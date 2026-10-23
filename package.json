@@ -17,7 +17,7 @@
   "author": { "name": "Sathish", "url": "https://github.com/isathish" },
   "license": "MIT",
   "icon": "media/logo.png",
-  "galleryBanner": { "color": "#0f172a", "theme": "dark" },
+  "galleryBanner": { "color": "#15181d", "theme": "dark" },
   "homepage": "https://isathish.github.io/localpilot/",
   "repository": { "type": "git", "url": "https://github.com/isathish/localpilot.git" },
   "bugs": { "url": "https://github.com/isathish/localpilot/issues" },
@@ -267,6 +267,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "smoke": "node scripts/run-smoke.js",
+    "release": "node scripts/release.js",
     "test": "vscode-test"
   },
   "devDependencies": {

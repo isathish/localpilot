@@ -54,7 +54,13 @@ Implement `LLMProvider` (`src/types.ts`), branch in `createProvider()` (`src/pro
 
 ## Releases
 
-CI runs on every push and pull request. Pushing a tag `vX.Y.Z` (matching `package.json`) builds the VSIX, creates a GitHub Release with it attached, and — if `VSCE_PAT` / `OVSX_PAT` secrets are configured — publishes to the VS Code Marketplace and Open VSX. The docs site deploys from `docs/` on every push to `main`.
+CI runs on every push and pull request. To cut a release from a clean `main`:
+
+```bash
+npm run release -- patch     # or minor | major | 1.2.3
+```
+
+The script bumps `package.json` and the docs version, promotes the **Unreleased** section of `CHANGELOG.md`, runs compile + smoke + packaging, commits, tags `vX.Y.Z` and pushes. The **Release** workflow then builds and tests on CI, attaches `localpilot-X.Y.Z.vsix`, a stable `localpilot.vsix` and `SHA256SUMS.txt` to a GitHub Release with the changelog as notes, and — if `VSCE_PAT` / `OVSX_PAT` repository secrets exist — publishes to the VS Code Marketplace and Open VSX. The docs site deploys from `docs/` on every push to `main`.
 
 ## Contributing
 

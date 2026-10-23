@@ -2,6 +2,16 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+- New restrained brand palette (graphite + amber) for the logo, marketplace banner and website; removed gradient/glow styling.
+- Website: fixed hero logo alignment, replaced text glyphs with CSS icons, fixed the docs "Edit this page" link.
+
+### Added
+- `npm run release -- <version|patch|minor|major>` cuts a release end to end (version bump, changelog promotion, verification, tag, push).
+- Windows-compatible smoke test runner.
+
 ## 0.1.0 — 2026-10-23
 
 Initial public release.
