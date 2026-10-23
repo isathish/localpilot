@@ -4,7 +4,11 @@ description: Every LocalPilot setting, with defaults.
 permalink: /docs/configuration/
 ---
 
-Open **Settings → Extensions → LocalPilot**, or edit `settings.json`.
+The easiest way to configure LocalPilot is its own **Settings** screen — click the gear icon in the chat toolbar or run *LocalPilot: Settings*. It has a page for each group below, shows whether a value comes from your User or Workspace settings, lets you reset any value, and includes a **provider manager** with a *Test connection* button that lists the models each server exposes.
+
+The first time LocalPilot starts without a reachable model server it opens the **Welcome / Setup** wizard instead, which detects Ollama, LM Studio, llama.cpp and vLLM, recommends a model and sets an approval preset (*Careful*, *Balanced* or *Autonomous*). Run it again any time with *LocalPilot: Welcome / Setup*, or disable the automatic prompt with `localpilot.showWelcomeOnStartup`.
+
+Everything is also available in **Settings → Extensions → LocalPilot** and in `settings.json`; the keys are listed below.
 
 ## Models
 

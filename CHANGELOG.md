@@ -2,6 +2,15 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Added
+- **Settings screen** (*LocalPilot: Settings*, gear icon in the chat toolbar): a dedicated panel for every option — **Providers** (add from presets for Ollama, LM Studio, llama.cpp, vLLM, Jan, LocalAI, SGLang or a custom endpoint; edit URL/key/context/models; enable/disable; *Test connection* shows latency and the live model list), **Models & generation**, **Agent & approvals** with *Careful / Balanced / Autonomous* presets, **Inline completions**, **Web search**, **Memory & skills** (skill folders, discovered skills and subagents, open/clear notes), **MCP servers** (add/edit/remove, connection status and tool counts) and **Advanced**. Each value shows whether it comes from User or Workspace settings and can be reset individually; a scope toggle chooses where edits are written.
+- **Welcome / Setup wizard** (*LocalPilot: Welcome / Setup*): detects running model servers, lists their models with a recommended default, and picks an approval preset and inline completions. Opens automatically on first run when no server is reachable (`localpilot.showWelcomeOnStartup`).
+- **Getting Started walkthrough** in VS Code's Welcome page; commands *Manage Model Providers…* and *Clear Memory Notes…*; the Agents view and the chat's "no models" notice link straight to setup/providers.
+
+### Changed
+- "Open settings" in the chat and the no-model fallback now open the LocalPilot Settings panel instead of the generic VS Code settings editor.
+
 ## 0.2.2 — 2026-10-23
 ### Added
 - **Screenshot tool with capture modes** — the camera/attach button, the **@ Add context** menu and *LocalPilot: Capture Screenshot to Chat* now offer **Selection area** (drag a rectangle), **This VS Code window** (captured instantly, no interaction), **Pick a window**, **Full screen** and **Full screen in 5 s** (time to switch apps or open a menu). macOS uses `screencapture` (window id lookup via CoreGraphics, no screen-recording prompt); Linux uses gnome-screenshot / spectacle / scrot / grim+slurp / import+xdotool; Windows gets a translucent drag-to-select overlay, foreground-window capture and virtual-screen capture via PowerShell.

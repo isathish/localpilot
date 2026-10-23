@@ -35,9 +35,11 @@ code --install-extension {{ site.extension_id }}
 
 ## 3. Open LocalPilot
 
-Click the LocalPilot icon in the Activity Bar or press <kbd>⌘⇧L</kbd> (<kbd>Ctrl⇧L</kbd> on Windows/Linux). Pick a model from the dropdown at the bottom of the composer — or click the model name in the status bar.
+Click the LocalPilot icon in the Activity Bar or press <kbd>⌘⇧L</kbd> (<kbd>Ctrl⇧L</kbd> on Windows/Linux).
 
-If you see *No models found*, make sure a server is running and press **Refresh models**.
+On first launch the **Welcome / Setup** screen opens: it detects the servers from step 1, lists their models with a recommended default, and lets you choose how much freedom the agent gets (*Careful*, *Balanced* or *Autonomous*). Click **Finish & open chat** and you're done. You can rerun it any time with *LocalPilot: Welcome / Setup*.
+
+Afterwards, pick a model from the picker at the bottom of the composer — or click the model name in the status bar. If you see *No models found*, make sure a server is running and press **Refresh**, or open **Set up providers** to add a custom endpoint and test the connection.
 
 ## 4. Your first task
 
