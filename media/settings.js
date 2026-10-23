@@ -53,7 +53,7 @@
     autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always' } },
   };
 
-  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {} };
+  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null };
 
   // ------------------------------------------------------------------ helpers
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
@@ -659,9 +659,15 @@
         const help = el('div');
         help.style.marginTop = '14px';
         const setupJob = state.jobs.find((j) => j.status === 'running' && ['setup', 'pull', 'install-runtime', 'start'].includes(j.kind));
-        help.innerHTML = `<div class="btnrow" style="margin-bottom:12px"><button class="btn brand" id="autoSetup" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}Set up automatically</button><span class="muted small">${esc(setupJob ? `${setupJob.model}: ${setupJob.detail}` : 'Starts or installs Ollama and downloads a starter coder model sized for this machine.')}</span></div><p class="hint"><b>Or do it yourself</b> — any of these works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
+        const ol = (state.runtimes || []).find((r) => r.target === 'ollama');
+        const st = state.starter;
+        const plan = st ? `${st.agent}${st.completion ? ` + ${st.completion}` : ''} (≈ ${st.gb} GB)` : 'a coder model sized for this machine';
+        const label = ol && !ol.installed ? 'Install Ollama & starter model' : ol && !ol.running ? 'Start Ollama & download starter model' : 'Download starter model';
+        const sub = ol && !ol.installed ? `Installs Ollama ${st ? st.platformNote : ''} in a terminal, starts it and downloads ${plan}. One click — nothing else to configure.` : ol && !ol.running ? `Ollama is installed but not running. Starts it and downloads ${plan}.` : `Downloads ${plan} into Ollama.`;
+        const pct = setupJob && setupJob.progress >= 0 ? ` ${Math.round(setupJob.progress * 100)}%` : '';
+        help.innerHTML = `<div class="auto-setup"><button class="btn brand" id="autoSetup" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${esc(setupJob ? 'Setting up…' : label)}</button><div class="auto-sub">${setupJob ? `<b>${esc(setupJob.kind === 'pull' ? `Downloading ${setupJob.model}${pct}` : setupJob.kind === 'install-runtime' ? 'Installing Ollama' : setupJob.kind === 'start' ? 'Starting Ollama' : 'Setting up')}</b><span>${esc(setupJob.detail || '')}</span>${setupJob.progress >= 0 ? `<div class="progress"><i style="width:${Math.max(2, Math.round(setupJob.progress * 100))}%"></i></div>` : ''}` : esc(sub)}</div></div><p class="hint"><b>Or do it yourself</b> — any of these works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
         c.appendChild(help);
-        help.querySelector('#autoSetup').onclick = () => { post({ type: 'autoSetup', installRuntime: false }); };
+        help.querySelector('#autoSetup').onclick = () => { state.setup.pendingAuto = true; const ol2 = (state.runtimes || []).find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol2 && !ol2.installed), target: 'ollama' }); render(); };
       }
       const foot = el('div', 'foot');
       foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><button class="btn link" id="manual">Add a custom endpoint…</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
@@ -677,7 +683,7 @@
       const list = el('div', 'mdl-list');
       if (!all.length) {
         const e = el('div', 'empty', 'The server is running but has no models yet. <button class="btn brand sm" id="autoSetup2">Download a starter model</button> or pull one by hand (e.g. <code>ollama pull qwen2.5-coder:7b</code>) and go back.');
-        e.querySelector('#autoSetup2').onclick = () => { post({ type: 'autoSetup', installRuntime: false }); su.step = 0; render(); };
+        e.querySelector('#autoSetup2').onclick = () => { su.pendingAuto = true; post({ type: 'autoSetup', installRuntime: false, target: 'ollama' }); su.step = 0; render(); };
         list.appendChild(e);
       }
       for (const m of all) {
@@ -739,11 +745,15 @@
         if (m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
         render();
         break;
-      case 'probe':
-        state.probe = m.results; state.busy = false; state.dmr = m.dockerModelRunner || null;
+      case 'probe': {
+        state.probe = m.results; state.busy = false; state.dmr = m.dockerModelRunner || null; state.runtimes = m.runtimes || state.runtimes; state.starter = m.starter || state.starter;
         for (const r of m.results) { state.tests[r.id] = r; }
+        // After a one-click setup from the wizard, jump straight to the model step with the recommendation selected.
+        const found = m.results.filter((r) => r.ok && r.models.length);
+        if (state.page === 'setup' && state.setup.pendingAuto && found.length) { state.setup.pendingAuto = false; state.setup.providers = m.results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); state.setup.model = recommend(found); state.setup.step = 1; }
         render();
         break;
+      }
       case 'testResult':
         state.tests[m.id] = m.result;
         render();

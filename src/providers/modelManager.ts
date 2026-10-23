@@ -1,4 +1,6 @@
 import * as cp from 'child_process';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS, getConfig } from '../config';
 import { ProviderConfig } from '../types';
@@ -72,15 +74,83 @@ function which(cmd: string, args: string[] = ['--version'], timeoutMs = 4000): P
   });
 }
 
+const OLLAMA_LOCATIONS: Record<string, string[]> = {
+  win32: [
+    `${process.env['LOCALAPPDATA'] ?? ''}\\Programs\\Ollama\\ollama.exe`,
+    `${process.env['PROGRAMFILES'] ?? 'C:\\Program Files'}\\Ollama\\ollama.exe`,
+  ],
+  darwin: ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama'],
+  linux: ['/usr/local/bin/ollama', '/usr/bin/ollama', '/snap/bin/ollama'],
+};
+
+/** `ollama` on PATH, or its well-known install location (a just-installed binary is not on this process's PATH yet). */
+export async function findOllamaBinary(): Promise<string | undefined> {
+  if (await which('ollama')) {
+    return 'ollama';
+  }
+  for (const p of OLLAMA_LOCATIONS[process.platform] ?? OLLAMA_LOCATIONS.linux) {
+    try {
+      await fs.access(p);
+      return p;
+    } catch {
+      /* next */
+    }
+  }
+  return undefined;
+}
+
 /** Platform install command for Ollama, run in a visible terminal so the user sees what happens. */
-export function ollamaInstallCommand(platform: NodeJS.Platform = process.platform): { command: string; note: string } {
+export interface InstallScript {
+  /** Script to run in a fresh terminal; prints a final "LocalPilot: Ollama ready" / "failed" line. */
+  command: string;
+  /** Shell to run it in (platform-appropriate, never the user's exotic default shell). */
+  shellPath: string;
+  shellArgs?: string[];
+  note: string;
+}
+
+/**
+ * Unattended Ollama installer per platform. Each script tries the package manager first and falls back to the
+ * official download, so it completes on a fresh machine without any extra setup:
+ * - macOS: Homebrew cask → else download Ollama-darwin.zip into /Applications; then launch the app (starts the server).
+ * - Windows: winget → else download OllamaSetup.exe and run it silently; the installer starts the tray app.
+ * - Linux: official install.sh via curl or wget (asks for sudo in the terminal); starts `ollama serve` if there is no systemd.
+ */
+export function ollamaInstallCommand(platform: NodeJS.Platform = process.platform): InstallScript {
   if (platform === 'darwin') {
-    return { command: 'brew install --cask ollama || (echo "Homebrew not found — download Ollama from https://ollama.com/download"; open https://ollama.com/download)', note: 'Uses Homebrew when available, otherwise opens the download page.' };
+    const script = [
+      'set +e',
+      'echo "LocalPilot: installing Ollama…"',
+      'if command -v brew >/dev/null 2>&1; then brew install --cask ollama; fi',
+      'if [ ! -d /Applications/Ollama.app ] && [ ! -d "$HOME/Applications/Ollama.app" ]; then',
+      '  echo "LocalPilot: Homebrew not available or failed — downloading the official build"',
+      '  curl -fL --progress-bar https://ollama.com/download/Ollama-darwin.zip -o /tmp/Ollama-darwin.zip && ditto -x -k /tmp/Ollama-darwin.zip /Applications && rm -f /tmp/Ollama-darwin.zip',
+      'fi',
+      'if [ -d /Applications/Ollama.app ] || [ -d "$HOME/Applications/Ollama.app" ]; then open -a Ollama && echo "LocalPilot: Ollama ready"; else echo "LocalPilot: Ollama install failed — download it from https://ollama.com/download"; fi',
+    ].join('\n');
+    return { command: script, shellPath: '/bin/bash', note: 'Homebrew cask when available, otherwise the official download into /Applications.' };
   }
   if (platform === 'win32') {
-    return { command: 'winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements', note: 'Uses winget (Windows 10/11).' };
+    const script = [
+      '$ErrorActionPreference = "Continue"; Write-Host "LocalPilot: installing Ollama..."',
+      '$ok = $false',
+      'if (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements --silent; if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) { $ok = $true } }',
+      'if (-not $ok) { Write-Host "LocalPilot: winget not available or failed - downloading the official installer"; $f = Join-Path $env:TEMP "OllamaSetup.exe"; Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $f -UseBasicParsing; Start-Process -FilePath $f -ArgumentList "/VERYSILENT","/NORESTART","/SP-" -Wait; $ok = Test-Path (Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama.exe") }',
+      '$app = Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama app.exe"; if ($ok -and (Test-Path $app)) { Start-Process -FilePath $app }',
+      'if ($ok) { Write-Host "LocalPilot: Ollama ready" } else { Write-Host "LocalPilot: Ollama install failed - download it from https://ollama.com/download" }',
+    ].join('; ');
+    return { command: script, shellPath: 'powershell.exe', shellArgs: ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass'], note: 'winget when available, otherwise the official silent installer.' };
   }
-  return { command: 'curl -fsSL https://ollama.com/install.sh | sh', note: 'Official install script (asks for sudo).' };
+  const script = [
+    'set +e',
+    'echo "LocalPilot: installing Ollama (the official script asks for sudo)…"',
+    'if command -v curl >/dev/null 2>&1; then curl -fsSL https://ollama.com/install.sh | sh; elif command -v wget >/dev/null 2>&1; then wget -qO- https://ollama.com/install.sh | sh; else echo "LocalPilot: need curl or wget"; fi',
+    'if command -v ollama >/dev/null 2>&1 || [ -x /usr/local/bin/ollama ]; then',
+    '  if ! (command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ollama 2>/dev/null); then (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; fi',
+    '  echo "LocalPilot: Ollama ready"',
+    'else echo "LocalPilot: Ollama install failed — see https://ollama.com/download/linux"; fi',
+  ].join('\n');
+  return { command: script, shellPath: '/bin/bash', note: 'Official install script (asks for sudo); starts the server when there is no systemd (e.g. WSL).' };
 }
 
 /**
@@ -128,7 +198,7 @@ export class ModelManager implements vscode.Disposable {
     const lmsCfg = providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio');
     const health = (c?: ProviderConfig) => (c ? createProvider(c).healthCheck().catch(() => false) : Promise.resolve(false));
     const [ollamaBin, ollamaUp, dockerModel, dockerUp, lms, lmsUp] = await Promise.all([
-      which('ollama'),
+      findOllamaBinary().then((b) => !!b),
       health(ollamaCfg),
       which('docker', ['model', 'version']),
       health(dockerCfg),
@@ -347,15 +417,23 @@ export class ModelManager implements vscode.Disposable {
       if (await up()) {
         return this.finish(job, 'done');
       }
+      const bin = await findOllamaBinary();
       let launched = false;
       if (process.platform === 'darwin') {
         launched = await which('open', ['-a', 'Ollama'], 6000);
-      } else if (process.platform === 'win32') {
-        launched = await which('cmd', ['/c', 'start', '', 'ollama', 'app'], 6000);
+      } else if (process.platform === 'win32' && bin && bin !== 'ollama') {
+        // The tray app ("ollama app.exe") sits next to the CLI and starts the server; fall back to `ollama serve`.
+        const app = path.join(path.dirname(bin), 'ollama app.exe');
+        launched = await fs.access(app).then(() => {
+          const child = cp.spawn(app, [], { detached: true, stdio: 'ignore' });
+          child.on('error', () => undefined);
+          child.unref();
+          return true;
+        }, () => false);
       }
-      if (!launched) {
+      if (!launched && bin) {
         try {
-          const child = cp.spawn('ollama', ['serve'], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' });
+          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' && bin === 'ollama' });
           child.on('error', () => undefined);
           child.unref();
           launched = true;
@@ -388,17 +466,22 @@ export class ModelManager implements vscode.Disposable {
    */
   async installOllama(): Promise<ModelJob> {
     const job = this.start('install-runtime', 'ollama', 'Ollama', 'Installing in the terminal…');
-    const { command } = ollamaInstallCommand();
-    const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama' });
+    const script = ollamaInstallCommand();
+    const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama', shellPath: script.shellPath, shellArgs: script.shellArgs });
     term.show(true);
-    term.sendText(command);
+    // Give the shell a moment to start before pasting the script (PowerShell in particular drops early input).
+    await sleep(process.platform === 'win32' ? 1500 : 400);
+    term.sendText(script.command, true);
     try {
       for (let i = 0; i < 200; i++) {
         if (this.aborts.get(job.id)?.signal.aborted) {
           return this.finish(job, 'cancelled');
         }
         await sleep(3000);
-        if (await which('ollama')) {
+        if (await createProvider({ id: 'probe', type: 'ollama', baseUrl: this.ollamaBase().baseUrl }).healthCheck().catch(() => false)) {
+          return this.finish(job, 'done');
+        }
+        if (await findOllamaBinary()) {
           this.update(job, { detail: 'Installed — starting the server…' });
           const started = await this.startOllama();
           if (started.status !== 'done') {

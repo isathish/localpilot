@@ -25,11 +25,11 @@ Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entir
 
 
 <p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/hero-agent.png" alt="LocalPilot in VS Code: the agent fixed applyDiscount in cart.js, ran npm test (2 passing) in the LocalPilot Agent terminal and offers Accept / Reject" width="900"></p>
-<p align="center"><sub>Real session with <code>qwen2.5-coder:7b</code> on Ollama — read → edit → test → review. Nothing left the machine.</sub></p>
+<p align="center"><sub>Captured from a normal session: <code>qwen2.5-coder:7b</code> in Ollama fixed a failing test, ran the suite and asked for review.</sub></p>
 
 ## Why LocalPilot?
 
-**It saves you money, and you can check that it's private.**
+**It costs nothing per month, and you can check for yourself that it is private.**
 
 | Per developer | LocalPilot | GitHub Copilot Pro / Pro+ | Cursor Pro | Claude Pro / Max |
 |---|---|---|---|---|
@@ -40,14 +40,14 @@ Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entir
 
 <sub>Published list prices for individual plans (USD) at the time of writing; vendors change plans and limits often. With LocalPilot you pay only for your own electricity — a 7B coding model needs ~8 GB RAM, 14B–32B models 16–32 GB.</sub>
 
-**See for yourself in 30 seconds:** turn Wi‑Fi off — LocalPilot keeps editing and running tests; open *Settings → Providers* — every address is `localhost` or a server you added; it is MIT-licensed — read the source or run `npm test` against your own Ollama.
+**Three checks, under a minute.** Turn off Wi‑Fi: LocalPilot keeps editing and running tests. Open *Settings → Providers*: every address is `localhost` unless you added one. Read the source: it is MIT-licensed, and `npm test` runs against your own Ollama.
 
-- **Private & offline** — your code only ever reaches the model servers you configure (localhost by default). No account, no telemetry SDK, no update pings.
-- **Frontier-style agent** — reads, searches, edits, runs commands and tests, fixes its own mistakes, asks before anything risky.
-- **Built for local models** — automatic tool-calling fallback for models without function calling, aggressive context management so 8k–32k windows still finish long tasks.
-- **Parallel by design** — run many agents at once, review every file each one touched, keep or undo per agent.
-- **Drop-in for your existing setup** — honours `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` out of the box.
-- **Free & MIT licensed.**
+- **Private and offline.** Your code only reaches the model servers you list, and the defaults are `localhost`. No account, no telemetry SDK, no update check.
+- **A full agent.** It reads, searches, edits, runs commands and tests, retries when something fails and asks before anything risky.
+- **Written for local models.** A text fallback for models without tool calling, and context trimming so 8k to 32k windows still finish long tasks.
+- **Parallel agents.** Run several at once, see every file each one touched, keep or undo per agent.
+- **Works with your existing setup.** Reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are.
+- **Free, MIT licensed.**
 
 ## Install
 

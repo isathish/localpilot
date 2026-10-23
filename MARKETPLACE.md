@@ -1,12 +1,12 @@
-# LocalPilot — the AI coding agent that runs on your machine
+# LocalPilot: a coding agent for VS Code that runs on your own machine
 
-Copilot-class agentic coding in VS Code, powered entirely by models you serve with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner**. No subscription. No accounts. No telemetry. Nothing leaves your computer.
+LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, edits files, runs tests and shows you the diff. The difference is where the model runs: every token comes from a server you host with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner**. No subscription, no account, no telemetry.
 
-**$0 per month instead of $10–$200 per developer.** Cloud assistants bill every seat every month and meter your usage; LocalPilot uses the laptop you already own — unplug the network and it keeps working. Check it yourself: *Settings → Providers* lists every address it talks to (all `localhost` unless you add a server), and the source is MIT-licensed on GitHub.
+**It costs nothing per month.** Cloud assistants charge $10 to $200 per developer and meter usage on top. LocalPilot runs on the laptop you already have and keeps working with the network unplugged. To check for yourself, open *Settings → Providers*: every address is `localhost` unless you added one. The source is MIT-licensed on GitHub.
 
 ## What it does
 
-- **Agent mode** — reads your project, plans with a live task checklist, edits files, runs commands and tests, checks diagnostics and fixes its own mistakes. You approve anything risky.
+- **Agent mode** — reads your project, keeps a live task checklist, edits files, runs commands and tests, checks diagnostics and retries when something fails. You approve anything risky.
 - **Ask & Plan modes** — read-only answers, or a reviewed implementation plan before any code changes.
 - **Parallel agents & chat tabs** — run several tasks at once in independent tabs; the Agents panel shows live status and every file each agent touched.
 - **Review every change** — diff, accept or reject per file or per agent, with changed lines highlighted; restore a checkpoint to rewind files and conversation.
@@ -19,7 +19,7 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
 - **Web search & MCP** — DuckDuckGo / SearXNG / Brave / Tavily search, readable page fetch, and any MCP server's tools.
 - **Inline completions** — ghost text from FIM models such as qwen2.5-coder or codestral.
 - **`localpilot` CLI** — `localpilot "fix the failing tests"` from any terminal; `--plan`, `--ask`, `--parallel`.
-- **Fits your setup** — honours `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` automatically.
+- **Fits your setup** — reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are.
 
 ## Get started in two minutes
 
@@ -30,7 +30,7 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
    ```
    LM Studio, llama.cpp, vLLM, Docker Model Runner and model-server containers are detected automatically too.
 2. Open the **LocalPilot** icon in the Activity Bar (or press `Ctrl/⌘ ⇧ L`).
-3. Ask for a change — **Auto** picks the best model it found. Review the diff, accept it, ship it.
+3. Ask for a change. **Auto** picks the best model it found. Read the diff and accept it.
 
 ## Works with
 
@@ -44,7 +44,7 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
 | Ollama / vLLM / llama.cpp in Docker | discovered from the container's published port |
 | Any OpenAI-compatible API | add it under **Settings → Providers** or `localpilot.providers` |
 
-Models without native tool calling still work in agent mode thanks to a built-in prompt-based fallback.
+Models without native tool calling still work in agent mode; LocalPilot falls back to a text protocol and reads the tool calls out of the reply.
 
 ## Recommended models
 

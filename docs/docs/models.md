@@ -40,9 +40,9 @@ Every server that answers and is not yet in `localpilot.providers` is **added au
 
 ## Automatic setup
 
-If no model is reachable anywhere — fresh machine, server stopped, models deleted — LocalPilot offers to fix it in one click (*Set up automatically* in the chat, the setup wizard, **Settings → Models**, or the *LocalPilot: Set Up Models Automatically* command):
+If no model is reachable anywhere — fresh machine, server stopped, models deleted — LocalPilot offers to fix it in one click. The setup wizard shows a single situational button (*Install Ollama & starter model* / *Start Ollama & download starter model* / *Download starter model*) that names the models and download size and runs without further prompts; the same flow is behind *Set up automatically* in the chat, **Settings → Models** and the *LocalPilot: Set Up Models Automatically* command:
 
-1. **Find a runtime.** A running Ollama or Docker Model Runner is used as is. An installed-but-stopped Ollama is started. With nothing installed, LocalPilot opens a terminal with the platform installer (`brew install --cask ollama`, `winget install Ollama.Ollama` or the official `install.sh`) and waits for it to finish.
+1. **Find a runtime.** A running Ollama or Docker Model Runner is used as is. An installed-but-stopped Ollama is started (the menu-bar/tray app, or `ollama serve`). With nothing installed, LocalPilot opens a terminal and runs an unattended installer that falls back when the package manager is missing — macOS: Homebrew cask, else the official `Ollama-darwin.zip` into `/Applications`; Windows: winget in PowerShell, else `OllamaSetup.exe /VERYSILENT`; Linux: the official `install.sh` via curl or wget (asks for sudo), starting `ollama serve` itself on systems without systemd such as WSL — and waits until the server answers.
 2. **Size the models to the machine.** RAM, CPU cores and GPU memory are detected (Apple Silicon counts as unified memory) and turned into a *model budget*. The starter set is deliberately **smallest-first** so the agent is usable quickly and leaves room for a second model:
 
    | Budget | Agent model | Completions | Images |

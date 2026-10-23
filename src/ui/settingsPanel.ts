@@ -67,7 +67,7 @@ export interface ModelsState {
 
 type ToSettings =
   | { type: 'state'; page: SettingsPage; section?: SettingsSection; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string }[]; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number }; sessions: number; welcomed: boolean }
-  | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string }
+  | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
   | { type: 'jobs'; jobs: ModelJob[] }
@@ -328,8 +328,17 @@ export class SettingsPanel implements vscode.Disposable {
   private async probeAll(): Promise<void> {
     this.post({ type: 'busy', busy: true });
     // Settings + well-known endpoints + Docker containers; nothing is written from here (the wizard merges on finish).
-    const report = await autoDetectProviders(this.log, { write: false });
-    this.post({ type: 'probe', results: report.results, dockerModelRunner: report.dockerModelRunner });
+    const [report, runtimes, system] = await Promise.all([autoDetectProviders(this.log, { write: false }), this.models.detectRuntimes().catch(() => [] as RuntimeStatus[]), getSystemProfile().catch(() => undefined)]);
+    const plan = system ? starterPlan(system) : undefined;
+    const label = (p: { entry: { name: string }; variant: { tag: string; gb: number } }) => `${p.entry.name} ${p.variant.tag}`;
+    const platformNote = process.platform === 'darwin' ? 'via Homebrew (or the ollama.com download)' : process.platform === 'win32' ? 'via winget' : 'via the official install script';
+    this.post({
+      type: 'probe',
+      results: report.results,
+      dockerModelRunner: report.dockerModelRunner,
+      runtimes,
+      starter: plan ? { agent: label(plan.agent), completion: plan.completion ? label(plan.completion) : undefined, gb: Math.round((plan.agent.variant.gb + (plan.completion?.variant.gb ?? 0)) * 10) / 10, platformNote } : undefined,
+    });
     this.post({ type: 'busy', busy: false });
   }
 
