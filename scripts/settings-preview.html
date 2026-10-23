@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 -->
+<style>
+:root{
+--vscode-editor-background:#1f1f1f;--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-widget-border:#2b2b2b;
+--vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-list-hoverBackground:#2a2d2e;
+--vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c;
+--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-focusBorder:#0078d4;
+--vscode-textLink-foreground:#4daafc;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#cca700;--vscode-testing-iconPassed:#73c991;
+--vscode-textCodeBlock-background:#2a2a2a;--vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;
+--vscode-notifications-background:#252526;
+}
+html.light{
+--vscode-editor-background:#ffffff;--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#717171;--vscode-widget-border:#e5e5e5;
+--vscode-sideBar-background:#f8f8f8;--vscode-editorWidget-background:#f3f3f3;--vscode-list-hoverBackground:#e8e8e8;
+--vscode-input-background:#ffffff;--vscode-input-foreground:#3b3b3b;--vscode-input-border:#cecece;
+--vscode-button-background:#005fb8;--vscode-button-hoverBackground:#0258a8;--vscode-focusBorder:#005fb8;
+--vscode-textLink-foreground:#005fb8;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#bf8803;--vscode-testing-iconPassed:#2ea043;
+--vscode-textCodeBlock-background:#f0f0f0;--vscode-notifications-background:#f3f3f3;
+}
+</style>
+<link rel="stylesheet" href="../media/settings.css"></head>
+<body data-logo="../media/logo.svg">
+<div id="app" aria-busy="true"><div class="loading"><span class="spinner"></span>Loading…</div></div>
+<div id="toasts"></div>
+<script>
+const q = new URLSearchParams(location.search);
+if (q.get('light')) document.documentElement.classList.add('light');
+const section = q.get('section') || 'providers';
+const page = q.get('page') || 'settings';
+const providers = [
+  { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' },
+  { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' },
+  { id: 'docker', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' },
+  { id: 'docker-lp-ollama', type: 'ollama', baseUrl: 'http://localhost:11435', displayName: 'Ollama (Docker · lp-ollama)', enabled: false },
+];
+const models = [
+  { id: 'ollama/qwen2.5-coder:7b', providerId: 'ollama', modelId: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
+  { id: 'ollama/qwen2.5-coder:1.5b', providerId: 'ollama', modelId: 'qwen2.5-coder:1.5b', name: 'qwen2.5-coder:1.5b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
+  { id: 'docker/docker.io/ai/smollm2:latest', providerId: 'docker', modelId: 'docker.io/ai/smollm2:latest', name: 'smollm2:latest', contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false },
+  { id: 'lmstudio/qwen2.5-vl-7b', providerId: 'lmstudio', modelId: 'qwen2.5-vl-7b', name: 'qwen2.5-vl-7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: true },
+];
+const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, temperature: 0.2, thinking: 'off', keepAlive: '30m', compactionThreshold: 0.75, maxToolOutputChars: 24000,
+  'approvals.terminal': 'ask', 'approvals.write': 'always', 'approvals.delete': 'ask', 'approvals.network': 'always', 'parallel.maxConcurrency': 4, 'parallel.maxSubagentDepth': 2,
+  'webSearch.provider': 'duckduckgo', 'webSearch.searxngUrl': 'http://localhost:8888', 'webSearch.apiKey': '', 'webSearch.maxResults': 6,
+  'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
+  mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
+  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
+  'models.disabled': [], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '' };
+const settings = {};
+for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
+window.acquireVsCodeApi = () => ({ postMessage(m) {
+  const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
+  if (m.type === 'ready') {
+    send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models,
+      skills: [{ name: 'release', description: 'Cut a release end to end', source: '.localpilot/skills' }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: '~/.claude/skills' }],
+      agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
+      mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5 }, sessions: 12, welcomed: true });
+  }
+  if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
+    { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },
+    { id: 'lmstudio', displayName: 'LM Studio', type: 'openai', baseUrl: 'http://localhost:1234/v1', configured: true, enabled: true, ok: false, latencyMs: 3, error: 'No response — is the server running?', source: 'settings' },
+    { id: 'docker', displayName: 'Docker Model Runner', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', configured: true, enabled: true, ok: true, latencyMs: 40, models: models.filter(m => m.providerId === 'docker'), source: 'settings' },
+    { id: 'docker-lp-ollama', displayName: 'Ollama (Docker · lp-ollama)', type: 'ollama', baseUrl: 'http://localhost:11435', configured: false, enabled: true, ok: true, latencyMs: 9, models: [models[1]], source: 'docker' },
+  ] }), 300);
+  if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
+  if (m.type === 'loadModels') setTimeout(() => {
+    const installed = models.map(m => ({ ...m, gb: m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: 'ok', autoRoles: m.supportsVision ? ['vision'] : m.name.includes('7b') ? ['agent'] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
+    const cat = (key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, rec, inst, targets) => ({ key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, recommendedFor: rec, installed: inst, targets });
+    send({ type: 'models', models: {
+      system: { platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 36, gpu: 'Apple M3 Pro', unifiedMemory: true, modelBudgetGb: 24, tier: 'large', summary: 'Apple M3 Pro · 36 GB unified memory' },
+      runtimes: [
+        { target: 'ollama', label: 'Ollama', installed: true, running: true, providerId: 'ollama', baseUrl: 'http://localhost:11434', canRemove: true },
+        { target: 'docker', label: 'Docker Model Runner', installed: true, running: true, providerId: 'docker', baseUrl: 'http://localhost:12434/engines/v1', canRemove: true },
+        { target: 'lmstudio', label: 'LM Studio', installed: false, running: false, canRemove: false, hint: 'Install from lmstudio.ai, then start the server in the Developer tab' },
+      ],
+      installed,
+      catalog: [
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '1.5b', 1.5, 1.0, true, false, ['completion'], ['ollama/qwen2.5-coder:1.5b'], [{ target: 'ollama', id: 'qwen2.5-coder:1.5b' }, { target: 'lmstudio', id: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '7b', 7, 4.7, true, false, ['agent'], ['ollama/qwen2.5-coder:7b'], [{ target: 'ollama', id: 'qwen2.5-coder:7b' }, { target: 'docker', id: 'ai/qwen2.5-coder' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '14b', 14, 9.0, true, false, [], [], [{ target: 'ollama', id: 'qwen2.5-coder:14b' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '32b', 32, 20, true, true, [], [], [{ target: 'ollama', id: 'qwen2.5-coder:32b' }]),
+        cat('qwen3', 'Qwen3', 'Alibaba', 'Hybrid thinking model with strong general reasoning and tool use.', ['agent', 'reasoning'], '8b', 8, 5.2, true, false, ['reasoning'], [], [{ target: 'ollama', id: 'qwen3:8b' }, { target: 'docker', id: 'ai/qwen3' }]),
+        cat('devstral', 'Devstral', 'Mistral', 'Agentic coding model tuned for software-engineering tasks.', ['agent'], '24b', 24, 14, true, false, [], [], [{ target: 'ollama', id: 'devstral:24b' }]),
+        cat('qwen2.5vl', 'Qwen2.5 VL', 'Alibaba', 'Vision-language model for screenshots and UI bugs.', ['vision'], '7b', 7, 6, true, false, ['vision'], [], [{ target: 'ollama', id: 'qwen2.5vl:7b' }]),
+        cat('llama3.3', 'Llama 3.3', 'Meta', 'General assistant with tool calling; large.', ['agent'], '70b', 70, 43, false, false, [], [], [{ target: 'ollama', id: 'llama3.3:70b' }]),
+      ],
+      jobs: [
+        { id: 'j1', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:14b', status: 'running', progress: 0.42, detail: '3.8 GB / 9.0 GB · 12 MB/s', startedAt: Date.now() - 60000 },
+        { id: 'j0', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:7b', status: 'done', progress: 1, detail: 'Installed', startedAt: Date.now() - 600000, finishedAt: Date.now() - 300000 },
+      ],
+      starter: { agent: 'qwen2.5-coder:7b', completion: 'qwen2.5-coder:1.5b', vision: 'qwen2.5vl:7b' },
+    } });
+  }, 200);
+} });
+</script>
+<script src="../media/settings.js"></script>
+</body></html>
