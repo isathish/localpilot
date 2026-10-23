@@ -86,6 +86,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
   if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
     void providers.listModels().catch(() => []).then((models) => {
+      if (settingsPanel.isOpen) {
+        return; // the user already opened Settings themselves — don't hijack the panel
+      }
       if (!models.length || !getConfig().defaultModel) {
         settingsPanel.show('setup');
       } else {

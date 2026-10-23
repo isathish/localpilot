@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
-import { DEFAULT_PROVIDERS, getConfig } from '../config';
+import { DEFAULT_PROVIDERS, getConfig, McpServerConfig } from '../config';
 import { McpManager } from '../mcp/mcpManager';
 import { createProvider, ProviderRegistry } from '../providers/registry';
 import { SessionStore } from '../sessions/sessionStore';
@@ -103,6 +103,11 @@ export class SettingsPanel implements vscode.Disposable {
     );
   }
 
+  /** True while the panel exists (visible or in a background tab). */
+  get isOpen(): boolean {
+    return !!this.panel;
+  }
+
   show(page: SettingsPage = 'settings', section?: SettingsSection): void {
     this.page = page;
     this.section = section;
@@ -178,15 +183,21 @@ export class SettingsPanel implements vscode.Disposable {
     if (scope === 'workspace' && !vscode.workspace.workspaceFolders?.length) {
       throw new Error('Open a folder to use workspace settings');
     }
-    const clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : value;
+    const clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
     await vscode.workspace.getConfiguration('localpilot').update(key, clean, scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace);
     this.log.info(`settings: ${key} ${clean === undefined ? 'reset' : 'updated'} (${scope})`);
   }
 
   private async finishSetup(m: Extract<FromSettings, { type: 'finishSetup' }>): Promise<void> {
     const cfg = vscode.workspace.getConfiguration('localpilot');
-    if (m.providers) {
-      await cfg.update('providers', m.providers.map(sanitizeProvider), vscode.ConfigurationTarget.Global);
+    if (m.providers?.length) {
+      // Merge: keep everything the user already configured, add newly detected servers.
+      const existing = cfg.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS).map(sanitizeProvider);
+      const known = new Set(existing.map((p) => p.baseUrl.replace(/\/+$/, '')));
+      const added = m.providers.map(sanitizeProvider).filter((p) => !known.has(p.baseUrl));
+      if (added.length) {
+        await cfg.update('providers', [...existing, ...added], vscode.ConfigurationTarget.Global);
+      }
     }
     if (m.model) {
       await cfg.update('defaultModel', m.model, vscode.ConfigurationTarget.Global);
@@ -271,6 +282,37 @@ export class SettingsPanel implements vscode.Disposable {
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
+}
+
+/** Validate the MCP server map coming from the form: non-empty names and commands, string args, string env values. */
+export function sanitizeMcpServers(value: unknown): Record<string, McpServerConfig> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('mcpServers must be an object');
+  }
+  const out: Record<string, McpServerConfig> = {};
+  for (const [rawName, rawCfg] of Object.entries(value as Record<string, unknown>)) {
+    const name = rawName.trim().replace(/[^\w.-]+/g, '-');
+    const c = (rawCfg ?? {}) as Partial<McpServerConfig>;
+    const command = String(c.command ?? '').trim();
+    if (!name || !command) {
+      throw new Error(`MCP server "${rawName || '?'}" needs a name and a command`);
+    }
+    const entry: McpServerConfig = { command };
+    if (Array.isArray(c.args) && c.args.length) {
+      entry.args = c.args.map(String);
+    }
+    if (c.env && typeof c.env === 'object' && !Array.isArray(c.env)) {
+      entry.env = Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, String(v)]));
+    }
+    if (typeof c.cwd === 'string' && c.cwd.trim()) {
+      entry.cwd = c.cwd.trim();
+    }
+    if (c.enabled === false) {
+      entry.enabled = false;
+    }
+    out[name] = entry;
+  }
+  return out;
 }
 
 /** Keep only known fields and normalise URLs/ids so a malformed form can't produce a broken provider. */

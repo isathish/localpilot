@@ -28,6 +28,12 @@ Unreachable servers are skipped silently; models from all reachable servers are 
 
 ## Adding a provider
 
+The quickest way is **Settings → Providers** (gear icon in the chat toolbar): pick a preset or *Custom endpoint*, fill in the URL and optional API key, and press **Test connection** to confirm the server answers and see which models it exposes.
+
+![Provider editor with a successful connection test]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
+
+The same configuration lives in `localpilot.providers` if you prefer `settings.json`:
+
 ```jsonc
 {
   "id": "homelab",

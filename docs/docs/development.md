@@ -36,9 +36,10 @@ src/
   tools/          fs, search (ripgrep), terminal, editor/diagnostics, web search/fetch, registry
   sessions/       persisted multi-session store
   ui/             chatController, chatViewProvider (webview), agentsView, chatParticipant,
-                  lmProvider (Language Model API), inlineCompletion, inlineEdit, images
+                  lmProvider (Language Model API), inlineCompletion, inlineEdit, images,
+                  settingsPanel (Settings / provider manager / setup wizard webview)
   mcp/            stdio MCP client
-media/            chat.js / chat.css (webview), icons
+media/            chat.js / chat.css, settings.js / settings.css (webviews), walkthrough/*.md, icons
 docs/             this site (Jekyll, GitHub Pages)
 ```
 

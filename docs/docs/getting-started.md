@@ -39,6 +39,10 @@ Click the LocalPilot icon in the Activity Bar or press <kbd>⌘⇧L</kbd> (<kbd>
 
 On first launch the **Welcome / Setup** screen opens: it detects the servers from step 1, lists their models with a recommended default, and lets you choose how much freedom the agent gets (*Careful*, *Balanced* or *Autonomous*). Click **Finish & open chat** and you're done. You can rerun it any time with *LocalPilot: Welcome / Setup*.
 
+![Setup step 1 — LocalPilot found Ollama with 4 models and LM Studio with 1 model]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
+
+![Setup step 2 — choosing a default model; qwen2.5-coder:14b is recommended because it supports tool calling]({{ '/assets/screenshots/setup-model.png' | relative_url }})
+
 Afterwards, pick a model from the picker at the bottom of the composer — or click the model name in the status bar. If you see *No models found*, make sure a server is running and press **Refresh**, or open **Set up providers** to add a custom endpoint and test the connection.
 
 ## 4. Your first task

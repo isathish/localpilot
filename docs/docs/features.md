@@ -49,6 +49,17 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 - **Commit message** generator in the Source Control view.
 - **Inline completions** from FIM models.
 
+## Settings & setup
+
+- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models & generation, Agent & approvals, Inline completions, Web search, Memory & skills, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
+- **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
+- **Approval presets** — *Careful*, *Balanced*, *Autonomous* — or fine-grained Ask / Allow / Block per action.
+- **MCP server manager** — add, edit, disable and remove servers with their connection status and tool counts.
+- **Welcome / Setup wizard** on first run: detects running servers, recommends a model, sets an approval preset.
+- **Getting Started walkthrough** in VS Code's Welcome page.
+
+![Memory & skills page listing project and global notes, skill folders, discovered skills and subagents]({{ '/assets/screenshots/settings-memory.png' | relative_url }})
+
 ## VS Code platform
 
 - `@localpilot` participant in the built-in Chat view (`/agent`, `/ask`, `/plan`).

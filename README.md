@@ -95,6 +95,12 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>), pick a mod
 
 Skills use progressive disclosure (only name + description are in the prompt until `load_skill` is called). Subagents run with a fresh context window and return only a final report. Full guide: [Skills & subagents](https://isathish.github.io/localpilot/docs/skills-and-agents/).
 
+## Settings & first-run setup
+
+LocalPilot has its own **Settings** screen (gear icon in the chat toolbar): a provider manager with **Test connection**, model and generation options, *Careful / Balanced / Autonomous* approval presets, inline completions, web search, memory & skills, and MCP servers — each value tagged with the scope it comes from and resettable individually. On first run a short **setup wizard** detects Ollama / LM Studio / llama.cpp / vLLM, recommends a model and picks an approval preset.
+
+<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/settings-providers.png" alt="LocalPilot Settings — provider manager" width="800"></p>
+
 ## Configuration highlights
 
 | Setting | Default | Purpose |

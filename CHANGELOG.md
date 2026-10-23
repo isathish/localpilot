@@ -8,8 +8,18 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Welcome / Setup wizard** (*LocalPilot: Welcome / Setup*): detects running model servers, lists their models with a recommended default, and picks an approval preset and inline completions. Opens automatically on first run when no server is reachable (`localpilot.showWelcomeOnStartup`).
 - **Getting Started walkthrough** in VS Code's Welcome page; commands *Manage Model Providers…* and *Clear Memory Notes…*; the Agents view and the chat's "no models" notice link straight to setup/providers.
 
+- Integration tests (`npm test`, real VS Code) covering the settings panel commands, provider probing against an Ollama-style server, input sanitisation and configuration round-trips.
+- **Real end-to-end tests** against a local Ollama server (skipped when none is running): the agent writes a file through a real tool call, two sessions run **in parallel** and each finishes its own task, and `stop()` aborts a streaming run. Tests run in a fresh temporary workspace folder.
+- **Extension API** (`vscode.extensions.getExtension('localpilot.localpilot-agent').exports`): `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels`, `version` — drive LocalPilot agents from other extensions or scripts.
+
+### Fixed
+- **Tool calls printed as text are now executed.** Small models (e.g. 1.5B coders) often emit `{"name": …, "arguments": …}` as plain text instead of using the tool channel; the agent loop now parses fenced, tagged and bare JSON calls for known tools whenever no native call arrives, so the run continues instead of stopping with a dead answer.
+- `write_file` reports a clear error when given a directory path (such as `.`) instead of a raw filesystem failure; the system prompt now states how paths are resolved and that tools must be invoked, not described.
+- Versions are no longer hard-coded: the MCP client advertises the real extension version, `package-lock.json` is bumped by the release script and the docs refer to `X.Y.Z` instead of a stale number.
+
 ### Changed
 - "Open settings" in the chat and the no-model fallback now open the LocalPilot Settings panel instead of the generic VS Code settings editor.
+- Finishing the setup wizard merges newly detected servers into `localpilot.providers` instead of replacing the list; MCP server entries are validated before being written; the first-run wizard never replaces a Settings panel the user already opened.
 
 ## 0.2.2 — 2026-10-23
 ### Added

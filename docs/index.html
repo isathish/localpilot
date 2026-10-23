@@ -87,6 +87,7 @@ permalink: /
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg></div><h3>Inline edit &amp; terminal</h3><p><kbd>⌘⌥K</kbd> rewrites a selection in place; in the terminal it turns plain English into a command you can review and run.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div><h3>Web search &amp; MCP</h3><p>DuckDuckGo, SearXNG, Brave or Tavily search plus readable page fetch; plug in any MCP server and its tools appear automatically.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg></div><h3>Inline completions</h3><p>Ghost-text suggestions from FIM models such as qwen2.5-coder, codestral or starcoder2 — fast and fully offline.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></div><h3>Guided setup &amp; settings</h3><p>A first-run wizard detects your servers and recommends a model. The Settings screen manages providers (with <em>Test connection</em>), approval presets, completions, memory and MCP servers.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H4zM8 20h8M12 16v4"/></svg></div><h3>Deep VS Code integration</h3><p>Sidebar and editor-tab chat, <code>@localpilot</code> chat participant, local models in Copilot's model picker, light-bulb fixes and commit messages.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><h3>Private by design</h3><p>No accounts, no telemetry, no cloud. Your code only ever reaches the model servers you configure — on localhost by default.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12V5a2 2 0 0 1 2-2h7l5 5v4"/><path d="M5 17h14M5 21h9"/></svg></div><h3>Follows your rules</h3><p>Automatically honours <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursorrules</code> and <code>copilot-instructions.md</code> — no migration needed.</p></div>
@@ -104,7 +105,7 @@ permalink: /
       <div class="step"><h3>Serve a model</h3><p>Start any local server. LocalPilot auto-detects Ollama, LM Studio, llama.cpp and vLLM on their default ports.</p><pre><code>ollama pull qwen2.5-coder:14b
 ollama serve</code></pre></div>
       <div class="step"><h3>Install LocalPilot</h3><p>Install from the Marketplace, or download the VSIX from GitHub releases.</p><pre><code>code --install-extension {{ site.extension_id }}</code></pre></div>
-      <div class="step"><h3>Pick a model and go</h3><p>Open the LocalPilot sidebar, choose a model, and ask for a change. Review the diff, keep it, ship it.</p><pre><code>⌘⇧L  open chat
+      <div class="step"><h3>Pick a model and go</h3><p>The setup wizard finds your server and recommends a model. Open the LocalPilot sidebar, ask for a change, review the diff, keep it, ship it.</p><pre><code>⌘⇧L  open chat
 ⌘⌥K  inline edit</code></pre></div>
     </div>
   </div>
