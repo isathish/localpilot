@@ -4,7 +4,7 @@
   "description": "The AI coding agent that runs on your machine. Copilot-style agent mode with Ollama, LM Studio, llama.cpp or vLLM — private, offline, free.",
   "version": "0.1.4",
   "engines": {
-    "vscode": "^1.140.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "AI",
@@ -852,7 +852,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "@types/vscode": "^1.140.0",
+    "@types/vscode": "^1.104.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.0.0",
     "esbuild": "^0.28.1",

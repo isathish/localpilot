@@ -47,7 +47,7 @@ curl -L -o localpilot.vsix https://github.com/isathish/localpilot/releases/lates
 code --install-extension localpilot.vsix
 ```
 
-Requires VS Code 1.140+.
+Requires VS Code 1.104+.
 
 **Serve a model** (any one of these; default ports are auto-detected)
 

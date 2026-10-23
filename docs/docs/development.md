@@ -6,7 +6,7 @@ permalink: /docs/development/
 
 ## Prerequisites
 
-Node.js 20+ and VS Code 1.140+.
+Node.js 20+ and VS Code 1.104+.
 
 ```bash
 git clone {{ site.repo }}.git
