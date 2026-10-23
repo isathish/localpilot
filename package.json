@@ -79,7 +79,7 @@
     "viewsWelcome": [
       {
         "view": "localpilot.agentsView",
-        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)"
+        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
       }
     ],
     "chatParticipants": [
@@ -222,6 +222,30 @@
         "command": "localpilot.showLogs",
         "title": "Show Logs",
         "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.openSettings",
+        "title": "Settings",
+        "category": "LocalPilot",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "localpilot.manageProviders",
+        "title": "Manage Model Providers…",
+        "category": "LocalPilot",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "localpilot.openWelcome",
+        "title": "Welcome / Setup",
+        "category": "LocalPilot",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "localpilot.clearMemory",
+        "title": "Clear Memory Notes…",
+        "category": "LocalPilot",
+        "icon": "$(clear-all)"
       },
       {
         "command": "localpilot.installCli",
@@ -398,6 +422,21 @@
           "command": "localpilot.undoAllChanges",
           "when": "view == localpilot.agentsView && localpilot.hasChanges",
           "group": "1_changes"
+        },
+        {
+          "command": "localpilot.openSettings",
+          "when": "view == localpilot.chatView",
+          "group": "navigation@5"
+        },
+        {
+          "command": "localpilot.manageProviders",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage@0"
+        },
+        {
+          "command": "localpilot.openWelcome",
+          "when": "view == localpilot.chatView",
+          "group": "9_logs@0"
         }
       ],
       "view/item/context": [
@@ -829,9 +868,82 @@
           "default": "",
           "editPresentation": "multilineText",
           "description": "Extra instructions appended to the system prompt (coding conventions, preferences…)."
+        },
+        "localpilot.showWelcomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "order": 0,
+          "markdownDescription": "Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Welcome / Setup*."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "localpilot.gettingStarted",
+        "title": "Get started with LocalPilot",
+        "description": "Connect a local model server, pick a model and run your first agent task — all on your machine.",
+        "steps": [
+          {
+            "id": "setup",
+            "title": "Connect a model server",
+            "description": "LocalPilot works with Ollama, LM Studio, llama.cpp, vLLM or any OpenAI-compatible endpoint. The setup screen finds running servers and recommends a model.\n[Open setup](command:localpilot.openWelcome)",
+            "media": {
+              "markdown": "media/walkthrough/setup.md"
+            },
+            "completionEvents": [
+              "onCommand:localpilot.openWelcome",
+              "onSettingChanged:localpilot.defaultModel"
+            ]
+          },
+          {
+            "id": "chat",
+            "title": "Open the chat",
+            "description": "Ask questions, or switch to **Agent** mode to let LocalPilot plan, edit files and run commands with your approval.\n[Open chat](command:localpilot.openChat)",
+            "media": {
+              "markdown": "media/walkthrough/chat.md"
+            },
+            "completionEvents": [
+              "onCommand:localpilot.openChat",
+              "onView:localpilot.chatView"
+            ]
+          },
+          {
+            "id": "approvals",
+            "title": "Decide how autonomous the agent is",
+            "description": "Choose **Careful**, **Balanced** or **Autonomous**, or set each approval individually. Every file edit is tracked and can be undone.\n[Agent & approvals](command:localpilot.openSettings?%22agent%22)",
+            "media": {
+              "markdown": "media/walkthrough/approvals.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:localpilot.approvals.terminal",
+              "onSettingChanged:localpilot.approvals.write"
+            ]
+          },
+          {
+            "id": "parallel",
+            "title": "Run agents in parallel",
+            "description": "Give several tasks at once — each runs as its own agent while you keep working.\n[Run tasks in parallel](command:localpilot.runParallelTasks)",
+            "media": {
+              "markdown": "media/walkthrough/parallel.md"
+            },
+            "completionEvents": [
+              "onCommand:localpilot.runParallelTasks"
+            ]
+          },
+          {
+            "id": "completions",
+            "title": "Turn on inline completions",
+            "description": "Ghost-text from a small local FIM model such as `qwen2.5-coder:1.5b-base`.\n[Inline completions](command:localpilot.openSettings?%22completions%22)",
+            "media": {
+              "markdown": "media/walkthrough/completions.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:localpilot.inlineCompletion.enabled"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

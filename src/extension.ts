@@ -23,6 +23,7 @@ import { installCli, registerUriHandler } from './ui/cli';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { LocalModelChatProvider } from './ui/lmProvider';
+import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const log = vscode.window.createOutputChannel('LocalPilot', { log: true });
@@ -62,6 +63,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
+  const settingsPanel = new SettingsPanel(context, providers, skills, mcp, memory, store, log);
+  context.subscriptions.push(settingsPanel);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', new LocalModelChatProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
@@ -80,8 +83,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void refreshStatus();
   context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()));
 
+  // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
+  if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
+    void providers.listModels().catch(() => []).then((models) => {
+      if (!models.length || !getConfig().defaultModel) {
+        settingsPanel.show('setup');
+      } else {
+        void context.globalState.update(WELCOMED_KEY, true);
+      }
+    });
+  }
+
   // --- Commands ----------------------------------------------------------------------------
   const cmd = (id: string, fn: (...a: unknown[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
+
+  cmd('localpilot.openSettings', (section?: unknown) => settingsPanel.show('settings', typeof section === 'string' ? (section as SettingsSection) : undefined));
+  cmd('localpilot.manageProviders', () => settingsPanel.show('settings', 'providers'));
+  cmd('localpilot.openWelcome', () => settingsPanel.show('setup'));
+  cmd('localpilot.clearMemory', async () => {
+    const notes = await memory.list();
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: '$(repo) Project memory', description: `${notes.filter((n) => n.scope === 'project').length} note(s) in .localpilot/memory/`, scope: 'project' as const },
+        { label: '$(globe) Global memory', description: `${notes.filter((n) => n.scope === 'global').length} note(s) shared across workspaces`, scope: 'global' as const },
+      ],
+      { title: 'LocalPilot: clear memory', placeHolder: 'Which notes should be deleted?' }
+    );
+    if (!pick) {
+      return;
+    }
+    const targets = notes.filter((n) => n.scope === pick.scope);
+    if (!targets.length) {
+      return void vscode.window.showInformationMessage('No notes to delete.');
+    }
+    const ok = await vscode.window.showWarningMessage(`Delete ${targets.length} ${pick.scope} memory note(s)? This cannot be undone.`, { modal: true }, 'Delete');
+    if (ok) {
+      let n = 0;
+      for (const t of targets) {
+        if (await memory.delete(t.name, pick.scope)) {
+          n++;
+        }
+      }
+      vscode.window.setStatusBarMessage(`LocalPilot: deleted ${n} memory note(s)`, 3000);
+    }
+  });
 
   cmd('localpilot.openChat', () => view.reveal());
   cmd('localpilot.openChatInEditor', () => view.openInEditor());
@@ -216,7 +261,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!models.length) {
       const pick = await vscode.window.showErrorMessage('No local models found. Is Ollama / LM Studio / llama.cpp / vLLM running?', 'Open settings', 'Retry');
       if (pick === 'Open settings') {
-        await vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.providers');
+        settingsPanel.show('settings', 'providers');
       } else if (pick === 'Retry') {
         await vscode.commands.executeCommand('localpilot.selectModel');
       }

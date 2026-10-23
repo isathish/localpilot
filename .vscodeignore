@@ -4,7 +4,6 @@ out/**
 scripts/**
 docs/**
 .github/**
-media/logo.svg
 media/logo-128.png
 node_modules/**
 src/**

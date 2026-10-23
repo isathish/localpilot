@@ -34,6 +34,7 @@ export interface LocalPilotConfig {
   memoryEnabled: boolean;
   keepAlive: string;
   systemPromptAppend: string;
+  showWelcomeOnStartup: boolean;
 }
 
 const SECTION = 'localpilot';
@@ -84,6 +85,7 @@ export function getConfig(): LocalPilotConfig {
     memoryEnabled: c.get<boolean>('memory.enabled', true),
     keepAlive: c.get<string>('keepAlive', '30m'),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
+    showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
   };
 }
 
