@@ -85,8 +85,10 @@ suite('LocalPilot terminal integration', () => {
     // Headless CI shells (Linux and macOS runners) often attach shell integration but report no exit code for the
     // second command; the tool then falls back to a child process. Only assert the code when the shell provided one.
     if (fail?.exitCode !== undefined) {
-      assert.strictEqual(fail.exitCode, 3);
-      assert.strictEqual(tm.lastFailure()?.exitCode, 3);
+      // PowerShell on Windows runners surfaces a generic 1 for a failing child; POSIX shells report the real code.
+      const expected = process.platform === 'win32' ? [1, 3] : [3];
+      assert.ok(expected.includes(fail.exitCode), `exit code ${fail.exitCode} not in ${expected.join('/')}`);
+      assert.ok(expected.includes(tm.lastFailure()?.exitCode ?? -1), 'last failure recorded');
     }
     // The agent terminal is reused per session and branded.
     const agentTerms = vscode.window.terminals.filter((t) => t.name === 'LocalPilot Agent');
