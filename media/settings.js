@@ -120,9 +120,14 @@
   // ------------------------------------------------------------------ shell
   function render() {
     if (!state.data) { return; }
+    // Clearing #app collapses the document and drops the scroll position; put it back once the page is rebuilt.
+    const y = window.scrollY;
     app.removeAttribute('aria-busy');
     app.innerHTML = '';
-    if (state.page === 'setup') { return renderSetup(); }
+    if (state.page === 'setup') { renderSetup(); } else { renderSettings(); }
+    if (y) { window.scrollTo(0, y); }
+  }
+  function renderSettings() {
     const d = state.data;
     const top = el('header', 'top');
     top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div><span class="spacer"></span>
@@ -241,10 +246,27 @@
   const fitBadge = (fit) => fit === 'ok' ? '<span class="badge ok">fits</span>' : fit === 'tight' ? '<span class="badge warn">tight</span>' : fit === 'over' ? '<span class="badge err">too big</span>' : '';
   const gbText = (gb) => (gb === undefined || gb === null ? '' : gb >= 10 ? `${Math.round(gb)} GB` : `${Number(gb).toFixed(1)} GB`);
   const activeJob = (kind, target, model) => state.jobs.find((j) => j.status === 'running' && j.kind === kind && (!target || j.target === target) && (!model || j.model === model));
+  const pctText = (job) => (job.progress >= 0 ? `${Math.round(job.progress * 100)}%` : '');
+  const barWidth = (job) => `${Math.max(2, Math.round((job.progress < 0 ? 0.3 : job.progress) * 100))}%`;
   function progressBar(job) {
-    const w = el('div', `progress ${job.progress < 0 ? 'indet' : ''}`, `<i style="width:${Math.max(2, Math.round((job.progress < 0 ? 0.3 : job.progress) * 100))}%"></i>`);
+    const w = el('div', `progress ${job.progress < 0 ? 'indet' : ''}`, `<i style="width:${barWidth(job)}"></i>`);
     w.title = job.detail || '';
+    w.dataset.job = job.id;
     return w;
+  }
+  function pctEl(job) { const s = el('span', 'pct', pctText(job)); s.dataset.job = job.id; return s; }
+  const setupTitle = (job) => job.kind === 'pull' ? `Downloading ${job.model}${job.progress >= 0 ? ` ${pctText(job)}` : ''}` : job.kind === 'install-runtime' ? 'Installing Ollama' : job.kind === 'start' ? 'Starting Ollama' : 'Setting up';
+  const jobsSig = (jobs) => jobs.map((j) => `${j.id}:${j.status}:${j.progress < 0 ? 'i' : 'd'}`).join('|');
+  // Progress ticks arrive several times a second; a full re-render would restart every CSS animation and
+  // reset scroll, which reads as blinking. Update the bars/labels of running jobs in place instead.
+  function patchJobs() {
+    for (const j of state.jobs) {
+      if (j.status !== 'running') { continue; }
+      app.querySelectorAll(`.progress[data-job="${j.id}"]`).forEach((p) => { p.classList.toggle('indet', j.progress < 0); p.firstElementChild.style.width = barWidth(j); p.title = j.detail || ''; });
+      app.querySelectorAll(`.pct[data-job="${j.id}"]`).forEach((s) => { s.textContent = pctText(j); });
+      app.querySelectorAll(`[data-job-detail="${j.id}"]`).forEach((s) => { s.textContent = j.detail || j.status; });
+      app.querySelectorAll(`[data-job-title="${j.id}"]`).forEach((s) => { s.textContent = setupTitle(j); });
+    }
   }
   function secModels(sec) {
     head(sec, 'Models', 'Everything about local models in one place: what this machine can run, what is installed, which model answers which task, and a catalog to install more — smallest first.');
@@ -283,7 +305,7 @@
     sys.appendChild(rts);
     const auto = el('div', 'sys-foot');
     const starter = d.starter.agent ? `${d.starter.agent}${d.starter.completion ? ` + ${d.starter.completion} for completions` : ''}${d.starter.vision ? ` + ${d.starter.vision} for images` : ''}` : 'a coder model sized for this machine';
-    auto.innerHTML = `<button class="btn ${anyModels ? '' : 'brand'}" id="auto" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${anyModels ? 'Install starter set' : 'Set up automatically'}</button><span class="hint">${esc(setupJob ? setupJob.detail : `Picks for this machine: ${starter}. Starts or installs Ollama when needed.`)}</span>`;
+    auto.innerHTML = `<button class="btn ${anyModels ? '' : 'brand'}" id="auto" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${anyModels ? 'Install starter set' : 'Set up automatically'}</button><span class="hint" ${setupJob ? `data-job-detail="${esc(setupJob.id)}"` : ''}>${esc(setupJob ? setupJob.detail : `Picks for this machine: ${starter}. Starts or installs Ollama when needed.`)}</span>`;
     auto.querySelector('#auto').onclick = () => post({ type: 'autoSetup', installRuntime: false });
     sys.appendChild(auto);
     sys.appendChild(field('models.autoSetup', 'Offer automatic setup', 'When LocalPilot starts and finds no local model, offer to install Ollama and a starter model.', 'toggle'));
@@ -300,11 +322,11 @@
       for (const j of jobs.slice(0, 8)) {
         const row = el('div', 'job');
         const verb = { pull: 'Installing', remove: 'Removing', start: 'Starting', 'install-runtime': 'Installing', setup: 'Setting up' }[j.kind] || j.kind;
-        row.innerHTML = `<span class="dot ${j.status === 'running' ? 'busy' : j.status === 'done' ? 'ok' : j.status === 'error' ? 'err' : ''}"></span><div class="t"><b>${esc(verb)} ${esc(j.model)} <span class="badge">${esc(TARGET_LABEL[j.target] || j.target)}</span></b><span>${esc(j.status === 'error' ? j.error || 'failed' : j.detail || j.status)}</span></div>`;
+        row.innerHTML = `<span class="dot ${j.status === 'running' ? 'busy' : j.status === 'done' ? 'ok' : j.status === 'error' ? 'err' : ''}"></span><div class="t"><b>${esc(verb)} ${esc(j.model)} <span class="badge">${esc(TARGET_LABEL[j.target] || j.target)}</span></b><span data-job-detail="${esc(j.id)}">${esc(j.status === 'error' ? j.error || 'failed' : j.detail || j.status)}</span></div>`;
         if (j.status === 'running') {
           const grp = el('div', 'prog-grp');
           grp.appendChild(progressBar(j));
-          grp.appendChild(el('span', 'pct', j.progress >= 0 ? `${Math.round(j.progress * 100)}%` : ''));
+          grp.appendChild(pctEl(j));
           const c = el('button', 'btn ghost sm', I.x); c.title = 'Cancel'; c.onclick = () => post({ type: 'cancelJob', id: j.id });
           grp.appendChild(c);
           row.appendChild(grp);
@@ -411,7 +433,7 @@
         if (job) {
           act.classList.add('prog-grp');
           act.appendChild(progressBar(job));
-          act.appendChild(el('span', 'pct', job.progress >= 0 ? `${Math.round(job.progress * 100)}%` : ''));
+          act.appendChild(pctEl(job));
           const cancel = el('button', 'btn ghost sm', I.x); cancel.title = 'Cancel'; cancel.onclick = () => post({ type: 'cancelJob', id: job.id });
           act.appendChild(cancel);
         } else if (it.targets.length) {
@@ -664,8 +686,7 @@
         const plan = st ? `${st.agent}${st.completion ? ` + ${st.completion}` : ''} (≈ ${st.gb} GB)` : 'a coder model sized for this machine';
         const label = ol && !ol.installed ? 'Install Ollama & starter model' : ol && !ol.running ? 'Start Ollama & download starter model' : 'Download starter model';
         const sub = ol && !ol.installed ? `Downloads and installs Ollama in the background (no admin rights needed), starts it and downloads ${plan}. One click — nothing else to configure.` : ol && !ol.running ? `Ollama is installed but not running. Starts it and downloads ${plan}.` : `Downloads ${plan} into Ollama.`;
-        const pct = setupJob && setupJob.progress >= 0 ? ` ${Math.round(setupJob.progress * 100)}%` : '';
-        help.innerHTML = `<div class="auto-setup"><button class="btn brand" id="autoSetup" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${esc(setupJob ? 'Setting up…' : label)}</button><div class="auto-sub">${setupJob ? `<b>${esc(setupJob.kind === 'pull' ? `Downloading ${setupJob.model}${pct}` : setupJob.kind === 'install-runtime' ? 'Installing Ollama' : setupJob.kind === 'start' ? 'Starting Ollama' : 'Setting up')}</b><span>${esc(setupJob.detail || '')}</span>${setupJob.progress >= 0 ? `<div class="progress"><i style="width:${Math.max(2, Math.round(setupJob.progress * 100))}%"></i></div>` : ''}` : esc(sub)}</div></div><p class="hint"><b>Or do it yourself</b> — any of these works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
+        help.innerHTML = `<div class="auto-setup"><button class="btn brand" id="autoSetup" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${esc(setupJob ? 'Setting up…' : label)}</button><div class="auto-sub">${setupJob ? `<b data-job-title="${esc(setupJob.id)}">${esc(setupTitle(setupJob))}</b><span data-job-detail="${esc(setupJob.id)}">${esc(setupJob.detail || '')}</span>${setupJob.progress >= 0 ? `<div class="progress" data-job="${esc(setupJob.id)}"><i style="width:${barWidth(setupJob)}"></i></div>` : ''}` : esc(sub)}</div></div><p class="hint"><b>Or do it yourself</b> — any of these works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
         c.appendChild(help);
         help.querySelector('#autoSetup').onclick = () => { state.setup.pendingAuto = true; const ol2 = (state.runtimes || []).find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol2 && !ol2.installed), target: 'ollama' }); render(); };
       }
@@ -759,13 +780,17 @@
         render();
         break;
       case 'models':
-        state.models = m.models; state.jobs = m.models.jobs || state.jobs; state.modelsRequested = false;
+        state.models = m.models; state.jobs = m.models.jobs || state.jobs; state.modelsRequested = false; state.jobsSig = jobsSig(state.jobs);
         if (state.section === 'models' || state.page === 'setup') { render(); }
         break;
-      case 'jobs':
+      case 'jobs': {
         state.jobs = m.jobs || [];
-        if ((state.section === 'models' && state.models) || state.page === 'setup') { render(); }
+        const sig = jobsSig(state.jobs);
+        const same = sig === state.jobsSig;
+        state.jobsSig = sig;
+        if ((state.section === 'models' && state.models) || state.page === 'setup') { if (same) { patchJobs(); } else { render(); } }
         break;
+      }
       case 'busy':
         state.busy = m.busy;
         if (!m.busy) { render(); }
