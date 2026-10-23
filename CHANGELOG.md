@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 0.2.9 — 2026-10-23
 ### Added
 - **`claude-ui-ux` built-in skill.** A design playbook for calm, warm, typography-led interfaces and for the UX patterns of assistant/agent surfaces — content-first layout, warm neutrals with a single amber accent, generous spacing, quiet motion, streaming replies that never jump, collapsible tool steps, permission prompts with single-key answers, plan panels, honest empty/loading/error states — with a mandatory `browser_inspect` verification pass in both themes and at narrow widths. Loaded automatically for "Claude-like", "assistant UI", "agent UI", "calm/minimal but warm" requests, or force it with `/skill claude-ui-ux`.
 
