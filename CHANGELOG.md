@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.4 — 2026-10-23
 ### Added
 - **Zero-config auto-detection of model servers.** At startup and on *Refresh models*, LocalPilot probes the configured providers, the well-known local ports (Ollama, LM Studio, llama.cpp, vLLM, **Docker Model Runner** `12434`, Jan, SGLang, KoboldCpp) and **running Docker containers** (`docker ps` — Ollama, vLLM, llama.cpp, LocalAI, TGI, SGLang, model-runner, KoboldCpp images, using each container's published host port). Every reachable server that isn't configured yet is added to `localpilot.providers` automatically (existing entries are never changed) and a notification says what was found. If the configured default model is offline, LocalPilot uses the best available one and offers to make it the default.
 - **Docker-based models**: a *Docker Model Runner* provider preset (`http://localhost:12434/engines/v1`, models like `docker/ai/qwen2.5-coder`), container discovery as above, and a one-click **Enable** prompt when the Model Runner is active but host (TCP) access is off. The setup wizard lists Docker servers too and marks newly found ones.
