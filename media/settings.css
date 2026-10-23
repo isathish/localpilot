@@ -155,11 +155,18 @@ input.invalid, select.invalid { border-color: var(--error); }
 .prov-result.ok { color: var(--ok); } .prov-result.err { color: var(--error); }
 .prov-result .models { color: var(--fg); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
 .prov-result .models span { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); font-family: var(--mono); }
-.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
-.preset { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); text-align: left; }
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
+.preset { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); text-align: left; min-width: 0; }
 .preset:hover { border-color: var(--focus); background: var(--hover); }
+.preset > div { min-width: 0; flex: 1; }
 .preset .ic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--code-bg); font-weight: 700; font-size: 12px; flex: none; }
-.preset b { display: block; font-size: 12.5px; } .preset span { display: block; font-size: 11px; color: var(--muted); }
+.preset b { display: block; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .preset span { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Brand marks: monogram on a tint of the vendor colour; the colour is kept on disabled "already added" cards too. */
+.brand-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 11px; letter-spacing: .02em; line-height: 1; font-family: inherit; --mark: var(--brand); color: var(--mark); background: color-mix(in srgb, var(--mark) 16%, var(--code-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 28%, transparent); }
+.brand-mark.plain { color: var(--muted); background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--border-soft); }
+.brand-mark svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.preset .brand-mark { width: 28px; height: 28px; border-radius: 7px; }
+.preset[disabled] .brand-mark { filter: saturate(.6); }
 
 /* ---- skills / mcp tables */
 .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -346,7 +353,7 @@ input[type=text], input[type=number], input[type=password], input[type=url], sel
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent); }
 .empty { border-color: var(--border-soft); border-radius: var(--radius); }
 .preset { min-height: 58px; }
-.preset .ic { background: var(--tint-2); font-weight: 600; }
+.preset .ic:not(.brand-mark) { background: var(--tint-2); font-weight: 600; }
 .preset[disabled], .preset.added { opacity: .55; cursor: default; }
 .preset[disabled]:hover, .preset.added:hover { background: transparent; border-color: var(--border-soft); }
 

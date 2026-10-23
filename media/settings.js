@@ -46,6 +46,28 @@
     { key: 'sglang', label: 'SGLang', sub: 'localhost:30000', cfg: { id: 'sglang', type: 'openai', baseUrl: 'http://localhost:30000/v1', displayName: 'SGLang' } },
     { key: 'custom', label: 'Custom endpoint', sub: 'any OpenAI-compatible URL', cfg: { id: 'custom', type: 'openai', baseUrl: 'http://', displayName: 'Custom' } },
   ];
+  /** Brand marks for provider cards: monogram + accent colour (we do not ship third-party logo artwork). */
+  const BRANDS = {
+    ollama: { mark: 'OL', color: '#9ca3af' }, lmstudio: { mark: 'LM', color: '#7c5cff' }, llamacpp: { mark: 'λ', color: '#f2a33a' },
+    vllm: { mark: 'vL', color: '#2f80ed' }, docker: { mark: 'DK', color: '#2496ed' }, jan: { mark: 'JA', color: '#22c55e' },
+    localai: { mark: 'LA', color: '#06b6d4' }, sglang: { mark: 'SG', color: '#ef4444' }, custom: { mark: I.plug, color: '' },
+  };
+  /** Resolves a brand from a preset key or a provider config (id prefix such as "ollama-2", then baseUrl/type hints). */
+  const brandOf = (keyOrCfg) => {
+    if (typeof keyOrCfg === 'string') { return BRANDS[keyOrCfg]; }
+    const p = keyOrCfg || {};
+    const base = String(p.id || '').replace(/-\d+$/, '');
+    if (BRANDS[base]) { return BRANDS[base]; }
+    if (p.type === 'ollama') { return BRANDS.ollama; }
+    const url = String(p.baseUrl || '');
+    const hit = PRESET_PROVIDERS.find((pr) => pr.key !== 'custom' && pr.cfg.baseUrl === url);
+    return hit ? BRANDS[hit.key] : null;
+  };
+  const brandMark = (keyOrCfg, fallback) => {
+    const b = brandOf(keyOrCfg);
+    const mark = b ? b.mark : esc(String(fallback || '?').replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?');
+    return `<span class="ic brand-mark${b && b.color ? '' : ' plain'}"${b && b.color ? ` style="--mark:${b.color}"` : ''} aria-hidden="true">${mark}</span>`;
+  };
   const APPROVAL = [['ask', 'Ask'], ['always', 'Allow'], ['never', 'Block']];
   const APPROVAL_PRESETS = {
     safe: { title: 'Careful', desc: 'Ask before every command, edit, delete and network call.', v: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask' } },
@@ -224,7 +246,7 @@
     const presets = el('div', 'presets');
     for (const pr of PRESET_PROVIDERS) {
       const taken = list.some((p) => p.id === pr.cfg.id);
-      const b = el('button', 'preset', `<span class="ic">${esc(pr.label[0])}</span><div><b>${esc(pr.label)}</b><span>${taken ? 'already added' : esc(pr.sub)}</span></div>`);
+      const b = el('button', 'preset', `${brandMark(pr.key, pr.label)}<div><b title="${esc(pr.label)}">${esc(pr.label)}</b><span title="${esc(pr.sub)}">${taken ? 'already added' : esc(pr.sub)}</span></div>`);
       b.disabled = taken && pr.key !== 'custom';
       b.onclick = () => {
         const cfg = { ...pr.cfg };
@@ -248,7 +270,7 @@
     c.dataset.prov = p.id;
     const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
-    c.innerHTML = `<div class="prov-head"><span class="dot ${status}"></span><div class="prov-title"><b>${esc(p.displayName || p.id)}</b><span>${esc(p.baseUrl)}</span></div><div class="prov-meta"><span class="badge">${p.type === 'ollama' ? 'Ollama API' : 'OpenAI API'}</span>${n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${p.enabled === false ? '<span class="badge">disabled</span>' : ''}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+    c.innerHTML = `<div class="prov-head"><span class="dot ${status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b>${esc(p.displayName || p.id)}</b><span>${esc(p.baseUrl)}</span></div><div class="prov-meta"><span class="badge">${p.type === 'ollama' ? 'Ollama API' : 'OpenAI API'}</span>${n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${p.enabled === false ? '<span class="badge">disabled</span>' : ''}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     c.querySelector('.prov-head').onclick = () => { state.expanded = open ? null : p.id; render(); };
     if (!open) { return c; }
     const body = el('div', 'prov-body');
@@ -630,7 +652,7 @@
     sec.appendChild(el('h2', 'sub', 'Skill folders'));
     const paths = Array.isArray(val('skillsPaths')) ? val('skillsPaths') : [];
     const sp = el('div', 'card');
-    sp.appendChild(field('skills.builtin', 'Built-in skills', 'Playbooks that ship with LocalPilot for the whole development loop: <code>requirements</code>, <code>design</code>, <code>new-project</code>, <code>implement</code>, <code>test</code>, <code>debug</code>, <code>review</code>, <code>refactor</code>, <code>ui-design</code>, <code>docs</code>, <code>deploy</code>, <code>ship</code>, <code>explore-codebase</code>. A workspace or user skill with the same name overrides the bundled one.', 'toggle'));
+    sp.appendChild(field('skills.builtin', 'Built-in skills', 'Playbooks that ship with LocalPilot for the whole development loop: <code>requirements</code>, <code>design</code>, <code>new-project</code>, <code>implement</code>, <code>test</code>, <code>debug</code>, <code>review</code>, <code>refactor</code>, <code>ui-design</code>, <code>claude-ui-ux</code>, <code>docs</code>, <code>deploy</code>, <code>ship</code>, <code>explore-codebase</code>. A workspace or user skill with the same name overrides the bundled one.', 'toggle'));
     const f = el('div', 'field wide');
     f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
     const ctl = el('div', 'ctl');
