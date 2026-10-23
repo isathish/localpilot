@@ -79,20 +79,66 @@
           "id": "localpilot.chatView",
           "name": "Chat",
           "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot"
+          "contextualTitle": "LocalPilot",
+          "when": "config.localpilot.chat.location != 'secondarySidebar' && config.localpilot.chat.location != 'panel'"
         },
         {
           "id": "localpilot.agentsView",
           "name": "Agents",
           "icon": "media/icon.svg",
           "contextualTitle": "LocalPilot Agents",
-          "visibility": "collapsed"
+          "visibility": "collapsed",
+          "when": "config.localpilot.chat.location != 'secondarySidebar' && config.localpilot.chat.location != 'panel'"
+        }
+      ],
+      "localpilot-secondary": [
+        {
+          "type": "webview",
+          "id": "localpilot.chatView.secondary",
+          "name": "Chat",
+          "icon": "media/icon.svg",
+          "contextualTitle": "LocalPilot",
+          "when": "config.localpilot.chat.location == 'secondarySidebar'"
+        },
+        {
+          "id": "localpilot.agentsView.secondary",
+          "name": "Agents",
+          "icon": "media/icon.svg",
+          "contextualTitle": "LocalPilot Agents",
+          "visibility": "collapsed",
+          "when": "config.localpilot.chat.location == 'secondarySidebar'"
+        }
+      ],
+      "localpilot-panel": [
+        {
+          "type": "webview",
+          "id": "localpilot.chatView.panel",
+          "name": "Chat",
+          "icon": "media/icon.svg",
+          "contextualTitle": "LocalPilot",
+          "when": "config.localpilot.chat.location == 'panel'"
+        },
+        {
+          "id": "localpilot.agentsView.panel",
+          "name": "Agents",
+          "icon": "media/icon.svg",
+          "contextualTitle": "LocalPilot Agents",
+          "visibility": "collapsed",
+          "when": "config.localpilot.chat.location == 'panel'"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "localpilot.agentsView",
+        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
+      },
+      {
+        "view": "localpilot.agentsView.secondary",
+        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
+      },
+      {
+        "view": "localpilot.agentsView.panel",
         "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
       }
     ],
@@ -464,154 +510,154 @@
       "view/title": [
         {
           "command": "localpilot.newSession",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "navigation@1"
         },
         {
           "command": "localpilot.showSessions",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "navigation@2"
         },
         {
           "command": "localpilot.openChatInEditor",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "navigation@3"
         },
         {
           "command": "localpilot.moveChat",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "0_layout"
         },
         {
           "command": "localpilot.sessionMenu",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "navigation@4"
         },
         {
           "command": "localpilot.runParallelTasks",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "1_run"
         },
         {
           "command": "localpilot.selectModel",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "1_run"
         },
         {
           "command": "localpilot.refreshModels",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.manageModels",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.reloadSkills",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.toggleInlineCompletions",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.openMemory",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.clearHistory",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.installCli",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
         {
           "command": "localpilot.showLogs",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "9_logs"
         },
         {
           "command": "localpilot.runParallelTasks",
-          "when": "view == localpilot.agentsView",
+          "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@1"
         },
         {
           "command": "localpilot.newSession",
-          "when": "view == localpilot.agentsView",
+          "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@2"
         },
         {
           "command": "localpilot.stopAll",
-          "when": "view == localpilot.agentsView",
+          "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@3"
         },
         {
           "command": "localpilot.keepAllChanges",
-          "when": "view == localpilot.agentsView && localpilot.hasChanges",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.hasChanges",
           "group": "1_changes"
         },
         {
           "command": "localpilot.undoAllChanges",
-          "when": "view == localpilot.agentsView && localpilot.hasChanges",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.hasChanges",
           "group": "1_changes"
         },
         {
           "command": "localpilot.openSettings",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "navigation@5"
         },
         {
           "command": "localpilot.manageProviders",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage@0"
         },
         {
           "command": "localpilot.openWelcome",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "9_logs@0"
         },
         {
           "command": "localpilot.openTerminal",
-          "when": "view == localpilot.chatView",
+          "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage@1"
         }
       ],
       "view/item/context": [
         {
           "command": "localpilot.stopSession",
-          "when": "view == localpilot.agentsView && viewItem == session-running",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-running",
           "group": "inline@1"
         },
         {
           "command": "localpilot.keepChanges",
-          "when": "view == localpilot.agentsView && viewItem == session-changed",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-changed",
           "group": "inline@1"
         },
         {
           "command": "localpilot.undoChanges",
-          "when": "view == localpilot.agentsView && viewItem == session-changed",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-changed",
           "group": "inline@2"
         },
         {
           "command": "localpilot.sessionMenu",
-          "when": "view == localpilot.agentsView && viewItem =~ /^session/",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
           "group": "inline@3"
         },
         {
           "command": "localpilot.keepChanges",
-          "when": "view == localpilot.agentsView && viewItem == file",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
           "group": "inline@1"
         },
         {
           "command": "localpilot.undoChanges",
-          "when": "view == localpilot.agentsView && viewItem == file",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
           "group": "inline@2"
         }
       ],
@@ -1197,7 +1243,9 @@
             },
             "completionEvents": [
               "onCommand:localpilot.openChat",
-              "onView:localpilot.chatView"
+              "onView:localpilot.chatView",
+              "onView:localpilot.chatView.secondary",
+              "onView:localpilot.chatView.panel"
             ]
           },
           {

@@ -62,12 +62,34 @@ suite('LocalPilot settings & setup', () => {
     assert.deepStrictEqual(c.configuration.properties['localpilot.chat.location'].enum, ['sidebar', 'secondarySidebar', 'panel', 'editor']);
     assert.strictEqual(c.configuration.properties['localpilot.chat.location'].default, 'sidebar');
     const menus = c.menus as Record<string, { command?: string; when?: string }[]>;
-    assert.ok(menus['view/title'].some((m) => m.command === 'localpilot.moveChat' && m.when?.includes('localpilot.chatView')));
+    assert.ok(menus['view/title'].some((m) => m.command === 'localpilot.moveChat' && /localpilot\\?\.chatView/.test(m.when ?? '')));
+    // One copy of the views per container, each shown only while the setting points at it.
+    const views = c.views as Record<string, { id: string; when?: string }[]>;
+    assert.ok(views['localpilot'].some((v) => v.id === 'localpilot.chatView' && /chat\.location/.test(v.when ?? '')));
+    assert.ok(views['localpilot-secondary'].some((v) => v.id === 'localpilot.chatView.secondary' && /== 'secondarySidebar'/.test(v.when ?? '')));
+    assert.ok(views['localpilot-panel'].some((v) => v.id === 'localpilot.chatView.panel' && /== 'panel'/.test(v.when ?? '')));
+    assert.ok(views['localpilot-secondary'].some((v) => v.id === 'localpilot.agentsView.secondary') && views['localpilot-panel'].some((v) => v.id === 'localpilot.agentsView.panel'));
+    for (const m of menus['view/title']) {
+      assert.ok(!/view == localpilot\.(chat|agents)View/.test(m.when ?? ''), `menu ${m.command} must match the per-container view ids: ${m.when}`);
+    }
     assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.openChat' && m.when?.includes('activeWebviewPanelId != localpilot.chatPanel')), 'LocalPilot icon on every editor');
     assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.moveChat' && m.when?.includes('activeWebviewPanelId == localpilot.chatPanel')), 'Move Chat To… on the chat tab');
     const commands = await vscode.commands.getCommands(true);
     for (const id of ['localpilot.moveChat', 'localpilot.statusMenu', 'localpilot.openChatInEditor']) {
       assert.ok(commands.includes(id), `missing command ${id}`);
+    }
+    // Every container's chat view is a real, focusable view; switching the setting reveals it there.
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const before = cfg.inspect<string>('chat.location')?.globalValue;
+    try {
+      for (const [loc, viewId] of [['secondarySidebar', 'localpilot.chatView.secondary'], ['panel', 'localpilot.chatView.panel'], ['sidebar', 'localpilot.chatView']] as const) {
+        assert.ok(commands.includes(`${viewId}.focus`), `no focus command for ${viewId}`);
+        await cfg.update('chat.location', loc, vscode.ConfigurationTarget.Global);
+        await vscode.commands.executeCommand(`${viewId}.focus`);
+        await vscode.commands.executeCommand('localpilot.openChat');
+      }
+    } finally {
+      await cfg.update('chat.location', before, vscode.ConfigurationTarget.Global);
     }
   });
 

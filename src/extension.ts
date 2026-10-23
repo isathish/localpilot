@@ -29,7 +29,7 @@ import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
-import { CHAT_LOCATIONS, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
+import { AGENTS_VIEW_IDS, agentsViewIdFor, CHAT_LOCATIONS, CHAT_VIEW_IDS, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
@@ -110,13 +110,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   // --- UI ----------------------------------------------------------------------------------
   const view = new ChatViewProvider(context, controller);
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, { webviewOptions: { retainContextWhenHidden: true } }));
+  // The same chat/agents views exist once per container (sidebar, secondary side bar, panel); `when` clauses show one set.
+  for (const id of CHAT_VIEW_IDS) {
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(id, view, { webviewOptions: { retainContextWhenHidden: true } }));
+  }
   const agentsTree = new AgentsTreeProvider(controller);
-  const agentsView = vscode.window.createTreeView('localpilot.agentsView', { treeDataProvider: agentsTree, showCollapseAll: true });
-  context.subscriptions.push(agentsTree, agentsView);
+  const agentsViews = AGENTS_VIEW_IDS.map((id) => vscode.window.createTreeView(id, { treeDataProvider: agentsTree, showCollapseAll: true }));
+  context.subscriptions.push(agentsTree, ...agentsViews);
   const updateAgentsBadge = () => {
     const n = controller.runningSessionIds.length;
-    agentsView.badge = n ? { value: n, tooltip: `${n} agent${n === 1 ? '' : 's'} running` } : undefined;
+    for (const v of agentsViews) {
+      v.badge = n ? { value: n, tooltip: `${n} agent${n === 1 ? '' : 's'} running` } : undefined;
+    }
     void vscode.commands.executeCommand('setContext', 'localpilot.hasChanges', tracker.count > 0);
   };
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
@@ -434,7 +439,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     view.reveal();
     await controller.runParallel(tasks);
-    void vscode.commands.executeCommand('localpilot.agentsView.focus');
+    void vscode.commands.executeCommand(`${agentsViewIdFor(getChatLocation())}.focus`);
   });
   cmd('localpilot.clearHistory', async () => {
     const all = controller.store.list();

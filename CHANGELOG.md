@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Chat in the Secondary Side Bar / Panel actually appears.** *Move Chat To…* (view menu, chat tab, status bar menu) and `localpilot.chat.location` used to depend on moving the views at runtime, which left the right-hand LocalPilot container empty and invisible. Each container now declares its own Chat and Agents views, shown only while the setting points at it, so choosing *Secondary Side Bar* or *Panel* reveals the chat there immediately (and on every restart), the view-title actions follow it, and *Open Chat* focuses the right place. The default stays the Primary Side Bar.
+
 ## 1.1.0 — 2026-10-23
 
 ### Added
