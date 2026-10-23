@@ -4,6 +4,8 @@ description: How LocalPilot fits large tasks into small context windows, and how
 permalink: /docs/context/
 ---
 
+<p><img src="{{ '/assets/screenshots/context-menu.png' | relative_url }}" alt="@ context menu with files, selection, workspace, problems, git, editors" width="420"></p>
+
 ## Attaching context
 
 | How | What it does |

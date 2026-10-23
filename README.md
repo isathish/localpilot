@@ -23,6 +23,10 @@ Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entir
 
 ---
 
+
+<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/hero-agent.png" alt="LocalPilot in VS Code: the agent fixed applyDiscount in cart.js, ran npm test (2 passing) in the LocalPilot Agent terminal and offers Accept / Reject" width="900"></p>
+<p align="center"><sub>Real session with <code>qwen2.5-coder:7b</code> on Ollama — read → edit → test → review. Nothing left the machine.</sub></p>
+
 ## Why LocalPilot?
 
 - **Private & offline** — your code only ever reaches the model servers you configure (localhost by default).

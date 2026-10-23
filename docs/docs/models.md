@@ -4,6 +4,8 @@ description: Connect Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Un
 permalink: /docs/models/
 ---
 
+<p><img src="{{ '/assets/screenshots/model-picker.png' | relative_url }}" alt="Model picker grouped by provider with context size and capability badges" width="420"></p>
+
 ## Provider types
 
 | `type` | Protocol | Use for |

@@ -4,6 +4,8 @@ description: The three interaction modes and how approvals keep you in control.
 permalink: /docs/agent-modes/
 ---
 
+<p><img src="{{ '/assets/screenshots/mode-picker.png' | relative_url }}" alt="Mode picker: Agent, Ask, Plan" width="420"></p>
+
 ## Agent
 
 The default. LocalPilot works autonomously until the task is done:

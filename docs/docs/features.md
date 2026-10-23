@@ -4,6 +4,8 @@ description: A tour of everything LocalPilot can do.
 permalink: /docs/features/
 ---
 
+![LocalPilot agent session in VS Code: read, edit with +1/−1 card, npm test in the LocalPilot Agent terminal, Changes panel with Accept / Reject]({{ '/assets/screenshots/hero-agent.png' | relative_url }})
+
 ## Chat & agent
 
 - **Agent mode** — autonomous loop: read → search → edit → run → verify, with approval gates for terminal, delete and network actions.
@@ -15,6 +17,10 @@ permalink: /docs/features/
 - **Slash commands** — `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill`, `/agent`, `/context`.
 
 ## Parallel agents & change review
+
+![Three agents running in parallel with the Agents panel and status bar count]({{ '/assets/screenshots/parallel-agents.png' | relative_url }})
+
+![Side-by-side diff of an agent edit opened from the Changes panel]({{ '/assets/screenshots/review-diff.png' | relative_url }})
 
 - **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task; each streams into its own tab.
 - **Agents panel** lists running/idle sessions with live status, badge counts and inline Stop.
@@ -50,6 +56,10 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 - Context menu: Explain, Fix, Refactor, Generate Tests, Add Documentation, Fix Errors in File.
 - **Commit message** generator in the Source Control view.
 - **Inline completions** from FIM models.
+- **Browser view, web screenshots & DevTools inspection** — the agent opens URLs in VS Code's Simple Browser (`open_browser`), screenshots rendered pages or local dev servers with a headless Chromium (`browser_screenshot`, desktop / phone / full-page), and runs a full DevTools inspection (`browser_inspect`): console logs and exceptions with locations, network trace with failed requests and timings, performance metrics, layout checks, optional click/type/scroll actions before capture — rendered as a DevTools panel in the chat and attached to vision models. You can do the same from the camera menu. See [Screenshots & images]({{ '/docs/images/' | relative_url }}).
+- **Clean transcript rendering** — syntax-highlighted code blocks (theme colours, copy / insert / apply, file-name links), Markdown with nested and task lists, tables and images, file reads as numbered listings, terminal output with ANSI colours and exit codes, inline diffs for every edit, clickable `path:line` references and an image lightbox.
+
+![Chat transcript: a user turn with an attached image and inline code, the model's thought, and a read_file step rendered as a numbered, syntax-highlighted listing with a clickable file header]({{ '/assets/screenshots/chat-rendering.png' | relative_url }})
 
 ## Terminal & CLI
 
