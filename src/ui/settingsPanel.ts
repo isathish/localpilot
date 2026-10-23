@@ -331,7 +331,7 @@ export class SettingsPanel implements vscode.Disposable {
     const [report, runtimes, system] = await Promise.all([autoDetectProviders(this.log, { write: false }), this.models.detectRuntimes().catch(() => [] as RuntimeStatus[]), getSystemProfile().catch(() => undefined)]);
     const plan = system ? starterPlan(system) : undefined;
     const label = (p: { entry: { name: string }; variant: { tag: string; gb: number } }) => `${p.entry.name} ${p.variant.tag}`;
-    const platformNote = process.platform === 'darwin' ? 'via Homebrew (or the ollama.com download)' : process.platform === 'win32' ? 'via winget' : 'via the official install script';
+    const platformNote = process.platform === 'darwin' ? 'official Ollama.app into /Applications' : process.platform === 'win32' ? 'official installer, per-user' : 'official build into ~/.local/share/localpilot';
     this.post({
       type: 'probe',
       results: report.results,

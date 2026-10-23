@@ -216,9 +216,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const runAutoSetup = async (opts: { installRuntime?: boolean; target?: InstallTarget; force?: boolean } = {}): Promise<AutoSetupResult> => {
     const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: setting up models', cancellable: true }, async (progress, token) => {
       const sub = modelManager.onDidChange(() => {
-        const job = modelManager.activeJobs.find((j) => j.kind === 'pull') ?? modelManager.activeJobs.find((j) => j.kind === 'setup');
+        const job = modelManager.activeJobs.find((j) => j.kind === 'pull' || j.kind === 'install-runtime' || j.kind === 'start') ?? modelManager.activeJobs.find((j) => j.kind === 'setup');
         if (job) {
-          progress.report({ message: `${job.kind === 'pull' ? `${job.model}: ` : ''}${job.detail}` });
+          progress.report({ message: `${job.kind === 'pull' ? `${job.model}: ` : job.kind === 'install-runtime' ? 'Ollama: ' : ''}${job.detail}${job.progress >= 0 ? ` (${Math.round(job.progress * 100)}%)` : ''}` });
         }
       });
       token.onCancellationRequested(() => modelManager.activeJobs.forEach((j) => modelManager.cancel(j.id)));
@@ -442,20 +442,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         void context.globalState.update(WELCOMED_KEY, true);
         return r;
       case 'needs-runtime': {
-        const ollama = r.runtimes.find((x) => x.target === 'ollama');
-        const pick = await vscode.window.showWarningMessage(
-          `No model server is running. Install Ollama and download ${plan.agent.entry.name} ${plan.agent.variant.tag} (${plan.agent.variant.gb} GB) for this ${profile.ramGb} GB machine?${ollama?.installed ? '' : ' The installer runs in a terminal.'}`,
-          { modal: true, detail: profile.summary },
-          'Install Ollama & model',
-          'I use another server'
-        );
-        if (pick === 'Install Ollama & model') {
-          return vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
-        }
-        if (pick === 'I use another server') {
+        // Nothing to run models on: install Ollama in the background (user-space, no sudo/UAC) and continue with the
+        // starter download — the whole thing is one click. The progress notification has Cancel.
+        if (o.installRuntime === false) {
           settingsPanel.show('settings', 'providers');
+          return r;
         }
-        return r;
+        vscode.window.setStatusBarMessage(`LocalPilot: installing Ollama and ${plan.agent.entry.name} ${plan.agent.variant.tag} (${plan.agent.variant.gb} GB) for this ${profile.ramGb} GB machine…`, 6000);
+        return vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
       }
       case 'error':
         void vscode.window.showErrorMessage(`Model setup failed: ${r.error}`, 'Show logs', 'Open Models').then((p) => (p === 'Show logs' ? log.show() : p && settingsPanel.show('settings', 'models')));

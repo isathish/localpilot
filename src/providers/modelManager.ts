@@ -1,6 +1,10 @@
 import * as cp from 'child_process';
+import { createWriteStream } from 'fs';
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
+import { Readable, Transform } from 'stream';
+import { pipeline } from 'stream/promises';
 import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS, getConfig } from '../config';
 import { ProviderConfig } from '../types';
@@ -74,14 +78,65 @@ function which(cmd: string, args: string[] = ['--version'], timeoutMs = 4000): P
   });
 }
 
+/** Where LocalPilot installs Ollama itself when no package manager / root is available (user-space, no sudo). */
+export const USER_OLLAMA_DIR = path.join(os.homedir(), '.local', 'share', 'localpilot', 'ollama');
+
 const OLLAMA_LOCATIONS: Record<string, string[]> = {
   win32: [
     `${process.env['LOCALAPPDATA'] ?? ''}\\Programs\\Ollama\\ollama.exe`,
     `${process.env['PROGRAMFILES'] ?? 'C:\\Program Files'}\\Ollama\\ollama.exe`,
   ],
-  darwin: ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama'],
-  linux: ['/usr/local/bin/ollama', '/usr/bin/ollama', '/snap/bin/ollama'],
+  darwin: ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama', path.join(os.homedir(), 'Applications/Ollama.app/Contents/Resources/ollama')],
+  linux: ['/usr/local/bin/ollama', '/usr/bin/ollama', '/snap/bin/ollama', path.join(USER_OLLAMA_DIR, 'bin', 'ollama')],
 };
+
+/** Streams a download to disk with byte progress; follows redirects (ollama.com → GitHub releases). */
+async function downloadFile(url: string, dest: string, onProgress: (done: number, total?: number) => void, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(url, { signal, redirect: 'follow' });
+  if (!res.ok || !res.body) {
+    throw new Error(`Download failed: HTTP ${res.status} for ${url}`);
+  }
+  const total = Number(res.headers.get('content-length')) || undefined;
+  let done = 0;
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  const counter = new Transform({
+    transform(chunk, _enc, cb) {
+      done += (chunk as Buffer).length;
+      onProgress(done, total);
+      cb(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), counter, createWriteStream(dest));
+}
+
+function runProcess(cmd: string, args: string[], opts: { timeoutMs?: number; signal?: AbortSignal; cwd?: string } = {}): Promise<{ code: number | null; out: string }> {
+  return new Promise((resolve, reject) => {
+    let out = '';
+    let child: cp.ChildProcess;
+    try {
+      child = cp.spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd });
+    } catch (e) {
+      return reject(e);
+    }
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`${path.basename(cmd)} timed out`));
+    }, opts.timeoutMs ?? 10 * 60_000);
+    const onAbort = () => child.kill();
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout?.on('data', (d) => (out += String(d)));
+    child.stderr?.on('data', (d) => (out += String(d)));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+      resolve({ code, out });
+    });
+  });
+}
 
 /** `ollama` on PATH, or its well-known install location (a just-installed binary is not on this process's PATH yet). */
 export async function findOllamaBinary(): Promise<string | undefined> {
@@ -461,11 +516,112 @@ export class ModelManager implements vscode.Disposable {
   }
 
   /**
-   * Opens a terminal running the platform's Ollama installer and waits (up to 10 minutes) for the binary to
-   * appear, then starts the server. The user watches and confirms any sudo/UAC prompts.
+   * Installs Ollama in the background — no terminal, no sudo/UAC — using the official builds:
+   * macOS: `Ollama-darwin.zip` → /Applications (or ~/Applications); Windows: `OllamaSetup.exe /VERYSILENT` (per-user);
+   * Linux: `ollama-linux-<arch>.tgz` → ~/.local/share/localpilot/ollama (user space). Then starts the server.
+   * Falls back to the interactive terminal script only if the background path fails.
    */
   async installOllama(): Promise<ModelJob> {
-    const job = this.start('install-runtime', 'ollama', 'Ollama', 'Installing in the terminal…');
+    const job = this.start('install-runtime', 'ollama', 'Ollama', 'Preparing download…');
+    const signal = this.aborts.get(job.id)!.signal;
+    const mb = (n: number) => `${(n / 1048576).toFixed(0)} MB`;
+    const onProgress = (what: string) => (done: number, total?: number) => this.update(job, { progress: total ? done / total : -1, detail: `${what} · ${mb(done)}${total ? ` / ${mb(total)}` : ''}` });
+    try {
+      if (await findOllamaBinary()) {
+        this.update(job, { detail: 'Ollama is already installed — starting it…' });
+      } else if (process.platform === 'darwin') {
+        const zip = path.join(os.tmpdir(), `Ollama-darwin-${Date.now()}.zip`);
+        await downloadFile('https://ollama.com/download/Ollama-darwin.zip', zip, onProgress('Downloading Ollama for macOS'), signal);
+        this.update(job, { progress: -1, detail: 'Installing Ollama.app…' });
+        let dest = '/Applications';
+        let r = await runProcess('ditto', ['-x', '-k', zip, dest], { signal });
+        if (r.code !== 0) {
+          dest = path.join(os.homedir(), 'Applications');
+          await fs.mkdir(dest, { recursive: true });
+          r = await runProcess('ditto', ['-x', '-k', zip, dest], { signal });
+        }
+        await fs.unlink(zip).catch(() => undefined);
+        if (r.code !== 0) {
+          throw new Error(`Could not unpack Ollama.app: ${r.out.trim().split('\n').pop() ?? ''}`);
+        }
+        // Clear the quarantine flag so Gatekeeper does not block the first launch of a downloaded app.
+        await runProcess('xattr', ['-dr', 'com.apple.quarantine', path.join(dest, 'Ollama.app')], { signal }).catch(() => undefined);
+      } else if (process.platform === 'win32') {
+        const exe = path.join(os.tmpdir(), `OllamaSetup-${Date.now()}.exe`);
+        await downloadFile('https://ollama.com/download/OllamaSetup.exe', exe, onProgress('Downloading Ollama for Windows'), signal);
+        this.update(job, { progress: -1, detail: 'Running the installer silently (per-user, no admin rights needed)…' });
+        const r = await runProcess(exe, ['/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES'], { signal, timeoutMs: 15 * 60_000 });
+        await fs.unlink(exe).catch(() => undefined);
+        if (r.code !== 0 && !(await findOllamaBinary())) {
+          throw new Error(`The Ollama installer exited with code ${r.code}`);
+        }
+      } else {
+        await this.installOllamaLinuxUserSpace(job, signal, onProgress);
+      }
+      if (signal.aborted) {
+        return this.finish(job, 'cancelled');
+      }
+      this.update(job, { progress: -1, detail: 'Installed — starting the server…' });
+      const started = await this.startOllama();
+      if (started.status !== 'done') {
+        throw new Error(started.error ?? 'Ollama installed but failed to start');
+      }
+      return this.finish(job, 'done');
+    } catch (e) {
+      if (signal.aborted) {
+        return this.finish(job, 'cancelled');
+      }
+      this.log.warn(`background Ollama install failed: ${e instanceof Error ? e.message : String(e)} — falling back to the terminal installer`);
+      return this.installOllamaInTerminal(job, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Linux without root: the official release archive (`.tar.zst`, or `.tgz` for older builds) unpacked into
+   * ~/.local/share/localpilot/ollama. zstd is decoded by Node itself when available (22.15+/24), else the `zstd` CLI.
+   */
+  private async installOllamaLinuxUserSpace(job: ModelJob, signal: AbortSignal, onProgress: (what: string) => (done: number, total?: number) => void): Promise<void> {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+    const base = `https://ollama.com/download/ollama-linux-${arch}`;
+    const zlib = await import('zlib');
+    const nodeZstd = typeof (zlib as { createZstdDecompress?: unknown }).createZstdDecompress === 'function';
+    const cliZstd = await which('zstd', ['--version']);
+    const zstAvailable = await fetch(`${base}.tar.zst`, { method: 'HEAD', redirect: 'follow', signal }).then((r) => r.ok, () => false);
+    await fs.mkdir(USER_OLLAMA_DIR, { recursive: true });
+    let archive: string;
+    let extract: string[];
+    if (zstAvailable && (nodeZstd || cliZstd)) {
+      archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tar.zst`);
+      await downloadFile(`${base}.tar.zst`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
+      if (nodeZstd) {
+        // Decompress in-process, then hand the plain tar to tar(1).
+        this.update(job, { progress: -1, detail: 'Decompressing…' });
+        const tar = archive.replace(/\.zst$/, '');
+        const { createReadStream } = await import('fs');
+        await pipeline(createReadStream(archive), (zlib as unknown as { createZstdDecompress(): Transform }).createZstdDecompress(), createWriteStream(tar));
+        await fs.unlink(archive).catch(() => undefined);
+        archive = tar;
+        extract = ['-xf', archive, '-C', USER_OLLAMA_DIR];
+      } else {
+        extract = ['--use-compress-program=unzstd', '-xf', archive, '-C', USER_OLLAMA_DIR];
+      }
+    } else {
+      archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tgz`);
+      await downloadFile(`${base}.tgz`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
+      extract = ['-xzf', archive, '-C', USER_OLLAMA_DIR];
+    }
+    this.update(job, { progress: -1, detail: `Unpacking into ${USER_OLLAMA_DIR}…` });
+    const r = await runProcess('tar', extract, { signal });
+    await fs.unlink(archive).catch(() => undefined);
+    if (r.code !== 0) {
+      throw new Error(`Could not unpack Ollama: ${r.out.trim().split('\n').pop() ?? ''}`);
+    }
+    await fs.chmod(path.join(USER_OLLAMA_DIR, 'bin', 'ollama'), 0o755).catch(() => undefined);
+  }
+
+  /** Interactive fallback: runs the platform installer script in a visible terminal and waits for the server. */
+  private async installOllamaInTerminal(job: ModelJob, reason: string): Promise<ModelJob> {
+    this.update(job, { progress: -1, detail: `Background install failed (${reason}) — running the installer in a terminal…` });
     const script = ollamaInstallCommand();
     const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama', shellPath: script.shellPath, shellArgs: script.shellArgs });
     term.show(true);

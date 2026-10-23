@@ -6,7 +6,7 @@ permalink: /docs/getting-started/
 
 ## 1. Serve a model — or let LocalPilot do it
 
-**Nothing installed yet?** Skip this step. When LocalPilot starts without finding a model it offers **Set up automatically**: it installs (or starts) Ollama and downloads a starter coder model sized for your RAM and GPU — a 7b on 16 GB+, smaller on tighter machines — plus a tiny completion model. One click, a few minutes of download, done. Details in [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
+**Nothing installed yet?** Skip this step. When LocalPilot starts without finding a model it offers **Set up automatically**: it installs Ollama in the background (official build, no admin rights), starts it and downloads a starter coder model sized for your RAM and GPU — a 7b on 16 GB+, smaller on tighter machines — plus a tiny completion model. One click, a few minutes of download, done. Details in [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
 
 Already have a server? LocalPilot talks to any of these out of the box (default ports are probed automatically):
 
@@ -45,7 +45,7 @@ On first launch the **Welcome / Setup** screen opens: it detects the servers fro
 
 ![Setup step 2 — choosing a default model; qwen2.5-coder:14b is recommended because it supports tool calling]({{ '/assets/screenshots/setup-model.png' | relative_url }})
 
-If no server is found the wizard shows one button for your situation — **Install Ollama & starter model**, **Start Ollama & download starter model** or **Download starter model** — with the models and download size it will fetch. One click installs Ollama (winget on Windows, Homebrew on macOS, the official script on Linux), starts it, pulls the starter models with live progress, and moves you on to picking the default model.
+If no server is found the wizard shows one button for your situation — **Install Ollama & starter model**, **Start Ollama & download starter model** or **Download starter model** — with the models and download size it will fetch. One click downloads and installs Ollama in the background — no admin rights, no terminal — starts it, pulls the starter models with live progress, and moves you on to picking the default model.
 
 Afterwards, pick a model from the picker at the bottom of the composer — or click the model name in the status bar. If you see *No models found*, click **Set up automatically**, or make sure a server is running and press **Refresh**. **Settings → Models** shows what fits your machine and lets you install more from the catalog; see [Managing models]({{ '/docs/models/#managing-models' | relative_url }}).
 
