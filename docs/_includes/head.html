@@ -5,6 +5,72 @@
   (function () { try { var t = localStorage.getItem('lp-theme'); if (t === 'light' || t === 'dark') { document.documentElement.setAttribute('data-theme', t); } } catch (e) {} })();
 </script>
 {% seo %}
+<meta name="keywords" content="{{ page.keywords | default: site.keywords | strip_newlines | strip }}">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="application-name" content="LocalPilot">
+<meta name="apple-mobile-web-app-title" content="LocalPilot">
+{% unless page.image %}<meta property="og:image" content="{{ '/assets/og.png' | absolute_url }}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:image" content="{{ '/assets/og.png' | absolute_url }}">{% endunless %}
+<link rel="alternate" type="application/rss+xml" title="LocalPilot releases" href="{{ site.repo }}/releases.atom">
+{% if site.google_analytics and jekyll.environment == 'production' %}
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id={{ site.google_analytics }}"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', '{{ site.google_analytics }}', { anonymize_ip: true });
+  // Conversion-style events for the download CTAs.
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a) { return; }
+    if (/releases\/latest\/download|\.vsix$/.test(a.href)) { gtag('event', 'download_vsix', { link_url: a.href, page_path: location.pathname }); }
+    else if (/github\.com\/isathish\/localpilot\/?$/.test(a.href)) { gtag('event', 'click_github', { page_path: location.pathname }); }
+  }, true);
+</script>
+{% endif %}
+{% if page.layout == 'landing' %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "LocalPilot",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "VS Code extension",
+      "operatingSystem": "macOS, Windows, Linux",
+      "softwareVersion": "{{ site.version }}",
+      "description": {{ site.description | jsonify }},
+      "url": "{{ site.url }}{{ site.baseurl }}/",
+      "image": "{{ '/assets/og.png' | absolute_url }}",
+      "downloadUrl": "{{ site.download }}",
+      "installUrl": "{{ site.download }}",
+      "softwareRequirements": "Visual Studio Code 1.140 or later; a local model server such as Ollama, LM Studio, llama.cpp or vLLM",
+      "license": "https://opensource.org/licenses/MIT",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@type": "Person", "name": "Sathish", "url": "https://github.com/isathish" },
+      "sameAs": ["{{ site.repo }}"],
+      "keywords": {{ site.keywords | strip_newlines | strip | jsonify }}
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Which local models work best with LocalPilot?", "acceptedAnswer": { "@type": "Answer", "text": "For agentic coding with tools: qwen2.5-coder 14b/32b, qwen3, devstral, llama3.3, mistral-small, gpt-oss. For inline completions: qwen2.5-coder 1.5b/7b-base, codestral, starcoder2. For screenshots: qwen2.5vl, llava, gemma3." } },
+        { "@type": "Question", "name": "Does LocalPilot send my code to the cloud?", "acceptedAnswer": { "@type": "Answer", "text": "No. LocalPilot only talks to the model servers you configure, which run on localhost by default. There is no telemetry and no account." } },
+        { "@type": "Question", "name": "Does agent mode work with models that lack tool calling?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. LocalPilot detects missing native function calling and falls back to a prompt-based tool protocol, parsing tool calls from the model's text." } },
+        { "@type": "Question", "name": "Is LocalPilot free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. LocalPilot is free and open source under the MIT license. You only pay for the hardware you already own." } },
+        { "@type": "Question", "name": "Can I reuse my Claude Code or Cursor rules and skills?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. CLAUDE.md, AGENTS.md, .cursorrules, .cursor/rules, .claude/skills, .claude/agents and .github/copilot-instructions.md are all loaded automatically." } }
+      ]
+    }
+  ]
+}
+</script>
+{% else %}
+<script type="application/ld+json">
+{ "@context": "https://schema.org", "@type": "TechArticle", "headline": {{ page.title | jsonify }}, "description": {{ page.description | default: site.description | jsonify }}, "url": "{{ page.url | absolute_url }}", "image": "{{ '/assets/og.png' | absolute_url }}", "author": { "@type": "Person", "name": "Sathish" }, "publisher": { "@type": "Organization", "name": "LocalPilot", "logo": { "@type": "ImageObject", "url": "{{ '/assets/logo.png' | absolute_url }}" } }, "about": { "@type": "SoftwareApplication", "name": "LocalPilot" } }
+</script>
+{% endif %}
 <link rel="icon" type="image/svg+xml" href="{{ '/assets/logo.svg' | relative_url }}">
 <link rel="apple-touch-icon" href="{{ '/assets/logo.png' | relative_url }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">

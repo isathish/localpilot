@@ -7,6 +7,7 @@
     </div>
     <nav class="footer-links">
       <a href="{{ '/docs/getting-started/' | relative_url }}">Docs</a>
+      {% for g in site.guides %}<a href="{{ g.url | relative_url }}">{{ g.title }}</a>{% endfor %}
       <a href="{{ site.releases }}">Releases</a>
       <a href="{{ site.repo }}/issues">Issues</a>
       <a href="{{ site.repo }}/blob/main/CHANGELOG.md">Changelog</a>

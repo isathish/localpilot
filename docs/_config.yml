@@ -1,6 +1,6 @@
 title: LocalPilot
 tagline: Local-first AI coding agent for VS Code
-description: LocalPilot brings the Copilot / Claude Code / Cursor experience to VS Code — powered entirely by models you run yourself with Ollama, LM Studio, llama.cpp or vLLM. Agent mode, parallel agents, skills, subagents, screenshots, MCP and more.
+description: LocalPilot is a free, open-source AI coding agent for VS Code that runs 100% locally with Ollama, LM Studio, llama.cpp or vLLM. Agent mode, parallel agents, skills, subagents, screenshots and MCP — a private, offline alternative to GitHub Copilot, Cursor and Claude Code.
 url: https://isathish.github.io
 baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
@@ -8,6 +8,26 @@ download: https://github.com/isathish/localpilot/releases/latest/download/localp
 releases: https://github.com/isathish/localpilot/releases
 version: 0.1.1
 lang: en
+logo: /assets/og.png
+author:
+  name: Sathish
+  url: https://github.com/isathish
+twitter:
+  card: summary_large_image
+social:
+  name: LocalPilot
+  links:
+    - https://github.com/isathish/localpilot
+google_analytics: G-HS3RSBRPYC
+# Add verification tokens from Google Search Console / Bing Webmaster Tools when available.
+webmaster_verifications:
+  google: ""
+  bing: ""
+keywords: >-
+  local AI coding assistant, offline AI code assistant, VS Code AI agent, Ollama VS Code extension,
+  LM Studio VS Code, llama.cpp VS Code, vLLM VS Code, GitHub Copilot alternative, Cursor alternative,
+  Claude Code alternative, private coding assistant, self-hosted copilot, local LLM coding, qwen2.5-coder VS Code,
+  AI agent VS Code extension, MCP VS Code, agentic coding, open source copilot
 markdown: kramdown
 kramdown:
   input: GFM
@@ -51,3 +71,12 @@ nav:
     url: /docs/development/
   - title: Publishing
     url: /docs/publishing/
+guides:
+  - title: Ollama in VS Code
+    url: /guides/ollama-vscode/
+  - title: LM Studio in VS Code
+    url: /guides/lm-studio-vscode/
+  - title: GitHub Copilot alternative
+    url: /guides/github-copilot-alternative/
+  - title: Offline AI coding assistant
+    url: /guides/offline-ai-coding-assistant/

@@ -1,6 +1,7 @@
 ---
 layout: landing
-title: LocalPilot — Local-first AI coding agent for VS Code
+title: LocalPilot — Free local AI coding agent for VS Code (Ollama, LM Studio, llama.cpp, vLLM)
+description: LocalPilot is a free, open-source AI coding agent for VS Code that runs 100% on your machine. Agent mode, parallel agents, skills, screenshots and MCP with Ollama, LM Studio, llama.cpp or vLLM — a private alternative to GitHub Copilot, Cursor and Claude Code.
 permalink: /
 ---
 <section class="hero">
@@ -134,6 +135,20 @@ ollama serve</code></pre></div>
       </table>
     </div>
     <p class="muted small" style="text-align:center;margin-top:12px">Comparison reflects publicly documented capabilities as of {{ 'now' | date: "%B %Y" }}; product features change frequently.</p>
+  </div>
+</section>
+
+<section id="guides">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Guides</span>
+      <h2>Set up LocalPilot with your stack</h2>
+    </div>
+    <div class="grid">
+      {% for g in site.guides %}
+      <a class="card card-link" href="{{ g.url | relative_url }}"><h3>{{ g.title }}</h3><p>{% assign gp = site.pages | where: "url", g.url | first %}{{ gp.description | default: '' | truncate: 140 }}</p></a>
+      {% endfor %}
+    </div>
   </div>
 </section>
 

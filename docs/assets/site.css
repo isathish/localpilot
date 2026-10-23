@@ -167,6 +167,9 @@ section { padding: 72px 0; }
 .card .ico svg { width: 18px; height: 18px; fill: none; stroke: var(--accent-text); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .card h3 { margin: 0 0 8px; font-size: 17px; }
 .card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+a.card-link { display: block; text-decoration: none; color: inherit; }
+a.card-link:hover { border-color: var(--accent); }
+a.card-link h3::after { content: ' →'; color: var(--accent-text); }
 
 .steps { counter-reset: s; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .step { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px 22px 22px; }
