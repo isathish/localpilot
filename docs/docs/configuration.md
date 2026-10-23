@@ -1,0 +1,81 @@
+---
+title: Configuration
+description: Every LocalPilot setting, with defaults.
+permalink: /docs/configuration/
+---
+
+Open **Settings → Extensions → LocalPilot**, or edit `settings.json`.
+
+## Models
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Model servers. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
+| `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model found |
+| `localpilot.contextWindow` | `32768` | Requested context (Ollama `num_ctx`); capped by the model's maximum |
+| `localpilot.maxOutputTokens` | `4096` | Max tokens per response |
+| `localpilot.temperature` | `0.2` | Sampling temperature |
+| `localpilot.thinking` | `false` | Extended thinking for reasoning models |
+
+## Context
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.compactionThreshold` | `0.75` | Fraction of the window at which pruning/summarising starts |
+| `localpilot.maxToolOutputChars` | `24000` | Per-tool-output clamp (head + tail kept) |
+| `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
+| `localpilot.skillsPaths` | `[]` | Additional skill folders |
+
+## Approvals
+
+| Setting | Default |
+|---|---|
+| `localpilot.approvals.terminal` | `ask` |
+| `localpilot.approvals.write` | `always` |
+| `localpilot.approvals.delete` | `ask` |
+| `localpilot.approvals.network` | `always` |
+
+Values: `always`, `ask`, `never`.
+
+## Parallelism
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.parallel.maxConcurrency` | `4` | Concurrent tool calls / subagents |
+| `localpilot.parallel.maxSubagentDepth` | `2` | Nesting limit |
+
+## Web search
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.webSearch.provider` | `duckduckgo` | `duckduckgo` (no key), `searxng`, `brave`, `tavily` |
+| `localpilot.webSearch.searxngUrl` | `http://localhost:8888` | Self-hosted SearXNG |
+| `localpilot.webSearch.apiKey` | `""` | Brave / Tavily key |
+| `localpilot.webSearch.maxResults` | `6` | |
+
+## Inline completions
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.inlineCompletion.enabled` | `false` | Ghost-text completions |
+| `localpilot.inlineCompletion.model` | `""` | `provider/model`; empty uses the first FIM-capable model |
+| `localpilot.inlineCompletion.debounceMs` | `350` | |
+| `localpilot.inlineCompletion.maxTokens` | `128` | |
+
+## MCP
+
+`localpilot.mcpServers` — see [MCP servers]({{ '/docs/mcp/' | relative_url }}).
+
+## Example
+
+```jsonc
+{
+  "localpilot.defaultModel": "ollama/qwen2.5-coder:32b",
+  "localpilot.contextWindow": 65536,
+  "localpilot.approvals.terminal": "ask",
+  "localpilot.inlineCompletion.enabled": true,
+  "localpilot.inlineCompletion.model": "ollama/qwen2.5-coder:1.5b-base",
+  "localpilot.webSearch.provider": "searxng",
+  "localpilot.systemPromptAppend": "Use pnpm, not npm. Prefer functional React components."
+}
+```

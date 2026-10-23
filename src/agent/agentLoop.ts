@@ -1,0 +1,297 @@
+import * as vscode from 'vscode';
+import { getConfig } from '../config';
+import { ContextManager } from '../context/contextManager';
+import { estimateMessagesTokens } from '../context/tokenizer';
+import { WorkspaceContext } from '../context/workspaceContext';
+import { ProviderRegistry } from '../providers/registry';
+import { newId } from '../providers/http';
+import { parseArgs, ToolRegistry } from '../tools/registry';
+import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition } from '../types';
+import { ParallelPool } from './parallel';
+import { buildSystemPrompt } from './prompts';
+import { SkillManager } from './skills';
+import { ChangeTracker } from './changeTracker';
+
+export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
+
+export interface AgentRunOptions {
+  session: Session;
+  /** The new user message to process (appended to the session). */
+  userMessage: ChatMessage;
+  modelRef?: string;
+  /** Restrict tool set (subagents). */
+  toolFilter?: string[];
+  /** Replace the default persona (subagents). */
+  roleOverride?: string;
+  depth?: number;
+  emit: (e: AgentEvent) => void;
+  signal: AbortSignal;
+  requestApproval: ApprovalHandler;
+  maxIterations?: number;
+}
+
+const MAX_ITERATIONS_DEFAULT = 40;
+
+/** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
+export class AgentRunner {
+  constructor(
+    private readonly providers: ProviderRegistry,
+    private readonly tools: ToolRegistry,
+    private readonly skills: SkillManager,
+    private readonly workspace: WorkspaceContext,
+    private readonly log: vscode.LogOutputChannel,
+    private readonly tracker?: ChangeTracker
+  ) {}
+
+  async run(o: AgentRunOptions): Promise<string> {
+    const cfg = getConfig();
+    const depth = o.depth ?? 0;
+    const session = o.session;
+    const emit = o.emit;
+    const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
+
+    const { provider, model } = await this.providers.resolve(o.modelRef ?? session.model);
+    session.model = model.id;
+
+    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars });
+    const pool = new ParallelPool(cfg.parallel.maxConcurrency);
+
+    const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
+    const toolList = this.selectTools(session.mode, o.toolFilter);
+    const nativeTools = model.supportsTools;
+    const toolDefs: ToolDefinition[] = toolsEnabled ? toolList.map((t) => t.definition) : [];
+
+    const system = await buildSystemPrompt({
+      mode: session.mode,
+      model,
+      toolsEnabled,
+      textToolProtocol: toolsEnabled && !nativeTools,
+      skills: this.skills,
+      workspace: this.workspace,
+      append: cfg.systemPromptAppend,
+      roleOverride: o.roleOverride,
+    });
+    const systemWithTextTools = !nativeTools && toolDefs.length ? `${system}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : system;
+
+    session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
+
+    const toolCtx: ToolContext = {
+      sessionId: session.id,
+      workspaceRoot: this.workspace.root,
+      signal: o.signal,
+      depth,
+      progress: (t) => status(t),
+      trackChange: (fsPath) => this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve(),
+      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id),
+    };
+
+    let finalText = '';
+    const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
+
+    for (let iter = 0; iter < maxIter; iter++) {
+      if (o.signal.aborted) {
+        break;
+      }
+
+      // --- Context management ---------------------------------------------------------------
+      let budget = ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], session.messages, cfg.maxOutputTokens);
+      if (ctxMgr.needsCompaction(budget)) {
+        const pruned = ctxMgr.pruneToolOutputs(session.messages);
+        if (pruned.saved > 0) {
+          session.messages = pruned.messages;
+          budget = ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], session.messages, cfg.maxOutputTokens);
+        }
+      }
+      if (ctxMgr.needsCompaction(budget)) {
+        status('Compacting conversation to fit the context window…');
+        const result = await ctxMgr.compact(session.messages, provider, model, o.signal);
+        if (result.removed > 0) {
+          session.messages = result.messages;
+          session.compactions++;
+          emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
+        }
+      }
+      session.contextTokens = estimateMessagesTokens(session.messages) + budget.systemTokens + budget.toolsTokens;
+
+      // --- Model call -----------------------------------------------------------------------
+      status(iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
+      const assistant: ChatMessage = { role: 'assistant', content: '', toolCalls: [], meta: { timestamp: Date.now() } };
+      let text = '';
+      let thinking = '';
+      const calls: ToolCall[] = [];
+      try {
+        const stream = provider.chat({
+          model: model.modelId,
+          messages: [{ role: 'system', content: systemWithTextTools }, ...session.messages.map(stripMeta)],
+          tools: nativeTools && toolDefs.length ? toolDefs : undefined,
+          temperature: cfg.temperature,
+          maxTokens: cfg.maxOutputTokens,
+          contextWindow: Math.min(model.contextWindow, Math.max(cfg.contextWindow, 4096)),
+          think: cfg.thinking ? true : undefined,
+          signal: o.signal,
+        });
+        for await (const ev of stream) {
+          switch (ev.type) {
+            case 'text':
+              text += ev.text;
+              emit({ sessionId: session.id, type: 'assistant_delta', payload: ev.text });
+              break;
+            case 'thinking':
+              thinking += ev.text;
+              emit({ sessionId: session.id, type: 'thinking_delta', payload: ev.text });
+              break;
+            case 'tool_call':
+              calls.push(ev.call);
+              break;
+            case 'usage':
+              if (ev.promptTokens) {
+                session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
+              }
+              break;
+          }
+        }
+      } catch (e) {
+        if (o.signal.aborted) {
+          break;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log.error(`model call failed: ${msg}`);
+        emit({ sessionId: session.id, type: 'error', payload: msg });
+        session.messages.push({ role: 'assistant', content: text || `(error: ${msg})`, meta: { timestamp: Date.now() } });
+        throw e;
+      }
+
+      // Models without native tool support emit tool calls as text.
+      if (!nativeTools && toolDefs.length) {
+        const parsed = extractTextToolCalls(text);
+        if (parsed.calls.length) {
+          calls.push(...parsed.calls);
+          text = parsed.remainder;
+        }
+      }
+
+      assistant.content = text;
+      assistant.thinking = thinking || undefined;
+      assistant.toolCalls = calls.length ? calls : undefined;
+      session.messages.push(assistant);
+      finalText = text;
+
+      if (!calls.length) {
+        break;
+      }
+
+      // --- Tool execution (parallel for read-only tools) ------------------------------------
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools);
+      session.messages.push(...results);
+      session.updatedAt = Date.now();
+    }
+
+    session.updatedAt = Date.now();
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens } });
+    return finalText;
+  }
+
+  private selectTools(mode: Session['mode'], filter?: string[]): Tool[] {
+    let list = this.tools.list();
+    if (filter) {
+      const allowed = new Set(filter);
+      list = list.filter((t) => allowed.has(t.definition.name));
+    }
+    if (mode !== 'agent') {
+      // Read-only modes: strip mutating tools.
+      list = list.filter((t) => !t.approvalKind || t.approvalKind === 'network');
+    }
+    return list;
+  }
+
+  private async executeToolCalls(
+    calls: ToolCall[],
+    available: Tool[],
+    ctx: ToolContext,
+    pool: ParallelPool,
+    ctxMgr: ContextManager,
+    emit: (e: AgentEvent) => void,
+    sessionId: string,
+    nativeTools: boolean
+  ): Promise<ChatMessage[]> {
+    const byName = new Map(available.map((t) => [t.definition.name, t]));
+    const runOne = async (call: ToolCall): Promise<ChatMessage> => {
+      const args = parseArgs(call.arguments);
+      emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+      const started = Date.now();
+      let result = byName.has(call.name)
+        ? await this.tools.execute(call.name, args, ctx)
+        : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+      if (ctx.signal.aborted) {
+        result = { content: 'Cancelled by user.', isError: true };
+      }
+      const content = ctxMgr.clampToolOutput(result.content ?? '');
+      emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
+      return {
+        role: 'tool',
+        content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`,
+        toolCallId: call.id,
+        toolName: call.name,
+        meta: { timestamp: Date.now() },
+      };
+    };
+
+    // Parallel-safe tools run concurrently; mutating tools run sequentially in order, after reads.
+    const parallel = calls.filter((c) => byName.get(c.name)?.parallelSafe);
+    const serial = calls.filter((c) => !byName.get(c.name)?.parallelSafe);
+    const results = new Map<string, ChatMessage>();
+    const settled = await pool.map(parallel, runOne);
+    settled.forEach((r, i) => {
+      const call = parallel[i];
+      results.set(call.id, r.status === 'fulfilled' ? r.value : { role: 'tool', content: `Tool failed: ${String(r.reason)}`, toolCallId: call.id, toolName: call.name });
+    });
+    for (const call of serial) {
+      results.set(call.id, await runOne(call));
+    }
+    // Preserve the model's original call order in the transcript.
+    const ordered = calls.map((c) => results.get(c.id)!);
+    if (!nativeTools) {
+      // Text protocol: tool results go back as a single user message.
+      return [{ role: 'user', content: ordered.map((m) => m.content).join('\n\n'), meta: { timestamp: Date.now() } }];
+    }
+    return ordered;
+  }
+
+  private async gateApproval(kind: NonNullable<Tool['approvalKind']>, mode: ApprovalMode, ask: () => Promise<boolean>, emit: (e: AgentEvent) => void, sessionId: string): Promise<boolean> {
+    if (mode === 'always') {
+      return true;
+    }
+    if (mode === 'never') {
+      return false;
+    }
+    emit({ sessionId, type: 'approval_request', payload: { kind } });
+    return ask();
+  }
+}
+
+function stripMeta(m: ChatMessage): ChatMessage {
+  const { meta: _meta, thinking: _thinking, ...rest } = m;
+  return rest;
+}
+
+/** Parses ```tool_call fenced JSON blocks or <tool_call>…</tool_call> tags out of free text. */
+export function extractTextToolCalls(text: string): { calls: ToolCall[]; remainder: string } {
+  const calls: ToolCall[] = [];
+  const re = /```(?:tool_call|json)?\s*\n?(\{[\s\S]*?\})\s*```|<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+  let remainder = text;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const json = m[1] ?? m[2];
+    try {
+      const obj = JSON.parse(json) as { name?: string; arguments?: unknown; parameters?: unknown };
+      if (obj && typeof obj.name === 'string') {
+        const args = obj.arguments ?? obj.parameters ?? {};
+        calls.push({ id: newId(), name: obj.name, arguments: typeof args === 'string' ? args : JSON.stringify(args) });
+        remainder = remainder.replace(m[0], '');
+      }
+    } catch {
+      /* not a tool call */
+    }
+  }
+  return { calls, remainder: remainder.trim() };
+}

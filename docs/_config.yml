@@ -1,0 +1,51 @@
+title: LocalPilot
+tagline: Local-first AI coding agent for VS Code
+description: LocalPilot brings the Copilot / Claude Code / Cursor experience to VS Code — powered entirely by models you run yourself with Ollama, LM Studio, llama.cpp or vLLM. Agent mode, parallel agents, skills, subagents, screenshots, MCP and more.
+url: https://isathish.github.io
+baseurl: /localpilot
+repo: https://github.com/isathish/localpilot
+download: https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix
+releases: https://github.com/isathish/localpilot/releases
+version: 0.1.0
+lang: en
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+defaults:
+  - scope:
+      path: "docs"
+    values:
+      layout: docs
+exclude:
+  - README.md
+nav:
+  - title: Getting started
+    url: /docs/getting-started/
+  - title: Features
+    url: /docs/features/
+  - title: Models & providers
+    url: /docs/models/
+  - title: Agent, Ask & Plan
+    url: /docs/agent-modes/
+  - title: Parallel agents & changes
+    url: /docs/parallel-agents/
+  - title: Skills & subagents
+    url: /docs/skills-and-agents/
+  - title: Context & mentions
+    url: /docs/context/
+  - title: Screenshots & images
+    url: /docs/images/
+  - title: MCP servers
+    url: /docs/mcp/
+  - title: Configuration
+    url: /docs/configuration/
+  - title: Keyboard shortcuts
+    url: /docs/shortcuts/
+  - title: Troubleshooting
+    url: /docs/troubleshooting/
+  - title: Development
+    url: /docs/development/

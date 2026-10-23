@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang }}">
+<head>
+{% include head.html %}
+</head>
+<body class="docs">
+{% include nav.html %}
+<div class="wrap docs-grid">
+  <aside class="sidebar">
+    <div class="sidebar-title">Documentation</div>
+    <ul>
+      {% for item in site.nav %}
+      <li><a href="{{ item.url | relative_url }}" {% if page.url == item.url %}class="active" aria-current="page"{% endif %}>{{ item.title }}</a></li>
+      {% endfor %}
+    </ul>
+    <div class="sidebar-foot">
+      <a class="btn btn-primary btn-block" href="{{ site.download }}">Download VSIX</a>
+      <a class="muted small" href="{{ site.repo }}/edit/main/docs{{ page.path | remove_first: 'docs' }}">Edit this page</a>
+    </div>
+  </aside>
+  <article class="content">
+    {% if page.title %}<h1>{{ page.title }}</h1>{% endif %}
+    {% if page.description %}<p class="lead">{{ page.description }}</p>{% endif %}
+    {{ content }}
+    {% assign idx = -1 %}
+    {% for item in site.nav %}{% if item.url == page.url %}{% assign idx = forloop.index0 %}{% endif %}{% endfor %}
+    {% if idx >= 0 %}
+    <nav class="pager">
+      {% assign prev = idx | minus: 1 %}{% assign next = idx | plus: 1 %}
+      {% if prev >= 0 %}{% assign p = site.nav[prev] %}<a class="pager-prev" href="{{ p.url | relative_url }}">← {{ p.title }}</a>{% else %}<span></span>{% endif %}
+      {% if next < site.nav.size %}{% assign n = site.nav[next] %}<a class="pager-next" href="{{ n.url | relative_url }}">{{ n.title }} →</a>{% endif %}
+    </nav>
+    {% endif %}
+  </article>
+</div>
+{% include footer.html %}
+</body>
+</html>

@@ -1,0 +1,17 @@
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <img src="{{ '/assets/logo.svg' | relative_url }}" alt="" width="24" height="24">
+      <span>LocalPilot</span>
+      <span class="muted">· v{{ site.version }} · MIT License</span>
+    </div>
+    <nav class="footer-links">
+      <a href="{{ '/docs/getting-started/' | relative_url }}">Docs</a>
+      <a href="{{ site.releases }}">Releases</a>
+      <a href="{{ site.repo }}/issues">Issues</a>
+      <a href="{{ site.repo }}/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="{{ site.repo }}">GitHub</a>
+    </nav>
+  </div>
+  <p class="wrap muted small">Your code never leaves your machine. LocalPilot talks only to the model servers you configure.</p>
+</footer>

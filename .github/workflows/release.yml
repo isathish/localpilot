@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package & publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Verify tag matches package.json version
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & test
+        run: |
+          npm run compile
+          npm run smoke
+          xvfb-run -a npm test
+
+      - name: Package VSIX
+        run: |
+          npx @vscode/vsce package --no-dependencies --out "localpilot-${{ steps.meta.outputs.version }}.vsix"
+          cp "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix
+          sha256sum localpilot-*.vsix > SHA256SUMS.txt
+
+      - name: Extract changelog section
+        id: notes
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          awk -v v="$V" '
+            /^## / { if (found) exit; if (index($0, v)) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then echo "See CHANGELOG.md for details." > RELEASE_NOTES.md; fi
+          {
+            echo ""
+            echo "### Install"
+            echo '```bash'
+            echo "code --install-extension localpilot-$V.vsix"
+            echo '```'
+            echo "Or **Extensions → ··· → Install from VSIX…** in VS Code. Documentation: https://isathish.github.io/localpilot/"
+          } >> RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: LocalPilot ${{ steps.meta.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            localpilot-${{ steps.meta.outputs.version }}.vsix
+            localpilot.vsix
+            SHA256SUMS.txt
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ secrets.VSCE_PAT != '' }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --no-dependencies --packagePath "localpilot-${{ steps.meta.outputs.version }}.vsix"
+
+      - name: Publish to Open VSX
+        if: ${{ secrets.OVSX_PAT != '' }}
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "localpilot-${{ steps.meta.outputs.version }}.vsix" -p "$OVSX_PAT"

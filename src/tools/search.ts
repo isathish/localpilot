@@ -1,0 +1,199 @@
+import * as vscode from 'vscode';
+import * as cp from 'child_process';
+import { Tool } from '../types';
+import { resolveWorkspacePath } from './fs';
+
+const EXCLUDES = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/*.min.js,**/*.map}';
+
+export const fileSearchTool: Tool = {
+  parallelSafe: true,
+  definition: {
+    name: 'file_search',
+    description: 'Find files by glob pattern (e.g. "src/**/*.ts", "**/package.json"). Returns workspace-relative paths.',
+    parameters: {
+      type: 'object',
+      properties: { pattern: { type: 'string' }, max_results: { type: 'integer', description: 'Default 50' } },
+      required: ['pattern'],
+    },
+  },
+  async execute(args) {
+    const pattern = String(args.pattern ?? '**/*');
+    const max = Number(args.max_results ?? 50);
+    const files = await vscode.workspace.findFiles(pattern, EXCLUDES, max);
+    if (!files.length) {
+      return { content: `No files match ${pattern}` };
+    }
+    return { content: files.map((f) => vscode.workspace.asRelativePath(f)).sort().join('\n') };
+  },
+};
+
+export const grepSearchTool: Tool = {
+  parallelSafe: true,
+  definition: {
+    name: 'grep_search',
+    description:
+      'Search file contents with a regex or literal string (uses ripgrep when available). Returns `path:line: text` matches. Use include_pattern to restrict to a glob.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        is_regex: { type: 'boolean', description: 'Treat query as a regular expression (default false)' },
+        include_pattern: { type: 'string', description: 'Glob such as "src/**/*.ts"' },
+        case_sensitive: { type: 'boolean' },
+        max_results: { type: 'integer', description: 'Default 100' },
+      },
+      required: ['query'],
+    },
+  },
+  async execute(args, ctx) {
+    const query = String(args.query ?? '');
+    if (!query) {
+      return { content: 'query is required', isError: true };
+    }
+    const max = Number(args.max_results ?? 100);
+    const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) {
+      return { content: 'No workspace open', isError: true };
+    }
+    const rg = await findRipgrep();
+    if (rg) {
+      const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-count', '50', '--max-columns', '300'];
+      if (!args.is_regex) {
+        rgArgs.push('--fixed-strings');
+      }
+      if (!args.case_sensitive) {
+        rgArgs.push('--ignore-case');
+      }
+      if (typeof args.include_pattern === 'string' && args.include_pattern) {
+        rgArgs.push('--glob', args.include_pattern);
+      }
+      for (const g of ['!node_modules', '!.git', '!dist', '!out', '!build']) {
+        rgArgs.push('--glob', g);
+      }
+      rgArgs.push('-e', query, '.');
+      const out = await runProcess(rg, rgArgs, root, ctx.signal);
+      const lines = out.split('\n').filter(Boolean).slice(0, max);
+      return { content: lines.length ? lines.map((l) => l.replace(/^\.\//, '')).join('\n') : `No matches for "${query}"` };
+    }
+    // Fallback: naive JS search (slower, but dependency-free).
+    const files = await vscode.workspace.findFiles(typeof args.include_pattern === 'string' && args.include_pattern ? args.include_pattern : '**/*', EXCLUDES, 2000);
+    const re = new RegExp(args.is_regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), args.case_sensitive ? '' : 'i');
+    const results: string[] = [];
+    for (const f of files) {
+      if (ctx.signal.aborted || results.length >= max) {
+        break;
+      }
+      try {
+        const bytes = await vscode.workspace.fs.readFile(f);
+        if (bytes.byteLength > 1_000_000) {
+          continue;
+        }
+        const text = Buffer.from(bytes).toString('utf8');
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length && results.length < max; i++) {
+          if (re.test(lines[i])) {
+            results.push(`${vscode.workspace.asRelativePath(f)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
+          }
+        }
+      } catch {
+        /* skip unreadable */
+      }
+    }
+    return { content: results.length ? results.join('\n') : `No matches for "${query}"` };
+  },
+};
+
+export const findSymbolTool: Tool = {
+  parallelSafe: true,
+  definition: {
+    name: 'find_symbol',
+    description: 'Find symbol definitions (classes, functions, variables) across the workspace using the language server.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+  },
+  async execute(args) {
+    const syms = (await vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', String(args.query ?? ''))) ?? [];
+    if (!syms.length) {
+      return { content: 'No symbols found (language server may not be ready).' };
+    }
+    return {
+      content: syms
+        .slice(0, 50)
+        .map((s) => `${vscode.SymbolKind[s.kind]} ${s.name}${s.containerName ? ` (in ${s.containerName})` : ''} — ${vscode.workspace.asRelativePath(s.location.uri)}:${s.location.range.start.line + 1}`)
+        .join('\n'),
+    };
+  },
+};
+
+export const findReferencesTool: Tool = {
+  parallelSafe: true,
+  definition: {
+    name: 'find_references',
+    description: 'Find all references to the symbol at a given file position using the language server.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string' }, line: { type: 'integer', description: '1-based' }, symbol: { type: 'string', description: 'Symbol name on that line' } },
+      required: ['path', 'line', 'symbol'],
+    },
+  },
+  async execute(args, ctx) {
+    const uri = resolveWorkspacePath(String(args.path), ctx);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const lineIdx = Number(args.line) - 1;
+    const col = doc.lineAt(lineIdx).text.indexOf(String(args.symbol));
+    if (col < 0) {
+      return { content: `Symbol "${args.symbol}" not found on line ${args.line}`, isError: true };
+    }
+    const locs = (await vscode.commands.executeCommand<vscode.Location[]>('vscode.executeReferenceProvider', uri, new vscode.Position(lineIdx, col))) ?? [];
+    return { content: locs.length ? locs.slice(0, 100).map((l) => `${vscode.workspace.asRelativePath(l.uri)}:${l.range.start.line + 1}`).join('\n') : 'No references found.' };
+  },
+};
+
+let rgPath: string | null | undefined;
+async function findRipgrep(): Promise<string | null> {
+  if (rgPath !== undefined) {
+    return rgPath;
+  }
+  const candidates = [
+    `${vscode.env.appRoot}/node_modules/@vscode/ripgrep/bin/rg`,
+    `${vscode.env.appRoot}/node_modules.asar.unpacked/@vscode/ripgrep/bin/rg`,
+    'rg',
+  ];
+  for (const c of candidates) {
+    try {
+      await runProcess(c, ['--version'], undefined);
+      rgPath = c;
+      return c;
+    } catch {
+      /* try next */
+    }
+  }
+  rgPath = null;
+  return null;
+}
+
+export function runProcess(cmd: string, args: string[], cwd?: string, signal?: AbortSignal, timeoutMs = 60_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(cmd, args, { cwd, shell: false });
+    let out = '';
+    let err = '';
+    const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.stdout.on('data', (d) => (out += d.toString()));
+    child.stderr.on('data', (d) => (err += d.toString()));
+    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    child.on('error', (e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(t);
+      // ripgrep exits 1 when there are no matches.
+      if (code === 0 || code === 1) {
+        resolve(out);
+      } else {
+        reject(new Error(err || `exit code ${code}`));
+      }
+    });
+  });
+}
+
+export const searchTools: Tool[] = [fileSearchTool, grepSearchTool, findSymbolTool, findReferencesTool];
