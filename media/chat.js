@@ -309,7 +309,7 @@
     const results = new Map();
     for (const m of s.messages) { if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); } }
     s.messages.forEach((m, i) => {
-      if (m.role === 'tool') { return; }
+      if (m.role === 'tool' || (m.role === 'user' && m.meta && m.meta.hidden)) { return; }
       if (m.meta && m.meta.summary) { const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       const node = m.role === 'user' ? userTurn(m, i) : assistantTurn(m, results);
       if (node) { els.messages.appendChild(node); }

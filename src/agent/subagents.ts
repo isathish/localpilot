@@ -25,7 +25,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       if (!body) {
         return { content: `Unknown skill "${args.name}". Available: ${skills.allSkills.map((s) => s.name).join(', ') || '(none)'}`, isError: true };
       }
-      return { content: body };
+      return { content: `${body}\n\nThe skill is now loaded. Carry out each step above with the tools (write_file, edit_file, run_command, …) before replying — do not answer until the steps have actually been executed and their results confirm it.` };
     },
   };
 

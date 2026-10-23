@@ -103,6 +103,8 @@ export class AgentRunner {
     // parallel requests run once); any mutating tool clears the cache.
     const toolCache = new Map<string, Promise<ChatMessage>>();
     const think = cfg.thinking === 'off' ? undefined : cfg.thinking === 'on' ? true : cfg.thinking;
+    let toolsExecuted = 0;
+    let nudged = false;
 
     for (let iter = 0; iter < maxIter; iter++) {
       if (o.signal.aborted) {
@@ -201,11 +203,24 @@ export class AgentRunner {
       finalText = text;
 
       if (!calls.length) {
+        // Small models sometimes answer "done" to an action request without doing anything. Once per
+        // run, in agent mode, when nothing was executed and the reply is a bare claim, push back.
+        if (session.mode === 'agent' && toolDefs.length && !nudged && toolsExecuted === 0 && depth === 0 && looksLikeBareClaim(text, o.userMessage.content)) {
+          nudged = true;
+          status('Verifying…');
+          session.messages.push({
+            role: 'user',
+            content: 'You have not called any tools, so nothing has been done yet. If the request requires an action (creating or editing files, running commands), perform it now with the tools and only then report. If no action is needed, explain why in one or two sentences.',
+            meta: { timestamp: Date.now(), hidden: true },
+          });
+          continue;
+        }
         break;
       }
 
       // --- Tool execution (parallel for read-only tools) ------------------------------------
       const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache);
+      toolsExecuted += calls.length;
       session.messages.push(...results);
       this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();
@@ -337,6 +352,17 @@ export class AgentRunner {
 function stripMeta(m: ChatMessage): ChatMessage {
   const { meta: _meta, thinking: _thinking, ...rest } = m;
   return rest;
+}
+
+/** A short, code-free reply to an imperative request that reads like "done" rather than an explanation or a question. */
+export function looksLikeBareClaim(reply: string, request: string): boolean {
+  const r = reply.trim();
+  if (!r || r.length > 240 || r.includes('```') || /\?\s*$/.test(r)) {
+    return false;
+  }
+  const imperative = /\b(create|write|add|edit|fix|update|change|rename|delete|remove|run|install|refactor|implement|make|generate|replace|move|save)\b/i.test(request);
+  const claim = /\b(done|fixed|created|written|added|updated|completed|finished|implemented|saved|removed|deleted|changed|greeted|ok)\b/i.test(r);
+  return imperative && claim;
 }
 
 /**

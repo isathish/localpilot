@@ -625,7 +625,7 @@ export class ChatController implements vscode.Disposable {
         if (!skill) {
           return say(`Unknown skill "${name}". Try /skills.`);
         }
-        void this.send(session.id, `Use the "${name}" skill (call load_skill first) for this task: ${task.join(' ') || 'follow the skill instructions.'}`);
+        void this.send(session.id, `Use the "${name}" skill for this task: ${task.join(' ') || 'follow the skill instructions.'}\nFirst call load_skill("${name}"), then perform every step the skill describes using the tools, then report what you did.`);
         return '';
       }
       case 'agent': {

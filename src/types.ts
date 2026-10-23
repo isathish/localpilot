@@ -29,6 +29,10 @@ export interface ChatMessage {
     summary?: boolean;
     /** Marks that the tool output was truncated / pruned. */
     pruned?: boolean;
+    /** Internal steering message (e.g. the completion nudge); sent to the model but not shown in the transcript. */
+    hidden?: boolean;
+    /** User-role carrier for images produced by tools (browser_screenshot); lists the originating tool call ids. */
+    toolImages?: string[];
   };
 }
 

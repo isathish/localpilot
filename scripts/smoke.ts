@@ -6,7 +6,7 @@
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
-import { extractTextToolCalls } from '../src/agent/agentLoop';
+import { extractTextToolCalls, looksLikeBareClaim } from '../src/agent/agentLoop';
 import { ContextManager } from '../src/context/contextManager';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
@@ -172,6 +172,14 @@ async function pureLogic() {
   check('known-tool filter rejects unknown names', extractTextToolCalls('{"name": "rm_rf", "arguments": {}}', new Set(['write_file'])).calls.length === 0);
   check('prose mentioning {"name": …} is left alone when not a real call', extractTextToolCalls('The schema is {"name": "x"} plus more text', new Set(['write_file'])).calls.length === 0);
   check('parseArgs lenient', parseArgs('{"path": "a"} trailing').path === 'a' && Object.keys(parseArgs('')).length === 0);
+
+  console.log('\n[Completion nudge heuristic]');
+  check('"done" to a create request is a bare claim', looksLikeBareClaim('done', 'Use write_file to create a.txt'));
+  check('"fixed" to an edit request is a bare claim', looksLikeBareClaim('Fixed.', 'Please fix the bug in calc.py'));
+  check('an explanation with code is not', !looksLikeBareClaim('Here is the change:\n```py\nx = 1\n```\nDone.', 'fix the bug'));
+  check('a clarifying question is not', !looksLikeBareClaim('Which file should I update?', 'update the config'));
+  check('a question-type request is not nudged', !looksLikeBareClaim('It returns the sum.', 'what does add do?'));
+  check('a long substantive answer is not', !looksLikeBareClaim('I reviewed the module. '.repeat(20), 'fix the module'));
 
   console.log('\n[Docker discovery]');
   const ports = parseDockerPorts('0.0.0.0:11435->11434/tcp, [::]:11435->11434/tcp, 127.0.0.1:9000->8000/tcp');
