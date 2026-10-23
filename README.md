@@ -29,7 +29,20 @@ Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entir
 
 ## Why LocalPilot?
 
-- **Private & offline** — your code only ever reaches the model servers you configure (localhost by default).
+**It saves you money, and you can check that it's private.**
+
+| Per developer | LocalPilot | GitHub Copilot Pro / Pro+ | Cursor Pro | Claude Pro / Max |
+|---|---|---|---|---|
+| Per month | **$0** | $10 / $39 | $20 | $20 / $100–200 |
+| Team of 10, per year | **$0** | $1,200 / $4,680 | $2,400 | $2,400 / $12,000+ |
+| Works with the network unplugged | **Yes** | No | No | No |
+| Where your code is processed | **Your laptop** | Vendor cloud | Vendor cloud | Vendor cloud |
+
+<sub>Published list prices for individual plans (USD) at the time of writing; vendors change plans and limits often. With LocalPilot you pay only for your own electricity — a 7B coding model needs ~8 GB RAM, 14B–32B models 16–32 GB.</sub>
+
+**See for yourself in 30 seconds:** turn Wi‑Fi off — LocalPilot keeps editing and running tests; open *Settings → Providers* — every address is `localhost` or a server you added; it is MIT-licensed — read the source or run `npm test` against your own Ollama.
+
+- **Private & offline** — your code only ever reaches the model servers you configure (localhost by default). No account, no telemetry SDK, no update pings.
 - **Frontier-style agent** — reads, searches, edits, runs commands and tests, fixes its own mistakes, asks before anything risky.
 - **Built for local models** — automatic tool-calling fallback for models without function calling, aggressive context management so 8k–32k windows still finish long tasks.
 - **Parallel by design** — run many agents at once, review every file each one touched, keep or undo per agent.

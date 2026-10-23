@@ -1,6 +1,8 @@
 # LocalPilot — the AI coding agent that runs on your machine
 
-Copilot-class agentic coding in VS Code, powered entirely by models you serve with **Ollama**, **LM Studio**, **llama.cpp** or **vLLM**. No accounts. No telemetry. Nothing leaves your computer.
+Copilot-class agentic coding in VS Code, powered entirely by models you serve with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner**. No subscription. No accounts. No telemetry. Nothing leaves your computer.
+
+**$0 per month instead of $10–$200 per developer.** Cloud assistants bill every seat every month and meter your usage; LocalPilot uses the laptop you already own — unplug the network and it keeps working. Check it yourself: *Settings → Providers* lists every address it talks to (all `localhost` unless you add a server), and the source is MIT-licensed on GitHub.
 
 ## What it does
 
