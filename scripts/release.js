@@ -12,8 +12,11 @@
  * 5. Commits "release: vX.Y.Z" and pushes main. The Release workflow then tests, tags, builds the VSIX,
  *    creates the GitHub Release and publishes to the Marketplace / Open VSX.
  *
+ * You rarely need to run this by hand: the Release workflow bumps automatically on every push to main
+ * that contains releasable commits (see scripts/auto-bump.js). Use it to pick a specific version.
+ *
  * Flags: --dry-run (change nothing, print the plan)  --no-push (commit only)  --no-verify (skip step 4)
- *        --ci (used by the "Prepare release" workflow: commits with the bot identity, no branch prompt)
+ *        --ci (used by the Release and "Prepare release" workflows: commits with the bot identity)
  */
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -165,15 +168,21 @@ if (flags.has('--no-push')) {
 function notesFromCommits(sinceTag) {
   const range = sinceTag ? `${sinceTag}..HEAD` : 'HEAD';
   const subjects = out(`git log ${range} --no-merges --format=%s`).split('\n').map((s) => s.trim()).filter(Boolean);
+  // Housekeeping commits are left out, unless they are all there is (e.g. a forced "[release patch]").
+  return groupSubjects(subjects, /^(release|chore|ci|build|test|tests|style|wip|merge)$/) || groupSubjects(subjects, /^(release|wip|merge)$/);
+}
+
+function groupSubjects(subjects, skippedTypes) {
   const groups = { Added: [], Changed: [], Fixed: [], Documentation: [] };
   const seen = new Set();
   for (const subject of subjects) {
     const m = subject.match(/^(\w+)(?:\([^)]*\))?(!)?:\s*(.+)$/);
     const type = m ? m[1].toLowerCase() : '';
     let text = m ? m[3] : subject;
-    if (/^(release|chore|ci|build|test|tests|style|wip|merge)$/.test(type) || /^release: v?\d/.test(subject)) {
+    if (skippedTypes.test(type) || /^release: v?\d/.test(subject)) {
       continue;
     }
+    text = text.replace(/\s*\[(skip release|release skip|release (?:major|minor|patch))\]/gi, '');
     text = text.replace(/\s+/g, ' ').trim();
     text = text.charAt(0).toUpperCase() + text.slice(1).replace(/\.$/, '');
     if (text.length > 160) {

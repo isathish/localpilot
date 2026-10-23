@@ -25,7 +25,7 @@ gh secret set OVSX_PAT --repo isathish/localpilot     # optional
 Then either:
 
 - run the **Publish to Marketplace** workflow (*Actions → Publish to Marketplace → Run workflow*, choose the release tag), which downloads the already-released VSIX, verifies its checksum and publishes it, or
-- cut a new release: *Actions → Prepare release → Run workflow* (or `npm run release -- patch` locally). The **Release** workflow tests, tags, builds and publishes automatically whenever `main` carries an untagged version and the secrets exist. See [Development → Releases](/docs/development/#releases).
+- cut a new release: just push to `main` — the **Release** workflow bumps the version, tags, builds and publishes automatically whenever the push contains releasable commits and the secrets exist. *Actions → Prepare release → Run workflow* (or `npm run release -- minor` locally) picks a specific version. See [Development → Releases](/docs/development/#releases).
 
 ## Path B — publish from your machine
 

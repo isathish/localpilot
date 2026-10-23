@@ -3,7 +3,8 @@ name: Prepare release
 # One click from the Actions tab: bumps the version, promotes the changelog (or generates it from
 # conventional commits since the last tag), verifies the build, commits "release: vX.Y.Z" to main
 # and starts the Release workflow, which tests, tags, packages and publishes.
-# Equivalent to running `npm run release -- <bump>` locally.
+# Equivalent to running `npm run release -- <bump>` locally. Plain pushes to main already release a
+# patch automatically (see release.yml); use this to choose a minor, major or custom version.
 on:
   workflow_dispatch:
     inputs:

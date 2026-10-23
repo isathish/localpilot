@@ -1,10 +1,17 @@
 name: Release
 
 # How a release happens
-#   1. main carries a package.json version that has no vX.Y.Z tag yet (npm run release -- patch,
-#      the "Prepare release" workflow, or a hand edit of package.json + CHANGELOG.md), or
-#   2. someone pushes a v*.*.* tag / runs this workflow manually.
+#   1. a push to main whose version is already tagged but that contains releasable commits (anything
+#      except docs/chore/ci/build/test/style/release) is bumped automatically: patch by default, minor
+#      for a breaking "type!:" commit, or whatever "[release patch|minor|major]" in a commit message
+#      asks for. "[skip release]" anywhere in the pushed commits skips the bump. The bump job runs
+#      scripts/release.js --ci (version files + changelog + compile/smoke/package check), commits
+#      "release: vX.Y.Z" and re-dispatches this workflow, which then takes path 2; or
+#   2. main carries a package.json version that has no vX.Y.Z tag yet (the bump job, npm run release,
+#      the "Prepare release" workflow, or a hand edit of package.json + CHANGELOG.md); or
+#   3. someone pushes a v*.*.* tag / runs this workflow manually.
 # prepare  decides and validates metadata (versions agree, changelog section has entries)
+# bump     (path 1 only) bumps the version on main and starts a new run
 # verify   type-checks, lints, runs smoke + Extension Host tests and packages the VSIX
 # publish  only then tags the commit, creates the GitHub Release with the changelog section as notes
 #          and publishes to the VS Code Marketplace and Open VSX. A failed publish fails the run;
@@ -21,6 +28,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: release
@@ -37,6 +45,7 @@ jobs:
       sha: ${{ steps.decide.outputs.sha }}
       tag_exists: ${{ steps.decide.outputs.tag_exists }}
       previous_tag: ${{ steps.decide.outputs.previous_tag }}
+      bump: ${{ steps.decide.outputs.bump }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,9 +68,19 @@ jobs:
           else
             TAG="v$PKG_VERSION"
             if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-              echo "::notice::$TAG already exists, nothing to release. Bump the version (npm run release -- patch, or Actions → Prepare release) to publish a new one."
               echo "release=false" >> "$GITHUB_OUTPUT"
               echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+              # Already released: decide whether the commits pushed since that tag earn an automatic bump.
+              BUMP=""
+              if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.actor }}" != "github-actions[bot]" ]; then
+                BUMP=$(node scripts/auto-bump.js "$TAG")
+              fi
+              if [ -n "$BUMP" ]; then
+                echo "::notice::$TAG is already released; the pushed commits earn a $BUMP bump. Bumping main and starting a new release run."
+              else
+                echo "::notice::$TAG already exists and the push has no releasable commits (or asked to [skip release]); nothing to release."
+              fi
+              echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
             else
               echo "::notice::package.json is $PKG_VERSION and $TAG does not exist yet. Releasing after verification."
               echo "release=true" >> "$GITHUB_OUTPUT"
@@ -73,6 +92,47 @@ jobs:
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "previous_tag=$PREV" >> "$GITHUB_OUTPUT"
+
+  bump:
+    name: Bump version & start release
+    needs: prepare
+    if: needs.prepare.outputs.release != 'true' && needs.prepare.outputs.bump != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Bump, verify, commit and push
+        env:
+          BUMP: ${{ needs.prepare.outputs.bump }}
+        run: |
+          # Another push may have landed since prepare ran; only bump if main still points at this run's commit.
+          if [ "$(git rev-parse HEAD)" != "${{ needs.prepare.outputs.sha }}" ]; then
+            echo "::notice::main moved on since this run started; the newer push will handle the bump."; exit 0
+          fi
+          node scripts/release.js "$BUMP" --ci --no-push
+          git push origin main
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+      - name: Start the Release workflow
+        # Pushes made with GITHUB_TOKEN do not trigger other workflow runs, so start it explicitly.
+        if: env.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref main
+          sleep 5
+          RUN=$(gh run list --workflow=release.yml --branch main --event workflow_dispatch --limit 1 --json url --jq '.[0].url')
+          {
+            echo "## Auto-bumped to v${version}"
+            echo ""
+            echo "Committed \`release: v${version}\` to main. Release run: ${RUN:-see the Actions tab}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify:
     name: Build, test & package

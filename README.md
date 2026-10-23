@@ -173,7 +173,7 @@ npm run compile     # type-check + lint + bundle
 npm run smoke       # offline tests (mock Ollama/OpenAI servers, agent loop)
 npm test            # Extension Host tests
 npm run check:version      # package.json, lockfile, docs config and changelog agree
-npm run release -- patch   # bump + changelog + push; CI tests, tags, releases and publishes
+npm run release -- minor   # pick a specific bump; plain pushes to main auto-release a patch
 ```
 
 Press <kbd>F5</kbd> for an Extension Development Host. Architecture notes: [Development](https://isathish.github.io/localpilot/docs/development/).
