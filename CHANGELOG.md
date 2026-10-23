@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.2 — 2026-10-23
 ### Added
 - **Screenshot tool with capture modes** — the camera/attach button, the **@ Add context** menu and *LocalPilot: Capture Screenshot to Chat* now offer **Selection area** (drag a rectangle), **This VS Code window** (captured instantly, no interaction), **Pick a window**, **Full screen** and **Full screen in 5 s** (time to switch apps or open a menu). macOS uses `screencapture` (window id lookup via CoreGraphics, no screen-recording prompt); Linux uses gnome-screenshot / spectacle / scrot / grim+slurp / import+xdotool; Windows gets a translucent drag-to-select overlay, foreground-window capture and virtual-screen capture via PowerShell.
 
