@@ -78,7 +78,7 @@ jobs:
               if [ -n "$BUMP" ]; then
                 echo "::notice::$TAG is already released; the pushed commits earn a $BUMP bump. Bumping main and starting a new release run."
               else
-                echo "::notice::$TAG already exists and the push has no releasable commits (or asked to [skip release]); nothing to release."
+                echo "::notice::$TAG already exists and the push has no releasable commits, or a commit opted out of releasing; nothing to release. Add [release patch] to a commit message to force one."
               fi
               echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
             else
