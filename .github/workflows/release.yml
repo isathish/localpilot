@@ -73,12 +73,12 @@ jobs:
               # Already released: decide whether the commits pushed since that tag earn an automatic bump.
               BUMP=""
               if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.actor }}" != "github-actions[bot]" ]; then
-                BUMP=$(node scripts/auto-bump.js "$TAG")
+                BUMP=$(node scripts/auto-bump.js "$TAG" "${{ github.event.before }}..$SHA")
               fi
               if [ -n "$BUMP" ]; then
                 echo "::notice::$TAG is already released; the pushed commits earn a $BUMP bump. Bumping main and starting a new release run."
               else
-                echo "::notice::$TAG already exists and the push has no releasable commits, or a commit opted out of releasing; nothing to release. Add [release patch] to a commit message to force one."
+                echo "::notice::$TAG already exists and the push has no releasable commits, or a commit opted out of releasing; nothing to release. Put [release patch] in a commit message to force one."
               fi
               echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
             else
