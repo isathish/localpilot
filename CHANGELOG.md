@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.0.1 — 2026-10-23
+
 ### Changed
 - **Gemma 4 is the starter model.** Automatic setup and the catalog now lead with Google's Gemma 4 — frontier-class small models with native tool calling, vision and optional thinking in every size — instead of Qwen2.5 Coder. A 16 GB machine gets `gemma4:e4b` (6.6 GB) plus `starcoder2:3b` for ghost text; an 8 GB machine gets `gemma4:e2b`; smaller machines fall back to Llama 3.2 / SmolLM2. Because Gemma 4 reads images itself, no separate vision model is downloaded any more. The catalog also gains NVIDIA's **Nemotron 3.5 Bolt** (e4b) and lists Gemma 4 e2b / e4b / 12b / 26b-a4b / 31b for Ollama, Docker Model Runner and LM Studio. Auto-routing prefers an installed Gemma 4 or Nemotron Bolt over a same-size Qwen coder for agent, reasoning and vision work, and prefers vision models that can also call tools. Qwen models remain in the catalog as an explicit choice.
 
