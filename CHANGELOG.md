@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.5 — 2026-10-23
 ### Added
 - **Brand icons & motion**: a LocalPilot icon font (`$(localpilot-logo)`, `$(localpilot-spark)`) replaces the generic robot codicon in the status bar, Agents view, Open Chat / Open Terminal commands and the terminal profile; the status bar shows an animated spinner with the running-agent count and a warning colour when no model is usable; the chat and Settings webviews open with a branded boot screen instead of a blank panel; the CLI has an animated amber spinner for thinking/status; every webview animation honours the OS "reduce motion" setting.
 - **Terminal integration**: the agent's commands run in a visible, branded **LocalPilot Agent** terminal through shell integration (live output, exit codes, Ctrl+C on stop) with a hidden-process fallback; terminal context menu **Explain Terminal Output**, **Fix Failed Command**, **Add Terminal Output to Chat**; `@terminal` chat context; **LocalPilot** terminal profile and *Open LocalPilot Terminal* with the CLI on PATH; settings `localpilot.terminal.runInIntegratedTerminal` / `reveal`.
