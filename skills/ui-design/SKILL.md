@@ -8,6 +8,7 @@ description: Design and polish user interfaces — layout, typography, spacing, 
 Goal: an interface that looks intentional on every screen size, is usable with keyboard and screen reader, and is verified with a real render — not just CSS that "should" work.
 
 ## 1. Understand the system you're styling
+- For chat / copilot / agent surfaces, or when the user wants a calm "Claude-like" feel, load the `claude-ui-ux` skill as well — it carries that visual language and the assistant-specific UX patterns.
 - Find the existing design language: global styles, CSS variables/tokens, Tailwind/theme config, component library (shadcn, MUI, Chakra, Vuetify…), fonts, icon set. `grep_search` for `--color`, `theme`, `tailwind.config`, `tokens`. Reuse these — never introduce a second palette or spacing scale.
 - Look at one well-made screen in the app (or the framework docs) and match it.
 - If a screenshot was attached, list the concrete problems you see (alignment, contrast, crowding, truncation, inconsistent sizes) before changing anything.

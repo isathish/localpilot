@@ -411,6 +411,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 
 /* toasts */
 #toasts { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 70; pointer-events: none; max-width: 90%; }
+.jump { position: fixed; left: 50%; transform: translateX(-50%); z-index: 60; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--vscode-notifications-background, var(--bg)); color: var(--fg); border: 1px solid var(--border); box-shadow: var(--shadow); font: inherit; font-size: var(--fs-sm); cursor: pointer; animation: fadeUp .18s ease-out; }
+.jump:hover { background: var(--tint); }
+.jump svg { width: 12px; height: 12px; transform: rotate(90deg); }
+.jump.hidden { display: none; }
 .toast { background: var(--vscode-notifications-background, var(--bg)); color: var(--vscode-notifications-foreground, var(--fg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 12px; font-size: var(--fs-sm); box-shadow: var(--shadow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: fadeUp .18s ease-out; }
 .toast.error { border-color: color-mix(in srgb, var(--error) 60%, transparent); }
 
@@ -579,7 +583,8 @@ pre.numbered .t { padding-right: 14px; }
 /* respect the OS "reduce motion" preference: keep state visible, drop the movement */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  .step.running .ico svg, .tab .spin, .bgrun .spin, .status .spinner, .todo.in_progress .box svg, .card.running .card-head .ico svg { animation: spin 1.5s linear infinite !important; }
+  /* "Running" stays legible as a static, dimmed glyph instead of an endless spin. */
+  .step.running .ico svg, .tab .spin, .bgrun .spin, .status .spinner, .todo.in_progress .box svg, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
   .step.running .label > b { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--fg); animation: none; }
   .typing i, .boot-dots i, .caret { animation: none !important; opacity: .7; }
   .progress::after { animation: none !important; left: 0; width: 100%; opacity: .5; }

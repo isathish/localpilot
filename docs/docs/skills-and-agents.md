@@ -46,6 +46,7 @@ LocalPilot ships playbooks for the whole development loop, so a fresh workspace 
 | `review` | Severity-ranked findings (correctness, OWASP security, performance, tests) with `file:line` fixes |
 | `refactor` | Behaviour-preserving restructuring guarded by tests and diagnostics |
 | `ui-design` | Hierarchy, spacing, typography, colour tokens, states, responsive, accessibility — verified with `browser_inspect` |
+| `claude-ui-ux` | Calm, warm, typography-led interfaces and assistant/agent UX patterns (streaming, tool steps, permission prompts, plan panels, empty/error states) |
 | `docs` | README / guides / API docs / changelog, checked against the code |
 | `deploy` | Dockerfile, CI, env & secrets, health checks, release checklist; runs the deploy when the CLI is available |
 | `ship` | Final verification, conventional commit message, PR description — no git action without permission |

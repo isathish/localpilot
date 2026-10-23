@@ -115,7 +115,18 @@
   function normLang(l) { l = String(l || '').toLowerCase().trim(); return LANG_ALIAS[l] || l; }
   function langForPath(p) { const m = /\.([a-z0-9]+)$/i.exec(String(p || '')); return m ? EXT_LANG[m[1].toLowerCase()] || '' : /dockerfile|makefile/i.test(p) ? 'sh' : ''; }
   const tok = (cls, text) => `<span class="tk-${cls}">${esc(text)}</span>`;
+  // Streaming re-renders the whole answer up to 20×/s; finished code blocks are identical each time, so remember them.
+  const hlCache = new Map();
   function highlight(code, lang) {
+    const key = `${lang}\u0000${code}`;
+    const hit = hlCache.get(key);
+    if (hit !== undefined) { return hit; }
+    const out = highlightRaw(code, lang);
+    if (hlCache.size > 300) { hlCache.delete(hlCache.keys().next().value); }
+    hlCache.set(key, out);
+    return out;
+  }
+  function highlightRaw(code, lang) {
     lang = normLang(lang);
     if (!code || code.length > 60000) { return esc(code); }
     if (lang === 'diff') { return code.split('\n').map((l) => (/^\+/.test(l) ? tok('add', l) : /^-/.test(l) ? tok('del', l) : /^@@/.test(l) ? tok('meta', l) : esc(l))).join('\n'); }
@@ -645,7 +656,14 @@
   }
   function renderSession() {
     const s = state.session;
+    // Same-session refreshes (mode/model change, compaction, restore) must not lose the reader's place.
+    const same = s && els.messages.dataset.sid === s.id;
+    const m = els.messages;
+    const stick = !same || m.scrollHeight - m.scrollTop - m.clientHeight < 160;
+    const y = m.scrollTop;
+    const open = same ? [...m.querySelectorAll('details')].map((d, i) => (d.open ? i : -1)).filter((i) => i >= 0) : [];
     els.messages.innerHTML = '';
+    els.messages.dataset.sid = s ? s.id : '';
     if (!s) { return; }
     syncMode(); syncModel(); updateCtx();
     if (!s.messages.length) { renderEmpty(); }
@@ -665,7 +683,9 @@
     if (live) { els.messages.appendChild(live.root); }
     setRunning(state.running.has(s.id));
     if (state.running.has(s.id)) { setStatus(state.status.get(s.id) || 'Working…'); }
-    scrollToBottom(true);
+    if (open.length) { const all = m.querySelectorAll('details'); for (const i of open) { if (all[i]) { all[i].open = true; } } }
+    if (stick) { scrollToBottom(true); } else { m.scrollTop = y; }
+    updateJump();
   }
   function renderEmpty() {
     const wrap = el('div', 'empty');
@@ -700,7 +720,7 @@
       const steps = el('div', 'steps');
       const body = el('div', 'body', '<span class="typing"><i></i><i></i><i></i></span>');
       root.appendChild(steps); root.appendChild(body);
-      live = { root, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), subTools: new Map(), timer: 0 };
+      live = { sid: sessionId, root, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), subTools: new Map(), timer: 0 };
       state.live.set(sessionId, live);
       if (state.session && state.session.id === sessionId) { els.messages.appendChild(root); }
     }
@@ -733,9 +753,26 @@
     live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
     live.thinkingEl = null;
   }
+  // Scrolls only when the event belongs to the transcript on screen — background agents must not move it.
+  const followLive = (live) => { if (state.session && state.session.id === live.sid) { scrollToBottom(false); updateJump(); } };
+  // "Jump to latest": shown when the reader has scrolled up while the active agent is still producing output.
+  const jump = el('button', 'jump hidden', `${I.chev}<span>Jump to latest</span>`);
+  jump.title = 'Scroll to the newest message'; jump.type = 'button';
+  $('app').appendChild(jump);
+  jump.onclick = () => { scrollToBottom(true); updateJump(); els.input.focus(); };
+  function updateJump() {
+    const m = els.messages;
+    const away = m.scrollHeight - m.scrollTop - m.clientHeight > 160;
+    const busy = state.session && (state.running.has(state.session.id) || state.live.has(state.session.id));
+    const show = !!(away && busy);
+    jump.classList.toggle('hidden', !show);
+    if (show) { jump.style.top = `${Math.round(m.getBoundingClientRect().bottom - 40)}px`; }
+  }
+  els.messages.addEventListener('scroll', updateJump, { passive: true });
+  window.addEventListener('resize', updateJump);
   function scheduleRender(live) {
     if (live.timer) { return; }
-    live.timer = setTimeout(() => { live.timer = 0; finishThinking(live); live.body.innerHTML = renderMarkdown(live.text) + '<span class="caret"></span>'; scrollToBottom(false); }, 50);
+    live.timer = setTimeout(() => { live.timer = 0; finishThinking(live); live.body.innerHTML = renderMarkdown(live.text) + '<span class="caret"></span>'; followLive(live); }, 50);
   }
   function finishLive(sessionId) {
     const live = state.live.get(sessionId);
@@ -776,14 +813,14 @@
             const rows = sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
             if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); sub.querySelector(':scope > summary .meta').textContent = `${sub.dataset.calls} step${sub.dataset.calls === '1' ? '' : 's'}`; }
           }
-          scrollToBottom(false);
+          followLive(live);
           break;
         }
         rotateBody(live);
         const node = placeTool(live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
         if (node) { live.tools.set(e.payload.id, node); }
         noteStatus(sid, toolLabel(e.payload.name, e.payload.args || {}, true).replace(/<[^>]+>/g, ''));
-        scrollToBottom(false);
+        followLive(live);
         break;
       }
       case 'tool_end':
@@ -853,7 +890,7 @@
 
   // ------------------------------------------------------------------ composer state
   function setStatus(text) { els.statusText.textContent = text || ''; els.status.classList.toggle('hidden', !text); }
-  function setRunning(running) { els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } updateSendEnabled(); }
+  function setRunning(running) { els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } updateSendEnabled(); updateJump(); }
   function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; }
   function updateCtx() {
     const s = state.session; if (!s) { return; }
@@ -1067,11 +1104,16 @@
   });
   // Strip under the tab bar: agents working in *other* tabs, with their live step. Click to switch, ■ to stop.
   let bgTimer = 0;
+  let bgSig = '';
   function renderBgRuns() {
     if (!els.bgruns) { return; }
     const active = activeId();
     const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active);
     els.bgruns.classList.toggle('hidden', !runs.length);
+    // Rebuilding identical rows restarts their spinners on every store broadcast; skip when nothing visible changed.
+    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}`).join('|');
+    if (sig === bgSig) { return; }
+    bgSig = sig;
     els.bgruns.innerHTML = '';
     if (!runs.length) { return; }
     for (const s of runs.slice(0, 3)) {
@@ -1142,29 +1184,41 @@
   // Placeholder adapts to the composer width.
   const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask, plan or build… (@ context)'], [420, 'Plan, build, fix anything… (@ context, / commands)']];
   new ResizeObserver(() => { const w = els.box.clientWidth; let p = PLACEHOLDERS[0][1]; for (const [min, t] of PLACEHOLDERS) { if (w >= min) { p = t; } } els.input.placeholder = p; }).observe(els.box);
+  let tasksSig = '';
   function renderTasks() {
     const todos = (state.session && state.session.todos) || [];
-    els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { return; }
+    els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { tasksSig = ''; return; }
     const done = todos.filter((t) => t.status === 'done').length;
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
     els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
+    const sig = `${state.session.id}|${todos.map((t) => `${t.id}:${t.status}:${t.title}:${t.agent || ''}`).join('|')}`;
+    if (sig === tasksSig) { return; }
+    tasksSig = sig;
+    const y = els.tasksList.scrollTop;
     els.tasksList.innerHTML = '';
     for (const t of todos) {
       const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? I.spin : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}</span>` : ''}`);
       if (t.result) { li.title = t.result.slice(0, 600); }
       els.tasksList.appendChild(li);
     }
+    els.tasksList.scrollTop = y;
   }
+  let changesSig = '';
   function renderChanges() {
     const s = state.session; const files = s ? state.changes.get(s.id) || [] : [];
-    els.changes.classList.toggle('hidden', !files.length); if (!files.length) { return; }
+    els.changes.classList.toggle('hidden', !files.length); if (!files.length) { changesSig = ''; return; }
     els.changesLabel.textContent = `${files.length} file${files.length === 1 ? '' : 's'} changed`;
+    const sig = `${s.id}|${files.map((f) => `${f.fsPath}:${f.kind}`).join('|')}`;
+    if (sig === changesSig) { return; }
+    changesSig = sig;
+    const y = els.changesList.scrollTop;
     els.changesList.innerHTML = '';
     for (const f of files) {
       const li = el('li', 'change', `<span class="kind ${f.kind}">${f.kind === 'create' ? 'A' : 'M'}</span><span class="name" title="${esc(f.path)}">${esc(f.path)}</span><span class="acts"><button data-a="undo" title="Reject">${I.undo}</button><button data-a="keep" title="Accept">${I.check}</button></span>`);
       li.onclick = (e) => { const a = e.target.closest('[data-a]'); if (a) { post({ type: a.dataset.a === 'undo' ? 'undoChanges' : 'keepChanges', sessionId: s.id, fsPath: f.fsPath }); return; } post({ type: 'showDiff', sessionId: s.id, fsPath: f.fsPath }); };
       els.changesList.appendChild(li);
     }
+    els.changesList.scrollTop = y;
   }
   function renderChips() {
     els.chips.innerHTML = '';
@@ -1204,7 +1258,8 @@
       menuState.sel = Math.max(0, menuState.items.findIndex((x) => x.it.selected)); highlight();
     };
     const highlight = () => menuState.items.forEach((x, i) => x.row.classList.toggle('sel', i === menuState.sel));
-    const pick = (it) => { closeMenu(); it.onPick && it.onPick(); };
+    // Return focus to the composer unless the picked action opened something that took it.
+    const pick = (it) => { closeMenu(); it.onPick && it.onPick(); if (!document.activeElement || document.activeElement === document.body) { els.input.focus(); } };
     render('');
     // Position above the anchor; fall back below when there is no room.
     const r = anchor.getBoundingClientRect(); const pw = Math.min(360, window.innerWidth - 20);
@@ -1222,6 +1277,9 @@
     if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; p.focus(); }
   }
   document.addEventListener('mousedown', (e) => { if (menuState && e.target.isConnected && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn, #btnHistory')) { closeMenu(); } });
+  // The popover is position:fixed from its anchor; scrolling or resizing would leave it floating detached.
+  els.messages.addEventListener('scroll', () => { if (menuState) { closeMenu(); } }, { passive: true });
+  window.addEventListener('resize', () => { if (menuState) { closeMenu(); } });
 
   els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
   els.modelBtn.onclick = () => {
@@ -1385,7 +1443,8 @@
         state.session = m.session; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
         renderSession(); renderChanges(); renderTasks(); renderTabs(); dismissBoot();
         if (switching) { closeMenu(); restoreDraft(m.session.id); const y = state.scroll.get(m.session.id); if (y !== undefined && !state.running.has(m.session.id)) { els.messages.scrollTop = y; } }
-        els.input.focus();
+        // Don't yank focus away from a rename box, popover search or anything else the user is typing in.
+        if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
         break;
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
@@ -1395,13 +1454,13 @@
         const isActive = state.session && state.session.id === m.sessionId;
         state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
-        else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); const d = els.approvals.querySelector(`[data-id="${CSS.escape(aid)}"]`); if (d) { d.remove(); } } } state.attention.delete(m.sessionId); }
+        else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
         if (isActive) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
         break;
       }
       case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
-      case 'approvalResolved': { const d = els.approvals.querySelector(`[data-id="${CSS.escape(m.id)}"]`); if (d) { d.remove(); } resolveAttention(m.id); break; }
+      case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
       case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level); } break;
       case 'draft': els.input.value = m.text || ''; autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
@@ -1418,17 +1477,28 @@
     state.approvalSid.delete(approvalId);
     if (![...state.approvalSid.values()].includes(sid)) { state.attention.delete(sid); renderTabs(); }
   }
+  /** Removes a prompt by id and unregisters its key handler — the only way prompts leave the DOM. */
+  function removeApproval(id) {
+    const d = els.approvals.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!d) { return; }
+    if (d._dispose) { d._dispose(); }
+    d.remove();
+  }
   function renderApproval(a) {
+    if (els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) { return; }
     const d = el('div', 'approval'); d.dataset.id = a.id;
     const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network' }[a.kind] || a.kind;
     const other = !state.session || state.session.id !== a.sessionId; const sess = other ? state.sessions.find((s) => s.id === a.sessionId) : null;
     d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="actions"><button class="btn ghost" data-a="deny" title="Deny (N)">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
     d.querySelector('pre').textContent = a.detail;
-    const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); d.remove(); resolveAttention(a.id); document.removeEventListener('keydown', key, true); els.input.focus(); };
-    const key = (e) => { if (e.target === els.input && els.input.value) { return; } if (e.target.closest && e.target.closest('.popover, .rename')) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };
+    const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
+    // Y/A/N answer the oldest pending prompt only; with several queued, one keypress must not resolve them all.
+    const key = (e) => { if (e.defaultPrevented || els.approvals.firstElementChild !== d) { return; } if (e.target === els.input && els.input.value) { return; } if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };
     d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (!b) { return; } if (b.dataset.a === 'open') { selectTab(a.sessionId); return; } answer(b.dataset.a); };
     document.addEventListener('keydown', key, true);
-    els.approvals.appendChild(d); scrollToBottom(true);
+    d._dispose = () => document.removeEventListener('keydown', key, true);
+    els.approvals.appendChild(d);
+    if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
   }
 
   updateSendEnabled();
