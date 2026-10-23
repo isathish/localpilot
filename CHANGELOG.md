@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.0.2 — 2026-10-23
+### Fixed
+- Show real vendor logos on provider cards
+
 ## 1.0.1 — 2026-10-23
 
 ### Changed
