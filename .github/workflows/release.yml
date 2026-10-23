@@ -16,6 +16,9 @@ jobs:
   release:
     name: Build, package & publish
     runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,13 +83,9 @@ jobs:
             SHA256SUMS.txt
 
       - name: Publish to VS Code Marketplace
-        if: ${{ secrets.VSCE_PAT != '' }}
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: env.VSCE_PAT != ''
         run: npx @vscode/vsce publish --no-dependencies --packagePath "localpilot-${{ steps.meta.outputs.version }}.vsix"
 
       - name: Publish to Open VSX
-        if: ${{ secrets.OVSX_PAT != '' }}
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        if: env.OVSX_PAT != ''
         run: npx ovsx publish "localpilot-${{ steps.meta.outputs.version }}.vsix" -p "$OVSX_PAT"
