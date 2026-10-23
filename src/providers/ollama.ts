@@ -12,12 +12,13 @@ import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 interface OllamaTag {
   name: string;
   model: string;
+  size?: number;
   details?: { family?: string; families?: string[]; parameter_size?: string };
 }
 interface OllamaShow {
   capabilities?: string[];
   model_info?: Record<string, unknown>;
-  details?: { family?: string };
+  details?: { family?: string; parameter_size?: string };
 }
 interface OllamaChatChunk {
   message?: {
@@ -90,6 +91,8 @@ export class OllamaProvider implements LLMProvider {
           supportsTools: caps.includes('tools'),
           supportsVision: caps.includes('vision'),
           supportsFim: caps.includes('insert') || /coder|code|starcoder|deepseek/i.test(m.name),
+          sizeBytes: typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
+          parameterSize: show?.details?.parameter_size ?? m.details?.parameter_size,
         };
         this.infoCache.set(m.name, info);
         return info;

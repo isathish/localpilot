@@ -57,6 +57,12 @@ export interface ModelInfo {
   supportsTools: boolean;
   supportsVision: boolean;
   supportsFim?: boolean;
+  /** On-disk size when the server reports it (Ollama). */
+  sizeBytes?: number;
+  /** Parameter count label when reported, e.g. `7.6B`. */
+  parameterSize?: string;
+  /** Hidden from pickers and routing via `localpilot.models.disabled`. Only set by the registry's full listing. */
+  disabled?: boolean;
 }
 
 export interface ChatRequestOptions {

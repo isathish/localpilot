@@ -16,6 +16,15 @@ export interface McpServerConfig {
   enabled?: boolean;
 }
 
+export interface RoutingConfig {
+  /** Pick a model per task automatically: vision model for image turns, FIM model for completions, fallback when the default is offline. */
+  enabled: boolean;
+  /** Model for turns with images (empty = best available vision model). */
+  vision?: string;
+  /** Model for reasoning-heavy Plan mode (empty = keep the session model). */
+  reasoning?: string;
+}
+
 export interface LocalPilotConfig {
   providers: ProviderConfig[];
   defaultModel: string;
@@ -35,6 +44,11 @@ export interface LocalPilotConfig {
   keepAlive: string;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
+  /** `provider/model` ids hidden from pickers and routing. */
+  disabledModels: string[];
+  /** Offer to install Ollama + a starter model when no local model is found. */
+  autoSetupModels: boolean;
+  routing: RoutingConfig;
 }
 
 const SECTION = 'localpilot';
@@ -86,6 +100,13 @@ export function getConfig(): LocalPilotConfig {
     keepAlive: c.get<string>('keepAlive', '30m'),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
     showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
+    disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
+    autoSetupModels: c.get<boolean>('models.autoSetup', true),
+    routing: {
+      enabled: c.get<boolean>('routing.enabled', true),
+      vision: c.get<string>('routing.vision', '') || undefined,
+      reasoning: c.get<string>('routing.reasoning', '') || undefined,
+    },
   };
 }
 
@@ -109,4 +130,14 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
 
 export async function setDefaultModel(modelId: string): Promise<void> {
   await vscode.workspace.getConfiguration(SECTION).update('defaultModel', modelId, vscode.ConfigurationTarget.Global);
+}
+
+/** Hide or show a model everywhere (pickers, routing, status bar) without touching the server. */
+export async function setModelEnabled(modelId: string, enabled: boolean): Promise<void> {
+  const c = vscode.workspace.getConfiguration(SECTION);
+  const cur = (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string');
+  const next = enabled ? cur.filter((id) => id !== modelId) : cur.includes(modelId) ? cur : [...cur, modelId];
+  if (next.length !== cur.length) {
+    await c.update('models.disabled', next, vscode.ConfigurationTarget.Global);
+  }
 }
