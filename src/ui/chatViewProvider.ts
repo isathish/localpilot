@@ -47,10 +47,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void> }): void {
+  private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void>; visible?: boolean }): void {
     webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')] };
     webview.html = this.html(webview);
-    const sink = { post: (m: ToWebview) => void webview.postMessage(m) };
+    const sink = { post: (m: ToWebview) => void webview.postMessage(m), visible: () => host.visible !== false };
     const attach = this.controller.attach(sink);
     const sub = webview.onDidReceiveMessage((m: FromWebview) => {
       if (m.type === 'attachActive' || m.type === 'pickAttachment') {

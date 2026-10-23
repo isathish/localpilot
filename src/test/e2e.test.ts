@@ -77,6 +77,8 @@ suite('LocalPilot end-to-end (real local model)', () => {
     const cfg = vscode.workspace.getConfiguration('localpilot');
     await cfg.update('defaultModel', model, vscode.ConfigurationTarget.Global);
     await cfg.update('approvals.write', 'always', vscode.ConfigurationTarget.Global);
+    // The agent may legitimately run a command to verify its edit; with no human to answer, allow it.
+    await cfg.update('approvals.terminal', 'always', vscode.ConfigurationTarget.Global);
     await cfg.update('showWelcomeOnStartup', false, vscode.ConfigurationTarget.Global);
   });
 

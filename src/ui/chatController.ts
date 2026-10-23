@@ -65,6 +65,8 @@ export type FromWebview =
 
 interface Sink {
   post(msg: ToWebview): void;
+  /** Whether the user can currently see this surface; approvals raised while nothing is visible also get a notification. */
+  visible?: () => boolean;
 }
 
 /** Shared brain behind the sidebar view, editor panels and the @localpilot chat participant. */
@@ -554,6 +556,30 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       this.broadcast({ type: 'approval', id, sessionId, title, detail, kind });
+      if (![...this.sinks].some((s) => !s.visible || s.visible())) {
+        // Chat UI exists but is hidden: mirror the prompt as a notification so a background agent never stalls unnoticed.
+        const session = this.store.get(sessionId);
+        void vscode.window
+          .showWarningMessage(`LocalPilot${session ? ` · ${session.title}` : ''}: ${title}`, 'Allow', 'Allow for session', 'Deny', 'Show chat')
+          .then((choice) => {
+            if (!this.approvals.has(id)) {
+              return; // already answered in the webview
+            }
+            if (choice === 'Show chat') {
+              void vscode.commands.executeCommand('localpilot.openChat');
+              return;
+            }
+            if (choice === undefined) {
+              return; // notification dismissed; the webview prompt stays open
+            }
+            if (choice === 'Allow for session') {
+              this.rememberApproval(sessionId, kind);
+            }
+            this.approvals.delete(id);
+            resolve(choice !== 'Deny');
+            this.broadcast({ type: 'approvalResolved', id });
+          });
+      }
     });
   }
 
