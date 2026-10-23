@@ -8,10 +8,10 @@ import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { SessionStore } from '../sessions/sessionStore';
 import { AgentEvent, ChatMessage, ModelInfo, Session } from '../types';
-import { captureScreenshot, ImageAttachment, pickImages, readImage } from './images';
+import { captureScreenshot, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
 
 export type ToWebview =
-  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; running: string[] }
+  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; running: string[]; platform: NodeJS.Platform }
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
   | { type: 'session'; session: Session }
   | { type: 'models'; models: ModelInfo[]; defaultModel: string }
@@ -48,12 +48,12 @@ export type FromWebview =
   | { type: 'pickAttachment' }
   | { type: 'compactNow'; sessionId: string }
   | { type: 'clearSession'; sessionId: string }
-  | { type: 'openSettings' }
+  | { type: 'openSettings'; section?: string }
   | { type: 'openExternal'; url: string }
   | { type: 'openInEditor' }
   | { type: 'attachUri'; uri: string }
   | { type: 'pickImage' }
-  | { type: 'captureScreenshot'; mode?: 'region' | 'window' | 'screen' }
+  | { type: 'captureScreenshot'; mode?: ScreenshotMode; delayMs?: number }
   | { type: 'requestOpenFiles' }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
@@ -297,7 +297,7 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'openSettings':
-        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:localpilot.localpilot-agent');
+        await vscode.commands.executeCommand('localpilot.openSettings', msg.section);
         return;
       case 'openExternal':
         if (/^https?:\/\//i.test(msg.url)) {
@@ -329,11 +329,13 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       case 'captureScreenshot': {
-        const img = await captureScreenshot(msg.mode ?? 'region');
+        const mode = msg.mode ?? 'region';
+        const img = await captureScreenshot(mode, { delayMs: msg.delayMs });
         if (img) {
           this.broadcast({ type: 'image', image: img });
         } else {
-          this.broadcast({ type: 'toast', level: 'error', text: 'Screenshot cancelled or no screenshot tool available' });
+          const hint = process.platform === 'linux' ? ' (install gnome-screenshot, spectacle, scrot or grim+slurp)' : '';
+          this.broadcast({ type: 'toast', level: 'error', text: mode === 'region' || mode === 'window' ? `Screenshot cancelled${hint}` : `Screenshot failed${hint}` });
         }
         return;
       }
@@ -396,6 +398,7 @@ export class ChatController implements vscode.Disposable {
       skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description })),
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description })),
       running: [...this.runs.keys()],
+      platform: process.platform,
     });
     const s = this.activeSession;
     if (s) {

@@ -285,9 +285,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   cmd('localpilot.inlineEdit', () => inlineEdit(providers, tracker, workspace));
   cmd('localpilot.terminalCommand', () => terminalCommand(providers, workspace));
-  cmd('localpilot.captureScreenshot', () => {
+  cmd('localpilot.captureScreenshot', async (mode?: unknown) => {
     view.reveal();
-    return controller.handle({ type: 'captureScreenshot', mode: 'region' });
+    type Item = vscode.QuickPickItem & { mode: 'region' | 'vscode' | 'window' | 'screen'; delayMs?: number };
+    const pickWindowDesc = process.platform === 'win32' ? 'Switch to the window; it is captured after 3 s' : 'Click a window to capture it';
+    const items: Item[] = [
+      { label: '$(screen-full) Selection area', description: 'Drag a rectangle', mode: 'region' },
+      { label: '$(window) This VS Code window', description: 'Captured immediately', mode: 'vscode' },
+      { label: '$(multiple-windows) Pick a window', description: pickWindowDesc, mode: 'window', delayMs: process.platform === 'win32' ? 3000 : 0 },
+      { label: '$(device-desktop) Full screen', description: 'Captured immediately', mode: 'screen' },
+      { label: '$(clock) Full screen in 5 s', description: 'Time to switch windows or open a menu', mode: 'screen', delayMs: 5000 },
+    ];
+    const chosen = typeof mode === 'string' ? items.find((i) => i.mode === mode) : await vscode.window.showQuickPick(items, { placeHolder: 'What to capture' });
+    if (!chosen) {
+      return;
+    }
+    return controller.handle({ type: 'captureScreenshot', mode: chosen.mode, delayMs: chosen.delayMs });
   });
   cmd('localpilot.attachImage', async (uri?: unknown) => {
     view.reveal();

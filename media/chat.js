@@ -39,6 +39,11 @@
     list: '<svg viewBox="0 0 16 16"><path d="M5 4h9M5 8h9M5 12h9M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
     camera: '<svg viewBox="0 0 16 16"><path d="M2.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h1.5M10.5 2.5H12A1.5 1.5 0 0 1 13.5 4v1.5M13.5 10.5V12a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.5 13.5H4A1.5 1.5 0 0 1 2.5 12v-1.5"/><circle cx="8" cy="8" r="2"/></svg>',
     image: '<svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/></svg>',
+    region: '<svg viewBox="0 0 16 16"><path d="M2.5 5.5V2.5h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3"/><rect x="5" y="5" width="6" height="6" rx=".5" stroke-dasharray="1.5 1.5"/></svg>',
+    window: '<svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11M4.5 4.5h.01M6.5 4.5h.01"/></svg>',
+    windows: '<svg viewBox="0 0 16 16"><rect x="1.5" y="4.5" width="9" height="8" rx="1.2"/><path d="M5 4.5v-1A1.2 1.2 0 0 1 6.2 2.3h7.1a1.2 1.2 0 0 1 1.2 1.2v5.6a1.2 1.2 0 0 1-1.2 1.2h-2.8M1.5 7h9"/></svg>',
+    screen: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5.5 14h5M8 11.5V14"/></svg>',
+    timer: '<svg viewBox="0 0 16 16"><circle cx="8" cy="9" r="5"/><path d="M8 6.5V9l1.8 1.3M6.5 2h3M12 4l1-1"/></svg>',
     cursor: '<svg viewBox="0 0 16 16"><path d="M3 2l10 6-4.5 1L6 13z"/></svg>',
     memory: '<svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>',
     plan: '<svg viewBox="0 0 16 16"><path d="M4 3h8v10H4z"/><path d="M6 6h4M6 8.5h4M6 11h2"/></svg>',
@@ -573,13 +578,29 @@
       ...MENTIONS.map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => addAttachment(n) })),
       { hr: true },
       { label: 'Image…', desc: 'Attach an image file', icon: I.image, onPick: () => post({ type: 'pickImage' }) },
-      { label: 'Screenshot', desc: 'Capture a screen region', icon: I.camera, onPick: () => { toast('Select a screen region…'); post({ type: 'captureScreenshot', mode: 'region' }); } },
+      ...screenshotItems(),
     ];
     if (state.openFiles.length) { items.push({ hr: true }); for (const f of state.openFiles.slice(0, 12)) { items.push({ group: 'Open editors', label: f.split('/').pop(), desc: f, icon: I.file, onPick: () => addAttachment(f) }); } }
     openMenu(els.addCtx, items, { search: 'Add files, folders, docs…' });
   }
   els.addCtx.onclick = openContextMenu;
-  els.image.onclick = () => post({ type: 'pickImage' });
+  // Screenshot capture options (like a native screenshot tool): area, this window, another window, full screen, timed.
+  function shot(mode, delayMs, msg) { return () => { if (msg) { toast(msg); } post({ type: 'captureScreenshot', mode, delayMs }); }; }
+  function screenshotItems() {
+    const WIN = state.platform === 'win32';
+    return [
+      { group: 'Screenshot', label: 'Selection area', desc: 'Drag to select a region · Esc to cancel', icon: I.region, onPick: shot('region', 0, 'Drag to select a region…') },
+      { group: 'Screenshot', label: 'This VS Code window', desc: 'Captured immediately', icon: I.window, onPick: shot('vscode', 0) },
+      { group: 'Screenshot', label: 'Pick a window', desc: WIN ? 'Switch to the window — captured in 3 s' : 'Click a window to capture it', icon: I.windows, onPick: shot('window', WIN ? 3000 : 0, WIN ? 'Switch to the window to capture — 3 s' : 'Click a window to capture it…') },
+      { group: 'Screenshot', label: 'Full screen', desc: 'Captured immediately', icon: I.screen, onPick: shot('screen', 0) },
+      { group: 'Screenshot', label: 'Full screen in 5 s', desc: 'Time to switch windows or open a menu', icon: I.timer, onPick: shot('screen', 5000, 'Capturing the screen in 5 s…') },
+    ];
+  }
+  els.image.onclick = () => openMenu(els.image, [
+    { label: 'Image file…', desc: 'PNG, JPEG, GIF or WebP · or paste / drop onto the composer', icon: I.image, onPick: () => post({ type: 'pickImage' }) },
+    { hr: true },
+    ...screenshotItems(),
+  ]);
   els.ctx.onclick = () => state.session && post({ type: 'compactNow', sessionId: state.session.id });
 
   // inline '/' and '@' autocomplete reuse the popover
@@ -658,7 +679,7 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); syncModel(); renderTabs(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; renderTabs(); break;
       case 'session': state.session = m.session; renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); break;
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;

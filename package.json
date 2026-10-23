@@ -249,7 +249,7 @@
       },
       {
         "command": "localpilot.captureScreenshot",
-        "title": "Capture Screenshot to Chat",
+        "title": "Capture Screenshot to Chat (Area / Window / Screen)",
         "category": "LocalPilot",
         "icon": "$(device-camera)"
       },

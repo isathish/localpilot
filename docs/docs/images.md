@@ -6,7 +6,11 @@ permalink: /docs/images/
 
 ## Ways to attach an image
 
-- **Capture screenshot** — camera button in the composer, <kbd>⌘⌥⇧S</kbd>, or *LocalPilot: Capture Screenshot to Chat*. Select a screen region and it lands in the composer.
+- **Capture screenshot** — camera button in the composer, <kbd>⌘⌥⇧S</kbd>, or *LocalPilot: Capture Screenshot to Chat*. Pick what to capture:
+  - **Selection area** — drag a rectangle (Esc cancels).
+  - **This VS Code window** — captured immediately, no interaction.
+  - **Pick a window** — click another window (macOS/Linux) or switch to it within 3 s (Windows).
+  - **Full screen** — now, or **in 5 s** to leave time to switch apps or open a menu.
 - **Paste** from the clipboard into the input box.
 - **Drag and drop** an image file onto the composer.
 - **Image button** to pick files, or right-click a PNG/JPEG in the Explorer → *Attach Image to Chat*.
@@ -21,9 +25,9 @@ The selected model must support vision (`qwen2.5vl`, `llava`, `gemma3`, `pixtral
 
 | Platform | Tool used |
 |---|---|
-| macOS | `screencapture -i` (region) — built in |
-| Linux | first available of `gnome-screenshot`, `spectacle`, `scrot`, `grim`+`slurp` |
-| Windows | PowerShell `System.Drawing` capture of the primary screen |
+| macOS | `screencapture` — `-i` area, `-iW` pick window, `-l <id>` VS Code window, full screen — built in |
+| Linux | first available of `gnome-screenshot`, `spectacle`, `scrot`, `grim`+`slurp`, ImageMagick `import`+`xdotool` |
+| Windows | PowerShell: translucent drag-to-select overlay for areas, `GetForegroundWindow` for windows, virtual-screen capture for full screen |
 
 ## Good prompts
 
