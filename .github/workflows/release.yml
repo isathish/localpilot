@@ -51,7 +51,7 @@ jobs:
         run: |
           npx @vscode/vsce package --no-dependencies --out "localpilot-${{ steps.meta.outputs.version }}.vsix"
           cp "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix
-          sha256sum localpilot-*.vsix > SHA256SUMS.txt
+          sha256sum "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix > SHA256SUMS.txt
 
       - name: Extract changelog section
         id: notes
