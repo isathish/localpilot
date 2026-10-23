@@ -61,7 +61,7 @@ fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace(/^version:.*$
 console.log(`\nrelease: verifying ${next}…`);
 sh('npm run compile');
 sh('npm run smoke');
-sh('npx @vscode/vsce package --no-dependencies --out /tmp/localpilot-release-check.vsix');
+sh('npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out /tmp/localpilot-release-check.vsix');
 
 sh(`git add package.json package-lock.json CHANGELOG.md docs/_config.yml`);
 sh(`git commit -m "release: v${next}"`);

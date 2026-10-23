@@ -1,15 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <rect width="256" height="256" rx="56" fill="#15181d"/>
-  <rect x="1" y="1" width="254" height="254" rx="55" fill="none" stroke="#2a2f37" stroke-width="2"/>
-  <!-- chat bubble -->
-  <path d="M60 74a22 22 0 0 1 22-22h92a22 22 0 0 1 22 22v70a22 22 0 0 1-22 22h-40l-38 32v-32H82a22 22 0 0 1-22-22z"
-        fill="none" stroke="#e7e9ec" stroke-width="14" stroke-linejoin="round"/>
+  <rect width="256" height="256" rx="58" fill="#F2A33A"/>
+  <!-- speech bubble -->
+  <path d="M52 86a26 26 0 0 1 26-26h100a26 26 0 0 1 26 26v62a26 26 0 0 1-26 26h-48l-40 34v-34H78a26 26 0 0 1-26-26z"
+        fill="#17191E"/>
   <!-- eyes -->
-  <circle cx="104" cy="109" r="11" fill="#f2a33a"/>
-  <circle cx="152" cy="109" r="11" fill="#f2a33a"/>
+  <circle cx="104" cy="118" r="13" fill="#F2A33A"/>
+  <circle cx="152" cy="118" r="13" fill="#F2A33A"/>
   <!-- antenna -->
-  <path d="M128 52V34" stroke="#e7e9ec" stroke-width="12" stroke-linecap="round"/>
-  <circle cx="128" cy="26" r="9" fill="#f2a33a"/>
-  <!-- local "chip" pins -->
-  <path d="M40 212h24M40 196h24M40 228h24" stroke="#4b525c" stroke-width="6" stroke-linecap="round"/>
+  <path d="M128 60V44" stroke="#17191E" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="128" cy="36" r="10" fill="#17191E"/>
 </svg>

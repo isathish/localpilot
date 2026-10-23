@@ -49,7 +49,7 @@ jobs:
 
       - name: Package VSIX
         run: |
-          npx @vscode/vsce package --no-dependencies --out "localpilot-${{ steps.meta.outputs.version }}.vsix"
+          npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out "localpilot-${{ steps.meta.outputs.version }}.vsix"
           cp "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix
           sha256sum "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix > SHA256SUMS.txt
 

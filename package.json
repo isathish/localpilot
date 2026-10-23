@@ -1,7 +1,7 @@
 {
   "name": "localpilot-agent",
   "displayName": "LocalPilot Agent",
-  "description": "Local-first AI coding agent for VS Code (Ollama, LM Studio, llama.cpp, vLLM, any OpenAI-compatible API) with multi-session chat, agentic tools, skills, subagents and parallel execution",
+  "description": "The AI coding agent that runs on your machine. Copilot-style agent mode with Ollama, LM Studio, llama.cpp or vLLM — private, offline, free.",
   "version": "0.1.2",
   "engines": {
     "vscode": "^1.140.0"
@@ -9,19 +9,14 @@
   "categories": [
     "AI",
     "Chat",
-    "Programming Languages",
-    "Other"
+    "Machine Learning"
   ],
   "keywords": [
     "ollama",
     "lm studio",
-    "llama.cpp",
-    "vllm",
     "local llm",
     "copilot",
-    "agent",
-    "chat",
-    "ai"
+    "ai agent"
   ],
   "publisher": "localpilot",
   "author": {

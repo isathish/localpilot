@@ -42,7 +42,7 @@ jobs:
         run: npm test
       - name: Package VSIX
         if: runner.os == 'Linux'
-        run: npx @vscode/vsce package --no-dependencies --out localpilot.vsix
+        run: npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out localpilot.vsix
       - name: Upload VSIX artifact
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4

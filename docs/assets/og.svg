@@ -1,29 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
   <rect width="1200" height="630" fill="#0e1013"/>
-  <rect x="0" y="0" width="1200" height="630" fill="url(#g)" opacity="1"/>
-  <defs>
-    <radialGradient id="g" cx="50%" cy="0%" r="80%">
-      <stop offset="0" stop-color="#1c2027"/>
-      <stop offset="1" stop-color="#0e1013"/>
-    </radialGradient>
-  </defs>
-  <!-- logo tile -->
-  <g transform="translate(80 170) scale(1.15)">
-    <rect width="256" height="256" rx="56" fill="#15181d"/>
-    <rect x="1" y="1" width="254" height="254" rx="55" fill="none" stroke="#2a2f37" stroke-width="2"/>
-    <path d="M60 74a22 22 0 0 1 22-22h92a22 22 0 0 1 22 22v70a22 22 0 0 1-22 22h-40l-38 32v-32H82a22 22 0 0 1-22-22z" fill="none" stroke="#e7e9ec" stroke-width="14" stroke-linejoin="round"/>
-    <circle cx="104" cy="109" r="11" fill="#f2a33a"/>
-    <circle cx="152" cy="109" r="11" fill="#f2a33a"/>
-    <path d="M128 52V34" stroke="#e7e9ec" stroke-width="12" stroke-linecap="round"/>
-    <circle cx="128" cy="26" r="9" fill="#f2a33a"/>
-    <path d="M40 212h24M40 196h24M40 228h24" stroke="#4b525c" stroke-width="6" stroke-linecap="round"/>
+  <g transform="translate(90 187) scale(1)">
+    <rect width="256" height="256" rx="58" fill="#F2A33A"/>
+    <path d="M52 86a26 26 0 0 1 26-26h100a26 26 0 0 1 26 26v62a26 26 0 0 1-26 26h-48l-40 34v-34H78a26 26 0 0 1-26-26z" fill="#17191E"/>
+    <circle cx="104" cy="118" r="13" fill="#F2A33A"/>
+    <circle cx="152" cy="118" r="13" fill="#F2A33A"/>
+    <path d="M128 60V44" stroke="#17191E" stroke-width="12" stroke-linecap="round"/>
+    <circle cx="128" cy="36" r="10" fill="#17191E"/>
   </g>
   <g font-family="Inter, Helvetica, Arial, sans-serif" fill="#f2f4f7">
-    <text x="430" y="250" font-size="78" font-weight="800" letter-spacing="-2">LocalPilot</text>
-    <text x="432" y="318" font-size="34" font-weight="600" fill="#d3d8df">The AI coding agent that runs on your machine</text>
-    <text x="432" y="372" font-size="26" fill="#a3acb8">Agent mode · parallel agents · skills · screenshots · MCP</text>
-    <text x="432" y="414" font-size="26" fill="#a3acb8">for VS Code, with Ollama · LM Studio · llama.cpp · vLLM</text>
-    <rect x="432" y="456" width="330" height="56" rx="12" fill="#f2a33a"/>
-    <text x="597" y="493" font-size="24" font-weight="700" fill="#15181d" text-anchor="middle">Free · Open source · MIT</text>
+    <text x="420" y="262" font-size="78" font-weight="800" letter-spacing="-2">LocalPilot</text>
+    <text x="422" y="326" font-size="34" font-weight="600" fill="#d3d8df">The AI coding agent that runs on your machine</text>
+    <text x="422" y="380" font-size="26" fill="#a3acb8">Agent mode · parallel agents · skills · screenshots · MCP</text>
+    <text x="422" y="420" font-size="26" fill="#a3acb8">VS Code · Ollama · LM Studio · llama.cpp · vLLM</text>
+    <rect x="422" y="462" width="300" height="54" rx="10" fill="#F2A33A"/>
+    <text x="572" y="498" font-size="23" font-weight="700" fill="#17191E" text-anchor="middle">Free · Open source · MIT</text>
   </g>
 </svg>
