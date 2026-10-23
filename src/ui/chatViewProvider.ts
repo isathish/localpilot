@@ -99,7 +99,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <body>
 <div id="app">
   <div id="progress" class="progress hidden" aria-hidden="true"></div>
-  <nav id="tabs" class="tabs hidden" aria-label="Chats"></nav>
+  <header id="tabbar" class="tabbar">
+    <nav id="tabs" class="tabs" aria-label="Chats"></nav>
+    <button id="btnNewTab" class="ib" title="New chat — runs in parallel">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
+    <button id="btnHistory" class="ib badge" data-n="0" title="All chats">${svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/>')}</button>
+  </header>
   <main id="messages" aria-live="polite"></main>
   <div id="approvals"></div>
   <footer id="composer">
@@ -111,7 +115,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <div class="panel-head">
         <button id="changesToggle" class="panel-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="changesLabel">0 files changed</span></button>
         <span class="spacer"></span>
-        <button class="btn ghost" data-a="undoAll">Reject all</button><button class="btn primary" data-a="keepAll">Accept all</button>
+        <button class="btn ghost" data-a="undoAll" title="Reject all changes">${svg('<path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/>')}<span class="long">Reject all</span></button><button class="btn primary" data-a="keepAll" title="Accept all changes">${svg('<path d="M3 8.5l3 3 7-7"/>')}<span class="long">Accept all</span></button>
       </div>
       <ul id="changesList" class="panel-body hidden"></ul>
     </div>
@@ -123,8 +127,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
       <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)" aria-label="Chat input"></textarea>
       <div class="row">
-        <button id="modeBtn" class="pick" title="Mode"><span id="modeIcon" class="ico"></span><span id="modeLabel">Agent</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
-        <button id="modelBtn" class="pick model" title="Model"><span id="modelLabel">Auto</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
+        <button id="modeBtn" class="pick mode" title="Mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
+        <button id="modelBtn" class="pick model" title="Model"><span class="ico">${svg('<path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/><circle cx="6.5" cy="7.5" r=".8" fill="currentColor"/><circle cx="9.5" cy="7.5" r=".8" fill="currentColor"/>')}</span><span id="modelLabel" class="lbl">Auto</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <span class="spacer"></span>
         <button id="btnImage" class="ib" title="Attach image (or paste / drop)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>

@@ -59,6 +59,7 @@ export type FromWebview =
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
   | { type: 'showDiff'; sessionId: string; fsPath: string }
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
+  | { type: 'runParallelPrompt' }
   | { type: 'copyText'; text: string };
 
 interface Sink {
@@ -352,6 +353,9 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'copyText':
         await vscode.env.clipboard.writeText(msg.text);
+        return;
+      case 'runParallelPrompt':
+        await vscode.commands.executeCommand('localpilot.runParallelTasks');
         return;
       case 'restoreCheckpoint': {
         const s = this.store.get(msg.sessionId);

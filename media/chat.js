@@ -8,7 +8,7 @@
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
-    popover: $('popover'),
+    popover: $('popover'), newTab: $('btnNewTab'), history: $('btnHistory'),
   };
 
   const I = {
@@ -441,22 +441,44 @@
     els.modelBtn.classList.toggle('warn', !state.models.length);
     if (!state.models.length) { els.modelLabel.textContent = 'No models'; return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
-    els.modelLabel.textContent = m ? (explicit ? m.name : `Auto · ${m.name}`) : explicit ? explicit.split('/').pop() : 'Auto';
+    const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
+    els.modelLabel.textContent = m ? (explicit ? name : `Auto · ${name}`) : name;
     els.modelBtn.title = m ? `${m.id} · ${(m.contextWindow / 1024).toFixed(0)}k context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}` : 'Model';
   }
+  function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }
+  // Chat tabs: always visible; running agents first, then the active chat, then recent ones.
   function renderTabs() {
-    const list = state.sessions.slice().sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || (b.updatedAt - a.updatedAt));
-    const show = list.length > 1 || state.running.size > 0;
-    els.tabs.classList.toggle('hidden', !show); if (!show) { return; }
+    const active = state.session && state.session.id;
+    const list = state.sessions.slice().sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || ((b.id === active) - (a.id === active)) || (b.updatedAt - a.updatedAt));
     els.tabs.innerHTML = '';
-    for (const s of list.slice(0, 8)) {
-      const b = el('button', `tab ${state.session && state.session.id === s.id ? 'active' : ''}`, `${state.running.has(s.id) ? '<span class="spin"></span>' : ''}<span class="t">${esc(s.title || 'New chat')}</span>`);
-      b.title = `${s.title}\n${s.mode} · ${s.messageCount} messages${state.running.has(s.id) ? ' · running' : ''}`;
+    if (!list.length && state.session) { list.push({ id: state.session.id, title: state.session.title || 'New chat', mode: state.session.mode, messageCount: state.session.messages.length, updatedAt: Date.now() }); }
+    for (const s of list.slice(0, 10)) {
+      const running = state.running.has(s.id);
+      const b = el('button', `tab ${s.id === active ? 'active' : ''}`, `${running ? '<span class="spin"></span>' : ''}<span class="t">${esc(s.title || 'New chat')}</span>`);
+      b.title = `${s.title}\n${s.mode} · ${s.messageCount} messages${running ? ' · running' : ''}`;
       b.onclick = () => post({ type: 'selectSession', id: s.id });
       els.tabs.appendChild(b);
     }
-    const plus = el('button', 'tab add', '+'); plus.title = 'New chat (runs in parallel)'; plus.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); els.tabs.appendChild(plus);
+    els.history.dataset.n = String(state.running.size);
+    els.history.title = state.running.size ? `All chats · ${state.running.size} running` : 'All chats';
+    const act = els.tabs.querySelector('.tab.active'); if (act) { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   }
+  function openHistory() {
+    const active = state.session && state.session.id;
+    const list = state.sessions.slice().sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || (b.updatedAt - a.updatedAt));
+    const items = [
+      { label: 'New chat', desc: 'Starts another agent in parallel', icon: I.sparkle, onPick: () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }) },
+      { label: 'Run tasks in parallel…', desc: 'One agent per task', icon: I.agent, onPick: () => post({ type: 'runParallelPrompt' }) },
+      { hr: true },
+      ...list.map((s) => ({ group: state.running.has(s.id) ? 'Running' : 'Chats', label: s.title || 'New chat', desc: `${s.mode} · ${s.messageCount} msgs · ${timeAgo(s.updatedAt)}`, icon: state.running.has(s.id) ? I.spin : s.pinned ? I.check : I.file, selected: s.id === active, tag: state.running.has(s.id) ? 'running' : undefined, onPick: () => post({ type: 'selectSession', id: s.id }) })),
+    ];
+    openMenu(els.history, items, { search: 'Search chats…' });
+  }
+  els.newTab.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' });
+  els.history.onclick = openHistory;
+  // Placeholder adapts to the composer width.
+  const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask, plan or build… (@ context)'], [420, 'Plan, build, fix anything… (@ context, / commands)']];
+  new ResizeObserver(() => { const w = els.box.clientWidth; let p = PLACEHOLDERS[0][1]; for (const [min, t] of PLACEHOLDERS) { if (w >= min) { p = t; } } els.input.placeholder = p; }).observe(els.box);
   function renderTasks() {
     const todos = (state.session && state.session.todos) || [];
     els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { return; }
@@ -532,7 +554,7 @@
     p.onkeydown = key;
     if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; p.focus(); }
   }
-  document.addEventListener('mousedown', (e) => { if (menuState && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn')) { closeMenu(); } });
+  document.addEventListener('mousedown', (e) => { if (menuState && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn, #btnHistory')) { closeMenu(); } });
 
   els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
   els.modelBtn.onclick = () => {
@@ -657,7 +679,7 @@
   function renderApproval(a) {
     const d = el('div', 'approval'); d.dataset.id = a.id;
     const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network' }[a.kind] || a.kind;
-    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span><span class="kind">${esc(kind)}</span></div><pre></pre><div class="actions"><button class="btn ghost" data-a="deny">Deny <kbd>N</kbd></button><button class="btn" data-a="session">Allow for session <kbd>A</kbd></button><button class="btn primary" data-a="allow">Allow once <kbd>Y</kbd></button></div>`;
+    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div><pre></pre><div class="actions"><button class="btn ghost" data-a="deny" title="Deny (N)">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
     d.querySelector('pre').textContent = a.detail;
     const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); d.remove(); document.removeEventListener('keydown', key, true); els.input.focus(); };
     const key = (e) => { if (e.target === els.input && els.input.value) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };

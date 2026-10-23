@@ -2,6 +2,12 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Changed
+- **Responsive composer**: the bottom row never wraps. Below ~420px the mode picker, context button and attach button collapse to icons; below ~260px the model picker collapses to its icon too. Placeholder text adapts to the available width and the duplicated focus ring on the textarea is gone.
+- **Multitasking tab bar is always visible**: running chats first (with spinners), then the active and recent ones; `+` starts another agent in parallel and a **History** button (badge = number of chats) opens a searchable popover with *New chat*, *Run tasks in parallel…*, running chats and recent chats.
+- Permission prompts and the *Accept all / Reject all* bar collapse to compact buttons on narrow panels; the redundant kind label on approvals is hidden when it equals the title.
+
 ## 0.2.0 — 2026-10-23
 ### Changed
 - **Chat UI redesigned** in the style of Cursor / Claude Code: custom Agent/Ask/Plan picker and searchable model picker (with *Auto*), an **@ Add context** menu (files, active selection, @workspace/@problems/@git/@editors, images, screenshots), consecutive read/search tools grouped as *Explored codebase · N files, M searches*, **diff cards** for edits with +/− counts and inline line diff, **terminal cards** for commands with exit codes, Claude-style permission prompts with *Allow once / Allow for session / Deny* and Y/A/N keys, hover actions on messages, prompt history (↑/↓), Esc to stop, ⌘I to add context, and a greeting-based empty state.
