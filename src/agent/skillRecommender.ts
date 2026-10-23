@@ -260,5 +260,5 @@ export function skillHint(matches: SkillMatch[]): string {
   if (!matches.length) {
     return '';
   }
-  return `Skills that match this request: ${matches.map((m) => `"${m.name}" (${m.description.replace(/\s+/g, ' ').slice(0, 120)})`).join('; ')}. Call load_skill("${matches[0].name}") first and follow it, unless it clearly does not apply.`;
+  return `Skills that match this request: ${matches.map((m) => `"${m.name}" (${m.description.replace(/\s+/g, ' ').slice(0, 120)})`).join('; ')}. Required first step: call load_skill("${matches[0].name}") before any other tool — the skill holds project-specific steps and formats you cannot know otherwise — then follow its instructions. Skip it only if the skill clearly does not apply.`;
 }

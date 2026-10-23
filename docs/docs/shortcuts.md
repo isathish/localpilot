@@ -24,6 +24,7 @@ permalink: /docs/shortcuts/
 | <kbd>Alt↑</kbd> / <kbd>Alt↓</kbd> | Previous / next chat tab |
 | <kbd>Alt1</kbd> … <kbd>Alt9</kbd> | Jump to tab N |
 | <kbd>←</kbd> / <kbd>→</kbd> / <kbd>Delete</kbd> / <kbd>F2</kbd> (tab focused) | Move between tabs / close / rename |
+| <kbd>⌘</kbd>-click / <kbd>⇧</kbd>-click a tab · <kbd>⌘A</kbd> (tab focused) | Select several tabs (then ✕ / <kbd>Delete</kbd> closes them all) |
 | <kbd>/</kbd> | Slash command picker |
 | <kbd>@</kbd> | Mention picker |
 | <kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Tab</kbd> | Navigate / accept picker |

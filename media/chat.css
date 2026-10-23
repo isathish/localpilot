@@ -82,6 +82,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tab .close:hover { background: var(--tint-2); color: var(--fg); }
 .tab.running .close { opacity: 1; color: var(--brand); } .tab.running .close:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
 .tab.pinned .ind { color: var(--brand); }
+.tab.selected { background: color-mix(in srgb, var(--focus) 18%, transparent); border-color: color-mix(in srgb, var(--focus) 55%, transparent); color: var(--fg); }
+.tab.selected .close { opacity: 1; }
 .tab.more { padding: 0 8px; color: var(--muted); border-style: dashed; border-color: var(--border-soft); }
 .tab .rename { width: 120px; height: 20px; padding: 0 4px; border: 1px solid var(--focus); border-radius: 3px; background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); outline: none; }
 .tabbar .ib { width: 24px; height: 24px; }
@@ -96,6 +98,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .bgrun .spin { width: 9px; height: 9px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 .bgrun .t { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; max-width: 45%; }
 .bgrun .st { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bgrun .mdl { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 8px; background: var(--tint-2); color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bgrun .stop { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; }
 .bgrun .stop:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); } .bgrun .stop svg { width: 11px; height: 11px; }
 .bgrun.more { justify-content: center; }

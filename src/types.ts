@@ -236,6 +236,7 @@ export interface AgentEvent {
     | 'tool_start'
     | 'tool_end'
     | 'approval_request'
+    | 'model_request'
     | 'status'
     | 'error'
     | 'compaction'

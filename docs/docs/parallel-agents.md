@@ -25,6 +25,8 @@ The bar at the top of the chat is a browser-style tab strip — **one tab per ag
 - **Double-click** (or <kbd>F2</kbd>) renames inline. **Right-click** for Rename · Pin · Fork · Export · Stop / Clear messages · Close · Delete.
 - Agents working in *other* tabs appear in a strip under the tab bar with their current step; click to switch, ■ to stop.
 - Keyboard: <kbd>Alt↑</kbd>/<kbd>Alt↓</kbd> cycle tabs, <kbd>Alt1…9</kbd> jump, <kbd>←</kbd>/<kbd>→</kbd> move between focused tabs.
+- **Several at once:** ⌘/Ctrl-click or Shift-click to select tabs, then ✕ / <kbd>Delete</kbd> / right-click → *Close N selected*, *Stop and close all* or *Delete selected chats*. Right-click any tab for *Close other tabs*, *Close tabs to the right*, *Close finished tabs*, *Stop and close* and *Stop all agents*.
+- **Isolation:** every tab keeps its own draft, attachments, scroll position and status line; every agent has its own context window, abort switch, tool cache and model. The model is shown in the tab tooltip and the background strip. Two chats using the same local model are served one at a time by the server — the waiting chat shows *Waiting for <model> — busy with N other chats…* instead of a silent stall.
 - Open tabs persist when the view is hidden and restored; at most 12 are shown — the rest live under **+N** / **All chats**.
 
 ## Run Tasks in Parallel

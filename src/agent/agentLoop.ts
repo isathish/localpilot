@@ -40,6 +40,9 @@ const MAX_ITERATIONS_DEFAULT = 40;
 
 /** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
 export class AgentRunner {
+  /** Sessions currently streaming from each model id — lets a waiting chat say *why* it is waiting (local servers serve one request per model at a time). */
+  private readonly inflight = new Map<string, Set<string>>();
+
   constructor(
     private readonly providers: ProviderRegistry,
     private readonly tools: ToolRegistry,
@@ -186,7 +189,12 @@ export class AgentRunner {
       session.contextTokens = estimateMessagesTokens(session.messages) + budget.systemTokens + budget.toolsTokens;
 
       // --- Model call -----------------------------------------------------------------------
-      status(iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
+      const busy = this.inflight.get(model.id) ?? new Set<string>();
+      const others = [...busy].filter((id) => id !== session.id).length;
+      status(others ? `Waiting for ${model.name} — busy with ${others} other chat${others === 1 ? '' : 's'}…` : iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
+      emit({ sessionId: session.id, type: 'model_request', payload: { model: model.id, name: model.name, queued: others } });
+      busy.add(session.id);
+      this.inflight.set(model.id, busy);
       const assistant: ChatMessage = { role: 'assistant', content: '', toolCalls: [], meta: { timestamp: Date.now() } };
       let text = '';
       let thinking = '';
@@ -229,6 +237,7 @@ export class AgentRunner {
           }
         }
       } catch (e) {
+        this.release(model.id, session.id);
         if (o.signal.aborted) {
           break;
         }
@@ -238,6 +247,8 @@ export class AgentRunner {
         session.messages.push({ role: 'assistant', content: text || `(error: ${msg})`, meta: { timestamp: Date.now() } });
         throw e;
       }
+
+      this.release(model.id, session.id);
 
       // Models without native tool support emit tool calls as text. Small "tool-capable" models also
       // frequently print the call as bare JSON instead of using the tool channel, so fall back to
@@ -291,6 +302,21 @@ export class AgentRunner {
     session.updatedAt = Date.now();
     emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens } });
     return finalText;
+  }
+
+  private release(modelId: string, sessionId: string): void {
+    const set = this.inflight.get(modelId);
+    if (set) {
+      set.delete(sessionId);
+      if (!set.size) {
+        this.inflight.delete(modelId);
+      }
+    }
+  }
+
+  /** Model ids with a request in flight and the sessions using them (for the Agents view / tab tooltips). */
+  get activeModelRequests(): { model: string; sessions: string[] }[] {
+    return [...this.inflight].map(([model, set]) => ({ model, sessions: [...set] }));
   }
 
   private selectTools(mode: Session['mode'], filter?: string[]): Tool[] {

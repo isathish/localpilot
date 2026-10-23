@@ -78,6 +78,8 @@
     // chats that finished while in the background (unread) and chats waiting on an approval (attention).
     openTabs: Array.isArray(persisted.openTabs) ? new Set(persisted.openTabs) : null, loadingTab: null, activeHint: null,
     status: new Map(), unread: new Set(), attention: new Set(), approvalSid: new Map(),
+    // Per-tab isolation: composer draft + attachments, scroll offset and the model each agent is talking to.
+    selected: new Set(), drafts: new Map(), scroll: new Map(), modelOf: new Map(), dismissed: new Set(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -662,6 +664,7 @@
     const live = state.live.get(s.id);
     if (live) { els.messages.appendChild(live.root); }
     setRunning(state.running.has(s.id));
+    if (state.running.has(s.id)) { setStatus(state.status.get(s.id) || 'Working…'); }
     scrollToBottom(true);
   }
   function renderEmpty() {
@@ -814,6 +817,7 @@
         }
         showTyping(live); break;
       }
+      case 'model_request': state.modelOf.set(sid, e.payload.model); if (e.payload.queued) { noteStatus(sid, `Waiting for ${e.payload.name} — busy with ${e.payload.queued} other chat${e.payload.queued === 1 ? '' : 's'}…`); } scheduleBg(); break;
       case 'todos': if (state.session && state.session.id === sid) { state.session.todos = e.payload || []; renderTasks(); } break;
       case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
@@ -897,13 +901,16 @@
   }
   function tabTitle(s) {
     const running = state.running.has(s.id); const st = state.status.get(s.id);
-    const lines = [s.title || 'New chat', `${MODES[s.mode] ? MODES[s.mode].label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'}`];
+    const lines = [s.title || 'New chat', `${MODES[s.mode] ? MODES[s.mode].label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${tabModel(s)}`];
     if (running) { lines.push(`Running${st ? ` — ${st}` : '…'}`); }
+    if (state.selected.size > 1 && state.selected.has(s.id)) { lines.push(`${state.selected.size} tabs selected — ✕ or Delete closes them all`); }
     if (state.attention.has(s.id)) { lines.push('Waiting for your approval'); }
     if (state.unread.has(s.id)) { lines.push('Finished — new results'); }
     if (s.id === activeId()) { lines.push('Double-click to rename · right-click for actions'); }
     return lines.join('\n');
   }
+  /** Model this chat talks to: the one it last requested, else its configured model, else the default. */
+  function tabModel(s) { return modelName(state.modelOf.get(s.id) || s.model || state.defaultModel) || 'auto'; }
   function tabIndicator(s) {
     if (state.running.has(s.id)) { return '<span class="spin" aria-label="Running"></span>'; }
     if (state.attention.has(s.id)) { return I.warn; }
@@ -916,19 +923,26 @@
     const { list, active, hidden } = tabList();
     // The store broadcasts on every save while agents stream; only rebuild the DOM when something visible changed.
     if (els.tabs.querySelector('.rename')) { renderTabs.pending = true; return; }
-    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
+    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0, state.selected.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
     if (sig === tabSig) { for (const tab of els.tabs.querySelectorAll('.tab[data-id]')) { const s = list.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } renderBgRuns(); return; }
     tabSig = sig;
     els.tabs.innerHTML = '';
     for (const s of list) {
       const running = state.running.has(s.id); const isActive = s.id === active;
-      const cls = ['tab', isActive && 'active', running && 'running', state.loadingTab === s.id && 'loading', state.unread.has(s.id) && 'unread', state.attention.has(s.id) && 'attention', s.pinned && 'pinned'].filter(Boolean).join(' ');
+      const cls = ['tab', isActive && 'active', running && 'running', state.loadingTab === s.id && 'loading', state.unread.has(s.id) && 'unread', state.attention.has(s.id) && 'attention', s.pinned && 'pinned', state.selected.has(s.id) && 'selected'].filter(Boolean).join(' ');
       const b = el('button', cls, `<span class="ind">${tabIndicator(s)}</span><span class="t">${esc(s.title || 'New chat')}</span><span class="close" role="button" title="${running ? 'Stop this agent' : s.pinned ? 'Pinned — unpin to close' : 'Close tab'}" aria-label="${running ? 'Stop' : 'Close'}">${running ? I.stop : I.x}</span>`);
       b.dataset.id = s.id; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(isActive)); b.tabIndex = isActive ? 0 : -1;
       if (state.loadingTab === s.id) { b.setAttribute('aria-busy', 'true'); }
       b.title = tabTitle(s);
-      b.onclick = (e) => { if (e.target.closest('.close')) { e.stopPropagation(); if (running) { post({ type: 'stop', sessionId: s.id }); } else if (s.pinned) { toast('Unpin the chat to close its tab'); } else { closeTab(s.id); } return; } if (e.detail < 2) { selectTab(s.id); } };
-      b.onauxclick = (e) => { if (e.button === 1) { e.preventDefault(); if (!running && !s.pinned) { closeTab(s.id); } } };
+      b.onclick = (e) => {
+        if (e.target.closest('.close')) { e.stopPropagation(); if (state.selected.size > 1 && state.selected.has(s.id)) { closeSelected(); } else if (running) { post({ type: 'stop', sessionId: s.id }); } else if (s.pinned) { toast('Unpin the chat to close its tab'); } else { closeTab(s.id); } return; }
+        // ⌘/Ctrl-click toggles a tab in the selection, Shift-click selects a range; plain click switches and clears the selection.
+        if (e.metaKey || e.ctrlKey) { toggleSelect(s.id); return; }
+        if (e.shiftKey) { selectRange(s.id); return; }
+        if (state.selected.size) { state.selected.clear(); tabSig = ''; }
+        if (e.detail < 2) { selectTab(s.id); }
+      };
+      b.onauxclick = (e) => { if (e.button === 1) { e.preventDefault(); if (state.selected.size > 1 && state.selected.has(s.id)) { closeSelected(); } else if (!running && !s.pinned) { closeTab(s.id); } } };
       b.oncontextmenu = (e) => { e.preventDefault(); openTabMenu(b, s); };
       b.ondblclick = (e) => { if (!e.target.closest('.close')) { startRename(b, s); } };
       els.tabs.appendChild(b);
@@ -945,10 +959,22 @@
     renderBgRuns();
     saveState();
   }
+  // Composer isolation: each tab keeps its own draft, attachments, images and scroll offset while you switch around.
+  function saveDraft(sid) {
+    if (!sid) { return; }
+    if (els.input.value || state.attachments.length || state.images.length) { state.drafts.set(sid, { text: els.input.value, attachments: [...state.attachments], images: [...state.images] }); } else { state.drafts.delete(sid); }
+    state.scroll.set(sid, els.messages.scrollTop);
+  }
+  function restoreDraft(sid) {
+    const d = state.drafts.get(sid);
+    els.input.value = d ? d.text : ''; state.attachments = d ? [...d.attachments] : []; state.images = d ? [...d.images] : [];
+    renderChips(); autoGrow(); updateSendEnabled();
+  }
   /** Optimistic switch: the clicked tab is selected and marked busy right away; the extension answers with the session. */
   function selectTab(id) {
     if (!id || id === activeId()) { return; }
     closeMenu();
+    saveDraft(state.session && state.session.id);
     state.loadingTab = id; state.unread.delete(id);
     if (state.openTabs) { state.openTabs.add(id); }
     renderTabs();
@@ -956,16 +982,32 @@
     clearTimeout(selectTab.timer);
     selectTab.timer = setTimeout(() => { if (state.loadingTab === id) { state.loadingTab = null; renderTabs(); toast('Could not open that chat', 'error'); } }, 8000);
   }
-  function closeTab(id) {
-    const { list } = tabList(); const idx = list.findIndex((s) => s.id === id);
-    if (!state.openTabs) { state.openTabs = new Set(tabList().list.map((s) => s.id)); }
-    state.openTabs.delete(id); state.unread.delete(id);
-    if (id === activeId()) {
-      const next = list[idx + 1] || list[idx - 1];
+  function closeTab(id) { closeTabs([id]); }
+  /** Closes several tabs at once. Running tabs are skipped unless `stop` is set (then the agent is stopped first); pinned ones are kept. */
+  function closeTabs(ids, opts = {}) {
+    const { list } = tabList(); const active = activeId();
+    if (!state.openTabs) { state.openTabs = new Set(list.map((s) => s.id)); }
+    const closing = new Set(); let skipped = 0;
+    for (const id of ids) {
+      const s = list.find((x) => x.id === id); if (!s) { continue; }
+      if (s.pinned) { skipped++; continue; }
+      if (state.running.has(id)) { if (opts.stop) { state.dismissed.add(id); post({ type: 'stop', sessionId: id }); } else { skipped++; continue; } }
+      closing.add(id);
+    }
+    for (const id of closing) { state.openTabs.delete(id); state.unread.delete(id); state.selected.delete(id); state.drafts.delete(id); state.scroll.delete(id); }
+    if (closing.has(active)) {
+      const remaining = list.filter((s) => !closing.has(s.id)); const idx = list.findIndex((s) => s.id === active);
+      const next = list.slice(idx + 1).find((s) => !closing.has(s.id)) || list.slice(0, idx).reverse().find((s) => !closing.has(s.id)) || remaining[0];
       if (next) { selectTab(next.id); } else { post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); }
     }
-    renderTabs();
+    tabSig = ''; renderTabs();
+    if (ids.length > 1) { toast(`Closed ${closing.size} tab${closing.size === 1 ? '' : 's'}${skipped ? ` · kept ${skipped} running/pinned` : ''}`); }
+    return closing.size;
   }
+  function toggleSelect(id) { const a = activeId(); if (!state.selected.size && a) { state.selected.add(a); } if (state.selected.has(id)) { state.selected.delete(id); } else { state.selected.add(id); } if (state.selected.size === 1 && state.selected.has(a)) { state.selected.clear(); } tabSig = ''; renderTabs(); }
+  function selectRange(id) { const { list } = tabList(); const a = [...state.selected].pop() || activeId(); const i = list.findIndex((s) => s.id === a); const j = list.findIndex((s) => s.id === id); if (i < 0 || j < 0) { return toggleSelect(id); } for (const s of list.slice(Math.min(i, j), Math.max(i, j) + 1)) { state.selected.add(s.id); } tabSig = ''; renderTabs(); }
+  function closeSelected(opts) { const ids = [...state.selected]; state.selected.clear(); closeTabs(ids, opts); }
+  function clearSelection() { if (state.selected.size) { state.selected.clear(); tabSig = ''; renderTabs(); } }
   function startRename(tab, s) {
     const t = tab.querySelector('.t'); if (!t || tab.querySelector('.rename')) { return; }
     const input = el('input', 'rename'); input.value = s.title || ''; input.setAttribute('aria-label', 'Chat title'); input.maxLength = 80;
@@ -978,6 +1020,21 @@
   }
   function openTabMenu(anchor, s) {
     const running = state.running.has(s.id);
+    const { list } = tabList(); const idx = list.findIndex((x) => x.id === s.id);
+    const right = list.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id);
+    const finished = list.filter((x) => state.unread.has(x.id) && !x.pinned).map((x) => x.id);
+    const idle = list.filter((x) => !state.running.has(x.id) && !x.pinned && x.id !== s.id).map((x) => x.id);
+    const runningIds = list.filter((x) => state.running.has(x.id)).map((x) => x.id);
+    if (state.selected.size > 1 && state.selected.has(s.id)) {
+      const sel = [...state.selected]; const nRun = sel.filter((id) => state.running.has(id)).length;
+      return openMenu(anchor, [
+        { label: `Close ${sel.length} selected tabs`, desc: nRun ? `${nRun} running will stay open` : 'Chats stay in All chats', icon: I.x, onPick: () => closeSelected() },
+        ...(nRun ? [{ label: `Stop and close all ${sel.length}`, desc: `Stops ${nRun} running agent${nRun === 1 ? '' : 's'} first`, icon: I.stop, onPick: () => closeSelected({ stop: true }) }] : []),
+        { label: 'Delete selected chats…', desc: 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `Delete ${sel.length} chats`, icon: I.trash, onPick: () => { closeSelected({ stop: true }); post({ type: 'deleteSessions', ids: sel }); } }, { label: 'Cancel', icon: I.x }]) },
+        { hr: true },
+        { label: 'Clear selection', icon: I.check, onPick: clearSelection },
+      ]);
+    }
     const items = [
       { label: 'Rename', desc: 'Double-click the tab also works', icon: I.rename, onPick: () => startRename(anchor, s) },
       { label: s.pinned ? 'Unpin' : 'Pin', desc: s.pinned ? 'Allow closing this tab' : 'Keep this tab first and open', icon: I.pin, onPick: () => post({ type: 'pinSession', id: s.id }) },
@@ -986,6 +1043,11 @@
       { hr: true },
       ...(running ? [{ label: 'Stop agent', desc: state.status.get(s.id) || 'Running', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
       ...(running || s.pinned ? [] : [{ label: 'Close tab', desc: 'Keeps the chat in All chats', icon: I.x, onPick: () => closeTab(s.id) }]),
+      ...(running ? [{ label: 'Stop and close', desc: 'Cancels the agent and closes this tab', icon: I.x, onPick: () => closeTabs([s.id], { stop: true }) }] : []),
+      ...(idle.length ? [{ group: 'Close many', label: 'Close other tabs', desc: `${idle.length} idle tab${idle.length === 1 ? '' : 's'} · running and pinned stay`, icon: I.x, onPick: () => closeTabs(idle) }] : []),
+      ...(right.length ? [{ group: 'Close many', label: 'Close tabs to the right', desc: `${right.length} tab${right.length === 1 ? '' : 's'}`, icon: I.chev, onPick: () => closeTabs(right) }] : []),
+      ...(finished.length ? [{ group: 'Close many', label: 'Close finished tabs', desc: `${finished.length} with unread results`, icon: I.check, onPick: () => closeTabs(finished) }] : []),
+      ...(runningIds.length > 1 ? [{ group: 'Close many', label: `Stop all ${runningIds.length} agents`, desc: 'Tabs stay open', icon: I.stop, onPick: () => { for (const id of runningIds) { post({ type: 'stop', sessionId: id }); } } }] : []),
       { label: 'Delete chat…', desc: running ? 'Stops the agent and deletes everything' : 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `Delete “${short(s.title || 'New chat', 32)}”`, desc: 'Permanently removes this chat', icon: I.trash, onPick: () => { if (state.openTabs) { state.openTabs.delete(s.id); } post({ type: 'deleteSession', id: s.id }); } }, { label: 'Cancel', icon: I.x }]) },
     ];
     openMenu(anchor, items);
@@ -998,7 +1060,9 @@
     if (i < 0 || e.target.classList.contains('rename')) { return; }
     const go = (j) => { e.preventDefault(); const t = tabs[(j + tabs.length) % tabs.length]; t.focus(); selectTab(t.dataset.id); };
     if (e.key === 'ArrowRight') { go(i + 1); } else if (e.key === 'ArrowLeft') { go(i - 1); } else if (e.key === 'Home') { go(0); } else if (e.key === 'End') { go(tabs.length - 1); }
-    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); const id = tabs[i].dataset.id; if (!state.running.has(id)) { closeTab(id); } }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (state.selected.size > 1) { closeSelected(); } else { const id = tabs[i].dataset.id; if (!state.running.has(id)) { closeTab(id); } } }
+    else if (e.key === 'Escape') { clearSelection(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); for (const t of tabs) { state.selected.add(t.dataset.id); } tabSig = ''; renderTabs(); }
     else if (e.key === 'F2') { e.preventDefault(); const s = tabList().list.find((x) => x.id === tabs[i].dataset.id); if (s) { startRename(tabs[i], s); } }
   });
   // Strip under the tab bar: agents working in *other* tabs, with their live step. Click to switch, ■ to stop.
@@ -1011,8 +1075,8 @@
     els.bgruns.innerHTML = '';
     if (!runs.length) { return; }
     for (const s of runs.slice(0, 3)) {
-      const row = el('div', 'bgrun', `<span class="spin"></span><span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><button class="stop" title="Stop this agent">${I.stop}</button>`);
-      row.title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nClick to open`;
+      const row = el('div', 'bgrun', `<span class="spin"></span><span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span><button class="stop" title="Stop this agent">${I.stop}</button>`);
+      row.title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
       row.onclick = (e) => { if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
       els.bgruns.appendChild(row);
     }
@@ -1255,6 +1319,7 @@
       if (attachments.length) { u.insertBefore(el('div', 'att', attachments.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join('')), u.firstChild.nextSibling); }
       els.messages.appendChild(u); ensureLive(state.session.id); setStatus('Sending…');
     }
+    state.drafts.delete(state.session.id);
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); scrollToBottom(true);
     if (!fromSuggestion) { els.input.focus(); }
   }
@@ -1315,10 +1380,12 @@
       case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); break;
       case 'session': {
-        const switching = !state.session || state.session.id !== m.session.id;
+        const prev = state.session && state.session.id; const switching = prev !== m.session.id;
+        if (switching && prev) { saveDraft(prev); }
         state.session = m.session; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
-        renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); dismissBoot();
-        if (switching) { closeMenu(); }
+        renderSession(); renderChanges(); renderTasks(); renderTabs(); dismissBoot();
+        if (switching) { closeMenu(); restoreDraft(m.session.id); const y = state.scroll.get(m.session.id); if (y !== undefined && !state.running.has(m.session.id)) { els.messages.scrollTop = y; } }
+        els.input.focus();
         break;
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
@@ -1326,8 +1393,9 @@
       case 'event': handleEvent(m.event); break;
       case 'running': {
         const isActive = state.session && state.session.id === m.sessionId;
+        state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
-        else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); const d = els.approvals.querySelector(`[data-id="${CSS.escape(aid)}"]`); if (d) { d.remove(); } } } state.attention.delete(m.sessionId); }
+        else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); const d = els.approvals.querySelector(`[data-id="${CSS.escape(aid)}"]`); if (d) { d.remove(); } } } state.attention.delete(m.sessionId); }
         if (isActive) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
         break;
