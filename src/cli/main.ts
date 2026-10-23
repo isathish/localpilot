@@ -12,6 +12,8 @@ import * as os from 'os';
 import * as vscode from 'vscode'; // → src/cli/vscodeShim.ts (aliased by the CLI build)
 import { AgentRunner } from '../agent/agentLoop';
 import { ChangeTracker } from '../agent/changeTracker';
+import { createGatherContextTool } from '../agent/clarify';
+import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
@@ -411,18 +413,22 @@ interface Core {
   runner: AgentRunner;
   mcp?: McpManager;
   log: vscode.LogOutputChannel;
+  /** Live sessions, so gather_context can see the working set and recent turns. */
+  sessions: Map<string, Session>;
 }
 
 async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string) => Promise<boolean>): Promise<Core> {
   const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
   const providers = new ProviderRegistry(log);
   const tools = new ToolRegistry();
-  const skills = new SkillManager(log);
+  const skills = new SkillManager(log, path.join(__dirname, '..', 'skills'));
   const workspace = new WorkspaceContext(log);
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log);
-  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory);
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool]);
+  const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
+  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner);
+  const sessions = new Map<string, Session>();
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions)]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
@@ -430,7 +436,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp = new McpManager(tools, log, VERSION);
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, mcp, log };
+  return { providers, tools, skills, workspace, tracker, memory, runner, mcp, log, sessions };
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -481,6 +487,8 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
         case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
         case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
+        case 'skill_suggestions': { const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined; if (sk.length) {r.note(`Matching skills: ${sk.map((s) => s.name).join(', ')}`);} if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);} break; }
+        case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
         case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.prompt).slice(0, 80)}`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
         case 'error': r.error(String(e.payload)); break;
@@ -601,6 +609,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const session = newSession(args.mode, modelInfo.id);
+  core.sessions.set(session.id, session);
   const cwdLabel = vscode.workspace.asRelativePath(args.cwd) === args.cwd ? path.basename(args.cwd) : args.cwd;
 
   // One-shot mode -----------------------------------------------------------

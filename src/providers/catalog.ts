@@ -2,7 +2,8 @@ import { ModelInfo } from '../types';
 import { estimateModelGb, fits, parameterSizeB, SystemProfile } from './system';
 
 /** What a model is routed to. `agent` is the default chat/agent model. */
-export type ModelRole = 'agent' | 'completion' | 'vision' | 'reasoning';
+/** `fast`: small tool-capable model for read-only subagents (exploration, clarification, research). */
+export type ModelRole = 'agent' | 'completion' | 'vision' | 'reasoning' | 'fast';
 
 /** Where a catalog model can be installed from LocalPilot. */
 export type InstallTarget = 'ollama' | 'docker' | 'lmstudio';

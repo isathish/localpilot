@@ -26,6 +26,10 @@ Type `@` to open the mention picker; <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Tab<
 
 The ring at the bottom-right of the composer shows how much of the model's window is in use. It turns amber at 65% and red at 85%. Click it to compact immediately (`/compact` does the same).
 
+## What is always in the prompt
+
+Besides your message and the conversation, every call carries a few compact sections so the model can orient itself before its first tool call: the active file and selection, a **project map** (top-level folders with file counts and their subfolders, root files, detected stack markers such as Node / Python / Docker), any project rules files, the memory index, the working set and the current checklist, and the one-line index of available skills. The full file list is only attached when you add `@workspace`.
+
 ## Automatic context management
 
 Before every model call LocalPilot computes a budget: system prompt + tool schemas + history + reserved output tokens vs. the model's context window. When usage crosses `localpilot.compactionThreshold` (default 0.75) it applies, in order:

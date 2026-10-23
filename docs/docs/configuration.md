@@ -44,6 +44,8 @@ Expand a provider to edit it and press **Test connection** — LocalPilot checks
 | `localpilot.routing.enabled` | `true` | Pick a model per task: vision model for image turns, smallest FIM model for completions, reasoning model in Plan mode, best available model when the default is offline/disabled |
 | `localpilot.routing.vision` | `""` (auto) | `provider/model` for turns with images when the session model cannot see |
 | `localpilot.routing.reasoning` | `""` (keep session model) | `provider/model` used in Plan mode |
+| `localpilot.routing.fast` | `""` (auto) | `provider/model` for read-only subagents (`explore`, `clarifier`, `researcher`). Empty = smallest tool-capable model that fits; `session` = keep the session model |
+| `localpilot.routing.coding` | `""` (keep session model) | `provider/model` for implementing subagents (`coder`, `tester`, `debugger`, `docs`) |
 
 See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 
@@ -73,6 +75,14 @@ Values: `always`, `ask`, `never`.
 |---|---|---|
 | `localpilot.parallel.maxConcurrency` | `4` | Concurrent tool calls / subagents |
 | `localpilot.parallel.maxSubagentDepth` | `2` | Nesting limit |
+| `localpilot.autoClarify` | `true` | Detect vague requests and hand the agent a workspace snapshot (editor, open files, errors, git) so it states its interpretation before acting |
+
+## Chat history & memory
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.sessions.retention` | `50` | Max chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats never count. `0` keeps everything |
+| `localpilot.memory.enabled` | `true` | Let the agent save/read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
 
 ## Web search
 

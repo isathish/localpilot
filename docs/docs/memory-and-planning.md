@@ -15,7 +15,14 @@ The agent can save durable notes and reads them back at the start of every sessi
 
 - The agent uses `memory_save` (replace or append), `memory_read`, `memory_list` and `memory_delete`. The system prompt instructs it to record verified facts and never secrets.
 - Every system prompt includes a compact **index** (name + first line) and inlines small notes (≤1200 chars) within a 6k budget; larger notes are fetched on demand.
-- **LocalPilot: Open Memory Notes** opens the folder; `localpilot.memory.enabled` turns the feature off.
+- **Settings → Memory & history** lists every note with its scope, size and age — open or delete notes individually, or clear a whole scope. **LocalPilot: Open Memory Notes** opens the folder; `localpilot.memory.enabled` turns the feature off.
+
+## Chat history
+
+Chats are stored per workspace in VS Code's workspace storage (never sent anywhere). **Settings → Memory & history** shows how many chats and messages exist, how much disk they use, and lets you:
+
+- set **Keep at most** (`localpilot.sessions.retention`, default 50) — the oldest idle chats are pruned automatically whenever a new chat starts; pinned and running chats never count;
+- **Clear chat history…** (also in the chat's All-chats menu and the Command Palette) — deletes idle chats, optionally keeping pinned ones; running agents keep going.
 
 Ask explicitly too: *"remember that we deploy with `make release` and tests need `DATABASE_URL`"*.
 
@@ -38,7 +45,7 @@ For any multi-step task the agent calls `manage_todos` first, then updates items
 
 ## Multitasking
 
-Every session is an independent agent. A **tab strip** at the top of the chat lists running sessions first (with a spinner) and recent ones after; `+` starts another agent while the current one keeps working. The **Agents** panel shows the same information with per-session changed files. Use **Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) or `localpilot --ide --parallel "a | b | c"` to fan out several tasks at once.
+Every session is an independent agent. A **tab strip** at the top of the chat shows one tab per agent with its live state (running, finished, needs approval); `+` starts another agent while the current one keeps working, and <kbd>⌘⇧Enter</kbd> sends the draft in a new tab. See [Parallel agents]({{ '/docs/parallel-agents/' | relative_url }}). The **Agents** panel shows the same information with per-session changed files. Use **Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) or `localpilot --ide --parallel "a | b | c"` to fan out several tasks at once.
 
 ## The `localpilot` CLI
 

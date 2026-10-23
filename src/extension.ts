@@ -1,6 +1,9 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
 import { ChangeTracker } from './agent/changeTracker';
+import { createGatherContextTool } from './agent/clarify';
+import { createSkillPrompt, SkillLearner } from './agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -42,13 +45,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Core services -----------------------------------------------------------------------
   const providers = new ProviderRegistry(log);
   const tools = new ToolRegistry();
-  const skills = new SkillManager(log);
+  const skills = new SkillManager(log, path.join(context.extensionPath, 'skills'));
   const workspace = new WorkspaceContext(log);
   const store = new SessionStore(context, log);
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(context.globalStorageUri, log);
-  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory);
+  const learner = new SkillLearner(path.join(context.globalStorageUri.fsPath, 'skill-learning.json'), log);
+  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
+  controller.learner = learner;
+  context.subscriptions.push(learner);
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
   const modelManager = new ModelManager(providers, log);
@@ -83,11 +89,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store)]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
 
   await Promise.all([store.load(), skills.refresh()]);
   void mcp.reload();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('localpilot.skillsPaths') || e.affectsConfiguration('localpilot.skills.builtin')) {
+        void skills.refresh();
+      }
+    })
+  );
 
   // --- UI ----------------------------------------------------------------------------------
   const view = new ChatViewProvider(context, controller);
@@ -103,7 +116,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log);
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds);
+  settingsPanel.learner = learner;
   context.subscriptions.push(settingsPanel);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', new LocalModelChatProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
@@ -369,6 +383,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     await controller.runParallel(tasks);
     void vscode.commands.executeCommand('localpilot.agentsView.focus');
   });
+  cmd('localpilot.clearHistory', async () => {
+    const all = controller.store.list();
+    const running = new Set(controller.runningSessionIds);
+    const pinned = all.filter((s) => s.pinned && !running.has(s.id)).length;
+    const idle = all.filter((s) => !running.has(s.id) && !s.pinned).length;
+    if (!idle && !pinned) {
+      return void vscode.window.showInformationMessage(running.size ? 'Only running chats are open — stop them first to delete them.' : 'No chat history to clear.');
+    }
+    const stats = await controller.store.stats();
+    const size = stats.bytes > 1048576 ? `${(stats.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(stats.bytes / 1024))} KB`;
+    const choice = await vscode.window.showWarningMessage(
+      `Clear chat history for this workspace?`,
+      { modal: true, detail: `${idle} chat${idle === 1 ? '' : 's'} (${stats.messages} messages, ${size}) will be deleted permanently.${pinned ? ` ${pinned} pinned chat${pinned === 1 ? '' : 's'} can be kept.` : ''}${running.size ? ` ${running.size} running agent${running.size === 1 ? '' : 's'} will keep going.` : ''}` },
+      pinned ? 'Clear, keep pinned' : 'Clear',
+      ...(pinned ? ['Clear everything'] : [])
+    );
+    if (!choice) {
+      return;
+    }
+    await controller.clearHistory({ keepPinned: choice !== 'Clear everything' });
+  });
   cmd('localpilot.stopSession', (id?: unknown) => controller.stop(typeof id === 'string' ? id : controller.activeSession?.id ?? ''));
   cmd('localpilot.stopAll', () => controller.runningSessionIds.forEach((id) => controller.stop(id)));
   cmd('localpilot.showDiff', (sessionId: unknown, fsPath: unknown) => typeof sessionId === 'string' && typeof fsPath === 'string' && tracker.showDiff(sessionId, fsPath));
@@ -559,6 +594,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const cur = cfg.get<boolean>('inlineCompletion.enabled', false);
     await cfg.update('inlineCompletion.enabled', !cur, vscode.ConfigurationTarget.Global);
     vscode.window.setStatusBarMessage(`LocalPilot inline completions ${!cur ? 'enabled' : 'disabled'}`, 2500);
+  });
+  cmd('localpilot.createSkill', async (suggestion?: unknown) => {
+    const s = suggestion as { slug?: string; topic?: string; count?: number; samples?: string[] } | undefined;
+    if (!s?.slug) {
+      return;
+    }
+    view.reveal();
+    await new Promise((r) => setTimeout(r, 300));
+    controller.draft(createSkillPrompt({ slug: s.slug, topic: s.topic ?? s.slug, count: s.count ?? 1, samples: s.samples ?? [] }));
+  });
+  cmd('localpilot.dismissSkillTopic', async (topic?: unknown) => {
+    if (typeof topic === 'string') {
+      await learner.dismiss(topic);
+    }
   });
   cmd('localpilot.reloadSkills', async () => {
     await skills.refresh();

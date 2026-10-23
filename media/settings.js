@@ -33,7 +33,7 @@
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['memory', 'Memory & skills', I.brain], ['mcp', 'MCP servers', I.plug], ['advanced', 'Advanced', I.wrench],
+    ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['advanced', 'Advanced', I.wrench],
   ];
   const PRESET_PROVIDERS = [
     { key: 'ollama', label: 'Ollama', sub: 'localhost:11434', cfg: { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' } },
@@ -68,6 +68,10 @@
   /** Generic setting row. kind: text|number|password|select|toggle|textarea|range|seg */
   function field(key, label, desc, kind, opts = {}) {
     const f = el('div', `field ${opts.wide ? 'wide' : ''}`);
+    // Components declare the setting keys they render from and how to rebuild themselves, so a changed setting
+    // refreshes just that element instead of the whole page (see refreshComponents).
+    f.dataset.deps = key;
+    f._rebuild = () => field(key, label, desc, kind, opts);
     f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
     const ctl = f.querySelector('.ctl');
     const v = val(key);
@@ -113,40 +117,85 @@
     return f;
   }
   const card = (...children) => { const c = el('div', 'card'); children.forEach((x) => x && c.appendChild(x)); return c; };
+  /** Marks any element as a self-rebuilding component bound to the given setting keys. */
+  const component = (node, deps, rebuild) => { node.dataset.deps = deps.join(','); node._rebuild = rebuild; return node; };
+  /** Settings whose change restructures a page (lists, visibility) rather than one control — these re-render the section. */
+  const STRUCTURAL_KEYS = new Set(['providers', 'mcpServers', 'skillsPaths', 'models.disabled', 'webSearch.provider']);
+  /** Rebuilds only the components that depend on the changed keys. Keeps a focused control intact (just refreshes its label). */
+  function refreshComponents(keys) {
+    const want = new Set(keys);
+    for (const node of [...app.querySelectorAll('[data-deps]')]) {
+      if (!node._rebuild || !node.dataset.deps.split(',').some((k) => want.has(k))) { continue; }
+      const fresh = node._rebuild();
+      wireGlobal(fresh);
+      if (node.contains(document.activeElement)) {
+        const a = node.querySelector('.lbl'); const b = fresh.querySelector('.lbl');
+        if (a && b) { a.replaceWith(b); }
+        continue;
+      }
+      node.replaceWith(fresh);
+    }
+  }
   const enabledModels = () => (state.data.models || []).filter((m) => !m.disabled);
   const modelOptions = (filter) => enabledModels().filter(filter || (() => true)).map((m) => [m.id, m.name, `${m.providerId} · ${Math.round(m.contextWindow / 1024)}k${m.supportsTools ? ' · tools' : ''}${m.supportsVision ? ' · vision' : ''}${m.supportsFim ? ' · FIM' : ''}`]);
   const shortId = (id) => String(id || '').split('/').pop();
 
   // ------------------------------------------------------------------ shell
+  /**
+   * Settings page: the header and sidebar are built once and kept; render() only swaps the <section> for the
+   * current page. Setting changes go through refreshComponents() and never reach here unless they restructure
+   * the page. The setup wizard is small and still renders as a whole.
+   */
   function render() {
     if (!state.data) { return; }
-    // Clearing #app collapses the document and drops the scroll position; put it back once the page is rebuilt.
+    // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt.
     const y = window.scrollY;
     app.removeAttribute('aria-busy');
-    app.innerHTML = '';
-    if (state.page === 'setup') { renderSetup(); } else { renderSettings(); }
+    if (state.page === 'setup') {
+      app.innerHTML = ''; app.dataset.page = 'setup';
+      renderSetup();
+    } else {
+      if (app.dataset.page !== 'settings') { app.innerHTML = ''; app.dataset.page = 'settings'; renderShell(); }
+      syncShell();
+      renderSection();
+    }
     if (y) { window.scrollTo(0, y); }
   }
-  function renderSettings() {
+  function renderShell() {
     const d = state.data;
     const top = el('header', 'top');
     top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div><span class="spacer"></span>
-      <div class="scope" role="radiogroup" aria-label="Settings scope"><button data-s="user" class="${state.scope === 'user' ? 'on' : ''}">User</button><button data-s="workspace" class="${state.scope === 'workspace' ? 'on' : ''}" ${d.hasWorkspace ? '' : 'disabled title="Open a folder to edit workspace settings"'}>Workspace</button></div>
+      <div class="scope" role="radiogroup" aria-label="Settings scope"><button data-s="user">User</button><button data-s="workspace">Workspace</button></div>
       <button class="btn" data-cmd="localpilot.openChat">${I.chat}Open chat</button>`;
-    top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { state.scope = b.dataset.s; render(); }));
+    top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled) { return; } state.scope = b.dataset.s; render(); }));
     app.appendChild(top);
     const layout = el('div', 'layout');
     const side = el('nav', 'side');
-    side.innerHTML = `<div class="grp">Settings</div>${SECTIONS.map(([id, label, icon]) => `<a data-sec="${id}" class="${state.section === id ? 'on' : ''}">${icon}${esc(label)}</a>`).join('')}<div class="grp">Help</div><a data-cmd="localpilot.openWelcome">${I.rocket}Run setup again</a><a data-url="https://isathish.github.io/localpilot/docs/configuration/">${I.book}Documentation</a>`;
+    side.innerHTML = `<div class="grp">Settings</div>${SECTIONS.map(([id, label, icon]) => `<a data-sec="${id}">${icon}${esc(label)}</a>`).join('')}<div class="grp">Help</div><a data-cmd="localpilot.openWelcome">${I.rocket}Run setup again</a><a data-url="https://isathish.github.io/localpilot/docs/configuration/">${I.book}Documentation</a>`;
     side.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; state.expanded = null; render(); }));
     layout.appendChild(side);
     const main = el('main', 'content');
-    const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, advanced: secAdvanced }[state.section] || secProviders)(sec);
-    main.appendChild(sec);
+    main.appendChild(el('section', 'sec'));
     layout.appendChild(main);
     app.appendChild(layout);
-    wireGlobal(app);
+    wireGlobal(top); wireGlobal(side);
+  }
+  /** Cheap per-render sync of the persistent shell: version, scope buttons, active nav entry. */
+  function syncShell() {
+    const d = state.data;
+    const v = app.querySelector('.top .brand span'); if (v) { v.textContent = `Settings · v${d.version}`; }
+    app.querySelectorAll('.top .scope button').forEach((b) => {
+      b.classList.toggle('on', state.scope === b.dataset.s);
+      if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? '' : 'Open a folder to edit workspace settings'; }
+    });
+    app.querySelectorAll('.side [data-sec]').forEach((a) => a.classList.toggle('on', a.dataset.sec === state.section));
+  }
+  function renderSection() {
+    const sec = el('section', 'sec');
+    ({ providers: secProviders, models: secModels, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    wireGlobal(sec);
+    const old = app.querySelector('main.content > .sec');
+    if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
   }
   function wireGlobal(root) {
     root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => post({ type: 'command', id: b.dataset.cmd, args: b.dataset.args ? JSON.parse(b.dataset.args) : undefined })));
@@ -196,6 +245,7 @@
     const probe = (state.probe || []).find((r) => r.id === p.id) || state.tests[p.id];
     const open = state.expanded === p.id;
     const c = el('div', `prov ${p.enabled === false ? 'off' : ''}`);
+    c.dataset.prov = p.id;
     const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
     c.innerHTML = `<div class="prov-head"><span class="dot ${status}"></span><div class="prov-title"><b>${esc(p.displayName || p.id)}</b><span>${esc(p.baseUrl)}</span></div><div class="prov-meta"><span class="badge">${p.type === 'ollama' ? 'Ollama API' : 'OpenAI API'}</span>${n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${p.enabled === false ? '<span class="badge">disabled</span>' : ''}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
@@ -241,7 +291,7 @@
   }
 
   // ------------------------------------------------------------------ models
-  const ROLE_LABEL = { agent: 'agent', completion: 'completions', vision: 'images', reasoning: 'plan' };
+  const ROLE_LABEL = { agent: 'agent', completion: 'completions', vision: 'images', reasoning: 'plan', fast: 'subagents' };
   const TARGET_LABEL = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
   const fitBadge = (fit) => fit === 'ok' ? '<span class="badge ok">fits</span>' : fit === 'tight' ? '<span class="badge warn">tight</span>' : fit === 'over' ? '<span class="badge err">too big</span>' : '';
   const gbText = (gb) => (gb === undefined || gb === null ? '' : gb >= 10 ? `${Math.round(gb)} GB` : `${Number(gb).toFixed(1)} GB`);
@@ -338,6 +388,7 @@
 
     // --- installed
     sec.appendChild(el('h2', 'sub', `Installed models<span class="count">${d.installed.filter((m) => !m.disabled).length} enabled · ${d.installed.length} total</span>`));
+    const installedCard = () => {
     const inst = el('div', 'card');
     if (!anyModels) {
       inst.appendChild(el('div', 'empty', running.length ? 'The server is running but has no models yet. Use <b>Set up automatically</b> above or install one from the catalog below.' : 'No model server is running. <b>Set up automatically</b> starts or installs Ollama and downloads a starter model sized for this machine.'));
@@ -377,18 +428,22 @@
       row.appendChild(right);
       inst.appendChild(row);
     }
-    sec.appendChild(inst);
+    return component(inst, ['defaultModel', 'inlineCompletion.model', 'routing.vision', 'routing.reasoning'], installedCard);
+    };
+    sec.appendChild(installedCard());
 
     // --- routing
     sec.appendChild(el('h2', 'sub', 'Routing'));
     const autoFor = (role) => { const m = d.installed.find((x) => !x.disabled && x.autoRoles.includes(role)); return m ? `Auto → ${m.name}` : role === 'vision' ? 'Auto → no vision model installed' : 'Auto → best available'; };
     const opts = modelOptions();
     sec.appendChild(card(
-      field('routing.enabled', 'Route automatically', 'Send image turns to a vision model, completions to the smallest FIM model, Plan mode to the reasoning model, and fall back to the best available model when the chosen one is offline or disabled.', 'toggle'),
+      field('routing.enabled', 'Route automatically', 'Send image turns to a vision model, completions to the smallest FIM model, Plan mode to the reasoning model, subagents to the models below, and fall back to the best available model when the chosen one is offline or disabled.', 'toggle'),
       field('defaultModel', 'Agent & chat', opts.length ? `New chats and editor actions. ${esc(autoFor('agent'))}.` : 'No models enabled yet.', 'select', { options: [['', 'Auto (best for this machine)', ''], ...opts] }),
       field('inlineCompletion.model', 'Inline completions', `Fill-in-the-middle model for ghost text. ${esc(autoFor('completion'))}.`, 'select', { options: [['', 'Auto (smallest FIM model)', ''], ...(modelOptions((m) => m.supportsFim).length ? modelOptions((m) => m.supportsFim) : opts)] }),
       field('routing.vision', 'Images', `Used when a turn has images and the session model cannot see. ${esc(autoFor('vision'))}.`, 'select', { options: [['', 'Auto (best vision model)', ''], ...(modelOptions((m) => m.supportsVision).length ? modelOptions((m) => m.supportsVision) : opts)] }),
-      field('routing.reasoning', 'Plan mode', 'Optional reasoning model for planning (qwen3, deepseek-r1, gpt-oss — pair with Extended thinking below). Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] })
+      field('routing.reasoning', 'Plan mode', 'Optional reasoning model for planning (qwen3, deepseek-r1, gpt-oss — pair with Extended thinking below). Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] }),
+      field('routing.fast', 'Read-only subagents', `<code>explore</code>, <code>clarifier</code>, <code>researcher</code> run many short tool calls, often several in parallel — a small tool-capable model keeps them snappy. ${esc(autoFor('fast'))}.`, 'select', { options: [['', 'Auto (smallest tool-capable model that fits)', ''], ['session', 'Keep the session model', ''], ...opts] }),
+      field('routing.coding', 'Implementing subagents', '<code>coder</code>, <code>tester</code>, <code>debugger</code>, <code>docs</code>. Pick a stronger coding model here while chatting with a lighter one. Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] })
     ));
 
     // --- generation
@@ -471,15 +526,19 @@
   // ------------------------------------------------------------------ agent & approvals
   function secAgent(sec) {
     head(sec, 'Agent & approvals', 'Control what the agent may do on its own. “Ask” shows an inline approval card in the chat; “Allow” proceeds silently; “Block” refuses.');
-    const cur = { terminal: val('approvals.terminal'), write: val('approvals.write'), delete: val('approvals.delete'), network: val('approvals.network') };
-    const presets = el('div', 'approval-presets');
-    for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
-      const on = Object.keys(p.v).every((x) => p.v[x] === cur[x]);
-      const b = el('button', `ap ${on ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
-      b.onclick = () => { for (const [x, v] of Object.entries(p.v)) { if (cur[x] !== v) { set(`approvals.${x}`, v); } } };
-      presets.appendChild(b);
-    }
-    sec.appendChild(presets);
+    const APPROVAL_KEYS = ['approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network'];
+    const presetsEl = () => {
+      const cur = { terminal: val('approvals.terminal'), write: val('approvals.write'), delete: val('approvals.delete'), network: val('approvals.network') };
+      const presets = el('div', 'approval-presets');
+      for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
+        const on = Object.keys(p.v).every((x) => p.v[x] === cur[x]);
+        const b = el('button', `ap ${on ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
+        b.onclick = () => { for (const [x, v] of Object.entries(p.v)) { if (cur[x] !== v) { set(`approvals.${x}`, v); } } };
+        presets.appendChild(b);
+      }
+      return component(presets, APPROVAL_KEYS, presetsEl);
+    };
+    sec.appendChild(presetsEl());
     sec.appendChild(card(
       field('approvals.terminal', 'Terminal commands', '<code>run_command</code> — shell commands in the workspace.', 'seg', { options: APPROVAL }),
       field('approvals.write', 'File edits', '<code>edit_file</code>, <code>write_file</code>, <code>create_directory</code>. Every edit is tracked and can be undone from the Changes panel either way.', 'seg', { options: APPROVAL }),
@@ -490,6 +549,10 @@
     sec.appendChild(card(
       field('terminal.runInIntegratedTerminal', 'Run commands in a visible terminal', 'The agent\'s <code>run_command</code> calls run in a branded <b>LocalPilot Agent</b> terminal through shell integration, so you can watch them live. Falls back to a hidden process when the shell has no integration.', 'toggle'),
       field('terminal.reveal', 'Reveal the terminal when a command runs', 'Shows the panel without stealing focus from the editor.', 'toggle')
+    ));
+    sec.appendChild(el('h2', 'sub', 'Understanding requests'));
+    sec.appendChild(card(
+      field('autoClarify', 'Interpret vague requests automatically', 'When a prompt is short or says “fix this” / “make it faster” without naming a target, the agent is handed the active file, selection, open editors, recent edits, errors and git changes, states <i>Understood as: …</i> and proceeds. It only asks when two readings would lead to materially different work.', 'toggle')
     ));
     sec.appendChild(el('h2', 'sub', 'Parallelism & context'));
     sec.appendChild(card(
@@ -527,33 +590,76 @@
   }
 
   // ------------------------------------------------------------------ memory & skills
+  function fmtBytes(b) { return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`; }
+  function fmtAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'just now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)} min ago`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)} h ago`; } return `${Math.floor(d / 86400e3)} d ago`; }
   function secMemory(sec) {
     const d = state.data;
-    head(sec, 'Memory & skills', 'Durable notes the agent keeps between chats, and the skills and subagents it can load.');
+    head(sec, 'Memory & history', 'What LocalPilot keeps on this machine: chat history for this workspace, durable notes the agent writes, and the skills and subagents it can load.');
+    // ---- chat history (per-workspace storage) with retention
+    const ss = d.sessions && typeof d.sessions === 'object' ? d.sessions : { count: Number(d.sessions) || 0, bytes: 0, messages: 0, running: 0, pinned: 0 };
+    sec.appendChild(el('h2', 'sub', 'Chat history'));
+    const hist = el('div', 'card');
+    const kv = el('div', 'field wide');
+    kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes)}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd><dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
+    hist.appendChild(kv);
+    const retention = field('sessions.retention', 'Keep at most', 'Oldest idle chats are removed automatically when a new chat starts. Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
+    hist.appendChild(retention);
+    const acts = el('div', 'btnrow');
+    acts.innerHTML = `<span class="muted small">Clearing removes idle chats only; running agents keep going and pinned chats can be kept.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.showSessions">${I.chat}Browse chats</button><button class="btn sm danger" data-cmd="localpilot.clearHistory" ${ss.count ? '' : 'disabled'}>${I.trash}Clear chat history…</button>`;
+    hist.appendChild(acts);
+    sec.appendChild(hist);
+    // ---- memory notes
+    sec.appendChild(el('h2', 'sub', 'Memory notes'));
     const mem = el('div', 'btnrow');
-    mem.innerHTML = `<span class="muted small">${d.memory.project} project note(s) · ${d.memory.global} global note(s)</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open notes</button><button class="btn sm danger" data-cmd="localpilot.clearMemory">${I.trash}Clear…</button>`;
+    mem.innerHTML = `<span class="muted small">${d.memory.project} project note(s) · ${d.memory.global} global note(s)</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
     sec.appendChild(card(
       field('memory.enabled', 'Enable memory', 'The agent can <code>memory_save</code> / <code>memory_read</code> notes in <code>.localpilot/memory/</code> (project, commit-able) and in global storage. A compact index is added to every prompt.', 'toggle', { after: mem })
     ));
+    const notes = Array.isArray(d.memory.notes) ? d.memory.notes : [];
+    if (notes.length) {
+      const t = el('table', 'tbl notes', `<thead><tr><th>Note</th><th>Summary</th><th>Scope</th><th>Updated</th><th></th></tr></thead><tbody>${notes.map((n) => `<tr data-name="${esc(n.name)}" data-scope="${esc(n.scope)}"><td class="mono"><a data-open title="Open ${esc(n.name)}.md">${esc(n.name)}</a></td><td class="muted">${esc(n.summary || '')}<span class="muted small"> · ${(n.chars / 1024).toFixed(1)} KB</span></td><td><span class="badge">${esc(n.scope)}</span></td><td class="muted small">${fmtAgo(n.updatedAt)}</td><td><button class="btn ghost sm danger" data-del title="Delete note">${I.trash}</button></td></tr>`).join('')}</tbody>`);
+      t.onclick = (e) => {
+        const tr = e.target.closest('tr[data-name]'); if (!tr) { return; }
+        if (e.target.closest('[data-del]')) { const b = e.target.closest('[data-del]'); if (b.dataset.armed) { post({ type: 'deleteNote', name: tr.dataset.name, scope: tr.dataset.scope }); tr.classList.add('busy'); } else { b.dataset.armed = '1'; b.innerHTML = 'Delete?'; b.classList.add('armed'); setTimeout(() => { delete b.dataset.armed; b.innerHTML = I.trash; b.classList.remove('armed'); }, 2500); } return; }
+        if (e.target.closest('[data-open]')) { post({ type: 'openNote', name: tr.dataset.name, scope: tr.dataset.scope }); }
+      };
+      const wrap = el('div', 'card tblwrap'); wrap.appendChild(t); sec.appendChild(wrap);
+    } else {
+      sec.appendChild(el('p', 'empty', 'No notes yet. The agent saves notes with <code>memory_save</code> when it learns something worth keeping (conventions, decisions, gotchas).'));
+    }
     sec.appendChild(el('h2', 'sub', 'Skill folders'));
     const paths = Array.isArray(val('skillsPaths')) ? val('skillsPaths') : [];
     const sp = el('div', 'card');
+    sp.appendChild(field('skills.builtin', 'Built-in skills', 'Playbooks that ship with LocalPilot for the whole development loop: <code>requirements</code>, <code>design</code>, <code>new-project</code>, <code>implement</code>, <code>test</code>, <code>debug</code>, <code>review</code>, <code>refactor</code>, <code>ui-design</code>, <code>docs</code>, <code>deploy</code>, <code>ship</code>, <code>explore-codebase</code>. A workspace or user skill with the same name overrides the bundled one.', 'toggle'));
     const f = el('div', 'field wide');
-    f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.cursor/rules</code> and <code>.github/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
+    f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
     const ctl = el('div', 'ctl');
     const ul = el('ul', 'list');
     paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skillsPaths', paths.filter((_, j) => j !== i)); ul.appendChild(li); });
     const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills"><button class="btn sm">${I.plus}Add</button>`);
     addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
     ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
-    const tableFor = (title, rows, empty) => {
+    const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user' };
+    const tableFor = (title, rows, empty, usage) => {
       const h = el('h2', 'sub', `${title} (${rows.length})`);
       sec.appendChild(h);
       if (!rows.length) { sec.appendChild(el('div', 'empty', empty)); return; }
-      const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th></tr></thead><tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(r.source)}</span></td></tr>`).join('')}</tbody>`);
+      const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th>${usage ? '<th title="Times the agent loaded this skill">Used</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>${usage ? `<td class="mono muted">${r.used ? `${r.used}×` : '—'}</td>` : ''}</tr>`).join('')}</tbody>`);
       sec.appendChild(card(t));
     };
-    tableFor('Skills', d.skills, 'No skills found. Create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.');
+    tableFor('Skills', d.skills, 'No skills found. Create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
+    const recurring = (d.learning && d.learning.recurring) || [];
+    if (recurring.length) {
+      sec.appendChild(el('h2', 'sub', `Suggested skills (${recurring.length})`));
+      const box = el('div', 'card');
+      box.appendChild(el('div', 'desc', 'Kinds of request that have come up repeatedly with no skill covering them. Creating a skill captures the procedure that worked so the agent follows it every time; it is written to <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> for you to review.'));
+      const ul = el('ul', 'list');
+      for (const r of recurring) {
+        const li = el('li', '', `<div><code>${esc(r.slug)}</code> <span class="muted small">· ${r.count}× — e.g. ${esc((r.samples || []).slice(-2).map((x) => `“${x}”`).join(', '))}</span></div><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.createSkill" data-args='${esc(JSON.stringify([r]))}'>${I.plus}Create skill</button><button class="reset x" title="Not now" data-cmd="localpilot.dismissSkillTopic" data-args='${esc(JSON.stringify([r.topic]))}'>${I.x}</button>`);
+        ul.appendChild(li);
+      }
+      box.appendChild(ul); sec.appendChild(box);
+    }
     tableFor('Subagents', d.agents, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.');
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
@@ -649,7 +755,7 @@
     sec.appendChild(grid);
     sec.appendChild(el('h2', 'sub', 'About'));
     const about = el('div', 'card');
-    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${providersList().filter((p) => p.enabled !== false).length} provider(s)</dd><dt>Privacy</dt><dd>LocalPilot talks only to the servers listed under Providers. No telemetry, no account.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
+    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions && typeof d.sessions === 'object' ? d.sessions.count : d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${providersList().filter((p) => p.enabled !== false).length} provider(s)</dd><dt>Privacy</dt><dd>LocalPilot talks only to the servers listed under Providers. No telemetry, no account.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
     sec.appendChild(about);
   }
 
@@ -759,13 +865,24 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'state':
+      case 'state': {
+        const prev = state.data;
         state.data = m;
-        if (m.page) { state.page = m.page; }
-        if (m.section) { state.section = m.section; }
-        if (m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
-        render();
+        const nav = !prev || m.navigate !== false;
+        const navChanged = nav && ((m.page && m.page !== state.page) || (m.section && m.section !== state.section));
+        if (nav && m.page) { state.page = m.page; }
+        if (nav && m.section) { state.section = m.section; }
+        if (nav && m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
+        if (!prev || navChanged || state.page === 'setup' || !app.querySelector('main.content > .sec')) { render(); break; }
+        // A settings round-trip: find what actually changed and refresh only those components.
+        const keys = new Set([...Object.keys(prev.settings || {}), ...Object.keys(m.settings || {})]);
+        const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
+        const SECTION_DATA = { providers: ['models'], models: ['models'], completions: ['models'], memory: ['skills', 'agents', 'memory'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
+        if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
+        if (changed.length) { refreshComponents(changed); }
         break;
+      }
       case 'probe': {
         state.probe = m.results; state.busy = false; state.dmr = m.dockerModelRunner || null; state.runtimes = m.runtimes || state.runtimes; state.starter = m.starter || state.starter;
         for (const r of m.results) { state.tests[r.id] = r; }
@@ -775,10 +892,14 @@
         render();
         break;
       }
-      case 'testResult':
+      case 'testResult': {
         state.tests[m.id] = m.result;
-        render();
+        if (state.page === 'setup') { render(); break; }
+        // Only the tested provider's card changes.
+        const list = providersList(); const p = list.find((x) => x.id === m.id); const old = app.querySelector(`.prov[data-prov="${CSS.escape(m.id)}"]`);
+        if (p && old) { const fresh = providerCard(p, list); wireGlobal(fresh); old.replaceWith(fresh); }
         break;
+      }
       case 'models':
         state.models = m.models; state.jobs = m.models.jobs || state.jobs; state.modelsRequested = false; state.jobsSig = jobsSig(state.jobs);
         if (state.section === 'models' || state.page === 'setup') { render(); }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { MemoryStore } from '../agent/memory';
+import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
 import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
@@ -31,7 +32,7 @@ export interface ManagedModel extends ModelInfo {
   gb?: number;
   fit: 'ok' | 'tight' | 'over' | 'unknown';
   /** Roles the router would currently pick this model for (with no overrides). */
-  autoRoles: ('agent' | 'completion' | 'vision' | 'reasoning')[];
+  autoRoles: ('agent' | 'completion' | 'vision' | 'reasoning' | 'fast')[];
   /** Catalog family/size if recognised. */
   catalog?: { key: string; name: string; tag: string };
   /** Runtime that can delete it, if any. */
@@ -66,7 +67,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string }[]; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number }; sessions: number; welcomed: boolean }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string; used?: number }[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -90,24 +91,27 @@ type FromSettings =
   | { type: 'autoSetup'; installRuntime?: boolean; target?: InstallTarget }
   | { type: 'startRuntime'; target: InstallTarget }
   | { type: 'command'; id: string; args?: unknown[] }
+  | { type: 'deleteNote'; name: string; scope: 'project' | 'global' }
+  | { type: 'openNote'; name: string; scope: 'project' | 'global' }
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
   | { type: 'openExternal'; url: string };
 
 /** Keys (relative to `localpilot.`) that the UI may read and write. Anything else is rejected. */
 const SETTING_KEYS = [
   'providers', 'defaultModel', 'contextWindow', 'maxOutputTokens', 'temperature', 'thinking', 'keepAlive', 'compactionThreshold', 'maxToolOutputChars',
-  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth',
+  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
-  'mcpServers', 'skillsPaths', 'memory.enabled', 'systemPromptAppend', 'showWelcomeOnStartup', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
-  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning',
+  'mcpServers', 'skillsPaths', 'skills.builtin', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
+  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
 const ALLOWED_COMMANDS = new Set([
-  'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
+  'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels',
+  'localpilot.createSkill', 'localpilot.dismissSkillTopic',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
@@ -123,9 +127,12 @@ export const WELCOMED_KEY = 'localpilot.welcomed';
  * The webview never touches configuration directly; every change is validated here and written with the VS Code API.
  */
 export class SettingsPanel implements vscode.Disposable {
+  /** Skill usage / recurring-request tracker (set by the extension host). */
+  learner?: SkillLearner;
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
+  private navigate = false;
   private modelsLoaded = false;
   private modelsRefresh?: ReturnType<typeof setTimeout>;
   private jobsTimer?: ReturnType<typeof setTimeout>;
@@ -139,7 +146,9 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly mcp: McpManager,
     private readonly memory: MemoryStore,
     private readonly store: SessionStore,
-    private readonly log: vscode.LogOutputChannel
+    private readonly log: vscode.LogOutputChannel,
+    /** Ids of chats currently streaming (they are never deleted by "Clear chat history"). */
+    private readonly running: () => string[] = () => []
   ) {
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
@@ -176,6 +185,7 @@ export class SettingsPanel implements vscode.Disposable {
   show(page: SettingsPage = 'settings', section?: SettingsSection): void {
     this.page = page;
     this.section = section;
+    this.navigate = true;
     if (this.panel) {
       this.panel.title = this.title();
       this.panel.reveal();
@@ -209,6 +219,7 @@ export class SettingsPanel implements vscode.Disposable {
   private async handle(m: FromSettings): Promise<void> {
     switch (m.type) {
       case 'ready':
+        this.navigate = true;
         return this.pushState();
       case 'set':
         return this.update(m.key, m.value, m.scope);
@@ -275,6 +286,18 @@ export class SettingsPanel implements vscode.Disposable {
           void this.pushState();
         }
         return;
+      case 'deleteNote': {
+        const ok = await this.memory.delete(m.name, m.scope);
+        this.post({ type: 'toast', level: ok ? 'info' : 'error', text: ok ? `Deleted note “${m.name}”` : `Note “${m.name}” not found` });
+        return this.pushState();
+      }
+      case 'openNote': {
+        const dir = this.memory.openFolder(m.scope);
+        if (dir) {
+          await vscode.window.showTextDocument(vscode.Uri.joinPath(dir, `${m.name}.md`), { preview: true }).then(undefined, () => this.post({ type: 'toast', level: 'error', text: `Cannot open ${m.name}.md` }));
+        }
+        return;
+      }
       case 'finishSetup':
         return this.finishSetup(m);
       case 'openExternal':
@@ -352,7 +375,7 @@ export class SettingsPanel implements vscode.Disposable {
     const [system, runtimes, all] = await Promise.all([getSystemProfile(), this.models.detectRuntimes(), this.providers.listAllModels().catch(() => [] as ModelInfo[])]);
     const enabled = all.filter((m) => !m.disabled);
     // Plan mode keeps the session model unless `routing.reasoning` is set, so there is no "auto" reasoning pick to show.
-    const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled, 'vision', system)?.id };
+    const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled, 'vision', system)?.id, fast: pickForRole(enabled, 'fast', system)?.id };
     const installed: ManagedModel[] = all.map((m) => {
       const gb = modelFootprintGb(m);
       const cat = lookupCatalog(m);
@@ -361,7 +384,7 @@ export class SettingsPanel implements vscode.Disposable {
         ...m,
         gb,
         fit: gb === undefined ? 'unknown' : gb <= system.modelBudgetGb ? 'ok' : gb <= system.modelBudgetGb * 1.25 ? 'tight' : 'over',
-        autoRoles: (['agent', 'completion', 'vision'] as const).filter((r) => auto[r] === m.id),
+        autoRoles: (['agent', 'completion', 'vision', 'fast'] as const).filter((r) => auto[r] === m.id),
         catalog: cat ? { key: cat.entry.key, name: cat.entry.name, tag: cat.variant.tag } : undefined,
         removable: rt?.target,
       };
@@ -412,22 +435,28 @@ export class SettingsPanel implements vscode.Disposable {
     }
     const models = await this.providers.listAllModels().catch(() => []);
     const notes = await this.memory.list().catch(() => []);
+    const learning = await this.learner?.usage().catch(() => undefined);
+    const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
     this.post({
       type: 'state',
       page: this.page,
       section: this.section,
+      // Only an explicit show()/ready moves the webview; refreshes after a settings change leave the user where they are.
+      navigate: this.navigate,
       version: String((this.ctx.extension.packageJSON as { version?: string }).version ?? ''),
       hasWorkspace: !!vscode.workspace.workspaceFolders?.length,
       settings,
       models,
-      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source })),
+      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count })),
+      learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
       mcp: this.mcp.status,
-      memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length },
-      sessions: this.store.list().length,
+      memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length, notes: notes.slice(0, 200).map((n) => ({ name: n.name, scope: n.scope, summary: n.summary, updatedAt: n.updatedAt, chars: n.chars })) },
+      sessions: { ...stats, running: this.running().length, pinned: this.store.list().filter((x) => x.pinned).length },
       welcomed: !!this.ctx.globalState.get(WELCOMED_KEY),
     });
     this.section = undefined;
+    this.navigate = false;
   }
 
   // ------------------------------------------------------------------ html

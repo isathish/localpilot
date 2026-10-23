@@ -266,6 +266,16 @@
         "category": "LocalPilot"
       },
       {
+        "command": "localpilot.createSkill",
+        "title": "Create Skill from Recurring Request…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.dismissSkillTopic",
+        "title": "Dismiss Skill Suggestion",
+        "category": "LocalPilot"
+      },
+      {
         "command": "localpilot.showLogs",
         "title": "Show Logs",
         "category": "LocalPilot"
@@ -293,6 +303,12 @@
         "title": "Clear Memory Notes…",
         "category": "LocalPilot",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "localpilot.clearHistory",
+        "title": "Clear Chat History…",
+        "category": "LocalPilot",
+        "icon": "$(trash)"
       },
       {
         "command": "localpilot.installCli",
@@ -465,6 +481,11 @@
           "group": "2_manage"
         },
         {
+          "command": "localpilot.clearHistory",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
           "command": "localpilot.installCli",
           "when": "view == localpilot.chatView",
           "group": "2_manage"
@@ -555,6 +576,14 @@
       "commandPalette": [
         {
           "command": "localpilot.openSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.createSkill",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.dismissSkillTopic",
           "when": "false"
         },
         {
@@ -811,6 +840,12 @@
           "default": true,
           "description": "Let the agent read and save durable notes in .localpilot/memory (project) and global storage (user)."
         },
+        "localpilot.sessions.retention": {
+          "type": "number",
+          "default": 50,
+          "minimum": 0,
+          "description": "Maximum number of chats kept in this workspace's history. The oldest idle chats are removed automatically when a new one is created; pinned and running chats are never removed. 0 keeps everything."
+        },
         "localpilot.compactionThreshold": {
           "type": "number",
           "default": 0.75,
@@ -874,6 +909,11 @@
           "default": 2,
           "minimum": 1,
           "maximum": 4
+        },
+        "localpilot.autoClarify": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When a request is short, vague or refers to \"this\"/\"it\" without naming a target, give the agent a snapshot of the active editor, open files, recent edits, errors and git changes so it can state its interpretation (`Understood as: …`) and proceed, asking only when two readings would lead to materially different work."
         },
         "localpilot.webSearch.provider": {
           "type": "string",
@@ -956,6 +996,11 @@
           "default": [],
           "description": "Extra folders containing skills (each skill is a folder with SKILL.md). `.localpilot/skills`, `.claude/skills`, `.github/skills`, `~/.agents/skills` are scanned automatically."
         },
+        "localpilot.skills.builtin": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Load the skills bundled with LocalPilot (requirements, design, implement, test, debug, review, deploy, …). A workspace or user skill with the same name overrides the bundled one; copy a bundled skill from the extension's `skills/` folder into `.localpilot/skills/` to customise it."
+        },
         "localpilot.systemPromptAppend": {
           "type": "string",
           "default": "",
@@ -1000,6 +1045,16 @@
           "type": "string",
           "default": "",
           "description": "provider/model used in Plan mode (e.g. ollama/qwen3:8b or ollama/deepseek-r1:8b). Empty = keep the session model."
+        },
+        "localpilot.routing.fast": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "provider/model for read-only subagents (`explore`, `clarifier`, `researcher`), which run many short tool calls in parallel. Empty = the smallest tool-capable model that fits this machine; `session` = always use the session model."
+        },
+        "localpilot.routing.coding": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "provider/model for implementing subagents (`coder`, `tester`, `debugger`, `docs`). Empty = keep the session model."
         },
         "localpilot.terminal.runInIntegratedTerminal": {
           "type": "boolean",

@@ -89,23 +89,42 @@ export const openFileTool: Tool = {
 export const askUserTool: Tool = {
   definition: {
     name: 'ask_user',
-    description: 'Ask the user a clarifying question and wait for their answer. Use sparingly, only when genuinely blocked.',
+    description:
+      'Ask the user one clarifying question and wait for the answer. Last resort: first try to resolve the ambiguity from gather_context, the editor state and the code. Use only when two plausible interpretations would lead to materially different work; offer 2–4 concrete options when possible.',
     parameters: {
       type: 'object',
-      properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, description: 'Optional fixed choices' } },
+      properties: {
+        question: { type: 'string', description: 'One specific question, phrased so a short answer settles it' },
+        options: { type: 'array', items: { type: 'string' }, description: 'Optional fixed choices (2–4). The user may still type a free-form answer.' },
+        recommended: { type: 'string', description: 'Which option you would pick if the user has no preference' },
+      },
       required: ['question'],
     },
   },
   async execute(args) {
-    const q = String(args.question ?? '');
-    const options = Array.isArray(args.options) ? (args.options as string[]) : [];
+    const q = String(args.question ?? '').trim();
+    if (!q) {
+      return { content: 'ask_user needs a question.', isError: true };
+    }
+    const options = Array.isArray(args.options) ? (args.options as unknown[]).map(String).filter(Boolean) : [];
+    const recommended = typeof args.recommended === 'string' ? args.recommended.trim() : '';
     let answer: string | undefined;
     if (options.length) {
-      answer = await vscode.window.showQuickPick(options, { title: 'LocalPilot asks', placeHolder: q, ignoreFocusOut: true });
+      const other = '$(edit) Something else…';
+      const items: vscode.QuickPickItem[] = options.map((o) => ({ label: o, description: o === recommended ? 'recommended' : undefined }));
+      const picked = await vscode.window.showQuickPick([...items, { label: other, alwaysShow: true }], { title: 'LocalPilot asks', placeHolder: q, ignoreFocusOut: true });
+      if (picked?.label === other) {
+        answer = await vscode.window.showInputBox({ title: 'LocalPilot asks', prompt: q, ignoreFocusOut: true });
+      } else {
+        answer = picked?.label;
+      }
     } else {
       answer = await vscode.window.showInputBox({ title: 'LocalPilot asks', prompt: q, ignoreFocusOut: true });
     }
-    return answer === undefined ? { content: 'User dismissed the question without answering.' } : { content: `User answered: ${answer}` };
+    if (answer === undefined) {
+      return { content: `User dismissed the question without answering.${recommended ? ` Proceed with the recommended option ("${recommended}") and state that assumption.` : ' Proceed with the most plausible interpretation and state that assumption.'}` };
+    }
+    return { content: `User answered: ${answer}` };
   },
 };
 

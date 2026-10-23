@@ -4,11 +4,14 @@ import { ContextManager } from '../context/contextManager';
 import { estimateMessagesTokens } from '../context/tokenizer';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
+import { ModelRole } from '../providers/catalog';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
+import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
+import { recommendSkills, SkillLearner, skillHint } from './skillRecommender';
 import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
 import { MemoryStore } from './memory';
@@ -20,6 +23,8 @@ export interface AgentRunOptions {
   /** The new user message to process (appended to the session). */
   userMessage: ChatMessage;
   modelRef?: string;
+  /** Routing role for this run (subagents pass `fast` for read-only work). Defaults to agent / reasoning in Plan mode. */
+  role?: ModelRole;
   /** Restrict tool set (subagents). */
   toolFilter?: string[];
   /** Replace the default persona (subagents). */
@@ -42,7 +47,8 @@ export class AgentRunner {
     private readonly workspace: WorkspaceContext,
     private readonly log: vscode.LogOutputChannel,
     private readonly tracker?: ChangeTracker,
-    private readonly memory?: MemoryStore
+    private readonly memory?: MemoryStore,
+    private readonly learner?: SkillLearner
   ) {}
 
   async run(o: AgentRunOptions): Promise<string> {
@@ -53,7 +59,7 @@ export class AgentRunner {
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
 
     const route = await this.providers.route({
-      role: session.mode === 'plan' ? 'reasoning' : 'agent',
+      role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
       modelRef: o.modelRef ?? session.model,
       needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
     });
@@ -92,11 +98,47 @@ export class AgentRunner {
 
     session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
 
+    // Vague request ("fix this", "make it faster")? Hand the model a snapshot of what the user is looking at and
+    // working on so it resolves the target itself and states its interpretation, instead of guessing or stalling.
+    if (depth === 0 && cfg.autoClarify && !o.roleOverride) {
+      const assessment = assessRequest(o.userMessage.content, {
+        hasAttachments: hasContextBlocks(o.userMessage.content),
+        hasImages: !!o.userMessage.images?.length,
+        hasSelection: this.workspace.hasSelection(),
+        hasHistory: session.messages.some((m) => m.role === 'assistant' && !!m.content.trim()),
+      });
+      if (!assessment.clear) {
+        status('Interpreting the request…');
+        const snapshot = await gatherRequestContext(this.workspace, session);
+        session.messages.push({ role: 'user', content: clarificationSteer(assessment, snapshot), meta: { timestamp: Date.now(), hidden: true } });
+        emit({ sessionId: session.id, type: 'clarify', payload: { reasons: assessment.reasons } });
+      }
+    }
+
+    // Skill recommendation: nudge the model towards a matching playbook and tell the UI; the learner also
+    // notices recurring request types that no skill covers and proposes creating one.
+    if (depth === 0 && !o.roleOverride && this.skills.allSkills.length) {
+      try {
+        const suggestions = this.learner ? await this.learner.observeRequest(o.userMessage.content, this.skills.allSkills) : { skills: recommendSkills(o.userMessage.content, this.skills.allSkills) };
+        const loaded = new Set(session.messages.filter((m) => m.role === 'tool' && m.toolName === 'load_skill').map((m) => /<skill name="([^"]+)"/.exec(m.content)?.[1]));
+        const fresh = suggestions.skills.filter((s) => !loaded.has(s.name));
+        if (fresh.length && !/^\/skill\b|^Use the "/.test(userText(o.userMessage.content))) {
+          session.messages.push({ role: 'user', content: skillHint(fresh), meta: { timestamp: Date.now(), hidden: true } });
+        }
+        if (fresh.length || suggestions.create) {
+          emit({ sessionId: session.id, type: 'skill_suggestions', payload: { skills: fresh, create: suggestions.create } });
+        }
+      } catch (e) {
+        this.log.warn(`skill recommendation failed: ${String(e)}`);
+      }
+    }
+
     const toolCtx: ToolContext = {
       sessionId: session.id,
       workspaceRoot: this.workspace.root,
       signal: o.signal,
       depth,
+      modelRef: model.id,
       progress: (t) => status(t),
       trackChange: (fsPath) => this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve(),
       todos: {
@@ -233,6 +275,14 @@ export class AgentRunner {
       // --- Tool execution (parallel for read-only tools) ------------------------------------
       const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision);
       toolsExecuted += calls.length;
+      for (const c of calls) {
+        if (c.name === 'load_skill' && depth === 0) {
+          const name = parseArgs(c.arguments).name;
+          if (typeof name === 'string') {
+            void this.learner?.recordSkillUsed(name);
+          }
+        }
+      }
       session.messages.push(...results);
       this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();

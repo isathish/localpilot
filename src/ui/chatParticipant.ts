@@ -68,6 +68,21 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
             stream.progress(`Subagent ${p.agent}: ${p.prompt.slice(0, 60)}…`);
             break;
           }
+          case 'clarify': {
+            const p = e.payload as { reasons?: string[] };
+            stream.progress(`Request looks ambiguous (${(p.reasons ?? []).join('; ')}) — interpreting it from the editor, errors and git changes…`);
+            break;
+          }
+          case 'skill_suggestions': {
+            const p = e.payload as { skills?: { name: string }[]; create?: { slug: string; count: number } };
+            if (p.skills?.length) {
+              stream.progress(`Matching skills: ${p.skills.map((s) => s.name).join(', ')}`);
+            }
+            if (p.create) {
+              stream.button({ command: 'localpilot.createSkill', arguments: [p.create], title: `Create "${p.create.slug}" skill (${p.create.count}× requested)` });
+            }
+            break;
+          }
           case 'error': {
             const md = new vscode.MarkdownString(`\n\n> $(warning) ${String(e.payload)}`);
             md.supportThemeIcons = true;

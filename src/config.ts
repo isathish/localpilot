@@ -23,6 +23,10 @@ export interface RoutingConfig {
   vision?: string;
   /** Model for reasoning-heavy Plan mode (empty = keep the session model). */
   reasoning?: string;
+  /** Model for read-only subagents — explore, clarifier, researcher (empty = auto: smallest tool-capable model that fits; 'session' keeps the session model). */
+  fast?: string;
+  /** Model for implementing subagents — coder, tester, debugger, docs (empty = keep the session model). */
+  coding?: string;
 }
 
 export interface LocalPilotConfig {
@@ -39,8 +43,11 @@ export interface LocalPilotConfig {
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
   skillsPaths: string[];
+  builtinSkills: boolean;
   thinking: ThinkingLevel;
   memoryEnabled: boolean;
+  /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
+  sessionRetention: number;
   keepAlive: string;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
@@ -49,6 +56,8 @@ export interface LocalPilotConfig {
   disabledModels: string[];
   /** Offer to install Ollama + a starter model when no local model is found. */
   autoSetupModels: boolean;
+  /** Detect vague requests and give the agent a workspace snapshot to resolve them before acting. */
+  autoClarify: boolean;
   routing: RoutingConfig;
 }
 
@@ -96,8 +105,10 @@ export function getConfig(): LocalPilotConfig {
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
     skillsPaths: c.get<string[]>('skillsPaths', []),
+    builtinSkills: c.get<boolean>('skills.builtin', true),
     thinking: normalizeThinking(c.get<unknown>('thinking', 'off')),
     memoryEnabled: c.get<boolean>('memory.enabled', true),
+    sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
     keepAlive: c.get<string>('keepAlive', '30m'),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
     showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
@@ -107,10 +118,13 @@ export function getConfig(): LocalPilotConfig {
     },
     disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
     autoSetupModels: c.get<boolean>('models.autoSetup', true),
+    autoClarify: c.get<boolean>('autoClarify', true),
     routing: {
       enabled: c.get<boolean>('routing.enabled', true),
       vision: c.get<string>('routing.vision', '') || undefined,
       reasoning: c.get<string>('routing.reasoning', '') || undefined,
+      fast: c.get<string>('routing.fast', '') || undefined,
+      coding: c.get<string>('routing.coding', '') || undefined,
     },
   };
 }

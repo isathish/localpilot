@@ -8,8 +8,11 @@
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
-    popover: $('popover'), newTab: $('btnNewTab'), history: $('btnHistory'),
+    popover: $('popover'), newTab: $('btnNewTab'), history: $('btnHistory'), bgruns: $('bgruns'),
   };
+  // Webview state survives the view being hidden/restored: which chats are open as tabs.
+  const persisted = (typeof vscode.getState === 'function' && vscode.getState()) || {};
+  function saveState() { if (typeof vscode.setState === 'function') { vscode.setState({ openTabs: state.openTabs ? [...state.openTabs] : undefined }); } }
 
   const I = {
     check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
@@ -34,6 +37,13 @@
     term: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 7l2 1.5L5 10M8.5 10h3"/></svg>',
     globe: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5a8 8 0 0 1 0 11M8 2.5a8 8 0 0 0 0 11"/></svg>',
     agent: '<svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="2"/><circle cx="6.5" cy="8" r="1" fill="currentColor"/><circle cx="9.5" cy="8" r="1" fill="currentColor"/><path d="M8 4V2"/></svg>',
+    stop: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none"/></svg>',
+    pin: '<svg viewBox="0 0 16 16"><path d="M9.5 2.5l4 4-2 1-2 2.5V13L8 11.5 4.5 15 1 11.5 4.5 8h3l2.5-2 1-2z"/></svg>',
+    fork: '<svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5.5v1A2.5 2.5 0 0 0 6.5 9h3A2.5 2.5 0 0 0 12 6.5v-1M8 9v2"/></svg>',
+    trash: '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>',
+    export: '<svg viewBox="0 0 16 16"><path d="M8 10V3M5 6l3-3 3 3M3 10v2.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10"/></svg>',
+    rename: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M3 14h10"/></svg>',
+    layers: '<svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3z"/><path d="M2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg>',
     brain: '<svg viewBox="0 0 16 16"><path d="M6 3a2.5 2.5 0 0 0-2.4 3.2A2.5 2.5 0 0 0 4 11a2.5 2.5 0 0 0 4 1.5A2.5 2.5 0 0 0 12 11a2.5 2.5 0 0 0 .4-4.8A2.5 2.5 0 0 0 10 3a2.5 2.5 0 0 0-2 1 2.5 2.5 0 0 0-2-1z"/></svg>',
     git: '<svg viewBox="0 0 16 16"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="6" r="1.5"/><path d="M5 5.5v5M11 7.5A3 3 0 0 1 8 10.5H6.5"/></svg>',
     list: '<svg viewBox="0 0 16 16"><path d="M5 4h9M5 8h9M5 12h9M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
@@ -64,6 +74,10 @@
   const state = {
     session: null, sessions: [], models: [], defaultModel: '', running: new Set(), attachments: [], images: [], skills: [], agents: [], openFiles: [],
     live: new Map(), changes: new Map(), checkpoints: new Map(), history: [], histIdx: -1,
+    // Multi-tab bookkeeping: which chats are shown as tabs, the tab we are switching to, live status per running chat,
+    // chats that finished while in the background (unread) and chats waiting on an approval (attention).
+    openTabs: Array.isArray(persisted.openTabs) ? new Set(persisted.openTabs) : null, loadingTab: null, activeHint: null,
+    status: new Map(), unread: new Set(), attention: new Set(), approvalSid: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -324,7 +338,7 @@
       const listing = numberedListing(head ? text.slice(head[0].length) : text, langForPath(head ? head[1] : args.path));
       if (listing) { c.classList.add('file'); c.innerHTML = `${head ? `<div class="file-head"><span class="path-link" data-path="${esc(head[1])}" data-line="${head[3]}">${esc(head[1])}</span><span class="meta">lines ${head[3]}–${head[4]} of ${head[2]}</span></div>` : ''}${listing}`; return; }
     }
-    if (tool === 'web_fetch' || tool === 'web_search' || tool === 'memory_read' || tool === 'load_skill') {
+    if (tool === 'web_fetch' || tool === 'web_search' || tool === 'memory_read' || tool === 'load_skill' || tool === 'run_parallel_subagents' || tool === 'run_subagent') {
       const src = /^Source: (\S+)\n\n?/.exec(text);
       c.classList.add('doc'); c.innerHTML = `${src ? `<div class="file-head"><a href="${esc(src[1])}">${esc(src[1])}</a></div>` : ''}<div class="doc-body">${renderMarkdown(src ? text.slice(src[0].length) : text)}</div>`;
       return;
@@ -368,6 +382,8 @@
     if (sec.Text && sec.Text.items.length) { out.push(section('Page text', `<pre class="ins-text">${esc(sec.Text.items.join('\n'))}</pre>`, false)); }
     return `<div class="ins">${out.join('')}</div>`;
   }
+  // ------------------------------------------------------------------ step timeline (VS Code-style agent transcript)
+  // One concise row per step: <verb> <detail>, past tense once done, present tense while running. Rows expand for details.
   function stepEl(cls, label, content, meta) {
     const d = el('details', `step ${cls}`);
     d.innerHTML = `<summary><span class="ico"></span><span class="label">${label}</span><span class="meta">${meta || ''}</span><span class="chev">${I.chev}</span></summary><div class="content"></div>`;
@@ -375,125 +391,223 @@
     setState(d, cls.includes('running') ? 'running' : cls.includes('error') ? 'error' : 'ok');
     return d;
   }
-  function setState(d, st) { d.classList.remove('running', 'ok', 'error'); d.classList.add(st); const ico = d.querySelector('.ico'); if (ico) { ico.innerHTML = st === 'running' ? I.spin : st === 'error' ? I.x : I.check; } }
-  function toolLabel(name, a) {
+  /** Settled rows keep their tool icon (muted) instead of a check mark; errors get ✕, running a spinner. */
+  function setState(d, st) { d.classList.remove('running', 'ok', 'error'); d.classList.add(st); const ico = d.querySelector(':scope > summary .ico'); if (ico) { ico.innerHTML = st === 'running' ? I.spin : st === 'error' ? I.x : d.__ico || I.check; } }
+  const LANG_EXT = { ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', json: 'json', md: 'md', css: 'css', scss: 'css', html: 'html', py: 'py', go: 'go', rs: 'rs', java: 'java', cs: 'cs', rb: 'rb', php: 'php', sh: 'sh', bash: 'sh', zsh: 'sh', yml: 'yml', yaml: 'yml', toml: 'toml', sql: 'sql', svg: 'svg', vue: 'vue', swift: 'swift', kt: 'kt' };
+  /** File / folder / URL chip, like the resource pills in VS Code chat. Files open on click; URLs open externally. */
+  function fchip(path, kind = 'file', extra) {
+    const p = String(path || ''); if (!p) { return ''; }
+    const name = kind === 'url' ? p.replace(/^https?:\/\//, '').replace(/\/$/, '') : base(p) || p;
+    const ext = kind === 'file' ? (p.split('.').pop() || '').toLowerCase() : '';
+    const tag = kind === 'url' ? I.globe : kind === 'folder' ? I.folder : LANG_EXT[ext] ? `<i class="lang l-${LANG_EXT[ext]}">${LANG_EXT[ext]}</i>` : I.file;
+    return `<span class="fchip${kind === 'url' ? '' : ' path-link'}" ${kind === 'url' ? `data-url="${esc(p)}"` : `data-path="${esc(p)}"`}${extra && extra.line ? ` data-line="${extra.line}"` : ''} title="${esc(p)}">${tag}<span>${esc(short(name, 48))}</span></span>`;
+  }
+  const code = (t, n = 60) => `<code>${short(String(t ?? ''), n)}</code>`;
+  function toolLabel(name, a, running) {
+    a = a || {};
+    const v = (past, now) => `<b>${running ? now : past}</b>`;
     switch (name) {
-      case 'read_file': return `Read <b>${short(base(a.path), 40)}</b>${a.start_line ? ` <i>L${a.start_line}–${a.end_line || ''}</i>` : ''}`;
-      case 'list_dir': return `Listed <b>${short(a.path || '.', 40)}</b>`;
-      case 'grep_search': return `Searched <b>${short(a.query, 50)}</b>${a.include_pattern ? ` in ${short(a.include_pattern, 24)}` : ''}`;
-      case 'file_search': return `Found files <b>${short(a.pattern, 40)}</b>`;
-      case 'find_symbol': return `Looked up <b>${short(a.query, 40)}</b>`;
-      case 'find_references': return `References to <b>${short(a.symbol, 40)}</b>`;
-      case 'get_diagnostics': return `Checked diagnostics${a.path ? ` in <b>${short(base(a.path), 40)}</b>` : ''}`;
-      case 'get_editor_state': return 'Read editor state';
-      case 'web_search': return `Searched the web <b>${short(a.query, 50)}</b>`;
-      case 'web_fetch': return `Fetched <b>${short(a.url, 50)}</b>`;
-      case 'browser_screenshot': return `Screenshot of <b>${short(a.url, 50)}</b>${a.mobile ? ' <i>phone</i>' : ''}${a.full_page ? ' <i>full page</i>' : ''}`;
-      case 'open_browser': return `Opened <b>${short(a.url, 50)}</b> in browser`;
-      case 'browser_inspect': return `Inspected <b>${short(a.url, 50)}</b>${a.mobile ? ' <i>phone</i>' : ''}${Array.isArray(a.actions) && a.actions.length ? ` <i>after ${a.actions.length} action${a.actions.length === 1 ? '' : 's'}</i>` : ''}`;
-      case 'load_skill': return `Loaded skill <b>${short(a.name, 30)}</b>`;
-      case 'memory_read': return `Recalled <b>${short(a.name, 30)}</b>`;
-      case 'memory_list': return 'Listed memory';
-      case 'memory_save': return `Saved memory <b>${short(a.name, 30)}</b>`;
-      case 'memory_delete': return `Deleted memory <b>${short(a.name, 30)}</b>`;
-      case 'manage_todos': return 'Updated plan';
-      case 'ask_user': return `Asked: ${short(a.question, 60)}`;
-      case 'open_file': return `Opened <b>${short(base(a.path), 40)}</b>`;
-      case 'create_directory': return `Created folder <b>${short(a.path, 40)}</b>`;
-      case 'delete_path': return `Deleted <b>${short(a.path, 40)}</b>`;
-      case 'run_parallel_subagents': return `Ran <b>${(a.tasks || []).length} subagents</b> in parallel`;
-      default: return `${esc(name)} ${short(a, 50)}`;
+      case 'read_file': return `${v('Read', 'Reading')} ${fchip(a.path, 'file', { line: a.start_line })}${a.start_line ? `, lines ${a.start_line} to ${a.end_line || '…'}` : ''}`;
+      case 'list_dir': return `${v('Listed', 'Listing')} ${fchip(a.path || '.', 'folder')}`;
+      case 'grep_search': return `${v('Searched', 'Searching')} for ${code(a.query)}${a.include_pattern ? ` in ${code(a.include_pattern, 24)}` : ''}`;
+      case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
+      case 'find_symbol': return `${v('Looked up', 'Looking up')} ${code(a.query)}`;
+      case 'find_references': return `${v('Found', 'Finding')} references to ${code(a.symbol)}`;
+      case 'get_diagnostics': return `${v('Checked', 'Checking')} ${a.path ? `errors in ${fchip(a.path)}` : 'workspace errors'}`;
+      case 'get_editor_state': return `${v('Read', 'Reading')} editor state`;
+      case 'gather_context': return `${v('Gathered', 'Gathering')} context${a.query ? ` for ${code(a.query)}` : ''}`;
+      case 'web_search': return `${v('Searched', 'Searching')} the web for ${code(a.query)}`;
+      case 'web_fetch': return `${v('Fetched', 'Fetching')} ${fchip(a.url, 'url')}`;
+      case 'browser_screenshot': return `${v('Captured', 'Capturing')} screenshot of ${fchip(a.url, 'url')}${a.mobile ? ' (phone)' : ''}${a.full_page ? ' (full page)' : ''}`;
+      case 'open_browser': return `${v('Opened', 'Opening')} ${fchip(a.url, 'url')}`;
+      case 'browser_inspect': return `${v('Inspected', 'Inspecting')} ${fchip(a.url, 'url')}${Array.isArray(a.actions) && a.actions.length ? ` after ${a.actions.length} action${a.actions.length === 1 ? '' : 's'}` : ''}`;
+      case 'load_skill': return `${v('Loaded', 'Loading')} skill ${code(a.name, 30)}`;
+      case 'memory_read': return `${v('Recalled', 'Recalling')} ${code(a.name, 30)} from memory`;
+      case 'memory_list': return `${v('Listed', 'Listing')} memory notes`;
+      case 'memory_save': return `${v('Saved', 'Saving')} ${code(a.name, 30)} to memory`;
+      case 'memory_delete': return `${v('Deleted', 'Deleting')} memory note ${code(a.name, 30)}`;
+      case 'manage_todos': return `${v('Updated', 'Updating')} the plan`;
+      case 'ask_user': return `${v('Asked', 'Asking')} ${short(a.question, 70)}`;
+      case 'open_file': return `${v('Opened', 'Opening')} ${fchip(a.path, 'file', { line: a.line })}`;
+      case 'create_directory': return `${v('Created', 'Creating')} folder ${fchip(a.path, 'folder')}`;
+      case 'delete_path': return `${v('Deleted', 'Deleting')} ${fchip(a.path)}`;
+      case 'run_command': return `${v('Ran', 'Running')} <code class="cmd">${highlight(String(a.command || ''), 'sh')}</code>`;
+      case 'edit_file': return `${v('Edited', 'Editing')} ${fchip(a.path)}`;
+      case 'write_file': return `${v('Created', 'Creating')} ${fchip(a.path)}`;
+      case 'run_subagent': return `${v('Delegated', 'Delegating')} to <b>${esc(a.agent || 'subagent')}</b>`;
+      case 'run_parallel_subagents': return `${v('Ran', 'Running')} <b>${(a.tasks || []).length} subagents</b> in parallel`;
+      default: return `${v('Ran', 'Running')} ${code(name, 40)} ${short(a, 50)}`;
     }
   }
-  function toolIcon(name) { return READ_TOOLS.has(name) ? (name.startsWith('web') ? I.globe : I.search) : name.startsWith('memory') ? I.memory : name === 'browser_screenshot' ? I.camera : name === 'open_browser' ? I.globe : name === 'browser_inspect' ? I.bug : I.sparkle; }
+  function toolIcon(name) {
+    if (name === 'read_file' || name === 'get_editor_state') { return I.file; }
+    if (name === 'list_dir' || name === 'create_directory') { return I.folder; }
+    if (/search|find_|gather/.test(name)) { return I.search; }
+    if (/^web|^open_browser|^browser_screenshot$/.test(name)) { return name === 'browser_screenshot' ? I.camera : I.globe; }
+    if (name === 'browser_inspect' || name === 'get_diagnostics') { return I.bug; }
+    if (name === 'run_command') { return I.term; }
+    if (name === 'edit_file' || name === 'write_file') { return I.edit; }
+    if (name === 'open_file') { return I.open; }
+    if (name.startsWith('memory')) { return I.memory; }
+    if (name === 'manage_todos') { return I.plan; }
+    if (name === 'ask_user') { return I.ask; }
+    if (name === 'delete_path') { return I.trash; }
+    if (name.includes('subagent')) { return I.agent; }
+    return I.sparkle;
+  }
+  /** "Thought" rows summarise the reasoning in one line (first sentence), like the verb phrases in VS Code's transcript. */
+  function thinkSummary(text) {
+    const line = String(text || '').split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find((l) => l.length > 8) || '';
+    const sent = (line.match(/^.*?[.!?](\s|$)/) || [line])[0].trim();
+    return short(sent, 110);
+  }
+  function thinkingRow(text, secs, running) {
+    const t = stepEl(`thinking ${running ? 'running' : 'ok'}`, running ? '<b>Thinking</b>…' : `<b>Thought</b> ${thinkSummary(text)}`, text, running ? '' : secs ? `${secs}s` : '');
+    t.__ico = I.brain; setState(t, running ? 'running' : 'ok');
+    return t;
+  }
 
-  // Edit card with inline diff (edit_file / write_file)
+  // Edit cards (inline diff) grouped into one row: "Edited settings.js, 2 other steps +4 −2"
   function editCard(name, a, result) {
     const card = el('div', `card edit ${result ? (result.isError ? 'error' : 'ok') : 'running'}`);
     const isWrite = name === 'write_file';
     const oldT = isWrite ? '' : (a.old_text || ''); const newT = isWrite ? (a.content || '') : (a.new_text || '');
     const d = renderDiff(oldT, newT);
-    const verb = result ? (result.isError ? 'Failed to edit' : isWrite ? 'Created' : 'Edited') : (isWrite ? 'Creating' : 'Editing');
+    card.dataset.path = a.path || ''; card.dataset.add = String(d.add); card.dataset.del = String(d.del); card.dataset.write = isWrite ? '1' : '0';
     card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed">${d.html}</div>`;
-    card.querySelector('.card-head').title = `${verb} ${a.path || ''}`;
     card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open }); return; } card.querySelector('.diff').classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
   }
-  // Terminal card (run_command)
-  function termCard(a, result) {
-    const card = el('div', `card term-card ${result ? (result.isError ? 'error' : 'ok') : 'running'}`);
-    const exit = result && /\[exit code (\d+|null)\]/.exec(result.content || '');
-    const code = exit ? exit[1] : null;
-    card.innerHTML = `<div class="card-head"><span class="ico">${result ? I.term : I.spin}</span><span class="name" style="direction:ltr" title="${esc(a.command || '')}"><span class="prompt">$</span> ${highlight(a.command || '', 'sh')}</span><span class="lines"></span>${code !== null ? `<span class="exit ${code === '0' ? 'good' : 'bad'}">exit ${code}</span>` : ''}<span class="acts"><button data-copy title="Copy command">${I.copy}</button><button data-copyout title="Copy output">${I.term}</button></span></div><div class="term${result && !result.isError ? ' collapsed' : ''}"></div>`;
-    setTermOutput(card, result ? result.content : '', !result);
-    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-copy]')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Copied')); return; } if (e.target.closest('[data-copyout]')) { navigator.clipboard.writeText(card.querySelector('.term').textContent).then(() => toast('Output copied')); return; } card.querySelector('.term').classList.toggle('collapsed'); };
-    return card;
-  }
-  function setTermOutput(card, content, running) {
-    const out = String(content || '').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '');
-    const term = card.querySelector('.term');
-    term.innerHTML = running ? '<span class="muted">Running…</span>' : out ? ansiToHtml(out) : '<span class="muted">(no output)</span>';
-    const n = out ? out.split('\n').length : 0;
-    card.querySelector('.lines').textContent = !running && n > 1 ? `${n} lines` : '';
-  }
-  function subagentCard(agent, prompt) {
-    const d = stepEl('subagent running', `<b>${esc(agent)}</b> subagent · ${short(prompt, 70)}`, '');
-    d.querySelector('.ico').innerHTML = I.agent;
-    return d;
-  }
-  // Container that groups consecutive read-only steps: "Explored codebase · 3 files, 2 searches"
-  function getGroup(container, create) {
+  function editGroup(container, create) {
     let g = container.lastElementChild;
-    if (g && g.classList.contains('group')) { return g; }
+    if (g && g.classList.contains('editgroup')) { return g; }
     if (!create) { return null; }
-    g = stepEl('step group running', 'Exploring codebase…', undefined);
-    g.querySelector('.ico').innerHTML = I.search;
+    g = stepEl('step editgroup running', '<b>Editing</b>…'); g.__ico = I.edit;
+    const c = g.querySelector(':scope > .content'); c.className = 'content edits'; c.innerHTML = '';
     container.appendChild(g);
     return g;
   }
-  function updateGroupLabel(g) {
-    const steps = [...g.querySelectorAll('.content > .step')];
-    const running = steps.some((s) => s.classList.contains('running'));
-    const n = { read: 0, search: 0, web: 0, other: 0 };
-    for (const s of steps) { const t = s.dataset.tool; if (t === 'read_file' || t === 'list_dir') { n.read++; } else if (/search|find|symbol/.test(t)) { n.search++; } else if (/^web/.test(t)) { n.web++; } else { n.other++; } }
-    const parts = []; if (n.read) { parts.push(`${n.read} file${n.read > 1 ? 's' : ''}`); } if (n.search) { parts.push(`${n.search} search${n.search > 1 ? 'es' : ''}`); } if (n.web) { parts.push(`${n.web} web`); } if (n.other) { parts.push(`${n.other} more`); }
-    g.querySelector(':scope > summary .label').innerHTML = `${running ? 'Exploring' : 'Explored'} ${n.web && !n.read && !n.search ? 'the web' : 'codebase'} <b>· ${parts.join(', ')}</b>`;
-    setState(g, running ? 'running' : steps.some((s) => s.classList.contains('error')) ? 'ok' : 'ok');
-    g.querySelector(':scope > summary .ico').innerHTML = running ? I.spin : I.search;
+  function updateEditGroup(g) {
+    const cards = [...g.querySelectorAll(':scope > .content > .card.edit')]; if (!cards.length) { return; }
+    const running = cards.some((c) => c.classList.contains('running')); const errs = cards.filter((c) => c.classList.contains('error')).length;
+    let add = 0, del = 0; const files = new Set();
+    for (const c of cards) { add += Number(c.dataset.add || 0); del += Number(c.dataset.del || 0); files.add(c.dataset.path); }
+    const shown = running ? cards.filter((c) => c.classList.contains('running')).pop() : cards[0];
+    const verb = running ? (shown.dataset.write === '1' ? 'Creating' : 'Editing') : errs === cards.length ? 'Failed to edit' : shown.dataset.write === '1' && cards.length === 1 ? 'Created' : 'Edited';
+    const others = cards.length - 1;
+    g.querySelector(':scope > summary .label').innerHTML = `<b>${verb}</b> ${fchip(shown.dataset.path)}${others > 0 ? `, ${others} other step${others > 1 ? 's' : ''}` : ''} <span class="stat"><span class="a">+${add}</span> <span class="d">−${del}</span></span>`;
+    g.querySelector(':scope > summary').title = [...files].join('\n');
+    setState(g, running ? 'running' : errs ? 'error' : 'ok');
   }
+
+  // Terminal row (run_command): "Ran `cmd`" with exit badge; output expands below.
+  function termRow(a, result) {
+    const s = stepEl(`step term ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel('run_command', a, !result));
+    s.__ico = I.term; s.dataset.tool = 'run_command'; s.dataset.args = JSON.stringify(a || {});
+    const c = s.querySelector(':scope > .content'); c.className = 'content termout';
+    c.innerHTML = `<div class="term-acts"><button data-copy title="Copy command">${I.copy}<span>Command</span></button><button data-copyout title="Copy output">${I.term}<span>Output</span></button></div><pre class="term"></pre>`;
+    c.onclick = (e) => { const b = e.target.closest('button'); if (!b) { return; } e.preventDefault(); if (b.hasAttribute('data-copy')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Command copied')); } else { navigator.clipboard.writeText(c.querySelector('.term').textContent).then(() => toast('Output copied')); } };
+    setTermRow(s, result ? result.content : '', !result);
+    setState(s, result ? (result.isError ? 'error' : 'ok') : 'running');
+    return s;
+  }
+  function setTermRow(node, content, running) {
+    const out = String(content || '').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '');
+    const pre = node.querySelector('.term');
+    pre.innerHTML = running ? '<span class="muted">Running…</span>' : out ? ansiToHtml(out) : '<span class="muted">(no output)</span>';
+    const m = /\[exit code (\d+|null)\]/.exec(String(content || ''));
+    const n = out ? out.split('\n').length : 0;
+    const meta = node.querySelector(':scope > summary .meta');
+    meta.innerHTML = running ? '' : `${n > 1 ? `<span class="lines">${n} lines</span>` : ''}${m ? `<span class="exit ${m[1] === '0' ? 'good' : 'bad'}">exit ${m[1]}</span>` : ''}`;
+  }
+
+  // Subagent pill: "agent · task · model" with its own nested step rows streaming underneath.
+  function modelName(ref) { const m = state.models.find((x) => x.id === ref); const n = m ? m.name : ref ? String(ref).split('/').pop() : ''; return n.replace(/[-_:]?(instruct|chat)\b/i, ''); }
+  function subagentCard(agent, prompt, model) {
+    const d = stepEl('subagent running', '');
+    d.__ico = I.agent; d.dataset.calls = '0'; d.dataset.pending = '1'; d.dataset.agent = agent || '';
+    const mdl = modelName(model) || (currentModel() ? modelName(currentModel().id) : '');
+    d.querySelector(':scope > summary .label').innerHTML = `<span class="pill"><span class="pico">${I.agent}</span><b>${esc(agent || 'subagent')}</b><i>·</i><span class="task" title="${esc(prompt || '')}">${short(prompt, 64)}</span>${mdl ? `<i>·</i><span class="model">${esc(mdl)}</span>` : ''}</span>`;
+    const c = d.querySelector(':scope > .content'); c.className = 'content subbody'; c.innerHTML = '<div class="subrows"></div>';
+    d.open = true;
+    return d;
+  }
+  /** Called when a child agent reports back: fold its rows into "Finished with N steps" and attach the report. */
+  function finishSubagent(d, result, error) {
+    setState(d, error ? 'error' : 'ok');
+    const rows = d.querySelector(':scope > .content > .subrows'); const n = rows ? rows.children.length : 0;
+    const body = d.querySelector(':scope > .content');
+    const steps = n ? ` ${error ? 'after' : 'with'} ${n} step${n === 1 ? '' : 's'}` : '';
+    const fin = stepEl(`step finished ${error ? 'error' : 'ok'}`, `<b>${error ? 'Failed' : 'Finished'}</b>${steps}`); fin.__ico = I.check; setState(fin, error ? 'error' : 'ok');
+    const finBody = fin.querySelector(':scope > .content'); finBody.className = 'content subrows-wrap'; finBody.innerHTML = '';
+    if (rows && n) { finBody.appendChild(rows); } else { fin.classList.add('empty'); }
+    body.innerHTML = ''; body.appendChild(fin);
+    const text = error || result || '';
+    if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body">${error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000))}</div>`; body.appendChild(rep); }
+    d.querySelector(':scope > summary .meta').textContent = '';
+    delete d.dataset.pending;
+  }
+  /** Host step for run_parallel_subagents while live: a queued lane per task becomes the child's pill as it starts. */
+  function subHost(name, a) {
+    const n = (a.tasks || []).length;
+    const d = stepEl('step subhost running', toolLabel(name, a, true), undefined, n > 1 ? `0/${n}` : '');
+    d.__ico = I.layers; d.dataset.total = String(n); d.dataset.done = '0'; d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
+    const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
+    for (const t of (a.tasks || [])) { c.appendChild(el('div', 'lane pending', `<span class="ico">${I.agent}</span><span class="who">${esc(t.agent || 'explore')}</span><span class="what">${short(t.prompt, 90)}</span>`)); }
+    d.open = true;
+    return d;
+  }
+  function hostFor(live) { const hosts = [...live.tools.values()].filter((n) => n.classList.contains('subhost') && n.classList.contains('running')); return hosts[hosts.length - 1] || null; }
+  function hostProgress(host) { const total = Number(host.dataset.total || 1); const done = Number(host.dataset.done || 0); const meta = host.querySelector(':scope > summary .meta'); if (meta && total > 1) { meta.textContent = `${done}/${total}`; } }
+
   function placeTool(container, tc, result) {
     const a = parseArgs(tc.arguments);
-    if (tc.name === 'edit_file' || tc.name === 'write_file') { const c = editCard(tc.name, a, result); c.dataset.callId = tc.id; container.appendChild(c); return c; }
-    if (tc.name === 'run_command') { const c = termCard(a, result); c.dataset.callId = tc.id; container.appendChild(c); return c; }
     if (tc.name === 'manage_todos') { return null; }
-    if (tc.name === 'run_subagent') { const c = subagentCard(a.agent, a.prompt); c.dataset.callId = tc.id; if (result) { setState(c, result.isError ? 'error' : 'ok'); c.querySelector('.ico').innerHTML = result.isError ? I.x : I.agent; c.querySelector('.content').className = 'content doc'; c.querySelector('.content').innerHTML = `<div class="doc-body">${renderMarkdown(result.content)}</div>`; } container.appendChild(c); return c; }
-    const s = stepEl(`step ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel(tc.name, a));
-    s.dataset.tool = tc.name; s.dataset.callId = tc.id; s.dataset.args = tc.arguments || '{}';
+    if (tc.name === 'edit_file' || tc.name === 'write_file') { const g = editGroup(container, true); const c = editCard(tc.name, a, result); c.dataset.callId = tc.id; g.querySelector(':scope > .content').appendChild(c); updateEditGroup(g); return c; }
+    if (tc.name === 'run_command') { const s = termRow(a, result); s.dataset.callId = tc.id; container.appendChild(s); return s; }
+    if (tc.name === 'run_parallel_subagents' && !result) { const h = subHost(tc.name, a); h.dataset.callId = tc.id; container.appendChild(h); return h; }
+    if (tc.name === 'run_subagent') { const c = subagentCard(a.agent, a.prompt, a.model); c.dataset.callId = tc.id; if (result) { finishSubagent(c, result.isError ? '' : result.content, result.isError ? result.content : ''); c.open = false; } container.appendChild(c); return c; }
+    const s = stepEl(`step ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel(tc.name, a, !result));
+    s.__ico = toolIcon(tc.name); s.dataset.tool = tc.name; s.dataset.callId = tc.id; s.dataset.args = tc.arguments || '{}';
     toolContent(s, tc.name, a, result ? result.content : '', !result, result);
     if (result && result.image) { s.open = true; }
-    s.querySelector('.ico').innerHTML = result ? (result.isError ? I.x : toolIcon(tc.name)) : I.spin;
-    if (READ_TOOLS.has(tc.name)) { const g = getGroup(container, true); g.querySelector(':scope > .content').appendChild(s); updateGroupLabel(g); }
-    else { container.appendChild(s); }
+    setState(s, result ? (result.isError ? 'error' : 'ok') : 'running');
+    container.appendChild(s);
     return s;
   }
   function finishTool(node, payload) {
     if (!node) { return; }
     const ok = !payload.isError;
+    const secs = payload.cached ? 'cached' : payload.durationMs > 800 ? `${(payload.durationMs / 1000).toFixed(1)}s` : '';
+    if (node.classList.contains('subhost')) {
+      setState(node, ok ? 'ok' : 'error');
+      node.querySelector(':scope > summary .label').innerHTML = toolLabel(node.dataset.tool, parseArgs(node.dataset.args || '{}'), false);
+      node.querySelector(':scope > summary .meta').textContent = secs;
+      for (const lane of node.querySelectorAll(':scope > .content > .lane.pending')) { lane.className = 'lane ' + (ok ? 'skipped' : 'error'); }
+      for (const sub of node.querySelectorAll(':scope > .content > .step.subagent.running')) { finishSubagent(sub, '', 'Cancelled'); }
+      if (payload.content && !node.querySelector(':scope > .content > .step')) { const c = node.querySelector(':scope > .content'); c.className = 'content doc'; c.innerHTML = `<div class="doc-body">${renderMarkdown(String(payload.content).slice(0, 8000))}</div>`; }
+      return;
+    }
+    if (node.classList.contains('subagent')) {
+      // Normally subagent_end already folded the rows; this covers cancellation and history replay.
+      if (node.classList.contains('running')) { finishSubagent(node, ok ? payload.content : '', ok ? '' : payload.content || 'Failed'); }
+      return;
+    }
     if (node.classList.contains('card')) {
       node.classList.remove('running'); node.classList.add(ok ? 'ok' : 'error');
-      const ico = node.querySelector('.card-head .ico'); if (ico) { ico.innerHTML = ok ? (node.classList.contains('edit') ? I.edit : I.term) : I.x; }
-      const term = node.querySelector('.term'); if (term) { setTermOutput(node, payload.content || '', false); if (ok) { term.classList.add('collapsed'); } const m = /\[exit code (\d+|null)\]/.exec(payload.content || ''); if (m) { const head = node.querySelector('.card-head'); let ex = head.querySelector('.exit'); if (!ex) { ex = el('span', 'exit'); head.insertBefore(ex, head.querySelector('.acts')); } ex.textContent = `exit ${m[1]}`; ex.className = `exit ${m[1] === '0' ? 'good' : 'bad'}`; } }
-      if (!ok && node.classList.contains('edit')) { const err = el('div', 'term', ''); err.textContent = payload.content || ''; node.appendChild(err); }
+      const ico = node.querySelector('.card-head .ico'); if (ico) { ico.innerHTML = ok ? I.edit : I.x; }
+      if (!ok) { const err = el('div', 'term', ''); err.textContent = payload.content || ''; node.appendChild(err); }
+      const g = node.closest('.editgroup'); if (g) { updateEditGroup(g); }
       return;
     }
     setState(node, ok ? 'ok' : 'error');
-    toolContent(node, node.dataset.tool, parseArgs(node.dataset.args || '{}'), payload.content || '', false, payload);
+    const args = parseArgs(node.dataset.args || '{}');
+    node.querySelector(':scope > summary .label').innerHTML = toolLabel(node.dataset.tool, args, false);
+    if (node.dataset.tool === 'run_command') { setTermRow(node, payload.content || '', false); if (!ok) { node.open = true; } return; }
+    toolContent(node, node.dataset.tool, args, payload.content || '', false, payload);
     if (payload.data && payload.data.image) { node.open = true; }
-    if (node.dataset.tool) { node.querySelector('.ico').innerHTML = ok ? toolIcon(node.dataset.tool) : I.x; }
-    const meta = node.querySelector(':scope > summary .meta');
-    if (meta) { meta.textContent = payload.cached ? 'cached' : payload.durationMs > 800 ? `${(payload.durationMs / 1000).toFixed(1)}s` : ''; }
-    const g = node.closest('.group'); if (g) { updateGroupLabel(g); }
+    node.querySelector(':scope > summary .meta').textContent = secs;
   }
 
   // ------------------------------------------------------------------ transcript rendering
@@ -516,7 +630,7 @@
   function assistantTurn(m, results) {
     const d = el('div', 'turn assistant');
     const steps = el('div', 'steps');
-    if (m.thinking) { const t = stepEl('thinking ok', 'Thought', m.thinking); t.querySelector('.ico').innerHTML = I.brain; steps.appendChild(t); }
+    if (m.thinking) { steps.appendChild(thinkingRow(m.thinking, 0, false)); }
     for (const tc of m.toolCalls || []) { placeTool(steps, tc, results.get(tc.id) || { content: '(no result)', isError: false }); }
     if (steps.children.length) { d.appendChild(steps); }
     if (m.content && m.content.trim()) {
@@ -583,13 +697,21 @@
       const steps = el('div', 'steps');
       const body = el('div', 'body', '<span class="typing"><i></i><i></i><i></i></span>');
       root.appendChild(steps); root.appendChild(body);
-      live = { root, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), timer: 0 };
+      live = { root, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), subTools: new Map(), timer: 0 };
       state.live.set(sessionId, live);
       if (state.session && state.session.id === sessionId) { els.messages.appendChild(root); }
     }
     return live;
   }
   function clearTyping(live) { const t = live.body.querySelector('.typing'); if (t) { live.body.innerHTML = ''; } }
+  // Between the last tool result and the model's next token nothing moves; show the typing dots again so the
+  // turn never looks stalled.
+  function showTyping(live) {
+    if (live.text.trim() || live.thinkingEl) { return; }
+    for (const n of live.tools.values()) { if (n.classList.contains('running')) { return; } }
+    for (const c of live.subs.values()) { if (c.classList.contains('running')) { return; } }
+    if (!live.body.querySelector('.typing')) { live.body.innerHTML = '<span class="typing" title="Thinking…"><i></i><i></i><i></i></span>'; }
+  }
   function rotateBody(live) {
     // Text that streamed before a tool call stays above the next steps block, in order.
     clearTyping(live);
@@ -602,9 +724,10 @@
   }
   function finishThinking(live) {
     if (!live.thinkingEl) { return; }
-    setState(live.thinkingEl, 'ok'); live.thinkingEl.querySelector('.ico').innerHTML = I.brain;
-    live.thinkingEl.querySelector('.label').textContent = `Thought for ${Math.max(1, Math.round((Date.now() - live.thinkStart) / 1000))}s`;
-    live.thinkingEl.querySelector('.meta').textContent = '';
+    const secs = Math.max(1, Math.round((Date.now() - live.thinkStart) / 1000));
+    setState(live.thinkingEl, 'ok');
+    live.thinkingEl.querySelector(':scope > summary .label').innerHTML = `<b>Thought</b> ${thinkSummary(live.thinking)}`;
+    live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
     live.thinkingEl = null;
   }
   function scheduleRender(live) {
@@ -618,7 +741,8 @@
     clearTyping(live);
     live.body.innerHTML = renderMarkdown(live.text);
     live.root.classList.remove('live');
-    for (const node of live.tools.values()) { if (node.classList.contains('running')) { finishTool(node, { isError: true, content: 'Cancelled' }); } }
+    for (const node of [...live.subTools.values(), ...live.tools.values()]) { if (node.classList.contains('running')) { finishTool(node, { isError: true, content: 'Cancelled' }); } }
+    for (const c of live.subs.values()) { if (c.classList.contains('running')) { finishSubagent(c, '', 'Cancelled'); } }
     finishThinking(live);
     state.live.delete(sessionId);
   }
@@ -628,34 +752,99 @@
       case 'assistant_delta': live.text += e.payload; scheduleRender(live); break;
       case 'thinking_delta':
         live.thinking += e.payload; clearTyping(live);
-        if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = stepEl('thinking running', 'Thinking…', ''); live.steps.appendChild(live.thinkingEl); }
-        live.thinkingEl.querySelector('.content').textContent = live.thinking;
-        live.thinkingEl.querySelector('.meta').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
+        if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = thinkingRow('', 0, true); live.steps.appendChild(live.thinkingEl); }
+        live.thinkingEl.querySelector(':scope > .content').textContent = live.thinking;
+        live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
         break;
       case 'status':
-        if (!visible) { break; }
         if (e.payload && typeof e.payload === 'object' && e.payload.childId) {
-          const d = e.payload.data; const sub = live.subs.get(e.payload.childId);
-          if (e.payload.inner === 'status' && typeof d === 'string') { setStatus(`${e.payload.agent}: ${d}`); }
-          else if (e.payload.inner === 'tool_start' && d) { setStatus(`${e.payload.agent}: ${d.name}`); if (sub) { sub.querySelector('.content').textContent += `· ${d.name} ${JSON.stringify(d.args || {}).slice(0, 100)}\n`; } }
-        } else { setStatus(typeof e.payload === 'string' ? e.payload : ''); }
+          const d = e.payload.data;
+          const t = e.payload.inner === 'status' && typeof d === 'string' ? `${e.payload.agent}: ${d}` : e.payload.inner === 'tool_start' && d ? `${e.payload.agent}: ${d.name}` : '';
+          if (t) { noteStatus(sid, t); if (visible) { setStatus(t); } }
+        } else { const t = typeof e.payload === 'string' ? e.payload : ''; noteStatus(sid, t); if (visible) { setStatus(t); } }
         break;
       case 'tool_start': {
-        finishThinking(live); rotateBody(live);
-        if (e.payload && e.payload.childId) { break; }
+        finishThinking(live);
+        if (e.payload && e.payload.childId) {
+          // A subagent's tool call: render it as a nested row under that agent's pill.
+          const d = e.payload.data || {}; const sub = live.subs.get(e.payload.childId);
+          noteStatus(sid, `${e.payload.agent}: ${toolLabel(d.name, d.args || {}, true).replace(/<[^>]+>/g, '')}`); if (visible) { setStatus(`${e.payload.agent}: ${d.name}`); }
+          if (sub && d.name !== 'manage_todos') {
+            const rows = sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
+            if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); sub.querySelector(':scope > summary .meta').textContent = `${sub.dataset.calls} step${sub.dataset.calls === '1' ? '' : 's'}`; }
+          }
+          scrollToBottom(false);
+          break;
+        }
+        rotateBody(live);
         const node = placeTool(live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
         if (node) { live.tools.set(e.payload.id, node); }
+        noteStatus(sid, toolLabel(e.payload.name, e.payload.args || {}, true).replace(/<[^>]+>/g, ''));
         scrollToBottom(false);
         break;
       }
-      case 'tool_end': if (e.payload && e.payload.childId) { break; } finishTool(live.tools.get(e.payload.id), e.payload); break;
-      case 'subagent_start': { rotateBody(live); const c = subagentCard(e.payload.agent, e.payload.prompt); live.subs.set(e.payload.childId, c); live.steps.appendChild(c); break; }
-      case 'subagent_end': { const c = live.subs.get(e.payload.childId); if (c) { setState(c, e.payload.error ? 'error' : 'ok'); c.querySelector('.ico').innerHTML = e.payload.error ? I.x : I.agent; const body = c.querySelector('.content'); const trace = body.textContent.trim(); body.className = 'content doc'; body.innerHTML = `${trace ? `<details class="trace"><summary>${trace.split('\n').length} tool call${trace.includes('\n') ? 's' : ''}</summary><pre>${esc(trace)}</pre></details>` : ''}<div class="doc-body">${e.payload.error ? `<div class="error-box">${esc(e.payload.error)}</div>` : renderMarkdown((e.payload.result || '').slice(0, 8000))}</div>`; } break; }
+      case 'tool_end':
+        if (e.payload && e.payload.childId) { const d = e.payload.data || {}; finishTool(live.subTools.get(`${e.payload.childId}:${d.id}`), d); break; }
+        finishTool(live.tools.get(e.payload.id), e.payload); showTyping(live); break;
+      case 'subagent_start': {
+        rotateBody(live);
+        // Prefer the pill created at run_subagent's tool_start (same agent, not yet claimed), else a lane in a parallel host, else a new pill.
+        let c = [...live.tools.values()].find((n) => n.classList.contains('subagent') && n.dataset.pending === '1' && !n.dataset.childId && n.dataset.agent === e.payload.agent);
+        if (c) { if (e.payload.model) { const m = c.querySelector('.pill .model'); const name = modelName(e.payload.model); if (m) { m.textContent = name; } else if (name) { c.querySelector('.pill').insertAdjacentHTML('beforeend', `<i>·</i><span class="model">${esc(name)}</span>`); } } }
+        else {
+          c = subagentCard(e.payload.agent, e.payload.prompt, e.payload.model);
+          const host = hostFor(live);
+          if (host) {
+            const lane = [...host.querySelectorAll(':scope > .content > .lane.pending')].find((l) => l.querySelector('.who').textContent === e.payload.agent) || host.querySelector(':scope > .content > .lane.pending');
+            if (lane) { lane.replaceWith(c); } else { host.querySelector(':scope > .content').appendChild(c); }
+          } else { live.steps.appendChild(c); }
+        }
+        c.dataset.childId = e.payload.childId; live.subs.set(e.payload.childId, c);
+        noteStatus(sid, `${e.payload.agent}: starting`);
+        scrollToBottom(false);
+        break;
+      }
+      case 'subagent_end': {
+        const c = live.subs.get(e.payload.childId);
+        if (c) {
+          for (const [k, n] of live.subTools) { if (k.startsWith(`${e.payload.childId}:`) && n.classList.contains('running')) { finishTool(n, { isError: true, content: 'Cancelled' }); } }
+          finishSubagent(c, e.payload.result || '', e.payload.error || '');
+          noteStatus(sid, 'Thinking…'); if (visible) { setStatus('Thinking…'); }
+          const host = c.parentElement && c.parentElement.closest('.subhost'); if (host) { host.dataset.done = String(Number(host.dataset.done || 0) + 1); hostProgress(host); }
+        }
+        showTyping(live); break;
+      }
       case 'todos': if (state.session && state.session.id === sid) { state.session.todos = e.payload || []; renderTasks(); } break;
       case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
+      case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
+      case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'error': rotateBody(live); live.root.insertBefore(el('div', 'error-box', esc(String(e.payload))), live.body); break;
-      case 'turn_end': if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
+      case 'turn_end': noteStatus(sid, 'Finishing…'); if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
+  }
+
+  /** Chips for skills matching the request (click → prefill `/skill name`) and for a recurring request type worth saving as a skill. */
+  function skillSuggestionNote(p) {
+    const skills = p.skills || []; const create = p.create;
+    if (!skills.length && !create) { return null; }
+    const n = el('div', 'note skills');
+    if (skills.length) {
+      n.appendChild(el('span', 'lbl', 'Matching skills:'));
+      for (const s of skills) {
+        const chip = el('button', 'chip', `${I.book || ''}${esc(s.name)}`); chip.title = `${s.description || ''}\n\nThe agent is nudged to load this skill automatically. Click to force it: /skill ${s.name} <task>`;
+        chip.onclick = () => { els.input.value = `/skill ${s.name} ${els.input.value.replace(/^\/skill \S+\s*/, '')}`; autoGrow(); updateSendEnabled(); els.input.focus(); };
+        n.appendChild(chip);
+      }
+    }
+    if (create) {
+      const wrap = el('div', 'learn');
+      wrap.appendChild(el('span', 'lbl', `Requests like this have come up ${create.count}× with no skill covering them.`));
+      const mk = el('button', 'chip brand', `${I.plus || ''}Create “${esc(create.slug)}” skill`); mk.title = 'Prefills a prompt asking the agent to write .localpilot/skills/' + create.slug + '/SKILL.md from what worked here';
+      mk.onclick = () => { els.input.value = `Create a reusable skill at .localpilot/skills/${create.slug}/SKILL.md for requests like: ${(create.samples || []).map((x) => `"${x}"`).join(', ')}. Use front-matter (name, description with quoted trigger phrases) and a step-by-step body based on how we handled it in this project, then reload skills.`; autoGrow(); updateSendEnabled(); els.input.focus(); };
+      const no = el('button', 'chip', 'Not now'); no.onclick = () => { post({ type: 'dismissSkillTopic', topic: create.topic }); wrap.remove(); if (!skills.length) { n.remove(); } };
+      wrap.appendChild(mk); wrap.appendChild(no); n.appendChild(wrap);
+    }
+    return n;
   }
 
   // ------------------------------------------------------------------ composer state
@@ -682,33 +871,207 @@
     els.modelBtn.title = m ? `${m.id} · ${(m.contextWindow / 1024).toFixed(0)}k context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}` : 'Model';
   }
   function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }
-  // Chat tabs: always visible; running agents first, then the active chat, then recent ones.
+  // ------------------------------------------------------------------ chat tabs (multitasking)
+  // Every chat is an independent agent. Tabs keep a stable, browser-like order (pinned first, then creation order) so
+  // nothing jumps around while agents start and finish; running chats are always kept open as tabs.
+  const MAX_TABS = 12;
+  function summaryOf(s) { return { id: s.id, title: s.title || 'New chat', mode: s.mode, messageCount: s.messages ? s.messages.length : 0, updatedAt: s.updatedAt || Date.now(), createdAt: s.createdAt || 0, pinned: s.pinned }; }
+  function activeId() { return state.loadingTab || (state.session && state.session.id) || state.activeHint; }
+  function tabList() {
+    const active = activeId();
+    const all = state.sessions.slice();
+    if (state.session && !all.some((s) => s.id === state.session.id)) { all.push(summaryOf(state.session)); }
+    // Until 'init' arrives every chat is a tab; afterwards the open set is explicit (and persisted across view reloads).
+    const open = state.openTabs || new Set(all.map((s) => s.id));
+    for (const s of all) { if (s.id === active || state.running.has(s.id) || state.attention.has(s.id) || state.unread.has(s.id)) { open.add(s.id); } }
+    const list = all.filter((s) => open.has(s.id)).sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || ((a.createdAt || 0) - (b.createdAt || 0)) || a.id.localeCompare(b.id));
+    if (list.length > MAX_TABS) {
+      // Too many open: keep pinned, running and the active chat; drop the oldest idle ones from the bar (still in "All chats").
+      const keep = new Set(list.filter((s) => s.pinned || s.id === active || state.running.has(s.id)).map((s) => s.id));
+      for (const s of list.slice().sort((a, b) => b.updatedAt - a.updatedAt)) { if (keep.size >= MAX_TABS) { break; } keep.add(s.id); }
+      for (const s of list) { if (!keep.has(s.id)) { open.delete(s.id); } }
+      state.openTabs = open;
+      return tabList();
+    }
+    return { list, active, hidden: all.length - list.length, all };
+  }
+  function tabTitle(s) {
+    const running = state.running.has(s.id); const st = state.status.get(s.id);
+    const lines = [s.title || 'New chat', `${MODES[s.mode] ? MODES[s.mode].label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'}`];
+    if (running) { lines.push(`Running${st ? ` — ${st}` : '…'}`); }
+    if (state.attention.has(s.id)) { lines.push('Waiting for your approval'); }
+    if (state.unread.has(s.id)) { lines.push('Finished — new results'); }
+    if (s.id === activeId()) { lines.push('Double-click to rename · right-click for actions'); }
+    return lines.join('\n');
+  }
+  function tabIndicator(s) {
+    if (state.running.has(s.id)) { return '<span class="spin" aria-label="Running"></span>'; }
+    if (state.attention.has(s.id)) { return I.warn; }
+    if (state.unread.has(s.id)) { return '<span class="dot" aria-label="Finished"></span>'; }
+    if (s.pinned) { return I.pin; }
+    return (MODES[s.mode] || MODES.agent).icon;
+  }
+  let tabSig = '';
   function renderTabs() {
-    const active = state.session && state.session.id;
-    const list = state.sessions.slice().sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || ((b.id === active) - (a.id === active)) || (b.updatedAt - a.updatedAt));
+    const { list, active, hidden } = tabList();
+    // The store broadcasts on every save while agents stream; only rebuild the DOM when something visible changed.
+    if (els.tabs.querySelector('.rename')) { renderTabs.pending = true; return; }
+    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
+    if (sig === tabSig) { for (const tab of els.tabs.querySelectorAll('.tab[data-id]')) { const s = list.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } renderBgRuns(); return; }
+    tabSig = sig;
     els.tabs.innerHTML = '';
-    if (!list.length && state.session) { list.push({ id: state.session.id, title: state.session.title || 'New chat', mode: state.session.mode, messageCount: state.session.messages.length, updatedAt: Date.now() }); }
-    for (const s of list.slice(0, 10)) {
-      const running = state.running.has(s.id);
-      const b = el('button', `tab ${s.id === active ? 'active' : ''}`, `${running ? '<span class="spin"></span>' : ''}<span class="t">${esc(s.title || 'New chat')}</span>`);
-      b.title = `${s.title}\n${s.mode} · ${s.messageCount} messages${running ? ' · running' : ''}`;
-      b.onclick = () => post({ type: 'selectSession', id: s.id });
+    for (const s of list) {
+      const running = state.running.has(s.id); const isActive = s.id === active;
+      const cls = ['tab', isActive && 'active', running && 'running', state.loadingTab === s.id && 'loading', state.unread.has(s.id) && 'unread', state.attention.has(s.id) && 'attention', s.pinned && 'pinned'].filter(Boolean).join(' ');
+      const b = el('button', cls, `<span class="ind">${tabIndicator(s)}</span><span class="t">${esc(s.title || 'New chat')}</span><span class="close" role="button" title="${running ? 'Stop this agent' : s.pinned ? 'Pinned — unpin to close' : 'Close tab'}" aria-label="${running ? 'Stop' : 'Close'}">${running ? I.stop : I.x}</span>`);
+      b.dataset.id = s.id; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(isActive)); b.tabIndex = isActive ? 0 : -1;
+      if (state.loadingTab === s.id) { b.setAttribute('aria-busy', 'true'); }
+      b.title = tabTitle(s);
+      b.onclick = (e) => { if (e.target.closest('.close')) { e.stopPropagation(); if (running) { post({ type: 'stop', sessionId: s.id }); } else if (s.pinned) { toast('Unpin the chat to close its tab'); } else { closeTab(s.id); } return; } if (e.detail < 2) { selectTab(s.id); } };
+      b.onauxclick = (e) => { if (e.button === 1) { e.preventDefault(); if (!running && !s.pinned) { closeTab(s.id); } } };
+      b.oncontextmenu = (e) => { e.preventDefault(); openTabMenu(b, s); };
+      b.ondblclick = (e) => { if (!e.target.closest('.close')) { startRename(b, s); } };
       els.tabs.appendChild(b);
     }
+    if (hidden > 0) {
+      const more = el('button', 'tab more', `<span class="t">+${hidden}</span>`);
+      more.title = `${hidden} more chat${hidden === 1 ? '' : 's'} — open All chats`; more.tabIndex = -1;
+      more.onclick = openHistory;
+      els.tabs.appendChild(more);
+    }
     els.history.dataset.n = String(state.running.size);
-    els.history.title = state.running.size ? `All chats · ${state.running.size} running` : 'All chats';
+    els.history.title = state.running.size ? `All chats · ${state.running.size} agent${state.running.size === 1 ? '' : 's'} running` : 'All chats';
     const act = els.tabs.querySelector('.tab.active'); if (act) { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+    renderBgRuns();
+    saveState();
   }
+  /** Optimistic switch: the clicked tab is selected and marked busy right away; the extension answers with the session. */
+  function selectTab(id) {
+    if (!id || id === activeId()) { return; }
+    closeMenu();
+    state.loadingTab = id; state.unread.delete(id);
+    if (state.openTabs) { state.openTabs.add(id); }
+    renderTabs();
+    post({ type: 'selectSession', id });
+    clearTimeout(selectTab.timer);
+    selectTab.timer = setTimeout(() => { if (state.loadingTab === id) { state.loadingTab = null; renderTabs(); toast('Could not open that chat', 'error'); } }, 8000);
+  }
+  function closeTab(id) {
+    const { list } = tabList(); const idx = list.findIndex((s) => s.id === id);
+    if (!state.openTabs) { state.openTabs = new Set(tabList().list.map((s) => s.id)); }
+    state.openTabs.delete(id); state.unread.delete(id);
+    if (id === activeId()) {
+      const next = list[idx + 1] || list[idx - 1];
+      if (next) { selectTab(next.id); } else { post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); }
+    }
+    renderTabs();
+  }
+  function startRename(tab, s) {
+    const t = tab.querySelector('.t'); if (!t || tab.querySelector('.rename')) { return; }
+    const input = el('input', 'rename'); input.value = s.title || ''; input.setAttribute('aria-label', 'Chat title'); input.maxLength = 80;
+    t.replaceWith(input); input.focus(); input.select();
+    let done = false;
+    const finish = (commit) => { if (done) { return; } done = true; const v = input.value.trim(); if (commit && v && v !== s.title) { s.title = v; if (state.session && state.session.id === s.id) { state.session.title = v; } post({ type: 'renameSession', id: s.id, title: v }); } input.replaceWith(t); renderTabs.pending = false; tabSig = ''; renderTabs(); els.input.focus(); };
+    input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } };
+    input.onblur = () => finish(true);
+    input.onclick = (e) => e.stopPropagation(); input.ondblclick = (e) => e.stopPropagation();
+  }
+  function openTabMenu(anchor, s) {
+    const running = state.running.has(s.id);
+    const items = [
+      { label: 'Rename', desc: 'Double-click the tab also works', icon: I.rename, onPick: () => startRename(anchor, s) },
+      { label: s.pinned ? 'Unpin' : 'Pin', desc: s.pinned ? 'Allow closing this tab' : 'Keep this tab first and open', icon: I.pin, onPick: () => post({ type: 'pinSession', id: s.id }) },
+      { label: 'Fork', desc: 'Branch into a new tab from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) },
+      { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
+      { hr: true },
+      ...(running ? [{ label: 'Stop agent', desc: state.status.get(s.id) || 'Running', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
+      ...(running || s.pinned ? [] : [{ label: 'Close tab', desc: 'Keeps the chat in All chats', icon: I.x, onPick: () => closeTab(s.id) }]),
+      { label: 'Delete chat…', desc: running ? 'Stops the agent and deletes everything' : 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `Delete “${short(s.title || 'New chat', 32)}”`, desc: 'Permanently removes this chat', icon: I.trash, onPick: () => { if (state.openTabs) { state.openTabs.delete(s.id); } post({ type: 'deleteSession', id: s.id }); } }, { label: 'Cancel', icon: I.x }]) },
+    ];
+    openMenu(anchor, items);
+  }
+  // Roving focus inside the tab list (WAI-ARIA tabs) plus global shortcuts: Alt+↑/↓ cycle, Alt+1…9 jump, Delete closes.
+  function cycleTab(delta) { const { list, active } = tabList(); if (!list.length) { return; } const i = list.findIndex((s) => s.id === active); selectTab(list[(Math.max(0, i) + delta + list.length) % list.length].id); }
+  els.tabs.setAttribute('role', 'tablist');
+  els.tabs.addEventListener('keydown', (e) => {
+    const tabs = [...els.tabs.querySelectorAll('.tab:not(.more)')]; const i = tabs.indexOf(document.activeElement);
+    if (i < 0 || e.target.classList.contains('rename')) { return; }
+    const go = (j) => { e.preventDefault(); const t = tabs[(j + tabs.length) % tabs.length]; t.focus(); selectTab(t.dataset.id); };
+    if (e.key === 'ArrowRight') { go(i + 1); } else if (e.key === 'ArrowLeft') { go(i - 1); } else if (e.key === 'Home') { go(0); } else if (e.key === 'End') { go(tabs.length - 1); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); const id = tabs[i].dataset.id; if (!state.running.has(id)) { closeTab(id); } }
+    else if (e.key === 'F2') { e.preventDefault(); const s = tabList().list.find((x) => x.id === tabs[i].dataset.id); if (s) { startRename(tabs[i], s); } }
+  });
+  // Strip under the tab bar: agents working in *other* tabs, with their live step. Click to switch, ■ to stop.
+  let bgTimer = 0;
+  function renderBgRuns() {
+    if (!els.bgruns) { return; }
+    const active = activeId();
+    const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active);
+    els.bgruns.classList.toggle('hidden', !runs.length);
+    els.bgruns.innerHTML = '';
+    if (!runs.length) { return; }
+    for (const s of runs.slice(0, 3)) {
+      const row = el('div', 'bgrun', `<span class="spin"></span><span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><button class="stop" title="Stop this agent">${I.stop}</button>`);
+      row.title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nClick to open`;
+      row.onclick = (e) => { if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
+      els.bgruns.appendChild(row);
+    }
+    if (runs.length > 3) { const more = el('button', 'bgrun more', `<span class="st">+${runs.length - 3} more running</span>`); more.onclick = openHistory; els.bgruns.appendChild(more); }
+  }
+  function scheduleBg() { if (bgTimer) { return; } bgTimer = setTimeout(() => { bgTimer = 0; renderBgRuns(); const t = els.tabs.querySelector('.tab.running'); if (t) { for (const tab of els.tabs.querySelectorAll('.tab.running')) { const s = tabList().all.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } } }, 120); }
+  function noteStatus(sid, text) { if (text) { state.status.set(sid, text); } else { state.status.delete(sid); } scheduleBg(); }
   function openHistory() {
-    const active = state.session && state.session.id;
+    const active = activeId();
     const list = state.sessions.slice().sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || (b.updatedAt - a.updatedAt));
     const items = [
       { label: 'New chat', desc: 'Starts another agent in parallel', icon: I.sparkle, onPick: () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }) },
-      { label: 'Run tasks in parallel…', desc: 'One agent per task', icon: I.agent, onPick: () => post({ type: 'runParallelPrompt' }) },
+      { label: 'Run tasks in parallel…', desc: 'One agent per task, each in its own tab', icon: I.layers, onPick: openParallelComposer },
+      ...(state.running.size > 1 ? [{ label: `Stop all ${state.running.size} agents`, icon: I.stop, onPick: () => { for (const id of state.running) { post({ type: 'stop', sessionId: id }); } } }] : []),
       { hr: true },
-      ...list.map((s) => ({ group: state.running.has(s.id) ? 'Running' : 'Chats', label: s.title || 'New chat', desc: `${s.mode} · ${s.messageCount} msgs · ${timeAgo(s.updatedAt)}`, icon: state.running.has(s.id) ? I.spin : s.pinned ? I.check : I.file, selected: s.id === active, tag: state.running.has(s.id) ? 'running' : undefined, onPick: () => post({ type: 'selectSession', id: s.id }) })),
+      ...list.map((s) => ({ group: state.running.has(s.id) ? 'Running' : 'Chats', label: s.title || 'New chat', desc: state.running.has(s.id) ? (state.status.get(s.id) || 'Working…') : `${s.mode} · ${s.messageCount} msgs · ${timeAgo(s.updatedAt)}${state.openTabs && !state.openTabs.has(s.id) ? ' · not in tab bar' : ''}`, icon: state.running.has(s.id) ? I.spin : s.pinned ? I.pin : I.file, selected: s.id === active, tag: state.running.has(s.id) ? 'running' : state.unread.has(s.id) ? 'new' : undefined, onPick: () => selectTab(s.id) })),
+      { hr: true },
+      { group: 'Manage', label: 'Close other tabs', desc: 'Keeps running and pinned chats open', icon: I.x, onPick: closeOtherTabs },
+      { group: 'Manage', label: 'Clear chat history…', desc: `Deletes idle chats in this workspace${state.running.size ? ' · running agents keep going' : ''}`, icon: I.trash, onPick: confirmClearHistory },
+      { group: 'Manage', label: 'Memory & history settings', desc: 'Retention, storage, memory notes', icon: I.memory, onPick: () => post({ type: 'openSettings', section: 'memory' }) },
     ];
     openMenu(els.history, items, { search: 'Search chats…' });
+  }
+  function closeOtherTabs() {
+    const active = activeId(); const { list } = tabList();
+    let n = 0;
+    if (!state.openTabs) { state.openTabs = new Set(list.map((s) => s.id)); }
+    for (const s of list) { if (s.id !== active && !state.running.has(s.id) && !s.pinned) { state.openTabs.delete(s.id); state.unread.delete(s.id); n++; } }
+    renderTabs(); toast(n ? `Closed ${n} tab${n === 1 ? '' : 's'}` : 'Nothing to close');
+  }
+  function confirmClearHistory() {
+    const idle = state.sessions.filter((s) => !state.running.has(s.id)); const pinned = idle.filter((s) => s.pinned).length;
+    if (!idle.length) { toast(state.running.size ? 'Only running chats are open — stop them first' : 'No chat history to clear'); return; }
+    const items = [
+      { label: pinned ? `Delete ${idle.length - pinned} chat${idle.length - pinned === 1 ? '' : 's'}, keep ${pinned} pinned` : `Delete ${idle.length} chat${idle.length === 1 ? '' : 's'}`, desc: 'Cannot be undone — file changes already accepted stay on disk', icon: I.trash, onPick: () => post({ type: 'clearHistory', keepPinned: true }) },
+      ...(pinned ? [{ label: `Delete everything (${idle.length})`, desc: 'Including pinned chats', icon: I.trash, onPick: () => post({ type: 'clearHistory', keepPinned: false }) }] : []),
+      { label: 'Cancel', icon: I.x },
+    ];
+    openMenu(els.history, items);
+  }
+  /** In-webview launcher for several agents at once: one task per line, each becomes its own tab. */
+  function openParallelComposer() {
+    const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden');
+    menuState = { items: [], sel: 0 };
+    const draft = els.input.value.trim();
+    const seed = draft.includes('|') ? draft.split('|').map((t) => t.trim()).filter(Boolean).join('\n') : draft.includes('\n') ? draft : '';
+    const mode = (state.session && state.session.mode) || 'agent';
+    const box = el('div', 'par', `<div class="par-head">${I.layers}<div><b>Run tasks in parallel</b><span>One task per line. Each runs as its own agent in a new tab while you keep working.</span></div></div><textarea rows="5" placeholder="Add input validation to the login form&#10;Write tests for utils/date.ts&#10;Fix the TypeScript errors in src/api" aria-label="Tasks, one per line"></textarea><div class="par-foot"><span class="n"></span><span class="spacer"></span><button class="btn ghost" data-a="cancel">Cancel</button><button class="btn primary" data-a="run" disabled>${I.agent}<span>Run</span></button></div>`);
+    const ta = box.querySelector('textarea'); const n = box.querySelector('.n'); const run = box.querySelector('[data-a="run"]');
+    ta.value = seed;
+    const tasks = () => ta.value.split('\n').map((t) => t.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    const update = () => { const k = tasks().length; n.textContent = k ? `${k} agent${k === 1 ? '' : 's'} · ${MODES[mode].label} mode` : 'Nothing to run yet'; run.disabled = !k; run.querySelector('span').textContent = k > 1 ? `Run ${k} agents` : 'Run'; };
+    const go = () => { const t = tasks(); if (!t.length) { return; } post({ type: 'runParallel', tasks: t, mode }); closeMenu(); if (seed) { els.input.value = ''; autoGrow(); updateSendEnabled(); } toast(`Started ${t.length} agent${t.length === 1 ? '' : 's'}`); };
+    ta.oninput = update; ta.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Escape') { closeMenu(); els.input.focus(); } if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); } };
+    box.onclick = (e) => { const a = e.target.closest('[data-a]'); if (!a) { return; } if (a.dataset.a === 'cancel') { closeMenu(); els.input.focus(); } else { go(); } };
+    p.appendChild(box); update();
+    const r = els.history.getBoundingClientRect(); const pw = Math.min(400, window.innerWidth - 20);
+    p.style.left = `${Math.max(10, Math.min(r.left - pw + r.width, window.innerWidth - pw - 10))}px`; p.style.top = `${r.bottom + 6}px`;
+    ta.focus();
   }
   els.newTab.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' });
   els.history.onclick = openHistory;
@@ -722,7 +1085,11 @@
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
     els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
     els.tasksList.innerHTML = '';
-    for (const t of todos) { els.tasksList.appendChild(el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? I.spin : ''}</span><span class="title">${esc(t.title)}</span>`)); }
+    for (const t of todos) {
+      const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? I.spin : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}</span>` : ''}`);
+      if (t.result) { li.title = t.result.slice(0, 600); }
+      els.tasksList.appendChild(li);
+    }
   }
   function renderChanges() {
     const s = state.session; const files = s ? state.changes.get(s.id) || [] : [];
@@ -790,7 +1157,7 @@
     p.onkeydown = key;
     if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; p.focus(); }
   }
-  document.addEventListener('mousedown', (e) => { if (menuState && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn, #btnHistory')) { closeMenu(); } });
+  document.addEventListener('mousedown', (e) => { if (menuState && e.target.isConnected && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn, #btnHistory')) { closeMenu(); } });
 
   els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
   els.modelBtn.onclick = () => {
@@ -860,10 +1227,22 @@
 
   // ------------------------------------------------------------------ input handling
   function autoGrow() { els.input.style.height = 'auto'; els.input.style.height = Math.min(240, els.input.scrollHeight) + 'px'; }
+  /** ⌘/Ctrl+Shift+Enter: start the draft as a new agent in its own tab, leaving the current chat (even a running one) untouched. */
+  function sendInNewTab() {
+    const text = els.input.value.trim();
+    if (!text) { return; }
+    const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
+    const attachments = [...new Set([...state.attachments, ...atRefs])];
+    const images = state.images.map((i) => i.data);
+    post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', text, attachments, images: images.length ? images : undefined });
+    state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
+    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled();
+    toast('Started in a new tab');
+  }
   function sendCurrent(fromSuggestion) {
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
-    if (state.running.has(state.session.id)) { toast('Still responding — stop it first or start a new chat', 'error'); return; }
+    if (state.running.has(state.session.id)) { openMenu(els.box, [{ label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return; }
     const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
@@ -886,6 +1265,7 @@
       if (e.key === 'Enter') { const x = menuState.items[menuState.sel]; if (x && x.it.label !== els.input.value.trim()) { e.preventDefault(); closeMenu(); x.it.onPick && x.it.onPick(); return; } closeMenu(); }
       else { els.popover.onkeydown(e); return; }
     }
+    if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
     if (e.key === 'Escape' && state.session && state.running.has(state.session.id)) { post({ type: 'stop', sessionId: state.session.id }); return; }
     if (e.key === 'ArrowUp' && !els.input.value && state.history.length) { e.preventDefault(); state.histIdx = Math.min(state.histIdx + 1, state.history.length - 1); els.input.value = state.history[state.histIdx]; autoGrow(); updateSendEnabled(); }
@@ -904,11 +1284,21 @@
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
     if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { navigator.clipboard.writeText(text).then(() => toast('Copied')); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { post({ type: 'applyCodeToFile', code: text }); } return; }
-    const link = e.target.closest('.path-link'); if (link) { post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined }); return; }
+    const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined }); return; }
+    const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
     const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
     const a = e.target.closest('a[href]'); if (a) { e.preventDefault(); post({ type: 'openExternal', url: a.getAttribute('href') }); }
   });
-  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); } if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); openContextMenu(); } });
+  document.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); }
+    if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); openContextMenu(); }
+    if (e.target && e.target.classList && e.target.classList.contains('rename')) { return; }
+    if (e.altKey && !mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); cycleTab(e.key === 'ArrowDown' ? 1 : -1); }
+    if (e.altKey && !mod && /^[1-9]$/.test(e.key)) { const { list } = tabList(); const t = list[Number(e.key) - 1]; if (t) { e.preventDefault(); selectTab(t.id); } }
+    if (mod && e.altKey && e.key.toLowerCase() === 't') { e.preventDefault(); els.newTab.click(); }
+    if (mod && e.altKey && e.key.toLowerCase() === 'w') { const id = activeId(); if (id && !state.running.has(id)) { e.preventDefault(); closeTab(id); } }
+  });
 
   // ------------------------------------------------------------------ messages from the extension
   // Branded boot screen shown until the first session arrives from the extension host.
@@ -922,32 +1312,53 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; syncModel(); renderTabs(); break;
-      case 'sessions': state.sessions = m.sessions || []; renderTabs(); break;
-      case 'session': state.session = m.session; renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); dismissBoot(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); break;
+      case 'session': {
+        const switching = !state.session || state.session.id !== m.session.id;
+        state.session = m.session; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
+        renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); dismissBoot();
+        if (switching) { closeMenu(); }
+        break;
+      }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'models': { const hadNone = !state.models.length; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { toast(`${m.models.length} model(s) found`); if (state.session && !state.session.messages.length) { renderSession(); } } break; }
       case 'event': handleEvent(m.event); break;
-      case 'running': if (m.running) { state.running.add(m.sessionId); } else { state.running.delete(m.sessionId); finishLive(m.sessionId); } if (state.session && state.session.id === m.sessionId) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } } renderTabs(); break;
-      case 'approval': renderApproval(m); if (!state.session || state.session.id !== m.sessionId) { toast('Approval needed in another chat'); } break;
-      case 'approvalResolved': { const d = els.approvals.querySelector(`[data-id="${CSS.escape(m.id)}"]`); if (d) { d.remove(); } break; }
+      case 'running': {
+        const isActive = state.session && state.session.id === m.sessionId;
+        if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
+        else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); const d = els.approvals.querySelector(`[data-id="${CSS.escape(aid)}"]`); if (d) { d.remove(); } } } state.attention.delete(m.sessionId); }
+        if (isActive) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
+        renderTabs();
+        break;
+      }
+      case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
+      case 'approvalResolved': { const d = els.approvals.querySelector(`[data-id="${CSS.escape(m.id)}"]`); if (d) { d.remove(); } resolveAttention(m.id); break; }
       case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level); } break;
       case 'draft': els.input.value = m.text || ''; autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
+      case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
       case 'openFiles': state.openFiles = m.files || []; break;
       case 'image': if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); break; } state.images.push(m.image); renderChips(); updateSendEnabled(); els.input.focus(); break;
     }
   });
 
   // Permission prompt (Claude Code style): Allow once / Allow for session / Deny, with keyboard shortcuts.
+  // Prompts from agents in other tabs show up here too (so a background agent never stalls unnoticed) with a link to that chat.
+  function resolveAttention(approvalId) {
+    const sid = state.approvalSid.get(approvalId); if (!sid) { return; }
+    state.approvalSid.delete(approvalId);
+    if (![...state.approvalSid.values()].includes(sid)) { state.attention.delete(sid); renderTabs(); }
+  }
   function renderApproval(a) {
     const d = el('div', 'approval'); d.dataset.id = a.id;
     const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network' }[a.kind] || a.kind;
-    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div><pre></pre><div class="actions"><button class="btn ghost" data-a="deny" title="Deny (N)">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
+    const other = !state.session || state.session.id !== a.sessionId; const sess = other ? state.sessions.find((s) => s.id === a.sessionId) : null;
+    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="actions"><button class="btn ghost" data-a="deny" title="Deny (N)">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
     d.querySelector('pre').textContent = a.detail;
-    const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); d.remove(); document.removeEventListener('keydown', key, true); els.input.focus(); };
-    const key = (e) => { if (e.target === els.input && els.input.value) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };
-    d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (b) { answer(b.dataset.a); } };
+    const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); d.remove(); resolveAttention(a.id); document.removeEventListener('keydown', key, true); els.input.focus(); };
+    const key = (e) => { if (e.target === els.input && els.input.value) { return; } if (e.target.closest && e.target.closest('.popover, .rename')) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };
+    d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (!b) { return; } if (b.dataset.a === 'open') { selectTab(a.sessionId); return; } answer(b.dataset.a); };
     document.addEventListener('keydown', key, true);
     els.approvals.appendChild(d); scrollToBottom(true);
   }

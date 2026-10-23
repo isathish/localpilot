@@ -145,6 +145,8 @@ export interface ToolContext {
   todos?: { get(): TodoItem[]; set(items: TodoItem[]): void };
   /** Depth of agent nesting (0 = main agent). */
   depth: number;
+  /** `provider/model` answering the current turn (subagents inherit it unless routed elsewhere). */
+  modelRef?: string;
 }
 
 export interface ToolResult {
@@ -214,6 +216,14 @@ export interface TodoItem {
   id: string;
   title: string;
   status: 'pending' | 'in_progress' | 'done' | 'skipped';
+  /** Subagent to delegate this item to (run_todos_parallel); omit for items the main agent does itself. */
+  agent?: string;
+  /** Self-contained brief for the subagent. */
+  prompt?: string;
+  /** Optional provider/model override for the delegated item. */
+  model?: string;
+  /** Delegated item's report (truncated), filled in by run_todos_parallel. */
+  result?: string;
 }
 
 export type ThinkingLevel = 'off' | 'on' | 'low' | 'medium' | 'high';
@@ -229,6 +239,10 @@ export interface AgentEvent {
     | 'status'
     | 'error'
     | 'compaction'
+    /** The request looked ambiguous; the agent was given a workspace snapshot to resolve it. Payload: { reasons }. */
+    | 'clarify'
+    /** Skills matching the request and/or a recurring request type worth turning into a skill. */
+    | 'skill_suggestions'
     | 'subagent_start'
     | 'subagent_end'
     | 'todos'

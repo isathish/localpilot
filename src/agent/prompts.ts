@@ -35,13 +35,13 @@ export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
     parts.push(`# Working style
 - Work autonomously to complete the task. Gather context with tools before editing; read a file before you modify it.
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
+- Large tasks: split the work into independent pieces (by file, module or concern). Give each independent item an "agent" (coder, tester, docs, explore…) and a self-contained "prompt" in manage_todos, then call run_todos_parallel to execute them concurrently while you keep the sequential, dependent items for yourself. Afterwards integrate the results, run diagnostics/tests on the combined change and finish the checklist. Do not delegate tiny edits — a single-file, few-line change is faster done directly.
 - Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase.
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
 - For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports, re-inspect, and use open_browser to show the user.
 - When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
-- For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents and integrate their results.
+- For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents (or checklist items via run_todos_parallel) and integrate their results. Give them everything they need: the goal, the files/symbols involved, constraints and what to return.
 - When you learn something durable about this project (build commands, conventions, gotchas) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
-- If a task is ambiguous in a way that materially changes the approach, ask one concise question with ask_user; otherwise make a sensible assumption and state it.
 - Never fabricate file contents, command output or API behaviour. If unsure, check.
 - File paths are relative to the workspace root ("notes.txt" is a file at the root; "." is the root directory itself and cannot be written to).
 - Finish with a brief summary: what changed (files), how it was verified, anything left open.`);
@@ -51,6 +51,14 @@ You are in read-only planning mode. Investigate the codebase with read/search to
   } else {
     parts.push(`# Ask mode
 Answer the user's question directly. You may read files and search the workspace for context, but do not modify anything.`);
+  }
+
+  if (!o.roleOverride) {
+    parts.push(`# Understanding the request
+- Requests are often terse: "fix this", "make it faster", "tests?", "why broken". Do not guess blindly and do not stall — resolve the intent from context: the active file and selection, open editors, files touched this session, current errors, uncommitted changes and the conversation so far (call gather_context when the system prompt does not already show enough).
+- Read typos and shorthand charitably ("fucntion" → function, "tset" → test, "the api file" → the file that handles the API). Verify names against the code instead of taking them literally.
+- When you had to interpret, start your reply with one line "Understood as: <precise restatement>" and list any assumptions, then proceed.
+- Ask with ask_user only when two plausible readings would lead to materially different work and the context does not settle it — one question, with 2–4 concrete options. Otherwise choose the most plausible reading and say so.`);
   }
 
   if (o.toolsEnabled) {
@@ -69,6 +77,11 @@ Answer the user's question directly. You may read files and search the workspace
   const editor = o.workspace.activeEditorContext();
   if (editor) {
     parts.push(`# Editor state\n${editor}`);
+  }
+
+  const map = await o.workspace.projectMap();
+  if (map) {
+    parts.push(`# Project map\n${map}\nUse list_dir / read_file for details; the user can attach the full file list with @workspace.`);
   }
 
   const rules = await o.workspace.loadInstructions();
@@ -101,7 +114,7 @@ ${skillsIdx}`);
 
   const agentsIdx = o.skills.agentsIndex();
   if (agentsIdx && o.mode === 'agent') {
-    parts.push(`# Available subagents (for run_subagent / run_parallel_subagents)\n${agentsIdx}`);
+    parts.push(`# Available subagents (for run_subagent / run_parallel_subagents)\n${agentsIdx}\nSubagents cannot see this conversation or ask the user anything; brief them fully. Use "clarifier" to turn a fuzzy brief into a precise one before fanning out work.`);
   }
 
   if (o.textToolProtocol) {

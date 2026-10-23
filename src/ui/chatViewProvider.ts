@@ -101,10 +101,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="boot" class="boot" role="status" aria-label="Loading LocalPilot"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span></div>
   <div id="progress" class="progress hidden" aria-hidden="true"></div>
   <header id="tabbar" class="tabbar">
-    <nav id="tabs" class="tabs" aria-label="Chats"></nav>
-    <button id="btnNewTab" class="ib" title="New chat — runs in parallel">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
+    <nav id="tabs" class="tabs" role="tablist" aria-label="Chats"></nav>
+    <button id="btnNewTab" class="ib" title="New chat — runs in parallel (⌘⇧↵ sends the draft in a new tab)">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
     <button id="btnHistory" class="ib badge" data-n="0" title="All chats">${svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/>')}</button>
   </header>
+  <div id="bgruns" class="bgruns hidden" aria-label="Agents running in other tabs"></div>
   <main id="messages" aria-live="polite"></main>
   <div id="approvals"></div>
   <footer id="composer">

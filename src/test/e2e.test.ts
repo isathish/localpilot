@@ -233,4 +233,57 @@ suite('LocalPilot end-to-end (real local model)', () => {
     assert.match(fan.content, /billing|invoice/i, `child 2 read BETA.md: ${fan.content.slice(0, 400)}`);
     assert.match(finalAnswer(id), /auth|billing|invoice/i, `parent summarised the reports: ${finalAnswer(id)}`);
   });
+
+  test('vague request: "fix this" is clarified from the active editor and the bug is actually fixed', async function () {
+    this.timeout(240_000);
+    const rel = 'src/mathutil.py';
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, rel), 'def add(a, b):\n    """Return the sum of a and b."""\n    return a - b\n', 'utf8');
+    const doc = await vscode.workspace.openTextDocument(path.join(root, rel));
+    await vscode.window.showTextDocument(doc, { preview: false });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const id = await api.runPrompt('fix this', 'agent');
+    await waitForRun(id, 230_000);
+    const session = api.getSession(id)!;
+    const steer = session.messages.find((m) => m.role === 'user' && m.meta?.hidden && /may be ambiguous/.test(m.content));
+    assert.ok(steer, `clarification steer was injected: ${transcript(id)}`);
+    assert.match(steer.content, /mathutil\.py/, 'snapshot names the active file');
+    const fixed = await fs.readFile(path.join(root, rel), 'utf8');
+    assert.match(fixed, /return\s+a\s*\+\s*b/, `bug fixed from context alone: ${fixed}\n${transcript(id)}`);
+  });
+
+  test('task splitting: checklist items with agent+prompt run as parallel subagents and are ticked off', async function () {
+    this.timeout(300_000);
+    const id = await api.runPrompt(
+      'Call manage_todos exactly once with two pending items: {"id":"1","title":"Create ONE.txt","status":"pending","agent":"coder","prompt":"Use write_file to create ONE.txt in the workspace root containing exactly: one"} and {"id":"2","title":"Create TWO.txt","status":"pending","agent":"coder","prompt":"Use write_file to create TWO.txt in the workspace root containing exactly: two"}. Then call run_todos_parallel once. Then reply "done".',
+      'agent'
+    );
+    await waitForRun(id, 290_000);
+    const session = api.getSession(id)!;
+    const fan = session.messages.find((m) => m.role === 'tool' && m.toolName === 'run_todos_parallel');
+    assert.ok(fan, `run_todos_parallel was not executed: ${transcript(id)}`);
+    assert.match(fan.content, /2\/2 items completed/, `both delegated items completed: ${fan.content.slice(0, 300)}`);
+    assert.ok(session.todos?.length === 2 && session.todos.every((t) => t.status === 'done'), `todos ticked off: ${JSON.stringify(session.todos)}`);
+    assert.ok(session.todos.every((t) => t.agent === 'coder' && t.result), 'items keep their agent and carry the report');
+    assert.match(await fs.readFile(path.join(root, 'ONE.txt'), 'utf8'), /one/i);
+    assert.match(await fs.readFile(path.join(root, 'TWO.txt'), 'utf8'), /two/i);
+  });
+
+  test('skill recommendation: a matching skill is suggested and loaded without /skill', async function () {
+    this.timeout(240_000);
+    const skillDir = path.join(root, '.localpilot', 'skills', 'banner');
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: banner\ndescription: Create the project banner file. Use for "banner", "create the banner".\n---\n# Banner skill\n\n1. Use write_file to create `BANNER.txt` in the workspace root.\n2. It must contain exactly one line: `Banner made by the banner skill`\n3. Reply "bannered" when done.\n', 'utf8');
+    await vscode.commands.executeCommand('localpilot.reloadSkills');
+    await new Promise((r) => setTimeout(r, 500));
+    const id = await api.runPrompt('create the banner for this project', 'agent');
+    await waitForRun(id, 230_000);
+    const session = api.getSession(id)!;
+    const hint = session.messages.find((m) => m.role === 'user' && m.meta?.hidden && /Skills that match this request/.test(m.content));
+    assert.ok(hint && /"banner"/.test(hint.content), `skill hint injected: ${transcript(id)}`);
+    assert.ok(toolsUsed(id).includes('load_skill'), `skill loaded on the model's own initiative: ${toolsUsed(id).join(',')}`);
+    assert.match(await fs.readFile(path.join(root, 'BANNER.txt'), 'utf8').catch(() => ''), /banner skill/i, transcript(id));
+  });
 });
+

@@ -1,9 +1,16 @@
 import { getConfig } from '../config';
-import { AgentEvent, ChatMessage, Session, Tool, ToolContext } from '../types';
+import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext } from '../types';
 import { AgentRunner, ApprovalHandler } from './agentLoop';
 import { ParallelPool } from './parallel';
 import { SkillManager } from './skills';
 import { newId } from '../providers/http';
+import { resolveAgentName, routeSubagent } from './builtinAgents';
+
+/** Appended to every subagent persona (built-in or custom). */
+const SUBAGENT_CONTRACT = `# You are a subagent
+- The parent agent only sees your final message, and there is no user to answer questions: never call ask_user and never end with a question. If the brief is ambiguous, call gather_context and read the relevant code, choose the most plausible interpretation, state it under "Interpretation" at the top of your report, and carry on.
+- Treat typos and shorthand in the brief charitably; verify against the code rather than taking names literally.
+- Finish by writing one complete, self-contained final report (paths with line numbers, what you verified, what you could not).`;
 
 /**
  * Tools that let the main agent delegate work: load_skill (progressive disclosure of skill instructions),
@@ -33,12 +40,12 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     definition: {
       name: 'run_subagent',
       description:
-        'Delegate a self-contained task to a subagent that runs with its own fresh context window and returns a final report. Use for exploration, research, reviews or isolated implementation work. The subagent cannot see this conversation, so include all necessary context in the prompt.',
+        'Delegate a self-contained task to a subagent that runs with its own fresh context window and returns a final report. Use for exploration, research, planning, reviews, testing, debugging or isolated implementation work. The subagent cannot see this conversation or ask the user anything, so include all necessary context (files, symbols, acceptance criteria) in the prompt. Vague brief? Delegate to "clarifier" first, or call gather_context yourself.',
       parameters: {
         type: 'object',
         properties: {
-          agent: { type: 'string', description: 'Subagent name (see Available subagents), e.g. "explore", "coder", "reviewer", "researcher"' },
-          prompt: { type: 'string', description: 'Complete, self-contained task description and what to return' },
+          agent: { type: 'string', description: 'Subagent name (see Available subagents): "clarifier", "explore", "planner", "coder", "tester", "debugger", "reviewer", "docs", "researcher" or a custom one. Common aliases ("review", "debug", "test") are accepted.' },
+          prompt: { type: 'string', description: 'Complete, self-contained task description: goal, relevant files/symbols, constraints, and exactly what to return' },
           model: { type: 'string', description: 'Optional provider/model override' },
         },
         required: ['agent', 'prompt'],
@@ -89,14 +96,20 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     if (ctx.depth >= cfg.parallel.maxSubagentDepth) {
       return { content: `Subagent depth limit (${cfg.parallel.maxSubagentDepth}) reached; do the work directly instead.`, isError: true };
     }
-    const def = skills.getAgent(agentName) ?? skills.getAgent('explore')!;
+    if (!prompt.trim()) {
+      return { content: 'The subagent prompt is empty. Describe the goal, the relevant files/symbols and what to return.', isError: true };
+    }
+    const resolved = resolveAgentName(agentName, skills.allAgents.map((a) => a.name));
+    const def = (resolved ? skills.getAgent(resolved) : undefined) ?? skills.getAgent('explore')!;
+    const fallbackNote = def.name !== agentName && !resolved ? `Note: unknown subagent "${agentName}" — ran "${def.name}" instead. Available: ${skills.allAgents.map((a) => a.name).join(', ')}.\n\n` : '';
     const childId = `${ctx.sessionId}::${def.name}::${newId('sub')}`;
+    const { role, modelRef: routedModel } = routeSubagent(def, modelRef, ctx.modelRef, cfg.routing);
     const child: Session = {
       id: childId,
       title: `${def.name}: ${prompt.slice(0, 40)}`,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      model: modelRef ?? def.model ?? '',
+      model: routedModel ?? '',
       messageCount: 0,
       messages: [],
       contextTokens: 0,
@@ -104,15 +117,16 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       mode: 'agent',
       attachments: [],
     };
-    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt } });
+    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined } });
     const user: ChatMessage = { role: 'user', content: prompt };
     try {
       const text = await runner.run({
         session: child,
         userMessage: user,
         modelRef: child.model || undefined,
+        role,
         toolFilter: def.tools,
-        roleOverride: `${def.systemPrompt}\n\nYou are a subagent. Finish by writing a complete final report; the parent agent only sees your last message.`,
+        roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
         depth: ctx.depth + 1,
         signal: ctx.signal,
         requestApproval: (title, detail, kind) => approval(ctx.sessionId, title, detail, kind),
@@ -121,7 +135,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         maxIterations: 25,
       });
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text } });
-      return { content: text || '(subagent returned no text)' };
+      return { content: fallbackNote + (text || '(subagent returned no text)') };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg } });
@@ -129,5 +143,47 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     }
   }
 
-  return [loadSkill, runSubagent, runParallel];
+  const runTodos: Tool = {
+    definition: {
+      name: 'run_todos_parallel',
+      description:
+        'Execute the pending checklist items that carry an "agent" and "prompt" (set them with manage_todos) as concurrent subagents, one per item, and mark each item in_progress → done/skipped as it runs. Use after splitting a large task into independent pieces: the user watches progress in the checklist while the pieces run in parallel. Items without agent/prompt, and items that depend on each other, are left for you to do in order.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: { type: 'array', items: { type: 'string' }, description: 'Optional: only run these todo ids (default: every pending item that has agent + prompt)' },
+        },
+      },
+    },
+    async execute(args, ctx) {
+      if (!ctx.todos) {
+        return { content: 'No checklist in this context. Call manage_todos first.', isError: true };
+      }
+      const wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
+      const runnable = ctx.todos.get().filter((t) => t.status === 'pending' && t.agent && t.prompt && (!wanted || wanted.has(t.id)));
+      if (!runnable.length) {
+        return { content: 'Nothing to run: no pending todos with both "agent" and "prompt". Add them with manage_todos (e.g. {"id":"2","title":"…","status":"pending","agent":"coder","prompt":"…"}).', isError: true };
+      }
+      const update = (id: string, patch: Partial<TodoItem>) => ctx.todos!.set(ctx.todos!.get().map((t) => (t.id === id ? { ...t, ...patch } : t)));
+      const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
+      const settled = await pool.map(runnable, async (t) => {
+        update(t.id, { status: 'in_progress' });
+        const r = await runChild(t.agent!, `${t.prompt}\n\nThis is checklist item "${t.title}" of a larger task; stay within its scope.`, t.model, ctx);
+        update(t.id, { status: r.isError ? 'skipped' : 'done', result: r.content.slice(0, 2000) });
+        return r;
+      });
+      const out = settled.map((r, i) => {
+        const t = runnable[i];
+        const header = `## ${t.id}. ${t.title} (${t.agent})`;
+        return r.status === 'fulfilled' ? `${header}${r.value.isError ? ' — FAILED' : ''}\n${r.value.content}` : `${header} — FAILED\n${String(r.reason)}`;
+      });
+      const failed = settled.filter((r) => r.status === 'rejected' || r.value.isError).length;
+      return {
+        content: `${runnable.length - failed}/${runnable.length} items completed.${failed ? ' Failed items were marked "skipped" — redo them yourself or re-run with fixes.' : ''}\n\n${out.join('\n\n')}\n\nIntegrate the results, verify the combined change (diagnostics/tests), then update the remaining checklist items.`,
+        isError: failed === runnable.length,
+      };
+    },
+  };
+
+  return [loadSkill, runSubagent, runParallel, runTodos];
 }

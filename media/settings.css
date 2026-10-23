@@ -450,3 +450,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .auto-setup .auto-sub b { display: block; color: var(--fg); font-weight: 600; }
 .auto-setup .auto-sub span { display: block; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-setup .progress { margin-top: 8px; height: 6px; }
+
+/* ---- memory & history */
+.kv.store dd b { font-weight: 600; }
+.badge.on { color: var(--ok, #73c991); background: color-mix(in srgb, var(--ok, #73c991) 14%, transparent); }
+.tblwrap { padding: 0; overflow: hidden; }
+.tbl.notes { width: 100%; margin: 0; }
+.tbl.notes td:nth-child(2) { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl.notes tr.busy { opacity: .5; pointer-events: none; }
+.tbl.notes a[data-open] { cursor: pointer; }
+.tbl.notes .btn.armed { color: var(--error); font-size: 11px; padding: 0 8px; }
+.tbl.notes td:last-child { width: 1%; white-space: nowrap; text-align: right; }
+p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 12.5px; }

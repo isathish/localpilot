@@ -80,6 +80,8 @@ With `localpilot.routing.enabled` (default on) LocalPilot picks the model per ta
 | Turn with images | The session model if it can see; otherwise `localpilot.routing.vision` or the best installed vision model — just for that turn, the session keeps its model |
 | Inline completions | `localpilot.inlineCompletion.model`, else the **smallest** FIM-capable model (latency matters more than size) |
 | Plan mode | `localpilot.routing.reasoning` when set (e.g. `ollama/qwen3:8b`), else the session model |
+| Read-only subagents (`explore`, `clarifier`, `researcher`) | `localpilot.routing.fast` when set, else the **smallest** tool-capable instruct model that fits — they run many short tool calls, often in parallel. `session` pins the session model |
+| Implementing subagents (`coder`, `tester`, `debugger`, `docs`) | `localpilot.routing.coding` when set (e.g. a 32b coder while you chat with a 7b), else the session model |
 | Chosen model offline or disabled | The best available model, with a status line explaining the substitution; the session switches to it |
 
 Ranking considers capabilities (tools, FIM, vision), model family, parameter count and whether the model fits the machine's budget, so a 32b model that spills out of memory loses to a 14b that doesn't. The status bar shows the model that will actually answer.

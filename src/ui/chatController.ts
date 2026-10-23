@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { AgentRunner } from '../agent/agentLoop';
+import { SkillLearner } from '../agent/skillRecommender';
 import { ChangeTracker } from '../agent/changeTracker';
 import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel } from '../config';
@@ -26,13 +27,17 @@ export type ToWebview =
   | { type: 'openFiles'; files: string[] }
   | { type: 'draft'; text: string }
   | { type: 'focusInput' }
+  | { type: 'historyCleared'; removed: number }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
 export type FromWebview =
   | { type: 'ready' }
-  | { type: 'newSession'; mode?: Session['mode'] }
+  | { type: 'newSession'; mode?: Session['mode']; text?: string; attachments?: string[]; images?: string[] }
+  | { type: 'runParallel'; tasks: string[]; mode?: Session['mode'] }
   | { type: 'selectSession'; id: string }
   | { type: 'deleteSession'; id: string }
+  | { type: 'deleteSessions'; ids: string[] }
+  | { type: 'clearHistory'; keepPinned?: boolean }
   | { type: 'renameSession'; id: string; title: string }
   | { type: 'pinSession'; id: string }
   | { type: 'forkSession'; id: string; uptoIndex?: number }
@@ -67,6 +72,7 @@ export type FromWebview =
   | { type: 'showDiff'; sessionId: string; fsPath: string }
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
   | { type: 'runParallelPrompt' }
+  | { type: 'dismissSkillTopic'; topic: string }
   | { type: 'copyText'; text: string };
 
 interface Sink {
@@ -89,6 +95,9 @@ export class ChatController implements vscode.Disposable {
   readonly onDidChangeRuns = this._onDidChangeRuns.event;
   /** Latest status line per running session (for the Agents view). */
   readonly runStatus = new Map<string, string>();
+
+  /** Skill usage/recurrence tracker (set by the extension host). */
+  learner?: SkillLearner;
 
   constructor(
     readonly store: SessionStore,
@@ -115,6 +124,11 @@ export class ChatController implements vscode.Disposable {
   attach(sink: Sink): vscode.Disposable {
     this.sinks.add(sink);
     return new vscode.Disposable(() => this.sinks.delete(sink));
+  }
+
+  /** Prefills the composer (used by Settings → "Create skill" and other entry points). */
+  draft(text: string): void {
+    this.broadcast({ type: 'draft', text });
   }
 
   private broadcast(msg: ToWebview): void {
@@ -157,8 +171,24 @@ export class ChatController implements vscode.Disposable {
       case 'ready':
         return this.sendInit();
       case 'newSession': {
-        const s = this.store.create(getConfig().defaultModel, msg.mode ?? 'agent');
+        const s = this.createSession(msg.mode ?? 'agent');
+        const text = msg.text?.trim();
+        if (text) {
+          s.title = text.slice(0, 60);
+          this.store.save(s);
+        }
         this.setActive(s);
+        if (text) {
+          // "Send in a new tab": the prompt starts streaming in the fresh session while the previous one keeps running.
+          void this.send(s.id, text, msg.attachments ?? [], msg.images);
+        }
+        return;
+      }
+      case 'runParallel': {
+        const tasks = msg.tasks.map((t) => t.trim()).filter(Boolean);
+        if (tasks.length) {
+          await this.runParallel(tasks, msg.mode ?? 'agent');
+        }
         return;
       }
       case 'selectSession': {
@@ -182,6 +212,15 @@ export class ChatController implements vscode.Disposable {
           }
         }
         return;
+      case 'deleteSessions': {
+        for (const id of msg.ids) {
+          await this.handle({ type: 'deleteSession', id });
+        }
+        return;
+      }
+      case 'clearHistory':
+        await this.clearHistory({ keepPinned: msg.keepPinned !== false });
+        return;
       case 'renameSession':
         return this.store.rename(msg.id, msg.title);
       case 'pinSession':
@@ -201,6 +240,9 @@ export class ChatController implements vscode.Disposable {
       }
       case 'send':
         await this.send(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
+        return;
+      case 'dismissSkillTopic':
+        await this.learner?.dismiss(msg.topic);
         return;
       case 'stop':
         return this.stop(msg.sessionId);
@@ -576,7 +618,7 @@ export class ChatController implements vscode.Disposable {
 
   /** Start a new session for an externally supplied prompt (CLI / URI handler). */
   async runPrompt(prompt: string, mode: Session['mode'] = 'agent', attachments: string[] = []): Promise<string> {
-    const s = this.store.create(getConfig().defaultModel, mode);
+    const s = this.createSession(mode);
     s.title = prompt.slice(0, 60);
     this.setActive(s);
     void this.send(s.id, prompt, attachments);
@@ -587,7 +629,7 @@ export class ChatController implements vscode.Disposable {
   async runParallel(tasks: string[], mode: Session['mode'] = 'agent'): Promise<string[]> {
     const ids: string[] = [];
     for (const task of tasks) {
-      const s = this.store.create(getConfig().defaultModel, mode);
+      const s = this.createSession(mode);
       s.title = task.slice(0, 60);
       ids.push(s.id);
     }
@@ -600,6 +642,48 @@ export class ChatController implements vscode.Disposable {
       this.setActive(first);
     }
     return ids;
+  }
+
+  /** Creates a chat and applies the retention limit so history cannot grow without bound. */
+  private createSession(mode: Session['mode']): Session {
+    const cfg = getConfig();
+    const s = this.store.create(cfg.defaultModel, mode);
+    void this.store.prune(cfg.sessionRetention, [...this.runs.keys(), s.id, ...(this.activeSessionId ? [this.activeSessionId] : [])]).then((n) => {
+      if (n) {
+        this.log.info(`Session retention: removed ${n} old chat(s) (limit ${cfg.sessionRetention})`);
+      }
+    });
+    return s;
+  }
+
+  /**
+   * "Clear chat history": removes every idle chat (optionally keeping pinned ones), reverts nothing on disk, stops no
+   * agent — running chats are always kept — and leaves the user in a fresh chat. Returns the number removed.
+   */
+  async clearHistory(opts: { keepPinned?: boolean } = {}): Promise<number> {
+    const keep = new Set<string>(this.runs.keys());
+    if (opts.keepPinned !== false) {
+      for (const s of this.store.list()) {
+        if (s.pinned) {
+          keep.add(s.id);
+        }
+      }
+    }
+    for (const s of this.store.list()) {
+      if (!keep.has(s.id)) {
+        this.tracker.keep(s.id);
+        this.sessionApprovalMemory.delete(s.id);
+      }
+    }
+    const n = await this.store.clearExcept(keep);
+    const current = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
+    if (!current) {
+      const next = this.store.list()[0];
+      this.setActive(next ? this.store.get(next.id)! : this.createSession('agent'));
+    }
+    this.broadcast({ type: 'historyCleared', removed: n });
+    this.broadcast({ type: 'toast', level: 'info', text: n ? `Cleared ${n} chat${n === 1 ? '' : 's'}${keep.size ? ` · kept ${keep.size} running/pinned` : ''}` : 'Nothing to clear' });
+    return n;
   }
 
   stop(sessionId: string): void {

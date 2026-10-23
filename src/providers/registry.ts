@@ -131,7 +131,8 @@ export class ProviderRegistry implements vscode.Disposable {
     const profile = await getSystemProfile().catch(() => undefined);
     const find = (ref?: string) => (ref ? models.find((m) => m.id === ref || m.modelId === ref) : undefined);
 
-    const roleOverride = role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : undefined;
+    const roleOverride =
+      role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
     const wanted = req.modelRef || roleOverride || cfg.defaultModel;
     let model = find(wanted);
     let reason: string | undefined;
@@ -169,6 +170,13 @@ export class ProviderRegistry implements vscode.Disposable {
         if (r && r.id !== model.id) {
           reason = `Plan mode — using ${r.name} for reasoning`;
           model = r;
+        }
+      } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
+        // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model.
+        const fast = pickForRole(models, 'fast', profile);
+        if (fast && fast.id !== model.id && fast.supportsTools) {
+          reason = `Read-only subagent — using ${fast.name}`;
+          model = fast;
         }
       }
     }
@@ -232,6 +240,14 @@ export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProf
     s += gb !== undefined ? Math.max(0, 12 - gb) : 0;
     s += /base/.test(n) ? 3 : 0;
     s -= /r1|reason|think|vl|vision/.test(n) ? 10 : 0;
+  }
+  if (role === 'fast') {
+    // Must call tools; among those, smaller and coder-tuned wins. Reasoning/vision models are slow for this.
+    s += m.supportsTools ? 25 : -60;
+    s += gb !== undefined ? Math.max(0, 16 - gb) : 0;
+    s += /coder|devstral|codestral|qwen2\.5|qwen3|llama3|mistral|gemma|phi/.test(n) ? 3 : 0;
+    s -= /base$|-base\b|:.*base/.test(n) ? 15 : 0;
+    s -= /r1|reason|think|vl|llava|vision|embed/.test(n) ? 10 : 0;
   }
   if (role === 'agent' || role === 'reasoning') {
     s += m.supportsTools ? 10 : 0;

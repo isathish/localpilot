@@ -118,6 +118,53 @@ export class SessionStore implements vscode.Disposable {
     }
   }
 
+  /** Delete every session except the given ids (running or pinned chats survive "Clear chat history"). */
+  async clearExcept(keep: Iterable<string>): Promise<number> {
+    const keepSet = new Set(keep);
+    let n = 0;
+    for (const id of [...this.sessions.keys()]) {
+      if (!keepSet.has(id)) {
+        await this.delete(id);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * Retention: keep at most `max` sessions (pinned ones never count, and `protect` — running chats — are never
+   * removed). Oldest idle chats go first. Called after every new chat so storage cannot grow without bound.
+   */
+  async prune(max: number, protect: Iterable<string> = []): Promise<number> {
+    if (!Number.isFinite(max) || max <= 0) {
+      return 0;
+    }
+    const safe = new Set(protect);
+    const candidates = [...this.sessions.values()].filter((s) => !s.pinned && !safe.has(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const extra = candidates.slice(max);
+    for (const s of extra) {
+      await this.delete(s.id);
+    }
+    return extra.length;
+  }
+
+  /** Storage footprint of the session files (for the Settings → Memory page). */
+  async stats(): Promise<{ count: number; bytes: number; messages: number; oldest?: number }> {
+    let bytes = 0;
+    let messages = 0;
+    let oldest: number | undefined;
+    for (const s of this.sessions.values()) {
+      messages += s.messages.length;
+      oldest = oldest === undefined ? s.createdAt : Math.min(oldest, s.createdAt);
+      try {
+        bytes += (await vscode.workspace.fs.stat(vscode.Uri.joinPath(this.dir, `${s.id}.json`))).size;
+      } catch {
+        bytes += JSON.stringify(s).length;
+      }
+    }
+    return { count: this.sessions.size, bytes, messages, oldest };
+  }
+
   /** Debounced write so streaming turns do not hammer the disk. */
   save(s: Session): void {
     s.updatedAt = Date.now();

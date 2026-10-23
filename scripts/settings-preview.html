@@ -42,11 +42,11 @@ const models = [
   { id: 'lmstudio/qwen2.5-vl-7b', providerId: 'lmstudio', modelId: 'qwen2.5-vl-7b', name: 'qwen2.5-vl-7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: true },
 ];
 const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, temperature: 0.2, thinking: 'off', keepAlive: '30m', compactionThreshold: 0.75, maxToolOutputChars: 24000,
-  'approvals.terminal': 'ask', 'approvals.write': 'always', 'approvals.delete': 'ask', 'approvals.network': 'always', 'parallel.maxConcurrency': 4, 'parallel.maxSubagentDepth': 2,
+  'approvals.terminal': 'ask', 'approvals.write': 'always', 'approvals.delete': 'ask', 'approvals.network': 'always', 'parallel.maxConcurrency': 4, 'parallel.maxSubagentDepth': 2, autoClarify: true, 'routing.fast': '', 'routing.coding': '',
   'webSearch.provider': 'duckduckgo', 'webSearch.searxngUrl': 'http://localhost:8888', 'webSearch.apiKey': '', 'webSearch.maxResults': 6,
   'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
   mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
-  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
+  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
   'models.disabled': [], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '' };
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
@@ -54,9 +54,10 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
   const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
   if (m.type === 'ready') {
     send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models,
-      skills: [{ name: 'release', description: 'Cut a release end to end', source: '.localpilot/skills' }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: '~/.claude/skills' }],
+      skills: [{ name: 'release', description: 'Cut a release end to end', source: '.localpilot/skills', used: 4 }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: '~/.claude/skills' }],
+      learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
-      mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5 }, sessions: 12, welcomed: true });
+      mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true });
   }
   if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
     { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },

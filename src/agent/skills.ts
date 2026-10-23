@@ -3,13 +3,16 @@ import * as path from 'path';
 import * as os from 'os';
 import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
+import { builtinAgents } from './builtinAgents';
 
 /**
  * Skills are folders containing a SKILL.md with YAML front-matter (`name`, `description`) and a markdown body
  * of instructions, following the Agent Skills convention used by Claude Code / Copilot.
  * Discovery locations (in priority order):
  *   <workspace>/.localpilot/skills/*, <workspace>/.claude/skills/*, <workspace>/.github/skills/*,
- *   ~/.localpilot/skills/*, ~/.claude/skills/*, ~/.agents/skills/*, plus `localpilot.skillsPaths`.
+ *   ~/.localpilot/skills/*, ~/.claude/skills/*, ~/.agents/skills/*, plus `localpilot.skillsPaths`,
+ *   then the skills bundled with the extension (`<extension>/skills/*`, source "builtin") — a workspace or user
+ *   skill with the same name overrides a bundled one.
  *
  * Subagents are markdown files with front-matter (`name`, `description`, `tools`, `model`) and a body used as
  * the system prompt, discovered in <workspace>/.localpilot/agents, <workspace>/.claude/agents, ~/.localpilot/agents.
@@ -21,7 +24,11 @@ export class SkillManager implements vscode.Disposable {
   readonly onDidChange = this._onDidChange.event;
   private watchers: vscode.FileSystemWatcher[] = [];
 
-  constructor(private readonly log: vscode.LogOutputChannel) {
+  constructor(
+    private readonly log: vscode.LogOutputChannel,
+    /** Folder with the skills shipped inside the extension package. */
+    private readonly builtinDir?: string
+  ) {
     for (const glob of ['**/.localpilot/{skills,agents}/**', '**/.claude/{skills,agents}/**', '**/.github/skills/**']) {
       const w = vscode.workspace.createFileSystemWatcher(glob);
       const reload = () => void this.refresh();
@@ -70,6 +77,9 @@ export class SkillManager implements vscode.Disposable {
     agentDirs.push({ dir: path.join(home, '.claude', 'agents'), source: 'user' });
     for (const p of getConfig().skillsPaths) {
       skillDirs.push({ dir: p.replace(/^~/, home), source: 'user' });
+    }
+    if (this.builtinDir && getConfig().builtinSkills) {
+      skillDirs.push({ dir: this.builtinDir, source: 'builtin' });
     }
 
     for (const { dir, source } of skillDirs) {
@@ -190,40 +200,4 @@ export function parseFrontMatter(raw: string): { meta: Record<string, unknown>; 
     meta[kv[1]] = v;
   }
   return { meta, body: m[2] };
-}
-
-function builtinAgents(): SubagentDefinition[] {
-  return [
-    {
-      name: 'explore',
-      source: 'builtin',
-      description: 'Fast read-only codebase exploration and Q&A. Use to locate files, understand structure, or answer questions without editing.',
-      tools: ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics'],
-      systemPrompt:
-        'You are a read-only code exploration agent. Investigate the workspace with search and read tools to answer the question precisely. Never edit files or run commands. Return a concise report with exact file paths and line numbers, and quote the relevant code.',
-    },
-    {
-      name: 'coder',
-      source: 'builtin',
-      description: 'Implements a well-specified code change end to end (edit files, run build/tests, fix errors).',
-      systemPrompt:
-        'You are an implementation agent. Make the requested change with minimal, idiomatic edits, verify with diagnostics/tests when possible, and report exactly what you changed (files, functions) and anything left undone.',
-    },
-    {
-      name: 'reviewer',
-      source: 'builtin',
-      description: 'Reviews code or a diff for bugs, security issues and style problems without editing.',
-      tools: ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'run_command'],
-      systemPrompt:
-        'You are a meticulous code reviewer. Identify correctness bugs, security vulnerabilities (OWASP top 10), race conditions, missing error handling and style inconsistencies. Rank findings by severity with file:line references and concrete fixes. Do not edit files.',
-    },
-    {
-      name: 'researcher',
-      source: 'builtin',
-      description: 'Researches a topic on the web and summarises findings with sources.',
-      tools: ['web_search', 'web_fetch', 'read_file'],
-      systemPrompt:
-        'You are a research agent. Use web_search then web_fetch the most relevant results. Cross-check at least two sources. Return a structured summary with citations (URLs) and note anything uncertain.',
-    },
-  ];
 }

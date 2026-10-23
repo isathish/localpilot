@@ -20,6 +20,10 @@ permalink: /docs/shortcuts/
 |---|---|
 | <kbd>Enter</kbd> | Send |
 | <kbd>⇧Enter</kbd> | New line |
+| <kbd>⌘⇧Enter</kbd> / <kbd>Ctrl⇧Enter</kbd> | Send in a **new tab** (another agent, in parallel) |
+| <kbd>Alt↑</kbd> / <kbd>Alt↓</kbd> | Previous / next chat tab |
+| <kbd>Alt1</kbd> … <kbd>Alt9</kbd> | Jump to tab N |
+| <kbd>←</kbd> / <kbd>→</kbd> / <kbd>Delete</kbd> / <kbd>F2</kbd> (tab focused) | Move between tabs / close / rename |
 | <kbd>/</kbd> | Slash command picker |
 | <kbd>@</kbd> | Mention picker |
 | <kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Tab</kbd> | Navigate / accept picker |
@@ -31,4 +35,4 @@ permalink: /docs/shortcuts/
 
 ## Commands (Command Palette → "LocalPilot")
 
-Open Chat · Open Chat in Editor · New Chat · Show Chats… · Chat Actions… · Run Tasks in Parallel… · Stop All Agents · Select Model · Refresh Models · Settings · Welcome / Setup · Manage Model Providers… · Toggle Inline Completions · Reload Skills, Subagents & MCP Servers · Open Memory Notes · Clear Memory Notes… · Install 'localpilot' Command in PATH · Edit with LocalPilot (inline) · Generate Terminal Command… · Capture Screenshot to Chat · Attach Image to Chat… · Explain / Fix / Refactor / Generate Tests / Add Documentation · Fix Errors in File · Generate Commit Message · Keep All / Undo All Agent Changes · Show Logs
+Open Chat · Open Chat in Editor · New Chat · Show Chats… · Chat Actions… · Run Tasks in Parallel… · Stop All Agents · Select Model · Refresh Models · Settings · Welcome / Setup · Manage Model Providers… · Toggle Inline Completions · Reload Skills, Subagents & MCP Servers · Open Memory Notes · Clear Memory Notes… · Clear Chat History… · Install 'localpilot' Command in PATH · Edit with LocalPilot (inline) · Generate Terminal Command… · Capture Screenshot to Chat · Attach Image to Chat… · Explain / Fix / Refactor / Generate Tests / Add Documentation · Fix Errors in File · Generate Commit Message · Keep All / Undo All Agent Changes · Show Logs
