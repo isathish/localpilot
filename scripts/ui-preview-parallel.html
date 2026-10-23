@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+:root{
+--vscode-sideBar-background:#181818;--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-widget-border:#2b2b2b;
+--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-focusBorder:#0078d4;
+--vscode-input-background:#1f1f1f;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c;--vscode-editor-background:#1f1f1f;
+--vscode-textCodeBlock-background:#2a2a2a;--vscode-toolbar-hoverBackground:#2a2d2e;--vscode-list-activeSelectionBackground:#04395e;--vscode-list-activeSelectionForeground:#fff;
+--vscode-textLink-foreground:#4daafc;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#cca700;--vscode-testing-iconPassed:#73c991;
+--vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;
+--vscode-scrollbarSlider-background:rgba(121,121,121,.4);--vscode-chat-requestBackground:#1f1f1f;--vscode-chat-requestBorder:#2b2b2b;--vscode-editorWidget-background:#202020;
+--vscode-input-placeholderForeground:#8b8b8b;--vscode-diffEditor-insertedLineBackground:rgba(46,160,67,.2);--vscode-diffEditor-removedLineBackground:rgba(248,81,73,.2);
+}
+body{margin:0}
+</style>
+<link rel="stylesheet" href="../media/chat.css"></head>
+<body>
+<div id="app">
+  <div id="progress" class="progress hidden"></div>
+  <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs"></nav><button id="btnNewTab" class="ib"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0"><svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
+  <main id="messages"></main>
+  <div id="approvals"></div>
+  <footer id="composer">
+    <div id="tasks" class="panel hidden"><button id="tasksToggle" class="panel-head"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="tasksLabel">Tasks</span><span class="spacer"></span><span id="tasksMeter" class="meter"><i></i></span></button><ul id="tasksList" class="panel-body"></ul></div>
+    <div id="changes" class="panel hidden"><div class="panel-head"><button id="changesToggle" class="panel-toggle"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="changesLabel"></span></button><span class="spacer"></span><button class="btn ghost" data-a="undoAll"><svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg><span class="long">Reject all</span></button><button class="btn primary" data-a="keepAll"><svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg><span class="long">Accept all</span></button></div><ul id="changesList" class="panel-body hidden"></ul></div>
+    <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
+    <div id="box" class="box">
+      <div class="ctx-row"><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
+      <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)"></textarea>
+      <div class="row">
+        <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <span class="spacer"></span>
+        <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
+        <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
+        <button id="btnSend" class="send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
+        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
+      </div>
+    </div>
+  </footer>
+<script>
+// Mock controller with real multi-session semantics: a session store, selectSession → 'session',
+// 'send' starts a simulated stream, and window.sim lets tests drive interleaved streams.
+const sessions = new Map(); let active = null;
+const models=[{id:'ollama/qwen2.5-coder:7b',providerId:'ollama',name:'qwen2.5-coder:7b',contextWindow:32768,supportsTools:true}];
+const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
+const list=()=>[...sessions.values()].map(s=>({id:s.id,title:s.title,updatedAt:s.updatedAt,messageCount:s.messages.length,mode:s.mode}));
+const running=new Set();
+function create(title){ const s={id:'s'+(sessions.size+1),title,mode:'agent',model:'',contextTokens:0,compactions:0,messages:[],updatedAt:Date.now()}; sessions.set(s.id,s); send({type:'sessions',sessions:list()}); return s; }
+function activate(s){ active=s; send({type:'session',session:s}); }
+window.sim={
+  start(id,prompt){ const s=sessions.get(id); s.messages.push({role:'user',content:prompt}); s.updatedAt=Date.now(); running.add(id); send({type:'sessions',sessions:list()}); if(active&&active.id===id){send({type:'session',session:s});} send({type:'running',sessionId:id,running:true}); send({type:'event',event:{sessionId:id,type:'status',payload:'Thinking…'}}); },
+  tool(id,callId,name,args,result){ send({type:'event',event:{sessionId:id,type:'tool_start',payload:{id:callId,name,args}}}); const s=sessions.get(id); const last=s.messages[s.messages.length-1]; if(last.role==='assistant'&&last.toolCalls){last.toolCalls.push({id:callId,name,arguments:JSON.stringify(args)});} else {s.messages.push({role:'assistant',content:'',toolCalls:[{id:callId,name,arguments:JSON.stringify(args)}]});} s.messages.push({role:'tool',toolCallId:callId,content:result}); send({type:'event',event:{sessionId:id,type:'tool_end',payload:{id:callId,name,isError:false,durationMs:12,content:result}}}); },
+  text(id,t){ send({type:'event',event:{sessionId:id,type:'assistant_delta',payload:t}}); const s=sessions.get(id); s._text=(s._text||'')+t; },
+  end(id){ const s=sessions.get(id); s.messages.push({role:'assistant',content:s._text||''}); s._text=''; running.delete(id); send({type:'event',event:{sessionId:id,type:'turn_end',payload:{text:'',contextTokens:1200}}}); send({type:'running',sessionId:id,running:false}); send({type:'sessions',sessions:list()}); },
+  sessions, get active(){return active;}, running
+};
+window.acquireVsCodeApi=()=>({postMessage(m){
+  if(m.type==='ready'){ const a=create('Add input validation'); create('Write tests for utils'); send({type:'init',sessions:list(),activeSessionId:a.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[],platform:'darwin'}); activate(a); }
+  else if(m.type==='selectSession'){ activate(sessions.get(m.id)); }
+  else if(m.type==='newSession'){ activate(create('New chat')); }
+  else if(m.type==='send'){ window.sim.start(m.sessionId,m.text); setTimeout(()=>{window.sim.text(m.sessionId,'Working on it…'); window.sim.end(m.sessionId);},400); }
+  else if(m.type==='stop'){ window.sim.end(m.sessionId); }
+  else if(m.type==='requestOpenFiles'){ send({type:'openFiles',files:[]}); }
+  window.__posted=(window.__posted||[]).concat([m]);
+}});
+</script>
+<script src="../media/chat.js"></script>
+</body></html>

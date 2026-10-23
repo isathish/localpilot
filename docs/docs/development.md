@@ -26,6 +26,16 @@ npm install
 
 Press <kbd>F5</kbd> to launch an Extension Development Host.
 
+### UI harnesses
+
+The webviews can be opened in a plain browser with mock data for quick visual checks in light/dark and at any width — no Extension Host needed:
+
+| File | What it shows |
+|---|---|
+| `scripts/ui-preview.html` | Chat view with a full sample transcript (steps, diff and terminal cards, approvals, tasks, changes). |
+| `scripts/ui-preview-parallel.html` | Chat view with a stateful mock controller; `window.sim.start/tool/text/end(sessionId, …)` drives several sessions streaming at once to check tabs and background runs. |
+| `scripts/settings-preview.html?section=models&light=1` | Settings / setup wizard (`?page=setup`) with mocked providers, probe results, hardware profile, installed models, catalog and jobs. |
+
 ## Extension API
 
 `activate()` returns a small API for other extensions and scripts:

@@ -212,4 +212,23 @@ suite('LocalPilot end-to-end (real local model)', () => {
     });
     assert.match(txt, /Hello from the greeting skill/);
   });
+
+  test('parallel subagents: run_parallel_subagents fans out real child agents concurrently and merges their reports', async function () {
+    this.timeout(300_000);
+    await fs.writeFile(path.join(root, 'ALPHA.md'), '# Alpha\n\nThe alpha module handles authentication tokens.\n', 'utf8');
+    await fs.writeFile(path.join(root, 'BETA.md'), '# Beta\n\nThe beta module handles billing invoices.\n', 'utf8');
+    const id = await api.runPrompt(
+      'Call the run_parallel_subagents tool exactly once with two tasks, both using agent "explore": task 1 prompt "Read ALPHA.md and report in one sentence what the alpha module handles", task 2 prompt "Read BETA.md and report in one sentence what the beta module handles". Then summarise both reports in two lines.',
+      'agent'
+    );
+    await waitForRun(id, 290_000);
+    const session = api.getSession(id)!;
+    const fan = session.messages.find((m) => m.role === 'tool' && m.toolName === 'run_parallel_subagents');
+    assert.ok(fan, `run_parallel_subagents was not executed: ${transcript(id)}`);
+    assert.match(fan.content, /## Task 1 \(explore\)/, 'first child report present');
+    assert.match(fan.content, /## Task 2 \(explore\)/, 'second child report present');
+    assert.match(fan.content, /authentication/i, `child 1 read ALPHA.md: ${fan.content.slice(0, 400)}`);
+    assert.match(fan.content, /billing|invoice/i, `child 2 read BETA.md: ${fan.content.slice(0, 400)}`);
+    assert.match(finalAnswer(id), /auth|billing|invoice/i, `parent summarised the reports: ${finalAnswer(id)}`);
+  });
 });
