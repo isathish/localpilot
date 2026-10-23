@@ -350,6 +350,11 @@ class Renderer {
     process.stdout.write(`  ${amber('☰')} ${bold(`Plan ${done}/${items.length}`)}\n${items.map((t) => `    ${t.status === 'done' ? green('✓') : t.status === 'in_progress' ? amber('▸') : t.status === 'skipped' ? dim('–') : dim('○')} ${t.status === 'done' ? dim(t.title) : t.title}`).join('\n')}\n`);
   }
   note(s: string): void {
+    if (this.quiet) {
+      // --print / piped: stdout must carry the answer only, so advisory notes go to stderr.
+      process.stderr.write(`  ${dim(s)}\n`);
+      return;
+    }
     this.clearStatus();
     this.flushPending();
     this.breakLine();

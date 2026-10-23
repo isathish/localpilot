@@ -311,21 +311,25 @@ async function agentLoopE2E() {
     tools.registerAll(createAgentTools(runner, skills, () => {}, async () => true));
 
     const mkSession = (model: string): Session => ({ id: 's1', title: '', createdAt: 0, updatedAt: 0, model, messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [] });
+    // Hidden steering messages (clarification snapshots, completion nudges) are plumbing, not transcript shape.
+    const visible = (s: Session) => s.messages.filter((m) => !m.meta?.hidden);
     const events: AgentEvent[] = [];
     const s = mkSession('mock/native');
     const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'go' }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true });
     check('native: final text returned', out === 'Final answer after tools.', out);
     check('native: tool calls executed in parallel', events.filter((e) => e.type === 'tool_end').length === 3 && peak >= 2, { peak });
     check('native: identical read-only call served from cache', executions === 2 && events.some((e) => e.type === 'tool_end' && (e.payload as { cached?: boolean }).cached), { executions });
-    check('native: transcript shape user→assistant(tools)→tool×3→assistant', s.messages.map((m) => m.role).join(',') === 'user,assistant,tool,tool,tool,assistant', s.messages.map((m) => m.role));
-    check('native: tool results carry call ids', s.messages[2].toolCallId === 'a' && s.messages[3].toolCallId === 'b' && s.messages[4].toolCallId === 'c');
+    const v1 = visible(s);
+    check('native: transcript shape user→assistant(tools)→tool×3→assistant', v1.map((m) => m.role).join(',') === 'user,assistant,tool,tool,tool,assistant', v1.map((m) => m.role));
+    check('native: tool results carry call ids', v1[2].toolCallId === 'a' && v1[3].toolCallId === 'b' && v1[4].toolCallId === 'c');
     check('native: turn_end emitted', events.at(-1)?.type === 'turn_end');
 
     const s2 = mkSession('mock/textonly');
     const out2 = await runner.run({ session: s2, userMessage: { role: 'user', content: 'go' }, emit: () => {}, signal: new AbortController().signal, requestApproval: async () => true });
+    const v2 = visible(s2);
     check('text-protocol: fallback works for models without tool support', out2 === 'Text-protocol done.', out2);
-    check('text-protocol: tool result fed back as user message', s2.messages[2].role === 'user' && s2.messages[2].content.includes('ECHO:three'), s2.messages[2]);
-    check('text-protocol: tool_call block stripped from assistant text', s2.messages[1].content === 'Checking.' && s2.messages[1].toolCalls?.length === 1);
+    check('text-protocol: tool result fed back as user message', v2[2].role === 'user' && v2[2].content.includes('ECHO:three'), v2[2]);
+    check('text-protocol: tool_call block stripped from assistant text', v2[1].content === 'Checking.' && v2[1].toolCalls?.length === 1);
 
     // Cancellation
     const s3 = mkSession('mock/native');

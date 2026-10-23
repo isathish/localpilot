@@ -16,7 +16,8 @@ module.exports = {
   workspace: {
     workspaceFolders: undefined,
     getConfiguration: () => ({
-      get: (k, d) => (k === 'providers' && process.env.LP_MOCK_URL ? [{ id: 'mock', type: 'openai', baseUrl: process.env.LP_MOCK_URL }] : k === 'approvals.terminal' ? 'always' : d),
+      // autoClarify off: the smoke prompts ("go") are deliberately terse and the agent-loop checks assert the exact transcript shape.
+      get: (k, d) => (k === 'providers' && process.env.LP_MOCK_URL ? [{ id: 'mock', type: 'openai', baseUrl: process.env.LP_MOCK_URL }] : k === 'approvals.terminal' ? 'always' : k === 'autoClarify' ? false : d),
       update: async () => {},
     }),
     onDidChangeConfiguration: () => new Disposable(),
