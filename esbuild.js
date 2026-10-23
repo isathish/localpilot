@@ -23,30 +23,37 @@ const esbuildProblemMatcherPlugin = {
 	},
 };
 
+const version = require('./package.json').version;
+
+const common = {
+	bundle: true,
+	format: 'cjs',
+	minify: production,
+	sourcemap: !production,
+	sourcesContent: false,
+	platform: 'node',
+	target: 'node18',
+	logLevel: 'silent',
+	define: { __LOCALPILOT_VERSION__: JSON.stringify(version) },
+	plugins: [esbuildProblemMatcherPlugin],
+};
+
 async function main() {
-	const ctx = await esbuild.context({
-		entryPoints: [
-			'src/extension.ts'
-		],
-		bundle: true,
-		format: 'cjs',
-		minify: production,
-		sourcemap: !production,
-		sourcesContent: false,
-		platform: 'node',
-		outfile: 'dist/extension.js',
-		external: ['vscode'],
-		logLevel: 'silent',
-		plugins: [
-			/* add to the end of plugins array */
-			esbuildProblemMatcherPlugin,
-		],
+	// 1. The extension: `vscode` is provided by the host.
+	const ext = await esbuild.context({ ...common, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js', external: ['vscode'] });
+	// 2. The `localpilot` CLI: same agent core, `vscode` resolved to the Node shim, runnable with plain node.
+	const cli = await esbuild.context({
+		...common,
+		entryPoints: ['src/cli/main.ts'],
+		outfile: 'dist/cli.js',
+		alias: { vscode: './src/cli/vscodeShim.ts' },
+		banner: { js: '#!/usr/bin/env node' },
 	});
 	if (watch) {
-		await ctx.watch();
+		await Promise.all([ext.watch(), cli.watch()]);
 	} else {
-		await ctx.rebuild();
-		await ctx.dispose();
+		await Promise.all([ext.rebuild(), cli.rebuild()]);
+		await Promise.all([ext.dispose(), cli.dispose()]);
 	}
 }
 

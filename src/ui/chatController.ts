@@ -45,6 +45,7 @@ export type FromWebview =
   | { type: 'insertCode'; code: string }
   | { type: 'applyCodeToFile'; code: string; path?: string }
   | { type: 'attachActive' }
+  | { type: 'attachRef'; ref: string }
   | { type: 'pickAttachment' }
   | { type: 'compactNow'; sessionId: string }
   | { type: 'clearSession'; sessionId: string }
@@ -264,6 +265,10 @@ export class ChatController implements vscode.Disposable {
         await ed.edit((b) => b.replace(full, msg.code));
         return;
       }
+      case 'attachRef':
+        // Special context chip (e.g. @terminal) added from a command outside the webview.
+        this.broadcast({ type: 'toast', level: 'info', text: `attach:@${msg.ref.replace(/^@/, '')}` });
+        return;
       case 'attachActive':
       case 'pickAttachment':
         return; // handled by the view (needs the session's local attachment list)

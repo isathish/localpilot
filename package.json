@@ -249,9 +249,33 @@
       },
       {
         "command": "localpilot.installCli",
-        "title": "Install 'localpilot' Command in PATH",
+        "title": "Install 'localpilot' CLI in PATH",
         "category": "LocalPilot",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "localpilot.openTerminal",
+        "title": "Open LocalPilot Terminal",
+        "category": "LocalPilot",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "localpilot.explainTerminal",
+        "title": "Explain Terminal Output",
+        "category": "LocalPilot",
+        "icon": "$(question)"
+      },
+      {
+        "command": "localpilot.fixTerminal",
+        "title": "Fix Failed Command",
+        "category": "LocalPilot",
+        "icon": "$(wrench)"
+      },
+      {
+        "command": "localpilot.attachTerminal",
+        "title": "Add Terminal Output to Chat",
+        "category": "LocalPilot",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "localpilot.openMemory",
@@ -437,6 +461,11 @@
           "command": "localpilot.openWelcome",
           "when": "view == localpilot.chatView",
           "group": "9_logs@0"
+        },
+        {
+          "command": "localpilot.openTerminal",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage@1"
         }
       ],
       "view/item/context": [
@@ -547,6 +576,18 @@
         {
           "command": "localpilot.terminalCommand",
           "group": "localpilot"
+        },
+        {
+          "command": "localpilot.explainTerminal",
+          "group": "localpilot@1"
+        },
+        {
+          "command": "localpilot.fixTerminal",
+          "group": "localpilot@2"
+        },
+        {
+          "command": "localpilot.attachTerminal",
+          "group": "localpilot@3"
         }
       ],
       "explorer/context": [
@@ -874,6 +915,16 @@
           "default": true,
           "order": 0,
           "markdownDescription": "Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Welcome / Setup*."
+        },
+        "localpilot.terminal.runInIntegratedTerminal": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the agent's `run_command` calls in a visible **LocalPilot Agent** terminal (via shell integration) so you can watch them live. Falls back to a hidden process when the shell has no integration or when disabled."
+        },
+        "localpilot.terminal.reveal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the LocalPilot Agent terminal (without stealing focus) when the agent runs a command."
         }
       }
     },
@@ -943,7 +994,16 @@
           }
         ]
       }
-    ]
+    ],
+    "terminal": {
+      "profiles": [
+        {
+          "id": "localpilot.terminalProfile",
+          "title": "LocalPilot",
+          "icon": "hubot"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

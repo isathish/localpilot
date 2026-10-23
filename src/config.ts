@@ -44,6 +44,7 @@ export interface LocalPilotConfig {
   keepAlive: string;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
+  terminal: { runInIntegratedTerminal: boolean; reveal: boolean };
   /** `provider/model` ids hidden from pickers and routing. */
   disabledModels: string[];
   /** Offer to install Ollama + a starter model when no local model is found. */
@@ -100,6 +101,10 @@ export function getConfig(): LocalPilotConfig {
     keepAlive: c.get<string>('keepAlive', '30m'),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
     showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
+    terminal: {
+      runInIntegratedTerminal: c.get<boolean>('terminal.runInIntegratedTerminal', true),
+      reveal: c.get<boolean>('terminal.reveal', true),
+    },
     disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
     autoSetupModels: c.get<boolean>('models.autoSetup', true),
     routing: {

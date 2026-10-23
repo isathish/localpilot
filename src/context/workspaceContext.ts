@@ -134,8 +134,13 @@ export class WorkspaceContext implements vscode.Disposable {
   }
 
   /** Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. */
+  /** Supplies the last terminal command + output for `@terminal` (set by the extension; absent in the CLI). */
+  terminalContext?: () => string;
+
   async readAttachment(ref: string): Promise<string> {
     switch (ref) {
+      case 'terminal':
+        return this.terminalContext?.() ?? '<terminal_output>Terminal context is only available inside VS Code.</terminal_output>';
       case 'workspace':
         return `<workspace_tree root="${this.root ?? ''}">\n${await this.fileTree()}\n</workspace_tree>`;
       case 'problems': {

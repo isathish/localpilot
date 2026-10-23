@@ -262,6 +262,11 @@
       field('approvals.delete', 'Deleting files', '<code>delete_path</code> — moves to the OS trash when possible.', 'seg', { options: APPROVAL }),
       field('approvals.network', 'Network & MCP', '<code>web_search</code>, <code>web_fetch</code> and tools from MCP servers.', 'seg', { options: APPROVAL })
     ));
+    sec.appendChild(el('h2', 'sub', 'Terminal'));
+    sec.appendChild(card(
+      field('terminal.runInIntegratedTerminal', 'Run commands in a visible terminal', 'The agent\'s <code>run_command</code> calls run in a branded <b>LocalPilot Agent</b> terminal through shell integration, so you can watch them live. Falls back to a hidden process when the shell has no integration.', 'toggle'),
+      field('terminal.reveal', 'Reveal the terminal when a command runs', 'Shows the panel without stealing focus from the editor.', 'toggle')
+    ));
     sec.appendChild(el('h2', 'sub', 'Parallelism & context'));
     sec.appendChild(card(
       field('parallel.maxConcurrency', 'Max concurrent tools / subagents', 'Read-only tools and parallel subagents run concurrently up to this limit.', 'number', { min: 1, max: 16 }),
@@ -405,7 +410,8 @@
     const grid = el('div', 'card');
     const tools = [
       ['Run setup again', 'Detect servers, pick a model and an approval preset.', 'localpilot.openWelcome', I.rocket],
-      ['Install the <code>localpilot</code> CLI', 'Start agents from any terminal: <code>localpilot "fix the tests"</code>.', 'localpilot.installCli', I.bolt],
+      ['Open a LocalPilot terminal', 'A branded terminal with the <code>localpilot</code> CLI already on PATH — run the agent right there: <code>localpilot "fix the tests"</code>.', 'localpilot.openTerminal', I.bolt],
+      ['Install the <code>localpilot</code> CLI', 'Put <code>localpilot</code> on your PATH for every terminal (also outside VS Code).', 'localpilot.installCli', I.wrench],
       ['Open settings.json', 'Edit every <code>localpilot.*</code> key by hand.', state.scope === 'workspace' ? 'workbench.action.openWorkspaceSettingsFile' : 'workbench.action.openSettingsJson', I.wrench],
       ['VS Code settings UI', 'The same settings in the built-in editor.', 'workbench.action.openSettings', I.wrench, ['@ext:localpilot.localpilot-agent']],
       ['Show logs', 'Provider requests, tool runs and errors.', 'localpilot.showLogs', I.book],

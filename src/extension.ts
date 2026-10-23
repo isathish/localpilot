@@ -21,7 +21,9 @@ import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { ChatViewProvider } from './ui/chatViewProvider';
-import { installCli, registerUriHandler } from './ui/cli';
+import { cliShim, installCli, registerUriHandler } from './ui/cli';
+import { TerminalManager } from './terminal/terminalManager';
+import { setIntegratedTerminalRunner } from './tools/terminal';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { LocalModelChatProvider } from './ui/lmProvider';
@@ -45,6 +47,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp);
+
+  // --- Terminal integration ------------------------------------------------------------------
+  const terminals = new TerminalManager(context, log);
+  context.subscriptions.push(terminals, new vscode.Disposable(() => setIntegratedTerminalRunner(undefined)));
+  setIntegratedTerminalRunner(terminals);
+  workspace.terminalContext = () => terminals.format(terminals.lastExecution());
+  // A private bin dir with the `localpilot` shim so LocalPilot terminals have the CLI on PATH without installing it.
+  void (async () => {
+    try {
+      const bin = vscode.Uri.joinPath(context.globalStorageUri, 'bin');
+      await vscode.workspace.fs.createDirectory(bin);
+      const shim = cliShim(context);
+      const file = vscode.Uri.joinPath(bin, process.platform === 'win32' ? 'localpilot.cmd' : 'localpilot');
+      await vscode.workspace.fs.writeFile(file, Buffer.from(process.platform === 'win32' ? shim.windows : shim.posix, 'utf8'));
+      if (process.platform !== 'win32') {
+        await (await import('fs/promises')).chmod(file.fsPath, 0o755);
+      }
+      const sep = process.platform === 'win32' ? ';' : ':';
+      terminals.cliEnv = { ...shim.env, PATH: `${bin.fsPath}${sep}${process.env.PATH ?? ''}` };
+    } catch (e) {
+      log.warn(`could not prepare the localpilot CLI shim: ${String(e)}`);
+    }
+  })();
+  context.subscriptions.push(
+    vscode.window.registerTerminalProfileProvider('localpilot.terminalProfile', {
+      provideTerminalProfile: () => new vscode.TerminalProfile(terminals.profileOptions()),
+    })
+  );
 
   tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
@@ -357,7 +387,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     vscode.window.showInformationMessage(`LocalPilot: ${skills.allSkills.length} skills, ${skills.allAgents.length} subagents, ${mcp.status.reduce((n, s) => n + s.tools, 0)} MCP tools`);
   });
   cmd('localpilot.showLogs', () => log.show());
-  cmd('localpilot.installCli', () => installCli());
+  cmd('localpilot.installCli', () => installCli(context));
+  cmd('localpilot.openTerminal', () => terminals.openCliTerminal(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath));
+  // Terminal context-menu actions: hand the last command + output of the clicked terminal to a new chat.
+  const terminalAction = (title: string, instruction: string, mode: 'agent' | 'ask', preferFailure: boolean) => async (terminal?: unknown) => {
+    const t = terminal && typeof terminal === 'object' && 'name' in terminal ? (terminal as vscode.Terminal) : vscode.window.activeTerminal;
+    const rec = (preferFailure ? terminals.lastFailure() : undefined) ?? terminals.lastExecution(t);
+    if (!rec) {
+      const pick = await vscode.window.showWarningMessage('No terminal command captured yet. Shell integration must be enabled (it is by default for bash, zsh, fish and PowerShell); run a command in the terminal and try again.', 'Learn more');
+      if (pick) {
+        void vscode.env.openExternal(vscode.Uri.parse('https://code.visualstudio.com/docs/terminal/shell-integration'));
+      }
+      return;
+    }
+    view.reveal();
+    const s = store.create(getConfig().defaultModel, mode);
+    s.title = `${title}: ${rec.command.slice(0, 40)}`;
+    await controller.handle({ type: 'selectSession', id: s.id });
+    void controller.send(s.id, `${terminals.format(rec)}\n\n${instruction}`);
+  };
+  cmd('localpilot.explainTerminal', terminalAction('Explain', 'Explain what this terminal output means. If it is an error, say what caused it and how to fix it.', 'ask', false));
+  cmd('localpilot.fixTerminal', terminalAction('Fix', 'This command failed. Find the cause in the workspace, fix it (edit files or suggest the corrected command), then re-run the command with run_command to verify.', 'agent', true));
+  cmd('localpilot.attachTerminal', async (terminal?: unknown) => {
+    const t = terminal && typeof terminal === 'object' && 'name' in terminal ? (terminal as vscode.Terminal) : vscode.window.activeTerminal;
+    if (!terminals.lastExecution(t)) {
+      return void vscode.window.showWarningMessage('No terminal command captured yet in this terminal.');
+    }
+    view.reveal();
+    await controller.handle({ type: 'attachRef', ref: 'terminal' });
+  });
   cmd('localpilot.openMemory', async () => {
     const pick = await vscode.window.showQuickPick(
       [

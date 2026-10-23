@@ -41,57 +41,74 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
   );
 }
 
-/** Writes a `localpilot` shim into ~/.local/bin (or %USERPROFILE%\bin on Windows) and explains PATH setup. */
-export async function installCli(): Promise<void> {
+/** Shell shim + env for the `localpilot` command. Exported so the LocalPilot terminal profile can put it on PATH without installing. */
+export function cliShim(ctx: vscode.ExtensionContext): { posix: string; windows: string; env: Record<string, string> } {
   const codeBin = detectCodeBinary();
+  const cliJs = vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'cli.js').fsPath;
+  const electron = process.execPath; // the extension host binary runs plain Node when ELECTRON_RUN_AS_NODE=1
+  const posix = `#!/usr/bin/env bash
+# LocalPilot CLI — the LocalPilot coding agent in your terminal. \`localpilot --help\` for usage.
+# Runs dist/cli.js from the installed LocalPilot extension with node (or VS Code's bundled runtime).
+set -eu
+CLI="\${LOCALPILOT_CLI:-}"
+if [ -z "$CLI" ] || [ ! -f "$CLI" ]; then
+  CLI="${cliJs}"
+  if [ ! -f "$CLI" ]; then
+    # Extension was updated: pick the newest installed LocalPilot version.
+    for d in "$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions" "$HOME/.cursor/extensions" "$HOME/.vscode-oss/extensions" "$HOME/.vscodium/extensions"; do
+      [ -d "$d" ] || continue
+      c=$(ls -d "$d"/${EXT_ID}-* 2>/dev/null | sort -V | tail -n1)
+      if [ -n "$c" ] && [ -f "$c/dist/cli.js" ]; then CLI="$c/dist/cli.js"; break; fi
+    done
+  fi
+fi
+[ -f "$CLI" ] || { echo "localpilot: cannot find the LocalPilot extension (dist/cli.js). Reinstall from the VS Code Marketplace." >&2; exit 1; }
+export LOCALPILOT_CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"
+if command -v node >/dev/null 2>&1; then
+  exec node "$CLI" "$@"
+fi
+export ELECTRON_RUN_AS_NODE=1
+exec "${electron}" "$CLI" "$@"
+`;
+  const windows = `@echo off\r
+rem LocalPilot CLI — the LocalPilot coding agent in your terminal. localpilot --help for usage.\r
+setlocal\r
+set "CLI=%LOCALPILOT_CLI%"\r
+if not exist "%CLI%" set "CLI=${cliJs.replace(/\\/g, '\\\\')}"\r
+if not exist "%CLI%" for /f "delims=" %%D in ('dir /b /ad /o-n "%USERPROFILE%\\.vscode\\extensions\\${EXT_ID}-*" 2^>nul') do if not defined FOUND if exist "%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" ( set "CLI=%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" & set FOUND=1 )\r
+if not exist "%CLI%" ( echo localpilot: cannot find the LocalPilot extension ^(dist\\cli.js^). Reinstall from the VS Code Marketplace. 1>&2 & exit /b 1 )\r
+if not defined LOCALPILOT_CODE_BIN set "LOCALPILOT_CODE_BIN=${codeBin.replace(/\\/g, '\\\\')}"\r
+where node >nul 2>nul && ( node "%CLI%" %* & exit /b %ERRORLEVEL% )\r
+set ELECTRON_RUN_AS_NODE=1\r
+"${electron.replace(/\\/g, '\\\\')}" "%CLI%" %*\r
+`;
+  return { posix, windows, env: { LOCALPILOT_CLI: cliJs, LOCALPILOT_CODE_BIN: codeBin } };
+}
+
+/** Writes the `localpilot` shim into ~/.local/bin (or %USERPROFILE%\bin on Windows) and explains PATH setup. */
+export async function installCli(ctx: vscode.ExtensionContext): Promise<void> {
+  const { posix, windows } = cliShim(ctx);
   const home = os.homedir();
   if (process.platform === 'win32') {
     const dir = path.join(home, 'bin');
     await fs.mkdir(dir, { recursive: true });
     const file = path.join(dir, 'localpilot.cmd');
-    await fs.writeFile(
-      file,
-      `@echo off\r\nsetlocal EnableDelayedExpansion\r\nset "MODE=agent"\r\nset "PAR="\r\n:parse\r\nif "%~1"=="" goto run\r\nif "%~1"=="--ask" (set "MODE=ask" & shift & goto parse)\r\nif "%~1"=="--plan" (set "MODE=plan" & shift & goto parse)\r\nif "%~1"=="--parallel" (set "PAR=1" & shift & goto parse)\r\nif "%~1"=="--settings" ( "${codeBin}" --open-url "vscode://${EXT_ID}/settings" "%CD%" & exit /b )\r\nif "%~1"=="--setup" ( "${codeBin}" --open-url "vscode://${EXT_ID}/setup" "%CD%" & exit /b )\r\nset "PROMPT=!PROMPT! %~1"\r\nshift\r\ngoto parse\r\n:run\r\nif "!PROMPT!"=="" ( "${codeBin}" --open-url "vscode://${EXT_ID}/new?mode=!MODE!" "%CD%" & exit /b )\r\nfor /f "delims=" %%E in ('powershell -NoProfile -Command "[uri]::EscapeDataString(\\"!PROMPT:~1!\\")"') do set "ENC=%%E"\r\n"${codeBin}" --open-url "vscode://${EXT_ID}/run?mode=!MODE!&parallel=!PAR!&prompt=!ENC!" "%CD%"\r\n`
-    );
-    void vscode.window.showInformationMessage(`Installed ${file}. Add ${dir} to your PATH, then run: localpilot "describe a task"`);
+    await fs.writeFile(file, windows);
+    const pick = await vscode.window.showInformationMessage(`Installed ${file}. Add ${dir} to your PATH, then run: localpilot "describe a task"`, 'Open LocalPilot terminal');
+    if (pick) {
+      await vscode.commands.executeCommand('localpilot.openTerminal');
+    }
     return;
   }
   const dir = path.join(home, '.local', 'bin');
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, 'localpilot');
-  const script = `#!/usr/bin/env bash
-# LocalPilot CLI — forwards a task to the LocalPilot VS Code extension in the current folder.
-# Usage: localpilot [--ask|--plan] [--parallel] [--file path ...] "task description"
-#        localpilot            (open a new chat)
-#        localpilot --settings | --setup   (open LocalPilot Settings / the setup wizard)
-set -euo pipefail
-CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"
-MODE=agent; PAR=0; FILES=""; PROMPT=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --ask) MODE=ask;; --plan) MODE=plan;; --agent) MODE=agent;;
-    --settings) exec "\${LOCALPILOT_CODE_BIN:-${codeBin}}" --open-url "vscode://${EXT_ID}/settings" "$PWD";;
-    --setup) exec "\${LOCALPILOT_CODE_BIN:-${codeBin}}" --open-url "vscode://${EXT_ID}/setup" "$PWD";;
-    --parallel|-p) PAR=1;;
-    --file|-f) shift; FILES="\${FILES:+$FILES,}$1";;
-    -h|--help) sed -n '2,5p' "$0"; exit 0;;
-    *) PROMPT="\${PROMPT:+$PROMPT }$1";;
-  esac; shift
-done
-urlencode() { python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$1" 2>/dev/null || node -e 'console.log(encodeURIComponent(process.argv[1]))' "$1"; }
-if [ -z "$PROMPT" ]; then
-  exec "$CODE_BIN" --open-url "vscode://${EXT_ID}/new?mode=$MODE" "$PWD"
-fi
-exec "$CODE_BIN" --open-url "vscode://${EXT_ID}/run?mode=$MODE&parallel=$PAR&files=$(urlencode "$FILES")&prompt=$(urlencode "$PROMPT")" "$PWD"
-`;
-  await fs.writeFile(file, script, { mode: 0o755 });
+  await fs.writeFile(file, posix, { mode: 0o755 });
   const onPath = (process.env.PATH ?? '').split(':').includes(dir);
   const msg = `Installed ${file}.${onPath ? '' : ` Add it to your PATH: export PATH="$HOME/.local/bin:$PATH"`} Try: localpilot "add tests for src/utils.ts"`;
-  const pick = await vscode.window.showInformationMessage(msg, 'Open in terminal');
+  const pick = await vscode.window.showInformationMessage(msg, 'Open LocalPilot terminal');
   if (pick) {
-    const t = vscode.window.createTerminal('LocalPilot CLI');
-    t.show();
-    t.sendText(onPath ? 'localpilot --help' : `export PATH="$HOME/.local/bin:$PATH" && localpilot --help`);
+    await vscode.commands.executeCommand('localpilot.openTerminal');
   }
 }
 

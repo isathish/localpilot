@@ -47,13 +47,13 @@ const SETTING_KEYS = [
   'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
-  'mcpServers', 'skillsPaths', 'memory.enabled', 'systemPromptAppend', 'showWelcomeOnStartup',
+  'mcpServers', 'skillsPaths', 'memory.enabled', 'systemPromptAppend', 'showWelcomeOnStartup', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
 const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
-  'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
+  'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings',
 ]);
 

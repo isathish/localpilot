@@ -1,7 +1,17 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as os from 'os';
+import { getConfig } from '../config';
 import { Tool } from '../types';
+
+/** Runner that executes in a visible, branded VS Code terminal (set by the extension; absent in the CLI). */
+export interface IntegratedTerminalRunner {
+  run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean): Promise<{ output: string; exitCode: number | undefined } | undefined>;
+}
+let integrated: IntegratedTerminalRunner | undefined;
+export function setIntegratedTerminalRunner(r: IntegratedTerminalRunner | undefined): void {
+  integrated = r;
+}
 
 const DANGEROUS = /\b(rm\s+-rf\s+[\/~]|sudo\b|mkfs|dd\s+if=|:\(\)\s*\{|shutdown|reboot|git\s+push\s+--force|git\s+reset\s+--hard|chmod\s+-R\s+777)/i;
 
@@ -47,6 +57,15 @@ export const runCommandTool: Tool = {
     }
 
     const timeoutMs = Math.min(600, Number(args.timeout_seconds ?? 120)) * 1000;
+    const termCfg = getConfig().terminal;
+    if (integrated && termCfg.runInIntegratedTerminal) {
+      // Visible, branded terminal via shell integration; the user sees the command run live.
+      const r = await integrated.run(ctx.sessionId, command, cwd, ctx.signal, timeoutMs, termCfg.reveal).catch(() => undefined);
+      if (r) {
+        const cleaned = r.output.trim();
+        return { content: `$ ${command}\n${cleaned || '(no output)'}\n[exit code ${r.exitCode ?? 'null'}]`, isError: r.exitCode !== 0, data: { exitCode: r.exitCode ?? null, terminal: true } };
+      }
+    }
     const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : process.env.SHELL ?? '/bin/zsh';
     return new Promise((resolve) => {
       const child = cp.spawn(shell, process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
