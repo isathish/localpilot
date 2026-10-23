@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.2 — 2026-10-23
 ### Changed
 - Extension identifier is now `localpilot.localpilot-agent` with Marketplace display name “LocalPilot Agent” (the previous name was already taken on the Marketplace). Settings, commands and the `@localpilot` chat participant are unchanged.
 - Website: light and dark themes (follows the OS by default, manual toggle persisted, no flash on load), higher-contrast text colours, larger base type and improved line-height; per-build stylesheet cache-busting.
