@@ -13,7 +13,8 @@ suite('LocalPilot Markdown reader', () => {
     this.timeout(20_000);
     const html = await vscode.commands.executeCommand<string>('markdown.api.render', '# Title\n\nSome `code` and a list:\n\n- one\n- two\n\n```ts\nconst x: number = 1;\n```\n');
     assert.ok(typeof html === 'string' && /<h1[^>]*>Title<\/h1>/.test(html), html);
-    assert.ok(/<code[^>]*>code<\/code>/.test(html) && /<li>one<\/li>/.test(html));
+    // VS Code's engine adds data-line / code-line attributes to block elements.
+    assert.ok(/<code[^>]*>code<\/code>/.test(html) && /<li[^>]*>one<\/li>/.test(html), html);
     assert.ok(/<pre[^>]*>/.test(html) && /language-ts|hljs/.test(html), 'fenced code keeps its language');
   });
 
