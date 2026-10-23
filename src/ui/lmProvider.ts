@@ -91,10 +91,18 @@ function convertMessage(m: vscode.LanguageModelChatRequestMessage): ChatMessage 
   const role = m.role === vscode.LanguageModelChatMessageRole.User ? 'user' : 'assistant';
   let text = '';
   const toolCalls: ChatMessage['toolCalls'] = [];
+  const images: string[] = [];
   let toolResult: ChatMessage | undefined;
   for (const part of m.content) {
     if (part instanceof vscode.LanguageModelTextPart) {
       text += part.value;
+    } else if (isDataPart(part)) {
+      // LanguageModelDataPart (VS Code ≥1.105) — forwarded to vision models as base64 images.
+      if (part.mimeType.startsWith('image/')) {
+        images.push(Buffer.from(part.data).toString('base64'));
+      } else {
+        text += `\n[attachment ${part.mimeType}: ${Buffer.from(part.data).toString('utf8').slice(0, 20_000)}]`;
+      }
     } else if (part instanceof vscode.LanguageModelToolCallPart) {
       toolCalls.push({ id: part.callId, name: part.name, arguments: JSON.stringify(part.input ?? {}) });
     } else if (part instanceof vscode.LanguageModelToolResultPart) {
@@ -105,5 +113,10 @@ function convertMessage(m: vscode.LanguageModelChatRequestMessage): ChatMessage 
   if (toolResult) {
     return toolResult;
   }
-  return { role, content: text, toolCalls: toolCalls.length ? toolCalls : undefined };
+  return { role, content: text, toolCalls: toolCalls.length ? toolCalls : undefined, images: images.length ? images : undefined };
+}
+
+function isDataPart(part: unknown): part is { mimeType: string; data: Uint8Array } {
+  const p = part as { mimeType?: unknown; data?: unknown };
+  return typeof p?.mimeType === 'string' && p.data instanceof Uint8Array;
 }

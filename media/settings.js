@@ -36,6 +36,7 @@
     { key: 'lmstudio', label: 'LM Studio', sub: 'localhost:1234', cfg: { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' } },
     { key: 'llamacpp', label: 'llama.cpp', sub: 'localhost:8080', cfg: { id: 'llamacpp', type: 'openai', baseUrl: 'http://localhost:8080/v1', displayName: 'llama.cpp server' } },
     { key: 'vllm', label: 'vLLM / Unsloth', sub: 'localhost:8000', cfg: { id: 'vllm', type: 'openai', baseUrl: 'http://localhost:8000/v1', displayName: 'vLLM / Unsloth' } },
+    { key: 'docker', label: 'Docker Model Runner', sub: 'localhost:12434', cfg: { id: 'docker', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' } },
     { key: 'jan', label: 'Jan', sub: 'localhost:1337', cfg: { id: 'jan', type: 'openai', baseUrl: 'http://localhost:1337/v1', displayName: 'Jan' } },
     { key: 'localai', label: 'LocalAI', sub: 'localhost:8080', cfg: { id: 'localai', type: 'openai', baseUrl: 'http://localhost:8080/v1', displayName: 'LocalAI' } },
     { key: 'sglang', label: 'SGLang', sub: 'localhost:30000', cfg: { id: 'sglang', type: 'openai', baseUrl: 'http://localhost:30000/v1', displayName: 'SGLang' } },
@@ -333,7 +334,7 @@
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers (stdio) whose tools become available to the agent. Governed by the Network approval policy.');
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
-    const status = new Map((state.data.mcp || []).map((s) => [s.name, s.tools]));
+    const status = new Map((state.data.mcp || []).map((s) => [s.name, s]));
     const names = Object.keys(servers);
     const list = el('div');
     if (!names.length) { list.appendChild(el('div', 'empty', 'No MCP servers configured. Add one below — for example the filesystem or GitHub server from <code>@modelcontextprotocol</code>.')); }
@@ -341,8 +342,11 @@
       const s = servers[name] || {};
       const open = state.expanded === `mcp:${name}`;
       const c = el('div', `prov ${s.enabled === false ? 'off' : ''}`);
-      const tools = status.get(name);
-      c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc([s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : '<span class="badge err">not connected</span>'}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+      const st = status.get(name);
+      const tools = st && !st.error ? st.tools : undefined;
+      const err = st && st.error;
+      c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc([s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+      if (err && s.enabled !== false) { c.appendChild(el('div', 'prov-result err', `${I.x} ${esc(err)}`)); }
       c.querySelector('.prov-head').onclick = () => { state.expanded = open ? null : `mcp:${name}`; render(); };
       if (open) { c.appendChild(mcpForm(name, s, servers)); }
       list.appendChild(c);
@@ -429,10 +433,15 @@
       c.innerHTML = `<h3>1 · Find your model server</h3><p class="hint">LocalPilot is checking the usual local ports. Start a server if nothing shows up, then check again.</p>`;
       const det = el('div', 'detect');
       const results = state.probe;
-      if (!results) { det.innerHTML = `<div class="srv"><span class="spinner"></span><div class="t"><b>Looking for Ollama, LM Studio, llama.cpp and vLLM…</b></div></div>`; }
+      if (!results) { det.innerHTML = `<div class="srv"><span class="spinner"></span><div class="t"><b>Looking for Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner and model containers…</b></div></div>`; }
       else {
-        for (const r of results) {
-          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${r.ok ? 'ok' : 'err'}"></span><div class="t"><b>${esc(r.displayName)}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${r.ok ? `${r.models.length} model${r.models.length === 1 ? '' : 's'}` : 'not running'}</span>`));
+        // Configured servers and anything reachable are listed; silent well-known ports stay out of the way.
+        for (const r of results.filter((x) => x.ok || x.configured)) {
+          const tag = r.source === 'docker' ? '<span class="tag">Docker</span>' : !r.configured ? '<span class="tag">new</span>' : '';
+          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${r.ok ? 'ok' : 'err'}"></span><div class="t"><b>${esc(r.displayName)}${tag}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${r.ok ? `${r.models.length} model${r.models.length === 1 ? '' : 's'}` : 'not running'}</span>`));
+        }
+        if (state.dmr === 'no-tcp') {
+          det.appendChild(el('div', 'srv', `<span class="dot warn"></span><div class="t"><b>Docker Model Runner</b><span>running, but host access is off — run <code>docker desktop enable model-runner --tcp=12434</code> and check again</span></div>`));
         }
       }
       c.appendChild(det);
@@ -440,7 +449,7 @@
       if (results && !found.length) {
         const help = el('div');
         help.style.marginTop = '14px';
-        help.innerHTML = `<p class="hint"><b>Nothing found yet.</b> Pick one of these — any of them works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
+        help.innerHTML = `<p class="hint"><b>Nothing found yet.</b> Pick one of these — any of them works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
         c.appendChild(help);
       }
       const foot = el('div', 'foot');
@@ -515,7 +524,7 @@
         render();
         break;
       case 'probe':
-        state.probe = m.results; state.busy = false;
+        state.probe = m.results; state.busy = false; state.dmr = m.dockerModelRunner || null;
         for (const r of m.results) { state.tests[r.id] = r; }
         render();
         break;

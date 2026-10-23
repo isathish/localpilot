@@ -7,6 +7,7 @@ import { createAgentTools } from './agent/subagents';
 import { getConfig, onConfigChange, setDefaultModel } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
+import { autoDetectProviders } from './providers/discovery';
 import { ProviderRegistry } from './providers/registry';
 import { SessionStore } from './sessions/sessionStore';
 import { editorTools } from './tools/editor';
@@ -85,9 +86,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   void refreshStatus();
   context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()));
 
+  // Auto-detect running model servers (settings, well-known ports, Docker containers, Docker Model Runner)
+  // and merge new ones into the provider list. Runs at startup and on every "Refresh models".
+  const DMR_HINT_KEY = 'localpilot.dmrHintDismissed';
+  const autoDetect = async (): Promise<void> => {
+    const report = await autoDetectProviders(log).catch((e) => {
+      log.warn(`auto-detect failed: ${String(e)}`);
+      return undefined;
+    });
+    if (!report) {
+      return;
+    }
+    if (report.added.length) {
+      const names = report.added.map((a) => a.displayName ?? a.id).join(', ');
+      const n = report.results.filter((r) => report.added.some((a) => a.baseUrl === r.baseUrl)).reduce((s, r) => s + r.models.length, 0);
+      void vscode.window
+        .showInformationMessage(`LocalPilot found ${names} (${n} model${n === 1 ? '' : 's'}) and added ${report.added.length === 1 ? 'it' : 'them'} to your providers.`, 'Open providers')
+        .then((pick) => pick && vscode.commands.executeCommand('localpilot.openSettings', 'providers'));
+    }
+    if (report.dockerModelRunner === 'no-tcp' && !context.globalState.get(DMR_HINT_KEY)) {
+      void vscode.window
+        .showInformationMessage('Docker Model Runner is running but only reachable from containers. Enable host access on port 12434 so LocalPilot can use its models?', 'Enable', 'Not now', "Don't ask again")
+        .then(async (pick) => {
+          if (pick === 'Enable') {
+            const term = vscode.window.createTerminal({ name: 'LocalPilot · Docker' });
+            term.show(true);
+            term.sendText('docker desktop enable model-runner --tcp=12434');
+            setTimeout(() => void autoDetect(), 8000);
+          } else if (pick === "Don't ask again") {
+            await context.globalState.update(DMR_HINT_KEY, true);
+          }
+        });
+    }
+    const cfg = getConfig();
+    const available = report.results.filter((r) => r.ok && r.enabled).flatMap((r) => r.models);
+    if (cfg.defaultModel && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended) {
+      void vscode.window
+        .showWarningMessage(`Default model "${cfg.defaultModel}" is not available right now; LocalPilot will use ${report.recommended.split('/').pop()} meanwhile.`, 'Make it the default')
+        .then((pick) => pick && setDefaultModel(report.recommended!));
+    }
+    if (report.added.length) {
+      await providers.listModels(true);
+      await controller.handle({ type: 'refreshModels' });
+      void refreshStatus();
+    }
+  };
+  const detection = autoDetect();
+
   // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
   if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
-    void providers.listModels().catch(() => []).then((models) => {
+    void detection.then(() => providers.listModels().catch(() => [])).then((models) => {
       if (settingsPanel.isOpen) {
         return; // the user already opened Settings themselves — don't hijack the panel
       }
@@ -291,6 +339,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
   });
   cmd('localpilot.refreshModels', async () => {
+    await autoDetect();
     await providers.listModels(true);
     await controller.handle({ type: 'refreshModels' });
     void refreshStatus();

@@ -22,6 +22,7 @@ import { WorkspaceContext } from '../src/context/workspaceContext';
 import { createAgentTools } from '../src/agent/subagents';
 import { diffLines } from '../src/agent/changeTracker';
 import { manageTodosTool } from '../src/agent/memory';
+import { parseDockerPorts, providersFromContainers } from '../src/providers/discovery';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -171,6 +172,22 @@ async function pureLogic() {
   check('known-tool filter rejects unknown names', extractTextToolCalls('{"name": "rm_rf", "arguments": {}}', new Set(['write_file'])).calls.length === 0);
   check('prose mentioning {"name": …} is left alone when not a real call', extractTextToolCalls('The schema is {"name": "x"} plus more text', new Set(['write_file'])).calls.length === 0);
   check('parseArgs lenient', parseArgs('{"path": "a"} trailing').path === 'a' && Object.keys(parseArgs('')).length === 0);
+
+  console.log('\n[Docker discovery]');
+  const ports = parseDockerPorts('0.0.0.0:11435->11434/tcp, [::]:11435->11434/tcp, 127.0.0.1:9000->8000/tcp');
+  check('parses docker ps port mappings (first host port per container port)', ports.get(11434) === 11435 && ports.get(8000) === 9000 && ports.size === 2, [...ports]);
+  const found = providersFromContainers([
+    { Image: 'ollama/ollama:latest', Names: 'my-ollama', Ports: '0.0.0.0:11435->11434/tcp' },
+    { Image: 'vllm/vllm-openai:v0.6', Names: 'vllm1', Ports: '0.0.0.0:8001->8000/tcp' },
+    { Image: 'ghcr.io/ggml-org/llama.cpp:server', Names: 'llm', Ports: '0.0.0.0:8081->8080/tcp' },
+    { Image: 'docker/model-runner:latest', Names: 'docker-model-runner', Ports: '0.0.0.0:12434->12434/tcp' },
+    { Image: 'postgres:16', Names: 'db', Ports: '0.0.0.0:5432->5432/tcp' },
+    { Image: 'ollama/ollama', Names: 'no-ports', Ports: '' },
+  ]);
+  check('maps known model-server images to providers and skips others', found.length === 4 && found.every((p) => /^docker-/.test(p.id)), found.map((p) => p.id));
+  check('ollama container → ollama provider on its host port', found[0].type === 'ollama' && found[0].baseUrl === 'http://localhost:11435');
+  check('vllm / llama.cpp containers → OpenAI-compatible /v1', found[1].baseUrl === 'http://localhost:8001/v1' && found[2].baseUrl === 'http://localhost:8081/v1');
+  check('standalone model runner → /engines/v1', found[3].baseUrl === 'http://localhost:12434/engines/v1');
 
   console.log('\n[Context manager]');
   const cm = new ContextManager({ compactionThreshold: 0.75, maxToolOutputChars: 1000 });

@@ -109,6 +109,20 @@ suite('LocalPilot settings & setup', () => {
     }
   });
 
+  test('probeProvider against a live Ollama (skipped when none is running)', async function () {
+    this.timeout(20_000);
+    const r = await probeProvider({ id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' }, true);
+    if (!r.ok) {
+      this.skip();
+    }
+    assert.ok(r.models.length > 0, 'a running Ollama should expose at least one chat model');
+    for (const m of r.models) {
+      assert.ok(m.id.startsWith('ollama/'), m.id);
+      assert.ok(m.contextWindow > 0);
+    }
+    assert.ok(recommendModel(r.models), 'wizard must be able to recommend a model');
+  });
+
   test('probeProvider fails fast and cleanly for unreachable or malformed endpoints', async function () {
     this.timeout(15_000);
     const dead = await probeProvider({ id: 'dead', type: 'openai', baseUrl: 'http://127.0.0.1:9' }, true);

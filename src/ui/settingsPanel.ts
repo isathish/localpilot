@@ -3,9 +3,13 @@ import { MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
 import { DEFAULT_PROVIDERS, getConfig, McpServerConfig } from '../config';
 import { McpManager } from '../mcp/mcpManager';
-import { createProvider, ProviderRegistry } from '../providers/registry';
+import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
+import { ProviderRegistry } from '../providers/registry';
 import { SessionStore } from '../sessions/sessionStore';
 import { ModelInfo, ProviderConfig } from '../types';
+
+export { probeProvider, recommendModel };
+export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
 export type SettingsSection = 'providers' | 'models' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'advanced';
@@ -19,22 +23,9 @@ interface SettingEntry {
   workspaceValue?: unknown;
 }
 
-export interface ProbeResult {
-  id: string;
-  displayName: string;
-  type: ProviderConfig['type'];
-  baseUrl: string;
-  configured: boolean;
-  enabled: boolean;
-  ok: boolean;
-  latencyMs: number;
-  models: Pick<ModelInfo, 'id' | 'name' | 'contextWindow' | 'supportsTools' | 'supportsVision' | 'supportsFim'>[];
-  error?: string;
-}
-
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string }[]; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number }[]; memory: { project: number; global: number }; sessions: number; welcomed: boolean }
-  | { type: 'probe'; results: ProbeResult[] }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string }[]; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number }; sessions: number; welcomed: boolean }
+  | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'busy'; busy: boolean }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
@@ -99,7 +90,8 @@ export class SettingsPanel implements vscode.Disposable {
           void this.pushState();
         }
       }),
-      providers.onDidChange(() => this.panel && void this.pushState())
+      providers.onDidChange(() => this.panel && void this.pushState()),
+      mcp.onDidChange(() => this.panel && void this.pushState())
     );
   }
 
@@ -218,11 +210,9 @@ export class SettingsPanel implements vscode.Disposable {
 
   private async probeAll(): Promise<void> {
     this.post({ type: 'busy', busy: true });
-    const configured = vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
-    const seen = new Set(configured.map((p) => p.baseUrl.replace(/\/+$/, '')));
-    const candidates = [...configured.map((p) => ({ cfg: p, configured: true })), ...DEFAULT_PROVIDERS.filter((d) => !seen.has(d.baseUrl)).map((cfg) => ({ cfg, configured: false }))];
-    const results = await Promise.all(candidates.map(({ cfg, configured: c }) => probeProvider(cfg, c)));
-    this.post({ type: 'probe', results });
+    // Settings + well-known endpoints + Docker containers; nothing is written from here (the wizard merges on finish).
+    const report = await autoDetectProviders(this.log, { write: false });
+    this.post({ type: 'probe', results: report.results, dockerModelRunner: report.dockerModelRunner });
     this.post({ type: 'busy', busy: false });
   }
 
@@ -340,44 +330,4 @@ export function sanitizeProvider(p: ProviderConfig): ProviderConfig {
     out.enabled = false;
   }
   return out;
-}
-
-/** Health-check one provider and list its models, with a hard timeout so an unreachable host never hangs the UI. */
-export async function probeProvider(cfg: ProviderConfig, configured: boolean): Promise<ProbeResult> {
-  const base: ProbeResult = { id: cfg.id, displayName: cfg.displayName || cfg.id, type: cfg.type, baseUrl: cfg.baseUrl, configured, enabled: cfg.enabled !== false, ok: false, latencyMs: 0, models: [] };
-  if (!/^https?:\/\//i.test(cfg.baseUrl)) {
-    return { ...base, error: 'Base URL must start with http:// or https://' };
-  }
-  const started = Date.now();
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 4000);
-  try {
-    const provider = createProvider(cfg);
-    const ok = await provider.healthCheck(ctl.signal);
-    if (!ok) {
-      return { ...base, latencyMs: Date.now() - started, error: 'No response — is the server running?' };
-    }
-    const models = await provider.listModels(ctl.signal);
-    return {
-      ...base,
-      ok: true,
-      latencyMs: Date.now() - started,
-      models: models.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, supportsTools: m.supportsTools, supportsVision: m.supportsVision, supportsFim: m.supportsFim })),
-    };
-  } catch (e) {
-    return { ...base, latencyMs: Date.now() - started, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Recommend a default model for setup: tool-capable coder models first, then by size hint in the name. */
-export function recommendModel(models: ProbeResult['models']): string | undefined {
-  const score = (m: ProbeResult['models'][number]) => {
-    const n = m.name.toLowerCase();
-    const size = /(\d+(?:\.\d+)?)b/.exec(n);
-    const b = size ? parseFloat(size[1]) : 7;
-    return (m.supportsTools ? 10 : 0) + (/coder|devstral|codestral/.test(n) ? 5 : 0) + (/qwen|llama|mistral|gemma|deepseek|gpt-oss/.test(n) ? 2 : 0) + Math.min(b, 32) / 8 - (b > 40 ? 3 : 0) - (/embed|rerank|vision|vl|llava|whisper/.test(n) ? 20 : 0);
-  };
-  return [...models].sort((a, b) => score(b) - score(a))[0]?.id;
 }

@@ -9,6 +9,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Getting Started walkthrough** in VS Code's Welcome page; commands *Manage Model Providers…* and *Clear Memory Notes…*; the Agents view and the chat's "no models" notice link straight to setup/providers.
 
 - Integration tests (`npm test`, real VS Code) covering the settings panel commands, provider probing against an Ollama-style server, input sanitisation and configuration round-trips.
+- MCP client tests that launch a real stdio MCP server and round-trip a tool call, and verify that an un-launchable server fails fast with its error shown in **Settings → MCP servers** ("failed to start" badge with the reason).
+- `@localpilot` / Language Model API: image attachments (`LanguageModelDataPart`) are forwarded to vision models instead of being dropped; non-image attachments are inlined as text.
 - **Real end-to-end tests** against a local Ollama server (skipped when none is running): the agent writes a file through a real tool call, two sessions run **in parallel** and each finishes its own task, and `stop()` aborts a streaming run. Tests run in a fresh temporary workspace folder.
 - **Extension API** (`vscode.extensions.getExtension('localpilot.localpilot-agent').exports`): `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels`, `version` — drive LocalPilot agents from other extensions or scripts.
 
@@ -19,6 +21,7 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ### Changed
 - "Open settings" in the chat and the no-model fallback now open the LocalPilot Settings panel instead of the generic VS Code settings editor.
+- MCP servers that cannot be spawned (bad command, missing `npx`) fail immediately instead of hanging 30 s; on Windows they are launched through the shell so `npx`/`.cmd` launchers resolve.
 - Finishing the setup wizard merges newly detected servers into `localpilot.providers` instead of replacing the list; MCP server entries are validated before being written; the first-run wizard never replaces a Settings panel the user already opened.
 
 ## 0.2.2 — 2026-10-23

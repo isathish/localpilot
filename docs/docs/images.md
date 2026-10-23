@@ -6,7 +6,7 @@ permalink: /docs/images/
 
 ## Ways to attach an image
 
-- **Capture screenshot** — camera button in the composer, <kbd>⌘⌥⇧S</kbd>, or *LocalPilot: Capture Screenshot to Chat*. Pick what to capture:
+- **Capture screenshot** — camera button in the composer, <kbd>⌘⌥⇧S</kbd>, or *LocalPilot: Capture Screenshot to Chat (Area / Window / Screen)*. Pick what to capture:
   - **Selection area** — drag a rectangle (Esc cancels).
   - **This VS Code window** — captured immediately, no interaction.
   - **Pick a window** — click another window (macOS/Linux) or switch to it within 3 s (Windows).
