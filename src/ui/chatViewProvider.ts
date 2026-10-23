@@ -103,40 +103,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <main id="messages" aria-live="polite"></main>
   <div id="approvals"></div>
   <footer id="composer">
-    <div id="tasks" class="tasks hidden">
-      <div class="tasks-head">
-        <button id="tasksToggle" class="changes-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="tasksLabel">Tasks</span></button>
-        <span class="spacer"></span>
-        <span id="tasksMeter" class="tasks-meter"><i></i></span>
-      </div>
-      <ul id="tasksList"></ul>
+    <div id="tasks" class="panel hidden">
+      <button id="tasksToggle" class="panel-head"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="tasksLabel">Tasks</span><span class="spacer"></span><span id="tasksMeter" class="meter"><i></i></span></button>
+      <ul id="tasksList" class="panel-body"></ul>
     </div>
-    <div id="changes" class="changes hidden">
-      <div class="changes-head">
-        <button id="changesToggle" class="changes-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="changesLabel">0 files changed</span></button>
+    <div id="changes" class="panel hidden">
+      <div class="panel-head">
+        <button id="changesToggle" class="panel-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="changesLabel">0 files changed</span></button>
         <span class="spacer"></span>
-        <button class="btn" data-a="undoAll">Undo all</button><button class="btn primary" data-a="keepAll">Keep all</button>
+        <button class="btn ghost" data-a="undoAll">Reject all</button><button class="btn primary" data-a="keepAll">Accept all</button>
       </div>
-      <ul id="changesList" class="hidden"></ul>
+      <ul id="changesList" class="panel-body hidden"></ul>
     </div>
     <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
     <div id="box" class="box">
-      <div id="chips" class="chips"></div>
-      <textarea id="input" rows="1" placeholder="Ask LocalPilot — @ to add files, / for commands" aria-label="Chat input"></textarea>
+      <div class="ctx-row">
+        <button id="btnAddCtx" class="ctxbtn" title="Add context (@)"><span class="at">@</span><span class="lbl">Add context</span></button>
+        <div id="chips" class="chips"></div>
+      </div>
+      <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)" aria-label="Chat input"></textarea>
       <div class="row">
-        <button id="btnAttach" class="ib" title="Add active file or selection as context">${svg('<path d="M10.5 4.5l-5 5a1.8 1.8 0 0 0 2.5 2.5l5.5-5.5a3.2 3.2 0 0 0-4.5-4.5L3.5 7.5"/>')}</button>
-        <button id="btnAttachPick" class="ib" title="Attach files…">${svg('<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/>')}</button>
-        <button id="btnImage" class="ib" title="Attach image… (or paste / drop an image)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
-        <button id="btnShot" class="ib" title="Capture screenshot (select a region)">${svg('<path d="M2.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h1.5M10.5 2.5H12A1.5 1.5 0 0 1 13.5 4v1.5M13.5 10.5V12a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.5 13.5H4A1.5 1.5 0 0 1 2.5 12v-1.5"/><circle cx="8" cy="8" r="2"/>')}</button>
-        <div class="picker" title="Mode"><select id="mode" aria-label="Mode"><option value="agent">Agent</option><option value="ask">Ask</option><option value="plan">Plan</option></select></div>
-        <div id="modelPicker" class="picker model" title="Model"><select id="model" aria-label="Model"></select></div>
+        <button id="modeBtn" class="pick" title="Mode"><span id="modeIcon" class="ico"></span><span id="modeLabel">Agent</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
+        <button id="modelBtn" class="pick model" title="Model"><span id="modelLabel">Auto</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <span class="spacer"></span>
+        <button id="btnImage" class="ib" title="Attach image (or paste / drop)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
-        <button id="btnSend" class="send" title="Send (Enter)">${svg('<path d="M3 8h9M8.5 4l4 4-4 4"/>')}</button>
-        <button id="btnStop" class="send stop hidden" title="Stop">${svg('<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>')}</button>
+        <button id="btnSend" class="send" title="Send (Enter)">${svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>')}</button>
+        <button id="btnStop" class="send stop hidden" title="Stop (Esc)">${svg('<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>')}</button>
       </div>
     </div>
   </footer>
+  <div id="popover" class="popover hidden" role="menu"></div>
   <div id="toasts"></div>
 </div>
 <script nonce="${nonce}" src="${media('chat.js')}"></script>

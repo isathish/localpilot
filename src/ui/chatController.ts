@@ -19,9 +19,10 @@ export type ToWebview =
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
   | { type: 'approvalResolved'; id: string }
   | { type: 'running'; sessionId: string; running: boolean }
-  | { type: 'changes'; sessionId: string; files: { path: string; fsPath: string; kind: 'create' | 'modify' }[] }
+  | { type: 'changes'; sessionId: string; files: { path: string; fsPath: string; kind: 'create' | 'modify' }[]; checkpoints: number[] }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'openFiles'; files: string[] }
+  | { type: 'draft'; text: string }
   | { type: 'focusInput' }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
@@ -56,7 +57,9 @@ export type FromWebview =
   | { type: 'requestOpenFiles' }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
-  | { type: 'showDiff'; sessionId: string; fsPath: string };
+  | { type: 'showDiff'; sessionId: string; fsPath: string }
+  | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
+  | { type: 'copyText'; text: string };
 
 interface Sink {
   post(msg: ToWebview): void;
@@ -132,7 +135,7 @@ export class ChatController implements vscode.Disposable {
 
   private pushChanges(sessionId: string): void {
     const files = this.tracker.forSession(sessionId).map((c) => ({ path: vscode.workspace.asRelativePath(c.fsPath), fsPath: c.fsPath, kind: c.original === undefined ? ('create' as const) : ('modify' as const) }));
-    this.broadcast({ type: 'changes', sessionId, files });
+    this.broadcast({ type: 'changes', sessionId, files, checkpoints: this.tracker.checkpoints(sessionId) });
   }
 
   isRunning(sessionId: string): boolean {
@@ -347,6 +350,30 @@ export class ChatController implements vscode.Disposable {
       case 'showDiff':
         await this.tracker.showDiff(msg.sessionId, msg.fsPath);
         return;
+      case 'copyText':
+        await vscode.env.clipboard.writeText(msg.text);
+        return;
+      case 'restoreCheckpoint': {
+        const s = this.store.get(msg.sessionId);
+        if (!s || this.isRunning(s.id)) {
+          this.broadcast({ type: 'toast', level: 'error', text: 'Stop the running agent before restoring a checkpoint' });
+          return;
+        }
+        const target = s.messages[msg.messageIndex];
+        if (!target || target.role !== 'user') {
+          return;
+        }
+        const reverted = await this.tracker.restoreToTurn(s.id, msg.messageIndex);
+        const prompt = target.content.replace(/<[a-z_]+[^>]*>[\s\S]*?<\/[a-z_]+>\s*/g, '').replace(/\n\n\[\d+ images? attached\]$/, '').trim();
+        s.messages = s.messages.slice(0, msg.messageIndex);
+        s.contextTokens = 0;
+        this.store.save(s);
+        this.broadcast({ type: 'session', session: s });
+        this.pushChanges(s.id);
+        this.broadcast({ type: 'draft', text: prompt });
+        this.broadcast({ type: 'toast', level: 'info', text: reverted ? `Restored checkpoint — reverted ${reverted} file${reverted === 1 ? '' : 's'}` : 'Restored checkpoint' });
+        return;
+      }
     }
   }
 
@@ -407,6 +434,7 @@ export class ChatController implements vscode.Disposable {
 
     const abort = new AbortController();
     this.runs.set(sessionId, abort);
+    this.tracker.beginTurn(sessionId, session.messages.length);
     this.runStatus.set(sessionId, 'Starting…');
     this.broadcast({ type: 'running', sessionId, running: true });
     this._onDidChangeRuns.fire();

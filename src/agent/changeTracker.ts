@@ -17,6 +17,9 @@ const SCHEME = 'localpilot-original';
  */
 export class ChangeTracker implements vscode.Disposable {
   private changes = new Map<string, TrackedChange>(); // key: sessionId|fsPath
+  /** Per-session, per-turn snapshots of files before the first edit in that turn (for "Restore checkpoint"). */
+  private turns = new Map<string, Map<number, Map<string, string | undefined>>>();
+  private currentTurn = new Map<string, number>();
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
   private readonly addedDeco: vscode.TextEditorDecorationType;
@@ -58,19 +61,86 @@ export class ChangeTracker implements vscode.Disposable {
   async beforeChange(fsPath: string, sessionId: string): Promise<void> {
     const sid = ChangeTracker.rootSession(sessionId);
     const key = `${sid}|${fsPath}`;
-    if (this.changes.has(key)) {
+    const turn = this.currentTurn.get(sid);
+    const needTurnSnap = turn !== undefined && !this.turns.get(sid)?.get(turn)?.has(fsPath);
+    if (this.changes.has(key) && !needTurnSnap) {
       return;
     }
-    let original: string | undefined;
+    let current: string | undefined;
     try {
       const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fsPath);
-      original = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8');
+      current = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8');
     } catch {
-      original = undefined;
+      current = undefined;
     }
-    this.changes.set(key, { sessionId: sid, fsPath, original, changedAt: Date.now() });
+    if (needTurnSnap) {
+      const byTurn = this.turns.get(sid) ?? new Map();
+      const files = byTurn.get(turn!) ?? new Map<string, string | undefined>();
+      files.set(fsPath, current);
+      byTurn.set(turn!, files);
+      this.turns.set(sid, byTurn);
+    }
+    if (!this.changes.has(key)) {
+      this.changes.set(key, { sessionId: sid, fsPath, original: current, changedAt: Date.now() });
+      this._onDidChange.fire();
+      setTimeout(() => this.decorateVisible(), 300);
+    }
+  }
+
+  /** Mark the start of a user turn (index of the user message) so edits can be rolled back to it. */
+  beginTurn(sessionId: string, turn: number): void {
+    this.currentTurn.set(ChangeTracker.rootSession(sessionId), turn);
+  }
+
+  /** Which turns of a session have file snapshots (i.e. are restorable checkpoints). */
+  checkpoints(sessionId: string): number[] {
+    return [...(this.turns.get(ChangeTracker.rootSession(sessionId))?.keys() ?? [])].sort((a, b) => a - b);
+  }
+
+  /** Revert every file touched in `turn` or later to its content at the start of the earliest such turn. */
+  async restoreToTurn(sessionId: string, turn: number): Promise<number> {
+    const sid = ChangeTracker.rootSession(sessionId);
+    const byTurn = this.turns.get(sid);
+    if (!byTurn) {
+      return 0;
+    }
+    const earliest = new Map<string, string | undefined>();
+    for (const t of [...byTurn.keys()].sort((a, b) => a - b)) {
+      if (t < turn) {
+        continue;
+      }
+      for (const [fsPath, content] of byTurn.get(t)!) {
+        if (!earliest.has(fsPath)) {
+          earliest.set(fsPath, content);
+        }
+      }
+      byTurn.delete(t);
+    }
+    let n = 0;
+    for (const [fsPath, content] of earliest) {
+      const uri = vscode.Uri.file(fsPath);
+      try {
+        if (content === undefined) {
+          await vscode.workspace.fs.delete(uri, { useTrash: true });
+        } else {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), content);
+          await vscode.workspace.applyEdit(edit);
+          await doc.save();
+        }
+        n++;
+        const tracked = this.changes.get(`${sid}|${fsPath}`);
+        if (tracked && tracked.original === content) {
+          this.changes.delete(`${sid}|${fsPath}`);
+        }
+      } catch (e) {
+        this.log.error(`checkpoint restore failed for ${fsPath}: ${String(e)}`);
+      }
+    }
     this._onDidChange.fire();
-    setTimeout(() => this.decorateVisible(), 300);
+    this.decorateVisible();
+    return n;
   }
 
   forSession(sessionId: string): TrackedChange[] {

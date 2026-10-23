@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+:root{
+--vscode-sideBar-background:#181818;--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-widget-border:#2b2b2b;
+--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-focusBorder:#0078d4;
+--vscode-input-background:#1f1f1f;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c;--vscode-editor-background:#1f1f1f;
+--vscode-textCodeBlock-background:#2a2a2a;--vscode-toolbar-hoverBackground:#2a2d2e;--vscode-list-activeSelectionBackground:#04395e;--vscode-list-activeSelectionForeground:#fff;
+--vscode-textLink-foreground:#4daafc;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#cca700;--vscode-testing-iconPassed:#73c991;
+--vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;
+--vscode-scrollbarSlider-background:rgba(121,121,121,.4);--vscode-chat-requestBackground:#1f1f1f;--vscode-chat-requestBorder:#2b2b2b;--vscode-editorWidget-background:#202020;
+--vscode-input-placeholderForeground:#8b8b8b;--vscode-diffEditor-insertedLineBackground:rgba(46,160,67,.2);--vscode-diffEditor-removedLineBackground:rgba(248,81,73,.2);
+}
+body{width:420px;margin:0 auto}
+</style>
+<link rel="stylesheet" href="../media/chat.css"></head>
+<body>
+<div id="app">
+  <div id="progress" class="progress hidden"></div>
+  <nav id="tabs" class="tabs hidden"></nav>
+  <main id="messages"></main>
+  <div id="approvals"></div>
+  <footer id="composer">
+    <div id="tasks" class="panel hidden"><button id="tasksToggle" class="panel-head"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="tasksLabel">Tasks</span><span class="spacer"></span><span id="tasksMeter" class="meter"><i></i></span></button><ul id="tasksList" class="panel-body"></ul></div>
+    <div id="changes" class="panel hidden"><div class="panel-head"><button id="changesToggle" class="panel-toggle"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="changesLabel"></span></button><span class="spacer"></span><button class="btn ghost" data-a="undoAll">Reject all</button><button class="btn primary" data-a="keepAll">Accept all</button></div><ul id="changesList" class="panel-body hidden"></ul></div>
+    <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
+    <div id="box" class="box">
+      <div class="ctx-row"><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
+      <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)"></textarea>
+      <div class="row">
+        <button id="modeBtn" class="pick"><span id="modeIcon" class="ico"></span><span id="modeLabel">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="modelBtn" class="pick model"><span id="modelLabel">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <span class="spacer"></span>
+        <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
+        <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
+        <button id="btnSend" class="send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
+        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
+      </div>
+    </div>
+  </footer>
+  <div id="popover" class="popover hidden"></div>
+  <div id="toasts"></div>
+</div>
+<script>
+const listeners=[];
+window.acquireVsCodeApi=()=>({postMessage(m){
+  const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
+  if(m.type==='ready'){
+    const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true}];
+    send({type:'init',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[],agents:[],running:['s2']});
+    const oldT="def roll_dice(notation):\n    m = re.match(r'(\\d+)d(\\d+)', notation)\n    if not m:\n        raise ValueError('bad')\n    count, sides = int(m[1]), int(m[2])";
+    const newT="def roll_dice(notation: str) -> int:\n    \"\"\"Roll dice such as '3d6+2', 'd20' or '2d10 - 1'.\"\"\"\n    m = re.fullmatch(r'\\s*(\\d*)\\s*d\\s*(\\d+)\\s*([+-]\\s*\\d+)?\\s*', notation, re.I)\n    if not m:\n        raise ValueError(f'Invalid dice notation: {notation!r}')\n    count = int(m.group(1) or 1)\n    sides = int(m.group(2))";
+    const session={id:'s1',title:'Make dice parser friendlier',mode:'agent',model:'',contextTokens:9800,compactions:0,
+      todos:[{id:'1',title:'Read dice.py and tests',status:'done'},{id:'2',title:'Rewrite parser with a single regex',status:'done'},{id:'3',title:'Run tests and fix failures',status:'in_progress'},{id:'4',title:'Update README examples',status:'pending'}],
+      messages:[
+        {role:'user',content:'Make the dice notation parser more user friendly — allow spaces, a bare d6, and better errors.'},
+        {role:'assistant',content:'',thinking:'The parser uses re.match with a strict pattern. I should allow optional count, whitespace, modifiers, and case-insensitivity, then raise a descriptive error.',toolCalls:[{id:'a',name:'read_file',arguments:'{"path":"dice.py"}'},{id:'b',name:'read_file',arguments:'{"path":"tests/test_dice.py"}'},{id:'c',name:'grep_search',arguments:'{"query":"roll_dice"}'}]},
+        {role:'tool',toolCallId:'a',content:'File: dice.py (24 lines)\n    1 | import random\n    2 | import re'},
+        {role:'tool',toolCallId:'b',content:'File: tests/test_dice.py (40 lines)'},
+        {role:'tool',toolCallId:'c',content:'dice.py:4: def roll_dice(notation):\nmain.py:9: total = roll_dice(dice_notation)'},
+        {role:'assistant',content:'',toolCalls:[{id:'d',name:'edit_file',arguments:JSON.stringify({path:'dice.py',old_text:oldT,new_text:newT})},{id:'e',name:'run_command',arguments:'{"command":"python -m pytest -q"}'}]},
+        {role:'tool',toolCallId:'d',content:'Edited dice.py at line 4.'},
+        {role:'tool',toolCallId:'e',content:'$ python -m pytest -q\n......                                                                   [100%]\n6 passed in 0.12s\n[exit code 0]'},
+        {role:'assistant',content:'Simplified the parser with a single regex:\n\n- `d6` now defaults to **one** die\n- spaces are ignored, matching is case-insensitive\n- invalid input raises a descriptive `ValueError`\n\n```python\nroll_dice("3d6+2")   # 3 dice, +2\nroll_dice("D20")     # one d20\n```\n\nAll 6 tests pass. Want me to update the README examples next?'},
+      ]};
+    send({type:'session',session});
+    send({type:'changes',sessionId:'s1',files:[{path:'dice.py',fsPath:'/x/dice.py',kind:'modify'}],checkpoints:[0]});
+    setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal'}),50);
+  }
+}});
+</script>
+<script src="../media/chat.js"></script>
+</body></html>

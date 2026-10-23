@@ -2,6 +2,12 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Changed
+- **Chat UI redesigned** in the style of Cursor / Claude Code: custom Agent/Ask/Plan picker and searchable model picker (with *Auto*), an **@ Add context** menu (files, active selection, @workspace/@problems/@git/@editors, images, screenshots), consecutive read/search tools grouped as *Explored codebase · N files, M searches*, **diff cards** for edits with +/− counts and inline line diff, **terminal cards** for commands with exit codes, Claude-style permission prompts with *Allow once / Allow for session / Deny* and Y/A/N keys, hover actions on messages, prompt history (↑/↓), Esc to stop, ⌘I to add context, and a greeting-based empty state.
+- **Restore checkpoint** on any user message: reverts files changed since that turn, truncates the conversation and puts the prompt back in the composer (per-turn snapshots in the change tracker).
+- Changes bar renamed to *Accept all / Reject all*; new panel styling for Tasks and Changes.
+
 ## 0.1.5 — 2026-10-23
 ### Changed
 - Minimum VS Code version lowered from 1.140 to **1.104** — the oldest release with the finalized Language Model provider API (`vscode.lm.registerLanguageModelChatProvider`) that LocalPilot depends on. Fixes “not compatible with the current version of Visual Studio Code” when installing on 1.1xx builds.
