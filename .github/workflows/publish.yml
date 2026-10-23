@@ -1,0 +1,57 @@
+name: Publish to Marketplace
+
+# Publishes an already-released VSIX to the VS Code Marketplace and/or Open VSX.
+# Run manually after setting the VSCE_PAT (and optionally OVSX_PAT) repository secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose VSIX to publish (e.g. v0.1.1). Defaults to the latest release.
+        required: false
+      target:
+        description: Where to publish
+        type: choice
+        default: both
+        options: [marketplace, openvsx, both]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve release and download VSIX
+        id: rel
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName); fi
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "localpilot-$VERSION.vsix" --pattern SHA256SUMS.txt
+          sha256sum -c --ignore-missing SHA256SUMS.txt
+          echo "file=localpilot-$VERSION.vsix" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to VS Code Marketplace
+        if: (github.event.inputs.target == 'marketplace' || github.event.inputs.target == 'both')
+        run: |
+          if [ -z "$VSCE_PAT" ]; then echo "::error::VSCE_PAT secret is not set. Create a PAT with 'Marketplace > Manage' scope at https://dev.azure.com and add it under Settings > Secrets > Actions."; exit 1; fi
+          npx @vscode/vsce publish --packagePath "${{ steps.rel.outputs.file }}"
+          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot"
+
+      - name: Publish to Open VSX
+        if: (github.event.inputs.target == 'openvsx' || github.event.inputs.target == 'both')
+        run: |
+          if [ -z "$OVSX_PAT" ]; then echo "::warning::OVSX_PAT secret is not set; skipping Open VSX."; exit 0; fi
+          npx ovsx publish "${{ steps.rel.outputs.file }}" -p "$OVSX_PAT"
+          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://open-vsx.org/extension/localpilot/localpilot"

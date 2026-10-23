@@ -49,3 +49,5 @@ nav:
     url: /docs/troubleshooting/
   - title: Development
     url: /docs/development/
+  - title: Publishing
+    url: /docs/publishing/
