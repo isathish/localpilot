@@ -1,9 +1,14 @@
 name: Release
 
-# A release happens whenever main carries a package.json version that has no tag yet: bump the version
-# (npm run release -- patch, or edit package.json + CHANGELOG), push, and this workflow tags vX.Y.Z, builds,
-# tests, packages the VSIX, creates the GitHub Release and publishes to the Marketplace / Open VSX.
-# Pushing a v*.*.* tag by hand or running it manually for an existing tag still works.
+# How a release happens
+#   1. main carries a package.json version that has no vX.Y.Z tag yet (npm run release -- patch,
+#      the "Prepare release" workflow, or a hand edit of package.json + CHANGELOG.md), or
+#   2. someone pushes a v*.*.* tag / runs this workflow manually.
+# prepare  decides and validates metadata (versions agree, changelog section has entries)
+# verify   type-checks, lints, runs smoke + Extension Host tests and packages the VSIX
+# publish  only then tags the commit, creates the GitHub Release with the changelog section as notes
+#          and publishes to the VS Code Marketplace and Open VSX. A failed publish fails the run;
+#          re-run "Publish to Marketplace" for that tag to retry without a new version.
 on:
   push:
     branches: [main]
@@ -11,8 +16,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to release (e.g. v0.1.0)
-        required: true
+        description: Existing tag to (re)release, e.g. v0.2.0. Leave empty to release the untagged version on main.
+        required: false
 
 permissions:
   contents: write
@@ -29,83 +34,84 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
       tag: ${{ steps.decide.outputs.tag }}
       version: ${{ steps.decide.outputs.version }}
+      sha: ${{ steps.decide.outputs.sha }}
+      tag_exists: ${{ steps.decide.outputs.tag_exists }}
+      previous_tag: ${{ steps.decide.outputs.previous_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
+      - name: Check version metadata
+        run: node scripts/check-version.js
       - name: Compare package.json version with existing tags
         id: decide
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+          SHA=$(git rev-parse HEAD)
+          if [ -n "${{ github.event.inputs.tag }}" ] || [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${{ github.event.inputs.tag || github.ref_name }}"
             if [ "${TAG#v}" != "$PKG_VERSION" ]; then
               echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"; exit 1
             fi
             echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
           else
             TAG="v$PKG_VERSION"
             if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-              echo "::notice::$TAG already exists — nothing to release (bump the version in package.json to release)."
+              echo "::notice::$TAG already exists, nothing to release. Bump the version (npm run release -- patch, or Actions → Prepare release) to publish a new one."
               echo "release=false" >> "$GITHUB_OUTPUT"
+              echo "tag_exists=true" >> "$GITHUB_OUTPUT"
             else
-              echo "::notice::package.json is $PKG_VERSION and $TAG does not exist yet — releasing."
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git tag -a "$TAG" -m "LocalPilot $TAG"
-              git push origin "$TAG"
+              echo "::notice::package.json is $PKG_VERSION and $TAG does not exist yet. Releasing after verification."
               echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "tag_exists=false" >> "$GITHUB_OUTPUT"
             fi
           fi
+          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREV" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Build, package & publish
+  verify:
+    name: Build, test & package
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
-    env:
-      VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
-
-      - name: Release metadata
-        id: meta
-        run: |
-          echo "version=${{ needs.prepare.outputs.version }}" >> "$GITHUB_OUTPUT"
-          echo "tag=${{ needs.prepare.outputs.tag }}" >> "$GITHUB_OUTPUT"
-
-      - name: Build & test
-        run: |
-          npm run compile
-          npm run smoke
-          xvfb-run -a npm test
-
+      - name: Type-check, lint, bundle
+        run: npm run compile
+      - name: Offline smoke tests
+        run: npm run smoke
+      - name: Extension Host tests
+        run: xvfb-run -a npm test
       - name: Package VSIX
         run: |
-          npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out "localpilot-${{ steps.meta.outputs.version }}.vsix"
-          cp "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix
-          sha256sum "localpilot-${{ steps.meta.outputs.version }}.vsix" localpilot.vsix > SHA256SUMS.txt
-
-      - name: Extract changelog section
-        id: notes
+          V="${{ needs.prepare.outputs.version }}"
+          npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out "localpilot-$V.vsix"
+          cp "localpilot-$V.vsix" localpilot.vsix
+          sha256sum "localpilot-$V.vsix" localpilot.vsix > SHA256SUMS.txt
+          unzip -p "localpilot-$V.vsix" extension/package.json | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s); if(p.version!==process.argv[1]){console.error("VSIX carries "+p.version+", expected "+process.argv[1]); process.exit(1)}})' "$V"
+      - name: Write release notes
         run: |
-          V="${{ steps.meta.outputs.version }}"
+          V="${{ needs.prepare.outputs.version }}"
+          TAG="${{ needs.prepare.outputs.tag }}"
+          PREV="${{ needs.prepare.outputs.previous_tag }}"
           awk -v v="$V" '
             /^## / { if (found) exit; if (index($0, v)) { found=1; next } }
             found { print }
           ' CHANGELOG.md > RELEASE_NOTES.md
-          if [ ! -s RELEASE_NOTES.md ]; then echo "See CHANGELOG.md for details." > RELEASE_NOTES.md; fi
+          if ! grep -q '^[-*] ' RELEASE_NOTES.md; then echo "::error::CHANGELOG.md has no entries for $V"; exit 1; fi
           {
             echo ""
             echo "### Install"
@@ -113,25 +119,95 @@ jobs:
             echo "code --install-extension localpilot-$V.vsix"
             echo '```'
             echo "Or **Extensions → ··· → Install from VSIX…** in VS Code. Documentation: https://isathish.github.io/localpilot/"
+            if [ -n "$PREV" ]; then echo ""; echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/$PREV...$TAG"; fi
           } >> RELEASE_NOTES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.prepare.outputs.version }}
+          path: |
+            localpilot-${{ needs.prepare.outputs.version }}.vsix
+            localpilot.vsix
+            SHA256SUMS.txt
+            RELEASE_NOTES.md
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    name: Tag, release & publish
+    needs: [prepare, verify]
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.prepare.outputs.version }}
+      - name: Verify checksums
+        run: sha256sum -c SHA256SUMS.txt
+
+      - name: Create tag
+        if: needs.prepare.outputs.tag_exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "LocalPilot $TAG" "${{ needs.prepare.outputs.sha }}"
+          git push origin "$TAG"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: LocalPilot ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ env.TAG }}
+          name: LocalPilot ${{ env.TAG }}
           body_path: RELEASE_NOTES.md
           files: |
-            localpilot-${{ steps.meta.outputs.version }}.vsix
+            localpilot-${{ env.VERSION }}.vsix
             localpilot.vsix
             SHA256SUMS.txt
 
       - name: Publish to VS Code Marketplace
-        if: env.VSCE_PAT != ''
-        continue-on-error: true
-        run: npx @vscode/vsce publish --no-dependencies --packagePath "localpilot-${{ steps.meta.outputs.version }}.vsix"
+        id: vsce
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT secret is not set; skipped the VS Code Marketplace. Add it and run 'Publish to Marketplace' for $TAG."
+            echo "status=skipped" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          npx @vscode/vsce publish --no-dependencies --packagePath "localpilot-$VERSION.vsix"
+          echo "status=published" >> "$GITHUB_OUTPUT"
 
       - name: Publish to Open VSX
-        if: env.OVSX_PAT != ''
-        continue-on-error: true
-        run: npx ovsx publish "localpilot-${{ steps.meta.outputs.version }}.vsix" -p "$OVSX_PAT"
+        id: ovsx
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::warning::OVSX_PAT secret is not set; skipped Open VSX."
+            echo "status=skipped" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          npx ovsx publish "localpilot-$VERSION.vsix" -p "$OVSX_PAT"
+          echo "status=published" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## LocalPilot $TAG"
+            echo ""
+            echo "| Step | Result |"
+            echo "|---|---|"
+            echo "| GitHub Release | https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG |"
+            echo "| VS Code Marketplace | ${{ steps.vsce.outputs.status || 'failed' }} · https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent |"
+            echo "| Open VSX | ${{ steps.ovsx.outputs.status || 'failed' }} · https://open-vsx.org/extension/localpilot/localpilot-agent |"
+            echo ""
+            echo "Checksums:"
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

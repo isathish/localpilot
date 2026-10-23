@@ -1120,6 +1120,7 @@
     "lint": "eslint src",
     "smoke": "node scripts/run-smoke.js",
     "release": "node scripts/release.js",
+    "check:version": "node scripts/check-version.js",
     "test": "vscode-test",
     "icons": "node scripts/build-icon-font.js"
   },

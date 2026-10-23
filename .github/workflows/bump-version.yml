@@ -1,0 +1,66 @@
+name: Prepare release
+
+# One click from the Actions tab: bumps the version, promotes the changelog (or generates it from
+# conventional commits since the last tag), verifies the build, commits "release: vX.Y.Z" to main
+# and starts the Release workflow, which tests, tags, packages and publishes.
+# Equivalent to running `npm run release -- <bump>` locally.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        default: patch
+        options: [patch, minor, major, custom]
+      version:
+        description: Exact version when bump is "custom" (e.g. 1.0.0)
+        required: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump version & changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Bump, verify, commit and push
+        env:
+          BUMP: ${{ github.event.inputs.bump }}
+          CUSTOM: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$BUMP" = "custom" ]; then
+            if [ -z "$CUSTOM" ]; then echo "::error::Enter a version when bump is 'custom'."; exit 1; fi
+            ARG="$CUSTOM"
+          else
+            ARG="$BUMP"
+          fi
+          node scripts/release.js "$ARG" --ci
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+      - name: Start the Release workflow
+        # Pushes made with GITHUB_TOKEN do not trigger other workflows, so start it explicitly.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref main
+          sleep 5
+          RUN=$(gh run list --workflow=release.yml --branch main --limit 1 --json databaseId,url --jq '.[0].url')
+          {
+            echo "## Prepared v${version}"
+            echo ""
+            echo "Committed \`release: v${version}\` to main. Release workflow: ${RUN:-see the Actions tab}"
+          } >> "$GITHUB_STEP_SUMMARY"

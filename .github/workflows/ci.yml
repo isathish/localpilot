@@ -3,10 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**.md']
+    # Everything except the website and prose, but CHANGELOG.md and MARKETPLACE.md are release inputs
+    # (release notes and the Marketplace README inside the VSIX) and docs/_config.yml carries the version.
+    paths: ['**', '!docs/**', '!**.md', 'CHANGELOG.md', 'MARKETPLACE.md', 'docs/_config.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['docs/**', '**.md']
+    paths: ['**', '!docs/**', '!**.md', 'CHANGELOG.md', 'MARKETPLACE.md', 'docs/_config.yml']
 
 permissions:
   contents: read
@@ -30,6 +32,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Check version metadata
+        run: npm run check:version
       - name: Type-check, lint, bundle
         run: npm run compile
       - name: Offline smoke tests

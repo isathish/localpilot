@@ -2,6 +2,10 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Changed
+- **Release pipeline.** The Release workflow now tests and packages *before* tagging, so a failing build no longer burns a version; a failed Marketplace or Open VSX publish fails the run instead of passing silently; the VSIX is checked to carry the released version and the run summary lists the release, Marketplace and checksum results. New **Prepare release** workflow cuts a release from the Actions tab (patch / minor / major / custom). `npm run release` can generate changelog entries from conventional commits when none were written, releases a hand-bumped untagged version instead of bumping again, and supports `--dry-run`, `--no-push` and `--no-verify`. New `npm run check:version` (also run by CI and the Release workflow) verifies that `package.json`, `package-lock.json`, `docs/_config.yml` and the changelog section agree and that `@types/vscode` is not newer than `engines.vscode`. CI now also runs for `CHANGELOG.md`, `MARKETPLACE.md` and `docs/_config.yml` changes.
+
 ## 0.2.6 — 2026-10-23
 ### Added
 - **Release on push.** The Release workflow now also runs on pushes to `main`: when `package.json` carries a version with no `vX.Y.Z` tag yet it creates the tag, builds, tests, publishes the GitHub Release with the VSIX and pushes to the Marketplace / Open VSX. Bump the version (`npm run release -- patch` or by hand) and push — no manual tagging. Pushes without a version change only run CI and the docs deploy.

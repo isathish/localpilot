@@ -80,15 +80,29 @@ Implement `LLMProvider` (`src/types.ts`), branch in `createProvider()` (`src/pro
 
 ## Releases
 
-CI runs on every push and pull request. **A release happens automatically whenever `main` is pushed with a `package.json` version that has no `vX.Y.Z` tag yet** — the **Release** workflow tags it, builds and tests, attaches `localpilot-X.Y.Z.vsix`, a stable `localpilot.vsix` and `SHA256SUMS.txt` to a GitHub Release with that version's changelog section as notes, and — if `VSCE_PAT` / `OVSX_PAT` repository secrets exist — publishes to the VS Code Marketplace and Open VSX. Pushes that don't change the version only run CI and deploy the docs.
+Releases are driven by the version in `package.json`. **Whenever `main` carries a version that has no `vX.Y.Z` tag yet, the Release workflow releases it.** Nothing is tagged until the build is green:
 
-So to release, bump the version and push. The helper does all of it from a clean `main`:
+1. **prepare** checks that `package.json`, `package-lock.json`, `docs/_config.yml` and the `CHANGELOG.md` section agree (`npm run check:version`) and decides whether the version is new.
+2. **verify** type-checks, lints, runs the smoke and Extension Host tests, packages `localpilot-X.Y.Z.vsix` and checks the version inside the VSIX.
+3. **publish** creates the `vX.Y.Z` tag, the GitHub Release (that version's changelog section as notes, plus the VSIX, a stable `localpilot.vsix` and `SHA256SUMS.txt`) and publishes to the VS Code Marketplace and Open VSX when the `VSCE_PAT` / `OVSX_PAT` secrets exist. A failed publish fails the run; re-run **Publish to Marketplace** for that tag to retry without burning a version.
 
-```bash
-npm run release -- patch     # or minor | major | 1.2.3
-```
+Pushes that do not change the version only run CI and deploy the docs.
 
-It bumps `package.json` / `package-lock.json` / `docs/_config.yml`, promotes the **Unreleased** section of `CHANGELOG.md` to the new version, runs compile + smoke + packaging, commits, tags and pushes. Editing the version by hand and pushing works too (keep a `## X.Y.Z` section in the changelog for the release notes). Pushing a tag manually or running *Actions → Release → Run workflow* for an existing tag is still supported. The docs site deploys from `docs/` on every push to `main`.
+### Cutting a release
+
+Two equivalent ways:
+
+- **From GitHub:** *Actions → Prepare release → Run workflow*, pick `patch`, `minor`, `major` or a custom version. It bumps, updates the changelog, verifies, commits `release: vX.Y.Z` to `main` and starts the Release workflow.
+- **From your machine**, on a clean `main`:
+
+  ```bash
+  npm run release -- patch            # or minor | major | 1.2.3
+  npm run release -- patch --dry-run  # show the version and release notes without changing anything
+  ```
+
+Both run `scripts/release.js`, which bumps the four version locations, promotes the **Unreleased** section of `CHANGELOG.md` to `## X.Y.Z — date`, runs compile + smoke + packaging and pushes the commit. Write changelog entries under `## Unreleased` as you go; if there are none, the script generates them from the conventional commits since the previous tag (`feat:` → Added, `fix:` → Fixed, `docs:`/`site:` → Documentation, anything else → Changed; `chore:`, `test:`, `ci:` and `release:` commits are skipped). If `package.json` was already bumped by hand and is untagged, `patch`/`minor`/`major` release that pending version instead of bumping again.
+
+Editing `package.json` by hand and pushing still works, provided `docs/_config.yml` matches and the changelog has a `## X.Y.Z` section with entries; CI and the Release workflow fail early otherwise. Pushing a tag manually or running *Actions → Release → Run workflow* for an existing tag is still supported.
 
 ## Website
 
