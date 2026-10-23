@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.0.0 — 2026-10-23
+
 LocalPilot 1.0 — the local-first coding agent is stable: resilient model calls, a calm and steady chat, built-in skills for the whole development loop, and a release pipeline that ships every push.
 
 ### Added
