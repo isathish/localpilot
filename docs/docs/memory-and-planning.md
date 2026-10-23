@@ -38,21 +38,8 @@ For any multi-step task the agent calls `manage_todos` first, then updates items
 
 ## Multitasking
 
-Every session is an independent agent. A **tab strip** at the top of the chat lists running sessions first (with a spinner) and recent ones after; `+` starts another agent while the current one keeps working. The **Agents** panel shows the same information with per-session changed files. Use **Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) or the CLI's `--parallel` flag to fan out several tasks at once.
+Every session is an independent agent. A **tab strip** at the top of the chat lists running sessions first (with a spinner) and recent ones after; `+` starts another agent while the current one keeps working. The **Agents** panel shows the same information with per-session changed files. Use **Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) or `localpilot --ide --parallel "a | b | c"` to fan out several tasks at once.
 
 ## The `localpilot` CLI
 
-Run **LocalPilot: Install 'localpilot' Command in PATH** once. It writes a small shim to `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`) that hands tasks to the extension in the current folder — like the `cursor` or `claude` CLIs.
-
-```bash
-localpilot "fix the failing tests in src/api"          # agent mode in the current folder
-localpilot --plan "migrate the auth module to JWT"     # read-only plan + checklist
-localpilot --ask "how does the retry logic work?"
-localpilot --file src/db.ts "add connection pooling"   # attach context files
-localpilot --parallel "write tests for utils | fix lint errors | update README"
-localpilot --settings                                   # open LocalPilot Settings
-localpilot --setup                                      # rerun the setup wizard
-localpilot                                             # just open a new chat
-```
-
-Under the hood it opens `vscode://localpilot.localpilot-agent/run?prompt=…`, so it works from any terminal, script or alias. Set `LOCALPILOT_CODE_BIN` to point at a different VS Code build (Insiders, VSCodium).
+The `localpilot` command runs the full agent in your shell — see [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).

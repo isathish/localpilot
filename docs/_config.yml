@@ -62,8 +62,10 @@ nav:
     url: /docs/parallel-agents/
   - title: Skills & subagents
     url: /docs/skills-and-agents/
-  - title: Memory, planning & CLI
+  - title: Memory & planning
     url: /docs/memory-and-planning/
+  - title: Terminal & CLI
+    url: /docs/terminal-and-cli/
   - title: Context & mentions
     url: /docs/context/
   - title: Screenshots & images

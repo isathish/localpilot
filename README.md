@@ -100,6 +100,21 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 
 Skills use progressive disclosure (only name + description are in the prompt until `load_skill` is called). Subagents run with a fresh context window and return only a final report. Full guide: [Skills & subagents](https://isathish.github.io/localpilot/docs/skills-and-agents/).
 
+## Terminal & CLI
+
+The agent runs its commands in a visible, branded **LocalPilot Agent** terminal (shell integration), so you watch `npm test` fail and pass while the agent fixes the code. Right-click any terminal for **Explain Terminal Output** / **Fix Failed Command**, or type `@terminal` in the chat.
+
+The `localpilot` CLI is the same agent for your shell — same tools, skills, memory, MCP servers, approvals and undo, against your local models:
+
+```bash
+localpilot "fix the failing tests"      # agent mode, one task
+localpilot --ask "what does main.ts do?"
+localpilot                               # interactive session
+localpilot models · localpilot doctor
+```
+
+Open it from VS Code (*LocalPilot: Open LocalPilot Terminal* — no install) or run *Install 'localpilot' CLI in PATH* for every terminal. Docs: [Terminal & CLI](https://isathish.github.io/localpilot/docs/terminal-and-cli/).
+
 ## Settings & first-run setup
 
 LocalPilot has its own **Settings** screen (gear icon in the chat toolbar): a provider manager with **Test connection**, model and generation options, *Careful / Balanced / Autonomous* approval presets, inline completions, web search, memory & skills, and MCP servers — each value tagged with the scope it comes from and resettable individually. On first run a short **setup wizard** detects Ollama / LM Studio / llama.cpp / vLLM, recommends a model and picks an approval preset.

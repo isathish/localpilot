@@ -51,10 +51,19 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 - **Commit message** generator in the Source Control view.
 - **Inline completions** from FIM models.
 
+## Terminal & CLI
+
+- Agent commands run in a visible, branded **LocalPilot Agent** terminal via shell integration (fallback: hidden process).
+- Right-click a terminal → **Explain Terminal Output**, **Fix Failed Command**, **Add Terminal Output to Chat**; `@terminal` in chat.
+- **`localpilot` CLI**: the full agent in any shell — streaming, tool steps, approvals, REPL, `models`, `doctor`. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
+
 ## Settings & setup
 
 - **Zero-config auto-detection** — at startup and on *Refresh models*, LocalPilot probes configured providers, the well-known local ports and running **Docker containers** (plus Docker Model Runner), adds every reachable server to your providers and picks the best tool-capable model when no default is set. See [Models & providers]({{ '/docs/models/' | relative_url }}).
-- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models & generation, Agent & approvals, Inline completions, Web search, Memory & skills, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
+- **One-click model setup** — with no local model anywhere, LocalPilot starts or installs Ollama and downloads a smallest-first starter set sized to your RAM / GPU (agent + completion + optional vision model), then sets the defaults. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
+- **Model manager & catalog** — hardware profile and model budget, installed models with enable / disable, set-default and remove, and a curated catalog where every size is marked fits / tight / too big; install to Ollama, Docker Model Runner or LM Studio with live progress.
+- **Automatic routing** — a vision model for image turns, the smallest FIM model for completions, an optional reasoning model for Plan mode, and a graceful fallback when the chosen model is offline or disabled.
+- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models, Agent & approvals, Inline completions, Web search, Memory & skills, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
 - **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
 - **Approval presets** — *Careful*, *Balanced*, *Autonomous* — or fine-grained Ask / Allow / Block per action.
 - **MCP server manager** — add, edit, disable and remove servers with their connection status and tool counts.
