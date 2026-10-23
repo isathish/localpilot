@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.4 — 2026-10-23
 ### Added
 - **Persistent memory**: the agent saves and recalls durable notes (`memory_save` / `memory_read` / `memory_list` / `memory_delete`) in `.localpilot/memory/` (project, commit-able) and global storage (user). A compact index is injected into every prompt; *LocalPilot: Open Memory Notes* opens the folder.
 - **Planning checklist**: `manage_todos` tool and a live **Tasks** panel with progress bar; the agent plans multi-step work first and updates each step as it goes. Plan mode now emits the checklist too.
