@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.0 — 2026-10-23
 ### Changed
 - **Chat UI redesigned** in the style of Cursor / Claude Code: custom Agent/Ask/Plan picker and searchable model picker (with *Auto*), an **@ Add context** menu (files, active selection, @workspace/@problems/@git/@editors, images, screenshots), consecutive read/search tools grouped as *Explored codebase · N files, M searches*, **diff cards** for edits with +/− counts and inline line diff, **terminal cards** for commands with exit codes, Claude-style permission prompts with *Allow once / Allow for session / Deny* and Y/A/N keys, hover actions on messages, prompt history (↑/↓), Esc to stop, ⌘I to add context, and a greeting-based empty state.
 - **Restore checkpoint** on any user message: reverts files changed since that turn, truncates the conversation and puts the prompt back in the composer (per-turn snapshots in the change tracker).
