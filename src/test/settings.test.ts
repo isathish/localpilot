@@ -81,13 +81,26 @@ suite('LocalPilot settings & setup', () => {
     // Every container's chat view is a real, focusable view; switching the setting reveals it there.
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const before = cfg.inspect<string>('chat.location')?.globalValue;
+    const api = vscode.extensions.getExtension('localpilot.localpilot-agent')!.exports as { chatHost?: { viewId: string; visible: boolean } };
+    const until = async (ok: () => boolean, ms = 8000) => { const t0 = Date.now(); while (!ok() && Date.now() - t0 < ms) { await new Promise((r) => setTimeout(r, 100)); } return ok(); };
     try {
       for (const [loc, viewId] of [['secondarySidebar', 'localpilot.chatView.secondary'], ['panel', 'localpilot.chatView.panel'], ['sidebar', 'localpilot.chatView']] as const) {
         assert.ok(commands.includes(`${viewId}.focus`), `no focus command for ${viewId}`);
         await cfg.update('chat.location', loc, vscode.ConfigurationTarget.Global);
-        await vscode.commands.executeCommand(`${viewId}.focus`);
+        // Simulates what Move Chat To… does after saving: the setting listener focuses the chat in its new home.
         await vscode.commands.executeCommand('localpilot.openChat');
+        const shown = await until(() => api.chatHost?.viewId === viewId && api.chatHost.visible);
+        assert.ok(shown, `after choosing ${loc} the chat should be visible in ${viewId}, got ${JSON.stringify(api.chatHost)}`);
       }
+      // The real "Move Chat To…" flow: run the command and answer its quick pick like a user would.
+      const picked = vscode.commands.executeCommand('localpilot.moveChat');
+      await until(() => false, 400);
+      await vscode.commands.executeCommand('workbench.action.quickOpenNavigateNext');
+      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+      await picked;
+      assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('chat.location'), 'secondarySidebar', 'the second item (Secondary Side Bar) was accepted');
+      const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView.secondary' && api.chatHost.visible);
+      assert.ok(moved, `Move Chat To… should show the chat on the right, got ${JSON.stringify(api.chatHost)}`);
     } finally {
       await cfg.update('chat.location', before, vscode.ConfigurationTarget.Global);
     }

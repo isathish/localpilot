@@ -796,7 +796,8 @@
     const d = state.data;
     head(sec, 'Advanced', 'Housekeeping, diagnostics and the raw settings files.');
     sec.appendChild(card(
-      field('showWelcomeOnStartup', 'Show setup on first run', 'Open the welcome screen when LocalPilot starts and no model server has been configured yet.', 'toggle')
+      field('showWelcomeOnStartup', 'Show setup on first run', 'Open the welcome screen when LocalPilot starts and no model server has been configured yet.', 'toggle'),
+      field('chat.location', 'Chat location', 'Where the chat lives. Changing it moves the chat right away; the LocalPilot icon in the editor title bar and the status bar always open it wherever it is.', 'select', { options: [['sidebar', 'Primary Side Bar', 'left, with the Explorer'], ['secondarySidebar', 'Secondary Side Bar', 'right, where Copilot Chat lives'], ['panel', 'Panel', 'bottom, next to the Terminal'], ['editor', 'Editor Area', 'a tab in the main area']] })
     ));
     sec.appendChild(el('h2', 'sub', 'Tools'));
     const grid = el('div', 'card');

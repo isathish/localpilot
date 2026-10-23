@@ -102,7 +102,7 @@ const SETTING_KEYS = [
   'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
-  'mcpServers', 'skillsPaths', 'skills.builtin', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
+  'mcpServers', 'skillsPaths', 'skills.builtin', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
   'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding',
 ] as const;
 

@@ -307,22 +307,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.openChat', () => view.reveal());
   cmd('localpilot.openChatInEditor', () => view.openInEditor());
   cmd('localpilot.moveChat', () => view.pickLocation());
-  // Apply the configured chat location once per value, so a view the user dragged by hand is not fought on every start.
-  const LOCATION_KEY = 'localpilot.chatLocationApplied';
-  const syncLocation = async () => {
-    const loc = getChatLocation();
-    const applied = context.globalState.get<string>(LOCATION_KEY);
-    if (applied === loc) {
-      return;
-    }
-    await context.globalState.update(LOCATION_KEY, loc);
-    // A fresh install already has the view in the sidebar; only move when something actually changed.
-    if (loc !== 'editor' && !(applied === undefined && loc === 'sidebar')) {
-      await view.applyLocation(loc);
-    }
-  };
-  void syncLocation();
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('localpilot.chat.location') && void syncLocation()));
+  // The views switch containers through their `when` clauses; a settings change (from Move Chat To…, the Settings
+  // UI or settings.json) only needs the chat revealed in its new home — a container is hidden until something focuses it.
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('localpilot.chat.location') && void view.applyLocation(getChatLocation())));
   // Copilot-style status bar menu: one click reaches the chat, model, layout and settings.
   cmd('localpilot.statusMenu', async () => {
     const cfg = getConfig();
@@ -951,6 +938,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     screenshotUrl: (url, opts) => captureUrl(url, opts).then((s) => ({ name: s.name, data: s.data, mime: s.mime, url: s.url, width: s.width, height: s.height })),
     inspectUrl: (url, opts) => inspectUrl(url, opts),
     installModel: (target, model) => modelManager.pull(target, model).then((j) => j.status === 'done'),
+    get chatHost() {
+      return view.host;
+    },
   };
 }
 
@@ -976,6 +966,8 @@ export interface LocalPilotApi {
   screenshotUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number }): Promise<{ name: string; data: string; mime: string; url: string; width: number; height: number }>;
   /** DevTools inspection of a URL: screenshot, console, network trace, performance and layout checks (optionally after actions). */
   inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
+  /** The view hosting the chat right now (`localpilot.chatView`, `.secondary`, `.panel`) and whether it is visible; undefined before the view is first shown or when the chat lives in an editor tab. */
+  readonly chatHost: { viewId: string; visible: boolean } | undefined;
 }
 
 export function deactivate(): void {

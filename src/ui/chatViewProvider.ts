@@ -57,12 +57,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    this.wire(view.webview, () => (this.view = undefined), view);
+    // When the location changes, the old container's view is disposed after the new one resolved; only forget our own.
+    this.wire(view.webview, () => { if (this.view === view) { this.view = undefined; } }, view);
     view.onDidChangeVisibility(() => {
       if (view.visible) {
         void view.webview.postMessage({ type: 'focusInput' } satisfies ToWebview);
       }
     });
+  }
+
+  /** Which view currently hosts the chat and whether it is on screen (for the API / tests). */
+  get host(): { viewId: string; visible: boolean } | undefined {
+    return this.view ? { viewId: this.view.viewType, visible: this.view.visible } : undefined;
   }
 
   /** Shows the chat as an editor tab; reuses the open tab instead of stacking duplicates. */
@@ -103,7 +109,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.openInEditor(vscode.ViewColumn.Active);
       return;
     }
-    await vscode.commands.executeCommand(`${chatViewIdFor(loc)}.focus`);
+    try {
+      await vscode.commands.executeCommand(`${chatViewIdFor(loc)}.focus`);
+    } catch (e) {
+      void vscode.window.showWarningMessage(`LocalPilot could not open the chat in the ${CHAT_LOCATIONS.find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /** Quick pick that updates `localpilot.chat.location` and moves the chat right away. */
@@ -122,10 +132,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     await vscode.workspace.getConfiguration('localpilot').update('chat.location', pick.id, vscode.ConfigurationTarget.Global);
-    // The configuration listener in extension.ts focuses the new container once the `when` clauses have switched.
-    if (pick.id === 'editor') {
-      this.openInEditor(vscode.ViewColumn.Active);
-    }
+    // The configuration listener reveals the chat too, but don't depend on its timing: show it now.
+    await this.applyLocation(pick.id);
   }
 
   private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void>; visible?: boolean }): void {
