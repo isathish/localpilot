@@ -6,7 +6,7 @@ baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
 download: https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix
 releases: https://github.com/isathish/localpilot/releases
-version: 0.1.0
+version: 0.1.1
 lang: en
 markdown: kramdown
 kramdown:

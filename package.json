@@ -2,7 +2,7 @@
   "name": "localpilot",
   "displayName": "LocalPilot",
   "description": "Local-first AI coding agent for VS Code (Ollama, LM Studio, llama.cpp, vLLM, any OpenAI-compatible API) with multi-session chat, agentic tools, skills, subagents and parallel execution",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -12,17 +12,42 @@
     "Programming Languages",
     "Other"
   ],
-  "keywords": ["ollama", "lm studio", "llama.cpp", "vllm", "local llm", "copilot", "agent", "chat", "ai"],
+  "keywords": [
+    "ollama",
+    "lm studio",
+    "llama.cpp",
+    "vllm",
+    "local llm",
+    "copilot",
+    "agent",
+    "chat",
+    "ai"
+  ],
   "publisher": "localpilot",
-  "author": { "name": "Sathish", "url": "https://github.com/isathish" },
+  "author": {
+    "name": "Sathish",
+    "url": "https://github.com/isathish"
+  },
   "license": "MIT",
   "icon": "media/logo.png",
-  "galleryBanner": { "color": "#15181d", "theme": "dark" },
+  "galleryBanner": {
+    "color": "#15181d",
+    "theme": "dark"
+  },
   "homepage": "https://isathish.github.io/localpilot/",
-  "repository": { "type": "git", "url": "https://github.com/isathish/localpilot.git" },
-  "bugs": { "url": "https://github.com/isathish/localpilot/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isathish/localpilot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/isathish/localpilot/issues"
+  },
   "badges": [
-    { "url": "https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg", "href": "https://github.com/isathish/localpilot/actions/workflows/ci.yml", "description": "CI" }
+    {
+      "url": "https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg",
+      "href": "https://github.com/isathish/localpilot/actions/workflows/ci.yml",
+      "description": "CI"
+    }
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -70,9 +95,18 @@
         "description": "Local-model coding agent with tools, skills and subagents",
         "isSticky": true,
         "commands": [
-          { "name": "agent", "description": "Autonomous agent mode: edit files, run commands" },
-          { "name": "ask", "description": "Answer questions (read-only)" },
-          { "name": "plan", "description": "Produce an implementation plan (read-only)" }
+          {
+            "name": "agent",
+            "description": "Autonomous agent mode: edit files, run commands"
+          },
+          {
+            "name": "ask",
+            "description": "Answer questions (read-only)"
+          },
+          {
+            "name": "plan",
+            "description": "Produce an implementation plan (read-only)"
+          }
         ]
       }
     ],
@@ -84,107 +118,428 @@
       }
     ],
     "commands": [
-      { "command": "localpilot.openChat", "title": "Open Chat", "category": "LocalPilot", "icon": "$(comment-discussion)" },
-      { "command": "localpilot.openChatInEditor", "title": "Open Chat in Editor", "category": "LocalPilot", "icon": "$(open-preview)" },
-      { "command": "localpilot.newSession", "title": "New Chat", "category": "LocalPilot", "icon": "$(add)" },
-      { "command": "localpilot.showSessions", "title": "Show Chats…", "category": "LocalPilot", "icon": "$(history)" },
-      { "command": "localpilot.sessionMenu", "title": "Chat Actions…", "category": "LocalPilot", "icon": "$(kebab-vertical)" },
-      { "command": "localpilot.openSession", "title": "Open Chat Session", "category": "LocalPilot" },
-      { "command": "localpilot.runParallelTasks", "title": "Run Tasks in Parallel…", "category": "LocalPilot", "icon": "$(run-all)" },
-      { "command": "localpilot.stopSession", "title": "Stop Agent", "category": "LocalPilot", "icon": "$(debug-stop)" },
-      { "command": "localpilot.stopAll", "title": "Stop All Agents", "category": "LocalPilot", "icon": "$(stop-circle)" },
-      { "command": "localpilot.showDiff", "title": "Show Diff", "category": "LocalPilot", "icon": "$(diff)" },
-      { "command": "localpilot.keepChanges", "title": "Keep", "category": "LocalPilot", "icon": "$(check)" },
-      { "command": "localpilot.undoChanges", "title": "Undo", "category": "LocalPilot", "icon": "$(discard)" },
-      { "command": "localpilot.keepAllChanges", "title": "Keep All Agent Changes", "category": "LocalPilot", "icon": "$(check-all)" },
-      { "command": "localpilot.undoAllChanges", "title": "Undo All Agent Changes", "category": "LocalPilot", "icon": "$(discard)" },
-      { "command": "localpilot.selectModel", "title": "Select Model", "category": "LocalPilot", "icon": "$(server)" },
-      { "command": "localpilot.refreshModels", "title": "Refresh Models", "category": "LocalPilot", "icon": "$(refresh)" },
-      { "command": "localpilot.toggleInlineCompletions", "title": "Toggle Inline Completions", "category": "LocalPilot" },
-      { "command": "localpilot.reloadSkills", "title": "Reload Skills, Subagents & MCP Servers", "category": "LocalPilot" },
-      { "command": "localpilot.showLogs", "title": "Show Logs", "category": "LocalPilot" },
-      { "command": "localpilot.inlineEdit", "title": "Edit with LocalPilot (inline)", "category": "LocalPilot", "icon": "$(sparkle)" },
-      { "command": "localpilot.terminalCommand", "title": "Generate Terminal Command…", "category": "LocalPilot", "icon": "$(terminal)" },
-      { "command": "localpilot.captureScreenshot", "title": "Capture Screenshot to Chat", "category": "LocalPilot", "icon": "$(device-camera)" },
-      { "command": "localpilot.attachImage", "title": "Attach Image to Chat…", "category": "LocalPilot", "icon": "$(file-media)" },
-      { "command": "localpilot.fixDiagnosticAt", "title": "Fix with LocalPilot", "category": "LocalPilot" },
-      { "command": "localpilot.explainDiagnosticAt", "title": "Explain with LocalPilot", "category": "LocalPilot" },
-      { "command": "localpilot.explainSelection", "title": "Explain", "category": "LocalPilot" },
-      { "command": "localpilot.fixSelection", "title": "Fix", "category": "LocalPilot" },
-      { "command": "localpilot.refactorSelection", "title": "Refactor", "category": "LocalPilot" },
-      { "command": "localpilot.generateTests", "title": "Generate Tests", "category": "LocalPilot" },
-      { "command": "localpilot.generateDocs", "title": "Add Documentation", "category": "LocalPilot" },
-      { "command": "localpilot.fixDiagnostics", "title": "Fix Errors in File", "category": "LocalPilot" },
-      { "command": "localpilot.commitMessage", "title": "Generate Commit Message", "category": "LocalPilot", "icon": "$(sparkle)" }
+      {
+        "command": "localpilot.openChat",
+        "title": "Open Chat",
+        "category": "LocalPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "localpilot.openChatInEditor",
+        "title": "Open Chat in Editor",
+        "category": "LocalPilot",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "localpilot.newSession",
+        "title": "New Chat",
+        "category": "LocalPilot",
+        "icon": "$(add)"
+      },
+      {
+        "command": "localpilot.showSessions",
+        "title": "Show Chats…",
+        "category": "LocalPilot",
+        "icon": "$(history)"
+      },
+      {
+        "command": "localpilot.sessionMenu",
+        "title": "Chat Actions…",
+        "category": "LocalPilot",
+        "icon": "$(kebab-vertical)"
+      },
+      {
+        "command": "localpilot.openSession",
+        "title": "Open Chat Session",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.runParallelTasks",
+        "title": "Run Tasks in Parallel…",
+        "category": "LocalPilot",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "localpilot.stopSession",
+        "title": "Stop Agent",
+        "category": "LocalPilot",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "localpilot.stopAll",
+        "title": "Stop All Agents",
+        "category": "LocalPilot",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "localpilot.showDiff",
+        "title": "Show Diff",
+        "category": "LocalPilot",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "localpilot.keepChanges",
+        "title": "Keep",
+        "category": "LocalPilot",
+        "icon": "$(check)"
+      },
+      {
+        "command": "localpilot.undoChanges",
+        "title": "Undo",
+        "category": "LocalPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "localpilot.keepAllChanges",
+        "title": "Keep All Agent Changes",
+        "category": "LocalPilot",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "localpilot.undoAllChanges",
+        "title": "Undo All Agent Changes",
+        "category": "LocalPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "localpilot.selectModel",
+        "title": "Select Model",
+        "category": "LocalPilot",
+        "icon": "$(server)"
+      },
+      {
+        "command": "localpilot.refreshModels",
+        "title": "Refresh Models",
+        "category": "LocalPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localpilot.toggleInlineCompletions",
+        "title": "Toggle Inline Completions",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.reloadSkills",
+        "title": "Reload Skills, Subagents & MCP Servers",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.showLogs",
+        "title": "Show Logs",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.inlineEdit",
+        "title": "Edit with LocalPilot (inline)",
+        "category": "LocalPilot",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "localpilot.terminalCommand",
+        "title": "Generate Terminal Command…",
+        "category": "LocalPilot",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "localpilot.captureScreenshot",
+        "title": "Capture Screenshot to Chat",
+        "category": "LocalPilot",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "localpilot.attachImage",
+        "title": "Attach Image to Chat…",
+        "category": "LocalPilot",
+        "icon": "$(file-media)"
+      },
+      {
+        "command": "localpilot.fixDiagnosticAt",
+        "title": "Fix with LocalPilot",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.explainDiagnosticAt",
+        "title": "Explain with LocalPilot",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.explainSelection",
+        "title": "Explain",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.fixSelection",
+        "title": "Fix",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.refactorSelection",
+        "title": "Refactor",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.generateTests",
+        "title": "Generate Tests",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.generateDocs",
+        "title": "Add Documentation",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.fixDiagnostics",
+        "title": "Fix Errors in File",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.commitMessage",
+        "title": "Generate Commit Message",
+        "category": "LocalPilot",
+        "icon": "$(sparkle)"
+      }
     ],
     "submenus": [
-      { "id": "localpilot.editorSubmenu", "label": "LocalPilot" }
+      {
+        "id": "localpilot.editorSubmenu",
+        "label": "LocalPilot"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "localpilot.newSession", "when": "view == localpilot.chatView", "group": "navigation@1" },
-        { "command": "localpilot.showSessions", "when": "view == localpilot.chatView", "group": "navigation@2" },
-        { "command": "localpilot.openChatInEditor", "when": "view == localpilot.chatView", "group": "navigation@3" },
-        { "command": "localpilot.sessionMenu", "when": "view == localpilot.chatView", "group": "navigation@4" },
-        { "command": "localpilot.runParallelTasks", "when": "view == localpilot.chatView", "group": "1_run" },
-        { "command": "localpilot.selectModel", "when": "view == localpilot.chatView", "group": "1_run" },
-        { "command": "localpilot.refreshModels", "when": "view == localpilot.chatView", "group": "2_manage" },
-        { "command": "localpilot.reloadSkills", "when": "view == localpilot.chatView", "group": "2_manage" },
-        { "command": "localpilot.toggleInlineCompletions", "when": "view == localpilot.chatView", "group": "2_manage" },
-        { "command": "localpilot.showLogs", "when": "view == localpilot.chatView", "group": "9_logs" },
-        { "command": "localpilot.runParallelTasks", "when": "view == localpilot.agentsView", "group": "navigation@1" },
-        { "command": "localpilot.newSession", "when": "view == localpilot.agentsView", "group": "navigation@2" },
-        { "command": "localpilot.stopAll", "when": "view == localpilot.agentsView", "group": "navigation@3" },
-        { "command": "localpilot.keepAllChanges", "when": "view == localpilot.agentsView && localpilot.hasChanges", "group": "1_changes" },
-        { "command": "localpilot.undoAllChanges", "when": "view == localpilot.agentsView && localpilot.hasChanges", "group": "1_changes" }
+        {
+          "command": "localpilot.newSession",
+          "when": "view == localpilot.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localpilot.showSessions",
+          "when": "view == localpilot.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localpilot.openChatInEditor",
+          "when": "view == localpilot.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.sessionMenu",
+          "when": "view == localpilot.chatView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "localpilot.runParallelTasks",
+          "when": "view == localpilot.chatView",
+          "group": "1_run"
+        },
+        {
+          "command": "localpilot.selectModel",
+          "when": "view == localpilot.chatView",
+          "group": "1_run"
+        },
+        {
+          "command": "localpilot.refreshModels",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.reloadSkills",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.toggleInlineCompletions",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.showLogs",
+          "when": "view == localpilot.chatView",
+          "group": "9_logs"
+        },
+        {
+          "command": "localpilot.runParallelTasks",
+          "when": "view == localpilot.agentsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localpilot.newSession",
+          "when": "view == localpilot.agentsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localpilot.stopAll",
+          "when": "view == localpilot.agentsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.keepAllChanges",
+          "when": "view == localpilot.agentsView && localpilot.hasChanges",
+          "group": "1_changes"
+        },
+        {
+          "command": "localpilot.undoAllChanges",
+          "when": "view == localpilot.agentsView && localpilot.hasChanges",
+          "group": "1_changes"
+        }
       ],
       "view/item/context": [
-        { "command": "localpilot.stopSession", "when": "view == localpilot.agentsView && viewItem == session-running", "group": "inline@1" },
-        { "command": "localpilot.keepChanges", "when": "view == localpilot.agentsView && viewItem == session-changed", "group": "inline@1" },
-        { "command": "localpilot.undoChanges", "when": "view == localpilot.agentsView && viewItem == session-changed", "group": "inline@2" },
-        { "command": "localpilot.sessionMenu", "when": "view == localpilot.agentsView && viewItem =~ /^session/", "group": "inline@3" },
-        { "command": "localpilot.keepChanges", "when": "view == localpilot.agentsView && viewItem == file", "group": "inline@1" },
-        { "command": "localpilot.undoChanges", "when": "view == localpilot.agentsView && viewItem == file", "group": "inline@2" }
+        {
+          "command": "localpilot.stopSession",
+          "when": "view == localpilot.agentsView && viewItem == session-running",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.keepChanges",
+          "when": "view == localpilot.agentsView && viewItem == session-changed",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.undoChanges",
+          "when": "view == localpilot.agentsView && viewItem == session-changed",
+          "group": "inline@2"
+        },
+        {
+          "command": "localpilot.sessionMenu",
+          "when": "view == localpilot.agentsView && viewItem =~ /^session/",
+          "group": "inline@3"
+        },
+        {
+          "command": "localpilot.keepChanges",
+          "when": "view == localpilot.agentsView && viewItem == file",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.undoChanges",
+          "when": "view == localpilot.agentsView && viewItem == file",
+          "group": "inline@2"
+        }
       ],
       "commandPalette": [
-        { "command": "localpilot.openSession", "when": "false" },
-        { "command": "localpilot.showDiff", "when": "false" },
-        { "command": "localpilot.keepChanges", "when": "false" },
-        { "command": "localpilot.undoChanges", "when": "false" },
-        { "command": "localpilot.stopSession", "when": "false" },
-        { "command": "localpilot.fixDiagnosticAt", "when": "false" },
-        { "command": "localpilot.explainDiagnosticAt", "when": "false" }
+        {
+          "command": "localpilot.openSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.showDiff",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.keepChanges",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.undoChanges",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.stopSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.fixDiagnosticAt",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.explainDiagnosticAt",
+          "when": "false"
+        }
       ],
       "editor/context": [
-        { "submenu": "localpilot.editorSubmenu", "group": "0_localpilot" }
+        {
+          "submenu": "localpilot.editorSubmenu",
+          "group": "0_localpilot"
+        }
       ],
       "localpilot.editorSubmenu": [
-        { "command": "localpilot.inlineEdit", "group": "0@1" },
-        { "command": "localpilot.explainSelection", "group": "1@1" },
-        { "command": "localpilot.fixSelection", "group": "1@2" },
-        { "command": "localpilot.refactorSelection", "group": "1@3" },
-        { "command": "localpilot.generateTests", "group": "1@4" },
-        { "command": "localpilot.generateDocs", "group": "1@5" },
-        { "command": "localpilot.fixDiagnostics", "group": "2@1" }
+        {
+          "command": "localpilot.inlineEdit",
+          "group": "0@1"
+        },
+        {
+          "command": "localpilot.explainSelection",
+          "group": "1@1"
+        },
+        {
+          "command": "localpilot.fixSelection",
+          "group": "1@2"
+        },
+        {
+          "command": "localpilot.refactorSelection",
+          "group": "1@3"
+        },
+        {
+          "command": "localpilot.generateTests",
+          "group": "1@4"
+        },
+        {
+          "command": "localpilot.generateDocs",
+          "group": "1@5"
+        },
+        {
+          "command": "localpilot.fixDiagnostics",
+          "group": "2@1"
+        }
       ],
       "scm/title": [
-        { "command": "localpilot.commitMessage", "group": "navigation" }
+        {
+          "command": "localpilot.commitMessage",
+          "group": "navigation"
+        }
       ],
       "terminal/context": [
-        { "command": "localpilot.terminalCommand", "group": "localpilot" }
+        {
+          "command": "localpilot.terminalCommand",
+          "group": "localpilot"
+        }
       ],
       "explorer/context": [
-        { "command": "localpilot.attachImage", "when": "resourceExtname =~ /\\.(png|jpe?g|gif|webp)$/", "group": "localpilot" }
+        {
+          "command": "localpilot.attachImage",
+          "when": "resourceExtname =~ /\\.(png|jpe?g|gif|webp)$/",
+          "group": "localpilot"
+        }
       ]
     },
     "keybindings": [
-      { "command": "localpilot.openChat", "key": "ctrl+shift+l", "mac": "cmd+shift+l" },
-      { "command": "localpilot.newSession", "key": "ctrl+shift+alt+l", "mac": "cmd+shift+alt+l" },
-      { "command": "localpilot.runParallelTasks", "key": "ctrl+shift+alt+p", "mac": "cmd+shift+alt+p" },
-      { "command": "localpilot.inlineEdit", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorTextFocus && !editorReadonly" },
-      { "command": "localpilot.terminalCommand", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "terminalFocus" },
-      { "command": "localpilot.captureScreenshot", "key": "ctrl+alt+shift+s", "mac": "cmd+alt+shift+s" },
-      { "command": "localpilot.explainSelection", "key": "ctrl+shift+e", "mac": "cmd+shift+e", "when": "editorHasSelection" }
+      {
+        "command": "localpilot.openChat",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      },
+      {
+        "command": "localpilot.newSession",
+        "key": "ctrl+shift+alt+l",
+        "mac": "cmd+shift+alt+l"
+      },
+      {
+        "command": "localpilot.runParallelTasks",
+        "key": "ctrl+shift+alt+p",
+        "mac": "cmd+shift+alt+p"
+      },
+      {
+        "command": "localpilot.inlineEdit",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "localpilot.terminalCommand",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "terminalFocus"
+      },
+      {
+        "command": "localpilot.captureScreenshot",
+        "key": "ctrl+alt+shift+s",
+        "mac": "cmd+alt+shift+s"
+      },
+      {
+        "command": "localpilot.explainSelection",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      }
     ],
     "configuration": {
       "title": "LocalPilot",
@@ -194,46 +549,207 @@
           "markdownDescription": "Local/remote model servers. `type` is `ollama` (native API) or `openai` (any OpenAI-compatible server: LM Studio, llama.cpp, vLLM, SGLang, Unsloth/llama-server, LocalAI, Jan, OpenRouter…). Models are referenced as `<id>/<model>`.",
           "items": {
             "type": "object",
-            "required": ["id", "type", "baseUrl"],
+            "required": [
+              "id",
+              "type",
+              "baseUrl"
+            ],
             "properties": {
-              "id": { "type": "string", "description": "Short unique id, e.g. ollama, lmstudio" },
-              "type": { "type": "string", "enum": ["ollama", "openai"] },
-              "baseUrl": { "type": "string", "description": "e.g. http://localhost:11434 or http://localhost:1234/v1" },
-              "apiKey": { "type": "string" },
-              "displayName": { "type": "string" },
-              "models": { "type": "array", "items": { "type": "string" }, "description": "Explicit model ids when the server does not list them" },
-              "contextWindow": { "type": "number", "description": "Fallback context window when the server does not report it" },
-              "enabled": { "type": "boolean", "default": true }
+              "id": {
+                "type": "string",
+                "description": "Short unique id, e.g. ollama, lmstudio"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ollama",
+                  "openai"
+                ]
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "e.g. http://localhost:11434 or http://localhost:1234/v1"
+              },
+              "apiKey": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "models": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Explicit model ids when the server does not list them"
+              },
+              "contextWindow": {
+                "type": "number",
+                "description": "Fallback context window when the server does not report it"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
             }
           },
           "default": [
-            { "id": "ollama", "type": "ollama", "baseUrl": "http://localhost:11434", "displayName": "Ollama" },
-            { "id": "lmstudio", "type": "openai", "baseUrl": "http://localhost:1234/v1", "displayName": "LM Studio" },
-            { "id": "llamacpp", "type": "openai", "baseUrl": "http://localhost:8080/v1", "displayName": "llama.cpp server" },
-            { "id": "vllm", "type": "openai", "baseUrl": "http://localhost:8000/v1", "displayName": "vLLM / Unsloth" }
+            {
+              "id": "ollama",
+              "type": "ollama",
+              "baseUrl": "http://localhost:11434",
+              "displayName": "Ollama"
+            },
+            {
+              "id": "lmstudio",
+              "type": "openai",
+              "baseUrl": "http://localhost:1234/v1",
+              "displayName": "LM Studio"
+            },
+            {
+              "id": "llamacpp",
+              "type": "openai",
+              "baseUrl": "http://localhost:8080/v1",
+              "displayName": "llama.cpp server"
+            },
+            {
+              "id": "vllm",
+              "type": "openai",
+              "baseUrl": "http://localhost:8000/v1",
+              "displayName": "vLLM / Unsloth"
+            }
           ]
         },
-        "localpilot.defaultModel": { "type": "string", "default": "", "description": "Default model as provider/model (e.g. ollama/qwen2.5-coder:14b). Empty = auto-pick the best tool-capable local model." },
-        "localpilot.contextWindow": { "type": "number", "default": 32768, "description": "Requested context window (num_ctx for Ollama). Capped by the model's maximum." },
-        "localpilot.maxOutputTokens": { "type": "number", "default": 4096 },
-        "localpilot.temperature": { "type": "number", "default": 0.2, "minimum": 0, "maximum": 2 },
-        "localpilot.thinking": { "type": "boolean", "default": false, "description": "Enable extended thinking for reasoning models that support it (Ollama `think`)." },
-        "localpilot.compactionThreshold": { "type": "number", "default": 0.75, "minimum": 0.3, "maximum": 0.95, "description": "Fraction of the context window at which older messages are pruned and summarised." },
-        "localpilot.maxToolOutputChars": { "type": "number", "default": 24000, "description": "Tool outputs longer than this are truncated (head + tail) before being sent to the model." },
-        "localpilot.approvals.terminal": { "type": "string", "enum": ["always", "ask", "never"], "default": "ask", "description": "Approval policy for running shell commands." },
-        "localpilot.approvals.write": { "type": "string", "enum": ["always", "ask", "never"], "default": "always", "description": "Approval policy for creating/editing files." },
-        "localpilot.approvals.delete": { "type": "string", "enum": ["always", "ask", "never"], "default": "ask" },
-        "localpilot.approvals.network": { "type": "string", "enum": ["always", "ask", "never"], "default": "always", "description": "Approval policy for web search / fetch and MCP tools." },
-        "localpilot.parallel.maxConcurrency": { "type": "number", "default": 4, "minimum": 1, "maximum": 16, "description": "Max concurrent tool calls / subagents." },
-        "localpilot.parallel.maxSubagentDepth": { "type": "number", "default": 2, "minimum": 1, "maximum": 4 },
-        "localpilot.webSearch.provider": { "type": "string", "enum": ["duckduckgo", "searxng", "brave", "tavily"], "default": "duckduckgo", "description": "duckduckgo needs no key; searxng is self-hosted; brave/tavily need an API key." },
-        "localpilot.webSearch.searxngUrl": { "type": "string", "default": "http://localhost:8888" },
-        "localpilot.webSearch.apiKey": { "type": "string", "default": "" },
-        "localpilot.webSearch.maxResults": { "type": "number", "default": 6 },
-        "localpilot.inlineCompletion.enabled": { "type": "boolean", "default": false, "description": "Ghost-text completions from a local FIM model (qwen2.5-coder, codestral, starcoder2…)." },
-        "localpilot.inlineCompletion.model": { "type": "string", "default": "", "description": "provider/model for completions. Empty = first FIM-capable model." },
-        "localpilot.inlineCompletion.debounceMs": { "type": "number", "default": 350 },
-        "localpilot.inlineCompletion.maxTokens": { "type": "number", "default": 128 },
+        "localpilot.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model as provider/model (e.g. ollama/qwen2.5-coder:14b). Empty = auto-pick the best tool-capable local model."
+        },
+        "localpilot.contextWindow": {
+          "type": "number",
+          "default": 32768,
+          "description": "Requested context window (num_ctx for Ollama). Capped by the model's maximum."
+        },
+        "localpilot.maxOutputTokens": {
+          "type": "number",
+          "default": 4096
+        },
+        "localpilot.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 2
+        },
+        "localpilot.thinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable extended thinking for reasoning models that support it (Ollama `think`)."
+        },
+        "localpilot.compactionThreshold": {
+          "type": "number",
+          "default": 0.75,
+          "minimum": 0.3,
+          "maximum": 0.95,
+          "description": "Fraction of the context window at which older messages are pruned and summarised."
+        },
+        "localpilot.maxToolOutputChars": {
+          "type": "number",
+          "default": 24000,
+          "description": "Tool outputs longer than this are truncated (head + tail) before being sent to the model."
+        },
+        "localpilot.approvals.terminal": {
+          "type": "string",
+          "enum": [
+            "always",
+            "ask",
+            "never"
+          ],
+          "default": "ask",
+          "description": "Approval policy for running shell commands."
+        },
+        "localpilot.approvals.write": {
+          "type": "string",
+          "enum": [
+            "always",
+            "ask",
+            "never"
+          ],
+          "default": "always",
+          "description": "Approval policy for creating/editing files."
+        },
+        "localpilot.approvals.delete": {
+          "type": "string",
+          "enum": [
+            "always",
+            "ask",
+            "never"
+          ],
+          "default": "ask"
+        },
+        "localpilot.approvals.network": {
+          "type": "string",
+          "enum": [
+            "always",
+            "ask",
+            "never"
+          ],
+          "default": "always",
+          "description": "Approval policy for web search / fetch and MCP tools."
+        },
+        "localpilot.parallel.maxConcurrency": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 16,
+          "description": "Max concurrent tool calls / subagents."
+        },
+        "localpilot.parallel.maxSubagentDepth": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 4
+        },
+        "localpilot.webSearch.provider": {
+          "type": "string",
+          "enum": [
+            "duckduckgo",
+            "searxng",
+            "brave",
+            "tavily"
+          ],
+          "default": "duckduckgo",
+          "description": "duckduckgo needs no key; searxng is self-hosted; brave/tavily need an API key."
+        },
+        "localpilot.webSearch.searxngUrl": {
+          "type": "string",
+          "default": "http://localhost:8888"
+        },
+        "localpilot.webSearch.apiKey": {
+          "type": "string",
+          "default": ""
+        },
+        "localpilot.webSearch.maxResults": {
+          "type": "number",
+          "default": 6
+        },
+        "localpilot.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Ghost-text completions from a local FIM model (qwen2.5-coder, codestral, starcoder2…)."
+        },
+        "localpilot.inlineCompletion.model": {
+          "type": "string",
+          "default": "",
+          "description": "provider/model for completions. Empty = first FIM-capable model."
+        },
+        "localpilot.inlineCompletion.debounceMs": {
+          "type": "number",
+          "default": 350
+        },
+        "localpilot.inlineCompletion.maxTokens": {
+          "type": "number",
+          "default": 128
+        },
         "localpilot.mcpServers": {
           "type": "object",
           "default": {},
@@ -241,16 +757,45 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "command": { "type": "string" },
-              "args": { "type": "array", "items": { "type": "string" } },
-              "env": { "type": "object", "additionalProperties": { "type": "string" } },
-              "cwd": { "type": "string" },
-              "enabled": { "type": "boolean", "default": true }
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
             }
           }
         },
-        "localpilot.skillsPaths": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra folders containing skills (each skill is a folder with SKILL.md). `.localpilot/skills`, `.claude/skills`, `.github/skills`, `~/.agents/skills` are scanned automatically." },
-        "localpilot.systemPromptAppend": { "type": "string", "default": "", "editPresentation": "multilineText", "description": "Extra instructions appended to the system prompt (coding conventions, preferences…)." }
+        "localpilot.skillsPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra folders containing skills (each skill is a folder with SKILL.md). `.localpilot/skills`, `.claude/skills`, `.github/skills`, `~/.agents/skills` are scanned automatically."
+        },
+        "localpilot.systemPromptAppend": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "description": "Extra instructions appended to the system prompt (coding conventions, preferences…)."
+        }
       }
     }
   },
