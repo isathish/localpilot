@@ -1,7 +1,12 @@
 name: Release
 
+# A release happens whenever main carries a package.json version that has no tag yet: bump the version
+# (npm run release -- patch, or edit package.json + CHANGELOG), push, and this workflow tags vX.Y.Z, builds,
+# tests, packages the VSIX, creates the GitHub Release and publishes to the Marketplace / Open VSX.
+# Pushing a v*.*.* tag by hand or running it manually for an existing tag still works.
 on:
   push:
+    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
@@ -12,9 +17,54 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: Decide whether to release
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Compare package.json version with existing tags
+        id: decide
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            if [ "${TAG#v}" != "$PKG_VERSION" ]; then
+              echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"; exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            TAG="v$PKG_VERSION"
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::notice::$TAG already exists — nothing to release (bump the version in package.json to release)."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::package.json is $PKG_VERSION and $TAG does not exist yet — releasing."
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag -a "$TAG" -m "LocalPilot $TAG"
+              git push origin "$TAG"
+              echo "release=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
   release:
     name: Build, package & publish
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -22,24 +72,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
 
-      - name: Verify tag matches package.json version
+      - name: Release metadata
         id: meta
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "$VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"; exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${{ needs.prepare.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ needs.prepare.outputs.tag }}" >> "$GITHUB_OUTPUT"
 
       - name: Build & test
         run: |

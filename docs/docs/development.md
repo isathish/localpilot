@@ -80,13 +80,15 @@ Implement `LLMProvider` (`src/types.ts`), branch in `createProvider()` (`src/pro
 
 ## Releases
 
-CI runs on every push and pull request. To cut a release from a clean `main`:
+CI runs on every push and pull request. **A release happens automatically whenever `main` is pushed with a `package.json` version that has no `vX.Y.Z` tag yet** — the **Release** workflow tags it, builds and tests, attaches `localpilot-X.Y.Z.vsix`, a stable `localpilot.vsix` and `SHA256SUMS.txt` to a GitHub Release with that version's changelog section as notes, and — if `VSCE_PAT` / `OVSX_PAT` repository secrets exist — publishes to the VS Code Marketplace and Open VSX. Pushes that don't change the version only run CI and deploy the docs.
+
+So to release, bump the version and push. The helper does all of it from a clean `main`:
 
 ```bash
 npm run release -- patch     # or minor | major | 1.2.3
 ```
 
-The script bumps `package.json` and the docs version, promotes the **Unreleased** section of `CHANGELOG.md`, runs compile + smoke + packaging, commits, tags `vX.Y.Z` and pushes. The **Release** workflow then builds and tests on CI, attaches `localpilot-X.Y.Z.vsix`, a stable `localpilot.vsix` and `SHA256SUMS.txt` to a GitHub Release with the changelog as notes, and — if `VSCE_PAT` / `OVSX_PAT` repository secrets exist — publishes to the VS Code Marketplace and Open VSX. The docs site deploys from `docs/` on every push to `main`.
+It bumps `package.json` / `package-lock.json` / `docs/_config.yml`, promotes the **Unreleased** section of `CHANGELOG.md` to the new version, runs compile + smoke + packaging, commits, tags and pushes. Editing the version by hand and pushing works too (keep a `## X.Y.Z` section in the changelog for the release notes). Pushing a tag manually or running *Actions → Release → Run workflow* for an existing tag is still supported. The docs site deploys from `docs/` on every push to `main`.
 
 ## Website
 
