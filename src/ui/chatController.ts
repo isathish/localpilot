@@ -43,6 +43,7 @@ export type FromWebview =
   | { type: 'forkSession'; id: string; uptoIndex?: number }
   | { type: 'exportSession'; id: string }
   | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
+  | { type: 'retry'; sessionId: string }
   | { type: 'stop'; sessionId: string }
   | { type: 'approval'; id: string; approved: boolean; remember?: boolean }
   | { type: 'setModel'; sessionId: string; model: string; makeDefault?: boolean }
@@ -240,6 +241,9 @@ export class ChatController implements vscode.Disposable {
       }
       case 'send':
         await this.send(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
+        return;
+      case 'retry':
+        await this.retry(msg.sessionId);
         return;
       case 'dismissSkillTopic':
         await this.learner?.dismiss(msg.topic);
@@ -604,8 +608,11 @@ export class ChatController implements vscode.Disposable {
       });
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      this.broadcast({ type: 'event', event: { sessionId, type: 'error', payload: msg } });
+      // The agent loop already surfaced model failures with a friendlier message; don't show them twice.
+      if (!(e as { reported?: boolean }).reported) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.broadcast({ type: 'event', event: { sessionId, type: 'error', payload: msg } });
+      }
       return '';
     } finally {
       this.runs.delete(sessionId);
@@ -614,6 +621,27 @@ export class ChatController implements vscode.Disposable {
       this.broadcast({ type: 'running', sessionId, running: false });
       this._onDidChangeRuns.fire();
     }
+  }
+
+  /** Replays the last user turn after a failure: drops the failed exchange and sends the same message again. */
+  async retry(sessionId: string): Promise<string> {
+    const session = this.store.get(sessionId);
+    if (!session || this.runs.has(sessionId)) {
+      return '';
+    }
+    let idx = session.messages.length - 1;
+    while (idx >= 0 && !(session.messages[idx].role === 'user' && !session.messages[idx].meta?.hidden && !session.messages[idx].meta?.toolImages && !session.messages[idx].meta?.summary)) {
+      idx--;
+    }
+    if (idx < 0) {
+      return '';
+    }
+    const last = session.messages[idx];
+    session.messages = session.messages.slice(0, idx);
+    this.store.save(session);
+    this.broadcast({ type: 'session', session });
+    // Attachments are already inlined in the stored content, so send it verbatim with no new attachments.
+    return this.send(sessionId, last.content.replace(/\n\n\[\d+ images? attached\]$/, ''), [], last.images);
   }
 
   /** Start a new session for an externally supplied prompt (CLI / URI handler). */

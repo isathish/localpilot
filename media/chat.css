@@ -280,7 +280,13 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .note .chip svg { width: 11px; height: 11px; }
 .note .chip:hover { border-color: var(--brand); color: var(--brand); }
 .note .chip.brand { border-color: var(--brand); color: var(--brand); }
-.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--error); border: 1px solid color-mix(in srgb, var(--error) 50%, transparent); background: color-mix(in srgb, var(--error) 8%, transparent); border-radius: var(--radius-sm); }
+.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--error); border: 1px solid color-mix(in srgb, var(--error) 50%, transparent); background: color-mix(in srgb, var(--error) 8%, transparent); border-radius: var(--radius-sm); display: flex; align-items: flex-start; gap: 10px; }
+.error-box .msg { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.error-box .retry-btn { flex: none; color: var(--fg); }
+.error-box .retry-btn svg { animation: none; }
+.note.retry { display: flex; align-items: center; gap: 6px; }
+.note.retry svg { width: 12px; height: 12px; animation: spin 1.2s linear infinite; }
+.turn:not(.live) .note.retry svg { animation: none; opacity: .6; }
 .chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 22px; padding: 0 6px 0 7px; font-size: 11.5px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--tint); color: var(--fg); }
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip button { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 3px; color: var(--muted); }

@@ -29,7 +29,9 @@ const STACK_MARKERS: [RegExp, string][] = [
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
   private mapCache?: { text: string; at: number };
+  private rulesCache?: { text: string; max: number };
   private readonly watcher: vscode.FileSystemWatcher;
+  private readonly rulesWatcher: vscode.FileSystemWatcher;
 
   constructor(private readonly log: vscode.LogOutputChannel) {
     this.watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
@@ -39,10 +41,17 @@ export class WorkspaceContext implements vscode.Disposable {
     };
     this.watcher.onDidCreate(invalidate);
     this.watcher.onDidDelete(invalidate);
+    // Rules files are re-read only when one of them changes, not on every prompt build.
+    this.rulesWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot/rules.md,.localpilot/rules/*,AGENTS.md,CLAUDE.md,.cursorrules,.cursor/rules/*,.github/copilot-instructions.md,.windsurfrules}');
+    const dropRules = () => (this.rulesCache = undefined);
+    this.rulesWatcher.onDidChange(dropRules);
+    this.rulesWatcher.onDidCreate(dropRules);
+    this.rulesWatcher.onDidDelete(dropRules);
   }
 
   dispose(): void {
     this.watcher.dispose();
+    this.rulesWatcher.dispose();
   }
 
   get root(): string | undefined {
@@ -51,6 +60,9 @@ export class WorkspaceContext implements vscode.Disposable {
 
   /** Concatenated project rules (AGENTS.md, CLAUDE.md, .cursorrules, copilot-instructions…), capped. */
   async loadInstructions(maxChars = 12000): Promise<string> {
+    if (this.rulesCache && this.rulesCache.max === maxChars) {
+      return this.rulesCache.text;
+    }
     const parts: string[] = [];
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       for (const rel of RULE_FILES) {
@@ -80,7 +92,9 @@ export class WorkspaceContext implements vscode.Disposable {
       }
     }
     const joined = parts.join('\n\n');
-    return joined.length > maxChars ? joined.slice(0, maxChars) + '\n…(rules truncated)' : joined;
+    const text = joined.length > maxChars ? joined.slice(0, maxChars) + '\n…(rules truncated)' : joined;
+    this.rulesCache = { text, max: maxChars };
+    return text;
   }
 
   /** `git status` + `git diff` for the @git mention. */

@@ -21,6 +21,9 @@ import { SkillManager } from '../src/agent/skills';
 import { WorkspaceContext } from '../src/context/workspaceContext';
 import { createAgentTools } from '../src/agent/subagents';
 import { diffLines } from '../src/agent/changeTracker';
+import { callKey, classifyModelError, ModelStallError, withWatchdog } from '../src/agent/resilience';
+import { HttpError } from '../src/providers/http';
+import { StreamEvent } from '../src/types';
 import { manageTodosTool } from '../src/agent/memory';
 import { parseDockerPorts, providersFromContainers } from '../src/providers/discovery';
 
@@ -241,23 +244,69 @@ async function pureLogic() {
   const d = diffLines(['a', 'b', 'c', 'd'], ['a', 'B', 'c', 'x', 'd']);
   check('diffLines marks modified + added lines', d.modified.join(',') === '1' && d.added.join(',') === '3', d);
   check('diffLines identical → empty', diffLines(['a'], ['a']).added.length === 0 && diffLines(['a'], ['a']).modified.length === 0);
+
+  console.log('\n[Resilience helpers]');
+  check('classify: ECONNREFUSED → network', classifyModelError(Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } })) === 'network');
+  check('classify: HTTP 503 → server, 429 → ratelimit, 400 → other', classifyModelError(new HttpError(503, 'overloaded', 'u')) === 'server' && classifyModelError(new HttpError(429, '', 'u')) === 'ratelimit' && classifyModelError(new HttpError(400, 'bad request', 'u')) === 'other');
+  check('classify: context-length message → overflow', classifyModelError(new HttpError(400, "This model's maximum context length is 32768 tokens", 'u')) === 'overflow' && classifyModelError(new Error('the input length exceeds num_ctx')) === 'overflow');
+  check('callKey ignores argument order', callKey('read_file', { path: 'a', start_line: 1 }) === callKey('read_file', { start_line: 1, path: 'a' }) && callKey('read_file', { path: 'a' }) !== callKey('read_file', { path: 'b' }));
+  {
+    let aborted = false;
+    async function* slow(): AsyncGenerator<StreamEvent> { await new Promise((r) => setTimeout(r, 400)); yield { type: 'text', text: 'late' }; }
+    let err: unknown;
+    try { for await (const _ of withWatchdog(slow(), { firstTokenMs: 60, idleMs: 60, abort: () => (aborted = true) })) { /* never */ } } catch (e) { err = e; }
+    check('watchdog: no first token within the limit → ModelStallError + abort', err instanceof ModelStallError && (err as ModelStallError).phase === 'first-token' && aborted);
+    async function* ok(): AsyncGenerator<StreamEvent> { yield { type: 'text', text: 'a' }; await new Promise((r) => setTimeout(r, 20)); yield { type: 'text', text: 'b' }; }
+    const got: string[] = [];
+    for await (const ev of withWatchdog(ok(), { firstTokenMs: 500, idleMs: 500, abort: () => undefined })) { if (ev.type === 'text') { got.push(ev.text); } }
+    check('watchdog: passes events through when the stream keeps moving', got.join('') === 'ab');
+    async function* stallsLater(): AsyncGenerator<StreamEvent> { yield { type: 'text', text: 'a' }; await new Promise((r) => setTimeout(r, 300)); yield { type: 'text', text: 'b' }; }
+    let err2: unknown;
+    try { for await (const _ of withWatchdog(stallsLater(), { firstTokenMs: 500, idleMs: 60, abort: () => undefined })) { /* consume */ } } catch (e) { err2 = e; }
+    check('watchdog: mid-stream silence → ModelStallError(mid-stream)', err2 instanceof ModelStallError && (err2 as ModelStallError).phase === 'mid-stream');
+  }
 }
 
 async function agentLoopE2E() {
   console.log('\n[Agent loop end-to-end]');
   let calls = 0;
+  let flakyHits = 0;
+  let emptyHits = 0;
   const srv = await listen(async (req, res) => {
     if (req.url === '/v1/models') {
-      return res.end(JSON.stringify({ data: [{ id: 'native', capabilities: ['tool_use'] }, { id: 'textonly', capabilities: [] }] }));
+      return res.end(JSON.stringify({ data: [{ id: 'native', capabilities: ['tool_use'] }, { id: 'textonly', capabilities: [] }, { id: 'flaky', capabilities: ['tool_use'] }, { id: 'empty', capabilities: ['tool_use'] }, { id: 'looper', capabilities: ['tool_use'] }] }));
     }
     if (req.url === '/v1/chat/completions') {
       const body = JSON.parse(await readBody(req));
       calls++;
+      if (body.model === 'flaky' && flakyHits++ === 0) {
+        res.statusCode = 503;
+        return res.end('upstream overloaded');
+      }
       res.setHeader('content-type', 'text/event-stream');
       const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
       const transcript = JSON.stringify(body.messages);
       const sawResult = transcript.includes('ECHO:');
-      if (body.model === 'native') {
+      if (body.model === 'flaky') {
+        send({ choices: [{ delta: { content: 'Recovered after a retry.' } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+      } else if (body.model === 'empty') {
+        if (emptyHits++ === 0) {
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] }); // nothing at all
+        } else {
+          send({ choices: [{ delta: { content: 'Second time lucky.' } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        }
+      } else if (body.model === 'looper') {
+        // Keeps asking for the same thing until the loop guard refuses, then answers.
+        if (transcript.includes('Refused: this exact call')) {
+          send({ choices: [{ delta: { content: 'Okay, stopping the loop.' } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        } else {
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `l${calls}`, function: { name: 'echo', arguments: '{"text":"same"}' } }] } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+        }
+      } else if (body.model === 'native') {
         if (!sawResult) {
           // Two identical read-only calls: the second must be served from the per-turn cache.
           send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'echo', arguments: '{"text":"one"}' } }, { index: 1, id: 'b', function: { name: 'echo', arguments: '{"text":"two"}' } }, { index: 2, id: 'c', function: { name: 'echo', arguments: '{"text":"one"}' } }] } }] });
@@ -331,13 +380,32 @@ async function agentLoopE2E() {
     check('text-protocol: tool result fed back as user message', v2[2].role === 'user' && v2[2].content.includes('ECHO:three'), v2[2]);
     check('text-protocol: tool_call block stripped from assistant text', v2[1].content === 'Checking.' && v2[1].toolCalls?.length === 1);
 
+    // Resilience: a 5xx before the first token is retried transparently.
+    const sFlaky = mkSession('mock/flaky');
+    const evFlaky: AgentEvent[] = [];
+    const outFlaky = await runner.run({ session: sFlaky, userMessage: { role: 'user', content: 'go' }, emit: (e) => evFlaky.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+    check('resilience: HTTP 503 before first token is retried and recovers', outFlaky === 'Recovered after a retry.' && flakyHits === 2, { outFlaky, flakyHits });
+    check('resilience: retry is announced with reason=server', evFlaky.some((e) => e.type === 'retry' && (e.payload as { reason: string }).reason === 'server') && !evFlaky.some((e) => e.type === 'error'));
+    // An empty completion is asked again instead of being accepted as the answer.
+    const sEmpty = mkSession('mock/empty');
+    const evEmpty: AgentEvent[] = [];
+    const outEmpty = await runner.run({ session: sEmpty, userMessage: { role: 'user', content: 'go' }, emit: (e) => evEmpty.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+    check('resilience: empty completion is retried', outEmpty === 'Second time lucky.' && emptyHits === 2 && evEmpty.some((e) => e.type === 'retry' && (e.payload as { reason: string }).reason === 'empty'), { outEmpty, emptyHits });
+    // The same tool call over and over is refused after MAX_IDENTICAL_CALLS, which breaks the loop.
+    const sLoop = mkSession('mock/looper');
+    const beforeLoop = executions;
+    const outLoop = await runner.run({ session: sLoop, userMessage: { role: 'user', content: 'go' }, emit: () => {}, signal: new AbortController().signal, requestApproval: async () => true });
+    const refused = sLoop.messages.filter((m) => m.role === 'tool' && /Refused: this exact call/.test(m.content)).length;
+    check('resilience: identical tool call loop is cut off', outLoop === 'Okay, stopping the loop.' && refused >= 1 && executions - beforeLoop <= 3, { outLoop, refused, ran: executions - beforeLoop });
+
     // Cancellation
     const s3 = mkSession('mock/native');
     const ac = new AbortController();
     ac.abort();
     const out3 = await runner.run({ session: s3, userMessage: { role: 'user', content: 'go' }, emit: () => {}, signal: ac.signal, requestApproval: async () => true }).catch((e) => `ERR:${e.message}`);
     check('aborted signal exits loop quickly', out3 === '' || String(out3).startsWith('ERR:'), out3);
-    check('total model calls as expected', calls === 4, calls);
+    // native 2 + textonly 2 + flaky 2 (503 then ok) + empty 2 + looper 5 (3 served calls, 1 refused, final answer); the aborted run makes none.
+    check('total model calls as expected', calls === 13, calls);
 
     // manage_todos writes to the session via the tool context
     const s4 = mkSession('mock/native');

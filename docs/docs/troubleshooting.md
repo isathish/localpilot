@@ -43,7 +43,11 @@ The model's snippet didn't match the file. LocalPilot already retries with white
 
 ## Slow first response
 
-The model is loading into memory. Ollama keeps it loaded for 5 minutes by default (`OLLAMA_KEEP_ALIVE`). LM Studio: enable *Keep model loaded*.
+The model is loading into memory. Ollama keeps it loaded for 5 minutes by default (`OLLAMA_KEEP_ALIVE`). LM Studio: enable *Keep model loaded*. While nothing has arrived yet the status line counts the seconds (*Waiting for qwen2.5-coder · 45s (loading the model or a long prompt)…*); after 3 minutes with no output the request is cancelled and retried.
+
+## "Retrying (1/2)" notes, or "the model stopped responding"
+
+LocalPilot retries a model request on its own when the connection drops, the server answers 5xx/429, the stream goes silent for 90 s, or the model returns an empty completion — twice, with a short back-off, before showing an error. A *Retrying (n/2) — reason* note appears in the transcript each time. If the server says the prompt is too long, the conversation is compacted once and sent again. When an error does surface it comes with a **Retry** button that replays your last message. Repeated stalls usually mean the model is too large for the machine (watch memory) or the server is wedged — restart it. A tool called with the exact same arguments more than three times in one turn is refused so a confused model cannot loop forever; after 40 model steps in a single turn the agent stops and asks you to say *continue*.
 
 ## Parallel agents are slow
 

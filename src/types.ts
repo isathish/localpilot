@@ -240,6 +240,8 @@ export interface AgentEvent {
     | 'status'
     | 'error'
     | 'compaction'
+    /** A model request failed transiently (or came back empty) and is being retried. Payload: { attempt, max, reason, message }. */
+    | 'retry'
     /** The request looked ambiguous; the agent was given a workspace snapshot to resolve it. Payload: { reasons }. */
     | 'clarify'
     /** Skills matching the request and/or a recurring request type worth turning into a skill. */

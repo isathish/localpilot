@@ -10,6 +10,7 @@ import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
+import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
 import { recommendSkills, SkillLearner, skillHint } from './skillRecommender';
 import { SkillManager } from './skills';
@@ -37,6 +38,15 @@ export interface AgentRunOptions {
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
+/** Transient model failures (network, 5xx/429, stall, empty completion) are retried this many times per step. */
+const MAX_MODEL_RETRIES = 2;
+const RETRY_BACKOFF_MS = [800, 2500];
+/** Local models may need to load weights and prefill a long prompt before the first token. */
+const FIRST_TOKEN_TIMEOUT_MS = 180_000;
+/** Once streaming, this much silence means the server hung (a slow token is seconds, not a minute). */
+const IDLE_TIMEOUT_MS = 90_000;
+/** The same tool with the same arguments this many times in one turn is a loop, not progress. */
+const MAX_IDENTICAL_CALLS = 3;
 
 /** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
 export class AgentRunner {
@@ -162,6 +172,9 @@ export class AgentRunner {
     const think = cfg.thinking === 'off' ? undefined : cfg.thinking === 'on' ? true : cfg.thinking;
     let toolsExecuted = 0;
     let nudged = false;
+    /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
+    const callCounts = new Map<string, number>();
+    let completed = false;
 
     for (let iter = 0; iter < maxIter; iter++) {
       if (o.signal.aborted) {
@@ -184,9 +197,10 @@ export class AgentRunner {
           session.messages = result.messages;
           session.compactions++;
           emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
+          budget = { ...budget, historyTokens: result.after };
         }
       }
-      session.contextTokens = estimateMessagesTokens(session.messages) + budget.systemTokens + budget.toolsTokens;
+      session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
 
       // --- Model call -----------------------------------------------------------------------
       const busy = this.inflight.get(model.id) ?? new Set<string>();
@@ -199,53 +213,120 @@ export class AgentRunner {
       let text = '';
       let thinking = '';
       const calls: ToolCall[] = [];
-      try {
-        const stream = provider.chat({
-          model: model.modelId,
-          messages: [{ role: 'system', content: systemWithTextTools }, ...session.messages.map(stripMeta)],
-          tools: nativeTools && toolDefs.length ? toolDefs : undefined,
-          temperature: cfg.temperature,
-          maxTokens: cfg.maxOutputTokens,
-          contextWindow: Math.min(model.contextWindow, Math.max(cfg.contextWindow, 4096)),
-          think,
-          keepAlive: cfg.keepAlive || undefined,
-          signal: o.signal,
-        });
+      // Transient failures (connection drops, 5xx, a stalled server, an empty completion) are retried a
+      // couple of times before the user sees an error; a context-overflow reply compacts once and retries.
+      let attempt = 0;
+      let compactedForOverflow = false;
+      let aborted = false;
+      while (true) {
+        text = '';
+        thinking = '';
+        calls.length = 0;
+        const ac = new AbortController();
+        const onAbort = () => ac.abort();
+        o.signal.addEventListener('abort', onAbort, { once: true });
         let first = true;
-        for await (const ev of stream) {
-          if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
-            first = false;
-            emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
+        try {
+          const stream = provider.chat({
+            model: model.modelId,
+            messages: [{ role: 'system', content: systemWithTextTools }, ...session.messages.map(stripMeta)],
+            tools: nativeTools && toolDefs.length ? toolDefs : undefined,
+            temperature: cfg.temperature,
+            maxTokens: cfg.maxOutputTokens,
+            contextWindow: Math.min(model.contextWindow, Math.max(cfg.contextWindow, 4096)),
+            think,
+            keepAlive: cfg.keepAlive || undefined,
+            signal: ac.signal,
+          });
+          const guarded = withWatchdog(stream, {
+            firstTokenMs: FIRST_TOKEN_TIMEOUT_MS,
+            idleMs: IDLE_TIMEOUT_MS,
+            abort: () => ac.abort(),
+            onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — busy with another chat` : `Waiting for ${model.name}`} · ${s}s${s >= 30 ? ' (loading the model or a long prompt)' : ''}…`),
+          });
+          for await (const ev of guarded) {
+            if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
+              first = false;
+              emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
+            }
+            switch (ev.type) {
+              case 'text':
+                text += ev.text;
+                emit({ sessionId: session.id, type: 'assistant_delta', payload: ev.text });
+                break;
+              case 'thinking':
+                thinking += ev.text;
+                emit({ sessionId: session.id, type: 'thinking_delta', payload: ev.text });
+                break;
+              case 'tool_call':
+                calls.push(ev.call);
+                break;
+              case 'usage':
+                if (ev.promptTokens) {
+                  session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
+                }
+                break;
+            }
           }
-          switch (ev.type) {
-            case 'text':
-              text += ev.text;
-              emit({ sessionId: session.id, type: 'assistant_delta', payload: ev.text });
-              break;
-            case 'thinking':
-              thinking += ev.text;
-              emit({ sessionId: session.id, type: 'thinking_delta', payload: ev.text });
-              break;
-            case 'tool_call':
-              calls.push(ev.call);
-              break;
-            case 'usage':
-              if (ev.promptTokens) {
-                session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
-              }
-              break;
+        } catch (e) {
+          o.signal.removeEventListener('abort', onAbort);
+          if (o.signal.aborted) {
+            aborted = true;
+            break;
           }
+          const kind = classifyModelError(e);
+          const msg = e instanceof Error ? e.message : String(e);
+          if (kind === 'overflow' && !compactedForOverflow) {
+            // The server knows better than our estimate: shrink the history and send again.
+            compactedForOverflow = true;
+            this.log.warn(`model rejected the prompt as too long; compacting and retrying: ${msg}`);
+            status('Prompt too long for the model — compacting and retrying…');
+            session.messages = ctxMgr.pruneToolOutputs(session.messages, 0).messages;
+            const result = await ctxMgr.compact(session.messages, provider, model, o.signal, 4);
+            if (result.removed > 0) {
+              session.messages = result.messages;
+              session.compactions++;
+              emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
+            }
+            continue;
+          }
+          if (isTransient(kind) && first && attempt < MAX_MODEL_RETRIES) {
+            attempt++;
+            const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+            this.log.warn(`model call failed (${kind}), retry ${attempt}/${MAX_MODEL_RETRIES} in ${wait}ms: ${msg}`);
+            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? 'The server is rate limiting' : 'Connection to the model failed'} — retrying (${attempt}/${MAX_MODEL_RETRIES})…`);
+            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: MAX_MODEL_RETRIES, reason: kind, message: msg } });
+            await sleep(wait, o.signal);
+            if (o.signal.aborted) {
+              aborted = true;
+              break;
+            }
+            continue;
+          }
+          this.release(model.id, session.id);
+          this.log.error(`model call failed: ${msg}`);
+          const friendly = describeModelError(kind, msg, model.name);
+          emit({ sessionId: session.id, type: 'error', payload: friendly });
+          session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now() } });
+          const err = e instanceof Error ? e : new Error(msg);
+          (err as Error & { reported?: boolean }).reported = true;
+          throw err;
         }
-      } catch (e) {
+        o.signal.removeEventListener('abort', onAbort);
+        // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
+        if (!text.trim() && !calls.length && attempt < MAX_MODEL_RETRIES && !o.signal.aborted) {
+          attempt++;
+          this.log.warn(`empty completion from ${model.id}; retry ${attempt}/${MAX_MODEL_RETRIES}`);
+          status(`The model returned nothing — asking again (${attempt}/${MAX_MODEL_RETRIES})…`);
+          emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: MAX_MODEL_RETRIES, reason: 'empty', message: 'empty completion' } });
+          await sleep(RETRY_BACKOFF_MS[0], o.signal);
+          continue;
+        }
+        break;
+      }
+      if (aborted) {
         this.release(model.id, session.id);
-        if (o.signal.aborted) {
-          break;
-        }
-        const msg = e instanceof Error ? e.message : String(e);
-        this.log.error(`model call failed: ${msg}`);
-        emit({ sessionId: session.id, type: 'error', payload: msg });
-        session.messages.push({ role: 'assistant', content: text || `(error: ${msg})`, meta: { timestamp: Date.now() } });
-        throw e;
+        break;
       }
 
       this.release(model.id, session.id);
@@ -280,11 +361,12 @@ export class AgentRunner {
           });
           continue;
         }
+        completed = true;
         break;
       }
 
       // --- Tool execution (parallel for read-only tools) ------------------------------------
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision);
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts);
       toolsExecuted += calls.length;
       for (const c of calls) {
         if (c.name === 'load_skill' && depth === 0) {
@@ -297,6 +379,15 @@ export class AgentRunner {
       session.messages.push(...results);
       this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();
+    }
+
+    if (!completed && !o.signal.aborted) {
+      // Ran out of steps with tool results pending: say so instead of ending on a dangling tool call.
+      const note = `Stopped after ${maxIter} model steps in one turn without reaching a final answer. Reply "continue" to carry on from here, or narrow the task.`;
+      this.log.warn(`session ${session.id}: ${note}`);
+      session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
+      emit({ sessionId: session.id, type: 'assistant_delta', payload: note });
+      finalText = finalText || note;
     }
 
     session.updatedAt = Date.now();
@@ -362,7 +453,8 @@ export class AgentRunner {
     sessionId: string,
     nativeTools: boolean,
     cache: Map<string, Promise<ChatMessage>>,
-    vision = false
+    vision = false,
+    callCounts?: Map<string, number>
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
@@ -395,6 +487,16 @@ export class AgentRunner {
       const args = parseArgs(call.arguments);
       const tool = byName.get(call.name);
       emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+      if (callCounts) {
+        const key = callKey(call.name, args);
+        const n = (callCounts.get(key) ?? 0) + 1;
+        callCounts.set(key, n);
+        if (n > MAX_IDENTICAL_CALLS) {
+          const content = `Refused: this exact call (${call.name} with the same arguments) has already been made ${n - 1} times this turn and would return the same result. Use the earlier result, change the arguments, or take a different approach — if you are finished, answer the user.`;
+          emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content } });
+          return { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } };
+        }
+      }
       const cacheKey = tool?.parallelSafe ? `${call.name}:${JSON.stringify(args)}` : undefined;
       if (cacheKey) {
         const inflight = cache.get(cacheKey);

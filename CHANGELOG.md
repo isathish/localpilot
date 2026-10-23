@@ -4,6 +4,16 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+LocalPilot 1.0 — the local-first coding agent is stable: resilient model calls, a calm and steady chat, built-in skills for the whole development loop, and a release pipeline that ships every push.
+
+### Added
+- **Resilient model calls.** Every request to a model server now goes through a retry layer: connection drops, HTTP 5xx/429 and an empty completion are retried up to twice with back-off before you see an error; a stream that produces nothing for 3 minutes (model loading, long prompt) or goes silent for 90 s mid-answer is cancelled as a stall and retried; a server reply that the prompt is too long compacts the conversation once and sends it again. The chat shows *Retrying (1/2) — the model stopped responding* notes and counts the seconds while waiting for the first token; errors are rewritten into one actionable sentence (what failed, what to do) and carry a **Retry** button that replays your last message. New `retry` agent event for other front-ends.
+- **Loop and runaway guards.** The same tool with the same arguments more than three times in one turn is refused with a message that tells the model to use the earlier result or change approach; when a turn hits the 40-step limit the agent now says so (*reply "continue"*) instead of ending on a dangling tool call. An empty assistant reply is no longer accepted as the answer.
+
+### Changed
+- **Faster turns.** Project rules files (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/*`, copilot instructions…) are read once and cached until one of them changes instead of on every prompt build; the context budget's history estimate is reused rather than recomputed for every model step; failures are reported once (the agent loop) instead of twice.
+- **Version 1.0.0.** Settings, commands and the extension API are considered stable from here; breaking changes will bump the major version.
+
 ## 0.2.9 — 2026-10-23
 ### Added
 - **`claude-ui-ux` built-in skill.** A design playbook for calm, warm, typography-led interfaces and for the UX patterns of assistant/agent surfaces — content-first layout, warm neutrals with a single amber accent, generous spacing, quiet motion, streaming replies that never jump, collapsible tool steps, permission prompts with single-key answers, plan panels, honest empty/loading/error states — with a mandatory `browser_inspect` verification pass in both themes and at narrow widths. Loaded automatically for "Claude-like", "assistant UI", "agent UI", "calm/minimal but warm" requests, or force it with `/skill claude-ui-ux`.
