@@ -62,6 +62,19 @@ npm run release -- patch     # or minor | major | 1.2.3
 
 The script bumps `package.json` and the docs version, promotes the **Unreleased** section of `CHANGELOG.md`, runs compile + smoke + packaging, commits, tags `vX.Y.Z` and pushes. The **Release** workflow then builds and tests on CI, attaches `localpilot-X.Y.Z.vsix`, a stable `localpilot.vsix` and `SHA256SUMS.txt` to a GitHub Release with the changelog as notes, and — if `VSCE_PAT` / `OVSX_PAT` repository secrets exist — publishes to the VS Code Marketplace and Open VSX. The docs site deploys from `docs/` on every push to `main`.
 
+## Website
+
+The site in `docs/` is plain Jekyll (GitHub Pages). Everything site-wide lives in `docs/_config.yml`:
+
+| Key | Used by |
+|---|---|
+| `google_analytics` | Google tag (gtag.js) in `_includes/head.html`, plus `ask_ai`, `download_vsix`, `click_install`, `click_github` and `copy_markdown` events. |
+| `ask_ai` | The **Ask AI** buttons (`_includes/ask-ai.html`) shown under every docs title and in the footer. Each entry is an assistant whose public `?q=` parameter receives a pre-filled, page-aware prompt — ChatGPT, Claude, Perplexity and Gemini (via Google AI Mode, since the Gemini app has no prefill parameter). |
+| `topics`, `works_with` | Footer link columns and the keyword *Topics* strip (`_includes/footer.html`). Add a target keyword here so it becomes a crawlable link. |
+| `nav`, `guides` | Sidebar, footer columns, pager and `/llms.txt`. |
+
+Docs pages also get **Copy page as Markdown** (fetches the page source from GitHub and strips the front matter) and **View as Markdown** links, and `/llms.txt` lists every page with its description for LLM crawlers.
+
 ## Contributing
 
 Issues and pull requests are welcome at [{{ site.repo }}]({{ site.repo }}). Please run `npm run compile && npm run smoke` before opening a PR.

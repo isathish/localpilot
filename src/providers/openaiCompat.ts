@@ -124,6 +124,9 @@ export class OpenAICompatProvider implements LLMProvider {
     if (opts.jsonSchema) {
       body.response_format = { type: 'json_schema', json_schema: { name: 'response', schema: opts.jsonSchema } };
     }
+    if (typeof opts.think === 'string') {
+      body.reasoning_effort = opts.think;
+    }
 
     // Accumulate streamed tool-call fragments by index.
     const pending = new Map<number, { id: string; name: string; args: string }>();

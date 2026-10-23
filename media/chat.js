@@ -7,6 +7,7 @@
     statusText: $('statusText'), mode: $('mode'), model: $('model'), modelPicker: $('modelPicker'), ctx: $('ctxMeter'),
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
+    tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
   };
 
   const ICON = {
@@ -25,7 +26,7 @@
     beaker: '<svg viewBox="0 0 16 16"><path d="M6 2v5l-3.5 6a1 1 0 0 0 .9 1.5h9.2a1 1 0 0 0 .9-1.5L10 7V2"/><path d="M5 2h6"/></svg>',
   };
 
-  const state = { session: null, models: [], defaultModel: '', running: new Set(), attachments: [], images: [], skills: [], agents: [], openFiles: [], live: new Map(), changes: new Map() };
+  const state = { session: null, sessions: [], models: [], defaultModel: '', running: new Set(), attachments: [], images: [], skills: [], agents: [], openFiles: [], live: new Map(), changes: new Map(), todos: new Map() };
   const MENTIONS = [
     ['workspace', 'Project file tree'], ['selection', 'Current selection / active file'], ['problems', 'Errors & warnings'], ['git', 'git status + diff'], ['editors', 'List of open editors'],
   ];
@@ -251,8 +252,9 @@
     if (!live) {
       const root = el('div', 'msg assistant live');
       const body = el('div', 'body');
+      body.innerHTML = '<span class="typing" aria-label="Waiting for the model"><i></i><i></i><i></i></span>';
       root.appendChild(body);
-      live = { root, body, text: '', thinking: '', thinkingEl: null, tools: new Map(), subagents: new Map(), renderTimer: 0 };
+      live = { root, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subagents: new Map(), renderTimer: 0 };
       state.live.set(sessionId, live);
       if (state.session && state.session.id === sessionId) { els.messages.appendChild(root); }
     }
@@ -260,7 +262,13 @@
   }
   function scheduleRender(live) {
     if (live.renderTimer) { return; }
-    live.renderTimer = setTimeout(() => { live.renderTimer = 0; live.body.innerHTML = renderMarkdown(live.text); scrollToBottom(false); }, 50);
+    live.renderTimer = setTimeout(() => { live.renderTimer = 0; if (live.thinkingEl) { finishThinking(live); } live.body.innerHTML = renderMarkdown(live.text) + '<span class="caret"></span>'; scrollToBottom(false); }, 50);
+  }
+  function finishThinking(live) {
+    if (!live.thinkingEl) { return; }
+    setStepState(live.thinkingEl, 'ok');
+    live.thinkingEl.querySelector('.label').textContent = `Thought for ${Math.max(1, Math.round((Date.now() - live.thinkStart) / 1000))}s`;
+    live.thinkingEl = null;
   }
   // Steps for the live turn go into a steps container placed before the current text body.
   function liveSteps(live) {
@@ -288,8 +296,9 @@
         break;
       case 'thinking_delta':
         live.thinking += e.payload;
-        if (!live.thinkingEl) { live.thinkingEl = stepEl('thinking running', 'Thinking…', ''); liveSteps(live).appendChild(live.thinkingEl); }
+        if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = stepEl('thinking running', 'Thinking…', ''); liveSteps(live).appendChild(live.thinkingEl); if (live.body.querySelector('.typing')) { live.body.innerHTML = ''; } }
         live.thinkingEl.querySelector('.content').textContent = live.thinking;
+        live.thinkingEl.querySelector('.dur').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
         break;
       case 'status':
         if (!visible) { break; }
@@ -300,7 +309,8 @@
         } else { setStatus(typeof e.payload === 'string' ? e.payload : ''); }
         break;
       case 'tool_start': {
-        if (live.thinkingEl) { setStepState(live.thinkingEl, 'ok'); live.thinkingEl.querySelector('.label').textContent = 'Thought'; live.thinkingEl = null; }
+        if (live.thinkingEl) { finishThinking(live); }
+        if (live.body.querySelector('.typing')) { live.body.innerHTML = ''; }
         rotateBody(live);
         if (e.payload && e.payload.childId) { break; }
         const node = toolStep({ id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
@@ -315,10 +325,15 @@
         if (node) {
           setStepState(node, e.payload.isError ? 'error' : 'ok');
           node.querySelector('.content').textContent = e.payload.content || '';
-          if (e.payload.durationMs > 800) { node.querySelector('.dur').textContent = `${(e.payload.durationMs / 1000).toFixed(1)}s`; }
+          if (e.payload.cached) { node.querySelector('.dur').textContent = 'cached'; }
+          else if (e.payload.durationMs > 800) { node.querySelector('.dur').textContent = `${(e.payload.durationMs / 1000).toFixed(1)}s`; }
         }
         break;
       }
+      case 'todos':
+        state.todos.set(sid, e.payload || []);
+        if (state.session && state.session.id === sid) { state.session.todos = e.payload || []; renderTasks(); }
+        break;
       case 'subagent_start': {
         rotateBody(live);
         const d = stepEl('subagent running', `Subagent <b>${esc(e.payload.agent)}</b> · ${esc(e.payload.prompt.slice(0, 80))}`, '');
@@ -358,7 +373,7 @@
     live.body.innerHTML = renderMarkdown(live.text);
     live.root.classList.remove('live');
     for (const node of live.tools.values()) { if (node.classList.contains('running')) { setStepState(node, 'error'); } }
-    if (live.thinkingEl) { setStepState(live.thinkingEl, 'ok'); live.thinkingEl.querySelector('.label').textContent = 'Thought'; }
+    finishThinking(live);
     state.live.delete(sessionId);
   }
 
@@ -370,9 +385,47 @@
   function setRunning(running) {
     els.send.classList.toggle('hidden', running);
     els.stop.classList.toggle('hidden', !running);
+    els.progress.classList.toggle('hidden', !running);
     if (!running) { setStatus(''); }
     updateSendEnabled();
   }
+
+  // Multitasking tab strip: running sessions first, then recent ones.
+  function renderTabs() {
+    const list = state.sessions.slice();
+    list.sort((a, b) => (state.running.has(b.id) - state.running.has(a.id)) || (b.updatedAt - a.updatedAt));
+    const show = list.length > 1 || state.running.size > 0;
+    els.tabs.classList.toggle('hidden', !show);
+    if (!show) { return; }
+    els.tabs.innerHTML = '';
+    for (const s of list.slice(0, 8)) {
+      const active = state.session && state.session.id === s.id;
+      const running = state.running.has(s.id);
+      const b = el('button', `tab ${active ? 'active' : ''} ${running ? 'running' : ''}`, `${running ? '<span class="spin"></span>' : ''}<span class="t">${esc(s.title || 'New chat')}</span>`);
+      b.title = `${s.title}\n${s.mode} · ${s.messageCount} messages${running ? ' · running' : ''}`;
+      b.onclick = () => post({ type: 'selectSession', id: s.id });
+      els.tabs.appendChild(b);
+    }
+    const plus = el('button', 'tab add', '+');
+    plus.title = 'New chat (runs in parallel)';
+    plus.onclick = () => post({ type: 'newSession', mode: els.mode.value });
+    els.tabs.appendChild(plus);
+  }
+
+  function renderTasks() {
+    const todos = (state.session && state.session.todos) || [];
+    els.tasks.classList.toggle('hidden', !todos.length);
+    if (!todos.length) { return; }
+    const done = todos.filter((t) => t.status === 'done').length;
+    els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
+    els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
+    els.tasksList.innerHTML = '';
+    for (const t of todos) {
+      const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? ICON.check : t.status === 'in_progress' ? ICON.spin : ''}</span><span class="title">${esc(t.title)}</span>`);
+      els.tasksList.appendChild(li);
+    }
+  }
+  els.tasksToggle.onclick = () => els.tasksList.classList.toggle('collapsed');
   function updateSendEnabled() { els.send.disabled = !els.input.value.trim(); }
 
   function updateCtx() {
@@ -648,13 +701,14 @@
     const m = ev.data;
     switch (m.type) {
       case 'init':
-        state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running);
-        syncModelSelect();
+        state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running);
+        syncModelSelect(); renderTabs();
         break;
       case 'sessions':
+        state.sessions = m.sessions || []; renderTabs();
         break;
       case 'session':
-        state.session = m.session; renderSession(); renderChanges(); els.input.focus();
+        state.session = m.session; renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus();
         break;
       case 'changes':
         state.changes.set(m.sessionId, m.files);
@@ -672,6 +726,7 @@
       case 'running':
         if (m.running) { state.running.add(m.sessionId); } else { state.running.delete(m.sessionId); finishLive(m.sessionId); }
         if (state.session && state.session.id === m.sessionId) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
+        renderTabs();
         break;
       case 'approval':
         renderApproval(m);

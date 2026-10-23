@@ -98,9 +98,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 <div id="app">
+  <div id="progress" class="progress hidden" aria-hidden="true"></div>
+  <nav id="tabs" class="tabs hidden" aria-label="Chats"></nav>
   <main id="messages" aria-live="polite"></main>
   <div id="approvals"></div>
   <footer id="composer">
+    <div id="tasks" class="tasks hidden">
+      <div class="tasks-head">
+        <button id="tasksToggle" class="changes-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="tasksLabel">Tasks</span></button>
+        <span class="spacer"></span>
+        <span id="tasksMeter" class="tasks-meter"><i></i></span>
+      </div>
+      <ul id="tasksList"></ul>
+    </div>
     <div id="changes" class="changes hidden">
       <div class="changes-head">
         <button id="changesToggle" class="changes-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="changesLabel">0 files changed</span></button>

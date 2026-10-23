@@ -1,18 +1,74 @@
 <footer class="footer">
-  <div class="wrap footer-inner">
-    <div class="footer-brand">
-      <img src="{{ '/assets/logo.svg' | relative_url }}" alt="" width="24" height="24">
-      <span>LocalPilot</span>
-      <span class="muted">· v{{ site.version }} · MIT License</span>
+  <div class="wrap">
+    <div class="footer-ask">
+      {% include ask-ai.html placement="footer" %}
     </div>
-    <nav class="footer-links">
-      <a href="{{ '/docs/getting-started/' | relative_url }}">Docs</a>
-      {% for g in site.guides %}<a href="{{ g.url | relative_url }}">{{ g.title }}</a>{% endfor %}
-      <a href="{{ site.releases }}">Releases</a>
-      <a href="{{ site.repo }}/issues">Issues</a>
-      <a href="{{ site.repo }}/blob/main/CHANGELOG.md">Changelog</a>
-      <a href="{{ site.repo }}">GitHub</a>
+
+    <div class="footer-grid">
+      <div class="footer-col footer-brand-col">
+        <a class="footer-brand" href="{{ '/' | relative_url }}">
+          <img src="{{ '/assets/logo.svg' | relative_url }}" alt="" width="28" height="28">
+          <span>LocalPilot</span>
+        </a>
+        <p class="footer-tagline">{{ site.tagline }}. Free and open source. Agent mode, parallel agents, skills, screenshots and MCP — powered by the models you run with Ollama, LM Studio, llama.cpp or vLLM.</p>
+        <p class="footer-meta muted small">v{{ site.version }} · MIT License · VS Code 1.140+ · macOS, Linux, Windows</p>
+        <div class="footer-cta">
+          <a class="btn btn-primary btn-sm" href="{{ site.marketplace }}">Install from Marketplace</a>
+          <a class="btn btn-sm" href="{{ site.download }}">Download VSIX</a>
+        </div>
+      </div>
+
+      <nav class="footer-col" aria-label="Product">
+        <h4>Product</h4>
+        <a href="{{ '/#features' | relative_url }}">Features</a>
+        <a href="{{ '/#how' | relative_url }}">How it works</a>
+        <a href="{{ '/#compare' | relative_url }}">Compare with Copilot, Cursor &amp; Claude Code</a>
+        <a href="{{ '/#faq' | relative_url }}">FAQ</a>
+        <a href="{{ site.marketplace }}">VS Code Marketplace</a>
+        <a href="{{ site.openvsx }}">Open VSX Registry</a>
+        <a href="{{ site.releases }}">Releases &amp; VSIX downloads</a>
+        <a href="{{ site.repo }}/blob/main/CHANGELOG.md">Changelog</a>
+      </nav>
+
+      <nav class="footer-col" aria-label="Documentation">
+        <h4>Documentation</h4>
+        {% for item in site.nav %}<a href="{{ item.url | relative_url }}">{{ item.title }}</a>
+        {% endfor %}
+      </nav>
+
+      <nav class="footer-col" aria-label="Guides and works with">
+        <h4>Guides</h4>
+        {% for g in site.guides %}<a href="{{ g.url | relative_url }}">{{ g.title }}</a>
+        {% endfor %}
+        <h4 class="footer-h4-gap">Works with</h4>
+        {% for w in site.works_with %}<a href="{{ w.url | relative_url }}">{{ w.title }}</a>
+        {% endfor %}
+      </nav>
+
+      <nav class="footer-col" aria-label="Community">
+        <h4>Community</h4>
+        <a href="{{ site.repo }}">GitHub repository</a>
+        <a href="{{ site.repo }}/issues">Report an issue</a>
+        <a href="{{ site.repo }}/discussions">Discussions</a>
+        <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>
+        <a href="{{ site.repo }}/blob/main/docs/docs/development.md">Contributing</a>
+        <a href="{{ site.author.url }}">Built by {{ site.author.name }}</a>
+        <h4 class="footer-h4-gap">For machines</h4>
+        <a href="{{ '/llms.txt' | relative_url }}">llms.txt</a>
+        <a href="{{ '/sitemap.xml' | relative_url }}">Sitemap</a>
+        <a href="{{ site.repo }}/releases.atom">Releases RSS</a>
+      </nav>
+    </div>
+
+    <nav class="footer-topics" aria-label="Topics">
+      <span class="footer-topics-label">Topics</span>
+      {% for t in site.topics %}<a class="footer-topic" href="{{ t.url | relative_url }}">{{ t.title }}</a>{% endfor %}
     </nav>
+
+    <div class="footer-bottom">
+      <p class="muted small">© {{ site.time | date: '%Y' }} LocalPilot · <a href="{{ site.author.url }}">{{ site.author.name }}</a> · Released under the <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>.</p>
+      <p class="muted small">Privacy: your code never leaves your machine. LocalPilot talks only to the model servers you configure and collects no telemetry. This website uses Google Analytics for anonymous traffic statistics.</p>
+      <p class="muted small">GitHub Copilot, Cursor, Claude, ChatGPT, Perplexity, Gemini, Ollama, LM Studio and VS Code are trademarks of their respective owners. LocalPilot is an independent open-source project and is not affiliated with or endorsed by them.</p>
+    </div>
   </div>
-  <p class="wrap muted small">Your code never leaves your machine. LocalPilot talks only to the model servers you configure.</p>
 </footer>

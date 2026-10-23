@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
 import { ChangeTracker } from './agent/changeTracker';
+import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
 import { getConfig, onConfigChange, setDefaultModel } from './config';
@@ -18,6 +19,7 @@ import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { ChatViewProvider } from './ui/chatViewProvider';
+import { installCli, registerUriHandler } from './ui/cli';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { LocalModelChatProvider } from './ui/lmProvider';
@@ -34,12 +36,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspace = new WorkspaceContext(log);
   const store = new SessionStore(context, log);
   const tracker = new ChangeTracker(log);
-  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker);
+  const memory = new MemoryStore(context.globalStorageUri, log);
+  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
   const mcp = new McpManager(tools, log);
-  context.subscriptions.push(providers, tools, skills, store, tracker, controller, mcp);
+  context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp);
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
 
   await Promise.all([store.load(), skills.refresh()]);
@@ -58,6 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
+  registerUriHandler(context, controller, () => view.reveal());
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', new LocalModelChatProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
@@ -254,6 +258,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.showInformationMessage(`LocalPilot: ${skills.allSkills.length} skills, ${skills.allAgents.length} subagents, ${mcp.status.reduce((n, s) => n + s.tools, 0)} MCP tools`);
   });
   cmd('localpilot.showLogs', () => log.show());
+  cmd('localpilot.installCli', () => installCli());
+  cmd('localpilot.openMemory', async () => {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: '$(repo) Project memory', description: '.localpilot/memory/', scope: 'project' as const },
+        { label: '$(globe) Global memory', description: 'shared across workspaces', scope: 'global' as const },
+      ],
+      { title: 'LocalPilot memory' }
+    );
+    if (!pick) {
+      return;
+    }
+    const dir = memory.openFolder(pick.scope);
+    if (!dir) {
+      return void vscode.window.showWarningMessage('Open a folder to use project memory.');
+    }
+    await vscode.workspace.fs.createDirectory(dir);
+    const notes = (await memory.list()).filter((n) => n.scope === pick.scope);
+    if (!notes.length) {
+      await memory.write('README', '# LocalPilot memory\n\nThe agent saves durable notes here with `memory_save`. Edit freely; each file is a note.', pick.scope);
+    }
+    await vscode.commands.executeCommand('revealInExplorer', dir).then(undefined, () => undefined);
+    const first = notes[0] ? vscode.Uri.joinPath(dir, `${notes[0].name}.md`) : vscode.Uri.joinPath(dir, 'README.md');
+    await vscode.window.showTextDocument(first);
+  });
   cmd('localpilot.inlineEdit', () => inlineEdit(providers, tracker, workspace));
   cmd('localpilot.terminalCommand', () => terminalCommand(providers, workspace));
   cmd('localpilot.captureScreenshot', () => {

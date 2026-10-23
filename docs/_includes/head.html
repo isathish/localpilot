@@ -10,20 +10,25 @@
 <meta name="application-name" content="LocalPilot">
 <meta name="apple-mobile-web-app-title" content="LocalPilot">
 <link rel="alternate" type="application/rss+xml" title="LocalPilot releases" href="{{ site.repo }}/releases.atom">
-{% if site.google_analytics and jekyll.environment == 'production' %}
+{% if site.google_analytics %}
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id={{ site.google_analytics }}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
-  gtag('config', '{{ site.google_analytics }}', { anonymize_ip: true });
-  // Conversion-style events for the download CTAs.
+
+  gtag('config', '{{ site.google_analytics }}');
+
+  // Conversion-style events: installs/downloads, GitHub, and "Ask AI" hand-offs.
   document.addEventListener('click', function (e) {
     var a = e.target.closest && e.target.closest('a[href]');
     if (!a) { return; }
-    if (/releases\/latest\/download|\.vsix$/.test(a.href)) { gtag('event', 'download_vsix', { link_url: a.href, page_path: location.pathname }); }
-    else if (/github\.com\/isathish\/localpilot\/?$/.test(a.href)) { gtag('event', 'click_github', { page_path: location.pathname }); }
+    var p = { link_url: a.href, page_path: location.pathname };
+    if (a.dataset.ai) { gtag('event', 'ask_ai', { assistant: a.dataset.ai, placement: a.dataset.placement || 'page', page_path: location.pathname }); }
+    else if (/releases\/latest\/download|\.vsix$/.test(a.href)) { gtag('event', 'download_vsix', p); }
+    else if (/marketplace\.visualstudio\.com|open-vsx\.org/.test(a.href)) { gtag('event', 'click_install', p); }
+    else if (/github\.com\/isathish\/localpilot\/?$/.test(a.href)) { gtag('event', 'click_github', p); }
   }, true);
 </script>
 {% endif %}

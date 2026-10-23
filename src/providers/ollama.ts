@@ -119,6 +119,9 @@ export class OllamaProvider implements LLMProvider {
     if (opts.think !== undefined) {
       body.think = opts.think;
     }
+    if (opts.keepAlive) {
+      body.keep_alive = opts.keepAlive;
+    }
     for await (const line of streamLines(`${this.baseUrl}/api/chat`, body, this.headers, opts.signal)) {
       let chunk: OllamaChatChunk;
       try {

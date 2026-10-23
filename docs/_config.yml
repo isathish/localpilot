@@ -6,6 +6,7 @@ baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
 download: https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix
 marketplace: https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent
+openvsx: https://open-vsx.org/extension/localpilot/localpilot-agent
 extension_id: localpilot.localpilot-agent
 releases: https://github.com/isathish/localpilot/releases
 version: 0.1.3
@@ -61,6 +62,8 @@ nav:
     url: /docs/parallel-agents/
   - title: Skills & subagents
     url: /docs/skills-and-agents/
+  - title: Memory, planning & CLI
+    url: /docs/memory-and-planning/
   - title: Context & mentions
     url: /docs/context/
   - title: Screenshots & images
@@ -86,3 +89,83 @@ guides:
     url: /guides/github-copilot-alternative/
   - title: Offline AI coding assistant
     url: /guides/offline-ai-coding-assistant/
+# "Ask AI" buttons rendered by _includes/ask-ai.html. Each product opens with the prompt pre-filled via its public query parameter.
+# Gemini has no public prefill parameter in the Gemini app, so it uses Google AI Mode (udm=50), which is powered by Gemini.
+ask_ai:
+  - name: ChatGPT
+    key: chatgpt
+    url: https://chatgpt.com/?q=
+    color: "#10a37f"
+    title: Ask ChatGPT (OpenAI GPT) about this page
+  - name: Claude
+    key: claude
+    url: https://claude.ai/new?q=
+    color: "#d97757"
+    title: Ask Claude (Anthropic) about this page
+  - name: Perplexity
+    key: perplexity
+    url: https://www.perplexity.ai/search/new?q=
+    color: "#20808d"
+    title: Ask Perplexity about this page
+  - name: Gemini
+    key: gemini
+    url: "https://www.google.com/search?udm=50&amp;q="
+    color: "#4285f4"
+    title: Ask Google Gemini (AI Mode) about this page
+# Footer topic links — one entry per target keyword so every keyword is a real, crawlable link.
+topics:
+  - title: Local AI coding assistant
+    url: /guides/offline-ai-coding-assistant/
+  - title: Offline AI code assistant
+    url: /guides/offline-ai-coding-assistant/
+  - title: VS Code AI agent
+    url: /docs/agent-modes/
+  - title: Ollama VS Code extension
+    url: /guides/ollama-vscode/
+  - title: LM Studio VS Code
+    url: /guides/lm-studio-vscode/
+  - title: llama.cpp VS Code
+    url: /docs/models/
+  - title: vLLM VS Code
+    url: /docs/models/
+  - title: GitHub Copilot alternative
+    url: /guides/github-copilot-alternative/
+  - title: Cursor alternative
+    url: /#compare
+  - title: Claude Code alternative
+    url: /#compare
+  - title: Private coding assistant
+    url: /guides/offline-ai-coding-assistant/
+  - title: Self-hosted Copilot
+    url: /guides/github-copilot-alternative/
+  - title: Local LLM coding
+    url: /docs/models/
+  - title: qwen2.5-coder VS Code
+    url: /docs/models/
+  - title: AI agent VS Code extension
+    url: /docs/features/
+  - title: MCP VS Code
+    url: /docs/mcp/
+  - title: Agentic coding
+    url: /docs/parallel-agents/
+  - title: Open source Copilot
+    url: /guides/github-copilot-alternative/
+  - title: Skills & subagents
+    url: /docs/skills-and-agents/
+  - title: Screenshots & vision models
+    url: /docs/images/
+works_with:
+  - title: Ollama
+    url: /guides/ollama-vscode/
+  - title: LM Studio
+    url: /guides/lm-studio-vscode/
+  - title: llama.cpp
+    url: /docs/models/
+  - title: vLLM
+    url: /docs/models/
+  - title: Unsloth exports
+    url: /docs/models/
+  - title: OpenAI-compatible servers
+    url: /docs/models/
+  - title: MCP servers
+    url: /docs/mcp/

@@ -21,6 +21,7 @@ import { SkillManager } from '../src/agent/skills';
 import { WorkspaceContext } from '../src/context/workspaceContext';
 import { createAgentTools } from '../src/agent/subagents';
 import { diffLines } from '../src/agent/changeTracker';
+import { manageTodosTool } from '../src/agent/memory';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -229,7 +230,8 @@ async function agentLoopE2E() {
       const sawResult = transcript.includes('ECHO:');
       if (body.model === 'native') {
         if (!sawResult) {
-          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'echo', arguments: '{"text":"one"}' } }, { index: 1, id: 'b', function: { name: 'echo', arguments: '{"text":"two"}' } }] } }] });
+          // Two identical read-only calls: the second must be served from the per-turn cache.
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'echo', arguments: '{"text":"one"}' } }, { index: 1, id: 'b', function: { name: 'echo', arguments: '{"text":"two"}' } }, { index: 2, id: 'c', function: { name: 'echo', arguments: '{"text":"one"}' } }] } }] });
           send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
         } else {
           send({ choices: [{ delta: { content: 'Final answer after tools.' } }] });
@@ -262,10 +264,12 @@ async function agentLoopE2E() {
     const workspace = new WorkspaceContext(log);
     let concurrent = 0;
     let peak = 0;
+    let executions = 0;
     const echo: Tool = {
       parallelSafe: true,
       definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
       async execute(args) {
+        executions++;
         concurrent++;
         peak = Math.max(peak, concurrent);
         await new Promise((r) => setTimeout(r, 30));
@@ -282,9 +286,10 @@ async function agentLoopE2E() {
     const s = mkSession('mock/native');
     const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'go' }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true });
     check('native: final text returned', out === 'Final answer after tools.', out);
-    check('native: two tool calls executed in parallel', events.filter((e) => e.type === 'tool_end').length === 2 && peak === 2, { peak });
-    check('native: transcript shape user→assistant(tools)→tool×2→assistant', s.messages.map((m) => m.role).join(',') === 'user,assistant,tool,tool,assistant', s.messages.map((m) => m.role));
-    check('native: tool results carry call ids', s.messages[2].toolCallId === 'a' && s.messages[3].toolCallId === 'b');
+    check('native: tool calls executed in parallel', events.filter((e) => e.type === 'tool_end').length === 3 && peak >= 2, { peak });
+    check('native: identical read-only call served from cache', executions === 2 && events.some((e) => e.type === 'tool_end' && (e.payload as { cached?: boolean }).cached), { executions });
+    check('native: transcript shape user→assistant(tools)→tool×3→assistant', s.messages.map((m) => m.role).join(',') === 'user,assistant,tool,tool,tool,assistant', s.messages.map((m) => m.role));
+    check('native: tool results carry call ids', s.messages[2].toolCallId === 'a' && s.messages[3].toolCallId === 'b' && s.messages[4].toolCallId === 'c');
     check('native: turn_end emitted', events.at(-1)?.type === 'turn_end');
 
     const s2 = mkSession('mock/textonly');
@@ -300,6 +305,13 @@ async function agentLoopE2E() {
     const out3 = await runner.run({ session: s3, userMessage: { role: 'user', content: 'go' }, emit: () => {}, signal: ac.signal, requestApproval: async () => true }).catch((e) => `ERR:${e.message}`);
     check('aborted signal exits loop quickly', out3 === '' || String(out3).startsWith('ERR:'), out3);
     check('total model calls as expected', calls === 4, calls);
+
+    // manage_todos writes to the session via the tool context
+    const s4 = mkSession('mock/native');
+    const todoEvents: AgentEvent[] = [];
+    const ctx = { sessionId: s4.id, signal: new AbortController().signal, depth: 0, progress() {}, trackChange: async () => {}, requestApproval: async () => true, todos: { get: () => s4.todos ?? [], set: (items: Session['todos']) => { s4.todos = items; todoEvents.push({ sessionId: s4.id, type: 'todos', payload: items }); } } };
+    const r = await manageTodosTool.execute({ todos: [{ id: '1', title: 'Read code', status: 'done' }, { id: '2', title: 'Edit file', status: 'in_progress' }, { title: 'Run tests' }] }, ctx);
+    check('manage_todos stores a sanitised list and reports progress', s4.todos?.length === 3 && s4.todos[2].status === 'pending' && r.content.includes('1/3 done') && todoEvents.length === 1, s4.todos);
   } finally {
     srv.close();
     delete process.env.LP_MOCK_URL;

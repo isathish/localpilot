@@ -11,6 +11,7 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
+import { MemoryStore } from './memory';
 
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
 
@@ -40,7 +41,8 @@ export class AgentRunner {
     private readonly skills: SkillManager,
     private readonly workspace: WorkspaceContext,
     private readonly log: vscode.LogOutputChannel,
-    private readonly tracker?: ChangeTracker
+    private readonly tracker?: ChangeTracker,
+    private readonly memory?: MemoryStore
   ) {}
 
   async run(o: AgentRunOptions): Promise<string> {
@@ -70,6 +72,9 @@ export class AgentRunner {
       workspace: this.workspace,
       append: cfg.systemPromptAppend,
       roleOverride: o.roleOverride,
+      memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection() : undefined,
+      workingSet: session.workingSet,
+      todos: session.todos,
     });
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${system}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : system;
 
@@ -82,11 +87,22 @@ export class AgentRunner {
       depth,
       progress: (t) => status(t),
       trackChange: (fsPath) => this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve(),
+      todos: {
+        get: () => session.todos ?? [],
+        set: (items) => {
+          session.todos = items;
+          emit({ sessionId: session.id, type: 'todos', payload: items });
+        },
+      },
       requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id),
     };
 
     let finalText = '';
     const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
+    // Read-only tool results are memoised for the turn (including in-flight calls, so identical
+    // parallel requests run once); any mutating tool clears the cache.
+    const toolCache = new Map<string, Promise<ChatMessage>>();
+    const think = cfg.thinking === 'off' ? undefined : cfg.thinking === 'on' ? true : cfg.thinking;
 
     for (let iter = 0; iter < maxIter; iter++) {
       if (o.signal.aborted) {
@@ -127,10 +143,16 @@ export class AgentRunner {
           temperature: cfg.temperature,
           maxTokens: cfg.maxOutputTokens,
           contextWindow: Math.min(model.contextWindow, Math.max(cfg.contextWindow, 4096)),
-          think: cfg.thinking ? true : undefined,
+          think,
+          keepAlive: cfg.keepAlive || undefined,
           signal: o.signal,
         });
+        let first = true;
         for await (const ev of stream) {
+          if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
+            first = false;
+            emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
+          }
           switch (ev.type) {
             case 'text':
               text += ev.text;
@@ -181,8 +203,9 @@ export class AgentRunner {
       }
 
       // --- Tool execution (parallel for read-only tools) ------------------------------------
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools);
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache);
       session.messages.push(...results);
+      this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();
     }
 
@@ -204,6 +227,26 @@ export class AgentRunner {
     return list;
   }
 
+  private trackWorkingSet(session: Session, calls: ToolCall[]): void {
+    const set = session.workingSet ?? [];
+    for (const c of calls) {
+      if (!/^(read_file|edit_file|write_file)$/.test(c.name)) {
+        continue;
+      }
+      const p = parseArgs(c.arguments).path;
+      if (typeof p !== 'string' || !p) {
+        continue;
+      }
+      const rel = vscode.workspace.asRelativePath(p);
+      const idx = set.indexOf(rel);
+      if (idx >= 0) {
+        set.splice(idx, 1);
+      }
+      set.push(rel);
+    }
+    session.workingSet = set.slice(-40);
+  }
+
   private async executeToolCalls(
     calls: ToolCall[],
     available: Tool[],
@@ -212,14 +255,13 @@ export class AgentRunner {
     ctxMgr: ContextManager,
     emit: (e: AgentEvent) => void,
     sessionId: string,
-    nativeTools: boolean
+    nativeTools: boolean,
+    cache: Map<string, Promise<ChatMessage>>
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
-    const runOne = async (call: ToolCall): Promise<ChatMessage> => {
-      const args = parseArgs(call.arguments);
-      emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+    const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       const started = Date.now();
-      let result = byName.has(call.name)
+      let result = tool
         ? await this.tools.execute(call.name, args, ctx)
         : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
       if (ctx.signal.aborted) {
@@ -228,12 +270,33 @@ export class AgentRunner {
       const content = ctxMgr.clampToolOutput(result.content ?? '');
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
       return {
-        role: 'tool',
-        content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`,
-        toolCallId: call.id,
-        toolName: call.name,
-        meta: { timestamp: Date.now() },
+        msg: { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } },
+        isError: !!result.isError,
       };
+    };
+    const runOne = async (call: ToolCall): Promise<ChatMessage> => {
+      const args = parseArgs(call.arguments);
+      const tool = byName.get(call.name);
+      emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+      const cacheKey = tool?.parallelSafe ? `${call.name}:${JSON.stringify(args)}` : undefined;
+      if (cacheKey) {
+        const inflight = cache.get(cacheKey);
+        if (inflight) {
+          const hit = await inflight;
+          emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: false, durationMs: 0, content: hit.content, cached: true } });
+          return { ...hit, toolCallId: call.id, meta: { timestamp: Date.now() } };
+        }
+        const p = execute(call, tool, args).then((r) => {
+          if (r.isError) {
+            cache.delete(cacheKey);
+          }
+          return r.msg;
+        });
+        cache.set(cacheKey, p);
+        return p;
+      }
+      cache.clear();
+      return (await execute(call, tool, args)).msg;
     };
 
     // Parallel-safe tools run concurrently; mutating tools run sequentially in order, after reads.

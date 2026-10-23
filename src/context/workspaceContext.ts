@@ -6,8 +6,20 @@ import { runProcess } from '../tools/search';
 const RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules'];
 
 /** Lightweight workspace context: file tree snapshot, open editors, selections, diagnostics summary. */
-export class WorkspaceContext {
-  constructor(private readonly log: vscode.LogOutputChannel) {}
+export class WorkspaceContext implements vscode.Disposable {
+  private treeCache?: { text: string; max: number; at: number };
+  private readonly watcher: vscode.FileSystemWatcher;
+
+  constructor(private readonly log: vscode.LogOutputChannel) {
+    this.watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
+    const invalidate = () => (this.treeCache = undefined);
+    this.watcher.onDidCreate(invalidate);
+    this.watcher.onDidDelete(invalidate);
+  }
+
+  dispose(): void {
+    this.watcher.dispose();
+  }
 
   get root(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -70,11 +82,16 @@ export class WorkspaceContext {
   }
 
   async fileTree(maxEntries = 400): Promise<string> {
+    if (this.treeCache && this.treeCache.max === maxEntries && Date.now() - this.treeCache.at < 5 * 60_000) {
+      return this.treeCache.text;
+    }
     const files = await vscode.workspace.findFiles('**/*', '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**}', maxEntries);
     const root = this.root;
     const rel = files.map((f) => (root ? path.relative(root, f.fsPath) : f.fsPath)).sort();
     const truncated = files.length >= maxEntries ? `\n... (truncated at ${maxEntries} entries; use file_search/grep_search for more)` : '';
-    return rel.join('\n') + truncated;
+    const text = rel.join('\n') + truncated;
+    this.treeCache = { text, max: maxEntries, at: Date.now() };
+    return text;
   }
 
   activeEditorContext(): string {

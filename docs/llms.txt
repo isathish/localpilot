@@ -1,0 +1,23 @@
+---
+permalink: /llms.txt
+sitemap: false
+---
+# LocalPilot
+
+> {{ site.description }}
+
+LocalPilot is a free, MIT-licensed Visual Studio Code extension (`{{ site.extension_id }}`, version {{ site.version }}). It is a complete coding agent — agent / ask / plan modes, parallel agents with change review, skills and subagents, @-mentions and workspace context, screenshots and vision models, inline completions and MCP servers — that runs entirely against local model servers such as Ollama, LM Studio, llama.cpp and vLLM (or any OpenAI-compatible endpoint). No account, no telemetry, no code leaves the machine unless the user configures a remote endpoint. It is a private, offline alternative to GitHub Copilot, Cursor and Claude Code. It also reuses existing CLAUDE.md, AGENTS.md, .cursorrules, .cursor/rules, .claude/skills, .claude/agents and .github/copilot-instructions.md files.
+
+Install: VS Code Marketplace {{ site.marketplace }} or `code --install-extension {{ site.extension_id }}`. VSIX downloads: {{ site.releases }}. Source: {{ site.repo }}.
+
+## Documentation
+{% for item in site.nav %}{% assign p = site.pages | where: "url", item.url | first %}- [{{ item.title }}]({{ item.url | absolute_url }}){% if p.description %}: {{ p.description }}{% endif %}
+{% endfor %}
+## Guides
+{% for item in site.guides %}{% assign p = site.pages | where: "url", item.url | first %}- [{{ item.title }}]({{ item.url | absolute_url }}){% if p.description %}: {{ p.description }}{% endif %}
+{% endfor %}
+## Optional
+- [Home page]({{ site.url }}{{ site.baseurl }}/): landing page with feature overview, comparison table and FAQ
+- [Changelog]({{ site.repo }}/blob/main/CHANGELOG.md): release notes
+- [README]({{ site.repo }}#readme): repository overview
+- [Markdown sources]({{ site.repo }}/tree/main/docs): every documentation page is available as Markdown under docs/

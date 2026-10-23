@@ -69,7 +69,10 @@ export interface ChatRequestOptions {
   contextWindow?: number;
   stop?: string[];
   jsonSchema?: Record<string, unknown>;
-  think?: boolean;
+  /** Thinking: false/true or an effort level for reasoning models. */
+  think?: boolean | 'low' | 'medium' | 'high';
+  /** Keep the model loaded between turns (Ollama keep_alive). */
+  keepAlive?: string;
   signal?: AbortSignal;
 }
 
@@ -128,6 +131,8 @@ export interface ToolContext {
   progress(text: string): void;
   /** Snapshot a file before modifying it so the user can review/undo the agent's changes. */
   trackChange(fsPath: string): Promise<void>;
+  /** Read/replace the session's todo list (undefined for subagents without a session). */
+  todos?: { get(): TodoItem[]; set(items: TodoItem[]): void };
   /** Depth of agent nesting (0 = main agent). */
   depth: number;
 }
@@ -189,7 +194,19 @@ export interface Session extends SessionSummary {
   compactions: number;
   /** Attached context items (file URIs, selections). */
   attachments: string[];
+  /** Agent-maintained plan / checklist for the current task. */
+  todos?: TodoItem[];
+  /** Files read or modified in this session (workspace-relative), most recent last. */
+  workingSet?: string[];
 }
+
+export interface TodoItem {
+  id: string;
+  title: string;
+  status: 'pending' | 'in_progress' | 'done' | 'skipped';
+}
+
+export type ThinkingLevel = 'off' | 'on' | 'low' | 'medium' | 'high';
 
 export interface AgentEvent {
   sessionId: string;
@@ -204,6 +221,7 @@ export interface AgentEvent {
     | 'compaction'
     | 'subagent_start'
     | 'subagent_end'
+    | 'todos'
     | 'turn_end';
   payload?: unknown;
 }

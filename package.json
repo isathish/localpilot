@@ -224,6 +224,18 @@
         "category": "LocalPilot"
       },
       {
+        "command": "localpilot.installCli",
+        "title": "Install 'localpilot' Command in PATH",
+        "category": "LocalPilot",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "localpilot.openMemory",
+        "title": "Open Memory Notes",
+        "category": "LocalPilot",
+        "icon": "$(book)"
+      },
+      {
         "command": "localpilot.inlineEdit",
         "title": "Edit with LocalPilot (inline)",
         "category": "LocalPilot",
@@ -344,6 +356,16 @@
         },
         {
           "command": "localpilot.toggleInlineCompletions",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.openMemory",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.installCli",
           "when": "view == localpilot.chatView",
           "group": "2_manage"
         },
@@ -636,9 +658,20 @@
           "maximum": 2
         },
         "localpilot.thinking": {
+          "type": "string",
+          "enum": ["off", "on", "low", "medium", "high"],
+          "default": "off",
+          "description": "Extended thinking for reasoning models (Ollama `think`, OpenAI-compatible `reasoning_effort`). Reasoning is shown as a collapsible step."
+        },
+        "localpilot.keepAlive": {
+          "type": "string",
+          "default": "30m",
+          "description": "How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, -1 for forever). Avoids reload latency between turns."
+        },
+        "localpilot.memory.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Enable extended thinking for reasoning models that support it (Ollama `think`)."
+          "default": true,
+          "description": "Let the agent read and save durable notes in .localpilot/memory (project) and global storage (user)."
         },
         "localpilot.compactionThreshold": {
           "type": "number",

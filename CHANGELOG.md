@@ -2,6 +2,22 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Added
+- **Persistent memory**: the agent saves and recalls durable notes (`memory_save` / `memory_read` / `memory_list` / `memory_delete`) in `.localpilot/memory/` (project, commit-able) and global storage (user). A compact index is injected into every prompt; *LocalPilot: Open Memory Notes* opens the folder.
+- **Planning checklist**: `manage_todos` tool and a live **Tasks** panel with progress bar; the agent plans multi-step work first and updates each step as it goes. Plan mode now emits the checklist too.
+- **`localpilot` CLI**: *Install 'localpilot' Command in PATH* writes a shim so `localpilot "fix the tests"`, `--plan`, `--ask`, `--file`, `--parallel` start agents in the current folder via a `vscode://` URI handler.
+- **Multitasking tab strip** in the chat view: running sessions first with spinners, `+` to start another agent in parallel.
+- **Loading & streaming UI**: top progress bar while running, typing indicator before the first token, streaming caret, shimmer on running tool steps, *Thought for Ns* timer.
+- `localpilot.thinking` levels `off|on|low|medium|high` (Ollama `think`, OpenAI `reasoning_effort`); `localpilot.keepAlive` keeps the Ollama model loaded between turns; `localpilot.memory.enabled`.
+- Website: **Ask AI** buttons on every docs page and in the footer — open ChatGPT, Claude, Perplexity or Gemini (Google AI Mode) with a page-aware prompt pre-filled; **Copy page as Markdown** and **View as Markdown** on docs pages; `/llms.txt` index for LLM crawlers.
+- Website: full footer with Product, Documentation, Guides, Works-with and Community columns, a Topics strip linking every target keyword, and privacy/trademark notices.
+
+### Changed
+- **Caching**: identical read-only tool calls are served once per turn (including concurrent duplicates) and show a *cached* badge; mutating tools invalidate the cache. `@workspace` file tree is cached with file-watcher invalidation.
+- **Context**: the prompt now carries the session's working set (files read/edited) and current checklist, so compaction no longer loses track of progress.
+- Website: Google tag (gtag.js) now loads whenever `google_analytics` is configured (previously only in the `production` Jekyll environment) and reports `ask_ai`, `click_install`, `download_vsix`, `click_github` and `copy_markdown` events.
+
 ## 0.1.3 — 2026-10-23
 ### Changed
 - New icon: amber tile with a bold graphite mark — crisp at 16–128 px and on light or dark backgrounds.

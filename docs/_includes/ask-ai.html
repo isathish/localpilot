@@ -1,0 +1,55 @@
+{%- comment -%}
+Ask-AI hand-off buttons. Usage:
+  {% include ask-ai.html placement="page" %}    – page-aware prompt + Copy/View Markdown (docs pages)
+  {% include ask-ai.html placement="footer" %}  – product-level prompt (every page)
+Each button opens the assistant with the prompt pre-filled through its public query parameter (see site.ask_ai in _config.yml).
+{%- endcomment -%}
+{%- assign placement = include.placement | default: 'page' -%}
+{%- assign site_home = site.url | append: site.baseurl | append: '/' -%}
+{%- assign page_abs = page.url | absolute_url -%}
+{%- if placement == 'footer' or page.layout == 'landing' -%}
+  {%- capture ai_prompt -%}Tell me about LocalPilot ({{ site_home }}), a free, open-source, local-first AI coding agent for VS Code that runs 100% on my machine with Ollama, LM Studio, llama.cpp or vLLM (agent mode, parallel agents, skills, subagents, screenshots and MCP). How does it compare with GitHub Copilot, Cursor and Claude Code, and how do I install it from the VS Code Marketplace ({{ site.marketplace }})?{%- endcapture -%}
+{%- else -%}
+  {%- capture ai_prompt -%}Read {{ page_abs }} and explain "{{ page.title }}" from the LocalPilot documentation. LocalPilot is a free, open-source, local-first AI coding agent for VS Code that runs with Ollama, LM Studio, llama.cpp or vLLM. Summarize the key points, then answer my follow-up questions about it.{%- endcapture -%}
+{%- endif -%}
+{%- assign ai_q = ai_prompt | strip | url_encode -%}
+<div class="ask-ai ask-ai--{{ placement }}" role="group" aria-label="Ask an AI assistant about {% if placement == 'footer' %}LocalPilot{% else %}this page{% endif %}">
+  <span class="ask-ai-label">{% if placement == 'footer' %}Ask about LocalPilot in{% else %}Ask AI about this page{% endif %}</span>
+  <div class="ask-ai-btns">
+    {%- for a in site.ask_ai %}
+    <a class="ask-ai-btn" href="{{ a.url }}{{ ai_q }}" target="_blank" rel="noopener" title="{% if placement == 'footer' %}{{ a.title | replace: 'this page', 'LocalPilot' }}{% else %}{{ a.title }}{% endif %}" data-ai="{{ a.key }}" data-placement="{{ placement }}">
+      <span class="ask-ai-dot" style="--c:{{ a.color }}" aria-hidden="true"></span>{{ a.name }}
+    </a>
+    {%- endfor %}
+    {%- if placement == 'page' and page.path and page.layout != 'landing' %}
+    {%- assign raw_md = site.repo | replace: 'https://github.com/', 'https://raw.githubusercontent.com/' | append: '/main/docs/' | append: page.path %}
+    <button type="button" class="ask-ai-btn ask-ai-copy" data-md="{{ raw_md }}" data-title="{{ page.title | escape }}" data-url="{{ page_abs }}" title="Copy this page as Markdown to paste into any LLM">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span>Copy page as Markdown</span>
+    </button>
+    <a class="ask-ai-btn" href="{{ raw_md }}" target="_blank" rel="noopener" title="Open the Markdown source of this page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 15v-5l2.5 3L12 10v5M17 10v5m-2-2l2 2 2-2"/></svg><span>View as Markdown</span>
+    </a>
+    {%- endif %}
+  </div>
+</div>
+{%- if placement == 'page' and page.layout != 'landing' %}
+<script>
+  (function () {
+    var btn = document.querySelector('.ask-ai-copy');
+    if (!btn || !navigator.clipboard) { return; }
+    btn.addEventListener('click', function () {
+      var label = btn.querySelector('span'), orig = label.textContent;
+      var fallback = '# ' + btn.dataset.title + '\n\nSource: ' + btn.dataset.url + '\n\n' + document.querySelector('.content').innerText;
+      var ctl = window.AbortController ? new AbortController() : null;
+      var timer = ctl && setTimeout(function () { ctl.abort(); }, 4000);
+      fetch(btn.dataset.md, ctl ? { signal: ctl.signal } : undefined).then(function (r) { return r.ok ? r.text() : Promise.reject(); })
+        .then(function (md) { return md.replace(/^---[\s\S]*?---\s*/, '') + '\n\nSource: ' + btn.dataset.url + '\n'; })
+        .catch(function () { return fallback; })
+        .then(function (text) { clearTimeout(timer); return navigator.clipboard.writeText(text); })
+        .then(function () { label.textContent = 'Copied!'; if (window.gtag) { gtag('event', 'copy_markdown', { page_path: location.pathname }); } })
+        .catch(function () { label.textContent = 'Copy failed'; })
+        .then(function () { setTimeout(function () { label.textContent = orig; }, 1800); });
+    });
+  })();
+</script>
+{%- endif %}

@@ -285,6 +285,8 @@ export class ChatController implements vscode.Disposable {
           s.messages = [];
           s.contextTokens = 0;
           s.compactions = 0;
+          s.todos = [];
+          s.workingSet = [];
           this.store.save(s);
           this.broadcast({ type: 'session', session: s });
         }
@@ -452,6 +454,15 @@ export class ChatController implements vscode.Disposable {
       this.broadcast({ type: 'running', sessionId, running: false });
       this._onDidChangeRuns.fire();
     }
+  }
+
+  /** Start a new session for an externally supplied prompt (CLI / URI handler). */
+  async runPrompt(prompt: string, mode: Session['mode'] = 'agent', attachments: string[] = []): Promise<string> {
+    const s = this.store.create(getConfig().defaultModel, mode);
+    s.title = prompt.slice(0, 60);
+    this.setActive(s);
+    void this.send(s.id, prompt, attachments);
+    return s.id;
   }
 
   /** Launch several independent agent sessions at once (one per task) and return their ids. */

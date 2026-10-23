@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ApprovalMode, ProviderConfig } from './types';
+import { ApprovalMode, ProviderConfig, ThinkingLevel } from './types';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -30,7 +30,9 @@ export interface LocalPilotConfig {
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
   skillsPaths: string[];
-  thinking: boolean;
+  thinking: ThinkingLevel;
+  memoryEnabled: boolean;
+  keepAlive: string;
   systemPromptAppend: string;
 }
 
@@ -78,9 +80,21 @@ export function getConfig(): LocalPilotConfig {
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
     skillsPaths: c.get<string[]>('skillsPaths', []),
-    thinking: c.get<boolean>('thinking', false),
+    thinking: normalizeThinking(c.get<unknown>('thinking', 'off')),
+    memoryEnabled: c.get<boolean>('memory.enabled', true),
+    keepAlive: c.get<string>('keepAlive', '30m'),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
   };
+}
+
+function normalizeThinking(v: unknown): ThinkingLevel {
+  if (v === true) {
+    return 'on';
+  }
+  if (v === 'on' || v === 'low' || v === 'medium' || v === 'high') {
+    return v;
+  }
+  return 'off';
 }
 
 export function onConfigChange(cb: () => void): vscode.Disposable {
