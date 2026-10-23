@@ -117,7 +117,10 @@ jobs:
             echo "::notice::main moved on since this run started; the newer push will handle the bump."; exit 0
           fi
           node scripts/release.js "$BUMP" --ci --no-push
-          git push origin main
+          # A push that lands while we were verifying wins; its own run performs the bump.
+          if ! git push origin main; then
+            echo "::notice::main moved on while verifying; the newer push will handle the bump."; exit 0
+          fi
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
       - name: Start the Release workflow
         # Pushes made with GITHUB_TOKEN do not trigger other workflow runs, so start it explicitly.
