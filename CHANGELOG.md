@@ -4,7 +4,12 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 ### Changed
+- Extension identifier is now `localpilot.localpilot-agent` with Marketplace display name “LocalPilot Agent” (the previous name was already taken on the Marketplace). Settings, commands and the `@localpilot` chat participant are unchanged.
 - Website: light and dark themes (follows the OS by default, manual toggle persisted, no flash on load), higher-contrast text colours, larger base type and improved line-height; per-build stylesheet cache-busting.
+- Website: Google Analytics, SEO metadata, structured data, social card, robots.txt and setup guides.
+
+### Added
+- Manual *Publish to Marketplace* workflow with publisher pre-check; CI publishes automatically on release when `VSCE_PAT` is set.
 
 ## 0.1.1 — 2026-10-23
 ### Changed

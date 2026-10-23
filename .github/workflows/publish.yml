@@ -42,6 +42,16 @@ jobs:
           echo "file=localpilot-$VERSION.vsix" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Check Marketplace publisher exists
+        if: (github.event.inputs.target == 'marketplace' || github.event.inputs.target == 'both')
+        run: |
+          PUB=$(node -p "require('./package.json').publisher")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://marketplace.visualstudio.com/_apis/gallery/publishers/$PUB?api-version=7.1-preview.1")
+          if [ "$CODE" = "404" ]; then
+            echo "::error title=Publisher missing::Marketplace publisher '$PUB' does not exist. Create it once at https://aka.ms/vsm-create-publisher (ID: $PUB), then re-run this workflow."; exit 1
+          fi
+          echo "Publisher '$PUB' found (HTTP $CODE)."
+
       - name: Publish to VS Code Marketplace
         if: (github.event.inputs.target == 'marketplace' || github.event.inputs.target == 'both')
         run: |
