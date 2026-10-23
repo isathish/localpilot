@@ -84,7 +84,7 @@ Releases are driven by the version in `package.json`. **Whenever `main` carries 
 
 1. **prepare** checks that `package.json`, `package-lock.json`, `docs/_config.yml` and the `CHANGELOG.md` section agree (`npm run check:version`) and decides whether the version is new.
 2. **verify** type-checks, lints, runs the smoke and Extension Host tests, packages `localpilot-X.Y.Z.vsix` and checks the version inside the VSIX.
-3. **publish** creates the `vX.Y.Z` tag, the GitHub Release (that version's changelog section as notes, plus the VSIX, a stable `localpilot.vsix` and `SHA256SUMS.txt`) and publishes to the VS Code Marketplace and Open VSX when the `VSCE_PAT` / `OVSX_PAT` secrets exist. A failed publish fails the run; re-run **Publish to Marketplace** for that tag to retry without burning a version.
+3. **publish** creates the `vX.Y.Z` tag, the GitHub Release (that version's changelog section as notes, plus the VSIX, a stable `localpilot.vsix` and `SHA256SUMS.txt`) and publishes to the VS Code Marketplace and Open VSX when the `VSCE_PAT` / `OVSX_PAT` secrets exist. A failed publish fails the run; re-run **Publish to Marketplace** for that tag to retry without burning a version. Finally it starts the **Docs** workflow so the website shows the new version (commits pushed by the workflow itself do not trigger push-based runs, so this is done explicitly).
 
 Pushes that do not change the version are checked for releasable commits: if the push contains anything other than `docs:`, `chore:`, `ci:`, `build:`, `test:`, `style:` or `release:` commits, a **bump** job runs `scripts/release.js` on `main` (patch by default; minor for a breaking `type!:` commit; or whatever `[release patch|minor|major]` in a commit message asks for), commits `release: vX.Y.Z` and starts a new Release run, which tags and publishes it. Put `[skip release]` in a commit message to hold a push back. Pushes with only housekeeping commits run CI and deploy the docs.
 
@@ -106,7 +106,7 @@ Editing `package.json` by hand and pushing still works, provided `docs/_config.y
 
 ## Website
 
-The site in `docs/` is plain Jekyll (GitHub Pages). Everything site-wide lives in `docs/_config.yml`:
+The site in `docs/` is plain Jekyll (GitHub Pages). The version shown on the site (`site.version`) is taken from `package.json` when the Docs workflow builds, so it always matches the released extension; the `version:` key in `docs/_config.yml` is only a fallback for local `jekyll serve` and is kept in sync by `npm run release` / `npm run check:version`. Everything else site-wide lives in `docs/_config.yml`:
 
 | Key | Used by |
 |---|---|

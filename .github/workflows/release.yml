@@ -14,7 +14,8 @@ name: Release
 # bump     (path 1 only) bumps the version on main and starts a new run
 # verify   type-checks, lints, runs smoke + Extension Host tests and packages the VSIX
 # publish  only then tags the commit, creates the GitHub Release with the changelog section as notes
-#          and publishes to the VS Code Marketplace and Open VSX. A failed publish fails the run;
+#          and publishes to the VS Code Marketplace and Open VSX, then redeploys the website so it
+#          shows the new version. A failed publish fails the run;
 #          re-run "Publish to Marketplace" for that tag to retry without a new version.
 on:
   push:
@@ -257,6 +258,22 @@ jobs:
           npx ovsx publish "localpilot-$VERSION.vsix" -p "$OVSX_PAT"
           echo "status=published" >> "$GITHUB_OUTPUT"
 
+      - name: Redeploy the website
+        # The bump commit was pushed with GITHUB_TOKEN, which never triggers the Docs push workflow, so
+        # the site would keep showing the previous version. Dispatch it explicitly (workflow_dispatch
+        # is exempt from that rule) now that the GitHub Release the site links to exists.
+        id: docs
+        if: always() && needs.prepare.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh workflow run docs.yml --ref main; then
+            echo "status=dispatched" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not start the Docs workflow; run it from the Actions tab so the site shows $TAG."
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -268,6 +285,7 @@ jobs:
             echo "| GitHub Release | https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG |"
             echo "| VS Code Marketplace | ${{ steps.vsce.outputs.status || 'failed' }} · https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent |"
             echo "| Open VSX | ${{ steps.ovsx.outputs.status || 'failed' }} · https://open-vsx.org/extension/localpilot/localpilot-agent |"
+            echo "| Website | ${{ steps.docs.outputs.status || 'failed' }} · https://isathish.github.io/localpilot/ |"
             echo ""
             echo "Checksums:"
             echo '```'

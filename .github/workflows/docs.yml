@@ -1,5 +1,9 @@
 name: Docs
 
+# Deploys the GitHub Pages site. The version shown on the site always comes from package.json at
+# build time, so it can never drift from the extension that was actually released. The Release
+# workflow dispatches this workflow after publishing, because pushes made with GITHUB_TOKEN
+# (the "release: vX.Y.Z" bump commit) do not trigger push-based runs on their own.
 on:
   push:
     branches: [main]
@@ -21,6 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Sync site version from package.json
+        run: |
+          V=$(node -p "require('./package.json').version")
+          sed -i -E "s/^version:.*$/version: $V/" docs/_config.yml
+          grep -q "^version: $V$" docs/_config.yml || { echo "::error::could not set version in docs/_config.yml"; exit 1; }
+          echo "Building site as v$V"
       - name: Build site with Jekyll
         uses: actions/jekyll-build-pages@v1
         with:

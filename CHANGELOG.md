@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Website version.** The site showed the previous release (v0.2.9 while 1.0.0 was out): the `release: vX.Y.Z` commit is pushed by the workflow bot, and GitHub never starts the Docs deploy for such pushes. The Release workflow now dispatches the Docs workflow after publishing, and the Docs build takes `site.version` from `package.json` instead of relying on the hand-maintained copy in `docs/_config.yml`, so the website can no longer drift from the released extension.
+
 ## 1.0.0 — 2026-10-23
 
 LocalPilot 1.0 — the local-first coding agent is stable: resilient model calls, a calm and steady chat, built-in skills for the whole development loop, and a release pipeline that ships every push.
