@@ -50,6 +50,8 @@ localpilot --plan "migrate the auth module to JWT"     # read-only plan + checkl
 localpilot --ask "how does the retry logic work?"
 localpilot --file src/db.ts "add connection pooling"   # attach context files
 localpilot --parallel "write tests for utils | fix lint errors | update README"
+localpilot --settings                                   # open LocalPilot Settings
+localpilot --setup                                      # rerun the setup wizard
 localpilot                                             # just open a new chat
 ```
 

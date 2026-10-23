@@ -39,7 +39,7 @@ Click the LocalPilot icon in the Activity Bar or press <kbd>⌘⇧L</kbd> (<kbd>
 
 On first launch the **Welcome / Setup** screen opens: it detects the servers from step 1, lists their models with a recommended default, and lets you choose how much freedom the agent gets (*Careful*, *Balanced* or *Autonomous*). Click **Finish & open chat** and you're done. You can rerun it any time with *LocalPilot: Welcome / Setup*.
 
-![Setup step 1 — LocalPilot found Ollama with 4 models and LM Studio with 1 model]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
+![Setup step 1 inside VS Code — LocalPilot found a running Ollama with 2 models]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
 
 ![Setup step 2 — choosing a default model; qwen2.5-coder:14b is recommended because it supports tool calling]({{ '/assets/screenshots/setup-model.png' | relative_url }})
 

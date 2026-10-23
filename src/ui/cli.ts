@@ -10,6 +10,7 @@ const EXT_ID = 'localpilot.localpilot-agent';
  * `localpilot` terminal command. The shell shim forwards the prompt to VS Code through a
  * `vscode://localpilot.localpilot-agent/run?...` URI, so `localpilot "fix the failing tests"`
  * opens LocalPilot in the current workspace and starts an agent — like the `cursor`/`claude` CLIs.
+ * Also handles `/new`, `/settings?section=…` and `/setup` deep links (`localpilot --settings`, `localpilot --setup`).
  */
 export function registerUriHandler(ctx: vscode.ExtensionContext, controller: ChatController, reveal: () => void): void {
   ctx.subscriptions.push(
@@ -29,6 +30,11 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
           }
         } else if (uri.path === '/new') {
           await controller.handle({ type: 'newSession', mode });
+        } else if (uri.path === '/settings') {
+          // vscode://localpilot.localpilot-agent/settings?section=providers
+          await vscode.commands.executeCommand('localpilot.openSettings', params.get('section') ?? undefined);
+        } else if (uri.path === '/setup') {
+          await vscode.commands.executeCommand('localpilot.openWelcome');
         }
       },
     })
@@ -45,7 +51,7 @@ export async function installCli(): Promise<void> {
     const file = path.join(dir, 'localpilot.cmd');
     await fs.writeFile(
       file,
-      `@echo off\r\nsetlocal EnableDelayedExpansion\r\nset "MODE=agent"\r\nset "PAR="\r\n:parse\r\nif "%~1"=="" goto run\r\nif "%~1"=="--ask" (set "MODE=ask" & shift & goto parse)\r\nif "%~1"=="--plan" (set "MODE=plan" & shift & goto parse)\r\nif "%~1"=="--parallel" (set "PAR=1" & shift & goto parse)\r\nset "PROMPT=!PROMPT! %~1"\r\nshift\r\ngoto parse\r\n:run\r\nif "!PROMPT!"=="" ( "${codeBin}" --open-url "vscode://${EXT_ID}/new?mode=!MODE!" "%CD%" & exit /b )\r\nfor /f "delims=" %%E in ('powershell -NoProfile -Command "[uri]::EscapeDataString(\\"!PROMPT:~1!\\")"') do set "ENC=%%E"\r\n"${codeBin}" --open-url "vscode://${EXT_ID}/run?mode=!MODE!&parallel=!PAR!&prompt=!ENC!" "%CD%"\r\n`
+      `@echo off\r\nsetlocal EnableDelayedExpansion\r\nset "MODE=agent"\r\nset "PAR="\r\n:parse\r\nif "%~1"=="" goto run\r\nif "%~1"=="--ask" (set "MODE=ask" & shift & goto parse)\r\nif "%~1"=="--plan" (set "MODE=plan" & shift & goto parse)\r\nif "%~1"=="--parallel" (set "PAR=1" & shift & goto parse)\r\nif "%~1"=="--settings" ( "${codeBin}" --open-url "vscode://${EXT_ID}/settings" "%CD%" & exit /b )\r\nif "%~1"=="--setup" ( "${codeBin}" --open-url "vscode://${EXT_ID}/setup" "%CD%" & exit /b )\r\nset "PROMPT=!PROMPT! %~1"\r\nshift\r\ngoto parse\r\n:run\r\nif "!PROMPT!"=="" ( "${codeBin}" --open-url "vscode://${EXT_ID}/new?mode=!MODE!" "%CD%" & exit /b )\r\nfor /f "delims=" %%E in ('powershell -NoProfile -Command "[uri]::EscapeDataString(\\"!PROMPT:~1!\\")"') do set "ENC=%%E"\r\n"${codeBin}" --open-url "vscode://${EXT_ID}/run?mode=!MODE!&parallel=!PAR!&prompt=!ENC!" "%CD%"\r\n`
     );
     void vscode.window.showInformationMessage(`Installed ${file}. Add ${dir} to your PATH, then run: localpilot "describe a task"`);
     return;
@@ -57,15 +63,18 @@ export async function installCli(): Promise<void> {
 # LocalPilot CLI — forwards a task to the LocalPilot VS Code extension in the current folder.
 # Usage: localpilot [--ask|--plan] [--parallel] [--file path ...] "task description"
 #        localpilot            (open a new chat)
+#        localpilot --settings | --setup   (open LocalPilot Settings / the setup wizard)
 set -euo pipefail
 CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"
 MODE=agent; PAR=0; FILES=""; PROMPT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --ask) MODE=ask;; --plan) MODE=plan;; --agent) MODE=agent;;
+    --settings) exec "\${LOCALPILOT_CODE_BIN:-${codeBin}}" --open-url "vscode://${EXT_ID}/settings" "$PWD";;
+    --setup) exec "\${LOCALPILOT_CODE_BIN:-${codeBin}}" --open-url "vscode://${EXT_ID}/setup" "$PWD";;
     --parallel|-p) PAR=1;;
     --file|-f) shift; FILES="\${FILES:+$FILES,}$1";;
-    -h|--help) sed -n '2,4p' "$0"; exit 0;;
+    -h|--help) sed -n '2,5p' "$0"; exit 0;;
     *) PROMPT="\${PROMPT:+$PROMPT }$1";;
   esac; shift
 done

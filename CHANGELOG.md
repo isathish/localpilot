@@ -18,6 +18,7 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Welcome / Setup wizard** (*LocalPilot: Welcome / Setup*): detects running model servers, lists their models with a recommended default, and picks an approval preset and inline completions. Opens automatically on first run when no server is reachable (`localpilot.showWelcomeOnStartup`).
 - **Getting Started walkthrough** in VS Code's Welcome page; commands *Manage Model Providers…* and *Clear Memory Notes…*; the Agents view and the chat's "no models" notice link straight to setup/providers.
 
+- Deep links `vscode://localpilot.localpilot-agent/settings?section=…` and `/setup`, and matching `localpilot --settings` / `--setup` CLI flags.
 - Integration tests (`npm test`, real VS Code) covering the settings panel commands, provider probing against an Ollama-style server, input sanitisation and configuration round-trips.
 - **Real end-to-end tests** against a local Ollama server (skipped when none is running): the agent writes a file through a real tool call, two sessions run **in parallel** and each finishes its own task, and `stop()` aborts a streaming run. Tests run in a fresh temporary workspace folder.
 - **Extension API** (`vscode.extensions.getExtension('localpilot.localpilot-agent').exports`): `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels`, `version` — drive LocalPilot agents from other extensions or scripts.

@@ -10,11 +10,11 @@ The first time LocalPilot starts without a reachable model server it opens the *
 
 Everything is also available in **Settings → Extensions → LocalPilot** and in `settings.json`; the keys are listed below.
 
-![LocalPilot Settings — Providers page with connection status for Ollama, LM Studio and a remote vLLM server, and one-click presets to add more]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
+![LocalPilot Settings inside VS Code — Providers page with live connection status (Ollama reachable, others not running) and one-click presets to add more]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
 
 Expand a provider to edit it and press **Test connection** — LocalPilot checks the server, measures latency and lists every model it exposes:
 
-![Provider editor with a successful connection test listing four Ollama models]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
+![Provider editor with a successful connection test against a running Ollama, listing its models]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
 
 ![Agent & approvals page with the Careful / Balanced / Autonomous presets and per-action Ask / Allow / Block controls]({{ '/assets/screenshots/settings-agent.png' | relative_url }})
 

@@ -8,6 +8,12 @@ LocalPilot includes a stdio [MCP](https://modelcontextprotocol.io) client. Every
 
 ## Configuration
 
+The **Settings → MCP servers** page (gear icon in the chat toolbar) lets you add, edit, disable and remove servers and shows each one's live state — connected with its tool count, disabled, or *failed to start* with the exact error:
+
+![MCP servers page inside VS Code — a connected server with 1 tool, a disabled one, and one that failed to start with the spawn error shown]({{ '/assets/screenshots/settings-mcp.png' | relative_url }})
+
+The same configuration lives under `localpilot.mcpServers`:
+
 ```jsonc
 "localpilot.mcpServers": {
   "filesystem": {
