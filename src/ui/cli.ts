@@ -10,13 +10,20 @@ const EXT_ID = 'localpilot.localpilot-agent';
  * `localpilot` terminal command. The shell shim forwards the prompt to VS Code through a
  * `vscode://localpilot.localpilot-agent/run?...` URI, so `localpilot "fix the failing tests"`
  * opens LocalPilot in the current workspace and starts an agent — like the `cursor`/`claude` CLIs.
- * Also handles `/new`, `/settings?section=…` and `/setup` deep links (`localpilot --settings`, `localpilot --setup`).
+ * Also handles `/new`, `/settings?section=…`, `/setup` and `/terminal?run=…` deep links (`localpilot --settings`, `localpilot --setup`).
  */
 export function registerUriHandler(ctx: vscode.ExtensionContext, controller: ChatController, reveal: () => void): void {
   ctx.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
-        const params = new URLSearchParams(uri.query);
+        // `uri.query` is already percent-decoded by VS Code; parse it ourselves so '+' and '%' in prompts survive.
+        const params = new Map<string, string>();
+        for (const part of uri.query.split('&')) {
+          const eq = part.indexOf('=');
+          if (eq > 0) {
+            params.set(part.slice(0, eq), part.slice(eq + 1));
+          }
+        }
         const prompt = (params.get('prompt') ?? '').trim();
         const mode = (['agent', 'ask', 'plan'].includes(params.get('mode') ?? '') ? params.get('mode') : 'agent') as 'agent' | 'ask' | 'plan';
         const files = (params.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
@@ -35,6 +42,9 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
           await vscode.commands.executeCommand('localpilot.openSettings', params.get('section') ?? undefined);
         } else if (uri.path === '/setup') {
           await vscode.commands.executeCommand('localpilot.openWelcome');
+        } else if (uri.path === '/terminal') {
+          // vscode://localpilot.localpilot-agent/terminal?run=localpilot%20--help — open the LocalPilot terminal, optionally running a command.
+          await vscode.commands.executeCommand('localpilot.openTerminal', params.get('run') ?? undefined);
         }
       },
     })

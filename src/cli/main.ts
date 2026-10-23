@@ -236,17 +236,32 @@ class Renderer {
     }
     this.line = '';
   }
+  private pending = '';
   text(raw: string): void {
     const delta = this.filter.push(raw);
     if (!delta || this.quiet) {
       return; // quiet (--print / piped) mode prints the final answer once at the end
     }
     this.clearStatus();
-    process.stdout.write(md(delta));
-    this.line += delta;
-    const nl = this.line.lastIndexOf('\n');
+    // Render markdown per complete line so inline markup split across stream deltas still formats.
+    this.pending += delta;
+    const nl = this.pending.lastIndexOf('\n');
     if (nl >= 0) {
-      this.line = this.line.slice(nl + 1);
+      process.stdout.write(md(this.pending.slice(0, nl + 1)));
+      this.pending = this.pending.slice(nl + 1);
+      this.line = '';
+    }
+    if (this.pending.length > 400) {
+      process.stdout.write(this.pending); // very long line: show progress without waiting for a newline
+      this.line += this.pending;
+      this.pending = '';
+    }
+  }
+  private flushPending(): void {
+    if (this.pending) {
+      process.stdout.write(md(this.pending));
+      this.line += this.pending;
+      this.pending = '';
     }
   }
   private statusShown = false;
@@ -272,6 +287,7 @@ class Renderer {
       return;
     }
     this.clearStatus();
+    this.flushPending();
     this.breakLine();
     const label = toolLabel(name, args);
     this.running.set(id, { label, start: Date.now() });
@@ -307,27 +323,30 @@ class Renderer {
       return;
     }
     this.clearStatus();
+    this.flushPending();
     this.breakLine();
     const done = items.filter((t) => t.status === 'done').length;
     process.stdout.write(`  ${amber('☰')} ${bold(`Plan ${done}/${items.length}`)}\n${items.map((t) => `    ${t.status === 'done' ? green('✓') : t.status === 'in_progress' ? amber('▸') : t.status === 'skipped' ? dim('–') : dim('○')} ${t.status === 'done' ? dim(t.title) : t.title}`).join('\n')}\n`);
   }
   note(s: string): void {
     this.clearStatus();
+    this.flushPending();
     this.breakLine();
     process.stdout.write(`  ${dim(s)}\n`);
   }
   error(s: string): void {
     this.clearStatus();
+    this.flushPending();
     this.breakLine();
     process.stdout.write(`${red('✖')} ${s}\n`);
   }
   end(): void {
     const rest = this.filter.flush();
     if (rest && !this.quiet) {
-      process.stdout.write(md(rest));
-      this.line += rest;
+      this.pending += rest;
     }
     this.clearStatus();
+    this.flushPending();
     this.breakLine();
   }
 }

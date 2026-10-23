@@ -103,8 +103,12 @@ export const runCommandTool: Tool = {
   },
 };
 
+/** Removes CSI colour/cursor codes and OSC sequences (titles, hyperlinks, shell-integration 633/133 markers). */
 export function stripAnsi(s: string): string {
-  return s.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  return s
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[=>NOM78]/g, '');
 }
 
 export const terminalTools: Tool[] = [runCommandTool];

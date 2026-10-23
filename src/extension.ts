@@ -388,7 +388,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.showLogs', () => log.show());
   cmd('localpilot.installCli', () => installCli(context));
-  cmd('localpilot.openTerminal', () => terminals.openCliTerminal(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath));
+  cmd('localpilot.openTerminal', (run?: unknown) => {
+    const term = terminals.openCliTerminal(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+    if (typeof run === 'string' && run.trim()) {
+      term.sendText(run.trim());
+    }
+    return term;
+  });
   // Terminal context-menu actions: hand the last command + output of the clicked terminal to a new chat.
   const terminalAction = (title: string, instruction: string, mode: 'agent' | 'ask', preferFailure: boolean) => async (terminal?: unknown) => {
     const t = terminal && typeof terminal === 'object' && 'name' in terminal ? (terminal as vscode.Terminal) : vscode.window.activeTerminal;
