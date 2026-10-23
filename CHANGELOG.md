@@ -2,6 +2,10 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Changed
+- **Chat UI polish**: a consistent design system for the webview — one type scale (13 / 12 / 11 px, tabular numerals for stats), unified radii (6 / 8 / 12 px), theme-derived soft borders and tint layers instead of hard-coded greys, and LocalPilot's amber used sparingly as the brand accent (empty-state tile, progress bar, thinking step, running tab, task in progress, context ring). Cards (diff, terminal, approvals, Tasks, Changes) share the same header height, hover states and shadows; approvals use a left accent instead of a loud full border; exit codes are pills; keyboard hints render as key caps; the composer has a softer focus ring, borderless context chip and a rounded-square send button; popover and toasts match. Verified in light and dark themes.
+
 ## 0.2.4 — 2026-10-23
 ### Added
 - **Zero-config auto-detection of model servers.** At startup and on *Refresh models*, LocalPilot probes the configured providers, the well-known local ports (Ollama, LM Studio, llama.cpp, vLLM, **Docker Model Runner** `12434`, Jan, SGLang, KoboldCpp) and **running Docker containers** (`docker ps` — Ollama, vLLM, llama.cpp, LocalAI, TGI, SGLang, model-runner, KoboldCpp images, using each container's published host port). Every reachable server that isn't configured yet is added to `localpilot.providers` automatically (existing entries are never changed) and a notification says what was found. If the configured default model is offline, LocalPilot uses the best available one and offers to make it the default.
