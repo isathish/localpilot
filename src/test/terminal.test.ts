@@ -79,17 +79,15 @@ suite('LocalPilot terminal integration', () => {
     }
     assert.match(r.output, /lp-marker-42/);
     assert.strictEqual(r.exitCode, 0);
-    const fail = await tm.run('test-session', '(exit 3)', EXT_ROOT, new AbortController().signal, 20_000, false);
-    // Headless Linux shells sometimes report no exit code through shell integration; the tool then falls back
-    // to a child process, so only assert the code when the shell actually provided one.
-    if (fail?.exitCode !== undefined) {
-      assert.strictEqual(fail.exitCode, 3);
-      assert.strictEqual(tm.lastFailure()?.exitCode, 3);
-    }
+    // `(exit 3)` is a POSIX idiom; PowerShell (the default shell on Windows runners) reports 1 for it. `cmd /c exit 3`
+    // yields a real exit status 3 from both PowerShell and cmd.exe.
+    const fail = await tm.run('test-session', process.platform === 'win32' ? 'cmd /c "exit 3"' : '(exit 3)', EXT_ROOT, new AbortController().signal, 20_000, false);
+    assert.strictEqual(fail?.exitCode, 3);
     // The agent terminal is reused per session and branded.
     const agentTerms = vscode.window.terminals.filter((t) => t.name === 'LocalPilot Agent');
     assert.strictEqual(agentTerms.length, 1);
-    assert.ok(tm.recordCount >= 1, 'executions are recorded for @terminal');
+    assert.ok(tm.recordCount >= 2, 'executions are recorded for @terminal');
+    assert.strictEqual(tm.lastFailure()?.exitCode, 3);
     agentTerms[0].dispose();
   });
 });

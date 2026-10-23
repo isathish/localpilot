@@ -1,6 +1,6 @@
 ---
 title: Models & providers
-description: Connect Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Unsloth exports or any OpenAI-compatible endpoint — auto-detected, including model servers running in Docker containers.
+description: One-click model setup sized to your hardware, a model manager with catalog, enable/disable and remove, automatic per-task routing, and auto-detected providers — Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner or any OpenAI-compatible endpoint.
 permalink: /docs/models/
 ---
 
@@ -36,7 +36,53 @@ You normally don't have to configure anything. At startup and on every *Refresh 
 2. the well-known local ports — Ollama `11434`, LM Studio `1234`, llama.cpp `8080`, vLLM `8000`, **Docker Model Runner `12434`**, Jan `1337`, SGLang `30000`, KoboldCpp `5001`,
 3. **running Docker containers** (`docker ps`) whose image is a known model server — `ollama/ollama`, `vllm/vllm-openai`, `ghcr.io/ggml-org/llama.cpp`, `localai/localai`, `huggingface/text-generation-inference`, `lmsysorg/sglang`, `docker/model-runner`, KoboldCpp — using the **published host port** of each container.
 
-Every server that answers and is not yet in `localpilot.providers` is **added automatically** (never removed or edited), and a notification tells you what was found. With no `defaultModel` set, **Auto** picks the best tool-capable coder model across all servers; if your configured default is offline, LocalPilot falls back to the best available one and offers to make it the default.
+Every server that answers and is not yet in `localpilot.providers` is **added automatically** (never removed or edited), and a notification tells you what was found. With no `defaultModel` set, **Auto** picks the best tool-capable coder model that fits this machine across all servers; if your configured default is offline, LocalPilot falls back to the best available one and offers to make it the default. If no server has any model at all, it offers [automatic setup](#automatic-setup).
+
+## Automatic setup
+
+If no model is reachable anywhere — fresh machine, server stopped, models deleted — LocalPilot offers to fix it in one click (*Set up automatically* in the chat, the setup wizard, **Settings → Models**, or the *LocalPilot: Set Up Models Automatically* command):
+
+1. **Find a runtime.** A running Ollama or Docker Model Runner is used as is. An installed-but-stopped Ollama is started. With nothing installed, LocalPilot opens a terminal with the platform installer (`brew install --cask ollama`, `winget install Ollama.Ollama` or the official `install.sh`) and waits for it to finish.
+2. **Size the models to the machine.** RAM, CPU cores and GPU memory are detected (Apple Silicon counts as unified memory) and turned into a *model budget*. The starter set is deliberately **smallest-first** so the agent is usable quickly and leaves room for a second model:
+
+   | Budget | Agent model | Completions | Images |
+   |---|---|---|---|
+   | ≥ 8 GB (16 GB RAM+) | `qwen2.5-coder:7b` (4.7 GB) | `qwen2.5-coder:1.5b` | `gemma3:4b` when ≥ 16 GB budget |
+   | 3.5–8 GB (8 GB RAM) | `qwen2.5-coder:3b` | `qwen2.5-coder:1.5b` | — |
+   | < 3.5 GB | `qwen2.5-coder:1.5b` / `0.5b` | — | — |
+
+3. **Download with progress** (status bar, notification and the Models page), then set `defaultModel`, `inlineCompletion.model` and `routing.vision` if they were empty.
+
+Already-installed models are skipped, so the flow is safe to re-run. Turn the startup offer off with `localpilot.models.autoSetup`.
+
+## Managing models
+
+**Settings → Models** (*LocalPilot: Manage Models*) is the model manager:
+
+![Settings → Models: machine profile with model budget, runtime status, install progress and the installed-model list with enable switches, roles and fit badges]({{ '/assets/screenshots/settings-models-manager.png' | relative_url }})
+
+- **This machine** — detected RAM / GPU / cores, the resulting model budget and tier, and the state of each runtime (Ollama, Docker Model Runner, LM Studio: running / installed / not found) with *Start* and *Install* buttons for Ollama.
+- **Installed models** — every model from every reachable provider with size, context, capabilities and the role the router would give it. Each row has an **enable/disable** switch (disabled models stay installed but disappear from pickers, routing and the status bar — stored in `localpilot.models.disabled`), *Set default*, and **Remove** for Ollama and Docker Model Runner models (LM Studio models are deleted from the LM Studio app).
+- **Routing** — see below.
+- **Model catalog** — curated families (Qwen2.5 Coder, Qwen3, Devstral, gpt-oss, Llama 3.x, Gemma 3, Qwen2.5 VL, Mistral Small, DeepSeek-R1, Codestral, StarCoder2, Phi-4 mini, SmolLM2) with every size annotated **fits / tight / too big** for this machine and a ★ on the recommended size per family. Pick **where to install** — Ollama (`ollama pull`), Docker Model Runner (`docker model pull`) or LM Studio (`lms get`) — and watch the download inline; cancel any time. Filter by role or search.
+
+![Model catalog: every size of a family marked fits / tight / too big, the recommended size starred, installed sizes ticked, and an Install-to-runtime button or live download progress per row]({{ '/assets/screenshots/settings-models-catalog.png' | relative_url }})
+
+The same actions exist as commands: *Install Model from Catalog…*, *Remove Local Model…*, *Enable / Disable Model…*. Models pulled by hand (`ollama pull …`) show up on the next refresh.
+
+## Automatic routing
+
+With `localpilot.routing.enabled` (default on) LocalPilot picks the model per task instead of using one model for everything:
+
+| Task | Model used |
+|---|---|
+| Agent / chat turn | The session's model, else `localpilot.defaultModel`, else the best tool-capable coder model **that fits in memory** |
+| Turn with images | The session model if it can see; otherwise `localpilot.routing.vision` or the best installed vision model — just for that turn, the session keeps its model |
+| Inline completions | `localpilot.inlineCompletion.model`, else the **smallest** FIM-capable model (latency matters more than size) |
+| Plan mode | `localpilot.routing.reasoning` when set (e.g. `ollama/qwen3:8b`), else the session model |
+| Chosen model offline or disabled | The best available model, with a status line explaining the substitution; the session switches to it |
+
+Ranking considers capabilities (tools, FIM, vision), model family, parameter count and whether the model fits the machine's budget, so a 32b model that spills out of memory loses to a 14b that doesn't. The status bar shows the model that will actually answer.
 
 ## Docker-based models
 

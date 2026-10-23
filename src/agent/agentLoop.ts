@@ -52,8 +52,20 @@ export class AgentRunner {
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
 
-    const { provider, model } = await this.providers.resolve(o.modelRef ?? session.model);
-    session.model = model.id;
+    const route = await this.providers.route({
+      role: session.mode === 'plan' ? 'reasoning' : 'agent',
+      modelRef: o.modelRef ?? session.model,
+      needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
+    });
+    const { provider, model } = route;
+    if (route.reason) {
+      status(route.reason);
+    }
+    // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
+    // unavailable model is replaced for good so the picker reflects what is actually answering.
+    if (!route.reason || route.fallback) {
+      session.model = model.id;
+    }
 
     const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars });
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
@@ -219,7 +231,7 @@ export class AgentRunner {
       }
 
       // --- Tool execution (parallel for read-only tools) ------------------------------------
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache);
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision);
       toolsExecuted += calls.length;
       session.messages.push(...results);
       this.trackWorkingSet(session, calls);
@@ -273,9 +285,12 @@ export class AgentRunner {
     emit: (e: AgentEvent) => void,
     sessionId: string,
     nativeTools: boolean,
-    cache: Map<string, Promise<ChatMessage>>
+    cache: Map<string, Promise<ChatMessage>>,
+    vision = false
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
+    // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
+    const captured: { callId: string; caption: string; data: string }[] = [];
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       const started = Date.now();
       let result = tool
@@ -284,7 +299,16 @@ export class AgentRunner {
       if (ctx.signal.aborted) {
         result = { content: 'Cancelled by user.', isError: true };
       }
-      const content = ctxMgr.clampToolOutput(result.content ?? '');
+      const img = (result.data as { image?: { data?: string }; caption?: string } | undefined)?.image;
+      let text = result.content ?? '';
+      if (img?.data && !result.isError) {
+        if (vision) {
+          captured.push({ callId: call.id, caption: (result.data as { caption?: string }).caption ?? `Image from ${call.name}`, data: img.data });
+        } else {
+          text += ' Note: the current model cannot see images — the screenshot is shown to the user only. Switch to a vision model (qwen2.5vl, gemma3, llama3.2-vision) to inspect it, or use web_fetch for the page text.';
+        }
+      }
+      const content = ctxMgr.clampToolOutput(text);
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
       return {
         msg: { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } },
@@ -330,11 +354,14 @@ export class AgentRunner {
     }
     // Preserve the model's original call order in the transcript.
     const ordered = calls.map((c) => results.get(c.id)!);
+    const imageMsg: ChatMessage | undefined = captured.length
+      ? { role: 'user', content: captured.map((c) => `[${c.caption}]`).join('\n'), images: captured.map((c) => c.data), meta: { timestamp: Date.now(), toolImages: captured.map((c) => c.callId) } }
+      : undefined;
     if (!nativeTools) {
-      // Text protocol: tool results go back as a single user message.
-      return [{ role: 'user', content: ordered.map((m) => m.content).join('\n\n'), meta: { timestamp: Date.now() } }];
+      // Text protocol: tool results go back as a single user message (with any captured images attached to it).
+      return [{ role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages } }];
     }
-    return ordered;
+    return imageMsg ? [...ordered, imageMsg] : ordered;
   }
 
   private async gateApproval(kind: NonNullable<Tool['approvalKind']>, mode: ApprovalMode, ask: () => Promise<boolean>, emit: (e: AgentEvent) => void, sessionId: string): Promise<boolean> {

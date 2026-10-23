@@ -8,6 +8,8 @@ import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { SessionStore } from '../sessions/sessionStore';
 import { AgentEvent, ChatMessage, ModelInfo, Session } from '../types';
+import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
+import { formatReport } from '../tools/cdp';
 import { captureScreenshot, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
 
 export type ToWebview =
@@ -50,11 +52,15 @@ export type FromWebview =
   | { type: 'compactNow'; sessionId: string }
   | { type: 'clearSession'; sessionId: string }
   | { type: 'openSettings'; section?: string }
+  | { type: 'autoSetupModels' }
   | { type: 'openExternal'; url: string }
   | { type: 'openInEditor' }
   | { type: 'attachUri'; uri: string }
   | { type: 'pickImage' }
   | { type: 'captureScreenshot'; mode?: ScreenshotMode; delayMs?: number }
+  | { type: 'captureUrl'; url?: string; mobile?: boolean; fullPage?: boolean }
+  | { type: 'inspectUrl'; url?: string; mobile?: boolean }
+  | { type: 'openBrowser'; url?: string }
   | { type: 'requestOpenFiles' }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
@@ -306,6 +312,9 @@ export class ChatController implements vscode.Disposable {
       case 'openSettings':
         await vscode.commands.executeCommand('localpilot.openSettings', msg.section);
         return;
+      case 'autoSetupModels':
+        await vscode.commands.executeCommand('localpilot.autoSetupModels');
+        return;
       case 'openExternal':
         if (/^https?:\/\//i.test(msg.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
@@ -335,6 +344,23 @@ export class ChatController implements vscode.Disposable {
           this.broadcast({ type: 'image', image: img });
         }
         return;
+      case 'captureUrl':
+        await this.captureUrl(msg.url, { mobile: msg.mobile, fullPage: msg.fullPage });
+        return;
+      case 'inspectUrl':
+        await this.inspectUrl(msg.url, { mobile: msg.mobile });
+        return;
+      case 'openBrowser': {
+        const url = msg.url || (await this.askUrl('Open in the VS Code browser view'));
+        if (url) {
+          try {
+            await openInBrowser(url);
+          } catch (e) {
+            this.broadcast({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        return;
+      }
       case 'captureScreenshot': {
         const mode = msg.mode ?? 'region';
         const img = await captureScreenshot(mode, { delayMs: msg.delayMs });
@@ -421,6 +447,56 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Entry point used by webviews and commands. Runs are per-session, so several sessions can stream at once. */
+  private async askUrl(title: string): Promise<string | undefined> {
+    const v = await vscode.window.showInputBox({ title, prompt: 'http(s) URL — a dev server such as localhost:3000, or any web page', placeHolder: 'http://localhost:3000', value: this.lastUrl, ignoreFocusOut: true });
+    const url = v?.trim();
+    if (url) {
+      this.lastUrl = url;
+    }
+    return url || undefined;
+  }
+  private lastUrl = '';
+
+  /** Renders a URL headlessly and attaches the screenshot to the composer (also used by the command palette). */
+  async captureUrl(url?: string, opts: { mobile?: boolean; fullPage?: boolean } = {}): Promise<boolean> {
+    const target = url || (await this.askUrl('Screenshot a web page'));
+    if (!target) {
+      return false;
+    }
+    this.broadcast({ type: 'toast', level: 'info', text: `Rendering ${target}…` });
+    try {
+      const shot = await captureUrl(target, { mobile: opts.mobile, fullPage: opts.fullPage });
+      this.broadcast({ type: 'image', image: { name: shot.name, data: shot.data, mime: shot.mime } });
+      return true;
+    } catch (e) {
+      this.broadcast({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
+      return false;
+    }
+  }
+
+  /** DevTools-style inspection: attaches the screenshot and drafts a message carrying the console/network/perf report. */
+  async inspectUrl(url?: string, opts: { mobile?: boolean } = {}): Promise<boolean> {
+    const target = url || (await this.askUrl('Inspect a web page (screenshot + console + network)'));
+    if (!target) {
+      return false;
+    }
+    this.broadcast({ type: 'toast', level: 'info', text: `Inspecting ${target}…` });
+    try {
+      const r = await inspectUrl(target, { mobile: opts.mobile, includeText: false });
+      if (r.screenshot) {
+        this.broadcast({ type: 'image', image: { name: `${new URL(r.finalUrl).hostname}-inspect.png`, data: r.screenshot, mime: 'image/png' } });
+      }
+      const errors = r.console.filter((c) => c.level === 'error').length;
+      const failed = r.network.filter((e) => e.error || (e.status ?? 0) >= 400).length;
+      const summary = errors || failed || r.layout.length ? `${errors} console error${errors === 1 ? '' : 's'}, ${failed} failed request${failed === 1 ? '' : 's'}, ${r.layout.length} layout issue${r.layout.length === 1 ? '' : 's'}` : 'no errors detected';
+      this.broadcast({ type: 'draft', text: `I inspected ${r.finalUrl} (${summary}). Analyse the screenshot and this DevTools report, explain the root causes and fix them:\n\n\`\`\`\n${formatReport(r, { maxConsole: 15, maxNetwork: 10 })}\n\`\`\`` });
+      return true;
+    } catch (e) {
+      this.broadcast({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
+      return false;
+    }
+  }
+
   async send(sessionId: string, text: string, attachments: string[] = [], images?: string[]): Promise<string> {
     const session = this.store.get(sessionId);
     if (!session) {

@@ -26,9 +26,13 @@
     bolt: '<svg viewBox="0 0 16 16"><path d="M9 1.5L3.5 9h4l-.5 5.5L13 7H9z"/></svg>',
     rocket: '<svg viewBox="0 0 16 16"><path d="M8 11c3-2 5-5.5 5-9-3.5 0-7 2-9 5l-2 .5L4.5 10 8 11z"/><path d="M5 11l-1.5 3M6 14l1-2.5"/><circle cx="9.5" cy="6.5" r="1"/></svg>',
     book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
+    download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
+    play: '<svg viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></svg>',
+    star: '<svg viewBox="0 0 16 16"><path d="M8 2l1.8 3.7 4.2.6-3 2.9.7 4.1L8 11.4l-3.7 1.9.7-4.1-3-2.9 4.2-.6z"/></svg>',
+    chip: '<svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6h1.5M1.5 10h1.5M13 6h1.5M13 10h1.5"/><rect x="6" y="6" width="4" height="4"/></svg>',
   };
   const SECTIONS = [
-    ['providers', 'Providers', I.server], ['models', 'Models & generation', I.cpu], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
+    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
     ['web', 'Web search', I.globe], ['memory', 'Memory & skills', I.brain], ['mcp', 'MCP servers', I.plug], ['advanced', 'Advanced', I.wrench],
   ];
   const PRESET_PROVIDERS = [
@@ -49,7 +53,7 @@
     autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always' } },
   };
 
-  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null } };
+  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {} };
 
   // ------------------------------------------------------------------ helpers
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
@@ -109,7 +113,9 @@
     return f;
   }
   const card = (...children) => { const c = el('div', 'card'); children.forEach((x) => x && c.appendChild(x)); return c; };
-  const modelOptions = (filter) => (state.data.models || []).filter(filter || (() => true)).map((m) => [m.id, m.name, `${m.providerId} · ${Math.round(m.contextWindow / 1024)}k${m.supportsTools ? ' · tools' : ''}${m.supportsVision ? ' · vision' : ''}${m.supportsFim ? ' · FIM' : ''}`]);
+  const enabledModels = () => (state.data.models || []).filter((m) => !m.disabled);
+  const modelOptions = (filter) => enabledModels().filter(filter || (() => true)).map((m) => [m.id, m.name, `${m.providerId} · ${Math.round(m.contextWindow / 1024)}k${m.supportsTools ? ' · tools' : ''}${m.supportsVision ? ' · vision' : ''}${m.supportsFim ? ' · FIM' : ''}`]);
+  const shortId = (id) => String(id || '').split('/').pop();
 
   // ------------------------------------------------------------------ shell
   function render() {
@@ -151,7 +157,7 @@
     head(sec, 'Providers', 'Model servers LocalPilot can talk to. Everything runs on the machines you choose — nothing is sent anywhere else.');
     const list = providersList();
     const bar = el('div', 'btnrow');
-    bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${(state.data.models || []).length} model(s) available</span>`;
+    bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${enabledModels().length} model(s) available</span>`;
     bar.querySelector('#probe').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     const wrap = el('div');
@@ -230,17 +236,213 @@
   }
 
   // ------------------------------------------------------------------ models
+  const ROLE_LABEL = { agent: 'agent', completion: 'completions', vision: 'images', reasoning: 'plan' };
+  const TARGET_LABEL = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
+  const fitBadge = (fit) => fit === 'ok' ? '<span class="badge ok">fits</span>' : fit === 'tight' ? '<span class="badge warn">tight</span>' : fit === 'over' ? '<span class="badge err">too big</span>' : '';
+  const gbText = (gb) => (gb === undefined || gb === null ? '' : gb >= 10 ? `${Math.round(gb)} GB` : `${Number(gb).toFixed(1)} GB`);
+  const activeJob = (kind, target, model) => state.jobs.find((j) => j.status === 'running' && j.kind === kind && (!target || j.target === target) && (!model || j.model === model));
+  function progressBar(job) {
+    const w = el('div', `progress ${job.progress < 0 ? 'indet' : ''}`, `<i style="width:${Math.max(2, Math.round((job.progress < 0 ? 0.3 : job.progress) * 100))}%"></i>`);
+    w.title = job.detail || '';
+    return w;
+  }
   function secModels(sec) {
-    head(sec, 'Models & generation', 'Which model answers by default and how it generates. Each chat can still pick its own model.');
+    head(sec, 'Models', 'Everything about local models in one place: what this machine can run, what is installed, which model answers which task, and a catalog to install more — smallest first.');
+    if (!state.models) {
+      if (!state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
+      sec.appendChild(el('div', 'loading', '<span class="spinner"></span>Checking this machine and the model servers…'));
+      return;
+    }
+    const d = { runtimes: [], installed: [], catalog: [], starter: {}, ...state.models };
+    d.system = d.system || { summary: 'Hardware not detected', modelBudgetGb: 0, tier: '' };
+    const running = d.runtimes.filter((r) => r.running);
+    const anyModels = d.installed.length > 0;
+    const setupJob = activeJob('setup') || activeJob('install-runtime') || activeJob('start');
+
+    // --- this machine
+    const sys = el('div', 'card sys-card');
+    const tierText = { tiny: 'very small models only (≤ 3b)', small: 'small models (up to ~7b)', medium: 'mid-size models (up to ~14b)', large: 'large models (up to ~32b)', xl: 'anything, including 70b+' }[d.system.tier] || '';
+    sys.innerHTML = `<div class="sys"><span class="ic">${I.chip}</span><div class="t"><b>${esc(d.system.summary)}</b><span>Comfortable with ${esc(tierText)}. Smaller models answer faster and leave room for completions and vision alongside the agent model.</span></div><div class="budget"><b>${esc(gbText(d.system.modelBudgetGb))}</b><span>model budget</span></div></div>`;
+    const rts = el('div', 'rts');
+    for (const r of d.runtimes) {
+      const row = el('div', 'rt');
+      const status = r.running ? '<span class="badge ok">running</span>' : r.installed ? '<span class="badge warn">installed</span>' : '<span class="badge">not found</span>';
+      row.innerHTML = `<span class="dot ${r.running ? 'ok' : r.installed ? 'warn' : ''}"></span><div class="t"><b>${esc(r.label)} ${status}</b><span title="${esc(r.hint || r.baseUrl || '')}">${esc(r.running ? r.baseUrl : r.hint || '')}</span></div>`;
+      if (!r.running && r.installed && r.target === 'ollama') {
+        const b = el('button', 'btn sm', `${I.play}Start`);
+        b.disabled = !!activeJob('start');
+        b.onclick = () => { b.disabled = true; post({ type: 'startRuntime', target: 'ollama' }); };
+        row.appendChild(b);
+      } else if (!r.installed && r.target === 'ollama') {
+        const b = el('button', 'btn sm', `${I.download}Install`);
+        b.onclick = () => post({ type: 'autoSetup', installRuntime: true, target: 'ollama' });
+        row.appendChild(b);
+      }
+      rts.appendChild(row);
+    }
+    sys.appendChild(rts);
+    const auto = el('div', 'sys-foot');
+    const starter = d.starter.agent ? `${d.starter.agent}${d.starter.completion ? ` + ${d.starter.completion} for completions` : ''}${d.starter.vision ? ` + ${d.starter.vision} for images` : ''}` : 'a coder model sized for this machine';
+    auto.innerHTML = `<button class="btn ${anyModels ? '' : 'brand'}" id="auto" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${anyModels ? 'Install starter set' : 'Set up automatically'}</button><span class="hint">${esc(setupJob ? setupJob.detail : `Picks for this machine: ${starter}. Starts or installs Ollama when needed.`)}</span>`;
+    auto.querySelector('#auto').onclick = () => post({ type: 'autoSetup', installRuntime: false });
+    sys.appendChild(auto);
+    sys.appendChild(field('models.autoSetup', 'Offer automatic setup', 'When LocalPilot starts and finds no local model, offer to install Ollama and a starter model.', 'toggle'));
+    sec.appendChild(sys);
+
+    // --- jobs
+    const jobs = state.jobs.filter((j) => j.kind !== 'setup' || j.status === 'running');
+    if (jobs.length) {
+      const h = el('h2', 'sub', `Activity${jobs.some((j) => j.status === 'running') ? '<span class="spinner"></span>' : ''}`);
+      const clr = el('button', 'btn ghost sm act', 'Clear finished'); clr.onclick = () => post({ type: 'clearJobs' });
+      if (jobs.some((j) => j.status !== 'running')) { h.appendChild(clr); }
+      sec.appendChild(h);
+      const card = el('div', 'card');
+      for (const j of jobs.slice(0, 8)) {
+        const row = el('div', 'job');
+        const verb = { pull: 'Installing', remove: 'Removing', start: 'Starting', 'install-runtime': 'Installing', setup: 'Setting up' }[j.kind] || j.kind;
+        row.innerHTML = `<span class="dot ${j.status === 'running' ? 'busy' : j.status === 'done' ? 'ok' : j.status === 'error' ? 'err' : ''}"></span><div class="t"><b>${esc(verb)} ${esc(j.model)} <span class="badge">${esc(TARGET_LABEL[j.target] || j.target)}</span></b><span>${esc(j.status === 'error' ? j.error || 'failed' : j.detail || j.status)}</span></div>`;
+        if (j.status === 'running') {
+          const grp = el('div', 'prog-grp');
+          grp.appendChild(progressBar(j));
+          grp.appendChild(el('span', 'pct', j.progress >= 0 ? `${Math.round(j.progress * 100)}%` : ''));
+          const c = el('button', 'btn ghost sm', I.x); c.title = 'Cancel'; c.onclick = () => post({ type: 'cancelJob', id: j.id });
+          grp.appendChild(c);
+          row.appendChild(grp);
+        }
+        card.appendChild(row);
+      }
+      sec.appendChild(card);
+    }
+
+    // --- installed
+    sec.appendChild(el('h2', 'sub', `Installed models<span class="count">${d.installed.filter((m) => !m.disabled).length} enabled · ${d.installed.length} total</span>`));
+    const inst = el('div', 'card');
+    if (!anyModels) {
+      inst.appendChild(el('div', 'empty', running.length ? 'The server is running but has no models yet. Use <b>Set up automatically</b> above or install one from the catalog below.' : 'No model server is running. <b>Set up automatically</b> starts or installs Ollama and downloads a starter model sized for this machine.'));
+    }
+    const def = val('defaultModel');
+    const sorted = [...d.installed].sort((a, b) => (a.disabled ? 1 : 0) - (b.disabled ? 1 : 0) || a.providerId.localeCompare(b.providerId) || a.name.localeCompare(b.name));
+    for (const m of sorted) {
+      const row = el('div', `mrow ${m.disabled ? 'off' : ''}`);
+      const tg = el('button', `toggle ${m.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.title = m.disabled ? 'Enable' : 'Disable (hidden from pickers and routing; stays installed)';
+      tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleModel', id: m.id, enabled: !!m.disabled }); };
+      row.appendChild(tg);
+      const caps = [m.supportsTools ? 'tools' : 'prompt tools', m.supportsVision ? 'vision' : '', m.supportsFim ? 'FIM' : ''].filter(Boolean).join(' · ');
+      const t = el('div', 't', `<b title="${esc(m.id)}">${esc(m.name)}</b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}</span>`);
+      row.appendChild(t);
+      const right = el('div', 'mrow-right');
+      const tags = el('div', 'tags');
+      if (m.id === def) { tags.innerHTML += '<span class="badge brand">default</span>'; }
+      else if (!def && m.autoRoles.includes('agent')) { tags.innerHTML += '<span class="badge brand">auto default</span>'; }
+      if (m.id === val('inlineCompletion.model')) { tags.innerHTML += '<span class="badge role">completions</span>'; }
+      if (m.id === val('routing.vision')) { tags.innerHTML += '<span class="badge role">images</span>'; }
+      if (m.id === val('routing.reasoning')) { tags.innerHTML += '<span class="badge role">plan</span>'; }
+      for (const r of m.autoRoles) { if (r !== 'agent' && !tags.innerHTML.includes(`>${ROLE_LABEL[r]}<`)) { tags.innerHTML += `<span class="badge" title="Routing picks this model for ${ROLE_LABEL[r]} unless you choose one">auto · ${ROLE_LABEL[r]}</span>`; } }
+      tags.innerHTML += fitBadge(m.fit);
+      right.appendChild(tags);
+      const acts = el('div', 'acts');
+      if (!m.disabled && m.id !== def) {
+        const b = el('button', 'btn ghost sm', 'Set default'); b.title = 'Use for new chats'; b.onclick = () => set('defaultModel', m.id);
+        acts.appendChild(b);
+      }
+      if (m.removable) {
+        const rj = activeJob('remove', m.removable, m.modelId);
+        const b = el('button', 'btn ghost sm danger', rj ? '<span class="spinner"></span>' : I.trash); b.title = `Delete from ${TARGET_LABEL[m.removable]}`; b.disabled = !!rj;
+        b.onclick = () => { if (confirm(`Delete ${m.name} from ${TARGET_LABEL[m.removable]}? You can download it again from the catalog.`)) { post({ type: 'removeModel', target: m.removable, model: m.modelId, providerId: m.providerId }); } };
+        acts.appendChild(b);
+      }
+      right.appendChild(acts);
+      row.appendChild(right);
+      inst.appendChild(row);
+    }
+    sec.appendChild(inst);
+
+    // --- routing
+    sec.appendChild(el('h2', 'sub', 'Routing'));
+    const autoFor = (role) => { const m = d.installed.find((x) => !x.disabled && x.autoRoles.includes(role)); return m ? `Auto → ${m.name}` : role === 'vision' ? 'Auto → no vision model installed' : 'Auto → best available'; };
     const opts = modelOptions();
     sec.appendChild(card(
-      field('defaultModel', 'Default model', opts.length ? 'Used for new chats and editor actions. Tool-capable coder models (qwen2.5-coder, devstral, qwen3…) work best in Agent mode.' : 'No models discovered yet — check your <a data-sec="providers">providers</a>.', 'select', { options: [['', 'Auto (best available)', ''], ...opts] }),
+      field('routing.enabled', 'Route automatically', 'Send image turns to a vision model, completions to the smallest FIM model, Plan mode to the reasoning model, and fall back to the best available model when the chosen one is offline or disabled.', 'toggle'),
+      field('defaultModel', 'Agent & chat', opts.length ? `New chats and editor actions. ${esc(autoFor('agent'))}.` : 'No models enabled yet.', 'select', { options: [['', 'Auto (best for this machine)', ''], ...opts] }),
+      field('inlineCompletion.model', 'Inline completions', `Fill-in-the-middle model for ghost text. ${esc(autoFor('completion'))}.`, 'select', { options: [['', 'Auto (smallest FIM model)', ''], ...(modelOptions((m) => m.supportsFim).length ? modelOptions((m) => m.supportsFim) : opts)] }),
+      field('routing.vision', 'Images', `Used when a turn has images and the session model cannot see. ${esc(autoFor('vision'))}.`, 'select', { options: [['', 'Auto (best vision model)', ''], ...(modelOptions((m) => m.supportsVision).length ? modelOptions((m) => m.supportsVision) : opts)] }),
+      field('routing.reasoning', 'Plan mode', 'Optional reasoning model for planning (qwen3, deepseek-r1, gpt-oss — pair with Extended thinking below). Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] })
+    ));
+
+    // --- generation
+    sec.appendChild(el('h2', 'sub', 'Generation'));
+    sec.appendChild(card(
       field('contextWindow', 'Context window', 'Requested context size in tokens (<code>num_ctx</code> for Ollama). Capped by the model. Larger = more memory and slower prompts.', 'select', { options: [[8192, '8k'], [16384, '16k'], [32768, '32k'], [65536, '64k'], [131072, '128k'], [262144, '256k']], cast: Number }),
       field('maxOutputTokens', 'Max output tokens', 'Upper bound per response.', 'number', { min: 256, max: 65536, step: 256 }),
       field('temperature', 'Temperature', 'Lower is more deterministic. 0.2 is a good default for code.', 'range', { min: 0, max: 1.5, step: 0.05, fmt: (v) => Number(v).toFixed(2) }),
       field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>). Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] }),
       field('keepAlive', 'Keep model loaded', 'How long Ollama keeps the model in memory after a request (e.g. <code>5m</code>, <code>30m</code>, <code>-1</code> = forever).', 'text', { placeholder: '30m', validate: (v) => /^(-1|0|\d+(ms|s|m|h))$/.test(v) })
     ));
+
+    // --- catalog
+    sec.appendChild(el('h2', 'sub', 'Model catalog'));
+    const chips = el('div', 'chips');
+    const filters = [['fits', 'Fits this machine'], ['all', 'All sizes'], ['agent', 'Agent'], ['completion', 'Completions'], ['vision', 'Vision'], ['reasoning', 'Reasoning']];
+    for (const [k, l] of filters) { const b = el('button', `chip ${state.cat.filter === k ? 'on' : ''}`, esc(l)); b.onclick = () => { state.cat.filter = k; render(); }; chips.appendChild(b); }
+    const q = el('input'); q.type = 'search'; q.placeholder = 'Search models…'; q.value = state.cat.q; q.oninput = debounce(() => { state.cat.q = q.value; render(); }, 250);
+    chips.appendChild(q);
+    sec.appendChild(chips);
+    if (!running.length) { sec.appendChild(el('p', 'muted small', 'Start a runtime to install from here — Ollama, Docker Model Runner (with host access) or LM Studio. Models can still be pulled by hand (<code>ollama pull …</code>) and appear after a refresh.')); }
+    const fams = [];
+    for (const it of d.catalog) { let f = fams.find((x) => x.key === it.key); if (!f) { f = { key: it.key, name: it.name, vendor: it.vendor, description: it.description, roles: it.roles, items: [] }; fams.push(f); } f.items.push(it); }
+    const ql = state.cat.q.trim().toLowerCase();
+    let shown = 0;
+    for (const f of fams) {
+      if (ql && !`${f.name} ${f.vendor} ${f.description} ${f.roles.join(' ')} ${f.items.map((i) => i.tag).join(' ')}`.toLowerCase().includes(ql)) { continue; }
+      if (['agent', 'completion', 'vision', 'reasoning'].includes(state.cat.filter) && !f.roles.includes(state.cat.filter)) { continue; }
+      const items = state.cat.filter === 'all' || ql ? f.items : f.items.filter((i) => i.fits || i.tight || i.installed.length);
+      if (!items.length) { continue; }
+      shown++;
+      const c = el('div', 'cat');
+      const headEl = el('div', 'cat-head', `<span class="ic">${esc(f.name[0])}</span><div class="t"><b>${esc(f.name)}</b><span class="v">${esc(f.vendor)}</span><p>${esc(f.description)}</p></div><div class="tags">${f.roles.map((r) => `<span class="badge role">${esc(ROLE_LABEL[r] || r)}</span>`).join('')}</div>`);
+      c.appendChild(headEl);
+      const hiddenCount = f.items.length - items.length;
+      for (const it of items) {
+        const row = el('div', `cat-var ${!it.fits && !it.tight ? 'dim' : ''}`);
+        const job = activeJob('pull', null, null) && state.jobs.find((j) => j.status === 'running' && j.kind === 'pull' && it.targets.some((t) => t.id === j.model && t.target === j.target));
+        row.innerHTML = `<span class="sz">${esc(it.tag)}</span><span class="gb">${esc(gbText(it.gb))}</span><span class="fit">${it.fits ? '<span class="badge ok">fits</span>' : it.tight ? '<span class="badge warn">tight</span>' : '<span class="badge err">too big</span>'}</span>${it.recommendedFor.length ? `<span class="badge star" title="Best size of this family for this machine">${I.star} recommended</span>` : ''}${it.installed.length ? `<span class="badge ok" title="${esc(it.installed.join(', '))}">${I.check} installed</span>` : ''}<span class="spacer"></span>`;
+        const act = el('div', 'cat-act');
+        row.appendChild(act);
+        if (job) {
+          act.classList.add('prog-grp');
+          act.appendChild(progressBar(job));
+          act.appendChild(el('span', 'pct', job.progress >= 0 ? `${Math.round(job.progress * 100)}%` : ''));
+          const cancel = el('button', 'btn ghost sm', I.x); cancel.title = 'Cancel'; cancel.onclick = () => post({ type: 'cancelJob', id: job.id });
+          act.appendChild(cancel);
+        } else if (it.targets.length) {
+          const key = `${it.key}:${it.tag}`;
+          let target = state.installTarget[key] || it.targets[0].target;
+          if (!it.targets.some((t) => t.target === target)) { target = it.targets[0].target; }
+          if (it.targets.length > 1) {
+            const sel = el('select'); sel.setAttribute('aria-label', 'Install to');
+            for (const t of it.targets) { const o = el('option'); o.value = t.target; o.textContent = TARGET_LABEL[t.target]; o.selected = t.target === target; sel.appendChild(o); }
+            sel.onchange = () => { state.installTarget[key] = sel.value; };
+            act.appendChild(sel);
+          }
+          const already = it.installed.some((id) => id.startsWith(`${(d.runtimes.find((r) => r.target === target) || {}).providerId}/`));
+          const b = el('button', `btn sm ${it.recommendedFor.length && !already ? 'primary' : ''}`, `${I.download}${already ? 'Reinstall' : it.targets.length > 1 ? 'Install' : `Install to ${TARGET_LABEL[target]}`}`);
+          b.title = `${target === 'ollama' ? 'ollama pull' : target === 'docker' ? 'docker model pull' : 'lms get'} ${it.targets.find((t) => t.target === target).id}`;
+          b.onclick = () => { const tgt = state.installTarget[key] || target; const t = it.targets.find((x) => x.target === tgt) || it.targets[0]; post({ type: 'installModel', target: t.target, model: t.id }); toast(`Installing ${f.name} ${it.tag} on ${TARGET_LABEL[t.target]}…`); };
+          act.appendChild(b);
+        } else {
+          act.appendChild(el('span', 'note', running.length ? `Not published for ${running.map((r) => r.label).join(' / ')} — pull it by hand` : 'Start a runtime to install'));
+        }
+        c.appendChild(row);
+      }
+      if (hiddenCount > 0) {
+        const more = el('button', 'cat-more', `${hiddenCount} larger size${hiddenCount === 1 ? '' : 's'} hidden — show all sizes`);
+        more.onclick = () => { state.cat.filter = 'all'; render(); };
+        c.appendChild(more);
+      }
+      sec.appendChild(c);
+    }
+    if (!shown) { sec.appendChild(el('div', 'empty', 'Nothing matches. Clear the search or switch to “All sizes”.')); }
+    sec.appendChild(el('p', 'muted small', 'Sizes are approximate Q4 footprints. “Fits” means the model stays within the budget above with room for its context cache; “tight” may still run by offloading layers to RAM, more slowly.'));
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
 
@@ -283,10 +485,11 @@
     const fim = modelOptions((m) => m.supportsFim);
     sec.appendChild(card(
       field('inlineCompletion.enabled', 'Enable inline completions', `Works best with small base/FIM models: <code>qwen2.5-coder:1.5b-base</code>, <code>qwen2.5-coder:7b-base</code>, <code>codestral</code>, <code>starcoder2</code>.${fim.length ? '' : ' <span class="err-text">No FIM-capable model found yet.</span>'}`, 'toggle'),
-      field('inlineCompletion.model', 'Completion model', 'Empty = first FIM-capable model discovered.', 'select', { options: [['', 'Auto (first FIM model)', ''], ...(fim.length ? fim : modelOptions())] }),
+      field('inlineCompletion.model', 'Completion model', 'Empty = the smallest FIM-capable model that fits this machine (see <a data-sec="models">Models → Routing</a>).', 'select', { options: [['', 'Auto (smallest FIM model)', ''], ...(fim.length ? fim : modelOptions())] }),
       field('inlineCompletion.debounceMs', 'Debounce', 'Milliseconds of idle typing before requesting a suggestion.', 'number', { min: 50, max: 2000, step: 50 }),
       field('inlineCompletion.maxTokens', 'Max tokens per suggestion', '', 'number', { min: 16, max: 1024, step: 16 })
     ));
+    sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
 
   // ------------------------------------------------------------------ web search
@@ -455,8 +658,10 @@
       if (results && !found.length) {
         const help = el('div');
         help.style.marginTop = '14px';
-        help.innerHTML = `<p class="hint"><b>Nothing found yet.</b> Pick one of these — any of them works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
+        const setupJob = state.jobs.find((j) => j.status === 'running' && ['setup', 'pull', 'install-runtime', 'start'].includes(j.kind));
+        help.innerHTML = `<div class="btnrow" style="margin-bottom:12px"><button class="btn brand" id="autoSetup" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}Set up automatically</button><span class="muted small">${esc(setupJob ? `${setupJob.model}: ${setupJob.detail}` : 'Starts or installs Ollama and downloads a starter coder model sized for this machine.')}</span></div><p class="hint"><b>Or do it yourself</b> — any of these works:</p><ul class="help-list"><li><b>Ollama</b> — install from <a data-url="https://ollama.com">ollama.com</a>, then <code>ollama pull qwen2.5-coder:7b</code>. It starts automatically.</li><li><b>Docker</b> — <code>docker model pull ai/qwen2.5-coder</code> with Docker Desktop's Model Runner (enable host access: <code>docker desktop enable model-runner --tcp=12434</code>), or run any Ollama / vLLM / llama.cpp container with a published port.</li><li><b>LM Studio</b> — open the <i>Developer</i> tab and start the local server (port 1234).</li><li><b>llama.cpp</b> — <code>llama-server -m model.gguf --port 8080</code></li><li><b>vLLM</b> — <code>vllm serve Qwen/Qwen2.5-Coder-7B-Instruct</code></li></ul>`;
         c.appendChild(help);
+        help.querySelector('#autoSetup').onclick = () => { post({ type: 'autoSetup', installRuntime: false }); };
       }
       const foot = el('div', 'foot');
       foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><button class="btn link" id="manual">Add a custom endpoint…</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
@@ -470,7 +675,11 @@
       const all = found.flatMap((r) => r.models.map((m) => ({ ...m, provider: r.displayName })));
       c.innerHTML = `<h3>2 · Choose a default model</h3><p class="hint">For agent mode pick a tool-capable coder model (qwen2.5-coder 7b–32b, devstral, qwen3, gpt-oss). You can switch per chat at any time.</p>`;
       const list = el('div', 'mdl-list');
-      if (!all.length) { list.appendChild(el('div', 'empty', 'The server is running but has no models loaded. Pull one (e.g. <code>ollama pull qwen2.5-coder:7b</code>) and go back.')); }
+      if (!all.length) {
+        const e = el('div', 'empty', 'The server is running but has no models yet. <button class="btn brand sm" id="autoSetup2">Download a starter model</button> or pull one by hand (e.g. <code>ollama pull qwen2.5-coder:7b</code>) and go back.');
+        e.querySelector('#autoSetup2').onclick = () => { post({ type: 'autoSetup', installRuntime: false }); su.step = 0; render(); };
+        list.appendChild(e);
+      }
       for (const m of all) {
         const b = el('button', `mdl ${su.model === m.id ? 'on' : ''}`, `<div class="t"><b>${esc(m.name)}</b><span>${esc(m.provider)} · ${Math.round(m.contextWindow / 1024)}k context</span></div><div class="tags">${m.id === recommend(found) ? '<span class="badge brand">recommended</span>' : ''}${m.supportsTools ? '<span class="badge ok">tools</span>' : '<span class="badge">prompt tools</span>'}${m.supportsVision ? '<span class="badge">vision</span>' : ''}${m.supportsFim ? '<span class="badge">FIM</span>' : ''}</div>`);
         b.onclick = () => { su.model = m.id; render(); };
@@ -527,6 +736,7 @@
         state.data = m;
         if (m.page) { state.page = m.page; }
         if (m.section) { state.section = m.section; }
+        if (m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
         render();
         break;
       case 'probe':
@@ -537,6 +747,14 @@
       case 'testResult':
         state.tests[m.id] = m.result;
         render();
+        break;
+      case 'models':
+        state.models = m.models; state.jobs = m.models.jobs || state.jobs; state.modelsRequested = false;
+        if (state.section === 'models' || state.page === 'setup') { render(); }
+        break;
+      case 'jobs':
+        state.jobs = m.jobs || [];
+        if ((state.section === 'models' && state.models) || state.page === 'setup') { render(); }
         break;
       case 'busy':
         state.busy = m.busy;

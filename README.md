@@ -66,7 +66,7 @@ code --install-extension localpilot.vsix
 
 Requires VS Code 1.104+.
 
-**Serve a model** (any one of these — LocalPilot auto-detects running servers, including ones in Docker)
+**Serve a model** — or let LocalPilot do it: with no model found it offers **Set up automatically**, which starts or installs Ollama and downloads a starter coder model sized for your machine. Any of these works too (running servers are auto-detected, including ones in Docker):
 
 ```bash
 ollama pull qwen2.5-coder:14b && ollama serve        # Ollama  → :11434
@@ -87,9 +87,12 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 | **Parallel agents & multitasking** | Chat tabs run independently; `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
 | **Change review & checkpoints** | Every agent edit is snapshotted — Diff / Accept / Reject per file or per session, and **Restore checkpoint** on any message rewinds files and conversation. |
 | **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Model manager & auto-setup** | One-click setup installs Ollama and a smallest-first starter set sized to your RAM / GPU. **Settings → Models** shows what fits this machine, lets you enable / disable, set default or remove installed models, and installs from a curated catalog to Ollama, Docker Model Runner or LM Studio with live progress. |
+| **Automatic routing** | Image turns go to a vision model, completions to the smallest FIM model, Plan mode to an optional reasoning model; an offline or disabled model falls back to the best available one. |
 | **Large-context management** | Per-model token budget → prune old tool outputs → LLM compaction → truncation. Live context meter; `/compact` on demand. |
 | **Memory** | Durable project and global notes (`.localpilot/memory/`) the agent saves and recalls across sessions. |
 | **Skills & subagents** | `SKILL.md` playbooks loaded on demand; built-in `explore`, `coder`, `reviewer`, `researcher`; define your own with a model and tool allow-list. |
+| **Browser view, screenshots & DevTools inspection** | The agent opens URLs in VS Code's Simple Browser, screenshots pages or local dev servers with a headless Chromium (desktop / phone / full-page), and inspects them over the DevTools Protocol — console errors and exceptions, network trace with failed requests, performance metrics, layout checks, optional click/type actions — rendered as a DevTools panel in the chat and attached to vision models. |
 | **Screenshots & images** | Selection area, this VS Code window, pick a window, full screen or timed capture (<kbd>⌘⌥⇧S</kbd>); paste or drop images; vision models fix what they see. |
 | **Inline edit & terminal** | <kbd>⌘⌥K</kbd> rewrites a selection in place; in a terminal it turns English into a reviewed command. |
 | **Context mentions** | `@workspace`, `@selection`, `@problems`, `@git`, `@editors`, `@file#L10-L20`, folders, drag-and-drop. |

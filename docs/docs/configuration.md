@@ -23,11 +23,29 @@ Expand a provider to edit it and press **Test connection** — LocalPilot checks
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Model servers. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
-| `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model found |
+| `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model that fits this machine |
+| `localpilot.models.disabled` | `[]` | `provider/model` ids hidden from pickers, routing and the status bar (toggle in **Settings → Models**) |
+| `localpilot.models.autoSetup` | `true` | Offer to install Ollama + a starter model when no local model is found |
 | `localpilot.contextWindow` | `32768` | Requested context (Ollama `num_ctx`); capped by the model's maximum |
 | `localpilot.maxOutputTokens` | `4096` | Max tokens per response |
 | `localpilot.temperature` | `0.2` | Sampling temperature |
 | `localpilot.thinking` | `false` | Extended thinking for reasoning models |
+
+## Browser
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.browser.chromePath` | `""` (auto) | Chromium-based browser used for headless web-page screenshots (`browser_screenshot`, *Screenshot a Web Page…*). Auto-detects Chrome, Chromium, Edge, Brave, Arc |
+
+## Routing
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.routing.enabled` | `true` | Pick a model per task: vision model for image turns, smallest FIM model for completions, reasoning model in Plan mode, best available model when the default is offline/disabled |
+| `localpilot.routing.vision` | `""` (auto) | `provider/model` for turns with images when the session model cannot see |
+| `localpilot.routing.reasoning` | `""` (keep session model) | `provider/model` used in Plan mode |
+
+See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 
 ## Context
 
@@ -70,7 +88,7 @@ Values: `always`, `ask`, `never`.
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.inlineCompletion.enabled` | `false` | Ghost-text completions |
-| `localpilot.inlineCompletion.model` | `""` | `provider/model`; empty uses the first FIM-capable model |
+| `localpilot.inlineCompletion.model` | `""` | `provider/model`; empty uses the smallest FIM-capable model that fits this machine |
 | `localpilot.inlineCompletion.debounceMs` | `350` | |
 | `localpilot.inlineCompletion.maxTokens` | `128` | |
 

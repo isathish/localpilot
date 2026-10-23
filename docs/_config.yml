@@ -1,6 +1,6 @@
 title: LocalPilot
 tagline: Local-first AI coding agent for VS Code
-description: LocalPilot is a free, open-source AI coding agent for VS Code that runs 100% locally with Ollama, LM Studio, llama.cpp or vLLM. Agent mode, parallel agents, skills, subagents, screenshots and MCP — a private, offline alternative to GitHub Copilot, Cursor and Claude Code.
+description: LocalPilot is a free, open-source AI coding agent for VS Code that runs 100% locally with Ollama, LM Studio, llama.cpp or vLLM — and sets up a model for you in one click. Agent mode, parallel agents, skills, subagents, screenshots, MCP and hardware-aware model management — a private, offline alternative to GitHub Copilot, Cursor and Claude Code.
 url: https://isathish.github.io
 baseurl: /localpilot
 repo: https://github.com/isathish/localpilot

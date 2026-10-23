@@ -4,9 +4,11 @@ description: Install LocalPilot, connect a local model server and run your first
 permalink: /docs/getting-started/
 ---
 
-## 1. Serve a model
+## 1. Serve a model — or let LocalPilot do it
 
-LocalPilot talks to any of these out of the box (default ports are probed automatically):
+**Nothing installed yet?** Skip this step. When LocalPilot starts without finding a model it offers **Set up automatically**: it installs (or starts) Ollama and downloads a starter coder model sized for your RAM and GPU — a 7b on 16 GB+, smaller on tighter machines — plus a tiny completion model. One click, a few minutes of download, done. Details in [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
+
+Already have a server? LocalPilot talks to any of these out of the box (default ports are probed automatically):
 
 | Server | Default endpoint | Notes |
 |---|---|---|
@@ -43,7 +45,9 @@ On first launch the **Welcome / Setup** screen opens: it detects the servers fro
 
 ![Setup step 2 — choosing a default model; qwen2.5-coder:14b is recommended because it supports tool calling]({{ '/assets/screenshots/setup-model.png' | relative_url }})
 
-Afterwards, pick a model from the picker at the bottom of the composer — or click the model name in the status bar. If you see *No models found*, make sure a server is running and press **Refresh**, or open **Set up providers** to add a custom endpoint and test the connection.
+If no server is found the wizard shows **Set up automatically** (installs or starts Ollama and pulls a starter model sized for your machine) next to the manual instructions.
+
+Afterwards, pick a model from the picker at the bottom of the composer — or click the model name in the status bar. If you see *No models found*, click **Set up automatically**, or make sure a server is running and press **Refresh**. **Settings → Models** shows what fits your machine and lets you install more from the catalog; see [Managing models]({{ '/docs/models/#managing-models' | relative_url }}).
 
 ## 4. Your first task
 

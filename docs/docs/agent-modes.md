@@ -35,7 +35,7 @@ Switch modes with the picker in the composer or `/mode agent|ask|plan`. Editor a
 | Run a shell command | `localpilot.approvals.terminal` | `ask` |
 | Create / edit a file | `localpilot.approvals.write` | `always` |
 | Delete a path | `localpilot.approvals.delete` | `ask` |
-| Web search / fetch / MCP tools | `localpilot.approvals.network` | `always` |
+| Web search / fetch, `browser_screenshot` / MCP tools | `localpilot.approvals.network` | `always` |
 
 Values: `always` (auto-approve), `ask` (inline prompt with *Allow* / *Allow for session* / *Deny*), `never` (block).
 

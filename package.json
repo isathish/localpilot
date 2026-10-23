@@ -209,6 +209,53 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "localpilot.autoSetupModels",
+        "title": "Set Up Models Automatically",
+        "category": "LocalPilot",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localpilot.installModel",
+        "title": "Install Model from Catalog…",
+        "category": "LocalPilot",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localpilot.removeModel",
+        "title": "Remove Local Model…",
+        "category": "LocalPilot",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "localpilot.toggleModel",
+        "title": "Enable / Disable Model…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.manageModels",
+        "title": "Manage Models",
+        "category": "LocalPilot",
+        "icon": "$(library)"
+      },
+      {
+        "command": "localpilot.openBrowser",
+        "title": "Open URL in Browser View…",
+        "category": "LocalPilot",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "localpilot.screenshotUrl",
+        "title": "Screenshot a Web Page…",
+        "category": "LocalPilot",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "localpilot.inspectUrl",
+        "title": "Inspect a Web Page (Screenshot, Console, Network)…",
+        "category": "LocalPilot",
+        "icon": "$(debug-console)"
+      },
+      {
         "command": "localpilot.toggleInlineCompletions",
         "title": "Toggle Inline Completions",
         "category": "LocalPilot"
@@ -394,6 +441,11 @@
         },
         {
           "command": "localpilot.refreshModels",
+          "when": "view == localpilot.chatView",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.manageModels",
           "when": "view == localpilot.chatView",
           "group": "2_manage"
         },
@@ -854,7 +906,7 @@
         "localpilot.inlineCompletion.model": {
           "type": "string",
           "default": "",
-          "description": "provider/model for completions. Empty = first FIM-capable model."
+          "description": "provider/model for completions. Empty = the smallest FIM-capable model that fits this machine."
         },
         "localpilot.inlineCompletion.debounceMs": {
           "type": "number",
@@ -916,6 +968,39 @@
           "order": 0,
           "markdownDescription": "Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Welcome / Setup*."
         },
+        "localpilot.models.autoSetup": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When no local model is found, offer to set one up automatically: start or install Ollama and download the smallest coder model that suits this machine (plus a tiny completion model when it fits)."
+        },
+        "localpilot.models.disabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "`provider/model` ids hidden from the model picker, routing and the status bar. Toggle models in **Settings → Models** instead of editing this by hand."
+        },
+        "localpilot.routing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Pick the right model per task automatically: a vision model for turns with images, the smallest fill-in-the-middle model for inline completions, the configured reasoning model in Plan mode, and the best available model when the default is offline or disabled."
+        },
+        "localpilot.routing.vision": {
+          "type": "string",
+          "default": "",
+          "description": "provider/model used for turns that include images when the session model cannot see. Empty = best available vision model."
+        },
+        "localpilot.browser.chromePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to a Chromium-based browser used for headless web-page screenshots (`browser_screenshot` tool, *Screenshot a Web Page…*). Empty = auto-detect Chrome, Chromium, Edge, Brave or Arc."
+        },
+        "localpilot.routing.reasoning": {
+          "type": "string",
+          "default": "",
+          "description": "provider/model used in Plan mode (e.g. ollama/qwen3:8b or ollama/deepseek-r1:8b). Empty = keep the session model."
+        },
         "localpilot.terminal.runInIntegratedTerminal": {
           "type": "boolean",
           "default": true,
@@ -937,7 +1022,7 @@
           {
             "id": "setup",
             "title": "Connect a model server",
-            "description": "LocalPilot works with Ollama, LM Studio, llama.cpp, vLLM or any OpenAI-compatible endpoint. The setup screen finds running servers and recommends a model.\n[Open setup](command:localpilot.openWelcome)",
+            "description": "LocalPilot works with Ollama, LM Studio, llama.cpp, vLLM or any OpenAI-compatible endpoint. The setup screen finds running servers and recommends a model — or installs Ollama and a model sized for this machine in one click.\n[Open setup](command:localpilot.openWelcome)\n[Manage models](command:localpilot.manageModels)",
             "media": {
               "markdown": "media/walkthrough/setup.md"
             },

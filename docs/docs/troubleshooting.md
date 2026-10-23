@@ -6,10 +6,28 @@ permalink: /docs/troubleshooting/
 
 ## "No models found"
 
-- Is the server running? `curl http://localhost:11434/api/tags` (Ollama) or `curl http://localhost:1234/v1/models` (LM Studio).
+- Fastest fix: click **Set up automatically** (chat notice, setup wizard or *LocalPilot: Set Up Models Automatically*). It starts or installs Ollama and downloads a starter model that fits your machine.
+- Is the server running? `curl http://localhost:11434/api/tags` (Ollama) or `curl http://localhost:1234/v1/models` (LM Studio). **Settings → Models** shows each runtime as running / installed / not found, with a *Start* button for Ollama.
 - LM Studio: start the server from the **Developer** tab and load at least one model.
 - Non-default port or remote host → add it to `localpilot.providers`.
 - Press **Refresh models** (title bar ↻ or the empty-state button).
+- Models you **disabled** in Settings → Models are hidden on purpose — flip the switch back on.
+
+## A model is missing from the picker
+
+Check **Settings → Models → Installed models**: disabled models are listed greyed out with their switch off. Embedding models are never shown. Models pulled by hand appear after **Refresh models**.
+
+## The wrong model answers
+
+With routing on, LocalPilot substitutes a model in three cases and says so in the chat status line: the turn has images and the session model cannot see (→ vision model), you are in Plan mode with `localpilot.routing.reasoning` set, or the chosen model is offline / disabled (→ best available). Pin a model per role in **Settings → Models → Routing**, or turn `localpilot.routing.enabled` off.
+
+## Model download fails or is slow
+
+Downloads run through the runtime (`ollama pull`, `docker model pull`, `lms get`), so network and disk limits are theirs. Cancel from the Activity list in Settings → Models and retry; partially downloaded layers resume. A size marked **tight** or **too big** may still download but will run slowly or not at all — prefer a size marked **fits**.
+
+## "Ollama did not answer" after automatic setup
+
+On macOS/Windows the Ollama app has to finish starting (menu-bar icon). Wait a few seconds and press **Start** in Settings → Models, or run `ollama serve` in a terminal. On Linux the installer registers a `systemd` service; `systemctl status ollama` shows whether it is up.
 
 ## The model never calls tools / prints JSON instead
 
@@ -37,7 +55,7 @@ Install one of `gnome-screenshot`, `spectacle`, `scrot`, or `grim` + `slurp` (Wa
 
 ## Inline completions don't appear
 
-Enable `localpilot.inlineCompletion.enabled`, pick a FIM-capable base model (`qwen2.5-coder:1.5b-base`), and make sure no other completion provider (e.g. Copilot) is taking precedence.
+Enable `localpilot.inlineCompletion.enabled` and make sure a FIM-capable model is installed — routing picks the smallest one automatically (install `qwen2.5-coder:1.5b` from the catalog if there is none), or pin one in `localpilot.inlineCompletion.model`. Also check that no other completion provider (e.g. Copilot) is taking precedence.
 
 ## Where are the logs?
 

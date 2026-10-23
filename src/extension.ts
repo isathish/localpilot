@@ -4,12 +4,17 @@ import { ChangeTracker } from './agent/changeTracker';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
-import { getConfig, onConfigChange, setDefaultModel } from './config';
+import { getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
+import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
 import { autoDetectProviders } from './providers/discovery';
+import { AutoSetupResult, ModelManager } from './providers/modelManager';
 import { ProviderRegistry } from './providers/registry';
+import { getSystemProfile } from './providers/system';
 import { SessionStore } from './sessions/sessionStore';
+import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/browser';
+import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
 import { fsTools } from './tools/fs';
 import { ToolRegistry } from './tools/registry';
@@ -46,7 +51,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
-  context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp);
+  const modelManager = new ModelManager(providers, log);
+  context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
@@ -76,7 +82,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     })
   );
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool]);
+
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
 
   await Promise.all([store.load(), skills.refresh()]);
@@ -96,7 +103,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, skills, mcp, memory, store, log);
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log);
   context.subscriptions.push(settingsPanel);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', new LocalModelChatProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
@@ -108,17 +115,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const refreshStatus = async () => {
     const cfg = getConfig();
     const models = await providers.listModels().catch(() => []);
-    const current = cfg.defaultModel || models[0]?.id || 'no model';
+    // Show what will actually answer: the router substitutes an offline/disabled default with the best available model.
+    const routed = models.length ? await providers.route({}).catch(() => undefined) : undefined;
+    const current = routed?.model.id ?? cfg.defaultModel ?? 'no model';
+    const pulling = modelManager.activeJobs.find((j) => j.kind === 'pull');
     const running = controller.runningSessionIds.length;
     const name = current.split('/').pop();
-    // Brand glyph when idle, animated spinner while agents run, warning colour when nothing is usable.
-    status.text = running ? `$(loading~spin) ${running} agent${running === 1 ? '' : 's'} · ${name}` : `$(localpilot-logo) ${name}`;
-    status.backgroundColor = models.length ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
-    status.tooltip = `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick to switch model`;
+    // Brand glyph when idle, animated spinner while agents run or a model downloads, warning colour when nothing is usable.
+    status.text = pulling
+      ? `$(sync~spin) ${pulling.model}${pulling.progress >= 0 ? ` ${Math.round(pulling.progress * 100)}%` : ''}`
+      : running
+        ? `$(loading~spin) ${running} agent${running === 1 ? '' : 's'} · ${name}`
+        : `$(localpilot-logo) ${name}`;
+    status.backgroundColor = models.length || pulling ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
+    status.tooltip = pulling
+      ? `LocalPilot · downloading ${pulling.model} — ${pulling.detail}`
+      : `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick to switch model`;
     status.show();
   };
   void refreshStatus();
-  context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()), controller.onDidChangeRuns(() => void refreshStatus()));
+  context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()), modelManager.onDidChange(() => void refreshStatus()), controller.onDidChangeRuns(() => void refreshStatus()));
 
   // Auto-detect running model servers (settings, well-known ports, Docker containers, Docker Model Runner)
   // and merge new ones into the provider list. Runs at startup and on every "Refresh models".
@@ -179,7 +195,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         void context.globalState.update(WELCOMED_KEY, true);
       }
     });
+  } else {
+    // Returning user with no model anywhere (server stopped, models deleted): offer the one-click fix once per session.
+    void detection.then(() => providers.listModels().catch(() => [])).then((models) => {
+      if (!models.length && getConfig().autoSetupModels && !settingsPanel.isOpen) {
+        void vscode.window
+          .showWarningMessage('LocalPilot found no local models. Set up Ollama and a starter model that fits this machine automatically?', 'Set up automatically', 'Open Models')
+          .then((pick) => {
+            if (pick === 'Set up automatically') {
+              void vscode.commands.executeCommand('localpilot.autoSetupModels');
+            } else if (pick === 'Open Models') {
+              settingsPanel.show('settings', 'models');
+            }
+          });
+      }
+    });
   }
+
+  /** Runs the auto-setup with a cancellable progress notification; returns what happened. */
+  const runAutoSetup = async (opts: { installRuntime?: boolean; target?: InstallTarget; force?: boolean } = {}): Promise<AutoSetupResult> => {
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: setting up models', cancellable: true }, async (progress, token) => {
+      const sub = modelManager.onDidChange(() => {
+        const job = modelManager.activeJobs.find((j) => j.kind === 'pull') ?? modelManager.activeJobs.find((j) => j.kind === 'setup');
+        if (job) {
+          progress.report({ message: `${job.kind === 'pull' ? `${job.model}: ` : ''}${job.detail}` });
+        }
+      });
+      token.onCancellationRequested(() => modelManager.activeJobs.forEach((j) => modelManager.cancel(j.id)));
+      try {
+        return await modelManager.autoSetup(opts);
+      } finally {
+        sub.dispose();
+      }
+    });
+    await providers.listModels(true);
+    await controller.handle({ type: 'refreshModels' });
+    void refreshStatus();
+    return result;
+  };
 
   // --- Commands ----------------------------------------------------------------------------
   const cmd = (id: string, fn: (...a: unknown[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
@@ -346,8 +399,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.selectModel', async () => {
     const models = await providers.listModels(true);
     if (!models.length) {
-      const pick = await vscode.window.showErrorMessage('No local models found. Is Ollama / LM Studio / llama.cpp / vLLM running?', 'Open settings', 'Retry');
-      if (pick === 'Open settings') {
+      const pick = await vscode.window.showErrorMessage('No local models found. Is Ollama / LM Studio / llama.cpp / vLLM running?', 'Set up automatically', 'Open settings', 'Retry');
+      if (pick === 'Set up automatically') {
+        await vscode.commands.executeCommand('localpilot.autoSetupModels');
+      } else if (pick === 'Open settings') {
         settingsPanel.show('settings', 'providers');
       } else if (pick === 'Retry') {
         await vscode.commands.executeCommand('localpilot.selectModel');
@@ -370,6 +425,132 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         await controller.handle({ type: 'setModel', sessionId: s.id, model: picked.id });
       }
       void refreshStatus();
+    }
+  });
+  cmd('localpilot.manageModels', () => settingsPanel.show('settings', 'models'));
+  cmd('localpilot.autoSetupModels', async (arg?: unknown) => {
+    const o = (arg && typeof arg === 'object' ? arg : {}) as { installRuntime?: boolean; target?: InstallTarget; force?: boolean };
+    const profile = await getSystemProfile();
+    const plan = await modelManager.plan();
+    const r = await runAutoSetup(o);
+    switch (r.status) {
+      case 'already':
+        void vscode.window.showInformationMessage(`LocalPilot already has ${r.models} local model(s). Install more from the catalog in Settings → Models.`, 'Open Models').then((p) => p && settingsPanel.show('settings', 'models'));
+        return r;
+      case 'installed':
+        void vscode.window.showInformationMessage(`LocalPilot is ready: ${r.agent.split('/').pop()} is the default model${r.completion ? `, ${r.completion.split('/').pop()} handles inline completions` : ''}${r.vision ? `, ${r.vision.split('/').pop()} handles images` : ''}.`, 'Open chat').then((p) => p && view.reveal());
+        void context.globalState.update(WELCOMED_KEY, true);
+        return r;
+      case 'needs-runtime': {
+        const ollama = r.runtimes.find((x) => x.target === 'ollama');
+        const pick = await vscode.window.showWarningMessage(
+          `No model server is running. Install Ollama and download ${plan.agent.entry.name} ${plan.agent.variant.tag} (${plan.agent.variant.gb} GB) for this ${profile.ramGb} GB machine?${ollama?.installed ? '' : ' The installer runs in a terminal.'}`,
+          { modal: true, detail: profile.summary },
+          'Install Ollama & model',
+          'I use another server'
+        );
+        if (pick === 'Install Ollama & model') {
+          return vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
+        }
+        if (pick === 'I use another server') {
+          settingsPanel.show('settings', 'providers');
+        }
+        return r;
+      }
+      case 'error':
+        void vscode.window.showErrorMessage(`Model setup failed: ${r.error}`, 'Show logs', 'Open Models').then((p) => (p === 'Show logs' ? log.show() : p && settingsPanel.show('settings', 'models')));
+        return r;
+      default:
+        return r;
+    }
+  });
+  cmd('localpilot.installModel', async () => {
+    const profile = await getSystemProfile();
+    const installed = await providers.listAllModels().catch(() => []);
+    const rows = catalogForSystem(profile, installed).filter((r) => r.fits || r.tight);
+    type Item = vscode.QuickPickItem & { row?: (typeof rows)[number] };
+    const items: Item[] = [];
+    for (const entry of MODEL_CATALOG) {
+      const variants = rows.filter((r) => r.entry === entry);
+      if (!variants.length) {
+        continue;
+      }
+      items.push({ label: entry.name, kind: vscode.QuickPickItemKind.Separator });
+      for (const r of variants) {
+        items.push({
+          label: `${r.recommendedFor.length ? '$(star-full) ' : ''}${entry.name} ${r.variant.tag}`,
+          description: `${r.variant.gb} GB · ${r.fits ? 'fits' : 'tight'}${r.installed.length ? ' · installed' : ''}`,
+          detail: `${entry.description} ${entry.roles.join(', ')}`,
+          row: r,
+        });
+      }
+    }
+    const picked = await vscode.window.showQuickPick(items, { title: `Install a model · ${profile.summary} · budget ${profile.modelBudgetGb} GB`, matchOnDescription: true, matchOnDetail: true });
+    if (!picked?.row) {
+      return;
+    }
+    const runtimes = (await modelManager.detectRuntimes()).filter((rt) => rt.running && installId(picked.row!, rt.target));
+    if (!runtimes.length) {
+      const p = await vscode.window.showWarningMessage('No running runtime can install this model. Start Ollama, Docker Model Runner or LM Studio first.', 'Set up automatically');
+      if (p) {
+        await vscode.commands.executeCommand('localpilot.autoSetupModels');
+      }
+      return;
+    }
+    const target = runtimes.length === 1 ? runtimes[0] : await vscode.window.showQuickPick(runtimes.map((rt) => ({ label: rt.label, description: rt.baseUrl, rt })), { title: 'Install to' }).then((x) => x?.rt);
+    if (!target) {
+      return;
+    }
+    settingsPanel.show('settings', 'models');
+    const job = await modelManager.pull(target.target, installId(picked.row, target.target)!, target.providerId);
+    if (job.status === 'done') {
+      await providers.listModels(true);
+      await controller.handle({ type: 'refreshModels' });
+      void vscode.window.showInformationMessage(`${job.model} installed on ${target.label}.`);
+    } else if (job.status === 'error') {
+      void vscode.window.showErrorMessage(`Install failed: ${job.error}`);
+    }
+  });
+  cmd('localpilot.removeModel', async () => {
+    const runtimes = await modelManager.detectRuntimes();
+    const models = (await providers.listAllModels(true).catch(() => [])).filter((m) => runtimes.some((rt) => rt.providerId === m.providerId && rt.canRemove && rt.running));
+    if (!models.length) {
+      return void vscode.window.showInformationMessage('No removable models (only Ollama and Docker Model Runner models can be deleted from here).');
+    }
+    const picked = await vscode.window.showQuickPick(
+      models.map((m) => ({ label: m.name, description: `${m.providerId}${m.sizeBytes ? ` · ${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : ''}`, m })),
+      { title: 'Remove a local model', placeHolder: 'Deletes the model files from the runtime' }
+    );
+    if (!picked) {
+      return;
+    }
+    const ok = await vscode.window.showWarningMessage(`Delete ${picked.m.name} from ${picked.m.providerId}? You can download it again later.`, { modal: true }, 'Delete');
+    if (!ok) {
+      return;
+    }
+    const rt = runtimes.find((x) => x.providerId === picked.m.providerId)!;
+    const job = await modelManager.remove(rt.target, picked.m.modelId, rt.providerId);
+    if (job.status === 'done') {
+      await providers.listModels(true);
+      await controller.handle({ type: 'refreshModels' });
+      void refreshStatus();
+    } else {
+      void vscode.window.showErrorMessage(`Remove failed: ${job.error}`);
+    }
+  });
+  cmd('localpilot.toggleModel', async (id?: unknown) => {
+    const all = await providers.listAllModels().catch(() => []);
+    let target = typeof id === 'string' ? all.find((m) => m.id === id) : undefined;
+    if (!target) {
+      const picked = await vscode.window.showQuickPick(
+        all.map((m) => ({ label: `${m.disabled ? '$(circle-slash) ' : '$(check) '}${m.name}`, description: m.providerId, detail: m.disabled ? 'disabled — select to enable' : 'enabled — select to disable', m })),
+        { title: 'Enable / disable a model' }
+      );
+      target = picked?.m;
+    }
+    if (target) {
+      await setModelEnabled(target.id, !!target.disabled);
+      vscode.window.setStatusBarMessage(`LocalPilot: ${target.name} ${target.disabled ? 'enabled' : 'disabled'}`, 2500);
     }
   });
   cmd('localpilot.refreshModels', async () => {
@@ -469,6 +650,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     return controller.handle({ type: 'captureScreenshot', mode: chosen.mode, delayMs: chosen.delayMs });
   });
+  cmd('localpilot.openBrowser', async (url?: unknown) => {
+    const target = typeof url === 'string' ? url : await vscode.window.showInputBox({ title: 'LocalPilot: open in browser view', prompt: 'http(s) URL — e.g. a local dev server', placeHolder: 'http://localhost:3000', ignoreFocusOut: true });
+    if (!target) {
+      return;
+    }
+    try {
+      await openInBrowser(target);
+    } catch (e) {
+      void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e));
+    }
+  });
+  cmd('localpilot.screenshotUrl', async (url?: unknown) => {
+    view.reveal();
+    await controller.captureUrl(typeof url === 'string' ? url : undefined);
+  });
+  cmd('localpilot.inspectUrl', async (url?: unknown) => {
+    view.reveal();
+    await controller.inspectUrl(typeof url === 'string' ? url : undefined);
+  });
   cmd('localpilot.attachImage', async (uri?: unknown) => {
     view.reveal();
     if (uri instanceof vscode.Uri) {
@@ -545,6 +745,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     },
     onDidChangeRuns: controller.onDidChangeRuns,
     listModels: () => providers.listModels(),
+    autoSetupModels: (opts) => runAutoSetup(opts),
+    screenshotUrl: (url, opts) => captureUrl(url, opts).then((s) => ({ name: s.name, data: s.data, mime: s.mime, url: s.url, width: s.width, height: s.height })),
+    inspectUrl: (url, opts) => inspectUrl(url, opts),
+    installModel: (target, model) => modelManager.pull(target, model).then((j) => j.status === 'done'),
   };
 }
 
@@ -562,6 +766,14 @@ export interface LocalPilotApi {
   readonly runningSessionIds: string[];
   readonly onDidChangeRuns: vscode.Event<void>;
   listModels(): Promise<ModelInfo[]>;
+  /** Installs a starter model set sized for this machine (no-op when models already exist unless `force`). */
+  autoSetupModels(opts?: { installRuntime?: boolean; target?: InstallTarget; force?: boolean }): Promise<AutoSetupResult>;
+  /** Pulls a model onto a runtime; resolves true on success. */
+  installModel(target: InstallTarget, model: string): Promise<boolean>;
+  /** Renders a URL with a local headless Chromium browser and returns the PNG (base64). */
+  screenshotUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number }): Promise<{ name: string; data: string; mime: string; url: string; width: number; height: number }>;
+  /** DevTools inspection of a URL: screenshot, console, network trace, performance and layout checks (optionally after actions). */
+  inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
 }
 
 export function deactivate(): void {

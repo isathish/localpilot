@@ -10,12 +10,16 @@ keywords: Ollama VS Code, Ollama VS Code extension, Ollama coding assistant, Oll
 
 ## Setup in two minutes
 
+**Zero-setup path:** install LocalPilot, open the sidebar and click **Set up automatically**. LocalPilot installs Ollama if needed (Homebrew / winget / official script), starts it, and pulls `qwen2.5-coder` in the size that fits your machine (7b on 16 GB+, 3b or 1.5b below that) plus `qwen2.5-coder:1.5b` for inline completions.
+
+**Manual path:**
+
 ```bash
-ollama pull qwen2.5-coder:14b      # or :32b if you have the VRAM
+ollama pull qwen2.5-coder:7b       # 14b / 32b from Settings → Models once you know it fits
 ollama serve                        # usually already running as a service
 ```
 
-Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-extension localpilot.vsix`), open the sidebar, and pick `ollama/qwen2.5-coder:14b` from the model dropdown. Ollama on `localhost:11434` is detected automatically.
+Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-extension localpilot.vsix`), open the sidebar, and pick `ollama/qwen2.5-coder:7b` from the model dropdown. Ollama on `localhost:11434` is detected automatically. **Settings → Models** lists every Ollama model with its size and lets you pull more from the catalog, delete models and switch them on or off without leaving VS Code.
 
 ## What you get beyond the Ollama CLI
 
@@ -25,14 +29,17 @@ Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-ext
 | **Large context** | Sets `num_ctx` per request (default 32k) so the model actually sees your files, then prunes/compacts history automatically |
 | **Thinking models** | `localpilot.thinking` enables Ollama's `think` for qwen3 / deepseek-r1 and shows the reasoning collapsed |
 | **Vision** | Screenshots and pasted images go to `qwen2.5vl`, `llava`, `gemma3` |
-| **Inline completions** | Ollama's FIM `suffix` support with `qwen2.5-coder:1.5b-base` or `codestral` |
+| **Inline completions** | Ollama's FIM `suffix` support; routing picks the smallest FIM model (`qwen2.5-coder:1.5b`) automatically |
+| **Model management** | `ollama pull` / `ollama rm` from the Settings UI with progress, hardware-aware size recommendations, per-model enable/disable |
 | **Parallel agents** | Several sessions at once; set `OLLAMA_NUM_PARALLEL=4` so Ollama serves them concurrently |
 
 ## Recommended Ollama models
 
-- **Agent work:** `qwen2.5-coder:14b` (16 GB), `qwen2.5-coder:32b` (24 GB+), `devstral`, `qwen3:14b`
-- **Fast completions:** `qwen2.5-coder:1.5b-base`, `qwen2.5-coder:7b-base`
-- **Screenshots:** `qwen2.5vl:7b`, `gemma3:12b`
+- **Agent work:** `qwen2.5-coder:7b` (8 GB+), `qwen2.5-coder:14b` (16 GB), `qwen2.5-coder:32b` (24 GB+), `devstral`, `qwen3:14b`, `gpt-oss:20b`
+- **Fast completions:** `qwen2.5-coder:1.5b`, `starcoder2:3b`
+- **Screenshots:** `gemma3:4b`, `qwen2.5vl:7b`, `gemma3:12b`
+
+The catalog in **Settings → Models** marks each size *fits / tight / too big* for your machine and stars the recommended one, so you don't have to guess.
 
 ## Tips
 

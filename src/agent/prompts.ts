@@ -37,6 +37,7 @@ export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
 - Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase.
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
+- For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports, re-inspect, and use open_browser to show the user.
 - When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
 - For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents and integrate their results.
 - When you learn something durable about this project (build commands, conventions, gotchas) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
@@ -88,7 +89,7 @@ Answer the user's question directly. You may read files and search the workspace
   }
 
   if (o.model.supportsVision) {
-    parts.push(`# Images\nThe user may attach screenshots or images. Inspect them carefully (UI bugs, error dialogs, diagrams) and reference specific visual details in your answer.`);
+    parts.push(`# Images\nThe user may attach screenshots or images, and browser_screenshot returns rendered web pages as images. Inspect them carefully (UI bugs, error dialogs, layout, diagrams) and reference specific visual details in your answer.`);
   }
 
   const skillsIdx = o.skills.skillsIndex();

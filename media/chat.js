@@ -76,15 +76,143 @@
   function base(p) { return String(p || '').split('/').pop(); }
   function short(v, n = 70) { const t = typeof v === 'string' ? v : JSON.stringify(v ?? ''); return esc(t.length > n ? t.slice(0, n - 1) + '…' : t); }
 
+  // ------------------------------------------------------------------ syntax highlighting
+  // Small tokenizer-based highlighter: comments, strings, numbers, keywords, types, calls, properties. Theme colours come
+  // from VS Code token CSS variables so blocks match the editor in light and dark themes.
+  const KW = {
+    js: 'const let var function return if else for while do switch case break continue new delete typeof instanceof in of class extends super this import export from default as async await yield try catch finally throw void with static get set null undefined true false',
+    ts: 'interface type enum namespace declare implements readonly public private protected abstract keyof infer is satisfies override never unknown any string number boolean object symbol bigint',
+    py: 'def class return if elif else for while in not and or is None True False import from as with pass break continue lambda try except finally raise yield global nonlocal assert del async await match case self',
+    sh: 'if then else elif fi for while do done case esac in function return exit export local readonly set unset echo cd ls cat grep sed awk curl git npm npx node python pip docker ollama sudo mkdir rm cp mv chmod source alias',
+    go: 'package import func return if else for range switch case default break continue go defer chan select struct interface map type var const nil true false make new len cap append error string int int64 float64 bool byte rune',
+    rust: 'fn let mut pub use mod struct enum impl trait for in if else match while loop return break continue self Self super crate as where type const static ref move async await dyn unsafe true false Some None Ok Err String Vec Option Result',
+    c: 'int char long short float double void unsigned signed struct union enum typedef const static extern return if else for while do switch case break continue default sizeof goto include define ifdef ifndef endif pragma class public private protected virtual override template typename namespace using new delete this nullptr true false bool auto',
+    java: 'public private protected class interface enum extends implements import package static final abstract void int long short byte char float double boolean return if else for while do switch case break continue new this super throw throws try catch finally instanceof null true false var record sealed permits fun val when object data override suspend let',
+    sql: 'select from where insert into values update set delete create table index view drop alter add primary key foreign references join left right inner outer on group by order having limit offset as and or not null is in like between exists union all distinct case when then else end count sum avg min max',
+    ruby: 'def end class module if elsif else unless while until for in do return yield begin rescue ensure raise require include extend attr_accessor self nil true false puts',
+    php: 'function class return if else elseif for foreach while do switch case break continue new echo public private protected static namespace use extends implements try catch finally throw null true false array',
+  };
+  const LANG_ALIAS = { javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js', typescript: 'ts', tsx: 'ts', python: 'py', bash: 'sh', shell: 'sh', zsh: 'sh', console: 'sh', shellscript: 'sh', golang: 'go', rs: 'rust', cpp: 'c', 'c++': 'c', h: 'c', hpp: 'c', cs: 'java', csharp: 'java', kotlin: 'java', kt: 'java', swift: 'java', scala: 'java', jsonc: 'json', json5: 'json', yml: 'yaml', htm: 'html', xml: 'html', svg: 'html', vue: 'html', svelte: 'html', scss: 'css', less: 'css', markdown: 'md', mdx: 'md', patch: 'diff', rb: 'ruby', ini: 'toml', cfg: 'toml', dockerfile: 'sh', makefile: 'sh' };
+  const EXT_LANG = { js: 'js', mjs: 'js', cjs: 'js', jsx: 'js', ts: 'ts', tsx: 'ts', py: 'py', sh: 'sh', bash: 'sh', zsh: 'sh', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'c', cc: 'c', hpp: 'c', cs: 'java', java: 'java', kt: 'java', swift: 'java', scala: 'java', sql: 'sql', rb: 'ruby', php: 'php', json: 'json', yaml: 'yaml', yml: 'yaml', html: 'html', htm: 'html', xml: 'html', svg: 'html', vue: 'html', css: 'css', scss: 'css', less: 'css', md: 'md', mdx: 'md', toml: 'toml', ini: 'toml', diff: 'diff', patch: 'diff' };
+  const kwSets = {};
+  function kwSet(lang) { if (!kwSets[lang]) { const base = lang === 'ts' ? `${KW.js} ${KW.ts}` : KW[lang] || ''; kwSets[lang] = new Set(base.split(/\s+/).filter(Boolean)); } return kwSets[lang]; }
+  function normLang(l) { l = String(l || '').toLowerCase().trim(); return LANG_ALIAS[l] || l; }
+  function langForPath(p) { const m = /\.([a-z0-9]+)$/i.exec(String(p || '')); return m ? EXT_LANG[m[1].toLowerCase()] || '' : /dockerfile|makefile/i.test(p) ? 'sh' : ''; }
+  const tok = (cls, text) => `<span class="tk-${cls}">${esc(text)}</span>`;
+  function highlight(code, lang) {
+    lang = normLang(lang);
+    if (!code || code.length > 60000) { return esc(code); }
+    if (lang === 'diff') { return code.split('\n').map((l) => (/^\+/.test(l) ? tok('add', l) : /^-/.test(l) ? tok('del', l) : /^@@/.test(l) ? tok('meta', l) : esc(l))).join('\n'); }
+    if (lang === 'md') { return code.split('\n').map((l) => (/^#{1,6}\s/.test(l) ? tok('k', l) : /^\s*[-*+]\s|^\s*\d+\.\s/.test(l) ? esc(l).replace(/^(\s*(?:[-*+]|\d+\.))/, (m) => `<span class="tk-n">${m}</span>`) : esc(l).replace(/`[^`]+`/g, (m) => `<span class="tk-s">${m}</span>`).replace(/\*\*[^*]+\*\*/g, (m) => `<span class="tk-t">${m}</span>`))).join('\n'); }
+    if (lang === 'html') { return esc(code).replace(/(&lt;!--[\s\S]*?--&gt;)|(&lt;\/?)([\w:-]+)([^&]*?)(\/?&gt;)/g, (m, c, open, name, attrs, close) => (c ? `<span class="tk-c">${c}</span>` : `<span class="tk-o">${open}</span><span class="tk-k">${name}</span>${attrs.replace(/([\w:-]+)(=)(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)?/g, (a, n, eq, v) => `<span class="tk-p">${n}</span>${eq}${v ? `<span class="tk-s">${v}</span>` : ''}`)}<span class="tk-o">${close}</span>`)); }
+    if (lang === 'css') { return esc(code).replace(/(\/\*[\s\S]*?\*\/)|([^{}\n;]+)(?=\s*\{)|([\w-]+)(\s*:\s*)([^;}\n]+)/g, (m, c, sel, prop, colon, val) => (c ? `<span class="tk-c">${c}</span>` : sel !== undefined ? `<span class="tk-t">${sel}</span>` : `<span class="tk-p">${prop}</span>${colon}<span class="tk-s">${val}</span>`)); }
+    if (lang === 'json') { return esc(code).replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)(\s*:)?|(-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b)|\b(true|false|null)\b/g, (m, str, colon, num, lit) => (str ? (colon ? `<span class="tk-p">${str}</span>${colon}` : `<span class="tk-s">${str}</span>`) : num ? `<span class="tk-n">${num}</span>` : `<span class="tk-k">${lit}</span>`)); }
+    if (lang === 'yaml' || lang === 'toml') { return code.split('\n').map((l) => { const m = /^(\s*)(#.*)$/.exec(l); if (m) { return esc(m[1]) + tok('c', m[2]); } const kv = /^(\s*(?:- )?)([\w.-]+|"[^"]*"|\[[^\]]*\])(\s*[:=]\s*)(.*)$/.exec(l); if (kv) { const v = kv[4]; const val = /^(['"]).*\1$/.test(v) ? tok('s', v) : /^(true|false|null|~|yes|no|on|off)$/i.test(v) ? tok('k', v) : /^-?\d+(\.\d+)?$/.test(v) ? tok('n', v) : esc(v).replace(/(#.*)$/, (c) => `<span class="tk-c">${c}</span>`); return esc(kv[1]) + tok('p', kv[2]) + esc(kv[3]) + val; } return esc(l).replace(/^(\s*-\s)/, (d) => `<span class="tk-o">${d}</span>`); }).join('\n'); }
+    const kws = kwSet(lang);
+    const lineC = lang === 'py' || lang === 'sh' || lang === 'ruby' ? '#' : lang === 'sql' ? '--' : '//';
+    const TRIPLE = ['"""', "'''"];
+    const out = []; let i = 0; const n = code.length;
+    const push = (cls, t) => out.push(cls ? tok(cls, t) : esc(t));
+    while (i < n) {
+      const ch = code[i]; const two = code.slice(i, i + 2);
+      if (two === '/*' && lang !== 'py' && lang !== 'sh') { const e = code.indexOf('*/', i + 2); const end = e < 0 ? n : e + 2; push('c', code.slice(i, end)); i = end; continue; }
+      if (code.startsWith(lineC, i)) { const e = code.indexOf('\n', i); const end = e < 0 ? n : e; push('c', code.slice(i, end)); i = end; continue; }
+      if (lang === 'c' && ch === '#' && (i === 0 || code[i - 1] === '\n')) { const e = code.indexOf('\n', i); const end = e < 0 ? n : e; push('meta', code.slice(i, end)); i = end; continue; }
+      if (lang === 'py' && TRIPLE.some((q) => code.startsWith(q, i))) { const q = code.slice(i, i + 3); const e = code.indexOf(q, i + 3); const end = e < 0 ? n : e + 3; push('s', code.slice(i, end)); i = end; continue; }
+      if (ch === '"' || ch === "'" || (ch === '`' && (lang === 'js' || lang === 'ts' || lang === 'sh'))) {
+        let j = i + 1; while (j < n && code[j] !== ch) { if (code[j] === '\\') { j++; } if (ch !== '`' && code[j] === '\n') { break; } j++; }
+        push('s', code.slice(i, j + 1)); i = j + 1; continue;
+      }
+      if (/[0-9]/.test(ch) && !/[\w$]/.test(code[i - 1] || ' ')) { let j = i; while (j < n && /[0-9a-fA-FxX._]/.test(code[j])) { j++; } push('n', code.slice(i, j)); i = j; continue; }
+      if (lang === 'sh' && ch === '$') { const m = /^\$(?:\{[^}]*\}|[\w@#?*!$-]+)/.exec(code.slice(i)); if (m) { push('v', m[0]); i += m[0].length; continue; } }
+      if (lang === 'sh' && ch === '-' && (i === 0 || /\s/.test(code[i - 1]))) { const m = /^-{1,2}[\w-]+/.exec(code.slice(i)); if (m) { push('p', m[0]); i += m[0].length; continue; } }
+      if (/[A-Za-z_$@]/.test(ch)) {
+        let j = i; while (j < n && /[\w$]/.test(code[j])) { j++; }
+        const w = code.slice(i, j); let k = j; while (k < n && code[k] === ' ') { k++; }
+        const prev = code.slice(0, i).replace(/\s+$/, '').slice(-1);
+        if (kws.has(w)) { push('k', w); }
+        else if (prev === '.' && code[k] !== '(') { push('p', w); }
+        else if (code[k] === '(') { push('f', w); }
+        else if (/^[A-Z][\w$]*$/.test(w) && w.length > 1 && !/^[A-Z_0-9]+$/.test(w)) { push('t', w); }
+        else { push('', w); }
+        i = j; continue;
+      }
+      if (/[{}()[\];,.]/.test(ch)) { push('o', ch); i++; continue; }
+      if (/[=+\-*/%<>!&|^~?:]/.test(ch)) { let j = i; while (j < n && /[=+\-*/%<>!&|^~?:]/.test(code[j]) && j - i < 3) { j++; } push('op', code.slice(i, j)); i = j; continue; }
+      let j = i; while (j < n && !/[\w$"'`#/{}()[\];,.=+\-*%<>!&|^~?:@]/.test(code[j])) { j++; } if (j === i) { j++; }
+      push('', code.slice(i, j)); i = j;
+    }
+    return out.join('');
+  }
+  /** Fenced block with header actions. `info` is the fence info string: `ts`, `ts path/to/file.ts`, `json title="x"`. */
+  function codeBlock(code, info) {
+    const parts = String(info || '').trim().split(/\s+/);
+    const lang = parts[0] && !/[./]/.test(parts[0]) ? parts[0] : '';
+    const titleM = /(?:title|file|path)=("?)([^"\s]+)\1/.exec(info || '');
+    const file = titleM ? titleM[2] : parts.find((p) => /[\w-]+\.[a-z0-9]+$/i.test(p) && !p.includes('=')) || '';
+    const lines = code.split('\n').length;
+    const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${esc(file)}</span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
+    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file))}</code></pre></div>`;
+  }
+  /** `NNN | text` lines from read_file → numbered, highlighted listing. */
+  function numberedListing(text, lang) {
+    const rows = [];
+    for (const l of String(text).split('\n')) { const m = /^\s*(\d+) \| ?(.*)$/.exec(l); if (m) { rows.push([m[1], m[2]]); } else if (rows.length) { rows[rows.length - 1][1] += `\n${l}`; } }
+    if (!rows.length) { return null; }
+    const body = highlight(rows.map((r) => r[1]).join('\n'), lang).split('\n');
+    return `<pre class="numbered"><code>${rows.map((r, i) => `<span class="l"><span class="n">${r[0]}</span><span class="t">${body[i] ?? ''}</span></span>`).join('')}</code></pre>`;
+  }
+  /** Escapes text and turns `path/to/file.ext:12` and URLs into links. */
+  function linkify(text) {
+    let s = esc(text);
+    s = s.replace(/(https?:\/\/[^\s<>"')\]]+)/g, (u) => `<a href="${u}">${u}</a>`);
+    s = s.replace(/(^|[\s(\[])((?:[\w.@-]+\/)*[\w.@-]+\.[a-zA-Z]{1,8})(?::(\d+)(?::\d+)?)?(?=[\s).,;:\]]|$)/gm, (m, pre, p, line) => (/^(https?|www)\b/.test(p) || (/\.(com|org|net|io|dev|ai)$/.test(p) && !p.includes('/')) ? m : `${pre}<span class="path-link" data-path="${p}" data-line="${line || ''}">${p}${line ? ':' + line : ''}</span>`));
+    return s;
+  }
+  /** ANSI SGR colours/bold/dim/underline → spans; every other escape sequence is dropped. */
+  function ansiToHtml(text) {
+    const parts = String(text).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[\?[\d;]*[a-zA-Z]|\x1b\[[\d;]*[A-Za-ln-z]|\r(?!\n)/g, '').split(/(\x1b\[[\d;]*m)/);
+    let open = []; let out = '';
+    for (const part of parts) {
+      const m = /^\x1b\[([\d;]*)m$/.exec(part);
+      if (!m) { out += open.length ? `<span class="${open.join(' ')}">${linkify(part)}</span>` : linkify(part); continue; }
+      for (const c of (m[1] || '0').split(';').map(Number)) {
+        if (c === 0) { open = []; }
+        else if (c === 1 || c === 2 || c === 3 || c === 4 || (c >= 30 && c <= 37) || (c >= 90 && c <= 97) || (c >= 40 && c <= 47)) { open.push(`a${c}`); }
+        else if (c === 39) { open = open.filter((x) => !/^a(3\d|9\d)$/.test(x)); }
+        else if (c === 22) { open = open.filter((x) => x !== 'a1' && x !== 'a2'); }
+        else if (c === 24) { open = open.filter((x) => x !== 'a4'); }
+        else if (c === 23) { open = open.filter((x) => x !== 'a3'); }
+      }
+    }
+    return out;
+  }
+  function openLightbox(src, alt) {
+    let lb = document.getElementById('lightbox');
+    if (!lb) {
+      lb = el('div', 'lightbox hidden'); lb.id = 'lightbox';
+      lb.innerHTML = `<img alt=""><div class="lb-bar"><span class="lb-cap"></span><button class="lb-copy" title="Copy image">${I.copy}</button><button class="lb-close" title="Close (Esc)">${I.x}</button></div>`;
+      document.body.appendChild(lb);
+      lb.onclick = (e) => { if (e.target.closest('.lb-copy')) { fetch(lb.querySelector('img').src).then((r) => r.blob()).then((b) => navigator.clipboard.write([new ClipboardItem({ [b.type]: b })])).then(() => toast('Image copied')).catch(() => toast('Copy failed', 'error')); return; } lb.classList.add('hidden'); };
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lb.classList.contains('hidden')) { lb.classList.add('hidden'); } });
+    }
+    lb.querySelector('img').src = src; lb.querySelector('img').alt = alt || ''; lb.querySelector('.lb-cap').textContent = alt || ''; lb.classList.remove('hidden');
+  }
+
   // ------------------------------------------------------------------ markdown
   function inline(md) {
+    // Protect code spans, images and links from the other substitutions, then restore them.
+    const keep = []; const hold = (html) => { keep.push(html); return `\u0000${keep.length - 1}\u0000`; };
     let s = esc(md);
-    s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
+    s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`));
+    s = s.replace(/!\[([^\]]*)\]\(((?:https?:|data:image\/)[^)\s]+)\)/g, (_, alt, src) => hold(`<img class="md-img" src="${src}" alt="${alt}" title="${alt}">`));
+    s = s.replace(/\[([^\]]+)\]\(((?:https?:|vscode:|command:)[^)\s]+)\)/g, (_, t, u) => hold(`<a href="${u}" title="${u}">${t}</a>`));
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>"')\]]+?)(?=[.,;:!?]?(?:[\s)]|$))/g, (m, pre, u) => `${pre}${hold(`<a href="${u}">${u}</a>`)}`);
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1<em>$2</em>').replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1<em>$2</em>');
     s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" title="$2">$1</a>');
     s = s.replace(/(^|[\s(])((?:[\w.-]+\/)+[\w.-]+\.[a-zA-Z]{1,8})(?::(\d+))?(?=[\s).,;:]|$)/g, (m, pre, p, line) => `${pre}<span class="path-link" data-path="${p}" data-line="${line || ''}">${p}${line ? ':' + line : ''}</span>`);
-    return s;
+    s = s.replace(/^\[([ xX])\]\s/, (_, c) => `<span class="task ${c.trim() ? 'done' : ''}">${c.trim() ? I.check : ''}</span>`);
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
   }
   function renderMarkdown(md) {
     const lines = String(md || '').replace(/\r/g, '').split('\n');
@@ -92,11 +220,11 @@
     const flush = () => { if (para.length) { out.push(`<p>${inline(para.join('\n')).replace(/\n/g, '<br>')}</p>`); para = []; } };
     while (i < lines.length) {
       const line = lines[i];
-      const fence = /^\s*```\s*([\w+#.-]*)\s*$/.exec(line);
+      const fence = /^\s*(`{3,}|~{3,})\s*(.*)$/.exec(line);
       if (fence) {
-        flush(); const lang = fence[1] || ''; const buf = []; i++;
-        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; } i++;
-        out.push(`<div class="code"><div class="code-head"><span class="lang">${esc(lang || 'text')}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file">${I.apply}</button></div><pre><code>${esc(buf.join('\n'))}</code></pre></div>`);
+        flush(); const info = fence[2] || ''; const buf = []; const close = new RegExp(`^\\s*\\${fence[1][0]}{${fence[1].length},}\\s*$`); i++;
+        while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; } i++;
+        out.push(codeBlock(buf.join('\n'), info));
         continue;
       }
       const h = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -104,12 +232,13 @@
       if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
       if (/^\s*>/.test(line)) { flush(); const buf = []; while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++; } out.push(`<blockquote>${renderMarkdown(buf.join('\n'))}</blockquote>`); continue; }
       if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
-        flush(); const ordered = /^\s*\d+[.)]\s+/.test(line); const items = [];
-        while (i < lines.length && (/^\s*[-*+]\s+/.test(lines[i]) || /^\s*\d+[.)]\s+/.test(lines[i]) || (/^\s{2,}\S/.test(lines[i]) && items.length))) {
-          if (/^\s*[-*+]\s+/.test(lines[i]) || /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')); } else { items[items.length - 1] += '\n' + lines[i].trim(); }
+        flush(); const items = [];
+        while (i < lines.length && (/^\s*(?:[-*+]|\d+[.)])\s+/.test(lines[i]) || (/^\s+\S/.test(lines[i]) && items.length) || (lines[i].trim() === '' && i + 1 < lines.length && /^\s+(?:[-*+]|\d+[.)])\s+/.test(lines[i + 1])))) {
+          const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
+          if (m) { items.push({ depth: m[1].replace(/\t/g, '  ').length, ordered: /\d/.test(m[2]), text: m[3] }); } else if (lines[i].trim()) { items[items.length - 1].text += '\n' + lines[i].trim(); }
           i++;
         }
-        out.push(`<${ordered ? 'ol' : 'ul'}>${items.map((it) => `<li>${inline(it).replace(/\n/g, '<br>')}</li>`).join('')}</${ordered ? 'ol' : 'ul'}>`);
+        out.push(renderList(items));
         continue;
       }
       if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
@@ -124,6 +253,21 @@
     }
     flush();
     return out.join('');
+  }
+
+  /** Builds nested <ul>/<ol> from flat list items with indentation depths. */
+  function renderList(items) {
+    let pos = 0;
+    const build = (depth) => {
+      const ordered = items[pos].ordered; let html = '';
+      while (pos < items.length && items[pos].depth >= depth) {
+        if (items[pos].depth > depth) { html = html.replace(/<\/li>$/, '') + build(items[pos].depth) + '</li>'; continue; }
+        const it = items[pos++];
+        html += `<li class="${/^\[[ xX]\]\s/.test(it.text) ? 'task-item' : ''}">${inline(it.text).replace(/\n/g, '<br>')}</li>`;
+      }
+      return `<${ordered ? 'ol' : 'ul'}>${html}</${ordered ? 'ol' : 'ul'}>`;
+    };
+    return build(items[0].depth);
   }
 
   // ------------------------------------------------------------------ diff
@@ -153,6 +297,77 @@
   }
 
   // ------------------------------------------------------------------ step/card builders
+  /** Renders a tool's result (or its pending arguments) as something readable instead of a raw text dump. */
+  function toolContent(node, tool, args, content, pending, extra) {
+    const c = node.querySelector(':scope > .content'); if (!c) { return; }
+    c.className = 'content';
+    const img = extra && (extra.image || (extra.data && extra.data.image));
+    if (tool === 'browser_inspect' && !pending) {
+      c.classList.add('inspect');
+      c.innerHTML = `${img && img.data ? `<img class="shot-img" src="data:${img.mime || 'image/png'};base64,${img.data}" alt="${esc((args && args.url) || 'screenshot')}" title="Click to enlarge">` : ''}${inspectReport(String(content || ''))}`;
+      return;
+    }
+    if (img && img.data) {
+      const src = `data:${img.mime || 'image/png'};base64,${img.data}`;
+      const cap = (extra.data && extra.data.caption) || (args && args.url) || tool;
+      c.classList.add('shot'); c.innerHTML = `<img src="${src}" alt="${esc(cap)}" title="Click to enlarge"><div class="shot-cap">${linkify(String(content || cap))}</div>`;
+      return;
+    }
+    if (pending) {
+      const entries = Object.entries(args || {}).filter(([, v]) => v !== undefined && v !== '');
+      c.classList.add('args'); c.innerHTML = entries.length ? `<dl>${entries.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === 'string' ? v : JSON.stringify(v))}</dd>`).join('')}</dl>` : '<span class="muted">Running…</span>';
+      return;
+    }
+    const text = String(content || '');
+    if (tool === 'read_file') {
+      const head = /^File: (.+?) \((\d+) lines total, showing (\d+)-(\d+)\)\n?/.exec(text);
+      const listing = numberedListing(head ? text.slice(head[0].length) : text, langForPath(head ? head[1] : args.path));
+      if (listing) { c.classList.add('file'); c.innerHTML = `${head ? `<div class="file-head"><span class="path-link" data-path="${esc(head[1])}" data-line="${head[3]}">${esc(head[1])}</span><span class="meta">lines ${head[3]}–${head[4]} of ${head[2]}</span></div>` : ''}${listing}`; return; }
+    }
+    if (tool === 'web_fetch' || tool === 'web_search' || tool === 'memory_read' || tool === 'load_skill') {
+      const src = /^Source: (\S+)\n\n?/.exec(text);
+      c.classList.add('doc'); c.innerHTML = `${src ? `<div class="file-head"><a href="${esc(src[1])}">${esc(src[1])}</a></div>` : ''}<div class="doc-body">${renderMarkdown(src ? text.slice(src[0].length) : text)}</div>`;
+      return;
+    }
+    c.innerHTML = linkify(text);
+  }
+  /** Turns the stable text report of browser_inspect into sections: summary chips, console entries, failed requests, metrics, layout. */
+  function inspectReport(text) {
+    const lines = String(text).replace(/\n\nThe screenshot is attached to the next message\.?\s*$/, '').split('\n');
+    const sec = {}; let cur = null;
+    for (const l of lines) {
+      const m = /^(Page|Actions|Console|Network|Performance|Layout|Text):\s?(.*)$/.exec(l);
+      if (m) { cur = m[1]; sec[cur] = { head: m[2], items: [] }; continue; }
+      if (cur && l.trim()) { sec[cur].items.push(l.replace(/^\s{2}/, '')); }
+    }
+    if (!sec.Page) { return linkify(text); }
+    const out = [];
+    const pm = /^(.*?) — (\S+)(?: \(HTTP (\d+)\))? · (\d+×\d+)(.*)$/.exec(sec.Page.head) || [];
+    const status = pm[3] ? Number(pm[3]) : 0;
+    out.push(`<div class="ins-head"><span class="ins-title">${esc(pm[1] || sec.Page.head)}</span><a href="${esc(pm[2] || '')}">${esc(pm[2] || '')}</a>${status ? `<span class="badge ${status >= 400 ? 'err' : 'ok'}">HTTP ${status}</span>` : ''}<span class="badge">${esc(pm[4] || '')}</span></div>`);
+    if (sec.Actions) { out.push(`<div class="ins-row muted">${I.cursor} ${esc(sec.Actions.head)}</div>`); }
+    const chips = [];
+    const cm = /^(\d+) errors?, (\d+) warnings?/.exec((sec.Console || {}).head || '');
+    const nm = /^(\d+) requests? · (\d+) failed · ([^·]+)/.exec((sec.Network || {}).head || '');
+    if (cm) { chips.push(`<span class="chip ${Number(cm[1]) ? 'err' : 'ok'}">${cm[1]} console error${cm[1] === '1' ? '' : 's'}</span><span class="chip ${Number(cm[2]) ? 'warn' : ''}">${cm[2]} warning${cm[2] === '1' ? '' : 's'}</span>`); }
+    if (nm) { chips.push(`<span class="chip ${Number(nm[2]) ? 'err' : 'ok'}">${nm[2]} failed of ${nm[1]} request${nm[1] === '1' ? '' : 's'}</span><span class="chip">${esc(nm[3].trim())}</span>`); }
+    if (sec.Layout) { const n = /^no issues/.test(sec.Layout.head) ? 0 : sec.Layout.head.split('; ').length; chips.push(`<span class="chip ${n ? 'warn' : 'ok'}">${n} layout issue${n === 1 ? '' : 's'}</span>`); }
+    if (chips.length) { out.push(`<div class="ins-chips">${chips.join('')}</div>`); }
+    const section = (title, body, open) => { const [t, ...rest] = title.split(' · '); return `<details class="ins-sec" ${open ? 'open' : ''}><summary><b>${esc(t)}</b>${rest.length ? `<span>${esc(rest.join(' · '))}</span>` : ''}</summary>${body}</details>`; };
+    if (sec.Console && sec.Console.items.length) {
+      const rows = sec.Console.items.map((it) => { const m = /^\[(\w+)\](?: \(([^)]+)\))? (.*?)(?: — (\S+))?$/.exec(it); if (!m) { return `<div class="ins-log">${linkify(it)}</div>`; } return `<div class="ins-log lv-${m[1]}"><span class="lv">${m[1]}</span>${m[2] ? `<span class="src">${esc(m[2])}</span>` : ''}<span class="msg">${linkify(m[3])}</span>${m[4] ? `<span class="at">${linkify(m[4])}</span>` : ''}</div>`; });
+      out.push(section(`Console · ${sec.Console.head}`, rows.join(''), cm && Number(cm[1]) > 0));
+    }
+    if (sec.Network) {
+      const failed = sec.Network.items.filter((it) => it.startsWith('✗')).map((it) => { const m = /^✗ (\w+) (\S+) → (.*?)(?: \((\d+) ms\))?$/.exec(it); return m ? `<div class="ins-req"><span class="m">${esc(m[1])}</span><span class="u">${linkify(m[2])}</span><span class="st err">${esc(m[3])}</span>${m[4] ? `<span class="ms">${m[4]} ms</span>` : ''}</div>` : `<div class="ins-req">${linkify(it)}</div>`; });
+      const types = sec.Network.items.find((it) => it.startsWith('by type:'));
+      out.push(section(`Network · ${sec.Network.head}`, `${failed.join('')}${types ? `<div class="ins-row muted">${esc(types)}</div>` : ''}`, failed.length > 0));
+    }
+    if (sec.Performance) { out.push(`<div class="ins-perf">${sec.Performance.head.split(' · ').map((p) => `<span>${esc(p)}</span>`).join('')}</div>`); }
+    if (sec.Layout && !/^no issues/.test(sec.Layout.head)) { out.push(section('Layout checks', sec.Layout.head.split('; ').map((l) => `<div class="ins-row warn">${I.warn} ${esc(l)}</div>`).join(''), true)); }
+    if (sec.Text && sec.Text.items.length) { out.push(section('Page text', `<pre class="ins-text">${esc(sec.Text.items.join('\n'))}</pre>`, false)); }
+    return `<div class="ins">${out.join('')}</div>`;
+  }
   function stepEl(cls, label, content, meta) {
     const d = el('details', `step ${cls}`);
     d.innerHTML = `<summary><span class="ico"></span><span class="label">${label}</span><span class="meta">${meta || ''}</span><span class="chev">${I.chev}</span></summary><div class="content"></div>`;
@@ -173,6 +388,9 @@
       case 'get_editor_state': return 'Read editor state';
       case 'web_search': return `Searched the web <b>${short(a.query, 50)}</b>`;
       case 'web_fetch': return `Fetched <b>${short(a.url, 50)}</b>`;
+      case 'browser_screenshot': return `Screenshot of <b>${short(a.url, 50)}</b>${a.mobile ? ' <i>phone</i>' : ''}${a.full_page ? ' <i>full page</i>' : ''}`;
+      case 'open_browser': return `Opened <b>${short(a.url, 50)}</b> in browser`;
+      case 'browser_inspect': return `Inspected <b>${short(a.url, 50)}</b>${a.mobile ? ' <i>phone</i>' : ''}${Array.isArray(a.actions) && a.actions.length ? ` <i>after ${a.actions.length} action${a.actions.length === 1 ? '' : 's'}</i>` : ''}`;
       case 'load_skill': return `Loaded skill <b>${short(a.name, 30)}</b>`;
       case 'memory_read': return `Recalled <b>${short(a.name, 30)}</b>`;
       case 'memory_list': return 'Listed memory';
@@ -187,7 +405,7 @@
       default: return `${esc(name)} ${short(a, 50)}`;
     }
   }
-  function toolIcon(name) { return READ_TOOLS.has(name) ? (name.startsWith('web') ? I.globe : I.search) : name.startsWith('memory') ? I.memory : I.sparkle; }
+  function toolIcon(name) { return READ_TOOLS.has(name) ? (name.startsWith('web') ? I.globe : I.search) : name.startsWith('memory') ? I.memory : name === 'browser_screenshot' ? I.camera : name === 'open_browser' ? I.globe : name === 'browser_inspect' ? I.bug : I.sparkle; }
 
   // Edit card with inline diff (edit_file / write_file)
   function editCard(name, a, result) {
@@ -207,11 +425,17 @@
     const card = el('div', `card term-card ${result ? (result.isError ? 'error' : 'ok') : 'running'}`);
     const exit = result && /\[exit code (\d+|null)\]/.exec(result.content || '');
     const code = exit ? exit[1] : null;
-    card.innerHTML = `<div class="card-head"><span class="ico">${result ? I.term : I.spin}</span><span class="name" style="direction:ltr" title="${esc(a.command || '')}">$ ${esc(a.command || '')}</span>${code !== null ? `<span class="exit ${code === '0' ? 'good' : 'bad'}">exit ${code}</span>` : ''}<span class="acts"><button data-copy title="Copy command">${I.copy}</button></span></div><div class="term${result && !result.isError ? ' collapsed' : ''}"></div>`;
-    const out = (result ? result.content : 'Running…').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '');
-    card.querySelector('.term').textContent = out || '(no output)';
-    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-copy]')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Copied')); return; } card.querySelector('.term').classList.toggle('collapsed'); };
+    card.innerHTML = `<div class="card-head"><span class="ico">${result ? I.term : I.spin}</span><span class="name" style="direction:ltr" title="${esc(a.command || '')}"><span class="prompt">$</span> ${highlight(a.command || '', 'sh')}</span><span class="lines"></span>${code !== null ? `<span class="exit ${code === '0' ? 'good' : 'bad'}">exit ${code}</span>` : ''}<span class="acts"><button data-copy title="Copy command">${I.copy}</button><button data-copyout title="Copy output">${I.term}</button></span></div><div class="term${result && !result.isError ? ' collapsed' : ''}"></div>`;
+    setTermOutput(card, result ? result.content : '', !result);
+    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-copy]')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Copied')); return; } if (e.target.closest('[data-copyout]')) { navigator.clipboard.writeText(card.querySelector('.term').textContent).then(() => toast('Output copied')); return; } card.querySelector('.term').classList.toggle('collapsed'); };
     return card;
+  }
+  function setTermOutput(card, content, running) {
+    const out = String(content || '').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '');
+    const term = card.querySelector('.term');
+    term.innerHTML = running ? '<span class="muted">Running…</span>' : out ? ansiToHtml(out) : '<span class="muted">(no output)</span>';
+    const n = out ? out.split('\n').length : 0;
+    card.querySelector('.lines').textContent = !running && n > 1 ? `${n} lines` : '';
   }
   function subagentCard(agent, prompt) {
     const d = stepEl('subagent running', `<b>${esc(agent)}</b> subagent · ${short(prompt, 70)}`, '');
@@ -243,9 +467,11 @@
     if (tc.name === 'edit_file' || tc.name === 'write_file') { const c = editCard(tc.name, a, result); c.dataset.callId = tc.id; container.appendChild(c); return c; }
     if (tc.name === 'run_command') { const c = termCard(a, result); c.dataset.callId = tc.id; container.appendChild(c); return c; }
     if (tc.name === 'manage_todos') { return null; }
-    if (tc.name === 'run_subagent') { const c = subagentCard(a.agent, a.prompt); c.dataset.callId = tc.id; if (result) { setState(c, result.isError ? 'error' : 'ok'); c.querySelector('.content').textContent = result.content; } container.appendChild(c); return c; }
-    const s = stepEl(`step ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel(tc.name, a), result ? result.content : JSON.stringify(a, null, 2));
-    s.dataset.tool = tc.name; s.dataset.callId = tc.id;
+    if (tc.name === 'run_subagent') { const c = subagentCard(a.agent, a.prompt); c.dataset.callId = tc.id; if (result) { setState(c, result.isError ? 'error' : 'ok'); c.querySelector('.ico').innerHTML = result.isError ? I.x : I.agent; c.querySelector('.content').className = 'content doc'; c.querySelector('.content').innerHTML = `<div class="doc-body">${renderMarkdown(result.content)}</div>`; } container.appendChild(c); return c; }
+    const s = stepEl(`step ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel(tc.name, a));
+    s.dataset.tool = tc.name; s.dataset.callId = tc.id; s.dataset.args = tc.arguments || '{}';
+    toolContent(s, tc.name, a, result ? result.content : '', !result, result);
+    if (result && result.image) { s.open = true; }
     s.querySelector('.ico').innerHTML = result ? (result.isError ? I.x : toolIcon(tc.name)) : I.spin;
     if (READ_TOOLS.has(tc.name)) { const g = getGroup(container, true); g.querySelector(':scope > .content').appendChild(s); updateGroupLabel(g); }
     else { container.appendChild(s); }
@@ -257,12 +483,13 @@
     if (node.classList.contains('card')) {
       node.classList.remove('running'); node.classList.add(ok ? 'ok' : 'error');
       const ico = node.querySelector('.card-head .ico'); if (ico) { ico.innerHTML = ok ? (node.classList.contains('edit') ? I.edit : I.term) : I.x; }
-      const term = node.querySelector('.term'); if (term) { const out = (payload.content || '').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, ''); term.textContent = out || '(no output)'; if (ok) { term.classList.add('collapsed'); } const m = /\[exit code (\d+|null)\]/.exec(payload.content || ''); if (m) { const head = node.querySelector('.card-head'); let ex = head.querySelector('.exit'); if (!ex) { ex = el('span', 'exit'); head.insertBefore(ex, head.querySelector('.acts')); } ex.textContent = `exit ${m[1]}`; ex.className = `exit ${m[1] === '0' ? 'good' : 'bad'}`; } }
+      const term = node.querySelector('.term'); if (term) { setTermOutput(node, payload.content || '', false); if (ok) { term.classList.add('collapsed'); } const m = /\[exit code (\d+|null)\]/.exec(payload.content || ''); if (m) { const head = node.querySelector('.card-head'); let ex = head.querySelector('.exit'); if (!ex) { ex = el('span', 'exit'); head.insertBefore(ex, head.querySelector('.acts')); } ex.textContent = `exit ${m[1]}`; ex.className = `exit ${m[1] === '0' ? 'good' : 'bad'}`; } }
       if (!ok && node.classList.contains('edit')) { const err = el('div', 'term', ''); err.textContent = payload.content || ''; node.appendChild(err); }
       return;
     }
-    setState(node, ok ? 'error'.replace('error', 'ok') : 'error');
-    node.querySelector('.content').textContent = payload.content || '';
+    setState(node, ok ? 'ok' : 'error');
+    toolContent(node, node.dataset.tool, parseArgs(node.dataset.args || '{}'), payload.content || '', false, payload);
+    if (payload.data && payload.data.image) { node.open = true; }
     if (node.dataset.tool) { node.querySelector('.ico').innerHTML = ok ? toolIcon(node.dataset.tool) : I.x; }
     const meta = node.querySelector(':scope > summary .meta');
     if (meta) { meta.textContent = payload.cached ? 'cached' : payload.durationMs > 800 ? `${(payload.durationMs / 1000).toFixed(1)}s` : ''; }
@@ -282,8 +509,8 @@
     act.onclick = (e) => { const b = e.target.closest('[data-act]'); if (!b) { return; } if (b.dataset.act === 'copy') { navigator.clipboard.writeText(text).then(() => toast('Copied')); } if (b.dataset.act === 'restore' && state.session) { post({ type: 'restoreCheckpoint', sessionId: state.session.id, messageIndex: index }); } };
     d.appendChild(act);
     if (atts.length) { d.appendChild(el('div', 'att', atts.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join(''))); }
-    if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64) => `<img src="data:image/png;base64,${b64}" alt="attached image">`).join(''))); }
-    d.appendChild(document.createTextNode(text));
+    if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" title="Click to enlarge">`).join(''))); }
+    d.appendChild(el('div', 'utext', inline(text)));
     return d;
   }
   function assistantTurn(m, results) {
@@ -307,9 +534,13 @@
     syncMode(); syncModel(); updateCtx();
     if (!s.messages.length) { renderEmpty(); }
     const results = new Map();
-    for (const m of s.messages) { if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); } }
+    for (const m of s.messages) {
+      if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); }
+      // Images captured by tools travel in a user-role carrier message; attach them to the originating step instead of showing a bubble.
+      if (m.role === 'user' && m.meta && m.meta.toolImages && m.images) { m.meta.toolImages.forEach((id, k) => { const r = results.get(id) || { content: '', isError: false }; r.image = { data: m.images[k], mime: 'image/png' }; results.set(id, r); }); }
+    }
     s.messages.forEach((m, i) => {
-      if (m.role === 'tool' || (m.role === 'user' && m.meta && m.meta.hidden)) { return; }
+      if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.hidden))) { return; }
       if (m.meta && m.meta.summary) { const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       const node = m.role === 'user' ? userTurn(m, i) : assistantTurn(m, results);
       if (node) { els.messages.appendChild(node); }
@@ -337,8 +568,8 @@
     }
     wrap.appendChild(sug);
     if (!state.models.length) {
-      const n = el('div', 'notice', `<b>No local models found.</b><br>Start <b>Ollama</b> (<code>ollama serve</code>), <b>LM Studio</b>'s server, <b>llama.cpp</b> or <b>vLLM</b>, then refresh. Custom endpoints go in settings.<div class="row"><button class="btn primary" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Open settings</button></div>`);
-      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'refresh') { post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings' }); } };
+      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
+      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
     els.messages.appendChild(wrap);
@@ -419,7 +650,7 @@
       }
       case 'tool_end': if (e.payload && e.payload.childId) { break; } finishTool(live.tools.get(e.payload.id), e.payload); break;
       case 'subagent_start': { rotateBody(live); const c = subagentCard(e.payload.agent, e.payload.prompt); live.subs.set(e.payload.childId, c); live.steps.appendChild(c); break; }
-      case 'subagent_end': { const c = live.subs.get(e.payload.childId); if (c) { setState(c, e.payload.error ? 'error' : 'ok'); c.querySelector('.ico').innerHTML = e.payload.error ? I.x : I.agent; c.querySelector('.content').textContent += e.payload.error ? `\nError: ${e.payload.error}` : `\n\n${(e.payload.result || '').slice(0, 4000)}`; } break; }
+      case 'subagent_end': { const c = live.subs.get(e.payload.childId); if (c) { setState(c, e.payload.error ? 'error' : 'ok'); c.querySelector('.ico').innerHTML = e.payload.error ? I.x : I.agent; const body = c.querySelector('.content'); const trace = body.textContent.trim(); body.className = 'content doc'; body.innerHTML = `${trace ? `<details class="trace"><summary>${trace.split('\n').length} tool call${trace.includes('\n') ? 's' : ''}</summary><pre>${esc(trace)}</pre></details>` : ''}<div class="doc-body">${e.payload.error ? `<div class="error-box">${esc(e.payload.error)}</div>` : renderMarkdown((e.payload.result || '').slice(0, 8000))}</div>`; } break; }
       case 'todos': if (state.session && state.session.id === sid) { state.session.todos = e.payload || []; renderTasks(); } break;
       case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
       case 'error': rotateBody(live); live.root.insertBefore(el('div', 'error-box', esc(String(e.payload))), live.body); break;
@@ -566,7 +797,7 @@
     const s = state.session; const cur = (s && s.model) || '';
     const items = [{ label: 'Auto', desc: state.defaultModel ? `Default: ${state.defaultModel.split('/').pop()}` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
     for (const m of state.models) { items.push({ group: m.providerId, label: m.name, desc: `${(m.contextWindow / 1024).toFixed(0)}k ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
-    items.push({ hr: true }, { label: 'Refresh models', icon: I.spin, onPick: () => { post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings' }) });
+    items.push({ hr: true }, { label: 'Refresh models', icon: I.spin, onPick: () => { post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
   function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
@@ -594,6 +825,10 @@
       { group: 'Screenshot', label: 'Pick a window', desc: WIN ? 'Switch to the window — captured in 3 s' : 'Click a window to capture it', icon: I.windows, onPick: shot('window', WIN ? 3000 : 0, WIN ? 'Switch to the window to capture — 3 s' : 'Click a window to capture it…') },
       { group: 'Screenshot', label: 'Full screen', desc: 'Captured immediately', icon: I.screen, onPick: shot('screen', 0) },
       { group: 'Screenshot', label: 'Full screen in 5 s', desc: 'Time to switch windows or open a menu', icon: I.timer, onPick: shot('screen', 5000, 'Capturing the screen in 5 s…') },
+      { group: 'Web page', label: 'Screenshot a URL…', desc: 'Renders a page or local dev server with a headless browser', icon: I.globe, onPick: () => post({ type: 'captureUrl' }) },
+      { group: 'Web page', label: 'Screenshot a URL (phone size)…', desc: '390×844 viewport with a mobile user agent', icon: I.globe, onPick: () => post({ type: 'captureUrl', mobile: true }) },
+      { group: 'Web page', label: 'Inspect a URL (screenshot + console + network)…', desc: 'DevTools report drafted into the composer for the model to analyse', icon: I.bug, onPick: () => post({ type: 'inspectUrl' }) },
+      { group: 'Web page', label: 'Open URL in browser view…', desc: 'Opens beside the editor, inside VS Code', icon: I.open, onPick: () => post({ type: 'openBrowser' }) },
     ];
   }
   els.image.onclick = () => openMenu(els.image, [
@@ -670,7 +905,7 @@
     const code = e.target.closest('[data-code]');
     if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { navigator.clipboard.writeText(text).then(() => toast('Copied')); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { post({ type: 'applyCodeToFile', code: text }); } return; }
     const link = e.target.closest('.path-link'); if (link) { post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined }); return; }
-    const img = e.target.closest('.imgs img'); if (img) { img.classList.toggle('zoom'); return; }
+    const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
     const a = e.target.closest('a[href]'); if (a) { e.preventDefault(); post({ type: 'openExternal', url: a.getAttribute('href') }); }
   });
   document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); } if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); openContextMenu(); } });

@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
 import { MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
-import { DEFAULT_PROVIDERS, getConfig, McpServerConfig } from '../config';
+import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
+import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
-import { ProviderRegistry } from '../providers/registry';
+import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
+import { pickForRole, ProviderRegistry } from '../providers/registry';
+import { getSystemProfile, SystemProfile } from '../providers/system';
 import { SessionStore } from '../sessions/sessionStore';
 import { ModelInfo, ProviderConfig } from '../types';
 
@@ -23,10 +26,51 @@ interface SettingEntry {
   workspaceValue?: unknown;
 }
 
+/** Installed model as shown in the manager: discovery info plus footprint, fit and auto-assigned roles. */
+export interface ManagedModel extends ModelInfo {
+  gb?: number;
+  fit: 'ok' | 'tight' | 'over' | 'unknown';
+  /** Roles the router would currently pick this model for (with no overrides). */
+  autoRoles: ('agent' | 'completion' | 'vision' | 'reasoning')[];
+  /** Catalog family/size if recognised. */
+  catalog?: { key: string; name: string; tag: string };
+  /** Runtime that can delete it, if any. */
+  removable?: InstallTarget;
+}
+
+/** Catalog row flattened for the webview. */
+export interface CatalogItem {
+  key: string;
+  name: string;
+  vendor: string;
+  description: string;
+  roles: string[];
+  tag: string;
+  paramsB: number;
+  gb: number;
+  fits: boolean;
+  tight: boolean;
+  recommendedFor: string[];
+  installed: string[];
+  /** Runtimes that know how to install this size, with the id they use. */
+  targets: { target: InstallTarget; id: string }[];
+}
+
+export interface ModelsState {
+  system: SystemProfile;
+  runtimes: RuntimeStatus[];
+  installed: ManagedModel[];
+  catalog: CatalogItem[];
+  jobs: ModelJob[];
+  starter: { agent: string; completion?: string; vision?: string };
+}
+
 type ToSettings =
   | { type: 'state'; page: SettingsPage; section?: SettingsSection; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string }[]; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number }; sessions: number; welcomed: boolean }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string }
   | { type: 'testResult'; id: string; result: ProbeResult }
+  | { type: 'models'; models: ModelsState }
+  | { type: 'jobs'; jobs: ModelJob[] }
   | { type: 'busy'; busy: boolean }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
@@ -37,6 +81,14 @@ type FromSettings =
   | { type: 'test'; provider: ProviderConfig }
   | { type: 'probe' }
   | { type: 'refreshModels' }
+  | { type: 'loadModels' }
+  | { type: 'installModel'; target: InstallTarget; model: string }
+  | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string }
+  | { type: 'toggleModel'; id: string; enabled: boolean }
+  | { type: 'cancelJob'; id: string }
+  | { type: 'clearJobs' }
+  | { type: 'autoSetup'; installRuntime?: boolean; target?: InstallTarget }
+  | { type: 'startRuntime'; target: InstallTarget }
   | { type: 'command'; id: string; args?: unknown[] }
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
   | { type: 'openExternal'; url: string };
@@ -48,13 +100,14 @@ const SETTING_KEYS = [
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'memory.enabled', 'systemPromptAppend', 'showWelcomeOnStartup', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
+  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
 const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
-  'workbench.action.openWalkthrough', 'workbench.action.openSettings',
+  'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
@@ -73,11 +126,15 @@ export class SettingsPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
+  private modelsLoaded = false;
+  private modelsRefresh?: ReturnType<typeof setTimeout>;
+  private jobsTimer?: ReturnType<typeof setTimeout>;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
     private readonly ctx: vscode.ExtensionContext,
     private readonly providers: ProviderRegistry,
+    private readonly models: ModelManager,
     private readonly skills: SkillManager,
     private readonly mcp: McpManager,
     private readonly memory: MemoryStore,
@@ -91,7 +148,23 @@ export class SettingsPanel implements vscode.Disposable {
         }
       }),
       providers.onDidChange(() => this.panel && void this.pushState()),
-      mcp.onDidChange(() => this.panel && void this.pushState())
+      mcp.onDidChange(() => this.panel && void this.pushState()),
+      models.onDidChange(() => {
+        // Pull progress arrives per chunk; coalesce so the webview repaints at most ~6×/s.
+        if (this.panel && !this.jobsTimer) {
+          this.jobsTimer = setTimeout(() => {
+            this.jobsTimer = undefined;
+            this.post({ type: 'jobs', jobs: models.allJobs });
+          }, 150);
+        }
+      }),
+      // A finished pull/remove changes the installed list: refresh the models view once discovery settles.
+      models.onDidChange(() => {
+        if (this.panel && !models.activeJobs.length && this.modelsLoaded) {
+          clearTimeout(this.modelsRefresh);
+          this.modelsRefresh = setTimeout(() => void this.pushModels(), 400);
+        }
+      })
     );
   }
 
@@ -118,7 +191,10 @@ export class SettingsPanel implements vscode.Disposable {
     panel.webview.html = this.html(panel.webview);
     this.panel = panel;
     panel.webview.onDidReceiveMessage((m: FromSettings) => void this.handle(m).catch((e) => this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) })));
-    panel.onDidDispose(() => (this.panel = undefined));
+    panel.onDidDispose(() => {
+      this.panel = undefined;
+      this.modelsLoaded = false;
+    });
   }
 
   private title(): string {
@@ -148,7 +224,48 @@ export class SettingsPanel implements vscode.Disposable {
         this.post({ type: 'busy', busy: true });
         await this.providers.listModels(true).catch(() => []);
         this.post({ type: 'busy', busy: false });
-        return this.pushState();
+        await this.pushState();
+        return this.modelsLoaded ? this.pushModels() : undefined;
+      case 'loadModels':
+        return this.pushModels();
+      case 'installModel':
+        void this.models.pull(m.target, m.model, this.runtimeProvider(m.target)).then((job) => {
+          if (job.status === 'done') {
+            this.post({ type: 'toast', level: 'info', text: `${job.model} installed` });
+          } else if (job.status === 'error') {
+            this.post({ type: 'toast', level: 'error', text: `Install failed: ${job.error}` });
+          }
+        });
+        return;
+      case 'removeModel':
+        void this.models.remove(m.target, m.model, m.providerId).then((job) => {
+          if (job.status === 'error') {
+            this.post({ type: 'toast', level: 'error', text: job.error ?? 'Remove failed' });
+          }
+        });
+        return;
+      case 'toggleModel':
+        // The config change re-fires provider discovery listeners, so the chat picker and status bar follow.
+        await setModelEnabled(m.id, m.enabled);
+        return this.pushModels();
+      case 'cancelJob':
+        return this.models.cancel(m.id);
+      case 'clearJobs':
+        return this.models.clearFinished();
+      case 'autoSetup':
+        await vscode.commands.executeCommand('localpilot.autoSetupModels', { installRuntime: m.installRuntime, target: m.target, force: true });
+        if (this.page === 'setup') {
+          await this.probeAll();
+        }
+        return this.pushModels();
+      case 'startRuntime':
+        if (m.target === 'ollama') {
+          const job = await this.models.startOllama();
+          this.post({ type: 'toast', level: job.status === 'done' ? 'info' : 'error', text: job.status === 'done' ? 'Ollama is running' : job.error ?? 'Could not start Ollama' });
+          await this.providers.listModels(true).catch(() => []);
+          return this.pushModels();
+        }
+        return;
       case 'command':
         if (!ALLOWED_COMMANDS.has(m.id)) {
           throw new Error(`Command not allowed: ${m.id}`);
@@ -216,6 +333,63 @@ export class SettingsPanel implements vscode.Disposable {
     this.post({ type: 'busy', busy: false });
   }
 
+  private runtimeProvider(target: InstallTarget): string | undefined {
+    const providers = getConfig().providers;
+    return target === 'ollama' ? providers.find((p) => p.type === 'ollama')?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
+  }
+
+  /** Builds the model-manager view: machine profile, runtimes, installed models with roles, catalog and jobs. */
+  async modelsState(): Promise<ModelsState> {
+    const [system, runtimes, all] = await Promise.all([getSystemProfile(), this.models.detectRuntimes(), this.providers.listAllModels().catch(() => [] as ModelInfo[])]);
+    const enabled = all.filter((m) => !m.disabled);
+    // Plan mode keeps the session model unless `routing.reasoning` is set, so there is no "auto" reasoning pick to show.
+    const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled, 'vision', system)?.id };
+    const installed: ManagedModel[] = all.map((m) => {
+      const gb = modelFootprintGb(m);
+      const cat = lookupCatalog(m);
+      const rt = runtimes.find((r) => r.providerId === m.providerId && r.canRemove && r.running);
+      return {
+        ...m,
+        gb,
+        fit: gb === undefined ? 'unknown' : gb <= system.modelBudgetGb ? 'ok' : gb <= system.modelBudgetGb * 1.25 ? 'tight' : 'over',
+        autoRoles: (['agent', 'completion', 'vision'] as const).filter((r) => auto[r] === m.id),
+        catalog: cat ? { key: cat.entry.key, name: cat.entry.name, tag: cat.variant.tag } : undefined,
+        removable: rt?.target,
+      };
+    });
+    const running = runtimes.filter((r) => r.running);
+    const catalog: CatalogItem[] = catalogForSystem(system, all).map((r: CatalogRow) => ({
+      key: r.entry.key,
+      name: r.entry.name,
+      vendor: r.entry.vendor,
+      description: r.entry.description,
+      roles: r.entry.roles,
+      tag: r.variant.tag,
+      paramsB: r.variant.paramsB,
+      gb: r.variant.gb,
+      fits: r.fits,
+      tight: r.tight,
+      recommendedFor: r.recommendedFor,
+      installed: r.installed,
+      targets: running.map((rt) => ({ target: rt.target, id: installId(r, rt.target) })).filter((t): t is { target: InstallTarget; id: string } => !!t.id),
+    }));
+    const plan = starterPlan(system);
+    const label = (p: { entry: { name: string }; variant: { tag: string; gb: number } }) => `${p.entry.name} ${p.variant.tag} (${p.variant.gb} GB)`;
+    return { system, runtimes, installed, catalog, jobs: this.models.allJobs, starter: { agent: label(plan.agent), completion: plan.completion ? label(plan.completion) : undefined, vision: plan.vision ? label(plan.vision) : undefined } };
+  }
+
+  private async pushModels(): Promise<void> {
+    if (!this.panel) {
+      return;
+    }
+    this.modelsLoaded = true;
+    try {
+      this.post({ type: 'models', models: await this.modelsState() });
+    } catch (e) {
+      this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   private async pushState(): Promise<void> {
     if (!this.panel) {
       return;
@@ -227,7 +401,7 @@ export class SettingsPanel implements vscode.Disposable {
       const scope = i?.workspaceValue !== undefined || i?.workspaceFolderValue !== undefined ? 'workspace' : i?.globalValue !== undefined ? 'user' : 'default';
       settings[key] = { value: cfg.get(key), default: i?.defaultValue, scope, userValue: i?.globalValue, workspaceValue: i?.workspaceValue ?? i?.workspaceFolderValue };
     }
-    const models = await this.providers.listModels().catch(() => []);
+    const models = await this.providers.listAllModels().catch(() => []);
     const notes = await this.memory.list().catch(() => []);
     this.post({
       type: 'state',
@@ -269,6 +443,8 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   dispose(): void {
+    clearTimeout(this.modelsRefresh);
+    clearTimeout(this.jobsTimer);
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }

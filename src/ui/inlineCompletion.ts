@@ -40,16 +40,9 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     let completion = this.cache.get(key);
 
     if (completion === undefined) {
-      let modelRef = cfg.model;
       try {
-        if (!modelRef) {
-          const models = await this.providers.listModels();
-          modelRef = models.find((m) => m.supportsFim)?.id ?? models[0]?.id;
-        }
-        if (!modelRef) {
-          return;
-        }
-        const { provider, model } = await this.providers.resolve(modelRef);
+        // Routing picks the configured completion model, else the smallest FIM-capable model that fits this machine.
+        const { provider, model } = await this.providers.route({ role: 'completion' });
         const abort = new AbortController();
         const sub = token.onCancellationRequested(() => abort.abort());
         const header = `// File: ${vscode.workspace.asRelativePath(document.uri)} (${document.languageId})\n`;

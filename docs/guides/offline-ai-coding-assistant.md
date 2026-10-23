@@ -28,11 +28,16 @@ Teams in finance, healthcare, defence and anyone with an NDA need an assistant w
 
 ## Sizing hardware
 
+LocalPilot does this for you: **Settings → Models** reads RAM, cores and GPU memory, shows a *model budget*, and marks every catalog size *fits / tight / too big*. Automatic setup starts with the smallest useful model and leaves bigger ones as an explicit upgrade. As a rule of thumb:
+
 | Setup | Comfortable models |
 |---|---|
-| MacBook Pro M-series 16–24 GB | `qwen2.5-coder:7b`, `qwen2.5-coder:14b` (q4) |
-| 32–64 GB unified / 24 GB GPU | `qwen2.5-coder:32b`, `devstral`, `qwen3:32b` |
+| 8 GB laptop | `qwen2.5-coder:3b` + `qwen2.5-coder:1.5b` for completions |
+| MacBook Pro M-series 16–24 GB | `qwen2.5-coder:7b`, `qwen2.5-coder:14b` (q4), `gemma3:4b` for screenshots |
+| 32–64 GB unified / 24 GB GPU | `qwen2.5-coder:32b`, `devstral`, `qwen3:32b`, `gpt-oss:20b` |
 | Shared GPU server (vLLM) | 32B–72B models for the whole team, OpenAI-compatible endpoint |
+
+Pre-download models before going offline (`ollama pull …` or the catalog's **Install** button); the Ollama installer itself needs network once.
 
 ## Team roll-out
 
