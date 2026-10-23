@@ -1,5 +1,9 @@
 import * as assert from 'assert';
-import { createSkillPrompt, recommendSkills, skillHint, slugFor, tokenize, topicKey } from '../agent/skillRecommender';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { createSkillPrompt, recommendSkills, skillHint, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { routeSubagent } from '../agent/builtinAgents';
 import { builtinAgents } from '../agent/builtinAgents';
 import { pickForRole, scoreForRole } from '../providers/registry';
@@ -31,6 +35,27 @@ suite('Skill recommendation', () => {
   test('stays quiet for unrelated requests', () => {
     assert.deepStrictEqual(recommendSkills('rename getUser to fetchUser in src/api.ts', SKILLS), []);
     assert.deepStrictEqual(recommendSkills('hello', SKILLS), []);
+  });
+
+  test('apostrophes and empty trigger phrases never match everything (regression)', () => {
+    const debugLike = { name: 'debug', description: `Systematic bug fixing. USE WHEN the user reports an error, "doesn't work", "broken", "fails", "why does", or flaky behaviour.` };
+    const ciLike = { name: 'deploy', description: 'Make a project deployable. Use for "CI/CD", "make it do X", " ".' };
+    assert.deepStrictEqual(triggers(debugLike.description), ['doesn\'t work', 'broken', 'fails', 'why does']);
+    assert.deepStrictEqual(triggers(ciLike.description), ['ci/cd', 'make it do x'], 'blank phrases are dropped, the rest only match verbatim');
+    assert.deepStrictEqual(triggers(`Use for 'review', 'look over' or "audit".`), ['review', 'look over', 'audit']);
+    for (const req of ['hello', 'thanks', 'add a logout button', 'rename the variable x to count', 'make it faster']) {
+      assert.deepStrictEqual(recommendSkills(req, [...SKILLS, debugLike, ciLike]).map((m) => m.name), [], req);
+    }
+    assert.strictEqual(recommendSkills("the login page doesn't work anymore", [...SKILLS, debugLike])[0]?.name, 'debug');
+    assert.strictEqual(recommendSkills('fix this bug', [...SKILLS, debugLike])[0]?.name, 'debug', 'task verbs are not stop words');
+    assert.strictEqual(recommendSkills('set up CI/CD for this repo', [...SKILLS, ciLike])[0]?.name, 'deploy', 'verbatim phrase match works without content words');
+    assert.ok(!recommendSkills('ship the relationship diagram to the docs folder', SKILLS).some((m) => m.name === 'deploy'), 'whole-word trigger match only');
+  });
+
+  test('keeps only runners-up in the same league as the best match', () => {
+    const r = recommendSkills('write tests for the deploy script', SKILLS);
+    assert.strictEqual(r[0]?.name, 'test');
+    assert.ok(r.every((m) => m.score >= r[0].score * 0.5), JSON.stringify(r));
   });
 
   test('ignores attached context blocks when matching', () => {
@@ -85,5 +110,80 @@ suite('Subagent routing', () => {
     assert.ok(['llama3.2:3b', 'qwen2.5-coder:7b'].includes(best!.modelId), best!.modelId);
     assert.ok(scoreForRole(m('qwen2.5-coder:7b', 4.7), 'fast') > scoreForRole(m('qwen2.5-coder:32b', 19), 'fast'));
     assert.ok(scoreForRole(m('qwen2.5-coder:7b', 4.7), 'fast') > scoreForRole(m('deepseek-r1:8b', 5), 'fast'));
+  });
+});
+
+suite('Skill installation', () => {
+  test('parseSkillSource understands GitHub shorthands, URLs, SKILL.md links and local paths', () => {
+    assert.deepStrictEqual(parseSkillSource('owner/repo'), { kind: 'github', owner: 'owner', repo: 'repo', ref: undefined, path: '' });
+    assert.deepStrictEqual(parseSkillSource('owner/repo/skills/pdf'), { kind: 'github', owner: 'owner', repo: 'repo', ref: undefined, path: 'skills/pdf' });
+    assert.deepStrictEqual(parseSkillSource('owner/repo@v2/skills/pdf/SKILL.md'), { kind: 'github', owner: 'owner', repo: 'repo', ref: 'v2', path: 'skills/pdf' });
+    assert.deepStrictEqual(parseSkillSource('https://github.com/owner/repo'), { kind: 'github', owner: 'owner', repo: 'repo', ref: undefined, path: '' });
+    assert.deepStrictEqual(parseSkillSource('https://github.com/owner/repo.git'), { kind: 'github', owner: 'owner', repo: 'repo', ref: undefined, path: '' });
+    assert.deepStrictEqual(parseSkillSource('https://github.com/owner/repo/tree/main/skills/pdf'), { kind: 'github', owner: 'owner', repo: 'repo', ref: 'main', path: 'skills/pdf' });
+    assert.deepStrictEqual(parseSkillSource('https://github.com/owner/repo/blob/main/skills/pdf/SKILL.md'), { kind: 'github', owner: 'owner', repo: 'repo', ref: 'main', path: 'skills/pdf' });
+    assert.deepStrictEqual(parseSkillSource('https://raw.githubusercontent.com/owner/repo/refs/heads/main/skills/pdf/SKILL.md'), { kind: 'github', owner: 'owner', repo: 'repo', ref: 'main', path: 'skills/pdf' });
+    assert.deepStrictEqual(parseSkillSource('https://example.com/skills/pdf/SKILL.md'), { kind: 'url', url: 'https://example.com/skills/pdf/SKILL.md' });
+    assert.deepStrictEqual(parseSkillSource('./my-skill'), { kind: 'local', path: './my-skill' });
+    assert.deepStrictEqual(parseSkillSource('~/skills/x'), { kind: 'local', path: path.join(os.homedir(), 'skills', 'x') });
+    assert.strictEqual(parseSkillSource('   '), undefined);
+    assert.strictEqual(describeSource(parseSkillSource('owner/repo@v2/skills/pdf')!), 'owner/repo/skills/pdf@v2');
+    assert.strictEqual(skillsDestination('workspace', '/ws'), path.join('/ws', '.localpilot', 'skills'));
+    assert.strictEqual(skillsDestination('workspace'), path.join(os.homedir(), '.localpilot', 'skills'), 'no workspace → user folder');
+  });
+
+  test('findSkillDirs lists skill folders under a base path, exact folder first', () => {
+    const files = ['README.md', 'skills/pdf/SKILL.md', 'skills/pdf/scripts/x.py', 'skills/xlsx/SKILL.md', 'other/deep/thing/SKILL.md', 'SKILL.md'];
+    assert.deepStrictEqual(findSkillDirs(files), ['', 'skills/pdf', 'skills/xlsx', 'other/deep/thing']);
+    assert.deepStrictEqual(findSkillDirs(files, 'skills'), ['skills/pdf', 'skills/xlsx']);
+    assert.deepStrictEqual(findSkillDirs(files, 'skills/pdf'), ['skills/pdf']);
+    assert.deepStrictEqual(findSkillDirs(files, 'nope'), []);
+  });
+
+  test('installs a skill collection from GitHub through the trees API (mocked) and from a local folder', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-skill-'));
+    const dest = path.join(tmp, 'dest');
+    const tree = [
+      { path: 'README.md', type: 'blob', size: 10 },
+      { path: 'skills/pdf/SKILL.md', type: 'blob', size: 80 },
+      { path: 'skills/pdf/scripts/fill.py', type: 'blob', size: 20 },
+      { path: 'skills/xlsx/SKILL.md', type: 'blob', size: 60 },
+      { path: 'skills', type: 'tree' },
+    ];
+    const bodies: Record<string, string> = {
+      'skills/pdf/SKILL.md': '---\nname: pdf\ndescription: Work with PDFs. Use for "pdf".\n---\n# PDF\nRun scripts/fill.py',
+      'skills/pdf/scripts/fill.py': 'print(1)',
+      'skills/xlsx/SKILL.md': '---\nname: Spread Sheets\ndescription: Excel files.\n---\n# XLSX',
+    };
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      const ok = (body: string, json = false) => new Response(body, { status: 200, headers: { 'content-type': json ? 'application/json' : 'text/plain' } });
+      if (url === 'https://api.github.com/repos/acme/skills') { return ok(JSON.stringify({ default_branch: 'trunk' }), true); }
+      if (url === 'https://api.github.com/repos/acme/skills/git/trees/trunk?recursive=1') { return ok(JSON.stringify({ tree }), true); }
+      const m = /^https:\/\/raw\.githubusercontent\.com\/acme\/skills\/trunk\/(.+)$/.exec(url);
+      if (m && bodies[m[1]]) { return ok(bodies[m[1]]); }
+      return new Response('nope', { status: 404 });
+    }) as typeof fetch;
+    const src = parseSkillSource('acme/skills')!;
+    const found = await discoverSkills(src, { fetchImpl });
+    assert.deepStrictEqual(found.map((f) => [f.name, f.dir, f.files]), [['pdf', 'skills/pdf', ['SKILL.md', 'scripts/fill.py']], ['spread-sheets', 'skills/xlsx', ['SKILL.md']]]);
+    const installed = await installSkills(src, { dest, only: ['pdf'], fetchImpl });
+    assert.deepStrictEqual(installed.map((i) => [i.name, i.files]), [['pdf', 2]]);
+    assert.strictEqual(await fs.readFile(path.join(dest, 'pdf', 'scripts', 'fill.py'), 'utf8'), 'print(1)');
+    assert.ok(!(await fs.stat(path.join(dest, 'spread-sheets')).catch(() => false)), 'unselected skill is not installed');
+    // Existing skill: skipped unless onExists says replace.
+    const again = await installSkills(src, { dest, only: ['pdf'], fetchImpl });
+    assert.deepStrictEqual(again, []);
+    const replaced = await installSkills(src, { dest, only: ['pdf'], fetchImpl, onExists: async () => true });
+    assert.strictEqual(replaced[0]?.name, 'pdf');
+    assert.ok(calls.every((c) => c.startsWith('https://api.github.com/') || c.startsWith('https://raw.githubusercontent.com/')), 'only GitHub endpoints are contacted');
+    // Local folder → user/workspace folder copy.
+    const local = await installSkills({ kind: 'local', path: path.join(dest, 'pdf') }, { dest: path.join(tmp, 'dest2') });
+    assert.deepStrictEqual(local.map((i) => [i.name, i.files]), [['pdf', 2]]);
+    await assert.rejects(discoverSkills({ kind: 'local', path: path.join(tmp, 'missing') }), /does not exist/);
+    await assert.rejects(discoverSkills(parseSkillSource('acme/skills/nothing-here')!, { fetchImpl }), /No SKILL\.md found/);
+    await fs.rm(tmp, { recursive: true, force: true });
   });
 });

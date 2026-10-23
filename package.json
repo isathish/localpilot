@@ -338,6 +338,12 @@
         "category": "LocalPilot"
       },
       {
+        "command": "localpilot.installSkill",
+        "title": "Install Skill…",
+        "category": "LocalPilot",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "localpilot.reloadSkills",
         "title": "Reload Skills, Subagents & MCP Servers",
         "category": "LocalPilot"

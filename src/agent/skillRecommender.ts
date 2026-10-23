@@ -24,17 +24,19 @@ export interface SkillMatch {
 }
 
 const STOP = new Set(
-  'the a an and or but if then else for to of in on at by with from into onto as is are be was were been being do does did done doing have has had having can could should would will shall may might must this that these those it its they them their there here where when how what which who whom why not no yes please pls just also some any all every each more most less least very really so too up out off over under again new old my our your his her me we you i us he she one two three make made making use used using want need like get got go going come let give take see look know think say said tell add fix write create update change remove delete run show find help need want able thing things stuff code file files project app application way ways work working works bit lot kind sort'.split(/\s+/)
+  'the a an and or but if then else for to of in on at by with from into onto as is are be was were been being do does did done doing have has had having can could should would will shall may might must this that these those it its they them their there here where when how what which who whom why not no yes please pls just also some any all every each more most less least very really so too up out off over under again new old my our your his her me we you i us he she one two three use used using want need like get got go going come let give take see look know think say said tell help thing things stuff way ways bit lot kind sort'.split(/\s+/)
 );
 
 /** Lower-cases, strips punctuation and plural/inflection suffixes, drops stop words and short tokens. */
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[`"'()[\]{}<>]/g, ' ')
+    .replace(/n['’]t\b/g, ' not')
+    .replace(/['’](s|re|ve|ll|d|m)\b/g, '')
+    .replace(/[`"'’“”()[\]{}<>]/g, ' ')
     .split(/[^a-z0-9+#.-]+/)
     .map((w) => w.replace(/^[.-]+|[.-]+$/g, ''))
-    .filter((w) => w.length >= 3 && !STOP.has(w))
+    .filter((w) => (w.length >= 3 || /^(ci|cd|ui|ux|db|pr|js|ts|py|go|ai|ml|qa|io|os|k8s|sql|api|cli|e2e)$/.test(w)) && !STOP.has(w))
     .map(stem);
 }
 
@@ -44,16 +46,48 @@ function stem(w: string): string {
   }
   // Plural first, then one derivational suffix: tests/testing → test, deployments → deploy, parsers → parser.
   let s = w.replace(/ies$/, 'y').replace(/(ss)$|s$/, '$1');
-  const m = /(ing|ed|ments?|ions?)$/.exec(s);
-  if (m && s.length - m[0].length >= 4) {
+  const m = /(ations?|ions?|ing|ed|ments?)$/.exec(s);
+  if (m && s.length - m[0].length >= 3) {
     s = s.slice(0, -m[0].length);
+    if (s.length >= 4) {
+      s = s.replace(/([bdgmnprt])\1$/, '$1'); // running → run, planning → plan (but add stays add)
+    }
   }
   return s;
 }
 
-/** Phrases a skill author quoted in the description ("deploy", "release") count as explicit triggers. */
-function triggers(description: string): string[] {
-  return [...description.matchAll(/["“']([^"”']{2,40})["”']/g)].map((m) => m[1].toLowerCase().trim()).filter(Boolean);
+/**
+ * Phrases a skill author quoted in the description ("deploy", "release") count as explicit triggers. Only real
+ * quotes delimit a phrase — an apostrophe inside a word (doesn't) is not a quote — and blank phrases are dropped.
+ * A phrase counts when it occurs verbatim; only phrases with several content words also match non-adjacently.
+ */
+export function triggers(description: string): string[] {
+  const out: string[] = [];
+  for (const m of description.matchAll(/["“]([^"”]{2,40})["”]|(?:^|[\s(])'([^']{2,40})'(?=$|[\s),.;:!?])/g)) {
+    const phrase = (m[1] ?? m[2] ?? '').toLowerCase().trim();
+    if (/[a-z0-9]/.test(phrase)) {
+      out.push(phrase);
+    }
+  }
+  return out;
+}
+
+/** 1 + ln(N / df) per description token: words shared by many skills carry little signal. */
+function inverseDocumentFrequency(skills: SkillLike[]): Map<string, number> {
+  const df = new Map<string, number>();
+  for (const s of skills) {
+    for (const t of new Set(tokenize(s.description))) {
+      df.set(t, (df.get(t) ?? 0) + 1);
+    }
+  }
+  const n = Math.max(1, skills.length);
+  return new Map([...df].map(([t, d]) => [t, 1 + Math.log(n / d)]));
+}
+
+/** True when `phrase` occurs in `text` as whole words (so "ship" does not match "relationship"). */
+function containsPhrase(text: string, phrase: string): boolean {
+  const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, 'i').test(text);
 }
 
 /**
@@ -67,6 +101,7 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
     return [];
   }
   const out: SkillMatch[] = [];
+  const idf = inverseDocumentFrequency(skills);
   for (const s of skills) {
     const nameTokens = tokenize(s.name.replace(/[-_]/g, ' '));
     const descTokens = new Set(tokenize(s.description));
@@ -74,24 +109,32 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
     let evidence = 0;
     for (const t of nameTokens) {
       if (tokens.has(t)) {
-        score += 3;
+        score += 4;
         evidence++;
       }
     }
     for (const trig of triggers(s.description)) {
-      if (text.includes(trig) || tokenize(trig).every((t) => tokens.has(t))) {
-        score += 3;
+      const tt = tokenize(trig);
+      if (containsPhrase(text, trig)) {
+        score += 4;
+        evidence++;
+      } else if (tt.length > 1 && tt.every((t) => tokens.has(t))) {
+        // All the phrase's content words appear, just not adjacently ("tests… write" for "write tests for").
+        score += 2.5;
         evidence++;
       }
     }
     let descHits = 0;
+    let descScore = 0;
     for (const t of descTokens) {
       if (tokens.has(t)) {
         descHits++;
+        descScore += idf.get(t) ?? 1;
       }
     }
-    // Long descriptions match everything a little; normalise so a focused description is not penalised.
-    score += (descHits * 1.5) / Math.max(1, Math.log2(descTokens.size + 1) / 2);
+    // Distinctive words ("bug", "dockerfile") count more than ones every skill uses ("code"); long "USE WHEN"
+    // descriptions match everything a little, so normalise by length.
+    score += (descScore * 1.2) / Math.max(1, Math.log2(descTokens.size / 10 + 1));
     if (descHits >= 2) {
       evidence++;
     }
@@ -99,14 +142,17 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
       out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10 });
     }
   }
-  return out.sort((a, b) => b.score - a.score).slice(0, max);
+  // Only keep runners-up that are in the same league as the best match; weak tails are noise in the UI and the prompt.
+  const ranked = out.sort((a, b) => b.score - a.score);
+  return ranked.filter((m, i) => i === 0 || m.score >= ranked[0].score * 0.5).slice(0, max);
 }
 
 /** Coarse "kind of request" key: the main verb plus the two most specific nouns, e.g. "deploy|docker|staging". */
 export function topicKey(request: string): string | undefined {
   const text = userText(request);
   const verb = /\b(fix|debug|refactor|implement|add|create|write|test|review|deploy|release|document|explain|migrate|convert|optimi[sz]e|design|plan|setup|set up|configure|install|build|generate|scaffold|analy[sz]e|benchmark|profile|lint|format|translate|upgrade|commit|publish)\b/i.exec(text)?.[1].toLowerCase().replace(/\s+/g, '');
-  const nouns = tokenize(text).filter((t) => !/^(fix|debug|refactor|implement|add|creat|writ|test|review|deploy|releas|document|explain|migrat|convert|optimi|design|plan|setup|configur|install|build|generat|scaffold|analy|benchmark|profil|lint|format|translat|upgrad|commit|publish)/.test(t));
+  const verbStems = new Set(verb ? tokenize(verb) : []);
+  const nouns = tokenize(text).filter((t) => !verbStems.has(t) && !/^(fix|debug|refactor|implement|add|creat|writ|test|review|deploy|releas|document|explain|migrat|convert|optimi|design|plan|setup|configur|install|build|generat|scaffold|analy|benchmark|profil|lint|format|translat|upgrad|commit|publish)/.test(t));
   if (!verb && nouns.length < 2) {
     return undefined;
   }

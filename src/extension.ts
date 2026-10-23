@@ -4,6 +4,7 @@ import { AgentRunner } from './agent/agentLoop';
 import { ChangeTracker } from './agent/changeTracker';
 import { createGatherContextTool } from './agent/clarify';
 import { createSkillPrompt, SkillLearner } from './agent/skillRecommender';
+import { describeSource, discoverSkills, installSkills, parseSkillSource, skillsDestination } from './agent/skillInstaller';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -688,6 +689,83 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.dismissSkillTopic', async (topic?: unknown) => {
     if (typeof topic === 'string') {
       await learner.dismiss(topic);
+    }
+  });
+  cmd('localpilot.installSkill', async (arg?: unknown) => {
+    const o = (arg && typeof arg === 'object' ? arg : typeof arg === 'string' ? { source: arg } : {}) as { source?: string; scope?: 'workspace' | 'user' };
+    const source =
+      o.source?.trim() ||
+      (await vscode.window.showInputBox({
+        title: 'Install a skill',
+        prompt: 'GitHub repository or folder (owner/repo, owner/repo/skills/name, a github.com URL), a URL to a SKILL.md, or a local skill folder',
+        placeHolder: 'owner/repo/skills/my-skill',
+        ignoreFocusOut: true,
+      }));
+    if (!source) {
+      return undefined;
+    }
+    const src = parseSkillSource(source);
+    if (!src) {
+      void vscode.window.showErrorMessage(`"${source}" is not a skill source.`);
+      return undefined;
+    }
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    let scope = o.scope;
+    if (!scope) {
+      const pick = await vscode.window.showQuickPick(
+        [
+          ...(root ? [{ label: 'This workspace', description: path.join(root, '.localpilot', 'skills'), detail: 'Shared with everyone who opens this project', scope: 'workspace' as const }] : []),
+          { label: 'My skills (all workspaces)', description: skillsDestination('user'), scope: 'user' as const },
+        ],
+        { title: `Install ${describeSource(src)} into…`, ignoreFocusOut: true }
+      );
+      if (!pick) {
+        return undefined;
+      }
+      scope = pick.scope;
+    }
+    const dest = skillsDestination(scope, root);
+    try {
+      const installed = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing skill from ${describeSource(src)}…`, cancellable: true }, async (progress, token) => {
+        const ac = new AbortController();
+        token.onCancellationRequested(() => ac.abort());
+        const found = await discoverSkills(src, { signal: ac.signal });
+        let only: string[] | undefined;
+        if (found.length > 1) {
+          const picked = await vscode.window.showQuickPick(
+            found.map((f) => ({ label: f.name, description: f.description.slice(0, 100), detail: f.dir || undefined, picked: true })),
+            { title: `${found.length} skills found — choose which to install`, canPickMany: true, ignoreFocusOut: true }
+          );
+          if (!picked?.length) {
+            return [];
+          }
+          only = picked.map((p) => p.label);
+        }
+        return installSkills(src, {
+          dest,
+          only,
+          signal: ac.signal,
+          progress: (t) => progress.report({ message: t }),
+          onExists: async (name) => (await vscode.window.showWarningMessage(`A skill named "${name}" is already installed there. Replace it?`, { modal: true }, 'Replace')) === 'Replace',
+        });
+      });
+      await skills.refresh();
+      if (installed.length) {
+        const names = installed.map((i) => `"${i.name}"`).join(', ');
+        void vscode.window.showInformationMessage(`Installed ${names} into ${dest}. The agent loads it when a request matches, or force it with /skill ${installed[0].name} <task>.`, 'Open SKILL.md', 'Open chat').then((p) => {
+          if (p === 'Open SKILL.md') {
+            void vscode.window.showTextDocument(vscode.Uri.file(path.join(installed[0].dir, 'SKILL.md')));
+          } else if (p === 'Open chat') {
+            view.reveal();
+          }
+        });
+      }
+      return installed;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log.error(`install skill ${source}: ${msg}`);
+      void vscode.window.showErrorMessage(`Could not install the skill: ${msg}`);
+      return undefined;
     }
   });
   cmd('localpilot.reloadSkills', async () => {

@@ -1,6 +1,6 @@
 ---
 name: new-project
-description: Bootstrap a brand-new project from an idea — choose a fitting stack, scaffold the folder structure and tooling, get a runnable "hello" slice working, verify it in the browser/terminal, and leave a plan for the next features. USE WHEN the workspace is empty or the user says "create a new app/project", "start from scratch", "scaffold", "set up a <framework> project", "build me a <thing>" with no existing code.
+description: Bootstrap a brand-new project from an idea — choose a fitting stack, scaffold the folder structure and tooling, get a runnable hello-world slice working, verify it in the browser/terminal, and leave a plan for the next features. USE WHEN the workspace is empty or the user says "create a new app/project", "start from scratch", "scaffold", "set up a <framework> project", "build me a <thing>" with no existing code.
 ---
 
 # New project

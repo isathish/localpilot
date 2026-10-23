@@ -708,7 +708,7 @@
       const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th>${usage ? '<th title="Times the agent loaded this skill">Used</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>${usage ? `<td class="mono muted">${r.used ? `${r.used}×` : '—'}</td>` : ''}</tr>`).join('')}</tbody>`);
       sec.appendChild(card(t));
     };
-    tableFor('Skills', d.skills, 'No skills found. Create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
+    tableFor('Skills', d.skills, 'No skills found. Use <b>Install skill…</b> below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
     const recurring = (d.learning && d.learning.recurring) || [];
     if (recurring.length) {
       sec.appendChild(el('h2', 'sub', `Suggested skills (${recurring.length})`));
@@ -723,7 +723,7 @@
     }
     tableFor('Subagents', d.agents, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.');
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
-    bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
+    bar.innerHTML = `<button class="btn primary" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install skill…</button><button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
     sec.appendChild(bar);
   }
 

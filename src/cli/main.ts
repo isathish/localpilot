@@ -17,6 +17,7 @@ import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
+import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { getConfig } from '../config';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { McpManager } from '../mcp/mcpManager';
@@ -65,6 +66,7 @@ ${bold('Usage')}
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your local servers
   localpilot doctor                       check servers, settings and tools
+  localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
@@ -97,10 +99,12 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install';
+  /** `skill install`: write into ~/.localpilot/skills instead of the workspace. */
+  user: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -122,6 +126,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === '-h' || x === '--help') {a.cmd = 'help';}
     else if (x === '--version' || x === '-V') {a.cmd = 'version';}
     else if (x === '--parallel' || x === '-P') {a.cmd = a.cmd ?? 'ide';} // parallel sessions live in the editor's Agents panel
+    else if (x === '--user' || x === '-u') {a.user = true;}
+    else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
     else if (!x.startsWith('-') && !words.length && !a.cmd && ['models', 'doctor', 'help', 'version'].includes(x)) {a.cmd = x as Args['cmd'];}
     else {words.push(x);}
   }
@@ -563,6 +569,40 @@ async function cmdDoctor(core: Core): Promise<void> {
 }
 
 // ------------------------------------------------------------------ main
+async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Promise<void> {
+  const src = parseSkillSource(args.prompt);
+  if (!args.prompt || !src) {
+    console.error(`${red('✖')} Usage: localpilot skill install <owner/repo[/path] | github URL | SKILL.md URL | folder> [--user]`);
+    process.exitCode = 2;
+    return;
+  }
+  const dest = skillsDestination(args.user ? 'user' : 'workspace', args.cwd);
+  console.log(`${dim('Installing from')} ${describeSource(src)} ${dim('into')} ${dest}`);
+  const installed = await installSkills(src, {
+    dest,
+    progress: (t) => renderer.status(t),
+    onExists: async (name) => {
+      if (args.yes) {
+        return true;
+      }
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((r) => rl.question(`${yellow('⚠')} "${name}" is already installed there. Replace it? [y/N] `, r));
+      rl.close();
+      return /^y(es)?$/i.test(answer.trim());
+    },
+  });
+  renderer.status('');
+  await core.skills.refresh();
+  for (const i of installed) {
+    console.log(`  ${green('✓')} ${bold(i.name)} ${dim(`(${i.files} file${i.files === 1 ? '' : 's'}) → ${i.dir}`)}`);
+  }
+  if (!installed.length) {
+    console.log(`  ${dim('nothing installed')}`);
+  } else {
+    console.log(`\n${dim('The agent loads it when a request matches; force it with')} /skill ${installed[0].name} <task>`);
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.cmd === 'help') {
@@ -601,6 +641,9 @@ async function main(): Promise<void> {
 
   if (args.cmd === 'models') {
     return cmdModels(core);
+  }
+  if (args.cmd === 'skill-install') {
+    return cmdSkillInstall(core, args, renderer);
   }
   if (args.cmd === 'doctor') {
     return cmdDoctor(core);

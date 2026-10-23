@@ -54,13 +54,23 @@ LocalPilot ships playbooks for the whole development loop, so a fresh workspace 
 
 The agent loads them on its own when a request matches ("write a spec for…", "review this", "deploy it"), or force one with `/skill implement …`.
 
+### Installing skills
+
+Skills published anywhere in the [Agent Skills](https://agentskills.io) format — a GitHub repository, a folder inside one, a collection such as `anthropics/skills`, a URL to a `SKILL.md`, or a folder on disk — install in one step:
+
+- **Command Palette → LocalPilot: Install Skill…** (also the **Install skill…** button in Settings → Memory & history → Skills), or
+- in the chat: `/skill install anthropics/skills/skills/pdf`, or
+- from the terminal: `localpilot skill install owner/repo[/path] [--user]`.
+
+Accepted sources: `owner/repo`, `owner/repo/path/to/skill`, `owner/repo@branch/path`, `https://github.com/owner/repo/tree/main/skills/x`, a `blob`/`raw.githubusercontent.com` link to a `SKILL.md`, any other `https://…/SKILL.md`, or a local path. When the source holds several skills you pick which ones to install; each lands in `.localpilot/skills/<name>/` of the workspace (or `~/.localpilot/skills/` for *My skills* / `--user`) with its companion files (`scripts/`, `reference.md`, …), and the skill list refreshes immediately — the `/skill` menu, the suggestion chips and Settings all see it without a reload. Existing skills are only replaced after confirmation. Private repositories and higher API limits use `GITHUB_TOKEN` if it is set.
+
 ### Progressive disclosure
 
 Only the **name and description** of each skill are placed in the system prompt. When a task matches, the model calls `load_skill` to pull in the full instructions. Dozens of skills therefore cost almost no context. Force one with `/skill <name> <task>`.
 
 ### Recommendations while you chat
 
-Each request is matched against the skill index — the skill's name, any quoted trigger phrases in its description (`Use for "deploy", "release"`) and the description's terms. Matching skills are passed to the model as a hint so it loads the playbook before starting, and shown as chips under the turn; click a chip to force it (`/skill <name> …`). Write descriptions with the words people actually type, and quote two or three trigger phrases, to make a skill easy to recommend.
+Each request is matched against the skill index — the skill's name, any quoted trigger phrases in its description (`Use for "deploy", "release"`) and the description's terms, weighted by how distinctive each term is among your installed skills (a word like *bug* says more than *code*). Matching skills are passed to the model as a hint so it loads the playbook before starting, and shown as chips under the turn; click a chip to force it (`/skill <name> …`). Nothing is recommended for requests that match no skill ("add a logout button", "hello") — a recommendation always comes from the skill's own words. Write descriptions with the words people actually type, and quote two or three trigger phrases, to make a skill easy to recommend; an apostrophe inside a word (*doesn't*) is not treated as a quote.
 
 ### Learning which skills you are missing
 

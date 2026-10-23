@@ -111,7 +111,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels',
-  'localpilot.createSkill', 'localpilot.dismissSkillTopic',
+  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
@@ -158,6 +158,7 @@ export class SettingsPanel implements vscode.Disposable {
       }),
       providers.onDidChange(() => this.panel && void this.pushState()),
       mcp.onDidChange(() => this.panel && void this.pushState()),
+      skills.onDidChange(() => this.panel && void this.pushState()),
       models.onDidChange(() => {
         // Pull progress arrives per chunk; coalesce so the webview repaints at most ~6×/s.
         if (this.panel && !this.jobsTimer) {

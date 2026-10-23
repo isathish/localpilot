@@ -4,6 +4,13 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Install skills.** *LocalPilot: Install Skill…* (Command Palette, the **Install skill…** button in Settings → Skills, `/skill install <source>` in the chat, `localpilot skill install <source> [--user]` in the terminal) fetches a skill — or lets you pick from a collection such as `anthropics/skills` — from `owner/repo[/path][@ref]`, a github.com `tree`/`blob` link, a `raw` or any other URL to a `SKILL.md`, or a local folder, with its companion files, into `.localpilot/skills/<name>` of the workspace or `~/.localpilot/skills`. Existing skills are only replaced after confirmation; `GITHUB_TOKEN` is used when set.
+
+### Fixed
+- **Skill recommendations fired for everything.** An apostrophe in a description (*"doesn't work"*) was read as a quote, and trigger phrases that contained no searchable word (`" "`, `"CI/CD"`, `"make it do X"`) matched every request — so `debug`, `deploy` and `implement` were recommended for "hello" and the hidden hint told the model to load `debug` first on every turn, derailing ordinary requests. Triggers now need real quotes and match as whole words; description terms are weighted by how distinctive they are across the installed skills; task verbs (`fix`, `test`, `write`, `add`…) are no longer stop words and `fixing`/`running`/`documentation` stem to `fix`/`run`/`document`; weak runners-up are dropped. "fix this bug" → `debug`, "write tests for the parser" → `test`, "hello" → nothing.
+- **New skills did not show up until a restart.** The chat's `/skill` menu and suggestion chips and Settings → Skills now refresh as soon as a skill is created, installed or removed. The `new-project` skill no longer claims greetings ("hello") as a trigger.
+
 ## 1.1.1 — 2026-10-23
 
 ### Fixed

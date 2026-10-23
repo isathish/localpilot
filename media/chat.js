@@ -67,7 +67,7 @@
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   const SLASH = [
     ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/skill ', 'Run a task with a skill'], ['/agent ', 'Delegate to a subagent'], ['/context', 'Context usage'],
+    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/agent ', 'Delegate to a subagent'], ['/context', 'Context usage'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -1451,6 +1451,7 @@
         break;
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
+      case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; break;
       case 'models': { const hadNone = !state.models.length; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { toast(`${m.models.length} model(s) found`); if (state.session && !state.session.messages.length) { renderSession(); } } break; }
       case 'event': handleEvent(m.event); break;
       case 'running': {

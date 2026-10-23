@@ -18,6 +18,7 @@ export type ToWebview =
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
   | { type: 'session'; session: Session }
   | { type: 'models'; models: ModelInfo[]; defaultModel: string }
+  | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[] }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
   | { type: 'approvalResolved'; id: string }
@@ -115,6 +116,8 @@ export class ChatController implements vscode.Disposable {
     this.disposables.push(
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       providers.onDidChange(() => void this.pushModels()),
+      // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
+      skills.onDidChange(() => this.broadcast({ type: 'skills', skills: skills.allSkills.map((s) => ({ name: s.name, description: s.description })), agents: skills.allAgents.map((a) => ({ name: a.name, description: a.description })) })),
       tracker.onDidChange(() => {
         for (const id of new Set([...this.store.list().map((s) => s.id)])) {
           if (this.tracker.forSession(id).length || id === this.activeSessionId) {
@@ -813,7 +816,7 @@ export class ChatController implements vscode.Disposable {
             '- `/compact` — summarise older messages to free context',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents',
-            '- `/skill <name> <task>` — run a task with a skill preloaded',
+            '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill',
             '- `/agent <name> <task>` — delegate directly to a subagent',
             '- `/context` — show context usage',
           ].join('\n')
@@ -848,9 +851,14 @@ export class ChatController implements vscode.Disposable {
         return say('Usage: `/model provider/model-id`');
       case 'skill': {
         const [name, ...task] = rest.trim().split(/\s+/);
+        if (name === 'install' || name === 'add') {
+          void vscode.commands.executeCommand('localpilot.installSkill', task.length ? { source: task.join(' ') } : undefined);
+          return say(task.length ? `Installing skill from ${task.join(' ')}…` : 'Opening the skill installer…');
+        }
         const skill = this.skills.getSkill(name);
         if (!skill) {
-          return say(`Unknown skill "${name}". Try /skills.`);
+          const hint = /[/:.]/.test(name) ? ` To install a skill from GitHub or a URL use \`/skill install ${name}\`.` : '';
+          return say(`Unknown skill "${name}". Try /skills.${hint}`);
         }
         void this.send(session.id, `Use the "${name}" skill for this task: ${task.join(' ') || 'follow the skill instructions.'}\nFirst call load_skill("${name}"), then perform every step the skill describes using the tools, then report what you did.`);
         return '';

@@ -4,6 +4,9 @@ import * as os from 'os';
 import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
 import { builtinAgents } from './builtinAgents';
+import { parseFrontMatter } from './frontMatter';
+
+export { parseFrontMatter } from './frontMatter';
 
 /**
  * Skills are folders containing a SKILL.md with YAML front-matter (`name`, `description`) and a markdown body
@@ -176,28 +179,4 @@ export class SkillManager implements vscode.Disposable {
     this.watchers.forEach((w) => w.dispose());
     this._onDidChange.dispose();
   }
-}
-
-export function parseFrontMatter(raw: string): { meta: Record<string, unknown>; body: string } {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-  if (!m) {
-    return { meta: {}, body: raw };
-  }
-  const meta: Record<string, unknown> = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!kv) {
-      continue;
-    }
-    let v: unknown = kv[2].trim();
-    if (typeof v === 'string') {
-      if (/^\[.*\]$/.test(v)) {
-        v = v.slice(1, -1).split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-      } else {
-        v = v.replace(/^['"]|['"]$/g, '');
-      }
-    }
-    meta[kv[1]] = v;
-  }
-  return { meta, body: m[2] };
 }

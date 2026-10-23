@@ -108,7 +108,7 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 ## Using it
 
 - Switch **Agent / Ask / Plan** in the composer or with `/mode`.
-- Type `@` to attach context, `/` for commands: `/help`, `/model`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill <name> <task>`, `/agent <name> <task>`, `/context`.
+- Type `@` to attach context, `/` for commands: `/help`, `/model`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill <name> <task>`, `/skill install <owner/repo|url>`, `/agent <name> <task>`, `/context`.
 - Code blocks have **Copy / Insert at cursor / Apply to file**; approvals appear inline with *Allow for session*.
 - Right-click in an editor → **LocalPilot** → Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File.
 
@@ -120,7 +120,7 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 .localpilot/rules.md · AGENTS.md · CLAUDE.md · .cursorrules · .github/copilot-instructions.md
 ```
 
-Skills use progressive disclosure (only name + description are in the prompt until `load_skill` is called). Subagents run with a fresh context window and return only a final report. Full guide: [Skills & subagents](https://isathish.github.io/localpilot/docs/skills-and-agents/).
+Install skills from GitHub or a URL with **LocalPilot: Install Skill…** (`/skill install anthropics/skills/skills/pdf`, `localpilot skill install owner/repo`). Skills use progressive disclosure (only name + description are in the prompt until `load_skill` is called). Subagents run with a fresh context window and return only a final report. Full guide: [Skills & subagents](https://isathish.github.io/localpilot/docs/skills-and-agents/).
 
 ## Terminal & CLI
 
