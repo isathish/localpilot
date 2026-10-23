@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">LocalPilot</h1>
 <p align="center"><strong>The AI coding agent that runs on your machine.</strong><br>
-Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b>. No accounts, no telemetry, no cloud.</p>
+An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>. No accounts, no telemetry, and nothing leaves your machine unless you point it at a remote endpoint.</p>
 <p align="center">
   <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/v/localpilot.localpilot-agent?label=marketplace&color=0078d4" alt="VS Code Marketplace"></a>
@@ -69,11 +69,11 @@ Requires VS Code 1.104+.
 **Serve a model** — or let LocalPilot do it: with no model found it offers **Set up automatically**, which starts or installs Ollama and downloads a starter coder model sized for your machine. Any of these works too (running servers are auto-detected, including ones in Docker):
 
 ```bash
-ollama pull qwen2.5-coder:14b && ollama serve        # Ollama  → :11434
+ollama pull gemma4:e4b && ollama serve               # Ollama  → :11434
 # LM Studio → Developer tab → Start server             → :1234
 # llama-server -m model.gguf --port 8080               → :8080
-# vllm serve Qwen/Qwen2.5-Coder-32B-Instruct           → :8000
-# docker model pull ai/qwen2.5-coder                   → Docker Model Runner :12434
+# vllm serve google/gemma-4-12B-it                     → :8000
+# docker model pull ai/gemma4:e4b                      → Docker Model Runner :12434
 # docker run -p 11434:11434 ollama/ollama              → any model-server container
 ```
 
@@ -161,9 +161,9 @@ All settings: [Configuration](https://isathish.github.io/localpilot/docs/configu
 
 | Task | Models |
 |---|---|
-| Agentic coding | `qwen2.5-coder:14b/32b`, `qwen3`, `devstral`, `llama3.3`, `mistral-small`, `gpt-oss` |
-| Inline completions | `qwen2.5-coder:1.5b/7b-base`, `codestral`, `starcoder2` |
-| Screenshots / vision | `qwen2.5vl`, `llava`, `gemma3`, `pixtral` |
+| Agentic coding | `gemma4:e2b/e4b/12b` (recommended), `nemotron-3.5-bolt:e4b`, `devstral`, `gpt-oss`, `mistral-small`, `qwen3` |
+| Inline completions | `starcoder2:3b`, `codestral`, `qwen2.5-coder:1.5b/7b-base` |
+| Screenshots / vision | `gemma4`, `nemotron-3.5-bolt`, `qwen2.5vl`, `llava`, `gemma3`, `pixtral` |
 
 ## Development
 

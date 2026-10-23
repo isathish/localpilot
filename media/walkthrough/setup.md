@@ -1,6 +1,6 @@
 # Connect a model server
 
-**Nothing set up yet?** Choose **Set up automatically** in the Welcome screen (or run *LocalPilot: Set Up Models Automatically*). LocalPilot installs Ollama in the background (no admin rights), starts it and downloads a coder model sized for this machine — smaller models first, so you are productive in minutes. Bigger models are one click away in **Settings → Models**.
+**Nothing set up yet?** Use the one-click button on the Welcome screen — it reads *Install Ollama & starter model*, *Start Ollama & download starter model* or *Download starter model* depending on what this machine already has (or run *LocalPilot: Set Up Models Automatically*). LocalPilot installs Ollama in the background (no admin rights), starts it and downloads a coder model sized for this machine — smaller models first, so you are productive in minutes. Bigger models are one click away in **Settings → Models**.
 
 LocalPilot never talks to a cloud API unless you point it at one. It discovers models from the servers you run:
 

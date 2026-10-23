@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ContextManager } from '../context/contextManager';
-import { estimateMessagesTokens } from '../context/tokenizer';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';

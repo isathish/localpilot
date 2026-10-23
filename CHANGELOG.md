@@ -4,7 +4,11 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Changed
+- **Gemma 4 is the starter model.** Automatic setup and the catalog now lead with Google's Gemma 4 — frontier-class small models with native tool calling, vision and optional thinking in every size — instead of Qwen2.5 Coder. A 16 GB machine gets `gemma4:e4b` (6.6 GB) plus `starcoder2:3b` for ghost text; an 8 GB machine gets `gemma4:e2b`; smaller machines fall back to Llama 3.2 / SmolLM2. Because Gemma 4 reads images itself, no separate vision model is downloaded any more. The catalog also gains NVIDIA's **Nemotron 3.5 Bolt** (e4b) and lists Gemma 4 e2b / e4b / 12b / 26b-a4b / 31b for Ollama, Docker Model Runner and LM Studio. Auto-routing prefers an installed Gemma 4 or Nemotron Bolt over a same-size Qwen coder for agent, reasoning and vision work, and prefers vision models that can also call tools. Qwen models remain in the catalog as an explicit choice.
+
 ### Fixed
+- **Stale and inconsistent copy.** The README, Marketplace listing, website and docs now list all nine built-in subagents (not the original four), name the Settings page *Memory & history* as the UI does, use the real command title *Install 'localpilot' CLI in PATH*, describe the approval card's actual buttons (*Allow once* / *Allow for session* / *Deny* with their keys) and the situation-specific Welcome-screen button, and qualify "your code stays on your machine" with the fact that you can point LocalPilot at a remote OpenAI-compatible endpoint. A docs link that ignored the site's base path is fixed; three unused symbols were removed from the source.
 - **Website version.** The site showed the previous release (v0.2.9 while 1.0.0 was out): the `release: vX.Y.Z` commit is pushed by the workflow bot, and GitHub never starts the Docs deploy for such pushes. The Release workflow now dispatches the Docs workflow after publishing, and the Docs build takes `site.version` from `package.json` instead of relying on the hand-maintained copy in `docs/_config.yml`, so the website can no longer drift from the released extension.
 
 ## 1.0.0 — 2026-10-23

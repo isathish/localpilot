@@ -9,6 +9,6 @@ Each kind of action has its own policy:
 | Deleting files | `delete_path` | **Ask** |
 | Network & MCP | `web_search`, `web_fetch`, MCP tools | **Allow** |
 
-**Ask** shows an inline card in the chat with *Allow*, *Allow for this chat* and *Deny*. **Allow** proceeds silently. **Block** refuses the action.
+**Ask** shows an inline card in the chat with *Allow once* (<kbd>Y</kbd>), *Allow for session* (<kbd>A</kbd>) and *Deny* (<kbd>N</kbd>). **Allow** proceeds silently. **Block** refuses the action.
 
 Presets — *Careful*, *Balanced* and *Autonomous* — set all four at once. Regardless of policy, every file edit is snapshotted so you can undo it or restore the whole chat to an earlier checkpoint.

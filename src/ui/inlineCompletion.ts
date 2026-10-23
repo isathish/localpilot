@@ -16,7 +16,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
   async provideInlineCompletionItems(
     document: vscode.TextDocument,
     position: vscode.Position,
-    context: vscode.InlineCompletionContext,
+    _context: vscode.InlineCompletionContext,
     token: vscode.CancellationToken
   ): Promise<vscode.InlineCompletionItem[] | undefined> {
     const cfg = getConfig().inlineCompletion;

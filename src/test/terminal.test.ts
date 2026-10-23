@@ -8,7 +8,6 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { TerminalManager } from '../terminal/terminalManager';
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EXT_ROOT = path.resolve(__dirname, '..', '..');
 
 suite('LocalPilot terminal integration', () => {

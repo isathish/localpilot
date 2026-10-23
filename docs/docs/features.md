@@ -41,7 +41,7 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 ## Skills & subagents
 
 - Skills (`SKILL.md`) are loaded on demand via progressive disclosure.
-- Built-in subagents: `explore`, `coder`, `reviewer`, `researcher`; define your own in `.localpilot/agents/*.md`.
+- Built-in subagents: `explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger` and `docs`; define your own in `.localpilot/agents/*.md`.
 
 ## Images
 
@@ -73,19 +73,19 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 - **One-click model setup** — with no local model anywhere, LocalPilot starts or installs Ollama and downloads a smallest-first starter set sized to your RAM / GPU (agent + completion + optional vision model), then sets the defaults. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
 - **Model manager & catalog** — hardware profile and model budget, installed models with enable / disable, set-default and remove, and a curated catalog where every size is marked fits / tight / too big; install to Ollama, Docker Model Runner or LM Studio with live progress.
 - **Automatic routing** — a vision model for image turns, the smallest FIM model for completions, an optional reasoning model for Plan mode, and a graceful fallback when the chosen model is offline or disabled.
-- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models, Agent & approvals, Inline completions, Web search, Memory & skills, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
+- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models, Agent & approvals, Inline completions, Web search, Memory & history, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
 - **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
 - **Approval presets** — *Careful*, *Balanced*, *Autonomous* — or fine-grained Ask / Allow / Block per action.
 - **MCP server manager** — add, edit, disable and remove servers with their connection status and tool counts.
 - **Welcome / Setup wizard** on first run: detects running servers, recommends a model, sets an approval preset.
 - **Getting Started walkthrough** in VS Code's Welcome page.
 
-![Memory & skills page listing project and global notes, skill folders, discovered skills and subagents]({{ '/assets/screenshots/settings-memory.png' | relative_url }})
+![Memory & history page listing project and global notes, skill folders, discovered skills and subagents]({{ '/assets/screenshots/settings-memory.png' | relative_url }})
 
 ## VS Code platform
 
 - `@localpilot` participant in the built-in Chat view (`/agent`, `/ask`, `/plan`).
 - Local models registered through the **Language Model Chat Provider API** — they appear in Copilot's model picker.
 - Status bar model switcher.
-- **`localpilot` CLI** (*Install 'localpilot' Command in PATH*): `localpilot "fix the tests"`, `--plan`, `--ask`, `--file`, `--parallel`, `--settings`, `--setup` open LocalPilot in the current folder via `vscode://` deep links.
+- **`localpilot` CLI** (*Install 'localpilot' CLI in PATH*): `localpilot "fix the tests"`, `--plan`, `--ask`, `--file`, `--parallel`, `--settings`, `--setup` open LocalPilot in the current folder via `vscode://` deep links.
 - **Extension API** — `activate()` exports `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels` and `version` for other extensions and scripts. See [Development]({{ '/docs/development/' | relative_url }}).

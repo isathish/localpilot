@@ -1,6 +1,6 @@
 # LocalPilot: a coding agent for VS Code that runs on your own machine
 
-LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, edits files, runs tests and shows you the diff. The difference is where the model runs: every token comes from a server you host with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner**. No subscription, no account, no telemetry.
+LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, edits files, runs tests and shows you the diff. The difference is where the model runs: every token comes from a server you host with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner** — or any OpenAI-compatible endpoint you choose to point it at. No subscription, no account, no telemetry.
 
 **It costs nothing per month.** Cloud assistants charge $10 to $200 per developer and meter usage on top. LocalPilot runs on the laptop you already have and keeps working with the network unplugged. To check for yourself, open *Settings → Providers*: every address is `localhost` unless you added one. The source is MIT-licensed on GitHub.
 
@@ -12,7 +12,7 @@ LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, 
 - **Review every change** — diff, accept or reject per file or per agent, with changed lines highlighted; restore a checkpoint to rewind files and conversation.
 - **Zero configuration** — auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in Docker containers, and picks the best tool-capable model.
 - **Memory** — durable project and personal notes the agent saves and recalls across sessions.
-- **Skills & subagents** — reusable `SKILL.md` playbooks and specialised `explore` / `coder` / `reviewer` / `researcher` agents, or define your own.
+- **Skills & subagents** — reusable `SKILL.md` playbooks (14 ship built in, from `requirements` to `deploy`) and nine specialised subagents (`explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger`, `docs`), or define your own.
 - **Screenshots & images** — capture a selection, this VS Code window, another window or the full screen (optionally timed), paste or drop an image, and let a vision model fix what it sees.
 - **Inline edit (⌘⌥K)** — describe a change and the selection is rewritten in place. In a terminal, it turns English into a reviewed command.
 - **Context on demand** — `@workspace`, `@selection`, `@problems`, `@git`, `@file#L10-L20`; smart compaction keeps long tasks inside small context windows.
@@ -25,7 +25,7 @@ LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, 
 
 1. Start a model server — for example:
    ```bash
-   ollama pull qwen2.5-coder:14b
+   ollama pull gemma4:e4b
    ollama serve
    ```
    LM Studio, llama.cpp, vLLM, Docker Model Runner and model-server containers are detected automatically too.
@@ -48,9 +48,9 @@ Models without native tool calling still work in agent mode; LocalPilot falls ba
 
 ## Recommended models
 
-- **Agent work:** `qwen2.5-coder:14b` / `:32b`, `qwen3`, `devstral`, `llama3.3`, `mistral-small`
-- **Inline completions:** `qwen2.5-coder:1.5b-base`, `codestral`, `starcoder2`
-- **Screenshots:** `qwen2.5vl`, `llava`, `gemma3`
+- **Agent work:** `gemma4:e2b` / `:e4b` / `:12b` (recommended), `nemotron-3.5-bolt:e4b`, `devstral`, `gpt-oss`, `mistral-small`
+- **Inline completions:** `starcoder2:3b`, `codestral`, `qwen2.5-coder:1.5b-base`
+- **Screenshots:** `gemma4`, `nemotron-3.5-bolt`, `qwen2.5vl`, `llava`
 
 ## Also in VS Code
 
