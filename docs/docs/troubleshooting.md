@@ -45,4 +45,4 @@ Enable `localpilot.inlineCompletion.enabled`, pick a FIM-capable base model (`qw
 
 ## Reset everything
 
-Sessions live in the workspace storage folder (*Developer: Open Extension Logs Folder* → sibling `workspaceStorage/<id>/localpilot.localpilot/sessions`). Deleting that folder clears all chats for the workspace.
+Sessions live in the workspace storage folder (*Developer: Open Extension Logs Folder* → sibling `workspaceStorage/<id>/localpilot.localpilot-agent/sessions`). Deleting that folder clears all chats for the workspace.

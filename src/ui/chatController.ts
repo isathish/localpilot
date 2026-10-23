@@ -291,7 +291,7 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'openSettings':
-        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:localpilot.localpilot');
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:localpilot.localpilot-agent');
         return;
       case 'openExternal':
         if (/^https?:\/\//i.test(msg.url)) {

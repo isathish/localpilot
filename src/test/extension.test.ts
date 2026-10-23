@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 suite('LocalPilot activation', () => {
   test('extension activates and registers its commands', async function () {
     this.timeout(30_000);
-    const ext = vscode.extensions.getExtension('localpilot.localpilot');
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent');
     assert.ok(ext, 'extension not found');
     await ext.activate();
     assert.ok(ext.isActive);
@@ -25,7 +25,7 @@ suite('LocalPilot activation', () => {
   });
 
   test('chat participant contribution is present', () => {
-    const ext = vscode.extensions.getExtension('localpilot.localpilot')!;
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
     const contributes = ext.packageJSON.contributes;
     assert.strictEqual(contributes.chatParticipants[0].id, 'localpilot.agent');
     assert.strictEqual(contributes.languageModelChatProviders[0].vendor, 'localpilot');

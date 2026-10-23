@@ -38,8 +38,8 @@ npx @vscode/vsce publish --no-dependencies --packagePath localpilot-0.1.1.vsix
 
 ## Verify
 
-- Marketplace listing: <https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot>
-- `code --install-extension localpilot.localpilot`
+- Marketplace listing: <https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent>
+- `code --install-extension localpilot.localpilot-agent`
 - The listing uses `README.md`, `CHANGELOG.md`, `media/logo.png` and the `galleryBanner` colour from `package.json`.
 
 ## Troubleshooting

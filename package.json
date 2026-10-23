@@ -1,6 +1,6 @@
 {
-  "name": "localpilot",
-  "displayName": "LocalPilot",
+  "name": "localpilot-agent",
+  "displayName": "LocalPilot Agent",
   "description": "Local-first AI coding agent for VS Code (Ollama, LM Studio, llama.cpp, vLLM, any OpenAI-compatible API) with multi-session chat, agentic tools, skills, subagents and parallel execution",
   "version": "0.1.1",
   "engines": {

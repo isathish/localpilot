@@ -47,11 +47,11 @@ jobs:
         run: |
           if [ -z "$VSCE_PAT" ]; then echo "::error::VSCE_PAT secret is not set. Create a PAT with 'Marketplace > Manage' scope at https://dev.azure.com and add it under Settings > Secrets > Actions."; exit 1; fi
           npx @vscode/vsce publish --packagePath "${{ steps.rel.outputs.file }}"
-          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot"
+          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"
 
       - name: Publish to Open VSX
         if: (github.event.inputs.target == 'openvsx' || github.event.inputs.target == 'both')
         run: |
           if [ -z "$OVSX_PAT" ]; then echo "::warning::OVSX_PAT secret is not set; skipping Open VSX."; exit 0; fi
           npx ovsx publish "${{ steps.rel.outputs.file }}" -p "$OVSX_PAT"
-          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://open-vsx.org/extension/localpilot/localpilot"
+          echo "::notice::Published ${{ steps.rel.outputs.tag }} to https://open-vsx.org/extension/localpilot/localpilot-agent"
