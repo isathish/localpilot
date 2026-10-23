@@ -219,7 +219,7 @@ export const manageTodosTool: Tool = {
   definition: {
     name: 'manage_todos',
     description:
-      'Create or update the task checklist shown to the user. Call it at the start of any multi-step task with all steps as "pending", then again whenever a step starts ("in_progress") or finishes ("done"). Always send the complete list. Keep 3–10 concise, outcome-oriented items. Items that are independent of each other can carry "agent" + "prompt" so run_todos_parallel executes them concurrently as subagents; leave agent/prompt off items you will do yourself or that depend on earlier ones.',
+      'Create or update the task checklist shown to the user. Call it at the start of any multi-step task with all steps as "pending", then again whenever a step starts ("in_progress") or finishes ("done"). Always send the complete list. Keep 3–10 concise, outcome-oriented items. Give items an "agent" + "prompt" so run_todos_parallel executes them as subagents; use "dependsOn" (ids) for ordering — independent items run concurrently, dependent ones wait for their prerequisites. Leave agent/prompt off only for items you must do yourself.',
     parameters: {
       type: 'object',
       properties: {
@@ -233,6 +233,7 @@ export const manageTodosTool: Tool = {
               status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'skipped'] },
               agent: { type: 'string', description: 'Optional subagent to delegate this item to (e.g. "coder", "tester", "explore")' },
               prompt: { type: 'string', description: 'Optional self-contained brief for the subagent: goal, files/symbols, constraints, what to return' },
+              dependsOn: { type: 'array', items: { type: 'string' }, description: 'Ids of items that must finish first (omit for independent items)' },
               model: { type: 'string', description: 'Optional provider/model override for the delegated item' },
             },
             required: ['id', 'title', 'status'],
@@ -247,14 +248,16 @@ export const manageTodosTool: Tool = {
       return { content: 'Todo list is not available in this context.' };
     }
     const previous = new Map(ctx.todos.get().map((t) => [t.id, t]));
-    const items = Array.isArray(args.todos) ? (args.todos as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown }[]) : [];
+    const items = Array.isArray(args.todos) ? (args.todos as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown; dependsOn?: unknown }[]) : [];
     const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+    const ids = new Set(items.map((t, i) => String(t.id ?? i + 1)));
     const clean: TodoItem[] = items
       .filter((t) => typeof t.title === 'string' && t.title.trim())
       .slice(0, 20)
       .map((t, i) => {
         const id = String(t.id ?? i + 1);
         const old = previous.get(id);
+        const deps = Array.isArray(t.dependsOn) ? (t.dependsOn as unknown[]).map(String).filter((d) => d !== id && ids.has(d)) : undefined;
         return {
           id,
           title: String(t.title).trim().slice(0, 160),
@@ -262,14 +265,15 @@ export const manageTodosTool: Tool = {
           agent: str(t.agent, 40) ?? old?.agent,
           prompt: str(t.prompt, 4000) ?? old?.prompt,
           model: str(t.model, 120) ?? old?.model,
+          dependsOn: deps?.length ? [...new Set(deps)] : deps ? undefined : old?.dependsOn,
           result: old?.result,
         };
       });
     ctx.todos.set(clean);
     const done = clean.filter((t) => t.status === 'done').length;
-    const delegable = clean.filter((t) => t.status === 'pending' && t.agent && t.prompt).length;
+    const delegable = clean.filter((t) => t.status === 'pending' && t.agent).length;
     return {
-      content: `Todo list updated: ${done}/${clean.length} done.\n${clean.map((t) => `[${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '>' : t.status === 'skipped' ? '-' : ' '}] ${t.id}. ${t.title}${t.agent ? ` → ${t.agent}` : ''}`).join('\n')}${delegable ? `\n${delegable} item${delegable === 1 ? '' : 's'} can run concurrently with run_todos_parallel.` : ''}`,
+      content: `Todo list updated: ${done}/${clean.length} done.\n${clean.map((t) => `[${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '>' : t.status === 'skipped' ? '-' : ' '}] ${t.id}. ${t.title}${t.agent ? ` → ${t.agent}` : ''}${t.dependsOn?.length ? ` (after ${t.dependsOn.join(', ')})` : ''}`).join('\n')}${delegable ? `\n${delegable} item${delegable === 1 ? '' : 's'} can run as subagents with run_todos_parallel (independent items concurrently, dependents in later waves).` : ''}`,
     };
   },
 };

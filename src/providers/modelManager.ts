@@ -171,7 +171,8 @@ export interface InstallScript {
  * - Windows: winget → else download OllamaSetup.exe and run it silently; the installer starts the tray app.
  * - Linux: official install.sh via curl or wget (asks for sudo in the terminal); starts `ollama serve` if there is no systemd.
  */
-export function ollamaInstallCommand(platform: NodeJS.Platform = process.platform): InstallScript {
+export function ollamaInstallCommand(platform: NodeJS.Platform = process.platform, parallelSlots = 1): InstallScript {
+  const slots = Math.max(1, Math.min(4, Math.round(parallelSlots || 1)));
   if (platform === 'darwin') {
     const script = [
       'set +e',
@@ -181,6 +182,7 @@ export function ollamaInstallCommand(platform: NodeJS.Platform = process.platfor
       '  echo "LocalPilot: Homebrew not available or failed — downloading the official build"',
       '  curl -fL --progress-bar https://ollama.com/download/Ollama-darwin.zip -o /tmp/Ollama-darwin.zip && ditto -x -k /tmp/Ollama-darwin.zip /Applications && rm -f /tmp/Ollama-darwin.zip',
       'fi',
+      `launchctl setenv OLLAMA_NUM_PARALLEL ${slots} 2>/dev/null || true`,
       'if [ -d /Applications/Ollama.app ] || [ -d "$HOME/Applications/Ollama.app" ]; then open -a Ollama && echo "LocalPilot: Ollama ready"; else echo "LocalPilot: Ollama install failed — download it from https://ollama.com/download"; fi',
     ].join('\n');
     return { command: script, shellPath: '/bin/bash', note: 'Homebrew cask when available, otherwise the official download into /Applications.' };
@@ -191,6 +193,7 @@ export function ollamaInstallCommand(platform: NodeJS.Platform = process.platfor
       '$ok = $false',
       'if (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements --silent; if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) { $ok = $true } }',
       'if (-not $ok) { Write-Host "LocalPilot: winget not available or failed - downloading the official installer"; $f = Join-Path $env:TEMP "OllamaSetup.exe"; Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $f -UseBasicParsing; Start-Process -FilePath $f -ArgumentList "/VERYSILENT","/NORESTART","/SP-" -Wait; $ok = Test-Path (Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama.exe") }',
+      `$env:OLLAMA_NUM_PARALLEL = "${slots}"; [Environment]::SetEnvironmentVariable("OLLAMA_NUM_PARALLEL", "${slots}", "User")`,
       '$app = Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama app.exe"; if ($ok -and (Test-Path $app)) { Start-Process -FilePath $app }',
       'if ($ok) { Write-Host "LocalPilot: Ollama ready" } else { Write-Host "LocalPilot: Ollama install failed - download it from https://ollama.com/download" }',
     ].join('; ');
@@ -201,7 +204,7 @@ export function ollamaInstallCommand(platform: NodeJS.Platform = process.platfor
     'echo "LocalPilot: installing Ollama (the official script asks for sudo)…"',
     'if command -v curl >/dev/null 2>&1; then curl -fsSL https://ollama.com/install.sh | sh; elif command -v wget >/dev/null 2>&1; then wget -qO- https://ollama.com/install.sh | sh; else echo "LocalPilot: need curl or wget"; fi',
     'if command -v ollama >/dev/null 2>&1 || [ -x /usr/local/bin/ollama ]; then',
-    '  if ! (command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ollama 2>/dev/null); then (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; fi',
+    `  if ! (command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ollama 2>/dev/null); then (OLLAMA_NUM_PARALLEL=${slots} nohup ollama serve >/tmp/ollama.log 2>&1 &) ; fi`,
     '  echo "LocalPilot: Ollama ready"',
     'else echo "LocalPilot: Ollama install failed — see https://ollama.com/download/linux"; fi',
   ].join('\n');
@@ -463,7 +466,20 @@ export class ModelManager implements vscode.Disposable {
 
   // ------------------------------------------------------------------ Ollama lifecycle
 
-  /** Starts the Ollama server (menu-bar app on macOS/Windows, `ollama serve` otherwise) and waits until it answers. */
+  /**
+   * Environment for an Ollama server started by LocalPilot. Ollama answers one request per model at a time
+   * unless `OLLAMA_NUM_PARALLEL` says otherwise, which would make parallel subagents queue behind each other.
+   */
+  static ollamaServerEnv(): Record<string, string> {
+    return { OLLAMA_NUM_PARALLEL: String(ModelManager.ollamaParallelSlots()) };
+  }
+
+  /** Parallel slots to ask Ollama for: the configured subagent concurrency, clamped to what a local machine can hold. */
+  static ollamaParallelSlots(): number {
+    return Math.max(1, Math.min(4, Math.round(getConfig().parallel.maxConcurrency || 1)));
+  }
+
+  /** Starts the Ollama server (menu-bar app on macOS/Windows, `ollama serve` otherwise) with parallel slots and waits until it answers. */
   async startOllama(): Promise<ModelJob> {
     const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…');
     const { baseUrl } = this.ollamaBase();
@@ -472,15 +488,20 @@ export class ModelManager implements vscode.Disposable {
       if (await up()) {
         return this.finish(job, 'done');
       }
+      const env = { ...process.env, ...ModelManager.ollamaServerEnv() };
       const bin = await findOllamaBinary();
       let launched = false;
       if (process.platform === 'darwin') {
+        // The menu-bar app reads its environment from launchd, not from `open`.
+        for (const [k, v] of Object.entries(ModelManager.ollamaServerEnv())) {
+          await which('launchctl', ['setenv', k, v], 4000);
+        }
         launched = await which('open', ['-a', 'Ollama'], 6000);
       } else if (process.platform === 'win32' && bin && bin !== 'ollama') {
         // The tray app ("ollama app.exe") sits next to the CLI and starts the server; fall back to `ollama serve`.
         const app = path.join(path.dirname(bin), 'ollama app.exe');
         launched = await fs.access(app).then(() => {
-          const child = cp.spawn(app, [], { detached: true, stdio: 'ignore' });
+          const child = cp.spawn(app, [], { detached: true, stdio: 'ignore', env });
           child.on('error', () => undefined);
           child.unref();
           return true;
@@ -488,9 +509,10 @@ export class ModelManager implements vscode.Disposable {
       }
       if (!launched && bin) {
         try {
-          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' && bin === 'ollama' });
+          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', env, shell: process.platform === 'win32' && bin === 'ollama' });
           child.on('error', () => undefined);
           child.unref();
+          this.servePid = child.pid;
           launched = true;
         } catch {
           launched = false;
@@ -513,6 +535,51 @@ export class ModelManager implements vscode.Disposable {
     } catch (e) {
       return this.finish(job, 'error', e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /** pid of an `ollama serve` LocalPilot spawned itself, so it can be restarted with new settings. */
+  private servePid?: number;
+
+  /**
+   * Restarts a local Ollama so it picks up `OLLAMA_NUM_PARALLEL` (parallel subagents otherwise queue behind each
+   * other). Stops the server LocalPilot started, the macOS/Windows app, or a plain `ollama serve`; a systemd-managed
+   * Ollama on Linux cannot be reconfigured from here and gets instructions instead.
+   */
+  async restartOllamaWithParallelSlots(): Promise<ModelJob> {
+    const { baseUrl } = this.ollamaBase();
+    if (!/localhost|127\.0\.0\.1|\[::1\]/.test(baseUrl)) {
+      const job = this.start('start', 'ollama', 'Ollama', 'Restarting Ollama…');
+      return this.finish(job, 'error', `Ollama at ${baseUrl} is not on this machine — set OLLAMA_NUM_PARALLEL=${ModelManager.ollamaParallelSlots()} in its environment and restart it there.`);
+    }
+    if (process.platform === 'linux' && (await which('systemctl', ['is-active', '--quiet', 'ollama'], 3000))) {
+      const job = this.start('start', 'ollama', 'Ollama', 'Restarting Ollama…');
+      return this.finish(
+        job,
+        'error',
+        `Ollama runs as a systemd service. Run: sudo systemctl edit ollama  → add  [Service]\\nEnvironment="OLLAMA_NUM_PARALLEL=${ModelManager.ollamaParallelSlots()}"  → sudo systemctl restart ollama`
+      );
+    }
+    const up = () => createProvider({ id: 'probe', type: 'ollama', baseUrl }).healthCheck().catch(() => false);
+    if (this.servePid) {
+      try {
+        process.kill(this.servePid);
+      } catch {
+        /* already gone */
+      }
+      this.servePid = undefined;
+    } else if (process.platform === 'darwin') {
+      await which('osascript', ['-e', 'tell application "Ollama" to quit'], 6000);
+      await which('pkill', ['-x', 'ollama'], 4000);
+    } else if (process.platform === 'win32') {
+      await which('taskkill', ['/F', '/IM', 'ollama app.exe'], 6000);
+      await which('taskkill', ['/F', '/IM', 'ollama.exe'], 6000);
+    } else {
+      await which('pkill', ['-x', 'ollama'], 4000);
+    }
+    for (let i = 0; i < 20 && (await up()); i++) {
+      await sleep(500);
+    }
+    return this.startOllama();
   }
 
   /**
@@ -622,7 +689,7 @@ export class ModelManager implements vscode.Disposable {
   /** Interactive fallback: runs the platform installer script in a visible terminal and waits for the server. */
   private async installOllamaInTerminal(job: ModelJob, reason: string): Promise<ModelJob> {
     this.update(job, { progress: -1, detail: `Background install failed (${reason}) — running the installer in a terminal…` });
-    const script = ollamaInstallCommand();
+    const script = ollamaInstallCommand(process.platform, ModelManager.ollamaParallelSlots());
     const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama', shellPath: script.shellPath, shellArgs: script.shellArgs });
     term.show(true);
     // Give the shell a moment to start before pasting the script (PowerShell in particular drops early input).

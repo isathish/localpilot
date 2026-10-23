@@ -20,6 +20,7 @@ import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/bro
 import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
 import { fsTools } from './tools/fs';
+import { createAnalyzeWorkspaceTool } from './tools/workspace';
 import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
 import { terminalTools } from './tools/terminal';
@@ -35,6 +36,7 @@ import { setIntegratedTerminalRunner } from './tools/terminal';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { LocalModelChatProvider } from './ui/lmProvider';
+import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
@@ -89,8 +91,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store)]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
+  const markdownViewer = new MarkdownViewer(context, log);
+  controller.markdownViewer = markdownViewer;
+  context.subscriptions.push(markdownViewer);
+  tools.register(createShowMarkdownTool(markdownViewer, (p) => (path.isAbsolute(p) ? vscode.Uri.file(p) : workspace.root ? vscode.Uri.joinPath(vscode.Uri.file(workspace.root), p) : undefined)));
 
   await Promise.all([store.load(), skills.refresh()]);
   void mcp.reload();
@@ -253,6 +259,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const cmd = (id: string, fn: (...a: unknown[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
   cmd('localpilot.openSettings', (section?: unknown) => settingsPanel.show('settings', typeof section === 'string' ? (section as SettingsSection) : undefined));
+  cmd('localpilot.openMarkdownViewer', async (arg?: unknown) => {
+    // Explorer / editor-title pass a Uri; the palette uses the active editor.
+    const uri = arg instanceof vscode.Uri ? arg : vscode.window.activeTextEditor?.document.uri;
+    if (!uri) {
+      void vscode.window.showInformationMessage('Open a Markdown file first, or use "Open as document" on a chat answer.');
+      return;
+    }
+    await markdownViewer.showFile(uri);
+  });
   cmd('localpilot.manageProviders', () => settingsPanel.show('settings', 'providers'));
   cmd('localpilot.openWelcome', () => settingsPanel.show('setup'));
   cmd('localpilot.clearMemory', async () => {
@@ -501,6 +516,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
   });
   cmd('localpilot.manageModels', () => settingsPanel.show('settings', 'models'));
+  cmd('localpilot.enableOllamaParallel', async () => {
+    const slots = ModelManager.ollamaParallelSlots();
+    const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());
+    if (job.status === 'done') {
+      void vscode.window.showInformationMessage(`Ollama now serves up to ${slots} requests at once, so parallel subagents run concurrently. Lower localpilot.parallel.maxConcurrency if memory gets tight.`);
+    } else if (job.status === 'error') {
+      void vscode.window.showWarningMessage(job.error ?? 'Could not restart Ollama.', 'Open docs').then((p) => p && vscode.env.openExternal(vscode.Uri.parse('https://isathish.github.io/localpilot/docs/parallel-agents/#parallel-requests')));
+    }
+    return job;
+  });
+  // The runner noticed concurrent requests queuing at the server (Ollama's default is one slot per model).
+  runner.onSerialServer = (model) => {
+    const provider = getConfig().providers.find((p) => p.id === model.providerId);
+    const isOllama = provider?.type === 'ollama';
+    const msg = `${model.name} is answering one request at a time, so parallel subagents are queuing instead of running concurrently.${isOllama ? ` LocalPilot can restart Ollama with ${ModelManager.ollamaParallelSlots()} parallel slots.` : ' Enable parallel requests on the server (e.g. OLLAMA_NUM_PARALLEL, or more replicas) to speed this up.'}`;
+    void vscode.window.showWarningMessage(msg, ...(isOllama ? ['Restart Ollama with parallel slots'] : []), 'Learn more').then((p) => {
+      if (p === 'Restart Ollama with parallel slots') {
+        void vscode.commands.executeCommand('localpilot.enableOllamaParallel');
+      } else if (p === 'Learn more') {
+        void vscode.env.openExternal(vscode.Uri.parse('https://isathish.github.io/localpilot/docs/parallel-agents/#parallel-requests'));
+      }
+    });
+  };
   cmd('localpilot.autoSetupModels', async (arg?: unknown) => {
     const o = (arg && typeof arg === 'object' ? arg : {}) as { installRuntime?: boolean; target?: InstallTarget; force?: boolean };
     const profile = await getSystemProfile();

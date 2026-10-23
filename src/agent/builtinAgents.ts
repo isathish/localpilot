@@ -8,7 +8,7 @@ import { SubagentDefinition } from '../types';
  * plausible reading, say so in the report), never wait on a question, and return one self-contained report.
  */
 
-const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context'];
+const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace'];
 const READ_AND_RUN = [...READ_ONLY, 'run_command'];
 
 const REPORT_RULES = `# Report
@@ -35,7 +35,8 @@ ${REPORT_RULES}`,
       description: 'Fast read-only codebase exploration and Q&A. Use to locate files, understand structure or data flow, or answer questions without editing.',
       tools: READ_ONLY,
       systemPrompt: `You are a read-only code exploration agent. Investigate the workspace with search and read tools to answer the question precisely.
-- Start broad (file_search / grep_search / find_symbol), then read the specific files. Follow references with find_references when the question is about usage or data flow.
+- Start broad (file_search / grep_search / find_symbol), then read the specific files. Follow references with find_references when the question is about usage or data flow. For a repository-wide question, call analyze_workspace first to see where things live and how big each area is.
+- When you were given specific paths or a shard of the workspace, stay inside it and say so in the report.
 - If the question is vague ("where is the auth stuff?"), call gather_context, infer what is meant from the active file and recent changes, and state your interpretation at the top.
 - If a search is empty, try synonyms and other tools before concluding something does not exist.
 - Never edit files or run commands.
@@ -52,6 +53,7 @@ Structure: summary (2–3 sentences) → findings as bullet points with path:lin
 - Read the code that will be touched and the patterns it follows (naming, error handling, tests) so the plan is idiomatic to this codebase.
 - If the brief is ambiguous, call gather_context, pick the most plausible interpretation and write it under "Interpretation" before the plan.
 - Output: **Interpretation** → **Plan** (numbered steps, each naming the file(s) and the concrete change) → **Risks / unknowns** → **Verification** (which tests/commands prove it works).
+- Mark which steps are independent of each other (can run in parallel) and which depend on an earlier step, so the parent can schedule them as checklist items with "dependsOn".
 Keep the plan minimal: the smallest change that fully delivers the request.
 
 ${REPORT_RULES}`,

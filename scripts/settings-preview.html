@@ -36,6 +36,7 @@ const providers = [
   { id: 'docker-lp-ollama', type: 'ollama', baseUrl: 'http://localhost:11435', displayName: 'Ollama (Docker · lp-ollama)', enabled: false },
 ];
 const models = [
+  { id: 'ollama/gemma4:e4b', providerId: 'ollama', modelId: 'gemma4:e4b', name: 'gemma4:e4b', contextWindow: 131072, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, supportsFim: false },
   { id: 'ollama/qwen2.5-coder:7b', providerId: 'ollama', modelId: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
   { id: 'ollama/qwen2.5-coder:1.5b', providerId: 'ollama', modelId: 'qwen2.5-coder:1.5b', name: 'qwen2.5-coder:1.5b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
   { id: 'docker/docker.io/ai/smollm2:latest', providerId: 'docker', modelId: 'docker.io/ai/smollm2:latest', name: 'smollm2:latest', contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false },
@@ -67,7 +68,7 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
   ] }), 300);
   if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
   if (m.type === 'loadModels') setTimeout(() => {
-    const installed = models.map(m => ({ ...m, gb: m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: 'ok', autoRoles: m.supportsVision ? ['vision'] : m.name.includes('7b') ? ['agent'] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
+    const installed = models.map(m => ({ ...m, gb: m.name.includes('gemma4') ? 6.6 : m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: 'ok', autoRoles: m.name.includes('gemma4') ? ['agent', 'vision'] : m.supportsVision ? [] : m.name.includes('7b') ? [] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('gemma4') ? { key: 'gemma4', name: 'Gemma 4', vendor: 'Google DeepMind', tag: 'e4b' } : m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', vendor: 'Alibaba', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
     const cat = (key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, rec, inst, targets) => ({ key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, recommendedFor: rec, installed: inst, targets });
     send({ type: 'models', models: {
       system: { platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 36, gpu: 'Apple M3 Pro', unifiedMemory: true, modelBudgetGb: 24, tier: 'large', summary: 'Apple M3 Pro · 36 GB unified memory' },
@@ -78,6 +79,10 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
       ],
       installed,
       catalog: [
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], 'e2b', 2.3, 4.6, true, false, [], [], [{ target: 'ollama', id: 'gemma4:e2b' }, { target: 'docker', id: 'ai/gemma4:e2b' }, { target: 'lmstudio', id: 'lmstudio-community/gemma-4-E2B-it-GGUF' }]),
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], 'e4b', 4.5, 6.6, true, false, ['agent', 'vision', 'reasoning'], ['ollama/gemma4:e4b'], [{ target: 'ollama', id: 'gemma4:e4b' }, { target: 'docker', id: 'ai/gemma4:e4b' }]),
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], '12b', 12, 8.0, true, false, [], [], [{ target: 'ollama', id: 'gemma4:12b' }, { target: 'docker', id: 'ai/gemma4' }]),
+        cat('nemotron-3.5-bolt', 'Nemotron 3.5 Bolt', 'NVIDIA', 'Compact frontier vision-language model for local coding, reasoning and tool use.', ['agent', 'vision', 'reasoning'], 'e4b', 4.5, 7.2, true, false, ['agent'], [], [{ target: 'ollama', id: 'nemotron-3.5-bolt:e4b' }]),
         cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '1.5b', 1.5, 1.0, true, false, ['completion'], ['ollama/qwen2.5-coder:1.5b'], [{ target: 'ollama', id: 'qwen2.5-coder:1.5b' }, { target: 'lmstudio', id: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF' }]),
         cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '7b', 7, 4.7, true, false, ['agent'], ['ollama/qwen2.5-coder:7b'], [{ target: 'ollama', id: 'qwen2.5-coder:7b' }, { target: 'docker', id: 'ai/qwen2.5-coder' }]),
         cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '14b', 14, 9.0, true, false, [], [], [{ target: 'ollama', id: 'qwen2.5-coder:14b' }]),
@@ -91,7 +96,7 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
         { id: 'j1', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:14b', status: 'running', progress: 0.42, detail: '3.8 GB / 9.0 GB · 12 MB/s', startedAt: Date.now() - 60000 },
         { id: 'j0', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:7b', status: 'done', progress: 1, detail: 'Installed', startedAt: Date.now() - 600000, finishedAt: Date.now() - 300000 },
       ],
-      starter: { agent: 'qwen2.5-coder:7b', completion: 'qwen2.5-coder:1.5b', vision: 'qwen2.5vl:7b' },
+      starter: { agent: 'gemma4:e4b', completion: 'starcoder2:3b' },
     } });
   }, 200);
 } });

@@ -147,6 +147,8 @@ export interface ToolContext {
   depth: number;
   /** `provider/model` answering the current turn (subagents inherit it unless routed elsewhere). */
   modelRef?: string;
+  /** True in Plan/Ask mode: subagents spawned from here must not mutate the workspace either. */
+  readOnly?: boolean;
 }
 
 export interface ToolResult {
@@ -222,6 +224,8 @@ export interface TodoItem {
   prompt?: string;
   /** Optional provider/model override for the delegated item. */
   model?: string;
+  /** Ids of items that must be done first; run_todos_parallel schedules items in dependency waves. */
+  dependsOn?: string[];
   /** Delegated item's report (truncated), filled in by run_todos_parallel. */
   result?: string;
 }

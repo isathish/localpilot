@@ -74,6 +74,7 @@ export type FromWebview =
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
   | { type: 'runParallelPrompt' }
   | { type: 'dismissSkillTopic'; topic: string }
+  | { type: 'openMarkdown'; text: string; title?: string }
   | { type: 'copyText'; text: string };
 
 interface Sink {
@@ -99,6 +100,8 @@ export class ChatController implements vscode.Disposable {
 
   /** Skill usage/recurrence tracker (set by the extension host). */
   learner?: SkillLearner;
+  /** Rendered Markdown reader for long answers and generated documents (set by the extension host). */
+  markdownViewer?: { showText(text: string, title?: string): Promise<void> };
 
   constructor(
     readonly store: SessionStore,
@@ -248,6 +251,16 @@ export class ChatController implements vscode.Disposable {
       case 'dismissSkillTopic':
         await this.learner?.dismiss(msg.topic);
         return;
+      case 'openMarkdown': {
+        const title = msg.title?.trim() || this.store.get(this.activeSessionId ?? '')?.title || 'Answer';
+        if (this.markdownViewer) {
+          await this.markdownViewer.showText(msg.text, title.slice(0, 80));
+        } else {
+          const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: msg.text });
+          await vscode.window.showTextDocument(doc, { preview: false });
+        }
+        return;
+      }
       case 'stop':
         return this.stop(msg.sessionId);
       case 'approval': {
@@ -560,7 +573,7 @@ export class ChatController implements vscode.Disposable {
       try {
         const { model } = await this.providers.resolve(session.model);
         if (!model.supportsVision) {
-          this.broadcast({ type: 'toast', level: 'error', text: `${model.name} cannot read images — pick a vision model (qwen2.5vl, llava, gemma3, pixtral…)` });
+          this.broadcast({ type: 'toast', level: 'error', text: `${model.name} cannot read images — pick a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl, llava…)` });
           return '';
         }
       } catch {

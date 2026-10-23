@@ -34,7 +34,7 @@ export interface ManagedModel extends ModelInfo {
   /** Roles the router would currently pick this model for (with no overrides). */
   autoRoles: ('agent' | 'completion' | 'vision' | 'reasoning' | 'fast')[];
   /** Catalog family/size if recognised. */
-  catalog?: { key: string; name: string; tag: string };
+  catalog?: { key: string; name: string; vendor: string; tag: string };
   /** Runtime that can delete it, if any. */
   removable?: InstallTarget;
 }
@@ -385,7 +385,7 @@ export class SettingsPanel implements vscode.Disposable {
         gb,
         fit: gb === undefined ? 'unknown' : gb <= system.modelBudgetGb ? 'ok' : gb <= system.modelBudgetGb * 1.25 ? 'tight' : 'over',
         autoRoles: (['agent', 'completion', 'vision', 'fast'] as const).filter((r) => auto[r] === m.id),
-        catalog: cat ? { key: cat.entry.key, name: cat.entry.name, tag: cat.variant.tag } : undefined,
+        catalog: cat ? { key: cat.entry.key, name: cat.entry.name, vendor: cat.entry.vendor, tag: cat.variant.tag } : undefined,
         removable: rt?.target,
       };
     });

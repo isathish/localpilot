@@ -44,10 +44,40 @@ const q = (n: number) => Math.round(n * 10) / 10;
  */
 export const MODEL_CATALOG: CatalogEntry[] = [
   {
+    key: 'gemma4',
+    name: 'Gemma 4',
+    vendor: 'Google DeepMind',
+    description:
+      'Frontier-class small models: native tool calling, vision and optional thinking in every size. e2b/e4b are the recommended starters (one model for agent + screenshots); 12b is the workstation step up, 26b is a fast MoE (4b active).',
+    roles: ['agent', 'vision', 'reasoning'],
+    supportsTools: true,
+    supportsFim: false,
+    supportsVision: true,
+    defaultVariant: 1,
+    variants: [
+      { tag: 'e2b', paramsB: 2.3, gb: 4.6, ollama: 'gemma4:e2b', docker: 'ai/gemma4:e2b', lmstudio: 'lmstudio-community/gemma-4-E2B-it-GGUF' },
+      { tag: 'e4b', paramsB: 4.5, gb: 6.6, ollama: 'gemma4:e4b', docker: 'ai/gemma4:e4b', lmstudio: 'lmstudio-community/gemma-4-E4B-it-GGUF' },
+      { tag: '12b', paramsB: 12, gb: 8.0, ollama: 'gemma4:12b', docker: 'ai/gemma4', lmstudio: 'lmstudio-community/gemma-4-12B-it-GGUF' },
+      { tag: '26b-a4b', paramsB: 26, gb: 16, ollama: 'gemma4:26b', docker: 'ai/gemma4:26b-a4b', lmstudio: 'lmstudio-community/gemma-4-26B-A4B-it-GGUF' },
+      { tag: '31b', paramsB: 31, gb: 19, ollama: 'gemma4:31b', docker: 'ai/gemma4:31b', lmstudio: 'lmstudio-community/gemma-4-31B-it-GGUF' },
+    ],
+  },
+  {
+    key: 'nemotron-3.5-bolt',
+    name: 'Nemotron 3.5 Bolt',
+    vendor: 'NVIDIA',
+    description: 'Compact frontier vision-language model for local coding, reasoning and tool use; 128k context. A strong alternative to Gemma 4 e4b.',
+    roles: ['agent', 'vision', 'reasoning'],
+    supportsTools: true,
+    supportsFim: false,
+    supportsVision: true,
+    variants: [{ tag: 'e4b', paramsB: 4.5, gb: 7.2, ollama: 'nemotron-3.5-bolt:e4b', lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF' }],
+  },
+  {
     key: 'qwen2.5-coder',
     name: 'Qwen2.5 Coder',
     vendor: 'Alibaba',
-    description: 'Best all-round coding family: native tool calling and fill-in-the-middle. The 7b is the recommended starter; 1.5b makes a snappy completion model.',
+    description: 'Coding family with native tool calling and fill-in-the-middle. Mostly useful today as a completion model; Gemma 4 is the better agent at the same size.',
     roles: ['agent', 'completion'],
     supportsTools: true,
     supportsFim: true,
@@ -261,34 +291,37 @@ export function installId(pick: CatalogPick, target: InstallTarget): string | un
 }
 
 /**
- * Smallest-first starter set for a machine: a tool-capable coder model that leaves headroom, plus a tiny
- * completion model when both fit at once. Bigger models are an explicit upgrade from the catalog.
+ * Smallest-first starter set for a machine: the smallest Gemma 4 that runs (tools + vision in one model), plus a
+ * tiny completion model when both fit at once. Machines too small for Gemma 4 e2b get a tiny tool-capable Llama.
+ * Bigger models are an explicit upgrade from the catalog.
  */
 export function starterPlan(profile: SystemProfile): { agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick } {
-  const coder = MODEL_CATALOG.find((e) => e.key === 'qwen2.5-coder')!;
+  const gemma4 = MODEL_CATALOG.find((e) => e.key === 'gemma4')!;
+  const llama = MODEL_CATALOG.find((e) => e.key === 'llama3.2')!;
+  const smol = MODEL_CATALOG.find((e) => e.key === 'smollm2')!;
   const pick = (e: CatalogEntry, tag: string): CatalogPick => ({ entry: e, variant: e.variants.find((v) => v.tag === tag)! });
-  // Starter agent model by budget. Keep ~40% headroom so the OS, editor and KV cache fit alongside it.
+  // Starter agent model by budget. Keep ~30% headroom so the OS, editor and KV cache fit alongside it; the one
+  // exception is e2b on 8 GB machines (budget 4 GB), where a slightly tight Gemma 4 beats a weaker tiny model.
   const budget = profile.modelBudgetGb;
   let agent: CatalogPick;
-  if (budget >= 8) {
-    agent = pick(coder, '7b');
-  } else if (budget >= 3.5) {
-    agent = pick(coder, '3b');
-  } else if (budget >= 1.8) {
-    agent = pick(coder, '1.5b');
+  if (budget >= 9) {
+    agent = pick(gemma4, 'e4b');
+  } else if (budget >= 4) {
+    agent = pick(gemma4, 'e2b');
+  } else if (budget >= 2.5) {
+    agent = pick(llama, '3b');
+  } else if (budget >= 1.5) {
+    agent = pick(llama, '1b');
   } else {
-    agent = pick(coder, '0.5b');
+    agent = pick(smol, '360m');
   }
   const out: { agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick } = { agent };
-  const small = pick(coder, '1.5b');
-  if (agent.variant.gb + small.variant.gb <= budget && agent.variant.tag !== '1.5b' && agent.variant.tag !== '0.5b') {
+  const small = pick(MODEL_CATALOG.find((e) => e.key === 'starcoder2')!, '3b');
+  if (agent.entry === gemma4 && agent.variant.gb + small.variant.gb <= budget) {
     out.completion = small;
   }
-  const gemma = MODEL_CATALOG.find((e) => e.key === 'gemma3')!;
-  const vision = pick(gemma, '4b');
-  if (budget >= 16 && agent.variant.gb + (out.completion?.variant.gb ?? 0) + vision.variant.gb <= budget) {
-    out.vision = vision;
-  }
+  // Gemma 4 reads images itself; only the tiny fallbacks would need a separate vision model, and those machines
+  // have no room for one.
   return out;
 }
 

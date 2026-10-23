@@ -233,6 +233,9 @@ export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProf
   let s = fit * 8;
   if (role === 'vision') {
     s += m.supportsVision ? 30 : -50;
+    // A vision model that can also call tools keeps the agent loop going after it looks at a screenshot.
+    s += m.supportsTools ? 5 : 0;
+    s += /gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) ? 3 : 0;
   }
   if (role === 'completion') {
     s += m.supportsFim ? 20 : -20;
@@ -245,21 +248,23 @@ export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProf
     // Must call tools; among those, smaller and coder-tuned wins. Reasoning/vision models are slow for this.
     s += m.supportsTools ? 25 : -60;
     s += gb !== undefined ? Math.max(0, 16 - gb) : 0;
-    s += /coder|devstral|codestral|qwen2\.5|qwen3|llama3|mistral|gemma|phi/.test(n) ? 3 : 0;
+    s += /coder|devstral|codestral|qwen2\.5|qwen3|llama3|mistral|gemma|phi|nemotron/.test(n) ? 3 : 0;
     s -= /base$|-base\b|:.*base/.test(n) ? 15 : 0;
     s -= /r1|reason|think|vl|llava|vision|embed/.test(n) ? 10 : 0;
   }
   if (role === 'agent' || role === 'reasoning') {
     s += m.supportsTools ? 10 : 0;
     s += /coder|devstral|codestral|gpt-oss|qwen3|mistral-small/.test(n) ? 4 : 0;
-    s += /qwen|llama|mistral|gemma|deepseek|phi|gpt-oss/.test(n) ? 2 : 0;
+    // Frontier-class small models (tools + vision + thinking) beat older coder tunes of the same size.
+    s += /gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) ? 7 : 0;
+    s += /qwen|llama|mistral|gemma|deepseek|phi|gpt-oss|nemotron/.test(n) ? 2 : 0;
     s -= /base$|-base\b|:.*base/.test(n) ? 8 : 0;
     s -= /vl|llava|vision/.test(n) ? 4 : 0;
     // Bigger is better for agent quality as long as it fits.
     const b = cat?.variant.paramsB ?? (gb !== undefined ? gb / 0.72 : 7);
     s += Math.min(b, 32) / 8;
     if (role === 'reasoning') {
-      s += /r1|qwen3|gpt-oss|think|reason/.test(n) ? 6 : 0;
+      s += /r1|qwen3|gpt-oss|gemma4|gemma-4|nemotron-3\.5|think|reason/.test(n) ? 6 : 0;
     }
   }
   return s;

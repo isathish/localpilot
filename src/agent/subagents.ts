@@ -1,7 +1,7 @@
 import { getConfig } from '../config';
 import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext } from '../types';
 import { AgentRunner, ApprovalHandler } from './agentLoop';
-import { ParallelPool } from './parallel';
+import { nextWave, ParallelPool } from './parallel';
 import { SkillManager } from './skills';
 import { newId } from '../providers/http';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
@@ -114,7 +114,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       messages: [],
       contextTokens: 0,
       compactions: 0,
-      mode: 'agent',
+      // A read-only parent (Plan/Ask) only ever spawns read-only children, whatever persona was asked for.
+      mode: ctx.readOnly ? 'ask' : 'agent',
       attachments: [],
     };
     emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined } });
@@ -147,11 +148,11 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     definition: {
       name: 'run_todos_parallel',
       description:
-        'Execute the pending checklist items that carry an "agent" and "prompt" (set them with manage_todos) as concurrent subagents, one per item, and mark each item in_progress → done/skipped as it runs. Use after splitting a large task into independent pieces: the user watches progress in the checklist while the pieces run in parallel. Items without agent/prompt, and items that depend on each other, are left for you to do in order.',
+        'Execute the pending checklist items that carry an "agent" as subagents (set agent/prompt/dependsOn with manage_todos). Independent items run concurrently; items with "dependsOn" wait for their prerequisites and receive their reports, so a whole plan runs in dependency waves with one call. Each item is marked in_progress → done/skipped as it runs and the user watches the checklist. Items without an agent are left for you to do yourself.',
       parameters: {
         type: 'object',
         properties: {
-          ids: { type: 'array', items: { type: 'string' }, description: 'Optional: only run these todo ids (default: every pending item that has agent + prompt)' },
+          ids: { type: 'array', items: { type: 'string' }, description: 'Optional: only run these todo ids (default: every pending item that has an agent)' },
         },
       },
     },
@@ -159,28 +160,83 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       if (!ctx.todos) {
         return { content: 'No checklist in this context. Call manage_todos first.', isError: true };
       }
+      if (ctx.readOnly) {
+        return { content: 'run_todos_parallel executes the plan and is only available in Agent mode. Finish the checklist here; the user can switch to Agent mode and say "implement the plan".', isError: true };
+      }
       const wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
-      const runnable = ctx.todos.get().filter((t) => t.status === 'pending' && t.agent && t.prompt && (!wanted || wanted.has(t.id)));
+      const all = ctx.todos.get();
+      const runnable = all.filter((t) => t.status === 'pending' && t.agent && (!wanted || wanted.has(t.id)));
       if (!runnable.length) {
-        return { content: 'Nothing to run: no pending todos with both "agent" and "prompt". Add them with manage_todos (e.g. {"id":"2","title":"…","status":"pending","agent":"coder","prompt":"…"}).', isError: true };
+        return { content: 'Nothing to run: no pending todos with an "agent". Add one with manage_todos (e.g. {"id":"2","title":"…","status":"pending","agent":"coder","prompt":"…","dependsOn":["1"]}).', isError: true };
       }
       const update = (id: string, patch: Partial<TodoItem>) => ctx.todos!.set(ctx.todos!.get().map((t) => (t.id === id ? { ...t, ...patch } : t)));
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
-      const settled = await pool.map(runnable, async (t) => {
-        update(t.id, { status: 'in_progress' });
-        const r = await runChild(t.agent!, `${t.prompt}\n\nThis is checklist item "${t.title}" of a larger task; stay within its scope.`, t.model, ctx);
-        update(t.id, { status: r.isError ? 'skipped' : 'done', result: r.content.slice(0, 2000) });
-        return r;
-      });
-      const out = settled.map((r, i) => {
-        const t = runnable[i];
-        const header = `## ${t.id}. ${t.title} (${t.agent})`;
-        return r.status === 'fulfilled' ? `${header}${r.value.isError ? ' — FAILED' : ''}\n${r.value.content}` : `${header} — FAILED\n${String(r.reason)}`;
-      });
-      const failed = settled.filter((r) => r.status === 'rejected' || r.value.isError).length;
+      const known = new Set(all.map((t) => t.id));
+      const satisfied = new Set(all.filter((t) => t.status === 'done').map((t) => t.id));
+      const failed = new Set(all.filter((t) => t.status === 'skipped').map((t) => t.id));
+      for (const t of runnable) {
+        for (const d of t.dependsOn ?? []) {
+          if (!known.has(d)) {
+            satisfied.add(d);
+          }
+        }
+      }
+      const checklist = all.map((t) => `${t.id}. ${t.title}${t.agent ? ` → ${t.agent}` : ''}${t.dependsOn?.length ? ` (after ${t.dependsOn.join(', ')})` : ''}`).join('\n');
+      const reports = new Map<string, string>();
+      const outcomes: { t: TodoItem; content: string; ok: boolean }[] = [];
+      let remaining = [...runnable];
+      let wave = 0;
+      while (remaining.length) {
+        const { ready, blocked, cyclic } = nextWave(remaining, satisfied, failed);
+        for (const t of blocked) {
+          const why = (t.dependsOn ?? []).filter((d) => failed.has(d));
+          update(t.id, { status: 'skipped', result: `Not run: prerequisite ${why.join(', ')} failed.` });
+          outcomes.push({ t, content: `Not run — prerequisite ${why.join(', ')} failed or was skipped.`, ok: false });
+          failed.add(t.id);
+        }
+        for (const t of cyclic) {
+          update(t.id, { status: 'skipped', result: 'Not run: circular dependsOn.' });
+          outcomes.push({ t, content: 'Not run — circular dependsOn between checklist items. Fix the dependencies with manage_todos and re-run.', ok: false });
+          failed.add(t.id);
+        }
+        remaining = remaining.filter((t) => !blocked.includes(t) && !cyclic.includes(t));
+        if (!ready.length) {
+          break;
+        }
+        wave++;
+        emit({ sessionId: ctx.sessionId, type: 'status', payload: `Running ${ready.length} checklist item${ready.length === 1 ? '' : 's'} in parallel (wave ${wave})…` });
+        const settled = await pool.map(ready, async (t) => {
+          update(t.id, { status: 'in_progress' });
+          const deps = (t.dependsOn ?? []).filter((d) => reports.has(d));
+          const depText = deps.length ? `\n\nReports from the prerequisite items you build on:\n${deps.map((d) => `### Item ${d}\n${reports.get(d)!.slice(0, 2500)}`).join('\n\n')}` : '';
+          const brief = t.prompt?.trim() || `Carry out checklist item ${t.id}: "${t.title}". Use the tools to inspect the workspace, make the change (or produce the analysis) and verify it.`;
+          const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx);
+          const ok = !r.isError;
+          update(t.id, { status: ok ? 'done' : 'skipped', result: r.content.slice(0, 2000) });
+          return r;
+        });
+        settled.forEach((r, i) => {
+          const t = ready[i];
+          const ok = r.status === 'fulfilled' && !r.value.isError;
+          const content = r.status === 'fulfilled' ? r.value.content : String(r.reason);
+          if (ok) {
+            satisfied.add(t.id);
+            reports.set(t.id, content);
+          } else {
+            failed.add(t.id);
+          }
+          outcomes.push({ t, content, ok });
+        });
+        remaining = remaining.filter((t) => !ready.includes(t));
+      }
+      const stillWaiting = remaining.map((t) => `${t.id} (waiting for ${(t.dependsOn ?? []).filter((d) => !satisfied.has(d)).join(', ')} — an item without an agent; do it yourself, then re-run)`);
+      const byId = new Map(runnable.map((t, i) => [t.id, i]));
+      outcomes.sort((a, b) => (byId.get(a.t.id) ?? 0) - (byId.get(b.t.id) ?? 0));
+      const out = outcomes.map(({ t, content, ok }) => `## ${t.id}. ${t.title} (${t.agent})${ok ? '' : ' — FAILED'}\n${content}`);
+      const failedCount = outcomes.filter((o) => !o.ok).length;
       return {
-        content: `${runnable.length - failed}/${runnable.length} items completed.${failed ? ' Failed items were marked "skipped" — redo them yourself or re-run with fixes.' : ''}\n\n${out.join('\n\n')}\n\nIntegrate the results, verify the combined change (diagnostics/tests), then update the remaining checklist items.`,
-        isError: failed === runnable.length,
+        content: `${outcomes.length - failedCount}/${runnable.length} items completed in ${wave} wave${wave === 1 ? '' : 's'}.${failedCount ? ' Failed items were marked "skipped" — redo them yourself or re-run with fixes.' : ''}${stillWaiting.length ? `\nNot started: ${stillWaiting.join('; ')}.` : ''}\n\n${out.join('\n\n')}\n\nIntegrate the results, verify the combined change (diagnostics/tests), then update the remaining checklist items.`,
+        isError: outcomes.length > 0 && failedCount === outcomes.length,
       };
     },
   };

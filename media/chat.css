@@ -353,6 +353,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .todo .title { line-height: 1.4; min-width: 0; overflow-wrap: anywhere; flex: 1; }
 .todo .todo-agent { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; margin-top: 1px; line-height: 16px; }
 .todo .todo-agent svg { width: 10px; height: 10px; }
+.todo .todo-after { margin-left: 4px; padding-left: 5px; border-left: 1px solid var(--border); opacity: .8; }
 .todo.in_progress .todo-agent { color: var(--brand); border-color: var(--brand); }
 .change { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; min-width: 0; }
 .change:hover { background: var(--tint); }

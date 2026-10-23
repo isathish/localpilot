@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- Dev harness for media/mdview.js: open in a browser, no VS Code needed. -->
+<html><head><meta charset="utf-8"><title>LocalPilot Markdown reader preview</title>
+<style>
+:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-textLink-foreground:#4daafc; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-notifications-background:#252526; --vscode-notifications-foreground:#ccc; --vscode-errorForeground:#f48771; }
+</style>
+<link rel="stylesheet" href="../media/mdview.css">
+</head><body>
+<header id="bar" class="bar">
+  <div class="meta"><b id="title">Document</b><span id="subtitle"></span></div><span class="spacer"></span>
+  <button id="toc" class="ib" title="Outline" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
+  <button id="smaller" class="ib" title="Smaller"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
+  <button id="larger" class="ib" title="Larger"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
+  <button id="copy" class="ib" title="Copy"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+  <button id="save" class="ib" title="Save as"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
+  <button id="open" class="ib" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
+</header>
+<div id="layout" class="layout"><nav id="outline" class="outline hidden"></nav><main id="doc" class="doc"><div class="loading">Rendering…</div></main></div>
+<div id="toasts"></div>
+<script>
+window.__posted = [];
+window.acquireVsCodeApi = () => ({ postMessage(m) { window.__posted.push(m); if (m.type === 'ready') { window.dispatchEvent(new MessageEvent('message', { data: { type: 'content', title: 'design.md', subtitle: 'docs/design/design.md', isFile: true, fontSize: 15, words: 412, markdown: '# x', html: `
+<h1>Dice parser — design</h1><p>Links: requirements → <a href="../requirements/dice.md">dice.md</a>, external <a href="https://example.com">example</a>, code <a href="src/dice.py:12">src/dice.py:12</a>.</p>
+<h2>Summary</h2><p>One paragraph: what we build and the <strong>shape</strong> of the solution with <code>inline code</code>.</p>
+<blockquote><p>Keep it boring.</p></blockquote>
+<h2>Architecture</h2><ul><li>Parser</li><li>Roller<ul><li>RNG</li></ul></li></ul>
+<h3>File changes</h3><table><thead><tr><th>Path</th><th>Change</th></tr></thead><tbody><tr><td>src/dice.py</td><td>edit</td></tr><tr><td>tests/test_dice.py</td><td>new</td></tr></tbody></table>
+<h2>Decisions</h2><ul class="contains-task-list"><li class="task-list-item"><input type="checkbox" checked disabled> single regex</li><li class="task-list-item"><input type="checkbox" disabled> i18n</li></ul>
+<pre><code class="language-python hljs"><span class="hljs-keyword">def</span> <span class="hljs-title function_">roll</span>(n: <span class="hljs-built_in">str</span>) -&gt; <span class="hljs-built_in">int</span>:
+    <span class="hljs-comment"># parse</span>
+    <span class="hljs-keyword">return</span> <span class="hljs-number">4</span></code></pre>
+<h2>Risks</h2><p>text</p><h2>Testing</h2><p>text</p>` } })); } }, getState() { return null; }, setState() {} });
+</script>
+<script src="../media/mdview.js"></script>
+</body></html>

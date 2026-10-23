@@ -648,8 +648,10 @@
     if (steps.children.length) { d.appendChild(steps); }
     if (m.content && m.content.trim()) {
       const body = el('div', 'body', renderMarkdown(m.content)); d.appendChild(body);
-      const act = el('div', 'actions', `<button data-act="copy" title="Copy response">${I.copy}</button>`);
-      act.onclick = () => navigator.clipboard.writeText(m.content).then(() => toast('Copied'));
+      // Long or structured answers read better in the dedicated Markdown reader.
+      const long = m.content.length > 600 || /^#{1,3}\s/m.test(m.content) || /^\|.*\|$/m.test(m.content);
+      const act = el('div', 'actions', `<button data-act="copy" title="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader">${I.open}<span>Open as document</span></button>` : ''}`);
+      act.onclick = (e) => { const b = e.target.closest('[data-act]'); if (!b) { return; } if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); return; } navigator.clipboard.writeText(m.content).then(() => toast('Copied')); };
       d.appendChild(act);
     }
     return d.children.length ? d : null;
@@ -1192,13 +1194,13 @@
     const done = todos.filter((t) => t.status === 'done').length;
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
     els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
-    const sig = `${state.session.id}|${todos.map((t) => `${t.id}:${t.status}:${t.title}:${t.agent || ''}`).join('|')}`;
+    const sig = `${state.session.id}|${todos.map((t) => `${t.id}:${t.status}:${t.title}:${t.agent || ''}:${(t.dependsOn || []).join(',')}`).join('|')}`;
     if (sig === tasksSig) { return; }
     tasksSig = sig;
     const y = els.tasksList.scrollTop;
     els.tasksList.innerHTML = '';
     for (const t of todos) {
-      const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? I.spin : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}</span>` : ''}`);
+      const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? I.spin : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent${t.dependsOn && t.dependsOn.length ? ` after ${t.dependsOn.join(', ')}` : ''}` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}${t.dependsOn && t.dependsOn.length ? `<span class="todo-after">after ${esc(t.dependsOn.join(', '))}</span>` : ''}</span>` : ''}`);
       if (t.result) { li.title = t.result.slice(0, 600); }
       els.tasksList.appendChild(li);
     }

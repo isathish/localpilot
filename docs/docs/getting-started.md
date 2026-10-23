@@ -18,8 +18,8 @@ Already have a server? LocalPilot talks to any of these out of the box (default 
 | [vLLM](https://docs.vllm.ai) / SGLang | `http://localhost:8000/v1` | GPU servers, OpenAI-compatible |
 
 ```bash
-# Ollama example
-ollama pull qwen2.5-coder:14b
+# Ollama example — Gemma 4 e4b: tools + vision + thinking in ~6.6 GB
+ollama pull gemma4:e4b
 ollama serve
 ```
 

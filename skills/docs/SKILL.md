@@ -41,4 +41,4 @@ Changelog: Keep-a-Changelog format under `Unreleased` → Added / Changed / Fixe
 - `get_diagnostics` if you edited code comments in typed languages.
 
 ## 5. Report
-- What was written/updated (files + sections), what you verified by running, and gaps you couldn't fill (e.g. needs a screenshot or a decision).
+- Open the main page you wrote with `show_markdown` so the user can read it rendered, then list what was written/updated (files + sections), what you verified by running, and gaps you couldn't fill (e.g. needs a screenshot or a decision).

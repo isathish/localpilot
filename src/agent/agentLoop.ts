@@ -46,11 +46,23 @@ const FIRST_TOKEN_TIMEOUT_MS = 180_000;
 const IDLE_TIMEOUT_MS = 90_000;
 /** The same tool with the same arguments this many times in one turn is a loop, not progress. */
 const MAX_IDENTICAL_CALLS = 3;
+/** Queued requests wait for the ones ahead of them; the first-token budget grows with the queue, up to this. */
+const FIRST_TOKEN_TIMEOUT_MAX_MS = 15 * 60_000;
+/** "implement the plan", "run the checklist", "go ahead with it"… — the plan's checklist should now be executed. */
+const IMPLEMENT_PLAN = /\b(implement|execute|run|start|apply|build|do|carry out|go ahead with|proceed with|kick off)\b[^.!?]{0,40}\b(plan|checklist|todos?|steps|items|tasks)\b|^\s*(go ahead|proceed|do it|go|make it so|implement|execute)[\s!.]*$/i;
+/** A request that waited this long for its first token while another request on the same model finished first was queued server-side. */
+const SERIAL_DETECT_MS = 8_000;
 
 /** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
 export class AgentRunner {
   /** Sessions currently streaming from each model id — lets a waiting chat say *why* it is waiting (local servers serve one request per model at a time). */
   private readonly inflight = new Map<string, Set<string>>();
+  /** When the last request to each model id finished — used to notice a server that answers one request at a time. */
+  private readonly lastFinished = new Map<string, number>();
+  /** Model ids already flagged as served serially, so the user is told once. */
+  private readonly serialWarned = new Set<string>();
+  /** Called once per model when concurrent requests are observed to queue at the server. */
+  onSerialServer?: (model: { id: string; name: string; providerId: string }) => void;
 
   constructor(
     private readonly providers: ProviderRegistry,
@@ -127,6 +139,20 @@ export class AgentRunner {
       }
     }
 
+    // "Implement the plan": the checklist already holds delegable items, so make the fan-out the first step
+    // instead of hoping the model remembers run_todos_parallel.
+    if (depth === 0 && session.mode === 'agent' && !o.roleOverride) {
+      const delegable = (session.todos ?? []).filter((t) => t.status === 'pending' && t.agent);
+      if (delegable.length && isImplementPlanRequest(userText(o.userMessage.content))) {
+        session.messages.push({
+          role: 'user',
+          content: `The checklist from the plan has ${delegable.length} pending item${delegable.length === 1 ? '' : 's'} with an agent (${delegable.map((t) => t.id).join(', ')}). Start by calling run_todos_parallel with no arguments — independent items run concurrently and dependent ones follow in later waves with their prerequisites' reports. Then integrate the results, verify the combined change (get_diagnostics / tests) and finish any remaining items yourself.`,
+          meta: { timestamp: Date.now(), hidden: true },
+        });
+        status(`Executing the plan: ${delegable.length} item${delegable.length === 1 ? '' : 's'} as parallel subagents…`);
+      }
+    }
+
     // Skill recommendation: nudge the model towards a matching playbook and tell the UI; the learner also
     // notices recurring request types that no skill covers and proposes creating one.
     if (depth === 0 && !o.roleOverride && this.skills.allSkills.length) {
@@ -151,6 +177,7 @@ export class AgentRunner {
       signal: o.signal,
       depth,
       modelRef: model.id,
+      readOnly: session.mode !== 'agent',
       progress: (t) => status(t),
       trackChange: (fsPath) => this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve(),
       todos: {
@@ -225,6 +252,7 @@ export class AgentRunner {
         const onAbort = () => ac.abort();
         o.signal.addEventListener('abort', onAbort, { once: true });
         let first = true;
+        const requestedAt = Date.now();
         try {
           const stream = provider.chat({
             model: model.modelId,
@@ -237,16 +265,19 @@ export class AgentRunner {
             keepAlive: cfg.keepAlive || undefined,
             signal: ac.signal,
           });
+          // A request queued behind `others` on a one-slot server legitimately waits for all of them: give it
+          // their first-token budget too instead of calling it a stall and retrying (which only re-queues it).
           const guarded = withWatchdog(stream, {
-            firstTokenMs: FIRST_TOKEN_TIMEOUT_MS,
+            firstTokenMs: Math.min(FIRST_TOKEN_TIMEOUT_MS * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS),
             idleMs: IDLE_TIMEOUT_MS,
             abort: () => ac.abort(),
-            onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — busy with another chat` : `Waiting for ${model.name}`} · ${s}s${s >= 30 ? ' (loading the model or a long prompt)' : ''}…`),
+            onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}` : `Waiting for ${model.name}`} · ${s}s${s >= 30 && !others ? ' (loading the model or a long prompt)' : ''}…`),
           });
           for await (const ev of guarded) {
             if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
               first = false;
               emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
+              this.noteFirstToken(model, others, requestedAt);
             }
             switch (ev.type) {
               case 'text':
@@ -395,12 +426,30 @@ export class AgentRunner {
   }
 
   private release(modelId: string, sessionId: string): void {
+    this.lastFinished.set(modelId, Date.now());
     const set = this.inflight.get(modelId);
     if (set) {
       set.delete(sessionId);
       if (!set.size) {
         this.inflight.delete(modelId);
       }
+    }
+  }
+
+  /**
+   * Heuristic for a server that serves one request per model at a time (Ollama's default `OLLAMA_NUM_PARALLEL`):
+   * our request was queued behind others, waited a while, and only got its first token after one of them finished.
+   */
+  private noteFirstToken(model: { id: string; name: string; providerId: string }, others: number, requestedAt: number): void {
+    if (!others || this.serialWarned.has(model.id)) {
+      return;
+    }
+    const finished = this.lastFinished.get(model.id) ?? 0;
+    const waited = Date.now() - requestedAt;
+    if (finished > requestedAt && waited >= SERIAL_DETECT_MS) {
+      this.serialWarned.add(model.id);
+      this.log.warn(`${model.id} appears to serve one request at a time (first token after ${Math.round(waited / 1000)}s behind ${others} other request(s)); parallel subagents will queue`);
+      this.onSerialServer?.(model);
     }
   }
 
@@ -472,7 +521,7 @@ export class AgentRunner {
         if (vision) {
           captured.push({ callId: call.id, caption: (result.data as { caption?: string }).caption ?? `Image from ${call.name}`, data: img.data });
         } else {
-          text += ' Note: the current model cannot see images — the screenshot is shown to the user only. Switch to a vision model (qwen2.5vl, gemma3, llama3.2-vision) to inspect it, or use web_fetch for the page text.';
+          text += ' Note: the current model cannot see images — the screenshot is shown to the user only. Switch to a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl) to inspect it, or use web_fetch for the page text.';
         }
       }
       const content = ctxMgr.clampToolOutput(text);
@@ -551,6 +600,11 @@ export class AgentRunner {
     emit({ sessionId, type: 'approval_request', payload: { kind } });
     return ask();
   }
+}
+
+/** True when the user is asking to execute the plan/checklist that is already in the session. */
+export function isImplementPlanRequest(text: string): boolean {
+  return IMPLEMENT_PLAN.test(text.trim());
 }
 
 function stripMeta(m: ChatMessage): ChatMessage {

@@ -23,6 +23,7 @@ import { McpManager } from '../mcp/mcpManager';
 import { ProviderRegistry } from '../providers/registry';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
+import { createAnalyzeWorkspaceTool } from '../tools/workspace';
 import { ToolRegistry } from '../tools/registry';
 import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
@@ -68,7 +69,7 @@ ${bold('Usage')}
 
 ${bold('Options')}
   --ask | --plan | --agent     mode (default: agent)
-  -m, --model <provider/model> model for this run (e.g. ollama/qwen2.5-coder:7b)
+  -m, --model <provider/model> model for this run (e.g. ollama/gemma4:e4b)
   -f, --file <path>            attach a file (repeatable; path#L10-L20 for a range)
   -y, --yes                    approve every command / edit / network call (CI, scripts)
   -C, --cwd <dir>              workspace root (default: current directory)
@@ -433,7 +434,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner);
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions)]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;

@@ -209,6 +209,9 @@ input.invalid, select.invalid { border-color: var(--error); }
 .mdl.on { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
 .mdl .t { flex: 1; min-width: 0; } .mdl .t b { display: block; font-size: 13px; font-family: var(--mono); font-weight: 500; } .mdl .t span { font-size: 11.5px; color: var(--muted); }
 .mdl .tags { display: flex; gap: 4px; }
+.mdl .brand-mark { width: 26px; height: 26px; border-radius: 7px; font-size: 10px; }
+.mdl .brand-mark svg { width: 13px; height: 13px; }
+.mdl .brand-mark svg.logo { width: 15px; height: 15px; }
 .setup .foot { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
 .setup .foot .btn.link { border: none; color: var(--muted); }
 .help-list { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
@@ -267,7 +270,8 @@ input.invalid, select.invalid { border-color: var(--error); }
 .chips input::placeholder { color: var(--muted); }
 .cat { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); margin-bottom: 10px; overflow: hidden; }
 .cat-head { display: flex; align-items: flex-start; gap: 12px; padding: 11px 14px 9px; }
-.cat-head .ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--code-bg); font-weight: 700; font-size: 12px; flex: none; }
+.cat-head .ic:not(.brand-mark) { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--code-bg); font-weight: 700; font-size: 12px; flex: none; }
+.cat-head .brand-mark { margin-top: 1px; }
 .cat-head .t { flex: 1; min-width: 0; } .cat-head .t b { font-size: 13px; } .cat-head .t .v { font-size: 11px; color: var(--muted); margin-left: 6px; }
 .cat-head .t p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 .cat-head .tags { display: flex; gap: 4px; flex: none; flex-wrap: wrap; justify-content: flex-end; max-width: 40%; padding-top: 2px; }
@@ -373,14 +377,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .job .pct { grid-area: pct; }
 .job .btn { grid-area: x; }
 .job:has(.progress) { grid-template-columns: auto minmax(0, 1fr) minmax(90px, 160px) 40px auto; grid-template-areas: "dot t bar pct x"; }
-.mrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 6px; }
+.mrow { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 6px; }
+.mrow .brand-mark { width: 26px; height: 26px; border-radius: 7px; font-size: 10px; }
+.mrow .brand-mark svg { width: 13px; height: 13px; }
+.mrow .brand-mark svg.logo { width: 15px; height: 15px; }
+.mrow.off .brand-mark { opacity: .5; filter: saturate(.6); }
 .mrow .toggle { align-self: center; }
 .mrow .t { flex: none; min-width: 0; }
 .mrow .mrow-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
 .mrow .tags { justify-content: flex-end; }
 .mrow .tags:empty { display: none; }
 .mrow .acts { display: flex; gap: 2px; }
-.cat-head .ic { background: var(--tint-2); border-radius: var(--radius-sm); }
+.cat-head .ic:not(.brand-mark) { background: var(--tint-2); border-radius: var(--radius-sm); }
 .cat-var { gap: 6px 10px; padding: 8px 14px; }
 .cat-var .sz { min-width: 48px; }
 .cat-var .gb { min-width: 56px; font-variant-numeric: tabular-nums; }
@@ -417,7 +425,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .sys .budget { order: 3; width: 100%; text-align: left; display: flex; align-items: baseline; gap: 6px; }
   .rts { grid-template-columns: 1fr; }
   .job:has(.progress) { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "dot t x" "bar bar pct"; }
-  .mrow { grid-template-columns: auto minmax(0, 1fr); }
+  .mrow { grid-template-columns: auto auto minmax(0, 1fr); }
   .mrow .mrow-right { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .mrow .tags { justify-content: flex-start; }
   .cat-head .tags { max-width: none; justify-content: flex-start; width: 100%; order: 3; }

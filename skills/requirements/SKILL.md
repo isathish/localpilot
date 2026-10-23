@@ -47,7 +47,7 @@ How we know it worked.
 ```
 
 ## 3. Hand off
-- Summarise the spec in 5 bullets in chat and link the file as `path`.
+- Open the spec for the user with `show_markdown` (path of the file you wrote) and summarise it in 5 bullets in chat.
 - Call `manage_todos` with the follow-up plan: "Design <feature>" → "Implement" → "Test" → "Ship" so the user sees the path forward.
 - If the user approves, continue with the `design` skill (or `implement` for small changes) in the same session.
 

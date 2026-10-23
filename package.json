@@ -241,6 +241,11 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "localpilot.enableOllamaParallel",
+        "title": "Restart Ollama with Parallel Request Slots",
+        "category": "LocalPilot"
+      },
+      {
         "command": "localpilot.installModel",
         "title": "Install Model from Catalog…",
         "category": "LocalPilot",
@@ -371,6 +376,12 @@
         "title": "Open Memory Notes",
         "category": "LocalPilot",
         "icon": "$(book)"
+      },
+      {
+        "command": "localpilot.openMarkdownViewer",
+        "title": "Open in Markdown Reader",
+        "category": "LocalPilot",
+        "icon": "$(open-preview)"
       },
       {
         "command": "localpilot.inlineEdit",
@@ -744,6 +755,11 @@
           "command": "localpilot.attachImage",
           "when": "resourceExtname =~ /\\.(png|jpe?g|gif|webp)$/",
           "group": "localpilot"
+        },
+        {
+          "command": "localpilot.openMarkdownViewer",
+          "when": "resourceExtname =~ /\\.(md|markdown)$/",
+          "group": "localpilot"
         }
       ]
     },
@@ -869,7 +885,7 @@
         "localpilot.defaultModel": {
           "type": "string",
           "default": "",
-          "description": "Default model as provider/model (e.g. ollama/qwen2.5-coder:14b). Empty = auto-pick the best tool-capable local model."
+          "description": "Default model as provider/model (e.g. ollama/gemma4:e4b). Empty = auto-pick the best tool-capable local model."
         },
         "localpilot.contextWindow": {
           "type": "number",
@@ -970,7 +986,7 @@
           "default": 4,
           "minimum": 1,
           "maximum": 16,
-          "description": "Max concurrent tool calls / subagents."
+          "description": "Max concurrent tool calls / subagents. When LocalPilot starts Ollama it also requests this many parallel slots (OLLAMA_NUM_PARALLEL, capped at 4) so subagents really run concurrently."
         },
         "localpilot.parallel.maxSubagentDepth": {
           "type": "number",
@@ -1130,7 +1146,7 @@
         "localpilot.routing.reasoning": {
           "type": "string",
           "default": "",
-          "description": "provider/model used in Plan mode (e.g. ollama/qwen3:8b or ollama/deepseek-r1:8b). Empty = keep the session model."
+          "description": "provider/model used in Plan mode (e.g. ollama/gemma4:12b or ollama/gpt-oss:20b). Empty = keep the session model."
         },
         "localpilot.routing.fast": {
           "type": "string",

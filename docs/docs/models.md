@@ -47,9 +47,12 @@ If no model is reachable anywhere — fresh machine, server stopped, models dele
 
    | Budget | Agent model | Completions | Images |
    |---|---|---|---|
-   | ≥ 8 GB (16 GB RAM+) | `qwen2.5-coder:7b` (4.7 GB) | `qwen2.5-coder:1.5b` | `gemma3:4b` when ≥ 16 GB budget |
-   | 3.5–8 GB (8 GB RAM) | `qwen2.5-coder:3b` | `qwen2.5-coder:1.5b` | — |
-   | < 3.5 GB | `qwen2.5-coder:1.5b` / `0.5b` | — | — |
+   | ≥ 9 GB (16 GB RAM+) | `gemma4:e4b` (6.6 GB) | `starcoder2:3b` | the Gemma 4 itself |
+   | 4–9 GB (8 GB RAM) | `gemma4:e2b` (4.6 GB, a little tight on 8 GB) | — | the Gemma 4 itself |
+   | 2.5–4 GB | `llama3.2:3b` | — | — |
+   | < 2.5 GB | `llama3.2:1b` / `smollm2:360m` | — | — |
+
+   Gemma 4 is a frontier-class small model with native tool calling, vision and optional thinking, so one download covers agent work, screenshots and Plan mode. Qwen models are no longer part of the starter set; they stay in the catalog if you prefer them.
 
 3. **Download with progress** (status bar, notification and the Models page), then set `defaultModel`, `inlineCompletion.model` and `routing.vision` if they were empty.
 
@@ -64,7 +67,7 @@ Already-installed models are skipped, so the flow is safe to re-run. Turn the st
 - **This machine** — detected RAM / GPU / cores, the resulting model budget and tier, and the state of each runtime (Ollama, Docker Model Runner, LM Studio: running / installed / not found) with *Start* and *Install* buttons for Ollama.
 - **Installed models** — every model from every reachable provider with size, context, capabilities and the role the router would give it. Each row has an **enable/disable** switch (disabled models stay installed but disappear from pickers, routing and the status bar — stored in `localpilot.models.disabled`), *Set default*, and **Remove** for Ollama and Docker Model Runner models (LM Studio models are deleted from the LM Studio app).
 - **Routing** — see below.
-- **Model catalog** — curated families (Qwen2.5 Coder, Qwen3, Devstral, gpt-oss, Llama 3.x, Gemma 3, Qwen2.5 VL, Mistral Small, DeepSeek-R1, Codestral, StarCoder2, Phi-4 mini, SmolLM2) with every size annotated **fits / tight / too big** for this machine and a ★ on the recommended size per family. Pick **where to install** — Ollama (`ollama pull`), Docker Model Runner (`docker model pull`) or LM Studio (`lms get`) — and watch the download inline; cancel any time. Filter by role or search.
+- **Model catalog** — curated families (Gemma 4, Nemotron 3.5 Bolt, Qwen2.5 Coder, Qwen3, Devstral, gpt-oss, Llama 3.x, Gemma 3, Qwen2.5 VL, Mistral Small, DeepSeek-R1, Codestral, StarCoder2, Phi-4 mini, SmolLM2) with every size annotated **fits / tight / too big** for this machine and a ★ on the recommended size per family. Pick **where to install** — Ollama (`ollama pull`), Docker Model Runner (`docker model pull`) or LM Studio (`lms get`) — and watch the download inline; cancel any time. Filter by role or search.
 
 ![Model catalog: every size of a family marked fits / tight / too big, the recommended size starred, installed sizes ticked, and an Install-to-runtime button or live download progress per row]({{ '/assets/screenshots/settings-models-catalog.png' | relative_url }})
 
@@ -147,9 +150,9 @@ Then it appears automatically under the matching provider.
 
 | Task | Models |
 |---|---|
-| Agentic coding (tools) | `qwen2.5-coder:14b` / `:32b`, `qwen3`, `devstral`, `llama3.3`, `mistral-small`, `gpt-oss` |
-| Inline completions (FIM) | `qwen2.5-coder:1.5b` / `:7b-base`, `codestral`, `starcoder2`, `deepseek-coder` |
-| Screenshots / vision | `qwen2.5vl`, `llava`, `gemma3`, `pixtral` |
-| Reasoning | `qwen3`, `deepseek-r1` (enable `localpilot.thinking`) |
+| Agentic coding (tools) | `gemma4:e2b` / `:e4b` / `:12b` (recommended), `nemotron-3.5-bolt:e4b`, `devstral`, `gpt-oss`, `mistral-small`, `qwen3` |
+| Inline completions (FIM) | `starcoder2:3b`, `codestral`, `qwen2.5-coder:1.5b` / `:7b-base`, `deepseek-coder` |
+| Screenshots / vision | `gemma4` (any size), `nemotron-3.5-bolt`, `qwen2.5vl`, `llava`, `gemma3`, `pixtral` |
+| Reasoning | `gemma4`, `gpt-oss`, `qwen3`, `deepseek-r1` (enable `localpilot.thinking`) |
 
 Tip: keep `localpilot.contextWindow` at 32k+ for agent work; Ollama models default to 2–4k unless `num_ctx` is raised, which LocalPilot does for you.

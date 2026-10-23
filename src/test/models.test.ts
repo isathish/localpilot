@@ -111,17 +111,25 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
 
   test('starter plan picks the smallest useful set and grows with the machine', () => {
     const small = starterPlan(buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 4, ramGb: 8, vramGb: 0 }));
-    assert.strictEqual(small.agent.variant.ollama, 'qwen2.5-coder:3b');
-    assert.strictEqual(small.completion?.variant.ollama, 'qwen2.5-coder:1.5b');
+    assert.strictEqual(small.agent.variant.ollama, 'gemma4:e2b', 'an 8 GB machine still gets the smallest Gemma 4');
+    assert.strictEqual(small.completion, undefined, 'no second model when it would not fit');
     assert.strictEqual(small.vision, undefined);
     const mid = starterPlan(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 8, ramGb: 16, vramGb: 0 }));
-    assert.strictEqual(mid.agent.variant.ollama, 'qwen2.5-coder:7b', 'a 16 GB Mac starts with the 7b, not the biggest model that fits');
+    assert.strictEqual(mid.agent.variant.ollama, 'gemma4:e4b', 'a 16 GB Mac starts with e4b, not the biggest model that fits');
+    assert.strictEqual(mid.completion?.variant.ollama, 'starcoder2:3b');
     const big = starterPlan(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 0 }));
-    assert.strictEqual(big.agent.variant.ollama, 'qwen2.5-coder:7b');
-    assert.strictEqual(big.vision?.variant.ollama, 'gemma3:4b');
-    const tiny = starterPlan(buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 2, ramGb: 3, vramGb: 0 }));
-    assert.strictEqual(tiny.agent.variant.ollama, 'qwen2.5-coder:0.5b');
-    assert.strictEqual(tiny.completion, undefined, 'no second model when it would not fit');
+    assert.strictEqual(big.agent.variant.ollama, 'gemma4:e4b');
+    assert.strictEqual(big.vision, undefined, 'Gemma 4 reads images itself, so no separate vision model');
+    assert.ok(big.agent.entry.supportsVision && big.agent.entry.supportsTools);
+    const tiny = starterPlan(buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 2, ramGb: 6, vramGb: 0 }));
+    assert.strictEqual(tiny.agent.variant.ollama, 'llama3.2:3b', 'below Gemma 4 e2b fall back to a tiny tool-capable model');
+    assert.strictEqual(tiny.completion, undefined);
+    const minuscule = starterPlan(buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 2, ramGb: 2, vramGb: 0 }));
+    assert.strictEqual(minuscule.agent.variant.ollama, 'smollm2:360m');
+    for (const p of [small, mid, big, tiny, minuscule]) {
+      assert.ok(!p.agent.variant.ollama?.startsWith('qwen'), `starter agent is never a Qwen model: ${p.agent.variant.ollama}`);
+      assert.ok(p.agent.entry.supportsTools, 'starter agent must call tools');
+    }
   });
 
   test('catalog is well-formed and annotated per machine', () => {
@@ -158,6 +166,15 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.ok(matchesCatalog({ ...m('ai/qwen2.5-coder:latest'), providerId: 'docker' }, { entry: coder, variant: v7 }));
     assert.ok(matchesCatalog({ ...m('qwen2.5-coder-7b-instruct'), providerId: 'lmstudio' }, { entry: coder, variant: v7 }));
     assert.ok(!matchesCatalog(m('qwen2.5-coder:14b'), { entry: coder, variant: v7 }));
+    const gemma4 = MODEL_CATALOG.find((e) => e.key === 'gemma4')!;
+    const e2b = gemma4.variants.find((v) => v.tag === 'e2b')!;
+    const g12 = gemma4.variants.find((v) => v.tag === '12b')!;
+    assert.ok(matchesCatalog(m('gemma4:e2b'), { entry: gemma4, variant: e2b }));
+    assert.ok(matchesCatalog({ ...m('docker.io/ai/gemma4:e2b'), providerId: 'docker' }, { entry: gemma4, variant: e2b }));
+    assert.ok(matchesCatalog({ ...m('gemma-4-e2b-it'), providerId: 'lmstudio' }, { entry: gemma4, variant: e2b }));
+    assert.ok(matchesCatalog({ ...m('docker.io/ai/gemma4:latest'), providerId: 'docker' }, { entry: gemma4, variant: g12 }), 'the Docker latest tag is the 12b');
+    assert.ok(!matchesCatalog({ ...m('docker.io/ai/gemma4:e2b'), providerId: 'docker' }, { entry: gemma4, variant: g12 }));
+    assert.ok(!matchesCatalog(m('gemma4:e4b'), { entry: gemma4, variant: e2b }));
     assert.strictEqual(lookupCatalog(m('devstral:latest'))?.entry.key, 'devstral');
     assert.strictEqual(lookupCatalog(m('my-finetune:latest')), undefined);
     assert.strictEqual(modelFootprintGb(m('qwen2.5-coder:7b', { sizeBytes: 5 * 1024 ** 3 })), 6);
@@ -182,6 +199,10 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const xl = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 16, ramGb: 128, vramGb: 0 });
     assert.strictEqual(pickForRole(models, 'agent', xl)?.modelId, 'qwen2.5-coder:32b', 'with room to spare the bigger coder wins');
     assert.ok(scoreForRole(models[4], 'agent', profile) < 0, 'embedding models are never routed to');
+    const withGemma = [...models, m('gemma4:e4b', { supportsVision: true, sizeBytes: 6.6e9 })];
+    assert.strictEqual(pickForRole(withGemma, 'agent', profile)?.modelId, 'gemma4:e4b', 'a small Gemma 4 beats a same-size Qwen coder');
+    assert.strictEqual(pickForRole(withGemma, 'vision', profile)?.modelId, 'gemma4:e4b');
+    assert.strictEqual(pickForRole(withGemma, 'reasoning', profile)?.modelId, 'gemma4:e4b');
   });
 
   test('registry lists, hides disabled models and routes per role against a real Ollama-style server', async function () {
@@ -322,7 +343,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       assert.strictEqual((r as { models: number }).models, 3);
       assert.deepStrictEqual(srv.pulled, [], 'nothing is downloaded when models exist');
       const plan = await mm.plan();
-      assert.ok(plan.agent.variant.ollama?.startsWith('qwen2.5-coder:'));
+      assert.ok(plan.agent.entry.supportsTools && !plan.agent.variant.ollama?.startsWith('qwen'), plan.agent.variant.ollama);
       const commands = await vscode.commands.getCommands(true);
       for (const id of ['localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.toggleModel', 'localpilot.manageModels']) {
         assert.ok(commands.includes(id), `missing command ${id}`);

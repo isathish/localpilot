@@ -63,10 +63,35 @@ The agent's work is shown as a timeline of concise rows, one per step: **Read** 
 
 A single agent can also fan out: `run_subagent` runs one child, `run_parallel_subagents` runs several concurrently (bounded by `localpilot.parallel.maxConcurrency`). Children have fresh context windows and report back only their final message, keeping the parent's context small.
 
-For large tasks the agent is asked to **split the work into checklist items first**: independent items get an `agent` and a self-contained `prompt` in `manage_todos`, and `run_todos_parallel` runs them concurrently — each item flips to *in progress* and then *done* in the Tasks panel, with the delegated agent shown on the item — while the main agent keeps the dependent steps, then integrates and verifies the combined change. Read-only subagents (`explore`, `clarifier`, `researcher`) are routed to a small, fast tool-capable model by default (`localpilot.routing.fast`), and implementing ones can be sent to a stronger coding model (`localpilot.routing.coding`). See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
+### Plans that execute themselves
+
+For large tasks the agent **splits the work into checklist items first** (`manage_todos`). Every item can carry an `agent` (coder, tester, docs, explore…), a self-contained `prompt`, and `dependsOn` — the ids it needs finished first. One call to `run_todos_parallel` then executes the whole checklist in **dependency waves**:
+
+1. every pending item whose prerequisites are done runs now, concurrently (up to `maxConcurrency`);
+2. when a wave finishes, the items that were waiting on it start, with the prerequisites' reports attached to their brief;
+3. an item whose prerequisite failed is skipped (and says why); a circular `dependsOn` is reported instead of deadlocking; items without an agent are left for the main agent.
+
+Each item flips to *in progress* and then *done* in the Tasks panel, with the delegated agent and its `after 1, 2` dependencies shown on the item. The main agent only keeps the final integration (combined diagnostics/tests, summary).
+
+**Plan mode → Agent mode.** A plan produced in Plan mode is already in this shape — each step has an agent, a complete brief and its dependencies. Switch to Agent mode and say *implement the plan* (or *go ahead*, *run the checklist*): LocalPilot makes `run_todos_parallel` the first step of that turn instead of relying on the model to remember it.
+
+### Whole-workspace analysis
+
+Repository-wide questions ("review the whole codebase", "where is the auth logic", "audit error handling") no longer read files one by one. The agent calls **`analyze_workspace`** first — a fast scan with no model call that returns languages and test locations per folder, manifest summaries (name, scripts, dependency counts) and a **balanced split of the repository into shards** sized for `maxConcurrency` — then fans out one `explore` or `reviewer` subagent per shard with `run_parallel_subagents` and merges the reports. Plan and Ask mode can do the same with read-only subagents.
+
+Read-only subagents (`explore`, `clarifier`, `researcher`) are routed to a small, fast tool-capable model by default (`localpilot.routing.fast`), and implementing ones can be sent to a stronger coding model (`localpilot.routing.coding`). See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
+
+## Parallel requests
+
+Parallel subagents are only as parallel as the model server. **Ollama serves one request per model at a time by default** (`OLLAMA_NUM_PARALLEL` unset), so four subagents would queue behind each other — the status line shows *Waiting for <model> — queued behind N other requests…* and the first-token timeout grows with the queue so queued requests are not mistaken for stalls.
+
+- When LocalPilot **starts Ollama itself** (automatic setup, *Start* in Settings → Models, the installer scripts) it sets `OLLAMA_NUM_PARALLEL` to `localpilot.parallel.maxConcurrency` (capped at 4).
+- When LocalPilot notices requests queuing at a server, it says so once and offers **Restart Ollama with parallel slots** (also *LocalPilot: Restart Ollama with Parallel Request Slots* in the Command Palette). A systemd-managed Ollama on Linux needs `sudo systemctl edit ollama` → `Environment="OLLAMA_NUM_PARALLEL=4"` → `sudo systemctl restart ollama`; a remote server needs the variable set where it runs.
+- Each slot keeps its own KV cache, so memory use grows with slots × `localpilot.contextWindow`. If a model becomes slow or spills to CPU after enabling slots, lower `maxConcurrency` (fewer slots) or the context window. Gemma 4's sliding-window attention keeps per-slot memory small, which is one reason it is the recommended local model.
+- LM Studio, llama.cpp (`--parallel N`), vLLM and Docker Model Runner have their own concurrency settings; LocalPilot's detection and status messages work the same way with them.
 
 ## Limits
 
-- `localpilot.parallel.maxConcurrency` (default 4) bounds concurrent tool calls and subagents per session.
+- `localpilot.parallel.maxConcurrency` (default 4) bounds concurrent tool calls and subagents per session, and is the number of Ollama slots LocalPilot asks for.
 - `localpilot.parallel.maxSubagentDepth` (default 2) prevents runaway nesting.
-- Your model server's own concurrency (e.g. `OLLAMA_NUM_PARALLEL`) ultimately decides how many requests run truly simultaneously.
+- Your model server's own concurrency ultimately decides how many requests run truly simultaneously — see [Parallel requests](#parallel-requests).

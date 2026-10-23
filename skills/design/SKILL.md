@@ -55,7 +55,7 @@ Flags, migrations order, monitoring, rollback.
 ## 4. Turn it into a plan
 - Call `manage_todos` with ordered, independently verifiable steps (each step = one commit-sized change, ending with "verify: build/tests/diagnostics").
 - Front-load the risky or unknown parts (spikes) so surprises surface early.
-- Summarise in chat: the chosen approach in 3–5 bullets, the file list, and the first step. Offer to start `implement`.
+- Open the design doc for the user with `show_markdown`, then summarise in chat: the chosen approach in 3–5 bullets, the file list, and the first step. Offer to start `implement`.
 
 ## Rules
 - No speculative abstractions: design for the stated requirements plus the next obvious one, not "someday".
