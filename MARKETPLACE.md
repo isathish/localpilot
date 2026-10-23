@@ -4,16 +4,19 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
 
 ## What it does
 
-- **Agent mode** — reads your project, edits files, runs commands and tests, checks diagnostics and fixes its own mistakes. You approve anything risky.
+- **Agent mode** — reads your project, plans with a live task checklist, edits files, runs commands and tests, checks diagnostics and fixes its own mistakes. You approve anything risky.
 - **Ask & Plan modes** — read-only answers, or a reviewed implementation plan before any code changes.
-- **Parallel agents** — run several tasks at once; the Agents panel shows live status and every file each agent touched.
-- **Review every change** — diff, keep or undo per file or per agent, with changed lines highlighted in the editor.
+- **Parallel agents & chat tabs** — run several tasks at once in independent tabs; the Agents panel shows live status and every file each agent touched.
+- **Review every change** — diff, accept or reject per file or per agent, with changed lines highlighted; restore a checkpoint to rewind files and conversation.
+- **Zero configuration** — auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in Docker containers, and picks the best tool-capable model.
+- **Memory** — durable project and personal notes the agent saves and recalls across sessions.
 - **Skills & subagents** — reusable `SKILL.md` playbooks and specialised `explore` / `coder` / `reviewer` / `researcher` agents, or define your own.
-- **Screenshots & images** — capture a screen region, paste or drop an image and let a vision model fix what it sees.
+- **Screenshots & images** — capture a selection, this VS Code window, another window or the full screen (optionally timed), paste or drop an image, and let a vision model fix what it sees.
 - **Inline edit (⌘⌥K)** — describe a change and the selection is rewritten in place. In a terminal, it turns English into a reviewed command.
 - **Context on demand** — `@workspace`, `@selection`, `@problems`, `@git`, `@file#L10-L20`; smart compaction keeps long tasks inside small context windows.
 - **Web search & MCP** — DuckDuckGo / SearXNG / Brave / Tavily search, readable page fetch, and any MCP server's tools.
 - **Inline completions** — ghost text from FIM models such as qwen2.5-coder or codestral.
+- **`localpilot` CLI** — `localpilot "fix the failing tests"` from any terminal; `--plan`, `--ask`, `--parallel`.
 - **Fits your setup** — honours `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` automatically.
 
 ## Get started in two minutes
@@ -23,9 +26,9 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
    ollama pull qwen2.5-coder:14b
    ollama serve
    ```
-   LM Studio, llama.cpp and vLLM are detected on their default ports too.
+   LM Studio, llama.cpp, vLLM, Docker Model Runner and model-server containers are detected automatically too.
 2. Open the **LocalPilot** icon in the Activity Bar (or press `Ctrl/⌘ ⇧ L`).
-3. Pick a model from the dropdown and ask for a change. Review the diff, keep it, ship it.
+3. Ask for a change — **Auto** picks the best model it found. Review the diff, accept it, ship it.
 
 ## Works with
 
@@ -35,7 +38,9 @@ Copilot-class agentic coding in VS Code, powered entirely by models you serve wi
 | LM Studio | `http://localhost:1234/v1` |
 | llama.cpp `llama-server` | `http://localhost:8080/v1` |
 | vLLM / SGLang | `http://localhost:8000/v1` |
-| Any OpenAI-compatible API | add it under `localpilot.providers` |
+| Docker Model Runner | `http://localhost:12434/engines/v1` |
+| Ollama / vLLM / llama.cpp in Docker | discovered from the container's published port |
+| Any OpenAI-compatible API | add it under **Settings → Providers** or `localpilot.providers` |
 
 Models without native tool calling still work in agent mode thanks to a built-in prompt-based fallback.
 

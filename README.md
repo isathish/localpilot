@@ -49,33 +49,38 @@ code --install-extension localpilot.vsix
 
 Requires VS Code 1.104+.
 
-**Serve a model** (any one of these; default ports are auto-detected)
+**Serve a model** (any one of these — LocalPilot auto-detects running servers, including ones in Docker)
 
 ```bash
 ollama pull qwen2.5-coder:14b && ollama serve        # Ollama  → :11434
 # LM Studio → Developer tab → Start server             → :1234
 # llama-server -m model.gguf --port 8080               → :8080
 # vllm serve Qwen/Qwen2.5-Coder-32B-Instruct           → :8000
+# docker model pull ai/qwen2.5-coder                   → Docker Model Runner :12434
+# docker run -p 11434:11434 ollama/ollama              → any model-server container
 ```
 
-Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>), pick a model, and ask for a change.
+Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for a change — **Auto** picks the best tool-capable model it found.
 
 ## Features
 
 | | |
 |---|---|
-| **Agent · Ask · Plan modes** | Autonomous edit/run loop with approval gates; read-only Q&A; investigate-then-plan. |
-| **Parallel agents** | `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
-| **Change review** | Every agent edit is snapshotted — Diff / Keep / Undo per file or per session, with highlighted lines in the editor. |
-| **Large-context management** | Per-model token budget → prune old tool outputs → LLM compaction → truncation. Live context meter. |
+| **Agent · Ask · Plan modes** | Autonomous edit/run loop with approval gates; read-only Q&A; investigate-then-plan with a live **Tasks** checklist. |
+| **Parallel agents & multitasking** | Chat tabs run independently; `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
+| **Change review & checkpoints** | Every agent edit is snapshotted — Diff / Accept / Reject per file or per session, and **Restore checkpoint** on any message rewinds files and conversation. |
+| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Large-context management** | Per-model token budget → prune old tool outputs → LLM compaction → truncation. Live context meter; `/compact` on demand. |
+| **Memory** | Durable project and global notes (`.localpilot/memory/`) the agent saves and recalls across sessions. |
 | **Skills & subagents** | `SKILL.md` playbooks loaded on demand; built-in `explore`, `coder`, `reviewer`, `researcher`; define your own with a model and tool allow-list. |
-| **Screenshots & images** | Capture a screen region (<kbd>⌘⌥⇧S</kbd>), paste or drop images; vision models fix what they see. |
+| **Screenshots & images** | Selection area, this VS Code window, pick a window, full screen or timed capture (<kbd>⌘⌥⇧S</kbd>); paste or drop images; vision models fix what they see. |
 | **Inline edit & terminal** | <kbd>⌘⌥K</kbd> rewrites a selection in place; in a terminal it turns English into a reviewed command. |
 | **Context mentions** | `@workspace`, `@selection`, `@problems`, `@git`, `@editors`, `@file#L10-L20`, folders, drag-and-drop. |
 | **Tools** | File ops, ripgrep search, symbols/references, shell, diagnostics, web search (DuckDuckGo / SearXNG / Brave / Tavily), web fetch, ask-user. |
-| **MCP** | Any stdio MCP server's tools are exposed to the agent automatically. |
+| **MCP** | Any stdio MCP server's tools are exposed to the agent automatically; status and errors in Settings. |
 | **Inline completions** | Ghost text from FIM models (qwen2.5-coder, codestral, starcoder2). |
-| **VS Code platform** | `@localpilot` chat participant, local models in Copilot's model picker (Language Model API), light-bulb fixes, context-menu actions, commit-message generator, status-bar model switcher. |
+| **`localpilot` CLI & API** | `localpilot "fix the tests"` from any terminal (`--plan`, `--ask`, `--parallel`); other extensions can drive agents through the exported API. |
+| **VS Code platform** | `@localpilot` chat participant, local models in Copilot's model picker (Language Model API), light-bulb fixes, context-menu actions, commit-message generator, status-bar model switcher, Settings panel and setup wizard. |
 | **Multi-session** | Persisted per workspace; fork, pin, rename, export to Markdown. |
 
 ## Using it

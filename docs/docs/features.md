@@ -10,14 +10,16 @@ permalink: /docs/features/
 - **Ask mode** — read-only Q&A about your code.
 - **Plan mode** — investigates and produces a numbered implementation plan without editing.
 - **Streaming** responses with live tool steps, thinking (for reasoning models) and status.
-- **Multiple sessions** persisted per workspace; several can run concurrently. Fork, pin, rename, export to Markdown.
+- **Multiple sessions** persisted per workspace; several can run concurrently in an always-visible **tab bar** (running chats first, History popover with search). Fork, pin, rename, export to Markdown.
+- **Planning & memory** — the agent keeps a live **Tasks** checklist for multi-step work and saves durable notes to `.localpilot/memory/` (project) or user storage (global) that are recalled in later sessions. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
 - **Slash commands** — `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill`, `/agent`, `/context`.
 
 ## Parallel agents & change review
 
-- **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task.
+- **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task; each streams into its own tab.
 - **Agents panel** lists running/idle sessions with live status, badge counts and inline Stop.
-- **Change tracker** snapshots files before edits — Diff / Keep / Undo per file or per session, highlighted lines in editors.
+- **Change tracker** snapshots files before edits — Diff / Accept / Reject per file or per session, highlighted lines in editors.
+- **Restore checkpoint** on any of your messages rewinds the files changed since that turn and puts the prompt back in the composer.
 
 ## Context
 
@@ -37,7 +39,7 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 
 ## Images
 
-- Capture a screenshot region (<kbd>⌘⌥⇧S</kbd>), paste, drag-drop, pick a file, or right-click an image in the Explorer.
+- Screenshot modes (<kbd>⌘⌥⇧S</kbd> or the attach menu): **Selection area**, **This VS Code window**, **Pick a window**, **Full screen**, **Full screen in 5 s**. Paste, drag-drop, pick a file, or right-click an image in the Explorer.
 - Client-side downscaling; thumbnails in chat; warns if the model lacks vision.
 
 ## Editor integration
@@ -51,8 +53,9 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 
 ## Settings & setup
 
+- **Zero-config auto-detection** — at startup and on *Refresh models*, LocalPilot probes configured providers, the well-known local ports and running **Docker containers** (plus Docker Model Runner), adds every reachable server to your providers and picks the best tool-capable model when no default is set. See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models & generation, Agent & approvals, Inline completions, Web search, Memory & skills, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
-- **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
+- **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
 - **Approval presets** — *Careful*, *Balanced*, *Autonomous* — or fine-grained Ask / Allow / Block per action.
 - **MCP server manager** — add, edit, disable and remove servers with their connection status and tool counts.
 - **Welcome / Setup wizard** on first run: detects running servers, recommends a model, sets an approval preset.
@@ -65,3 +68,5 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 - `@localpilot` participant in the built-in Chat view (`/agent`, `/ask`, `/plan`).
 - Local models registered through the **Language Model Chat Provider API** — they appear in Copilot's model picker.
 - Status bar model switcher.
+- **`localpilot` CLI** (*Install 'localpilot' Command in PATH*): `localpilot "fix the tests"`, `--plan`, `--ask`, `--file`, `--parallel`, `--settings`, `--setup` open LocalPilot in the current folder via `vscode://` deep links.
+- **Extension API** — `activate()` exports `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels` and `version` for other extensions and scripts. See [Development]({{ '/docs/development/' | relative_url }}).
