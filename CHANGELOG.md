@@ -2,6 +2,16 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Added
+- **Zero-config auto-detection of model servers.** At startup and on *Refresh models*, LocalPilot probes the configured providers, the well-known local ports (Ollama, LM Studio, llama.cpp, vLLM, **Docker Model Runner** `12434`, Jan, SGLang, KoboldCpp) and **running Docker containers** (`docker ps` — Ollama, vLLM, llama.cpp, LocalAI, TGI, SGLang, model-runner, KoboldCpp images, using each container's published host port). Every reachable server that isn't configured yet is added to `localpilot.providers` automatically (existing entries are never changed) and a notification says what was found. If the configured default model is offline, LocalPilot uses the best available one and offers to make it the default.
+- **Docker-based models**: a *Docker Model Runner* provider preset (`http://localhost:12434/engines/v1`, models like `docker/ai/qwen2.5-coder`), container discovery as above, and a one-click **Enable** prompt when the Model Runner is active but host (TCP) access is off. The setup wizard lists Docker servers too and marks newly found ones.
+- MCP client tests that launch a real stdio MCP server and round-trip a tool call, and verify that an un-launchable server fails fast with its error shown in **Settings → MCP servers** ("failed to start" badge with the reason).
+- `@localpilot` / Language Model API: image attachments (`LanguageModelDataPart`) are forwarded to vision models instead of being dropped; non-image attachments are inlined as text.
+
+### Changed
+- MCP servers that cannot be spawned (bad command, missing `npx`) fail immediately instead of hanging 30 s; on Windows they are launched through the shell so `npx`/`.cmd` launchers resolve.
+
 ## 0.2.3 — 2026-10-23
 ### Added
 - **Settings screen** (*LocalPilot: Settings*, gear icon in the chat toolbar): a dedicated panel for every option — **Providers** (add from presets for Ollama, LM Studio, llama.cpp, vLLM, Jan, LocalAI, SGLang or a custom endpoint; edit URL/key/context/models; enable/disable; *Test connection* shows latency and the live model list), **Models & generation**, **Agent & approvals** with *Careful / Balanced / Autonomous* presets, **Inline completions**, **Web search**, **Memory & skills** (skill folders, discovered skills and subagents, open/clear notes), **MCP servers** (add/edit/remove, connection status and tool counts) and **Advanced**. Each value shows whether it comes from User or Workspace settings and can be reset individually; a scope toggle chooses where edits are written.
@@ -9,8 +19,6 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Getting Started walkthrough** in VS Code's Welcome page; commands *Manage Model Providers…* and *Clear Memory Notes…*; the Agents view and the chat's "no models" notice link straight to setup/providers.
 
 - Integration tests (`npm test`, real VS Code) covering the settings panel commands, provider probing against an Ollama-style server, input sanitisation and configuration round-trips.
-- MCP client tests that launch a real stdio MCP server and round-trip a tool call, and verify that an un-launchable server fails fast with its error shown in **Settings → MCP servers** ("failed to start" badge with the reason).
-- `@localpilot` / Language Model API: image attachments (`LanguageModelDataPart`) are forwarded to vision models instead of being dropped; non-image attachments are inlined as text.
 - **Real end-to-end tests** against a local Ollama server (skipped when none is running): the agent writes a file through a real tool call, two sessions run **in parallel** and each finishes its own task, and `stop()` aborts a streaming run. Tests run in a fresh temporary workspace folder.
 - **Extension API** (`vscode.extensions.getExtension('localpilot.localpilot-agent').exports`): `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels`, `version` — drive LocalPilot agents from other extensions or scripts.
 
@@ -21,7 +29,6 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ### Changed
 - "Open settings" in the chat and the no-model fallback now open the LocalPilot Settings panel instead of the generic VS Code settings editor.
-- MCP servers that cannot be spawned (bad command, missing `npx`) fail immediately instead of hanging 30 s; on Windows they are launched through the shell so `npx`/`.cmd` launchers resolve.
 - Finishing the setup wizard merges newly detected servers into `localpilot.providers` instead of replacing the list; MCP server entries are validated before being written; the first-run wizard never replaces a Settings panel the user already opened.
 
 ## 0.2.2 — 2026-10-23

@@ -1,6 +1,6 @@
 ---
 title: Models & providers
-description: Connect Ollama, LM Studio, llama.cpp, vLLM, Unsloth exports or any OpenAI-compatible endpoint, and pick the right model for the job.
+description: Connect Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Unsloth exports or any OpenAI-compatible endpoint — auto-detected, including model servers running in Docker containers.
 permalink: /docs/models/
 ---
 
@@ -25,6 +25,37 @@ Models are referenced as **`<providerId>/<modelId>`**, e.g. `ollama/qwen2.5-code
 ```
 
 Unreachable servers are skipped silently; models from all reachable servers are merged into one picker.
+
+## Auto-detection
+
+You normally don't have to configure anything. At startup and on every *Refresh models*, LocalPilot probes:
+
+1. the providers in your settings,
+2. the well-known local ports — Ollama `11434`, LM Studio `1234`, llama.cpp `8080`, vLLM `8000`, **Docker Model Runner `12434`**, Jan `1337`, SGLang `30000`, KoboldCpp `5001`,
+3. **running Docker containers** (`docker ps`) whose image is a known model server — `ollama/ollama`, `vllm/vllm-openai`, `ghcr.io/ggml-org/llama.cpp`, `localai/localai`, `huggingface/text-generation-inference`, `lmsysorg/sglang`, `docker/model-runner`, KoboldCpp — using the **published host port** of each container.
+
+Every server that answers and is not yet in `localpilot.providers` is **added automatically** (never removed or edited), and a notification tells you what was found. With no `defaultModel` set, **Auto** picks the best tool-capable coder model across all servers; if your configured default is offline, LocalPilot falls back to the best available one and offers to make it the default.
+
+## Docker-based models
+
+**Docker Model Runner** (Docker Desktop 4.40+ or `docker model install-runner` on Docker Engine) serves models through an OpenAI-compatible API:
+
+```bash
+docker model pull ai/qwen2.5-coder            # or any ai/* model, or hf.co/<repo>
+docker desktop enable model-runner --tcp=12434   # one-time: allow access from the host
+```
+
+LocalPilot then finds it at `http://localhost:12434/engines/v1` and lists its models under the `docker` provider (e.g. `docker/docker.io/ai/qwen2.5-coder:latest`, shown as *qwen2.5-coder:latest* in the picker). If the runner is active but host access is off, LocalPilot shows a one-click **Enable** prompt that runs the command above.
+
+**Model servers in containers** work the same way as native ones — publish the port and LocalPilot picks them up:
+
+```bash
+docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama
+docker run -d --name vllm -p 8000:8000 --gpus all vllm/vllm-openai --model Qwen/Qwen2.5-Coder-7B-Instruct
+docker run -d --name llamacpp -p 8080:8080 -v ./models:/models ghcr.io/ggml-org/llama.cpp:server -m /models/model.gguf --host 0.0.0.0
+```
+
+Containers appear as providers named `docker-<container>` (e.g. *vLLM (Docker · vllm)*), so a non-standard host port such as `-p 11435:11434` is handled automatically.
 
 ## Adding a provider
 

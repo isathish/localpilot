@@ -161,7 +161,7 @@ export function providersFromContainers(rows: DockerPs[]): ProviderConfig[] {
 
 /** Running containers that look like model servers, mapped to their published host ports. Empty when Docker is absent. */
 export async function discoverDockerProviders(): Promise<ProviderConfig[]> {
-  const r = await exec('docker', ['ps', '--format', '{{json .}}'], 4000);
+  const r = await exec('docker', ['ps', '--format', '{{json .}}'], 3000);
   if (!r.ok || !r.out.trim()) {
     return [];
   }
@@ -179,11 +179,13 @@ export async function discoverDockerProviders(): Promise<ProviderConfig[]> {
 export type DockerModelRunnerState = 'absent' | 'stopped' | 'no-tcp' | 'ready';
 
 /** Docker Desktop's built-in Model Runner: present but only reachable from containers unless TCP access is enabled. */
-export async function dockerModelRunnerState(tcpReachable: boolean): Promise<DockerModelRunnerState> {
-  if (tcpReachable) {
+export async function dockerModelRunnerState(tcpReachable: boolean | Promise<boolean>): Promise<DockerModelRunnerState> {
+  // `docker model status` can block for a long time while the runner restarts, so cap it and run it alongside the probes.
+  const status = exec('docker', ['model', 'status'], 2500);
+  if (await tcpReachable) {
     return 'ready';
   }
-  const r = await exec('docker', ['model', 'status'], 5000);
+  const r = await status;
   if (!r.ok) {
     return 'absent';
   }
@@ -211,7 +213,7 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
   const seen = new Set(configured.map((p) => norm(p.baseUrl)));
   const ids = new Set(configured.map((p) => p.id));
 
-  const docker = await discoverDockerProviders();
+  const docker = discoverDockerProviders();
   const candidates: { cfg: ProviderConfig; configured: boolean; source: ProbeResult['source'] }[] = configured.map((c) => ({ cfg: c, configured: true, source: 'settings' as const }));
   for (const k of KNOWN_ENDPOINTS) {
     if (!seen.has(norm(k.baseUrl))) {
@@ -219,16 +221,19 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
       candidates.push({ cfg: k, configured: false, source: 'known' });
     }
   }
-  for (const d of docker) {
+  const staticResults = Promise.all(candidates.map((c) => probeProvider(c.cfg, c.configured, c.source)));
+  const dmrState = dockerModelRunnerState(staticResults.then((rs) => rs.some((r) => r.ok && /:12434\//.test(r.baseUrl))));
+
+  const dockerCandidates: typeof candidates = [];
+  for (const d of await docker) {
     if (!seen.has(norm(d.baseUrl))) {
       seen.add(norm(d.baseUrl));
-      candidates.push({ cfg: d, configured: false, source: 'docker' });
+      dockerCandidates.push({ cfg: d, configured: false, source: 'docker' });
     }
   }
-
-  const results = await Promise.all(candidates.map((c) => probeProvider(c.cfg, c.configured, c.source)));
-  const dmrReachable = results.some((r) => r.ok && /:12434\//.test(r.baseUrl));
-  const dockerModelRunner = await dockerModelRunnerState(dmrReachable);
+  const results = [...(await staticResults), ...(await Promise.all(dockerCandidates.map((c) => probeProvider(c.cfg, c.configured, c.source))))];
+  candidates.push(...dockerCandidates);
+  const dockerModelRunner = await dmrState;
 
   const added: ProviderConfig[] = [];
   for (const r of results) {

@@ -4,6 +4,7 @@ import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { LocalPilotApi } from '../extension';
+import { autoDetectProviders, discoverDockerProviders } from '../providers/discovery';
 
 /**
  * Real end-to-end runs against a local model server (Ollama on :11434).
@@ -83,6 +84,28 @@ suite('LocalPilot end-to-end (real local model)', () => {
     const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
     assert.strictEqual(api.version, ext.packageJSON.version);
     assert.match(api.version, /^\d+\.\d+\.\d+/);
+  });
+
+  test('auto-detection finds the running Ollama server and any model containers published by Docker', async function () {
+    this.timeout(30_000);
+    const log = vscode.window.createOutputChannel('LocalPilot e2e', { log: true });
+    const report = await autoDetectProviders(log, { write: false });
+    log.dispose();
+    const ollama = report.results.find((r) => r.ok && r.type === 'ollama' && /:11434$/.test(r.baseUrl));
+    assert.ok(ollama, `expected the local Ollama to be detected: ${report.results.map((r) => `${r.id}:${r.ok}`).join(', ')}`);
+    assert.ok(ollama.models.length > 0 && report.recommended, 'models listed and a recommendation made');
+
+    // When a model-server container is running (e.g. `docker run -p 11435:11434 ollama/ollama`), it must be
+    // discovered on its *host* port and proposed as a new provider unless already configured.
+    const containers = await discoverDockerProviders();
+    for (const c of containers) {
+      const r = report.results.find((x) => x.baseUrl === c.baseUrl);
+      assert.ok(r, `container ${c.id} (${c.baseUrl}) was probed`);
+      assert.strictEqual(r.source, r.configured ? 'settings' : 'docker');
+      if (r.ok && !r.configured) {
+        assert.ok(report.added.some((a) => a.baseUrl === c.baseUrl), `${c.id} proposed for addition`);
+      }
+    }
   });
 
   test('agent executes a real tool call: the model writes a file into the workspace', async function () {
