@@ -165,6 +165,7 @@ input.invalid, select.invalid { border-color: var(--error); }
 .brand-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 11px; letter-spacing: .02em; line-height: 1; font-family: inherit; --mark: var(--brand); color: var(--mark); background: color-mix(in srgb, var(--mark) 16%, var(--code-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 28%, transparent); }
 .brand-mark.plain { color: var(--muted); background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--border-soft); }
 .brand-mark svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.brand-mark svg.logo { width: 17px; height: 17px; fill: currentColor; stroke: none; }
 .preset .brand-mark { width: 28px; height: 28px; border-radius: 7px; }
 .preset[disabled] .brand-mark { filter: saturate(.6); }
 
