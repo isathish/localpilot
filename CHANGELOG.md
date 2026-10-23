@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.3 — 2026-10-23
 ### Added
 - **Settings screen** (*LocalPilot: Settings*, gear icon in the chat toolbar): a dedicated panel for every option — **Providers** (add from presets for Ollama, LM Studio, llama.cpp, vLLM, Jan, LocalAI, SGLang or a custom endpoint; edit URL/key/context/models; enable/disable; *Test connection* shows latency and the live model list), **Models & generation**, **Agent & approvals** with *Careful / Balanced / Autonomous* presets, **Inline completions**, **Web search**, **Memory & skills** (skill folders, discovered skills and subagents, open/clear notes), **MCP servers** (add/edit/remove, connection status and tool counts) and **Advanced**. Each value shows whether it comes from User or Workspace settings and can be reset individually; a scope toggle chooses where edits are written.
 - **Welcome / Setup wizard** (*LocalPilot: Welcome / Setup*): detects running model servers, lists their models with a recommended default, and picks an approval preset and inline completions. Opens automatically on first run when no server is reachable (`localpilot.showWelcomeOnStartup`).
