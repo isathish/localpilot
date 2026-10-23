@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.0 — 2026-10-23
+
 ### Added
 - **Plans that execute themselves, in parallel.** Checklist items now carry `dependsOn` next to `agent` and `prompt`, and one `run_todos_parallel` call runs the whole plan in **dependency waves**: independent items run concurrently, dependents start when their prerequisites finish and receive those reports in their brief, an item whose prerequisite failed is skipped with the reason, cycles are reported instead of deadlocking, and items without an agent are left for the main agent. Plan mode now produces checklists in exactly this shape (agent + complete brief + dependencies per step), and saying *implement the plan* / *go ahead* / *run the checklist* in Agent mode makes the fan-out the first step of the turn instead of hoping the model remembers it. The Tasks panel shows each item's agent and *after 1, 2* dependencies.
 - **`analyze_workspace` tool.** A fast, model-free scan of the repository — languages and test files per folder, manifest summaries (name, scripts, dependency counts), and a balanced split into shards sized for `parallel.maxConcurrency` — so whole-workspace reviews, audits and onboarding questions fan out one `explore`/`reviewer` subagent per shard with `run_parallel_subagents` instead of reading files one at a time. Available to the built-in read-only subagents and in Plan/Ask mode.
