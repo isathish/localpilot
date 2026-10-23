@@ -5,6 +5,8 @@ url: https://isathish.github.io
 baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
 download: https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix
+marketplace: https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent
+extension_id: localpilot.localpilot-agent
 releases: https://github.com/isathish/localpilot/releases
 version: 0.1.2
 lang: en

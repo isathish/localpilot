@@ -25,13 +25,13 @@ ollama serve
 
 ## 2. Install the extension
 
-Download the latest VSIX from the [releases page]({{ site.releases }}) (or use the [direct link]({{ site.download }})) and install it:
+**From the Marketplace** (search for *LocalPilot Agent* in the Extensions view), or from the command line:
 
 ```bash
-code --install-extension localpilot.vsix
+code --install-extension {{ site.extension_id }}
 ```
 
-Or in VS Code: **Extensions view → ··· → Install from VSIX…**
+**From a GitHub release:** download the latest VSIX from the [releases page]({{ site.releases }}) (or the [direct link]({{ site.download }})) and run `code --install-extension localpilot.vsix`, or use **Extensions view → ··· → Install from VSIX…**
 
 ## 3. Open LocalPilot
 

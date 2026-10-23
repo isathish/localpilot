@@ -11,16 +11,16 @@ permalink: /
     <h1>The AI coding agent that<br><span>runs on your machine</span></h1>
     <p class="sub">LocalPilot brings the Copilot, Claude Code and Cursor experience to VS Code — agent mode, parallel agents, skills, screenshots and MCP — powered entirely by models you serve with Ollama, LM Studio, llama.cpp or vLLM.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="{{ site.download }}">
+      <a class="btn btn-primary" href="{{ site.marketplace }}">
         <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-        Download for VS Code
+        Install from VS Code Marketplace
       </a>
       <a class="btn" href="{{ '/docs/getting-started/' | relative_url }}">Get started</a>
       <a class="btn" href="{{ site.repo }}">
         <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7 3.6 3.6 0 0 1 .1-2.7s.9-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1a3.6 3.6 0 0 1 .1 2.7 3.9 3.9 0 0 1 1 2.7c0 3.9-2.4 4.7-4.6 5 .4.3.7 1 .7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
         Star on GitHub
       </a>
-      <div class="note">v{{ site.version }} · VSIX for VS Code 1.140+ · macOS, Linux, Windows · <a href="{{ site.releases }}">all releases</a></div>
+      <div class="note">v{{ site.version }} · <code>code --install-extension {{ site.extension_id }}</code> · or <a href="{{ site.download }}">download the VSIX</a> · VS Code 1.140+ · macOS, Linux, Windows</div>
     </div>
 
     <div class="mock" aria-hidden="true">
@@ -103,7 +103,7 @@ permalink: /
     <div class="steps">
       <div class="step"><h3>Serve a model</h3><p>Start any local server. LocalPilot auto-detects Ollama, LM Studio, llama.cpp and vLLM on their default ports.</p><pre><code>ollama pull qwen2.5-coder:14b
 ollama serve</code></pre></div>
-      <div class="step"><h3>Install LocalPilot</h3><p>Download the VSIX and install it from the Extensions view or the command line.</p><pre><code>code --install-extension localpilot.vsix</code></pre></div>
+      <div class="step"><h3>Install LocalPilot</h3><p>Install from the Marketplace, or download the VSIX from GitHub releases.</p><pre><code>code --install-extension {{ site.extension_id }}</code></pre></div>
       <div class="step"><h3>Pick a model and go</h3><p>Open the LocalPilot sidebar, choose a model, and ask for a change. Review the diff, keep it, ship it.</p><pre><code>⌘⇧L  open chat
 ⌘⌥K  inline edit</code></pre></div>
     </div>
@@ -163,7 +163,7 @@ ollama serve</code></pre></div>
     <details><summary>Does any data leave my machine?</summary><p>Only if you configure it to — for example a remote OpenAI-compatible endpoint, or the optional web search tool (which asks for approval by default). There is no telemetry and no account.</p></details>
     <details><summary>How is this different from the Copilot "bring your own key" option?</summary><p>LocalPilot is a complete agent, not just a model provider. You get the agent loop, tools, parallel agents, change review, skills, subagents, screenshots and MCP — and it also registers your local models with VS Code's Language Model API so other extensions can use them.</p></details>
     <details><summary>Can I use my existing Claude Code / Cursor rules and skills?</summary><p>Yes. <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>, <code>.cursor/rules/*.mdc</code>, <code>.claude/skills</code>, <code>.claude/agents</code> and <code>.github/copilot-instructions.md</code> are all picked up automatically.</p></details>
-    <details><summary>Is it on the Marketplace?</summary><p>Releases ship as a VSIX on GitHub (<a href="{{ site.releases }}">Releases</a>). Install with <code>code --install-extension localpilot.vsix</code> or via <em>Extensions → … → Install from VSIX</em>.</p></details>
+    <details><summary>Is it on the Marketplace?</summary><p>Yes — <a href="{{ site.marketplace }}">LocalPilot Agent on the VS Code Marketplace</a> (<code>{{ site.extension_id }}</code>). Every release is also published as a VSIX on <a href="{{ site.releases }}">GitHub Releases</a> with SHA-256 checksums.</p></details>
   </div>
 </section>
 
@@ -172,7 +172,7 @@ ollama serve</code></pre></div>
     <h2>Your code. Your models. Your machine.</h2>
     <p>Free and open source under the MIT license.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="{{ site.download }}">Download LocalPilot</a>
+      <a class="btn btn-primary" href="{{ site.marketplace }}">Install LocalPilot</a>
       <a class="btn" href="{{ '/docs/getting-started/' | relative_url }}">Read the docs</a>
     </div>
   </div>

@@ -6,13 +6,15 @@
 Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b>. No accounts, no telemetry, no cloud.</p>
 <p align="center">
   <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/v/localpilot.localpilot-agent?label=marketplace&color=0078d4" alt="VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/i/localpilot.localpilot-agent?color=4cc38a" alt="Installs"></a>
   <a href="https://github.com/isathish/localpilot/releases/latest"><img src="https://img.shields.io/github/v/release/isathish/localpilot?label=release&color=f2a33a" alt="Latest release"></a>
-  <a href="https://github.com/isathish/localpilot/releases"><img src="https://img.shields.io/github/downloads/isathish/localpilot/total?color=4cc38a" alt="Downloads"></a>
   <a href="https://isathish.github.io/localpilot/"><img src="https://img.shields.io/badge/docs-website-111827" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix"><b>Download VSIX</b></a> ·
+  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><b>Install from Marketplace</b></a> ·
+  <a href="https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix">Download VSIX</a> ·
   <a href="https://isathish.github.io/localpilot/">Website</a> ·
   <a href="https://isathish.github.io/localpilot/docs/getting-started/">Documentation</a> ·
   <a href="https://isathish.github.io/localpilot/#compare">Compare</a> ·
@@ -32,14 +34,20 @@ Copilot / Claude Code / Cursor-class agentic coding in VS Code — powered entir
 
 ## Install
 
-**From a release (recommended)**
+**From the VS Code Marketplace (recommended)** — search for **LocalPilot Agent** in the Extensions view, or:
+
+```bash
+code --install-extension localpilot.localpilot-agent
+```
+
+**From a GitHub release**
 
 ```bash
 curl -L -o localpilot.vsix https://github.com/isathish/localpilot/releases/latest/download/localpilot.vsix
 code --install-extension localpilot.vsix
 ```
 
-Or in VS Code: *Extensions → ··· → Install from VSIX…*. Requires VS Code 1.140+. The Marketplace listing is coming soon.
+Requires VS Code 1.140+.
 
 **Serve a model** (any one of these; default ports are auto-detected)
 
