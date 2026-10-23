@@ -54,6 +54,23 @@ suite('LocalPilot settings & setup', () => {
     }
   });
 
+  test('chat location: containers for every side, Move Chat To… everywhere, LocalPilot icon in editor title and status bar', async () => {
+    const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
+    assert.ok(c.viewsContainers.activitybar.some((v: { id: string }) => v.id === 'localpilot'));
+    assert.ok(c.viewsContainers.secondarySidebar.some((v: { id: string }) => v.id === 'localpilot-secondary'));
+    assert.ok(c.viewsContainers.panel.some((v: { id: string }) => v.id === 'localpilot-panel'));
+    assert.deepStrictEqual(c.configuration.properties['localpilot.chat.location'].enum, ['sidebar', 'secondarySidebar', 'panel', 'editor']);
+    assert.strictEqual(c.configuration.properties['localpilot.chat.location'].default, 'sidebar');
+    const menus = c.menus as Record<string, { command?: string; when?: string }[]>;
+    assert.ok(menus['view/title'].some((m) => m.command === 'localpilot.moveChat' && m.when?.includes('localpilot.chatView')));
+    assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.openChat' && m.when?.includes('activeWebviewPanelId != localpilot.chatPanel')), 'LocalPilot icon on every editor');
+    assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.moveChat' && m.when?.includes('activeWebviewPanelId == localpilot.chatPanel')), 'Move Chat To… on the chat tab');
+    const commands = await vscode.commands.getCommands(true);
+    for (const id of ['localpilot.moveChat', 'localpilot.statusMenu', 'localpilot.openChatInEditor']) {
+      assert.ok(commands.includes(id), `missing command ${id}`);
+    }
+  });
+
   test('package.json wires the settings UI: gear in chat toolbar, walkthrough, welcome setting', () => {
     const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
     assert.ok(c.menus['view/title'].some((m: { command: string; when: string }) => m.command === 'localpilot.openSettings' && m.when.includes('localpilot.chatView')));

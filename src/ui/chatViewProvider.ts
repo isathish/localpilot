@@ -1,9 +1,31 @@
 import * as vscode from 'vscode';
 import { ChatController, FromWebview, ToWebview } from './chatController';
 
+/** Where the chat lives; mirrors the `localpilot.chat.location` setting. */
+export type ChatLocation = 'sidebar' | 'secondarySidebar' | 'panel' | 'editor';
+
+/** View container ids (as VS Code registers them) that host the LocalPilot views in each location. */
+const CONTAINER_FOR: Record<Exclude<ChatLocation, 'editor'>, string> = {
+  sidebar: 'workbench.view.extension.localpilot',
+  secondarySidebar: 'workbench.view.extension.localpilot-secondary',
+  panel: 'workbench.view.extension.localpilot-panel',
+};
+
+export const CHAT_LOCATIONS: { id: ChatLocation; label: string; detail: string; icon: string }[] = [
+  { id: 'sidebar', label: 'Primary Side Bar', detail: 'Left, with the Explorer — under the LocalPilot activity bar icon', icon: 'layout-sidebar-left' },
+  { id: 'secondarySidebar', label: 'Secondary Side Bar', detail: 'Right, where Copilot Chat lives — keeps the Explorer visible', icon: 'layout-sidebar-right' },
+  { id: 'panel', label: 'Panel', detail: 'Bottom, next to the Terminal and Problems', icon: 'layout-panel' },
+  { id: 'editor', label: 'Editor Area', detail: 'A tab in the main area, like a file — most room for long answers', icon: 'layout-centered' },
+];
+
+export function getChatLocation(): ChatLocation {
+  return vscode.workspace.getConfiguration('localpilot').get<ChatLocation>('chat.location', 'sidebar');
+}
+
 /** Hosts the chat UI in the sidebar view and (optionally) in editor tabs. All hosts share one controller. */
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'localpilot.chatView';
+  static readonly panelViewType = 'localpilot.chatPanel';
   private view?: vscode.WebviewView;
   private panels = new Set<vscode.WebviewPanel>();
 
@@ -28,8 +50,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  openInEditor(): void {
-    const panel = vscode.window.createWebviewPanel('localpilot.chatPanel', 'LocalPilot Chat', vscode.ViewColumn.Beside, {
+  /** Shows the chat as an editor tab; reuses the open tab instead of stacking duplicates. */
+  openInEditor(column: vscode.ViewColumn = vscode.ViewColumn.Beside): void {
+    const existing = this.panels.values().next().value as vscode.WebviewPanel | undefined;
+    if (existing) {
+      existing.reveal(undefined, false);
+      void existing.webview.postMessage({ type: 'focusInput' } satisfies ToWebview);
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(ChatViewProvider.panelViewType, 'LocalPilot Chat', column, {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
@@ -39,11 +68,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.wire(panel.webview, () => this.panels.delete(panel), panel);
   }
 
+  /** Opens the chat wherever the user keeps it: the editor tab when `chat.location` is `editor`, otherwise the view. */
   reveal(): void {
+    if (getChatLocation() === 'editor') {
+      this.openInEditor(vscode.ViewColumn.Active);
+      return;
+    }
     if (this.view) {
       this.view.show(true);
     } else {
       void vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
+    }
+  }
+
+  /**
+   * Moves the LocalPilot views to the container for `loc` and opens the chat there. Uses the same
+   * `vscode.moveViews` command Copilot Chat uses; the empty containers left behind hide themselves.
+   */
+  async applyLocation(loc: ChatLocation): Promise<void> {
+    if (loc === 'editor') {
+      this.openInEditor(vscode.ViewColumn.Active);
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand('vscode.moveViews', { viewIds: [ChatViewProvider.viewId, 'localpilot.agentsView'], destinationId: CONTAINER_FOR[loc] });
+    } catch {
+      // Older VS Code without the command: the view stays put and the user can still drag it.
+    }
+    await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
+  }
+
+  /** Quick pick that updates `localpilot.chat.location` and moves the chat right away. */
+  async pickLocation(): Promise<void> {
+    const current = getChatLocation();
+    const pick = await vscode.window.showQuickPick(
+      CHAT_LOCATIONS.map((l) => ({ label: `$(${l.icon}) ${l.label}`, description: l.id === current ? 'current' : undefined, detail: l.detail, id: l.id })),
+      { title: 'Move LocalPilot Chat To…', placeHolder: 'Where should the chat live? You can also drag the view anywhere.', matchOnDetail: true }
+    );
+    if (!pick) {
+      return;
+    }
+    if (pick.id === current) {
+      // Nothing to save; still move, so re-picking brings back a view that was dragged elsewhere or closed.
+      await this.applyLocation(pick.id);
+      return;
+    }
+    await vscode.workspace.getConfiguration('localpilot').update('chat.location', pick.id, vscode.ConfigurationTarget.Global);
+    // The configuration listener in extension.ts moves the views; editor tabs are opened on demand.
+    if (pick.id === 'editor') {
+      this.openInEditor(vscode.ViewColumn.Active);
     }
   }
 

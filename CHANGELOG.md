@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Chat anywhere, like Copilot and Claude Code.** The chat is no longer tied to the left sidebar: **LocalPilot: Move Chat To…** (chat toolbar, status bar menu, Command Palette) moves it to the Primary Side Bar, the Secondary Side Bar, the bottom Panel or an editor tab, and the choice is remembered in the new `localpilot.chat.location` setting (synced across machines; dragging the view by hand still works). *Open Chat* and the LocalPilot icon open the chat wherever it lives; *Open Chat in Editor* now reuses the open tab instead of stacking duplicates, and the chat tab gets its own toolbar (New Chat, Show Chats, Move, Settings).
+- **LocalPilot icon everywhere.** Every editor's title bar shows the LocalPilot icon (click to open the chat, as with Claude Code), and the status bar item now opens a Copilot-style menu — Open Chat, New Chat, Run Tasks in Parallel, Select Model, Manage Models, Inline Completions on/off, Move Chat To…, Settings, Logs — instead of only switching the model.
+
 ## 1.0.2 — 2026-10-23
 ### Fixed
 - Show real vendor logos on provider cards

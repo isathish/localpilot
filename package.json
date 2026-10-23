@@ -56,6 +56,20 @@
           "title": "LocalPilot",
           "icon": "media/icon.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "localpilot-secondary",
+          "title": "LocalPilot",
+          "icon": "media/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "localpilot-panel",
+          "title": "LocalPilot",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "views": {
@@ -124,6 +138,18 @@
         "title": "Open Chat in Editor",
         "category": "LocalPilot",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "localpilot.moveChat",
+        "title": "Move Chat To…",
+        "category": "LocalPilot",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "localpilot.statusMenu",
+        "title": "LocalPilot Menu…",
+        "category": "LocalPilot",
+        "icon": "$(localpilot-logo)"
       },
       {
         "command": "localpilot.newSession",
@@ -441,6 +467,11 @@
           "group": "navigation@3"
         },
         {
+          "command": "localpilot.moveChat",
+          "when": "view == localpilot.chatView",
+          "group": "0_layout"
+        },
+        {
           "command": "localpilot.sessionMenu",
           "when": "view == localpilot.chatView",
           "group": "navigation@4"
@@ -611,10 +642,47 @@
           "when": "false"
         }
       ],
+      "editor/title": [
+        {
+          "command": "localpilot.openChat",
+          "when": "activeWebviewPanelId != localpilot.chatPanel && activeWebviewPanelId != localpilot.settings",
+          "group": "navigation@9"
+        },
+        {
+          "command": "localpilot.newSession",
+          "when": "activeWebviewPanelId == localpilot.chatPanel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localpilot.showSessions",
+          "when": "activeWebviewPanelId == localpilot.chatPanel",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localpilot.moveChat",
+          "when": "activeWebviewPanelId == localpilot.chatPanel",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.openSettings",
+          "when": "activeWebviewPanelId == localpilot.chatPanel",
+          "group": "navigation@4"
+        },
+        {
+          "command": "localpilot.openMarkdownViewer",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@-1"
+        }
+      ],
       "editor/context": [
         {
           "submenu": "localpilot.editorSubmenu",
           "group": "0_localpilot"
+        },
+        {
+          "command": "localpilot.openMarkdownViewer",
+          "when": "resourceLangId == markdown",
+          "group": "0_localpilot@9"
         }
       ],
       "localpilot.editorSubmenu": [
@@ -1012,6 +1080,24 @@
           "default": true,
           "order": 0,
           "markdownDescription": "Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Welcome / Setup*."
+        },
+        "localpilot.chat.location": {
+          "type": "string",
+          "enum": [
+            "sidebar",
+            "secondarySidebar",
+            "panel",
+            "editor"
+          ],
+          "enumDescriptions": [
+            "Primary Side Bar (left, with the Explorer), under the LocalPilot activity bar icon.",
+            "Secondary Side Bar (right), where Copilot Chat lives.",
+            "Bottom panel, next to the Terminal and Problems.",
+            "An editor tab in the main area, like a file."
+          ],
+          "default": "sidebar",
+          "order": 1,
+          "markdownDescription": "Where the chat opens. Change it any time with *LocalPilot: Move Chat To…* (also in the chat toolbar and the status bar menu) or by dragging the view. The LocalPilot icon in the editor title bar and the status bar always opens the chat wherever it is."
         },
         "localpilot.models.autoSetup": {
           "type": "boolean",

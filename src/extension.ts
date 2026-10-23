@@ -28,7 +28,7 @@ import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
-import { ChatViewProvider } from './ui/chatViewProvider';
+import { CHAT_LOCATIONS, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
@@ -123,8 +123,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
 
-  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
-  status.command = 'localpilot.selectModel';
+  const status = vscode.window.createStatusBarItem('localpilot.status', vscode.StatusBarAlignment.Right, 90);
+  status.name = 'LocalPilot';
+  status.command = 'localpilot.statusMenu';
   context.subscriptions.push(status);
   const refreshStatus = async () => {
     const cfg = getConfig();
@@ -144,7 +145,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     status.backgroundColor = models.length || pulling ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
     status.tooltip = pulling
       ? `LocalPilot · downloading ${pulling.model} — ${pulling.detail}`
-      : `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick to switch model`;
+      : `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick for chat, models, layout and settings`;
     status.show();
   };
   void refreshStatus();
@@ -284,6 +285,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   cmd('localpilot.openChat', () => view.reveal());
   cmd('localpilot.openChatInEditor', () => view.openInEditor());
+  cmd('localpilot.moveChat', () => view.pickLocation());
+  // Apply the configured chat location once per value, so a view the user dragged by hand is not fought on every start.
+  const LOCATION_KEY = 'localpilot.chatLocationApplied';
+  const syncLocation = async () => {
+    const loc = getChatLocation();
+    const applied = context.globalState.get<string>(LOCATION_KEY);
+    if (applied === loc) {
+      return;
+    }
+    await context.globalState.update(LOCATION_KEY, loc);
+    // A fresh install already has the view in the sidebar; only move when something actually changed.
+    if (loc !== 'editor' && !(applied === undefined && loc === 'sidebar')) {
+      await view.applyLocation(loc);
+    }
+  };
+  void syncLocation();
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('localpilot.chat.location') && void syncLocation()));
+  // Copilot-style status bar menu: one click reaches the chat, model, layout and settings.
+  cmd('localpilot.statusMenu', async () => {
+    const cfg = getConfig();
+    const where = CHAT_LOCATIONS.find((l) => l.id === getChatLocation());
+    const items: (vscode.QuickPickItem & { run?: () => unknown })[] = [
+      { label: '$(localpilot-logo) Open Chat', description: where ? `in the ${where.label}` : undefined, run: () => view.reveal() },
+      { label: '$(add) New Chat', run: () => vscode.commands.executeCommand('localpilot.newSession') },
+      { label: '$(run-all) Run Tasks in Parallel…', run: () => vscode.commands.executeCommand('localpilot.runParallelTasks') },
+      { label: '', kind: vscode.QuickPickItemKind.Separator },
+      { label: '$(server) Select Model…', description: cfg.defaultModel || 'auto', run: () => vscode.commands.executeCommand('localpilot.selectModel') },
+      { label: '$(library) Manage Models', run: () => vscode.commands.executeCommand('localpilot.manageModels') },
+      { label: `$(${cfg.inlineCompletion.enabled ? 'check' : 'circle-large-outline'}) Inline Completions`, description: cfg.inlineCompletion.enabled ? 'on' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleInlineCompletions') },
+      { label: '', kind: vscode.QuickPickItemKind.Separator },
+      { label: '$(layout) Move Chat To…', description: where?.label, run: () => view.pickLocation() },
+      { label: '$(settings-gear) Settings', run: () => vscode.commands.executeCommand('localpilot.openSettings') },
+      { label: '$(output) Show Logs', run: () => vscode.commands.executeCommand('localpilot.showLogs') },
+    ];
+    const pick = await vscode.window.showQuickPick(items, { title: 'LocalPilot', placeHolder: 'Everything runs on your machine' });
+    await pick?.run?.();
+  });
   cmd('localpilot.newSession', async () => {
     view.reveal();
     await controller.handle({ type: 'newSession' });
