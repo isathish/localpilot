@@ -2,6 +2,10 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+### Changed
+- Website: light and dark themes (follows the OS by default, manual toggle persisted, no flash on load), higher-contrast text colours, larger base type and improved line-height; per-build stylesheet cache-busting.
+
 ## 0.1.1 — 2026-10-23
 ### Changed
 - New restrained brand palette (graphite + amber) for the logo, marketplace banner and website; removed gradient/glow styling.
