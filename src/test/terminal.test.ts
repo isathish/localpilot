@@ -32,6 +32,11 @@ suite('LocalPilot terminal integration', () => {
     const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
     assert.ok(c.menus['terminal/context'].some((m: { command: string }) => m.command === 'localpilot.fixTerminal'));
     assert.strictEqual(c.terminal.profiles[0].id, 'localpilot.terminalProfile');
+    assert.strictEqual(c.terminal.profiles[0].icon, 'localpilot-logo', 'terminal profile uses the brand glyph');
+    // Brand icon font: contributed glyphs exist and the font file ships.
+    assert.strictEqual(c.icons['localpilot-logo'].default.fontPath, 'media/localpilot.woff');
+    assert.ok(require('fs').existsSync(path.join(EXT_ROOT, 'media', 'localpilot.woff')), 'media/localpilot.woff must be built (npm run icons)');
+    assert.strictEqual(c.commands.find((x: { command: string }) => x.command === 'localpilot.openChat').icon, '$(localpilot-logo)');
     assert.strictEqual(c.configuration.properties['localpilot.terminal.runInIntegratedTerminal'].default, true);
   });
 

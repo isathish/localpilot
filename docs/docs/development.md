@@ -63,7 +63,8 @@ src/
                   lmProvider (Language Model API), inlineCompletion, inlineEdit, images,
                   settingsPanel (Settings / provider manager / setup wizard webview)
   mcp/            stdio MCP client
-media/            chat.js / chat.css, settings.js / settings.css (webviews), walkthrough/*.md, icons
+media/            chat.js / chat.css, settings.js / settings.css (webviews), walkthrough/*.md, icons,
+                  localpilot.woff (brand icon font → $(localpilot-logo); rebuild with `npm run icons`)
 docs/             this site (Jekyll, GitHub Pages)
 ```
 

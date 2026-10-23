@@ -109,12 +109,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const cfg = getConfig();
     const models = await providers.listModels().catch(() => []);
     const current = cfg.defaultModel || models[0]?.id || 'no model';
-    status.text = `$(hubot) ${current.split('/').pop()}`;
+    const running = controller.runningSessionIds.length;
+    const name = current.split('/').pop();
+    // Brand glyph when idle, animated spinner while agents run, warning colour when nothing is usable.
+    status.text = running ? `$(loading~spin) ${running} agent${running === 1 ? '' : 's'} · ${name}` : `$(localpilot-logo) ${name}`;
+    status.backgroundColor = models.length ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
     status.tooltip = `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick to switch model`;
     status.show();
   };
   void refreshStatus();
-  context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()));
+  context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()), controller.onDidChangeRuns(() => void refreshStatus()));
 
   // Auto-detect running model servers (settings, well-known ports, Docker containers, Docker Model Runner)
   // and merge new ones into the provider list. Runs at startup and on every "Refresh models".

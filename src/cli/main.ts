@@ -265,6 +265,11 @@ class Renderer {
     }
   }
   private statusShown = false;
+  private statusText = '';
+  private spinTimer: NodeJS.Timeout | undefined;
+  private spinFrame = 0;
+  private static readonly FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  /** Animated brand spinner + status line; redrawn on a timer so it keeps moving while the model thinks. */
   status(s: string): void {
     if (this.quiet || !tty) {
       return;
@@ -273,10 +278,24 @@ class Renderer {
       process.stdout.write('\n'); // keep partially streamed prose intact
       this.line = '';
     }
-    process.stdout.write(`\r\x1b[2K${dim(s.slice(0, Math.max(20, (process.stdout.columns || 100) - 2)))}`);
+    this.statusText = s;
     this.statusShown = true;
+    this.drawStatus();
+    if (!this.spinTimer && !process.env.LOCALPILOT_NO_SPINNER) {
+      this.spinTimer = setInterval(() => this.drawStatus(), 90);
+      this.spinTimer.unref();
+    }
+  }
+  private drawStatus(): void {
+    const frame = amber(Renderer.FRAMES[this.spinFrame++ % Renderer.FRAMES.length]);
+    const width = Math.max(20, (process.stdout.columns || 100) - 4);
+    process.stdout.write(`\r\x1b[2K${frame} ${dim(this.statusText.slice(0, width))}`);
   }
   clearStatus(): void {
+    if (this.spinTimer) {
+      clearInterval(this.spinTimer);
+      this.spinTimer = undefined;
+    }
     if (tty && this.statusShown) {
       process.stdout.write('\r\x1b[2K');
       this.statusShown = false;

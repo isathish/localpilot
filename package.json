@@ -117,7 +117,7 @@
         "command": "localpilot.openChat",
         "title": "Open Chat",
         "category": "LocalPilot",
-        "icon": "$(comment-discussion)"
+        "icon": "$(localpilot-logo)"
       },
       {
         "command": "localpilot.openChatInEditor",
@@ -257,7 +257,7 @@
         "command": "localpilot.openTerminal",
         "title": "Open LocalPilot Terminal",
         "category": "LocalPilot",
-        "icon": "$(terminal)"
+        "icon": "$(localpilot-logo)"
       },
       {
         "command": "localpilot.explainTerminal",
@@ -1000,9 +1000,25 @@
         {
           "id": "localpilot.terminalProfile",
           "title": "LocalPilot",
-          "icon": "hubot"
+          "icon": "localpilot-logo"
         }
       ]
+    },
+    "icons": {
+      "localpilot-logo": {
+        "description": "LocalPilot logo",
+        "default": {
+          "fontPath": "media/localpilot.woff",
+          "fontCharacter": "\\e900"
+        }
+      },
+      "localpilot-spark": {
+        "description": "LocalPilot spark (thinking / highlight)",
+        "default": {
+          "fontPath": "media/localpilot.woff",
+          "fontCharacter": "\\e901"
+        }
+      }
     }
   },
   "scripts": {
@@ -1019,7 +1035,8 @@
     "lint": "eslint src",
     "smoke": "node scripts/run-smoke.js",
     "release": "node scripts/release.js",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "icons": "node scripts/build-icon-font.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -1030,6 +1047,9 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^16.0.0",
+    "ttf2woff": "^3.0.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.61.1"
   },

@@ -676,12 +676,20 @@
   document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); } if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); openContextMenu(); } });
 
   // ------------------------------------------------------------------ messages from the extension
+  // Branded boot screen shown until the first session arrives from the extension host.
+  function dismissBoot() {
+    const b = $('boot');
+    if (!b) { return; }
+    b.classList.add('out');
+    setTimeout(() => b.remove(), 260);
+  }
+
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
       case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; renderTabs(); break;
-      case 'session': state.session = m.session; renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); break;
+      case 'session': state.session = m.session; renderSession(); renderChanges(); renderTasks(); renderTabs(); els.input.focus(); dismissBoot(); break;
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'models': { const hadNone = !state.models.length; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { toast(`${m.models.length} model(s) found`); if (state.session && !state.session.messages.length) { renderSession(); } } break; }
       case 'event': handleEvent(m.event); break;

@@ -261,7 +261,7 @@ export class SettingsPanel implements vscode.Disposable {
 <title>LocalPilot</title>
 </head>
 <body data-logo="${media('logo.svg')}">
-<div id="app" aria-busy="true"><div class="loading"><span class="spinner"></span>Loading…</div></div>
+<div id="app" aria-busy="true"><div class="loading" role="status"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span><span class="sr">Loading LocalPilot Settings…</span></div></div>
 <div id="toasts"></div>
 <script nonce="${nonce}" src="${media('settings.js')}"></script>
 </body>

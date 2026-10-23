@@ -44,7 +44,7 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
         item.id = s.id;
         item.description = n.running ? this.controller.runStatus.get(s.id) ?? 'Working…' : `${s.mode} · ${s.messageCount} msgs${files ? ` · ${files} file${files === 1 ? '' : 's'} changed` : ''}`;
         item.tooltip = `${s.title}\n${s.model || 'default model'} · ${new Date(s.updatedAt).toLocaleString()}`;
-        item.iconPath = new vscode.ThemeIcon(n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'hubot' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
+        item.iconPath = new vscode.ThemeIcon(n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'localpilot-logo' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
         item.contextValue = n.running ? 'session-running' : files ? 'session-changed' : 'session';
         item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [s.id] };
         if (this.controller.activeSession?.id === s.id) {
