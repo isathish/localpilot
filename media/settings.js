@@ -424,7 +424,7 @@
     sec.appendChild(grid);
     sec.appendChild(el('h2', 'sub', 'About'));
     const about = el('div', 'card');
-    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${providersList().filter((p) => p.enabled !== false).length} provider(s)</dd><dt>Privacy</dt><dd>LocalPilot talks only to the servers listed under Providers. No telemetry, no account.</dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
+    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${providersList().filter((p) => p.enabled !== false).length} provider(s)</dd><dt>Privacy</dt><dd>LocalPilot talks only to the servers listed under Providers. No telemetry, no account.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
     sec.appendChild(about);
   }
 

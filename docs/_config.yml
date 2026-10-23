@@ -13,8 +13,9 @@ version: 0.2.5
 lang: en
 logo: /assets/og.png
 author:
-  name: Sathish
+  name: Sathishkumar Nagarajan
   url: https://github.com/isathish
+  github: isathish
 twitter:
   card: summary_large_image
 social:

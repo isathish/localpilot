@@ -58,4 +58,4 @@ Models without native tool calling still work in agent mode thanks to a built-in
 
 [Documentation](https://isathish.github.io/localpilot/docs/getting-started/) · [Website](https://isathish.github.io/localpilot/) · [Source & issues](https://github.com/isathish/localpilot) · [Changelog](https://github.com/isathish/localpilot/blob/main/CHANGELOG.md)
 
-Free and open source under the MIT license.
+Free and open source under the MIT license. Built and maintained by [Sathishkumar Nagarajan](https://github.com/isathish).

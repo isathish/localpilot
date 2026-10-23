@@ -52,7 +52,8 @@
         <a href="{{ site.repo }}/discussions">Discussions</a>
         <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>
         <a href="{{ site.repo }}/blob/main/docs/docs/development.md">Contributing</a>
-        <a href="{{ site.author.url }}">Built by {{ site.author.name }}</a>
+        <a href="{{ site.author.url }}" rel="author">Built by {{ site.author.name }}</a>
+        <a href="{{ site.author.url }}">@{{ site.author.github }} on GitHub</a>
         <h4 class="footer-h4-gap">For machines</h4>
         <a href="{{ '/llms.txt' | relative_url }}">llms.txt</a>
         <a href="{{ '/sitemap.xml' | relative_url }}">Sitemap</a>
@@ -66,7 +67,7 @@
     </nav>
 
     <div class="footer-bottom">
-      <p class="muted small">© {{ site.time | date: '%Y' }} LocalPilot · <a href="{{ site.author.url }}">{{ site.author.name }}</a> · Released under the <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>.</p>
+      <p class="muted small">© {{ site.time | date: '%Y' }} LocalPilot · Built by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a> (<a href="{{ site.author.url }}">GitHub @{{ site.author.github }}</a>) · Released under the <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>.</p>
       <p class="muted small">Privacy: your code never leaves your machine. LocalPilot talks only to the model servers you configure and collects no telemetry. This website uses Google Analytics for anonymous traffic statistics.</p>
       <p class="muted small">GitHub Copilot, Cursor, Claude, ChatGPT, Perplexity, Gemini, Ollama, LM Studio and VS Code are trademarks of their respective owners. LocalPilot is an independent open-source project and is not affiliated with or endorsed by them.</p>
     </div>

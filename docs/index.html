@@ -177,7 +177,7 @@ ollama serve</code></pre></div>
       <h2>Open, local, verifiable</h2>
     </div>
     <div class="grid trust-grid">
-      <div class="card"><h3>Open source, MIT</h3><p>Every line is on <a href="{{ site.repo }}">GitHub</a>. The extension and the <code>localpilot</code> CLI are built from the same source; releases ship a VSIX with SHA-256 checksums.</p></div>
+      <div class="card"><h3>Open source, MIT</h3><p>Every line is on <a href="{{ site.repo }}">GitHub</a>, built and maintained by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a>. The extension and the <code>localpilot</code> CLI are built from the same source; releases ship a VSIX with SHA-256 checksums.</p></div>
       <div class="card"><h3>Only talks to servers you configure</h3><p>The provider list is yours. Defaults are <code>localhost</code>. No analytics SDK, no account, no update pings — the extension has zero network calls other than your model servers, MCP servers and the web tools you explicitly approve.</p></div>
       <div class="card"><h3>Tested against real models</h3><p>The test suite runs inside a real VS Code and includes end-to-end runs against a live Ollama: the agent reads a file, edits it, runs the tests, works in parallel sessions and stops on request. Run <code>npm test</code> yourself.</p></div>
       <div class="card"><h3>Approvals you set</h3><p>Terminal, file edit, delete and network actions each have an <i>Ask / Allow / Block</i> policy — presets <i>Careful</i>, <i>Balanced</i>, <i>Autonomous</i>. Every edit is undoable regardless of policy.</p></div>

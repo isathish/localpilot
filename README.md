@@ -163,6 +163,8 @@ Press <kbd>F5</kbd> for an Extension Development Host. Architecture notes: [Deve
 
 Issues and pull requests are welcome — see [open issues](https://github.com/isathish/localpilot/issues). If LocalPilot is useful to you, a GitHub star helps others find it.
 
+LocalPilot is built and maintained by [Sathishkumar Nagarajan](https://github.com/isathish) (GitHub: [@isathish](https://github.com/isathish)).
+
 ## License
 
-[MIT](LICENSE) © Sathish and LocalPilot contributors.
+[MIT](LICENSE) © [Sathishkumar Nagarajan](https://github.com/isathish) and LocalPilot contributors.

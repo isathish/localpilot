@@ -53,7 +53,7 @@
       "license": "https://opensource.org/licenses/MIT",
       "isAccessibleForFree": true,
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-      "author": { "@type": "Person", "name": "Sathish", "url": "https://github.com/isathish" },
+      "author": { "@type": "Person", "name": "Sathishkumar Nagarajan", "url": "https://github.com/isathish", "sameAs": ["https://github.com/isathish"] },
       "sameAs": ["{{ site.repo }}"],
       "keywords": {{ site.keywords | strip_newlines | strip | jsonify }}
     },
@@ -72,7 +72,7 @@
 </script>
 {% else %}
 <script type="application/ld+json">
-{ "@context": "https://schema.org", "@type": "TechArticle", "headline": {{ page.title | jsonify }}, "description": {{ page.description | default: site.description | jsonify }}, "url": "{{ page.url | absolute_url }}", "image": "{{ '/assets/og.png' | absolute_url }}", "author": { "@type": "Person", "name": "Sathish" }, "publisher": { "@type": "Organization", "name": "LocalPilot", "logo": { "@type": "ImageObject", "url": "{{ '/assets/logo.png' | absolute_url }}" } }, "about": { "@type": "SoftwareApplication", "name": "LocalPilot" } }
+{ "@context": "https://schema.org", "@type": "TechArticle", "headline": {{ page.title | jsonify }}, "description": {{ page.description | default: site.description | jsonify }}, "url": "{{ page.url | absolute_url }}", "image": "{{ '/assets/og.png' | absolute_url }}", "author": { "@type": "Person", "name": "Sathishkumar Nagarajan", "url": "https://github.com/isathish" }, "publisher": { "@type": "Organization", "name": "LocalPilot", "logo": { "@type": "ImageObject", "url": "{{ '/assets/logo.png' | absolute_url }}" } }, "about": { "@type": "SoftwareApplication", "name": "LocalPilot" } }
 </script>
 {% endif %}
 <link rel="icon" type="image/svg+xml" href="{{ '/assets/logo.svg' | relative_url }}">
