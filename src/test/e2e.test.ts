@@ -153,4 +153,63 @@ suite('LocalPilot end-to-end (real local model)', () => {
     assert.ok(Date.now() - t0 < 15_000);
     assert.ok(!api.runningSessionIds.includes(id));
   });
+
+  const toolsUsed = (id: string) => (api.getSession(id)?.messages ?? []).filter((m) => m.role === 'tool').map((m) => m.toolName ?? '');
+  const finalAnswer = (id: string) => [...(api.getSession(id)?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? '';
+
+  test('agent reads an existing file, understands it and fixes it in place with edit_file', async function () {
+    this.timeout(240_000);
+    const file = path.join(root, 'calc.py');
+    await fs.writeFile(file, 'def add(a, b):\n    return a - b  # BUG: should add\n\n\ndef mul(a, b):\n    return a * b\n', 'utf8');
+    const id = await api.runPrompt('calc.py has a bug in add(): it subtracts instead of adding. Read the file, then fix only that line with edit_file so add() returns a + b. Keep mul() unchanged. Reply "fixed" when done.', 'agent');
+    await waitForRun(id, 230_000);
+    const used = toolsUsed(id);
+    assert.ok(used.includes('read_file'), `expected read_file, got ${used.join(',')}; ${transcript(id)}`);
+    assert.ok(used.some((t) => t === 'edit_file' || t === 'write_file'), `expected an edit, got ${used.join(',')}; ${transcript(id)}`);
+    const after = await fs.readFile(file, 'utf8');
+    assert.match(after, /return a \+ b/, `file not fixed:\n${after}\n${transcript(id)}`);
+    assert.match(after, /def mul\(a, b\):\s*\n\s*return a \* b/, `mul() should be untouched:\n${after}`);
+  });
+
+  test('ask mode understands the workspace: finds where a symbol is defined', async function () {
+    this.timeout(240_000);
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'src', 'billing.py'), 'def compute_total(items):\n    return sum(i.price * i.qty for i in items)\n', 'utf8');
+    await fs.writeFile(path.join(root, 'src', 'models.py'), 'class Item:\n    def __init__(self, price, qty):\n        self.price = price\n        self.qty = qty\n', 'utf8');
+    await fs.writeFile(path.join(root, 'README.md'), '# Shop\n\nA tiny shop example.\n', 'utf8');
+    const id = await api.runPrompt('Which file in this workspace defines the function compute_total? Search the workspace with the tools, then answer with the file path only.', 'ask');
+    await waitForRun(id, 230_000);
+    const used = toolsUsed(id);
+    assert.ok(used.length > 0, `ask mode should still use read-only tools; ${transcript(id)}`);
+    assert.ok(!used.some((t) => /^(write_file|edit_file|run_command|delete_path)$/.test(t)), `ask mode must not mutate: ${used.join(',')}`);
+    assert.match(finalAnswer(id), /billing\.py/, `answer should name billing.py: ${finalAnswer(id)}\n${transcript(id)}`);
+  });
+
+  test('the active editor is attached as context and the model reasons about it', async function () {
+    this.timeout(240_000);
+    const doc = await vscode.workspace.openTextDocument(path.join(root, 'src', 'billing.py'));
+    await vscode.window.showTextDocument(doc);
+    const id = await api.runPrompt('What is the name of the function in the attached file? Answer with the function name only, no tools.', 'ask', ['selection']);
+    await waitForRun(id, 230_000);
+    const user = api.getSession(id)!.messages.find((m) => m.role === 'user')!;
+    assert.match(user.content, /<attachment path="src\/billing\.py"/, 'active file inlined into the prompt');
+    assert.match(finalAnswer(id), /compute_total/, `answer: ${finalAnswer(id)}`);
+  });
+
+  test('skill-based execution: a workspace SKILL.md is discovered, loaded with load_skill and followed', async function () {
+    this.timeout(240_000);
+    const skillDir = path.join(root, '.localpilot', 'skills', 'greeting');
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: greeting\ndescription: Create the project greeting file in the required format\n---\n# Greeting skill\n\nWhen asked to create a greeting:\n1. Use write_file to create `GREETING.txt` in the workspace root.\n2. The file must contain exactly one line: `Hello from the greeting skill`\n3. Do not create any other file. Reply "greeted" when done.\n', 'utf8');
+    await vscode.commands.executeCommand('localpilot.reloadSkills');
+    await new Promise((r) => setTimeout(r, 500));
+    const id = await api.runPrompt('/skill greeting create the greeting', 'agent');
+    await waitForRun(id, 230_000);
+    const used = toolsUsed(id);
+    assert.ok(used.includes('load_skill'), `expected load_skill, got ${used.join(',')}; ${transcript(id)}`);
+    const txt = await fs.readFile(path.join(root, 'GREETING.txt'), 'utf8').catch((e) => {
+      throw new Error(`${e.message}\n${transcript(id)}`);
+    });
+    assert.match(txt, /Hello from the greeting skill/);
+  });
 });

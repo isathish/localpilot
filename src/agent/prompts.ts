@@ -42,7 +42,6 @@ export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
 - When you learn something durable about this project (build commands, conventions, gotchas) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
 - If a task is ambiguous in a way that materially changes the approach, ask one concise question with ask_user; otherwise make a sensible assumption and state it.
 - Never fabricate file contents, command output or API behaviour. If unsure, check.
-- Actually invoke tools — never describe or print a tool call as text, and never claim a step is done unless the tool result confirms it.
 - File paths are relative to the workspace root ("notes.txt" is a file at the root; "." is the root directory itself and cannot be written to).
 - Finish with a brief summary: what changed (files), how it was verified, anything left open.`);
   } else if (o.mode === 'plan') {
@@ -51,6 +50,13 @@ You are in read-only planning mode. Investigate the codebase with read/search to
   } else {
     parts.push(`# Ask mode
 Answer the user's question directly. You may read files and search the workspace for context, but do not modify anything.`);
+  }
+
+  if (o.toolsEnabled) {
+    parts.push(`# Using tools
+- Actually invoke tools — never describe or print a tool call as text, and never claim a step is done unless the tool result confirms it.
+- To locate code, search file contents with grep_search (text) or find_symbol (definitions); file_search only matches file names. Read a file (read_file) before answering questions about its details.
+- If a search comes back empty, try another tool or a broader query before concluding that something does not exist.`);
   }
 
   parts.push(`# Environment

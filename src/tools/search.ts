@@ -9,7 +9,7 @@ export const fileSearchTool: Tool = {
   parallelSafe: true,
   definition: {
     name: 'file_search',
-    description: 'Find files by glob pattern (e.g. "src/**/*.ts", "**/package.json"). Returns workspace-relative paths.',
+    description: 'Find files by file NAME or path glob (e.g. "src/**/*.ts", "**/package.json"). Does not look inside files — to find where a function, class or string is defined or used, call grep_search (text) or find_symbol (language server) instead. Returns workspace-relative paths.',
     parameters: {
       type: 'object',
       properties: { pattern: { type: 'string' }, max_results: { type: 'integer', description: 'Default 50' } },
@@ -21,7 +21,9 @@ export const fileSearchTool: Tool = {
     const max = Number(args.max_results ?? 50);
     const files = await vscode.workspace.findFiles(pattern, EXCLUDES, max);
     if (!files.length) {
-      return { content: `No files match ${pattern}` };
+      // A bare identifier in a glob almost always means the model wanted a content search.
+      const looksLikeSymbol = /^(\*\*\/)?[\w.-]+\*?$/.test(pattern) && !/\.[a-z]{1,5}$/i.test(pattern.replace(/\*$/, ''));
+      return { content: `No files match ${pattern}.${looksLikeSymbol ? ` file_search only matches file names — to find "${pattern.replace(/^\*\*\//, '').replace(/\*$/, '')}" inside files use grep_search with that text as the query (or find_symbol for definitions).` : ''}` };
     }
     return { content: files.map((f) => vscode.workspace.asRelativePath(f)).sort().join('\n') };
   },
@@ -32,7 +34,7 @@ export const grepSearchTool: Tool = {
   definition: {
     name: 'grep_search',
     description:
-      'Search file contents with a regex or literal string (uses ripgrep when available). Returns `path:line: text` matches. Use include_pattern to restrict to a glob.',
+      'Search INSIDE file contents with a regex or literal string (uses ripgrep when available) — the right tool to find where a function, class, variable or message is defined or used. Returns `path:line: text` matches. Use include_pattern to restrict to a glob.',
     parameters: {
       type: 'object',
       properties: {
