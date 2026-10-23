@@ -8,7 +8,7 @@ download: https://github.com/isathish/localpilot/releases/latest/download/localp
 marketplace: https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent
 extension_id: localpilot.localpilot-agent
 releases: https://github.com/isathish/localpilot/releases
-version: 0.1.2
+version: 0.1.3
 lang: en
 logo: /assets/og.png
 author:

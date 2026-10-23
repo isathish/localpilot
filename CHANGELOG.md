@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.3 — 2026-10-23
 ### Changed
 - New icon: amber tile with a bold graphite mark — crisp at 16–128 px and on light or dark backgrounds.
 - Dedicated, concise Marketplace listing page (no duplicate logo or badge wall); shorter description; categories AI / Chat / Machine Learning.
