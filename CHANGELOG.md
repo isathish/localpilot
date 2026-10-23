@@ -2,7 +2,7 @@
 
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.1 — 2026-10-23
 ### Changed
 - **Responsive composer**: the bottom row never wraps. Below ~420px the mode picker, context button and attach button collapse to icons; below ~260px the model picker collapses to its icon too. Placeholder text adapts to the available width and the duplicated focus ring on the textarea is gone.
 - **Multitasking tab bar is always visible**: running chats first (with spinners), then the active and recent ones; `+` starts another agent in parallel and a **History** button (badge = number of chats) opens a searchable popover with *New chat*, *Run tasks in parallel…*, running chats and recent chats.
