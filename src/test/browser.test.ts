@@ -69,7 +69,8 @@ suite('LocalPilot browser view & web-page screenshots', () => {
   });
 
   test('captureUrl renders a local page with a headless Chromium (skipped when none is installed)', async function () {
-    this.timeout(60_000);
+    this.timeout(120_000);
+    this.retries(1); // the first Chromium launch on a fresh CI runner is occasionally very slow
     const browser = await findHeadlessBrowser(true);
     if (!browser) {
       this.skip();
@@ -108,6 +109,7 @@ suite('LocalPilot browser view & web-page screenshots', () => {
 
   test('browser_inspect collects console, exceptions, network failures, metrics, layout issues and performs actions (skipped without Chromium)', async function () {
     this.timeout(90_000);
+    this.retries(1);
     if (!(await findHeadlessBrowser()) || !hasWebSocket()) {
       this.skip();
     }

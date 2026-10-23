@@ -112,7 +112,9 @@ export async function captureUrl(rawUrl: string, opts: UrlCaptureOptions = {}): 
   const height = Math.min(8000, Math.max(240, Math.round(opts.height ?? (opts.fullPage ? 4000 : opts.mobile ? 844 : 800))));
   const wait = Math.min(20000, Math.max(0, Math.round(opts.waitMs ?? 1500)));
   const file = path.join(os.tmpdir(), `localpilot-web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.png`);
-  const profile = path.join(os.tmpdir(), 'localpilot-headless-profile');
+  // A fresh profile per capture: a shared one hangs when another Chromium still holds its lock (parallel captures,
+  // a stale process after a kill) — seen as 30s timeouts on Windows.
+  const profile = path.join(os.tmpdir(), `localpilot-headless-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
   const args = [
     '--headless=new',
     '--disable-gpu',
@@ -129,35 +131,45 @@ export async function captureUrl(rawUrl: string, opts: UrlCaptureOptions = {}): 
     ...(opts.mobile ? ['--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', '--force-device-scale-factor=2'] : []),
     url,
   ];
-  await new Promise<void>((resolve, reject) => {
-    const child = cp.spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let err = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`Timed out rendering ${url} after ${Math.round((wait + 30000) / 1000)}s`));
-    }, wait + 30000);
-    const onAbort = () => {
-      child.kill();
-      reject(new Error('Cancelled'));
-    };
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
-    child.stderr?.on('data', (d) => (err += String(d)));
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
+  const render = () =>
+    new Promise<void>((resolve, reject) => {
+      const child = cp.spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let err = '';
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Timed out rendering ${url} after ${Math.round((wait + 30000) / 1000)}s`));
+      }, wait + 30000);
+      const onAbort = () => {
+        child.kill();
+        reject(new Error('Cancelled'));
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      child.stderr?.on('data', (d) => (err += String(d)));
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+      child.on('close', async () => {
+        clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+        if (await exists(file)) {
+          resolve();
+        } else {
+          const line = err.split('\n').find((l) => /ERR_|error|failed/i.test(l) && !/task_policy|GPU|dbus|Fontconfig/i.test(l)) ?? '';
+          reject(new Error(`Could not render ${url}${line ? `: ${line.replace(/^\[[^\]]*\]\s*/, '').trim()}` : ''}`));
+        }
+      });
     });
-    child.on('close', async () => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      if (await exists(file)) {
-        resolve();
-      } else {
-        const line = err.split('\n').find((l) => /ERR_|error|failed/i.test(l) && !/task_policy|GPU|dbus|Fontconfig/i.test(l)) ?? '';
-        reject(new Error(`Could not render ${url}${line ? `: ${line.replace(/^\[[^\]]*\]\s*/, '').trim()}` : ''}`));
-      }
-    });
-  });
   try {
+    try {
+      await render();
+    } catch (e) {
+      // A cold first launch occasionally stalls (Windows especially); one retry is cheap and almost always succeeds.
+      if (!(e instanceof Error && /^Timed out/.test(e.message)) || opts.signal?.aborted) {
+        throw e;
+      }
+      await render();
+    }
     const img = await readImage(file);
     if (!img) {
       throw new Error('Screenshot file could not be read');
@@ -172,6 +184,7 @@ export async function captureUrl(rawUrl: string, opts: UrlCaptureOptions = {}): 
     return { ...img, name: `${host.replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.png`, url, width, height, browser: path.basename(browser) };
   } finally {
     await fs.unlink(file).catch(() => undefined);
+    await fs.rm(profile, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
