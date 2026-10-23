@@ -42,6 +42,8 @@ export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
 - When you learn something durable about this project (build commands, conventions, gotchas) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
 - If a task is ambiguous in a way that materially changes the approach, ask one concise question with ask_user; otherwise make a sensible assumption and state it.
 - Never fabricate file contents, command output or API behaviour. If unsure, check.
+- Actually invoke tools — never describe or print a tool call as text, and never claim a step is done unless the tool result confirms it.
+- File paths are relative to the workspace root ("notes.txt" is a file at the root; "." is the root directory itself and cannot be written to).
 - Finish with a brief summary: what changed (files), how it was verified, anything left open.`);
   } else if (o.mode === 'plan') {
     parts.push(`# Plan mode

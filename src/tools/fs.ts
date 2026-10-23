@@ -73,7 +73,12 @@ export const writeFileTool: Tool = {
     const content = typeof args.content === 'string' ? args.content : '';
     let exists = true;
     try {
-      await vscode.workspace.fs.stat(uri);
+      const st = await vscode.workspace.fs.stat(uri);
+      if (st.type & vscode.FileType.Directory) {
+        const rel = vscode.workspace.asRelativePath(uri);
+        const label = rel === uri.fsPath || rel === '.' || rel === '' ? 'The workspace root' : `"${rel}"`;
+        return { content: `${label} is a directory, not a file. Pass a file path such as "${path.posix.join(label === 'The workspace root' ? '' : rel, 'file.txt')}".`, isError: true };
+      }
     } catch {
       exists = false;
     }

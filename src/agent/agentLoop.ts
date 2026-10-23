@@ -183,9 +183,11 @@ export class AgentRunner {
         throw e;
       }
 
-      // Models without native tool support emit tool calls as text.
-      if (!nativeTools && toolDefs.length) {
-        const parsed = extractTextToolCalls(text);
+      // Models without native tool support emit tool calls as text. Small "tool-capable" models also
+      // frequently print the call as bare JSON instead of using the tool channel, so fall back to
+      // parsing text whenever no native call arrived — restricted to known tool names.
+      if (toolDefs.length && !calls.length) {
+        const parsed = extractTextToolCalls(text, nativeTools ? new Set(toolDefs.map((t) => t.name)) : undefined);
         if (parsed.calls.length) {
           calls.push(...parsed.calls);
           text = parsed.remainder;
@@ -337,24 +339,64 @@ function stripMeta(m: ChatMessage): ChatMessage {
   return rest;
 }
 
-/** Parses ```tool_call fenced JSON blocks or <tool_call>…</tool_call> tags out of free text. */
-export function extractTextToolCalls(text: string): { calls: ToolCall[]; remainder: string } {
+/**
+ * Parses tool calls out of free text: ```tool_call / ```json fenced blocks, <tool_call>…</tool_call> tags,
+ * and bare `{"name": …, "arguments": …}` objects. When `known` is given, only those tool names count.
+ */
+export function extractTextToolCalls(text: string, known?: ReadonlySet<string>): { calls: ToolCall[]; remainder: string } {
   const calls: ToolCall[] = [];
-  const re = /```(?:tool_call|json)?\s*\n?(\{[\s\S]*?\})\s*```|<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
   let remainder = text;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    const json = m[1] ?? m[2];
+  const accept = (raw: string, json: string): void => {
     try {
       const obj = JSON.parse(json) as { name?: string; arguments?: unknown; parameters?: unknown };
-      if (obj && typeof obj.name === 'string') {
+      if (obj && typeof obj.name === 'string' && (!known || known.has(obj.name))) {
         const args = obj.arguments ?? obj.parameters ?? {};
         calls.push({ id: newId(), name: obj.name, arguments: typeof args === 'string' ? args : JSON.stringify(args) });
-        remainder = remainder.replace(m[0], '');
+        remainder = remainder.replace(raw, '');
       }
     } catch {
       /* not a tool call */
     }
+  };
+  const re = /```(?:tool_call|json)?\s*\n?(\{[\s\S]*?\})\s*```|<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    accept(m[0], m[1] ?? m[2]);
+  }
+  if (!calls.length) {
+    for (const obj of bareJsonObjects(text)) {
+      accept(obj, obj);
+    }
   }
   return { calls, remainder: remainder.trim() };
+}
+
+/** Balanced top-level `{ "name": … }` objects found anywhere in `text` (string-aware brace matching). */
+function bareJsonObjects(text: string): string[] {
+  const out: string[] = [];
+  const start = /\{\s*"name"\s*:/g;
+  let m: RegExpExecArray | null;
+  while ((m = start.exec(text))) {
+    let depth = 0;
+    let inStr = false;
+    for (let i = m.index; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (ch === '\\') {
+          i++;
+        } else if (ch === '"') {
+          inStr = false;
+        }
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}' && --depth === 0) {
+        out.push(text.slice(m.index, i + 1));
+        start.lastIndex = i + 1;
+        break;
+      }
+    }
+  }
+  return out;
 }

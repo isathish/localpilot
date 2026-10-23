@@ -15,6 +15,7 @@ import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
 import { terminalTools } from './tools/terminal';
 import { webTools } from './tools/web';
+import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
@@ -25,7 +26,7 @@ import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineE
 import { LocalModelChatProvider } from './ui/lmProvider';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
   const log = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(log);
   log.info('LocalPilot activating');
@@ -40,7 +41,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const memory = new MemoryStore(context.globalStorageUri, log);
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
-  const mcp = new McpManager(tools, log);
+  const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
+  const mcp = new McpManager(tools, log, extensionVersion);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp);
 
   tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool]);
@@ -413,6 +415,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   log.info('LocalPilot activated');
+
+  return {
+    version: extensionVersion,
+    runPrompt: (prompt, mode, attachments) => controller.runPrompt(prompt, mode, attachments),
+    runParallel: (tasks, mode) => controller.runParallel(tasks, mode),
+    send: (sessionId, text) => controller.send(sessionId, text),
+    stop: (sessionId) => controller.stop(sessionId),
+    getSession: (id) => store.get(id),
+    get runningSessionIds() {
+      return controller.runningSessionIds;
+    },
+    onDidChangeRuns: controller.onDidChangeRuns,
+    listModels: () => providers.listModels(),
+  };
+}
+
+/** Programmatic API returned by `activate()` — `vscode.extensions.getExtension('localpilot.localpilot-agent').exports`. */
+export interface LocalPilotApi {
+  readonly version: string;
+  /** Starts a new session for `prompt` and returns its id; the run streams in the background. */
+  runPrompt(prompt: string, mode?: Session['mode'], attachments?: string[]): Promise<string>;
+  /** Starts one independent agent session per task, all running concurrently. */
+  runParallel(tasks: string[], mode?: Session['mode']): Promise<string[]>;
+  /** Sends a follow-up to an existing session and resolves with the final assistant text. */
+  send(sessionId: string, text: string): Promise<string>;
+  stop(sessionId: string): void;
+  getSession(id: string): Session | undefined;
+  readonly runningSessionIds: string[];
+  readonly onDidChangeRuns: vscode.Event<void>;
+  listModels(): Promise<ModelInfo[]>;
 }
 
 export function deactivate(): void {

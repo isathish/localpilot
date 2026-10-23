@@ -55,6 +55,16 @@ fs.writeFileSync(clPath, changelog);
 pkg.version = next;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+const lockPath = path.join(root, 'package-lock.json');
+if (fs.existsSync(lockPath)) {
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  lock.version = next;
+  if (lock.packages && lock.packages['']) {
+    lock.packages[''].version = next;
+  }
+  fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+}
+
 const cfgPath = path.join(root, 'docs', '_config.yml');
 fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace(/^version:.*$/m, `version: ${next}`));
 

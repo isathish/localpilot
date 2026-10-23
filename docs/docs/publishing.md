@@ -31,7 +31,7 @@ Then either:
 
 ```bash
 npx @vscode/vsce login localpilot      # paste the token once; stored in the OS keychain
-npx @vscode/vsce publish --no-dependencies --packagePath localpilot-0.1.1.vsix
+npx @vscode/vsce publish --no-dependencies --packagePath localpilot-X.Y.Z.vsix
 ```
 
 `vsce publish` without `--packagePath` builds and publishes the current working tree instead.

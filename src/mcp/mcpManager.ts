@@ -26,7 +26,7 @@ class McpClient implements vscode.Disposable {
   private buffer = '';
   tools: McpToolInfo[] = [];
 
-  constructor(readonly name: string, private readonly cfg: McpServerConfig, private readonly log: vscode.LogOutputChannel) {}
+  constructor(readonly name: string, private readonly cfg: McpServerConfig, private readonly log: vscode.LogOutputChannel, private readonly clientVersion: string) {}
 
   async start(): Promise<void> {
     const cwd = this.cfg.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -43,7 +43,7 @@ class McpClient implements vscode.Disposable {
     await this.request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'LocalPilot', version: '0.1.0' },
+      clientInfo: { name: 'LocalPilot', version: this.clientVersion },
     });
     this.notify('notifications/initialized', {});
     const res = (await this.request('tools/list', {})) as { tools?: McpToolInfo[] };
@@ -120,7 +120,7 @@ export class McpManager implements vscode.Disposable {
   private registrations: vscode.Disposable[] = [];
   private configSub: vscode.Disposable;
 
-  constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel) {
+  constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
     this.configSub = onConfigChange(() => void this.reload());
   }
 
@@ -131,7 +131,7 @@ export class McpManager implements vscode.Disposable {
       Object.entries(servers)
         .filter(([, c]) => c.enabled !== false && c.command)
         .map(async ([name, cfg]) => {
-          const client = new McpClient(name, cfg, this.log);
+          const client = new McpClient(name, cfg, this.log, this.clientVersion);
           try {
             await client.start();
             this.clients.set(name, client);
