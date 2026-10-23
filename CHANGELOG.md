@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 0.2.8 — 2026-10-23
 ### Changed
 - **Every push to `main` releases.** The Release workflow now bumps the version itself when the pushed commits contain anything beyond docs/chore/ci/test housekeeping — patch by default, minor for a breaking `type!:` commit, or the level named in `[release patch|minor|major]` — then commits `release: vX.Y.Z`, tags, builds and publishes. `[skip release]` holds a push back; *Prepare release* and `npm run release` remain for choosing a specific version. Generated release notes now fall back to housekeeping commits when nothing else was pushed.
 
