@@ -37,6 +37,10 @@ plugins:
   - jekyll-sitemap
 defaults:
   - scope:
+      path: ""
+    values:
+      image: /assets/og.png
+  - scope:
       path: "docs"
     values:
       layout: docs
