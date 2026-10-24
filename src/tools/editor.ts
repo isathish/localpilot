@@ -2,6 +2,27 @@ import * as vscode from 'vscode';
 import { Tool } from '../types';
 import { resolveWorkspacePath } from './fs';
 
+/** Resolves when the language server next publishes diagnostics for `uri` (plus a short settle), or after `maxMs`. */
+function waitForDiagnostics(uri: vscode.Uri, maxMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (): void => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        sub.dispose();
+        resolve();
+      }
+    };
+    const timer = setTimeout(finish, maxMs);
+    const sub = vscode.languages.onDidChangeDiagnostics((e) => {
+      if (e.uris.some((u) => u.toString() === uri.toString())) {
+        setTimeout(finish, 120);
+      }
+    });
+  });
+}
+
 export const getDiagnosticsTool: Tool = {
   parallelSafe: true,
   definition: {
@@ -21,9 +42,10 @@ export const getDiagnosticsTool: Tool = {
     let entries: [vscode.Uri, vscode.Diagnostic[]][];
     if (typeof args.path === 'string' && args.path) {
       const uri = resolveWorkspacePath(args.path, ctx);
-      // Ensure the document is open so the language server has analysed it.
+      // Ensure the document is open so the language server has analysed it, then give it a moment to
+      // report — returning as soon as diagnostics for this file change instead of always waiting the maximum.
       await vscode.workspace.openTextDocument(uri);
-      await new Promise((r) => setTimeout(r, 400));
+      await waitForDiagnostics(uri, 400);
       entries = [[uri, vscode.languages.getDiagnostics(uri)]];
     } else {
       entries = vscode.languages.getDiagnostics();

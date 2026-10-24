@@ -58,52 +58,80 @@ export const grepSearchTool: Tool = {
       return { content: 'No workspace open', isError: true };
     }
     const rg = await findRipgrep();
-    if (rg) {
-      const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-count', '50', '--max-columns', '300'];
-      if (!args.is_regex) {
-        rgArgs.push('--fixed-strings');
-      }
-      if (!args.case_sensitive) {
-        rgArgs.push('--ignore-case');
-      }
-      if (typeof args.include_pattern === 'string' && args.include_pattern) {
-        rgArgs.push('--glob', args.include_pattern);
-      }
-      for (const g of ['!node_modules', '!.git', '!dist', '!out', '!build']) {
-        rgArgs.push('--glob', g);
-      }
-      rgArgs.push('-e', query, '.');
-      const out = await runProcess(rg, rgArgs, root, ctx.signal);
-      const lines = out.split('\n').filter(Boolean).slice(0, max);
-      return { content: lines.length ? lines.map((l) => l.replace(/^\.\//, '')).join('\n') : `No matches for "${query}"` };
-    }
-    // Fallback: naive JS search (slower, but dependency-free).
-    const files = await vscode.workspace.findFiles(typeof args.include_pattern === 'string' && args.include_pattern ? args.include_pattern : '**/*', EXCLUDES, 2000);
-    const re = new RegExp(args.is_regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), args.case_sensitive ? '' : 'i');
-    const results: string[] = [];
-    for (const f of files) {
-      if (ctx.signal.aborted || results.length >= max) {
-        break;
-      }
-      try {
-        const bytes = await vscode.workspace.fs.readFile(f);
-        if (bytes.byteLength > 1_000_000) {
-          continue;
+    const include = typeof args.include_pattern === 'string' && args.include_pattern ? args.include_pattern : undefined;
+    const caseSensitive = Boolean(args.case_sensitive);
+    const search = async (isRegex: boolean): Promise<string[]> => {
+      if (rg) {
+        const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-count', '50', '--max-columns', '300'];
+        if (!isRegex) {
+          rgArgs.push('--fixed-strings');
         }
-        const text = Buffer.from(bytes).toString('utf8');
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length && results.length < max; i++) {
-          if (re.test(lines[i])) {
-            results.push(`${vscode.workspace.asRelativePath(f)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
+        if (!caseSensitive) {
+          rgArgs.push('--ignore-case');
+        }
+        if (include) {
+          rgArgs.push('--glob', include);
+        }
+        for (const g of ['!node_modules', '!.git', '!dist', '!out', '!build']) {
+          rgArgs.push('--glob', g);
+        }
+        rgArgs.push('-e', query, '.');
+        const out = await runProcess(rg, rgArgs, root, ctx.signal);
+        return out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
+      }
+      // Fallback: naive JS search (slower, but dependency-free).
+      const files = await vscode.workspace.findFiles(include ?? '**/*', EXCLUDES, 2000);
+      const re = new RegExp(isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
+      const results: string[] = [];
+      for (const f of files) {
+        if (ctx.signal.aborted || results.length >= max) {
+          break;
+        }
+        try {
+          const bytes = await vscode.workspace.fs.readFile(f);
+          if (bytes.byteLength > 1_000_000) {
+            continue;
           }
+          const text = Buffer.from(bytes).toString('utf8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length && results.length < max; i++) {
+            if (re.test(lines[i])) {
+              results.push(`${vscode.workspace.asRelativePath(f)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
+            }
+          }
+        } catch {
+          /* skip unreadable */
         }
-      } catch {
-        /* skip unreadable */
       }
+      return results;
+    };
+    let isRegex = Boolean(args.is_regex);
+    let lines = await search(isRegex);
+    // Models routinely send an escaped regex ("def foo\(") without is_regex; a literal search then looks for a
+    // backslash and finds nothing. Retry as a regex before reporting no matches.
+    if (!lines.length && !isRegex && looksLikeRegex(query) && !ctx.signal.aborted) {
+      isRegex = true;
+      lines = await search(true).catch(() => []);
     }
-    return { content: results.length ? results.join('\n') : `No matches for "${query}"` };
+    if (!lines.length) {
+      return { content: `No matches for "${query}"${isRegex ? ' (searched as a regular expression as well)' : ''}. Try a shorter literal such as the bare identifier, or find_symbol for definitions.` };
+    }
+    return { content: lines.join('\n') };
   },
 };
+
+/** Escaped metacharacters, classes or alternation: the query was written as a regex even if is_regex was not set. */
+export function looksLikeRegex(query: string): boolean {
+  if (!/\\[()[\]{}.*+?|^$dswbDSWB]|\.\*|\[[^\]]+\]|\(.*\|.*\)/.test(query)) {
+    return false;
+  }
+  try {
+    new RegExp(query);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const findSymbolTool: Tool = {
   parallelSafe: true,

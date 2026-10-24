@@ -146,8 +146,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds);
   settingsPanel.learner = learner;
   context.subscriptions.push(settingsPanel);
-  context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', new LocalModelChatProvider(providers, log)));
-  context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, new InlineCompletionProvider(providers, log)));
+  const lmProvider = new LocalModelChatProvider(providers, log);
+  context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', lmProvider), lmProvider);
+  const inline = new InlineCompletionProvider(providers, log);
+  context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inline), inline);
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
 
   const status = vscode.window.createStatusBarItem('localpilot.status', vscode.StatusBarAlignment.Right, 90);

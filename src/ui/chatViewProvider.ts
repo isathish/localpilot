@@ -205,7 +205,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <button id="btnHistory" class="ib badge" data-n="0" title="All chats">${svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/>')}</button>
   </header>
   <div id="bgruns" class="bgruns hidden" aria-label="Agents running in other tabs"></div>
-  <main id="messages" aria-live="polite"></main>
+  <main id="messages" role="log" aria-label="Conversation"></main>
   <div id="approvals"></div>
   <footer id="composer">
     <div id="tasks" class="panel hidden">
@@ -220,7 +220,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
       <ul id="changesList" class="panel-body hidden"></ul>
     </div>
-    <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
+    <div id="status" class="status hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="statusText" class="text"></span></div>
     <div id="box" class="box">
       <div class="ctx-row">
         <button id="btnAddCtx" class="ctxbtn" title="Add context (@)"><span class="at">@</span><span class="lbl">Add context</span></button>

@@ -21,6 +21,8 @@ export interface SkillMatch {
   name: string;
   description: string;
   score: number;
+  /** The skill's name or one of its quoted trigger phrases occurs in the request — not just shared description words. */
+  strong?: boolean;
 }
 
 const STOP = new Set(
@@ -90,6 +92,17 @@ export function containsPhrase(text: string, phrase: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, 'i').test(text);
 }
 
+/** True when the request names one of the agent's tools ("use the write_file tool", "with edit_file") — the user has already decided how. */
+export function namesTool(request: string, toolNames: Iterable<string>): boolean {
+  const text = userText(request).toLowerCase();
+  for (const name of toolNames) {
+    if (name.includes('_') && containsPhrase(text, name.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Scores skills against a request. A skill is recommended when its name, a quoted trigger phrase or several
  * description terms occur in the request. Returns up to `max` matches, strongest first.
@@ -107,17 +120,25 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
     const descTokens = new Set(tokenize(s.description));
     let score = 0;
     let evidence = 0;
+    let strong = false;
+    let nameHits = 0;
     for (const t of nameTokens) {
       if (tokens.has(t)) {
         score += 4;
         evidence++;
+        nameHits++;
       }
+    }
+    // "compute" alone must not make "azure-compute" a strong match for "compute_total"; the whole name has to be there.
+    if (nameHits > 0 && nameHits === nameTokens.length) {
+      strong = true;
     }
     for (const trig of triggers(s.description)) {
       const tt = tokenize(trig);
       if (containsPhrase(text, trig)) {
         score += 4;
         evidence++;
+        strong = true;
       } else if (tt.length > 1 && tt.every((t) => tokens.has(t))) {
         // All the phrase's content words appear, just not adjacently ("tests… write" for "write tests for").
         score += 2.5;
@@ -139,7 +160,7 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
       evidence++;
     }
     if (evidence > 0 && score >= 2.5) {
-      out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10 });
+      out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10, strong });
     }
   }
   // Only keep runners-up that are in the same league as the best match; weak tails are noise in the UI and the prompt.
@@ -306,5 +327,10 @@ export function skillHint(matches: SkillMatch[]): string {
   if (!matches.length) {
     return '';
   }
-  return `Skills that match this request: ${matches.map((m) => `"${m.name}" (${m.description.replace(/\s+/g, ' ').slice(0, 120)})`).join('; ')}. Required first step: call load_skill("${matches[0].name}") before any other tool — the skill holds project-specific steps and formats you cannot know otherwise — then follow its instructions. Skip it only if the skill clearly does not apply.`;
+  const list = matches.map((m) => `"${m.name}" (${m.description.replace(/\s+/g, ' ').slice(0, 120)})`).join('; ');
+  if (matches[0].strong) {
+    return `Skills that match this request: ${list}. Required first step: call load_skill("${matches[0].name}") before any other tool — the skill holds project-specific steps and formats you cannot know otherwise — then follow its instructions. Skip it only if the skill clearly does not apply.`;
+  }
+  // Only description words overlapped: a small, explicit request must not be detoured into a playbook it does not need.
+  return `Skills that may apply to this request: ${list}. If one of them clearly fits, call load_skill("${matches[0].name}") first and follow it; if the request is small and specific, do it directly with the tools instead.`;
 }

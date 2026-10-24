@@ -22,11 +22,13 @@ function serve(): Promise<{ url: string; close(): void; hits: number[] }> {
     }
     if (req.url === '/buggy') {
       res.setHeader('content-type', 'text/html');
-      return res.end(buggy);
+      res.end(buggy);
+      return;
     }
     if (req.url === '/api/users/42' || req.url === '/missing.png') {
       res.statusCode = 404;
-      return res.end('{"error":"nope"}');
+      res.end('{"error":"nope"}');
+      return;
     }
     res.setHeader('content-type', 'text/html');
     res.end(page);

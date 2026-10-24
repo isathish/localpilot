@@ -79,7 +79,7 @@ Return the replacement code in a single fenced code block and nothing else — n
 
   await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: editing…', cancellable: true }, async (progress, token) => {
     const abort = new AbortController();
-    token.onCancellationRequested(() => abort.abort());
+    const cancel = token.onCancellationRequested(() => abort.abort());
     let chars = 0;
     try {
       const raw = await quickPrompt(providers, messages, { signal: abort.signal, onDelta: (t) => { chars += t.length; progress.report({ message: `${chars} chars` }); } });
@@ -106,6 +106,8 @@ Return the replacement code in a single fenced code block and nothing else — n
       if (!token.isCancellationRequested) {
         void vscode.window.showErrorMessage(`LocalPilot inline edit failed: ${e instanceof Error ? e.message : String(e)}`);
       }
+    } finally {
+      cancel.dispose();
     }
   });
 }

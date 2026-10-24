@@ -153,8 +153,12 @@ export const editFileTool: Tool = {
     await ctx.trackChange(uri.fsPath);
     const edit = new vscode.WorkspaceEdit();
     edit.replace(uri, range, oldText ? newText : `\n${newText}`);
-    await vscode.workspace.applyEdit(edit);
-    await doc.save();
+    if (!(await vscode.workspace.applyEdit(edit))) {
+      return { content: `Failed to apply the edit to ${vscode.workspace.asRelativePath(uri)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
+    }
+    if (!(await doc.save())) {
+      return { content: `Edited ${vscode.workspace.asRelativePath(uri)} in the editor but could not save it to disk.`, isError: true };
+    }
     return { content: `Edited ${vscode.workspace.asRelativePath(uri)} at line ${range.start.line + 1}.`, data: { path: uri.fsPath, line: range.start.line + 1 } };
   },
 };

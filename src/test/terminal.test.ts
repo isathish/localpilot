@@ -108,7 +108,8 @@ function mockOpenAI(reply: string): Promise<{ url: string; close(): void; reques
       requests.push(`${req.method} ${req.url}`);
       res.setHeader('content-type', 'application/json');
       if (req.url === '/v1/models') {
-        return res.end(JSON.stringify({ data: [{ id: 'mock-coder', object: 'model' }] }));
+        res.end(JSON.stringify({ data: [{ id: 'mock-coder', object: 'model' }] }));
+        return;
       }
       if (req.url === '/v1/chat/completions') {
         const stream = /"stream"\s*:\s*true/.test(body);
@@ -116,9 +117,11 @@ function mockOpenAI(reply: string): Promise<{ url: string; close(): void; reques
           res.setHeader('content-type', 'text/event-stream');
           res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: reply }, index: 0 }] })}\n\n`);
           res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop', index: 0 }] })}\n\n`);
-          return res.end('data: [DONE]\n\n');
+          res.end('data: [DONE]\n\n');
+          return;
         }
-        return res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: reply }, finish_reason: 'stop' }] }));
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: reply }, finish_reason: 'stop' }] }));
+        return;
       }
       res.statusCode = 404;
       res.end();

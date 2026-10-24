@@ -3,6 +3,14 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Changed
+- **Small models finish what they start.** The agent now notices when a reply shows a tool call or a patch as text, announces an action without taking it ("I will edit the file…"), or reports a change as done when no file-modifying tool ran, and hands the model one corrective turn instead of ending the run. Tool calls written as malformed JSON in a `tool_call` block are reported back for a resend rather than silently treated as prose. On a 7B coder model the end-to-end suite went from 7/13 to 11/13 passing.
+- **Skill hints no longer derail simple requests.** A request that names the tool to use ("use the write_file tool…", "fix it with edit_file") gets no skill recommendation, and a skill is only *required* when its name or a quoted trigger phrase appears in the request — overlapping description words now merely suggest it. A single token of a hyphenated skill name ("compute" in `azure-compute`) no longer counts as the name.
+- **`grep_search` understands escaped regexes.** A query like `def foo\(` sent without `is_regex` used to search for a literal backslash and find nothing; it is now retried as a regular expression, and the no-match message suggests a bare identifier or `find_symbol`.
+- **Inline completions waste less.** A new keystroke now aborts the previous in-flight request as well as the pending debounce; automatic triggers are skipped while deleting or when the cursor is inside an identifier; mid-line completions are single-line, request fewer tokens and no longer repeat the text after the cursor (including overlapping tails such as `)`); the cache expires after five minutes.
+- **Faster, truer tool results.** `edit_file` reports a failed apply or save instead of claiming success; `get_diagnostics` returns as soon as the language server publishes for the file instead of always waiting 400 ms; Ollama discovery probes `/api/show` four models at a time instead of all at once.
+- **Chat webview.** Settled turns that are off screen skip layout and paint (`content-visibility`), and streaming text is announced through the status line rather than the whole transcript being a live region.
+- **Housekeeping.** `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride` and `noUnusedLocals` are on; the inline completion, inline edit and language-model providers dispose their listeners.
 
 ## 1.1.4 — 2026-10-24
 ### Added

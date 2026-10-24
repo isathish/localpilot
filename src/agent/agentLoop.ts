@@ -11,7 +11,7 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
-import { recommendSkills, SkillLearner, skillHint, SkillMatch } from './skillRecommender';
+import { namesTool, recommendSkills, SkillLearner, skillHint, SkillMatch } from './skillRecommender';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
 import { SkillManager } from './skills';
@@ -164,6 +164,8 @@ export class AgentRunner {
       try {
         const request = o.userMessage.content;
         const forced = /^\/skill\b|^Use the "/.test(userText(request));
+        // "Use the write_file tool to…" — the user has prescribed the tool; a playbook detour would only cost turns.
+        const prescribed = namesTool(request, toolDefs.map((t) => t.name));
         const suggestions = this.learner ? await this.learner.observeRequest(request, this.skills.allSkills) : { skills: recommendSkills(request, this.skills.allSkills) };
         const loaded = new Set(session.messages.filter((m) => m.role === 'tool' && m.toolName === 'load_skill').map((m) => /<skill name="([^"]+)"/.exec(m.content)?.[1]));
         let fresh: SkillMatch[] = suggestions.skills.filter((s) => !loaded.has(s.name));
@@ -189,7 +191,7 @@ export class AgentRunner {
             }
           }
         }
-        if (fresh.length && !forced) {
+        if (fresh.length && !forced && !prescribed) {
           const note = installed ? `The skill "${installed.name}" was just installed from ${installed.repo} because it matches this request. ` : '';
           session.messages.push({ role: 'user', content: note + skillHint(fresh), meta: { timestamp: Date.now(), hidden: true } });
         }
@@ -227,7 +229,10 @@ export class AgentRunner {
     const toolCache = new Map<string, Promise<ChatMessage>>();
     const think = cfg.thinking === 'off' ? undefined : cfg.thinking === 'on' ? true : cfg.thinking;
     let toolsExecuted = 0;
+    /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
+    let mutationsExecuted = 0;
     let nudged = false;
+    let malformedNudged = false;
     /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
     const callCounts = new Map<string, number>();
     let completed = false;
@@ -394,11 +399,14 @@ export class AgentRunner {
       // Models without native tool support emit tool calls as text. Small "tool-capable" models also
       // frequently print the call as bare JSON instead of using the tool channel, so fall back to
       // parsing text whenever no native call arrived — restricted to known tool names.
+      let malformedCalls: string[] = [];
       if (toolDefs.length && !calls.length) {
         const parsed = extractTextToolCalls(text, nativeTools ? new Set(toolDefs.map((t) => t.name)) : undefined);
         if (parsed.calls.length) {
           calls.push(...parsed.calls);
           text = parsed.remainder;
+        } else {
+          malformedCalls = parsed.malformed;
         }
       }
 
@@ -409,14 +417,40 @@ export class AgentRunner {
       finalText = text;
 
       if (!calls.length) {
+        // The model tried to call a tool but the call did not parse: hand the error back once so it can
+        // resend a corrected call instead of the turn ending as if the action had happened.
+        if (malformedCalls.length && !malformedNudged && !o.signal.aborted) {
+          malformedNudged = true;
+          status('Fixing tool call…');
+          const names = toolDefs.map((t) => t.name).join(', ');
+          session.messages.push({
+            role: 'user',
+            content: `Your tool call could not be executed: ${malformedCalls[0]}. Nothing has been done. Resend it as one complete, valid JSON object {"name": <tool>, "arguments": {...}} using only these tools: ${names}.`,
+            meta: { timestamp: Date.now(), hidden: true },
+          });
+          continue;
+        }
         // Small models sometimes answer "done" to an action request without doing anything. Once per
         // run, in agent mode, when nothing was executed and the reply is a bare claim, push back.
-        if (session.mode === 'agent' && toolDefs.length && !nudged && toolsExecuted === 0 && depth === 0 && looksLikeBareClaim(text, o.userMessage.content)) {
+        // Small models also stop after announcing an action ("I will edit the file with edit_file.") or after
+        // writing the call as text. The nudge fires once per run, so a false positive costs one short turn.
+        const canNudge = session.mode === 'agent' && toolDefs.length > 0 && !nudged && depth === 0;
+        const toolNames = toolDefs.map((t) => t.name);
+        const shown = canNudge && showsToolCallAsText(text, toolNames);
+        const announced = canNudge && !shown && looksLikeUnfulfilledIntent(text, toolNames);
+        const claimed = canNudge && !shown && !announced && mutationsExecuted === 0 && claimsChange(text, o.userMessage.content);
+        if (shown || announced || claimed || (canNudge && toolsExecuted === 0 && looksLikeBareClaim(text, o.userMessage.content))) {
           nudged = true;
           status('Verifying…');
           session.messages.push({
             role: 'user',
-            content: 'You have not called any tools, so nothing has been done yet. If the request requires an action (creating or editing files, running commands), perform it now with the tools and only then report. If no action is needed, explain why in one or two sentences.',
+            content: shown
+              ? 'You wrote the tool call (or the patch) as text, so it was not executed and the file is unchanged. Make the call through the tool interface now — one tool call with its JSON arguments, no code fence — and only then report.'
+              : claimed
+                ? 'You described the change as done, but no tool that modifies files or runs commands was called, so nothing has changed. Apply it now with the tools (edit_file / write_file / run_command) and only then report.'
+                : announced && toolsExecuted > 0
+                  ? 'You announced the next action but did not call a tool, so it has not happened. Do it now with the tool and only then report.'
+                  : 'You have not called any tools, so nothing has been done yet. If the request requires an action (creating or editing files, running commands), perform it now with the tools and only then report. If no action is needed, explain why in one or two sentences.',
             meta: { timestamp: Date.now(), hidden: true },
           });
           continue;
@@ -428,6 +462,10 @@ export class AgentRunner {
       // --- Tool execution (parallel for read-only tools) ------------------------------------
       const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts);
       toolsExecuted += calls.length;
+      mutationsExecuted += calls.filter((c) => {
+        const kind = toolList.find((t) => t.definition.name === c.name)?.approvalKind;
+        return kind === 'write' || kind === 'delete' || kind === 'terminal';
+      }).length;
       for (const c of calls) {
         if (c.name === 'load_skill' && depth === 0) {
           const name = parseArgs(c.arguments).name;
@@ -654,35 +692,91 @@ export function looksLikeBareClaim(reply: string, request: string): boolean {
 }
 
 /**
+ * The reply reports a change as already made ("I've edited add()", "The file has been updated", "Fixed.") in
+ * answer to a request for one. Checked only when no mutating tool ran, so an honest report is never flagged.
+ */
+export function claimsChange(reply: string, request: string): boolean {
+  const r = reply.trim();
+  if (!r || /\?\s*$/.test(r)) {
+    return false;
+  }
+  const imperative = /\b(create|write|add|edit|fix|update|change|rename|delete|remove|refactor|implement|make|generate|replace|move|save)\b/i.test(request);
+  const claim =
+    /\b(?:i'?ve|i have|has been|have been|is now|are now)\s+(?:\w+\s+){0,2}(?:edited|updated|fixed|changed|created|written|modified|applied|saved|removed|deleted|renamed|replaced|added|implemented)\b/i.test(r) ||
+    /(?:^|\n)\s*(?:fixed|done|updated|created|applied)[.!]?\s*$/i.test(r);
+  return imperative && claim;
+}
+
+/** A code fence or line that starts with a tool name ("edit_file: path:…", "write_file("), or a unified diff with file headers: the model showed the action instead of doing it. */
+export function showsToolCallAsText(reply: string, toolNames: Iterable<string>): boolean {
+  for (const raw of toolNames) {
+    const name = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const fence = '```[^\\n]*\\n\\s*' + name + '\\b';
+    const call = '(?:^|\\n)\\s*' + name + '\\s*\\(';
+    if (new RegExp(`${fence}|${call}`).test(reply)) {
+      return true;
+    }
+  }
+  return /```diff\b[\s\S]*?\n(?:---|\+\+\+) /.test(reply);
+}
+
+/**
+ * The reply shows a tool call as text instead of making it (a code fence or line starting with a tool name),
+ * or ends by announcing an action it never took ("Let's proceed with fixing…", "I'll now update the file").
+ * Small models do both regularly; either way nothing happened and the model should be told so.
+ */
+export function looksLikeUnfulfilledIntent(reply: string, toolNames: Iterable<string>): boolean {
+  const r = reply.trim();
+  if (!r) {
+    return false;
+  }
+  if (showsToolCallAsText(r, toolNames)) {
+    return true;
+  }
+  const tail = r.split(/\n+/).filter((l) => l.trim()).slice(-3).join(' ');
+  if (/let me know|would you like|do you want|should i\b/i.test(tail)) {
+    return false;
+  }
+  return /\b(?:let'?s|let us|i'?ll|i will|i'?m going to|i am going to|we'?ll|now i|next,? i|proceeding to|going to)\b[^.!?\n]{0,80}\b(?:proceed|start|begin|fix|edit|update|create|write|add|change|run|implement|apply|modify|read|open|check|look)/i.test(tail);
+}
+
+/**
  * Parses tool calls out of free text: ```tool_call / ```json fenced blocks, <tool_call>…</tool_call> tags,
  * and bare `{"name": …, "arguments": …}` objects. When `known` is given, only those tool names count.
  */
-export function extractTextToolCalls(text: string, known?: ReadonlySet<string>): { calls: ToolCall[]; remainder: string } {
+export function extractTextToolCalls(text: string, known?: ReadonlySet<string>): { calls: ToolCall[]; remainder: string; malformed: string[] } {
   const calls: ToolCall[] = [];
+  // Blocks the model explicitly marked as tool calls but that did not parse — truncated JSON, a trailing
+  // comma, an unknown tool name. Silently treating those as prose lets the model claim it acted when it did not.
+  const malformed: string[] = [];
   let remainder = text;
-  const accept = (raw: string, json: string): void => {
+  const accept = (raw: string, json: string, explicit: boolean): void => {
     try {
       const obj = JSON.parse(json) as { name?: string; arguments?: unknown; parameters?: unknown };
       if (obj && typeof obj.name === 'string' && (!known || known.has(obj.name))) {
         const args = obj.arguments ?? obj.parameters ?? {};
         calls.push({ id: newId(), name: obj.name, arguments: typeof args === 'string' ? args : JSON.stringify(args) });
         remainder = remainder.replace(raw, '');
+      } else if (explicit && obj && typeof obj.name === 'string') {
+        malformed.push(`unknown tool "${obj.name}"`);
       }
-    } catch {
-      /* not a tool call */
+    } catch (e) {
+      if (explicit) {
+        malformed.push(`invalid JSON (${e instanceof Error ? e.message : String(e)})`);
+      }
     }
   };
-  const re = /```(?:tool_call|json)?\s*\n?(\{[\s\S]*?\})\s*```|<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+  const re = /```(tool_call|json)?\s*\n?(\{[\s\S]*?\})\s*```|<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    accept(m[0], m[1] ?? m[2]);
+    accept(m[0], m[2] ?? m[3], m[1] === 'tool_call' || m[3] !== undefined);
   }
   if (!calls.length) {
     for (const obj of bareJsonObjects(text)) {
-      accept(obj, obj);
+      accept(obj, obj, false);
     }
   }
-  return { calls, remainder: remainder.trim() };
+  return { calls, remainder: remainder.trim(), malformed };
 }
 
 /** Balanced top-level `{ "name": … }` objects found anywhere in `text` (string-aware brace matching). */

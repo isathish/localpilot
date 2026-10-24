@@ -44,7 +44,8 @@ function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; d
       return readBody((b) => {
         res.setHeader('content-type', 'application/x-ndjson');
         if (b.model === 'nope:1b') {
-          return res.end(`${JSON.stringify({ error: 'pull model manifest: file does not exist' })}\n`);
+          res.end(`${JSON.stringify({ error: 'pull model manifest: file does not exist' })}\n`);
+          return;
         }
         const lines = [
           { status: 'pulling manifest' },
@@ -60,7 +61,8 @@ function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; d
           if (i >= lines.length) {
             pulled.push(b.model);
             models.push({ name: b.model, caps: ['completion', 'tools'], ctx: 8192, size: 1.2e9, params: '1.7B' });
-            return res.end();
+            res.end();
+            return;
           }
           res.write(`${JSON.stringify(lines[i++])}\n`);
           setTimeout(tick, 15);

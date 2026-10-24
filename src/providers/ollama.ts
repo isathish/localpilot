@@ -64,9 +64,9 @@ export class OllamaProvider implements LLMProvider {
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     const res = await getJson<{ models: OllamaTag[] }>(`${this.baseUrl}/api/tags`, this.headers, withTimeout(5000, signal));
     const models = res.models ?? [];
-    // Fetch capabilities in parallel but tolerate failures.
-    const infos = await Promise.all(
-      models.map(async (m) => {
+    // Fetch capabilities for models not seen before, a few at a time: /api/show loads model metadata
+    // from disk, and a user with twenty tags should not see Ollama freeze on every discovery.
+    const infos = await mapLimit(models, 4, async (m) => {
         const cached = this.infoCache.get(m.name);
         if (cached) {
           return cached;
@@ -96,8 +96,7 @@ export class OllamaProvider implements LLMProvider {
         };
         this.infoCache.set(m.name, info);
         return info;
-      })
-    );
+      });
     return infos.filter((i) => !/embed/i.test(i.modelId));
   }
 
@@ -202,4 +201,18 @@ function safeParse(s: string): unknown {
   } catch {
     return { input: s };
   }
+}
+
+/** `Promise.all(items.map(fn))` with at most `limit` calls in flight; results keep the input order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }

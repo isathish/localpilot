@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { createSkillPrompt, recommendSkills, skillHint, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { createSkillPrompt, namesTool, recommendSkills, skillHint, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
 import { routeSubagent } from '../agent/builtinAgents';
@@ -71,6 +71,27 @@ suite('Skill recommendation', () => {
     assert.strictEqual(a, b);
     assert.match(slugFor(a!), /^deploy-[a-z-]+$/);
     assert.strictEqual(topicKey('ok'), undefined);
+  });
+
+  test('weak matches only suggest the skill; name or trigger-phrase matches require it', () => {
+    const strong = recommendSkills('deploy this with docker', SKILLS);
+    assert.ok(strong[0]?.strong, JSON.stringify(strong));
+    assert.ok(/Required first step/.test(skillHint(strong)));
+    const weak = recommendSkills('the spacing and typography on the settings page look off, improve the layout', SKILLS);
+    assert.strictEqual(weak[0]?.name, 'ui-design');
+    assert.ok(!weak[0]?.strong, JSON.stringify(weak));
+    assert.ok(/may apply/.test(skillHint(weak)) && !/Required first step/.test(skillHint(weak)));
+    // One token of a hyphenated name is not the name: "compute_total" must not make "azure-compute" mandatory.
+    const partial = recommendSkills('which file defines compute_total?', [...SKILLS, { name: 'azure-compute', description: 'Azure VM/VMSS router. WHEN: create / provision VM, recommend VM size, compare VM pricing.' }]);
+    assert.ok(partial.every((m) => !m.strong), JSON.stringify(partial));
+  });
+
+  test('namesTool recognises a request that prescribes a tool', () => {
+    const tools = ['write_file', 'edit_file', 'read_file', 'run_command'];
+    assert.ok(namesTool('Use the write_file tool to create hello.txt', tools));
+    assert.ok(namesTool('fix only that line with edit_file', tools));
+    assert.ok(!namesTool('write a file with the results', tools));
+    assert.ok(!namesTool('read_files is not a tool', tools));
   });
 
   test('prompt helpers mention the skill path and the first match', () => {

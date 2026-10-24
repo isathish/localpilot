@@ -138,6 +138,9 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .turn .actions button:hover { background: var(--hover); color: var(--fg); }
 .turn .actions svg { width: 13px; height: 13px; }
 .turn.assistant { padding: 8px 12px 10px; }
+/* Settled turns off screen skip layout and paint entirely; the inner wrappers (not .turn) carry the containment so the
+   hover actions, which hang above the turn, are never clipped. The live turn is excluded so streaming never flickers. */
+.turn.assistant:not(.live) > .body, .turn.assistant:not(.live) > .steps { content-visibility: auto; contain-intrinsic-size: auto 80px; }
 .body { min-width: 0; overflow-wrap: anywhere; }
 .body > :first-child { margin-top: 0; } .body > :last-child { margin-bottom: 0; }
 .body p { margin: .5em 0; } .body ul, .body ol { margin: .4em 0; padding-left: 1.5em; } .body li { margin: .15em 0; }

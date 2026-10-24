@@ -7,12 +7,18 @@ import { ChatMessage, ModelInfo, ToolDefinition } from '../types';
  * Exposes every discovered local model to VS Code's Language Model API, so they show up in the
  * model picker of Copilot Chat / other extensions ("bring your own model").
  */
-export class LocalModelChatProvider implements vscode.LanguageModelChatProvider {
+export class LocalModelChatProvider implements vscode.LanguageModelChatProvider, vscode.Disposable {
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChangeLanguageModelChatInformation = this._onDidChange.event;
+  private readonly sub: vscode.Disposable;
 
   constructor(private readonly providers: ProviderRegistry, private readonly log: vscode.LogOutputChannel) {
-    providers.onDidChange(() => this._onDidChange.fire());
+    this.sub = providers.onDidChange(() => this._onDidChange.fire());
+  }
+
+  dispose(): void {
+    this.sub.dispose();
+    this._onDidChange.dispose();
   }
 
   async provideLanguageModelChatInformation(_options: { silent: boolean }, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
