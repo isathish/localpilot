@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.8 — 2026-10-24
 ### Added
 - **Isolated worktrees — agents never clobber each other or your open files.** Every agent chat now works in its own copy of the repository (a git worktree under `~/.localpilot/worktrees/`), seeded from your checkout *including uncommitted work*; `.localpilot/worktrees.json` can list setup commands (`npm ci`…) to run in each new copy. The changes panel shows *N files changed in isolated copy* with before/after diffs, **Apply to workspace** (changes land as ordinary uncommitted edits, 3-way merged on conflict, conflicts listed) and **Discard**; the **Agents** panel has the same actions plus *Open Agent's Worktree in New Window*. `localpilot.worktrees.mode` = `always` (default) / `parallel` / `off`; outside git, agents edit directly. Worktrees of deleted chats are cleaned up.
 - **Best of N.** Run one task on several models at once (2–8), each isolated; when the last one finishes a notification offers **Compare results**, listing each model with file counts and its answer, and *Apply this result* / *Apply and discard the others*. Also as *LocalPilot: Best of N…* in the palette.
