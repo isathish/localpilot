@@ -10,6 +10,7 @@
 --vscode-textLink-foreground:#4daafc;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#cca700;--vscode-testing-iconPassed:#73c991;
 --vscode-textCodeBlock-background:#2a2a2a;--vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;
 --vscode-notifications-background:#252526;
+--vscode-charts-blue:#3794ff;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-charts-orange:#d18616;--vscode-charts-purple:#b180d7;--vscode-charts-lines:#ffffff80;
 }
 html.light{
 --vscode-editor-background:#ffffff;--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#717171;--vscode-widget-border:#e5e5e5;
@@ -18,6 +19,7 @@ html.light{
 --vscode-button-background:#005fb8;--vscode-button-hoverBackground:#0258a8;--vscode-focusBorder:#005fb8;
 --vscode-textLink-foreground:#005fb8;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#bf8803;--vscode-testing-iconPassed:#2ea043;
 --vscode-textCodeBlock-background:#f0f0f0;--vscode-notifications-background:#f3f3f3;
+--vscode-charts-blue:#0a66c2;--vscode-charts-green:#388a34;--vscode-charts-red:#e51400;--vscode-charts-yellow:#bf8803;--vscode-charts-orange:#d18616;--vscode-charts-purple:#652d90;--vscode-charts-lines:#00000080;
 }
 </style>
 <link rel="stylesheet" href="../media/settings.css"></head>
@@ -27,6 +29,9 @@ html.light{
 <script>
 const q = new URLSearchParams(location.search);
 if (q.get('light')) document.documentElement.classList.add('light');
+// VS Code tags the body with the active theme kind; the stylesheet keys light/HC adjustments off these.
+document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
+if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df');
 const section = q.get('section') || 'providers';
 const page = q.get('page') || 'settings';
 const providers = [
@@ -59,6 +64,12 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
       learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
       mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true });
+  }
+  if (m.type === 'set' || m.type === 'reset') {
+    // Host round-trip: the setting is written, then the whole state is pushed again without navigating.
+    const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
+    if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
+    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: '0.2.5', hasWorkspace: true, settings: { ...settings }, models, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
   }
   if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
     { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },
@@ -180,11 +191,13 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
   if (m.type === 'dashboard') setTimeout(() => {
     const P = (p50, p95) => ({ p50, p95, avg: Math.round((p50 + p95) / 2) });
     const days = m.days || 7; const n = days === 0 ? 30 : days; const series = [];
-    for (let i = n - 1; i >= 0; i--) { const d = new Date(Date.now() - i * 86400e3); const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; const f = 0.5 + Math.abs(Math.sin(i * 1.7)); series.push({ day: k, runs: Math.round(6 * f), tokens: Math.round(48000 * f), toolCalls: Math.round(40 * f), modelCalls: Math.round(22 * f), completionsShown: Math.round(60 * f), completionsAccepted: Math.round(19 * f), errors: i % 4 === 0 ? 2 : 0 }); }
+    for (let i = n - 1; i >= 0; i--) { const d = new Date(Date.now() - i * 86400e3); const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; const f = 0.5 + Math.abs(Math.sin(i * 1.7)); const pt = Math.round(40000 * f), ct = Math.round(8000 * f); series.push({ day: k, runs: Math.round(6 * f), failedRuns: i % 4 === 0 ? 1 : 0, tokens: pt + ct, promptTokens: pt, completionTokens: ct, toolCalls: Math.round(40 * f), toolErrors: i % 3 === 0 ? 2 : 0, cachedTools: Math.round(4 * f), modelCalls: Math.round(22 * f), modelErrors: i % 4 === 0 ? 1 : 0, tokPerSec: Math.round((30 + 12 * Math.cos(i)) * 10) / 10, completionsShown: Math.round(60 * f), completionsAccepted: Math.round(19 * f), errors: i % 4 === 0 ? 2 : 0 }); }
     const summary = {
       days, from: Date.now() - n * 86400e3, to: Date.now(),
-      totals: { runs: 41, done: 34, stopped: 5, failed: 2, subagentRuns: 12, modelCalls: 163, modelErrors: 3, retries: 6, promptTokens: 284310, completionTokens: 61240, toolCalls: 288, toolErrors: 9, runTime: P(42000, 210000), steps: P(4, 11) },
+      totals: { runs: 41, done: 34, stopped: 5, failed: 2, subagentRuns: 12, modelCalls: 163, modelErrors: 3, retries: 6, promptTokens: 284310, completionTokens: 61240, toolCalls: 288, toolErrors: 9, cachedTools: 22, isolatedRuns: 29, activeDays: Math.min(n, 6), tokPerSec: 34.6, runTime: P(42000, 210000), steps: P(4, 11) },
       series,
+      hourly: [0, 0, 0, 0, 0, 0, 1, 3, 9, 18, 26, 31, 22, 14, 28, 35, 40, 33, 19, 12, 8, 5, 2, 1],
+      agents: [{ agent: 'coder', runs: 7, done: 6, stopped: 0, failed: 1, duration: P(48000, 160000), toolCalls: 61 }, { agent: 'explore', runs: 3, done: 3, stopped: 0, failed: 0, duration: P(9000, 21000), toolCalls: 17 }, { agent: 'tester', runs: 2, done: 1, stopped: 1, failed: 0, duration: P(70000, 70000), toolCalls: 14 }],
       models: [
         { model: 'qwen2.5-coder:7b', provider: 'ollama', calls: 118, promptTokens: 201000, completionTokens: 44800, tokPerSec: 38.4, ttft: P(640, 2900), duration: P(8200, 31000), errors: 1, last: Date.now() - 120000 },
         { model: 'qwen3:14b', provider: 'ollama', calls: 31, promptTokens: 71000, completionTokens: 14100, tokPerSec: 17.9, ttft: P(1800, 9400), duration: P(21000, 88000), errors: 2, last: Date.now() - 3600000 },

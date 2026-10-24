@@ -43,9 +43,18 @@ export interface Percentiles {
 export interface DayPoint {
   day: string;
   runs: number;
+  /** Runs that ended in `failed`. */
+  failedRuns: number;
   tokens: number;
+  promptTokens: number;
+  completionTokens: number;
   toolCalls: number;
+  toolErrors: number;
+  cachedTools: number;
   modelCalls: number;
+  modelErrors: number;
+  /** Completion tokens per second of generation across the day's successful calls (0 when none). */
+  tokPerSec: number;
   completionsShown: number;
   completionsAccepted: number;
   errors: number;
@@ -67,10 +76,22 @@ export interface TelemetrySummary {
     completionTokens: number;
     toolCalls: number;
     toolErrors: number;
+    /** Read-only tool calls served from the per-turn cache. */
+    cachedTools: number;
+    /** Runs that worked in an isolated worktree. */
+    isolatedRuns: number;
+    /** Days in the range with at least one event. */
+    activeDays: number;
+    /** Completion tokens per second of generation over every successful model call. */
+    tokPerSec: number;
     runTime: Percentiles;
     steps: Percentiles;
   };
   series: DayPoint[];
+  /** Model + tool calls per local hour of day (24 buckets), for the activity histogram. */
+  hourly: number[];
+  /** Subagent runs grouped by agent persona. */
+  agents: { agent: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; toolCalls: number }[];
   models: { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; tokPerSec: number; ttft: Percentiles; duration: Percentiles; errors: number; last: number }[];
   tools: { name: string; calls: number; errors: number; cached: number; duration: Percentiles; last: number }[];
   modes: { mode: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; steps: Percentiles; toolCalls: number }[];
@@ -388,7 +409,7 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
     const k = dayKey(t);
     let p = byDay.get(k);
     if (!p) {
-      p = { day: k, runs: 0, tokens: 0, toolCalls: 0, modelCalls: 0, completionsShown: 0, completionsAccepted: 0, errors: 0 };
+      p = { day: k, runs: 0, failedRuns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, modelCalls: 0, modelErrors: 0, tokPerSec: 0, completionsShown: 0, completionsAccepted: 0, errors: 0 };
       byDay.set(k, p);
     }
     return p;
@@ -412,9 +433,14 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
   const langs = new Map<string, { language: string; shown: number; accepted: number }>();
   const worktrees = { created: 0, applied: 0, discarded: 0, conflicts: 0, files: 0 };
   const errors: TelemetrySummary['errors'] = [];
-  const totals = { runs: 0, done: 0, stopped: 0, failed: 0, subagentRuns: 0, modelCalls: 0, modelErrors: 0, retries: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0 };
+  const totals = { runs: 0, done: 0, stopped: 0, failed: 0, subagentRuns: 0, modelCalls: 0, modelErrors: 0, retries: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, isolatedRuns: 0 };
   const runTimes: number[] = [];
   const runSteps: number[] = [];
+  const hourly = new Array<number>(24).fill(0);
+  const dayGenMs = new Map<string, number>();
+  let genMsTotal = 0;
+  type AgentAgg = { agent: string; runs: number; done: number; stopped: number; failed: number; dur: number[]; toolCalls: number };
+  const agents = new Map<string, AgentAgg>();
 
   for (const e of events) {
     const day = dayOf(e.t);
@@ -430,26 +456,36 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
         m.last = Math.max(m.last, e.t);
         day.modelCalls++;
         totals.modelCalls++;
+        hourly[new Date(e.t).getHours()]++;
         if (e.outcome === 'ok') {
           m.promptTokens += e.promptTokens ?? 0;
           m.completionTokens += e.completionTokens ?? 0;
           totals.promptTokens += e.promptTokens ?? 0;
           totals.completionTokens += e.completionTokens ?? 0;
           day.tokens += (e.promptTokens ?? 0) + (e.completionTokens ?? 0);
+          day.promptTokens += e.promptTokens ?? 0;
+          day.completionTokens += e.completionTokens ?? 0;
           m.dur.push(e.durationMs);
+          let gen = 0;
           if (e.ttftMs !== undefined) {
             m.ttft.push(e.ttftMs);
             if (e.completionTokens) {
-              m.genMs += Math.max(1, e.durationMs - e.ttftMs);
+              gen = Math.max(1, e.durationMs - e.ttftMs);
             }
           } else if (e.completionTokens) {
-            m.genMs += Math.max(1, e.durationMs);
+            gen = Math.max(1, e.durationMs);
+          }
+          if (gen) {
+            m.genMs += gen;
+            genMsTotal += gen;
+            dayGenMs.set(day.day, (dayGenMs.get(day.day) ?? 0) + gen);
           }
         } else if (e.outcome === 'retry') {
           totals.retries++;
         } else if (e.outcome === 'error') {
           m.errors++;
           totals.modelErrors++;
+          day.modelErrors++;
           day.errors++;
           errors.push({ t: e.t, kind: 'model', what: e.model, detail: e.reason ?? 'error' });
         }
@@ -465,14 +501,18 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
         t.last = Math.max(t.last, e.t);
         day.toolCalls++;
         totals.toolCalls++;
+        hourly[new Date(e.t).getHours()]++;
         if (e.cached) {
           t.cached++;
+          totals.cachedTools++;
+          day.cachedTools++;
         } else {
           t.dur.push(e.durationMs);
         }
         if (e.error) {
           t.errors++;
           totals.toolErrors++;
+          day.toolErrors++;
           day.errors++;
         }
         break;
@@ -480,10 +520,26 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
       case 'run': {
         if (e.depth > 0) {
           totals.subagentRuns++;
+          const name = e.agent || 'subagent';
+          let a = agents.get(name);
+          if (!a) {
+            a = { agent: name, runs: 0, done: 0, stopped: 0, failed: 0, dur: [], toolCalls: 0 };
+            agents.set(name, a);
+          }
+          a.runs++;
+          a[e.outcome]++;
+          a.dur.push(e.durationMs);
+          a.toolCalls += e.toolCalls;
+        }
+        if (e.isolated) {
+          totals.isolatedRuns++;
         }
         totals.runs++;
         totals[e.outcome]++;
         day.runs++;
+        if (e.outcome === 'failed') {
+          day.failedRuns++;
+        }
         runTimes.push(e.durationMs);
         runSteps.push(e.steps);
         let m = modes.get(e.mode);
@@ -564,12 +620,20 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
 
   const shownTotal = completions.shown + completions.cached;
   errors.sort((a, b) => b.t - a.t);
+  const series = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+  for (const d of series) {
+    const gen = dayGenMs.get(d.day);
+    d.tokPerSec = gen ? Math.round((d.completionTokens / gen) * 1000 * 10) / 10 : 0;
+  }
+  const activeDays = series.filter((d) => d.runs || d.modelCalls || d.toolCalls || d.completionsShown).length;
   return {
     days: range.days,
     from: range.from,
     to: range.to,
-    totals: { ...totals, runTime: percentiles(runTimes), steps: percentiles(runSteps) },
-    series: [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)),
+    totals: { ...totals, activeDays, tokPerSec: genMsTotal ? Math.round((totals.completionTokens / genMsTotal) * 1000 * 10) / 10 : 0, runTime: percentiles(runTimes), steps: percentiles(runSteps) },
+    series,
+    hourly,
+    agents: [...agents.values()].map((a) => ({ agent: a.agent, runs: a.runs, done: a.done, stopped: a.stopped, failed: a.failed, duration: percentiles(a.dur), toolCalls: a.toolCalls })).sort((a, b) => b.runs - a.runs),
     models: [...models.values()]
       .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
       .sort((a, b) => b.calls - a.calls),

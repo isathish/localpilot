@@ -17,8 +17,8 @@ export { parseFrontMatter } from './frontMatter';
  *   then the skills bundled with the extension (`<extension>/skills/*`, source "builtin") — a workspace or user
  *   skill with the same name overrides a bundled one.
  *
- * Subagents are markdown files with front-matter (`name`, `description`, `tools`, `model`) and a body used as
- * the system prompt, discovered in <workspace>/.localpilot/agents, <workspace>/.claude/agents, ~/.localpilot/agents.
+ * Subagents are markdown files with front-matter (`name`, `description`, `tools`, `model`, `skills`) and a body used
+ * as the system prompt (`skills` names skills preloaded into every run of that subagent), discovered in <workspace>/.localpilot/agents, <workspace>/.claude/agents, ~/.localpilot/agents.
  */
 export class SkillManager implements vscode.Disposable {
   private skills = new Map<string, Skill>();
@@ -198,8 +198,8 @@ export class SkillManager implements vscode.Disposable {
         const raw = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(path.join(dir, file)))).toString('utf8');
         const { meta, body } = parseFrontMatter(raw);
         const name = (meta.name as string) || file.replace(/\.md$/, '');
-        const tools = typeof meta.tools === 'string' ? meta.tools.split(',').map((s) => s.trim()).filter(Boolean) : Array.isArray(meta.tools) ? (meta.tools as string[]) : undefined;
-        this.agents.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools, model: meta.model as string | undefined, source });
+        const list = (v: unknown): string[] | undefined => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : Array.isArray(v) ? (v as unknown[]).map(String).filter(Boolean) : undefined);
+        this.agents.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools: list(meta.tools), skills: list(meta.skills), model: meta.model as string | undefined, source });
       } catch (e) {
         this.log.warn(`Failed to load agent ${file}: ${String(e)}`);
       }

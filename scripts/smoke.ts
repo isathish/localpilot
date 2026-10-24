@@ -640,7 +640,8 @@ async function pauseAndSteer() {
       const control = new RunControl(s.id);
       const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'CLAIM-GO create two files' }, emit, signal: control.signal, control, requestApproval: async () => true });
       const nudges = sink.filter((e) => e.sessionId === s.id && e.type === 'nudge').map((e) => (e.payload as { reason: string }).reason);
-      const hidden = s.messages.find((m) => m.role === 'user' && m.meta?.hidden);
+      // Skills found on the machine may add their own hidden hint first; the nudge is the tagged one.
+      const hidden = s.messages.find((m) => m.role === 'user' && m.meta?.hidden && m.meta?.nudge);
       const order = sink.filter((e) => e.sessionId === s.id && (e.type === 'nudge' || e.type === 'tool_start')).map((e) => e.type);
       check('nudge: emitted once with reason=claimed before the tool finally runs', nudges.join() === 'claimed' && order.join() === 'nudge,tool_start', { nudges, order });
       check('nudge: hidden steering message is tagged and names a fan-out tool for a delegation claim', !!hidden && hidden.meta?.nudge === 'claimed' && /run_todos_parallel|run_parallel_subagents/.test(hidden.content), hidden?.content.slice(0, 120));
@@ -798,6 +799,110 @@ async function telemetry() {
   }
 }
 
+async function skillsInHarness() {
+  console.log('\n[Skills in the agent harness: preload, subagent inheritance, swarm, dedupe]');
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-skills-'));
+  const mk = (name: string, description: string, body: string) => {
+    fs.mkdirSync(path.join(tmp, name), { recursive: true });
+    fs.writeFileSync(path.join(tmp, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n\n${body}\n`);
+  };
+  mk('zorblax-release', 'Cut a zorblax release end to end. Use for "cut a zorblax release".', '1. bump\n2. tag ZORBLAX-RELEASE-STEPS\n3. publish');
+  mk('quuxaudit', 'Audit code for quuxaudit findings.', '1. scan QUUXAUDIT-STEPS\n2. report');
+  mk('offlimits', 'A skill the user switched off. Use for "offlimits".', 'SHOULD-NEVER-APPEAR');
+  process.env.LP_SKILLS_DISABLED = 'offlimits';
+  const seen: Record<string, string> = {};
+  const srv = await listen(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.end(JSON.stringify({ data: [{ id: 'sk', capabilities: ['tool_use'] }] }));
+    }
+    if (req.url === '/v1/chat/completions') {
+      const body = JSON.parse(await readBody(req));
+      const msgs = body.messages as { role: string; content: string }[];
+      const transcript = JSON.stringify(msgs);
+      const task = String(msgs.find((m) => m.role === 'user')?.content ?? '');
+      const system = String(msgs.find((m) => m.role === 'system')?.content ?? '');
+      res.setHeader('content-type', 'text/event-stream');
+      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      const text = (t: string) => { send({ choices: [{ delta: { content: t } }] }); send({ choices: [{ delta: {}, finish_reason: 'stop' }] }); };
+      const tool = (id: string, name: string, args: unknown) => { send({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] }); send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }); };
+      const has = (re: RegExp) => re.test(transcript);
+      if (task.includes('CHILD-X')) {
+        seen.x = `release=${has(/<skill name=\\"zorblax-release\\"/)} audit=${has(/<skill name=\\"quuxaudit\\"/)} offlimits=${has(/SHOULD-NEVER-APPEAR/)} loadSkillTool=${JSON.stringify(body.tools ?? []).includes('"load_skill"')} indexHasOfflimits=${/- offlimits:/.test(system)}`;
+        text('X-REPORT');
+      } else if (task.includes('CHILD-Y')) {
+        seen.y = `release=${has(/<skill name=\\"zorblax-release\\"/)} audit=${has(/<skill name=\\"quuxaudit\\"/)} inherited=${has(/delegated this task is working with it/)}`;
+        text('Y-REPORT');
+      } else if (task.includes('SWARM-GO')) {
+        seen.parent = `preloaded=${has(/<skill name=\\"zorblax-release\\"/)} reason=${has(/because it matches this request/)}`;
+        if (has(/Y-REPORT/)) { text('Swarm done.'); } else { tool('s1', 'run_parallel_subagents', { tasks: [{ agent: 'explore', prompt: 'CHILD-X look around the repo' }, { agent: 'coder', prompt: 'CHILD-Y run the quuxaudit on src' }] }); }
+      } else if (task.includes('DEDUPE-GO')) {
+        if (has(/items completed/)) { text('Dedupe done.'); } else { tool('d1', 'run_todos_parallel', { tasks: [{ title: 'Create ONE', agent: 'coder', prompt: 'make ONE' }, { title: 'Create TWO', agent: 'coder', prompt: 'make TWO' }] }); }
+      } else if (task.includes('make ONE') || task.includes('make TWO')) {
+        text('made');
+      } else if (task.includes('MANGLED-GO')) {
+        if (has(/Resolved \\"Zorblax Release\\"/)) { text(`loaded:${has(/ZORBLAX-RELEASE-STEPS/)}`); } else { tool('m1', 'load_skill', { name: 'Zorblax Release' }); }
+      } else if (task.includes('BOGUS-GO')) {
+        if (has(/Unknown skill \\"turbo-wizard\\"/)) { text(`refused:${has(/Only these skills exist/)}:${has(/Do not invent skill names/)}`); } else { tool('b1', 'load_skill', { name: 'turbo-wizard' }); }
+      } else if (task.includes('DISABLED-GO')) {
+        if (has(/disabled by the user/)) { text(`refused:${!has(/SHOULD-NEVER-APPEAR/)}`); } else { tool('x1', 'load_skill', { name: 'offlimits' }); }
+      } else {
+        text('?');
+      }
+      return res.end();
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  process.env.LP_MOCK_URL = `${srv.url}/v1`;
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    const providers = new ProviderRegistry(log);
+    const tools = new ToolRegistry();
+    const skills = new SkillManager(log, tmp);
+    await skills.refresh();
+    const workspace = new WorkspaceContext(log);
+    tools.register({ parallelSafe: true, definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, async execute(args) { return { content: `ECHO:${args.text}` }; } });
+    const runner = new AgentRunner(providers, tools, skills, workspace, log);
+    const events: AgentEvent[] = [];
+    tools.registerAll(createAgentTools(runner, skills, (e) => events.push(e), async () => true));
+    const mkSession = (id: string, extra: Partial<Session> = {}): Session => ({ id, title: '', createdAt: 0, updatedAt: 0, model: 'mock/sk', messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [], ...extra });
+    const run = (s: Session, content: string) => runner.run({ session: s, userMessage: { role: 'user', content }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+
+    const names = skills.enabledSkills.map((k) => k.name);
+    check('disabled skill is loaded from disk but hidden from the agent', names.includes('zorblax-release') && names.includes('quuxaudit') && !names.includes('offlimits') && !!skills.getSkill('offlimits')?.disabled, names);
+    check('load_skill definition lists only enabled skills', (() => { const d = tools.get('load_skill')!.definition; const desc = JSON.stringify(d.parameters); return desc.includes('zorblax-release') && !desc.includes('offlimits'); })());
+
+    // 1. Parent: a trigger phrase preloads the skill; the swarm inherits it, and a worker also gets its own strong match.
+    const s1 = mkSession('sk1');
+    const out1 = await run(s1, 'SWARM-GO please cut a zorblax release for v2');
+    check('parent: strong trigger-phrase match preloads the skill body into the request', seen.parent === 'preloaded=true reason=true' && out1 === 'Swarm done.', { seen: seen.parent, out1 });
+    check('parent: Using skill status + skill_suggestions carries preloaded', events.some((e) => e.type === 'status' && /Using skill zorblax-release/.test(String(e.payload))) && events.some((e) => e.type === 'skill_suggestions' && JSON.stringify((e.payload as { preloaded?: unknown }).preloaded).includes('zorblax-release')));
+    check('worker X (explore): inherits the parent skill, not the disabled one; has load_skill; index hides disabled', seen.x === 'release=true audit=false offlimits=false loadSkillTool=true indexHasOfflimits=false', seen.x);
+    check('worker Y (coder): inherits the parent skill AND gets its own strong match, marked as inherited', seen.y === 'release=true audit=true inherited=true', seen.y);
+
+    // 2. run_todos_parallel with inline tasks that repeat pending checklist items runs those items instead of duplicating them.
+    const s2 = mkSession('sk2', { todos: [{ id: '1', title: 'Create ONE', status: 'pending', agent: 'coder', prompt: 'make ONE' }, { id: '2', title: 'Create TWO', status: 'pending', agent: 'coder', prompt: 'make TWO' }] });
+    const out2 = await run(s2, 'DEDUPE-GO');
+    const fan = s2.messages.find((m) => m.role === 'tool' && m.toolName === 'run_todos_parallel');
+    check('run_todos_parallel: inline tasks matching pending items run them in place (no duplicates, both done)', out2 === 'Dedupe done.' && s2.todos?.length === 2 && s2.todos.every((t) => t.status === 'done' && t.result === 'made') && /2\/2 items completed/.test(fan?.content ?? ''), { out2, todos: s2.todos, fan: fan?.content.slice(0, 120) });
+
+    // 3. load_skill tolerates a mangled name, refuses invented and disabled ones with guidance.
+    const out3 = await run(mkSession('sk3'), 'MANGLED-GO');
+    check('load_skill: "Zorblax Release" resolves to zorblax-release and returns the body', out3 === 'loaded:true', out3);
+    const out4 = await run(mkSession('sk4'), 'BOGUS-GO');
+    check('load_skill: an invented name is refused with the real list and an anti-hallucination note', out4 === 'refused:true:true', out4);
+    const out5 = await run(mkSession('sk5'), 'DISABLED-GO');
+    check('load_skill: a disabled skill is refused and its body never reaches the model', out5 === 'refused:true', out5);
+  } finally {
+    srv.close();
+    delete process.env.LP_SKILLS_DISABLED;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await telemetry();
   await worktrees();
@@ -806,6 +911,7 @@ async function telemetry() {
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();
+  await skillsInHarness();
   console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll smoke checks passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => {

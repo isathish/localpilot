@@ -18,15 +18,28 @@ Pick a range — **Today**, **7 / 30 / 90 days** or **All** — and the page ref
 | **Tool calls** | Tool executions and their failure rate. |
 | **Completions** | Inline-completion acceptance rate (accepted ÷ shown), requests, median latency. |
 | **Providers** | How many configured servers are reachable right now, with each one's uptime over the range. |
+| **Throughput** | Completion tokens per second of generation across every call in the range, and the fastest model. |
+| **Turn time** | Median and 95th-percentile duration of an agent turn, with the median number of model steps. |
+| **Cache hits** | Share of tool calls answered from the per-turn read cache (identical reads in one turn run once). |
 
-Below the cards:
+Then the charts (hidden for a single-day range, where the counters say it all). Hover any bar or point for the exact value; colours come from the VS Code theme's chart palette.
+
+- **Activity** — per day: model calls, tool calls, agent runs and errors.
+- **Tokens** — per day, prompt stacked on completion.
+- **Generation speed** — tok/s per day.
+- **Completions** — shown vs accepted per day.
+- **Run outcomes** / **Tool reliability** — donuts of done / stopped / failed and succeeded / cached / failed.
+- **Activity by hour** — when the machine is busiest (local time).
+
+Below the charts:
 
 - **Models** — calls, tokens in/out, generation speed (**tok/s**), time to first token and whole-request time (median / 95th percentile), errors.
 - **Runs by mode** — Agent, Multitask, Debug, Ask, Plan: outcomes, steps per run, duration, tool calls.
 - **Tools** — per tool: calls, failures, cached hits, duration and share of all calls.
 - **Provider health** — up/down, last error, uptime %, probe latency. Checks happen whenever models are discovered (start-up, refresh, every 30 s while the picker is open).
 - **Inline completions** — requested / shown / accepted / empty / failed, latency and acceptance by language.
-- **Isolated worktrees** — created, applied (with files touched), discarded, conflicts.
+- **Isolated worktrees** — how many runs were isolated, worktrees created, applied (with files touched), discarded, conflicts.
+- **Subagents** — per persona (coder, explore, tester…): runs, failures, duration and tool calls.
 - **Recent problems** — the latest model errors, failed runs and unreachable providers.
 
 ## Logs

@@ -39,7 +39,7 @@ export class OllamaProvider implements LLMProvider {
   readonly type = 'ollama' as const;
   readonly id: string;
   readonly displayName: string;
-  readonly baseUrl: string;
+  baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly defaultCtx: number;
   private infoCache = new Map<string, ModelInfo>();
@@ -57,6 +57,18 @@ export class OllamaProvider implements LLMProvider {
       await getJson(`${this.baseUrl}/api/version`, this.headers, withTimeout(2500, signal));
       return true;
     } catch {
+      // Windows resolves `localhost` to ::1 first while Ollama binds 127.0.0.1 only: a server that is up looks down.
+      // Retry on the IPv4 loopback and, when that answers, keep using it for this provider.
+      if (/\/\/localhost[:/]/i.test(this.baseUrl)) {
+        const v4 = this.baseUrl.replace(/\/\/localhost/i, '//127.0.0.1');
+        try {
+          await getJson(`${v4}/api/version`, this.headers, withTimeout(2500, signal));
+          this.baseUrl = v4;
+          return true;
+        } catch {
+          /* really down */
+        }
+      }
       return false;
     }
   }

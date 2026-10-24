@@ -117,12 +117,14 @@ name: migrator
 description: Converts JavaScript files to TypeScript one at a time.
 tools: read_file, write_file, edit_file, run_command, get_diagnostics
 model: ollama/qwen2.5-coder:32b
+skills: ts-conventions
 ---
 You convert JS to idiomatic TS. Preserve behaviour, add precise types, run tsc after each file…
 ```
 
-- `tools` restricts the tool set (omit for all tools).
+- `tools` restricts the tool set (omit for all tools). `load_skill` is read-only and available to every built-in subagent.
 - `model` overrides the session model — use a bigger model for hard sub-tasks, a smaller one for exploration.
+- `skills` names installed skills whose instructions are preloaded into every run of this subagent.
 - Locations: `.localpilot/agents`, `.claude/agents`, `~/.localpilot/agents`, `~/.claude/agents`.
 
 ### Built-in subagents
@@ -144,6 +146,12 @@ Every built-in follows the same contract: a subagent cannot ask the user anythin
 ### How delegation works
 
 The main agent calls `run_subagent` (one child) or `run_parallel_subagents` (many, concurrently). Children run with a **fresh context window**, cannot see the parent's conversation, and return only their final report — so include everything they need in the prompt (goal, files/symbols, constraints, what to return). Delegate directly with `/agent <name> <task>`.
+
+### Skills across the swarm
+
+A skill the parent is working with does not stop at the parent. Every subagent — whether started with `run_subagent`, fanned out with `run_parallel_subagents`, or run as a checklist item by `run_todos_parallel` — receives the parent's **active skills** (preloaded, pinned, forced with `/skill`, or loaded with `load_skill` during the turn) as a preloaded `<skill>` block that says *the agent that delegated this task is working with it*. On top of that, each worker gets a strong match on its **own brief** (a worker told to "run the quuxaudit on src" loads the `quuxaudit` skill even if the user never mentioned it), the `skills:` of its agent file, and any `skills` named on the task or checklist item (`run_subagent`, `run_parallel_subagents` tasks, `run_todos_parallel` tasks and `manage_todos` items all accept a `skills` array). Disabled skills are filtered out at every level, and a subagent whose tool list lacks `load_skill` is told that what applies is already in its brief instead of being shown an index it cannot use.
+
+`run_todos_parallel` also recognises inline tasks that restate pending checklist items (same prompt or title) and runs those items instead of appending duplicates — a common small-model habit that used to leave the original items pending forever.
 
 ## Understanding vague requests
 

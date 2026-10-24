@@ -11,7 +11,7 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
-import { clampSkillBody, namesTool, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
+import { clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
@@ -33,6 +33,8 @@ export interface AgentRunOptions {
   toolFilter?: string[];
   /** Replace the default persona (subagents). */
   roleOverride?: string;
+  /** Skills to preload into this run (subagents inherit the parent's active skills plus their agent file's `skills:`). */
+  skills?: string[];
   /** Folder the tools operate in (an isolated worktree); defaults to the workspace root. */
   workspaceRoot?: string;
   depth?: number;
@@ -157,6 +159,7 @@ export class AgentRunner {
       toolsEnabled,
       textToolProtocol: toolsEnabled && !nativeTools,
       skills: this.skills,
+      canLoadSkills: toolDefs.some((t) => t.name === 'load_skill'),
       workspace: this.workspace,
       append: cfg.systemPromptAppend,
       roleOverride: o.roleOverride,
@@ -209,6 +212,8 @@ export class AgentRunner {
     //   the step small local models most often skip or get wrong (hallucinated names, summarised steps).
     // - Loose matches are only hinted at. The chat's skills mode (session override, else the global setting)
     //   decides whether registry skills are installed on the spot, offered as a chip, or left alone.
+    // Skills in force for this run — handed to every subagent it spawns so a swarm follows the same playbook.
+    const activeSkills = new Set<string>(session.skills?.pinned ?? []);
     if (depth === 0 && !o.roleOverride && (this.skills.enabledSkills.length || this.catalog)) {
       try {
         const request = o.userMessage.content;
@@ -283,6 +288,7 @@ export class AgentRunner {
           }
         }
         const preloaded = items.map((i) => i.name);
+        [...preloaded, ...loaded].forEach((n) => n && activeSkills.add(n));
         const remaining = fresh.filter((f) => !preloaded.includes(f.name) && !loaded.has(f.name));
         const notes: string[] = [];
         if (items.length) {
@@ -307,9 +313,45 @@ export class AgentRunner {
       }
     }
 
+    // Subagents: no registry lookups or chips, but the same preloading — skills the parent handed down (its active
+    // skills, or the agent file's `skills:`), plus a strong match on the worker's own brief. The brief rarely repeats
+    // the user's words, so without this a worker would never see the playbook the parent is following.
+    if ((depth > 0 || o.roleOverride) && this.skills.enabledSkills.length) {
+      try {
+        const wanted: string[] = [];
+        for (const name of o.skills ?? []) {
+          const r = this.skills.resolveSkill(name);
+          if (r && !wanted.includes(r.skill.name)) {
+            wanted.push(r.skill.name);
+          }
+        }
+        const own = recommendSkills(o.userMessage.content, this.skills.enabledSkills, 1)[0];
+        if (own?.strong && !wanted.includes(own.name) && !namesTool(o.userMessage.content, toolDefs.map((t) => t.name))) {
+          wanted.push(own.name);
+        }
+        const inherited = new Set((o.skills ?? []).map((n) => this.skills.resolveSkill(n)?.skill.name).filter(Boolean));
+        const items: { name: string; body: string; reason: PreloadReason }[] = [];
+        const budget = Math.min(16_000, Math.max(3_000, Math.floor(model.contextWindow * 4 * 0.15)));
+        for (const name of wanted) {
+          const body = await this.skills.loadSkillBody(name);
+          if (body) {
+            items.push({ name, body: clampSkillBody(body, Math.max(1_500, Math.floor(budget / wanted.length))), reason: inherited.has(name) ? 'inherited' : 'match' });
+          }
+        }
+        if (items.length) {
+          session.messages.push({ role: 'user', content: skillPreloadNote(items), meta: { timestamp: Date.now(), hidden: true } });
+          items.forEach((i) => activeSkills.add(i.name));
+          status(`Using skill${items.length === 1 ? '' : 's'} ${items.map((i) => i.name).join(', ')}…`);
+        }
+      } catch (e) {
+        this.log.warn(`subagent skill preload failed: ${String(e)}`);
+      }
+    }
+
     const control = o.control ?? new RunControl(session.id, undefined, o.signal);
     const toolCtx: ToolContext = {
       sessionId: session.id,
+      skills: [...activeSkills],
       workspaceRoot: o.workspaceRoot ?? this.workspace.root,
       signal: o.signal,
       control,
@@ -645,6 +687,13 @@ export class AgentRunner {
       }).length;
       delegationsExecuted += calls.filter((c) => DELEGATION_TOOLS.has(c.name) && !results.find((r) => r.toolCallId === c.id)?.content.startsWith('Nothing to run')).length;
       for (const c of calls) {
+        if (c.name === 'load_skill') {
+          const loadedName = /<skill name="([^"]+)"/.exec(results.find((r) => r.toolCallId === c.id)?.content ?? '')?.[1];
+          if (loadedName && !activeSkills.has(loadedName)) {
+            activeSkills.add(loadedName);
+            toolCtx.skills = [...activeSkills];
+          }
+        }
         if (c.name === 'load_skill' && depth === 0) {
           const name = parseArgs(c.arguments).name;
           if (typeof name === 'string') {

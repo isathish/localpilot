@@ -31,7 +31,7 @@ Downloads run through the runtime (`ollama pull`, `docker model pull`, `lms get`
 
 ## "Ollama did not answer" after automatic setup
 
-On macOS/Windows the Ollama app has to finish starting (menu-bar icon). Wait a few seconds and press **Start** in Settings → Models, or run `ollama serve` in a terminal. On Linux the installer registers a `systemd` service; `systemctl status ollama` shows whether it is up.
+On macOS/Windows the Ollama app has to finish starting (menu-bar / tray icon); a first launch on Windows can take a minute and may show a welcome window — close it. LocalPilot waits up to 90 s, then press **Start** in Settings → Models, or run `ollama serve` in a terminal. If Ollama is running but shown as down, it is listening on `127.0.0.1` while `localhost` resolves to IPv6 — LocalPilot retries on the IPv4 loopback automatically; setting the provider URL to `http://127.0.0.1:11434` makes it explicit. On Linux the installer registers a `systemd` service; `systemctl status ollama` shows whether it is up.
 
 ## The model never calls tools / prints JSON instead
 

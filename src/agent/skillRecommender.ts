@@ -336,11 +336,13 @@ export function skillHint(matches: SkillMatch[]): string {
  * skill, or one the user forced with /skill), so the model follows them without having to call load_skill — the
  * step small local models most often skip or get wrong.
  */
-export function skillPreloadNote(items: { name: string; body: string; reason: 'match' | 'pinned' | 'forced' | 'installed' }[]): string {
+export type PreloadReason = 'match' | 'pinned' | 'forced' | 'installed' | 'inherited';
+
+export function skillPreloadNote(items: { name: string; body: string; reason: PreloadReason }[]): string {
   if (!items.length) {
     return '';
   }
-  const why = (r: (typeof items)[number]['reason']) => (r === 'forced' ? 'you were asked to use it' : r === 'pinned' ? 'it is pinned to this chat' : r === 'installed' ? 'it was just installed for this request' : 'it matches this request');
+  const why = (r: PreloadReason) => (r === 'forced' ? 'you were asked to use it' : r === 'pinned' ? 'it is pinned to this chat' : r === 'installed' ? 'it was just installed for this request' : r === 'inherited' ? 'the agent that delegated this task is working with it' : 'it matches this request');
   const names = items.map((i) => `"${i.name}"`).join(', ');
   const head =
     items.length === 1

@@ -8,7 +8,8 @@ import { SubagentDefinition } from '../types';
  * plausible reading, say so in the report), never wait on a question, and return one self-contained report.
  */
 
-const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace'];
+// `load_skill` is read-only: every subagent may pull in a playbook that applies to its brief.
+const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill'];
 const READ_AND_RUN = [...READ_ONLY, 'run_command'];
 
 const REPORT_RULES = `# Report
@@ -126,7 +127,7 @@ Structure: What was documented (files/sections) → Anything in the code that se
       name: 'researcher',
       source: 'builtin',
       description: 'Researches a topic, library or error message on the web and summarises findings with sources.',
-      tools: ['web_search', 'web_fetch', 'read_file', 'gather_context'],
+      tools: ['web_search', 'web_fetch', 'read_file', 'gather_context', 'load_skill'],
       systemPrompt: `You are a research agent. Use web_search, then web_fetch the most relevant results (official docs and primary sources first). Cross-check at least two sources before stating something as fact and prefer information matching the project's versions (check package manifests with read_file when relevant).
 
 ${REPORT_RULES}

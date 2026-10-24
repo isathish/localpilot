@@ -235,6 +235,7 @@ export const manageTodosTool: Tool = {
               prompt: { type: 'string', description: 'Optional self-contained brief for the subagent: goal, files/symbols, constraints, what to return' },
               dependsOn: { type: 'array', items: { type: 'string' }, description: 'Ids of items that must finish first (omit for independent items)' },
               model: { type: 'string', description: 'Optional provider/model override for the delegated item' },
+              skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names the worker must follow for this item' },
             },
             required: ['id', 'title', 'status'],
           },
@@ -248,7 +249,7 @@ export const manageTodosTool: Tool = {
       return { content: 'Todo list is not available in this context.' };
     }
     const previous = new Map(ctx.todos.get().map((t) => [t.id, t]));
-    const items = Array.isArray(args.todos) ? (args.todos as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown; dependsOn?: unknown }[]) : [];
+    const items = Array.isArray(args.todos) ? (args.todos as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown; dependsOn?: unknown; skills?: unknown }[]) : [];
     const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
     const ids = new Set(items.map((t, i) => String(t.id ?? i + 1)));
     const clean: TodoItem[] = items
@@ -265,6 +266,7 @@ export const manageTodosTool: Tool = {
           agent: str(t.agent, 40) ?? old?.agent,
           prompt: str(t.prompt, 4000) ?? old?.prompt,
           model: str(t.model, 120) ?? old?.model,
+          skills: Array.isArray(t.skills) ? (t.skills as unknown[]).map(String).map((x) => x.trim()).filter(Boolean).slice(0, 5) : old?.skills,
           dependsOn: deps?.length ? [...new Set(deps)] : deps ? undefined : old?.dependsOn,
           result: old?.result,
         };

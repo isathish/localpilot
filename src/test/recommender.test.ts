@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { clampSkillBody, createSkillPrompt, namesTool, recommendSkills, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
 import { normalizeSkillName, SkillManager } from '../agent/skills';
+import { setSkillEnabled } from '../config';
 import * as vscode from 'vscode';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
@@ -345,5 +346,68 @@ suite('Skill catalog', () => {
     assert.strictEqual(await c3.match('debug why the login page crashes, find the root cause', SKILLS), undefined, 'dismissed skills are not offered');
     assert.deepStrictEqual((await c3.search('debugging a crash')).map((h) => h.name), ['systematic-debugging']);
     await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  test('management flow (what Settings → Skills does): registry install into the workspace → agent sees it → disable → delete', async function () {
+    this.timeout(30_000);
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    assert.ok(root, 'test workspace folder');
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mgmt-'));
+    const bodies: Record<string, string> = {
+      'skills/zorb-forms/SKILL.md': '---\nname: zorb-forms\ndescription: Fill zorb forms. Use for "zorb form".\n---\n# Zorb\n\n1. ZORB-STEP',
+      'skills/zorb-forms/scripts/fill.py': 'print(1)',
+    };
+    const tree = Object.keys(bodies).map((p) => ({ path: p, type: 'blob', size: 50 }));
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      const ok = (body: string, json = false) => new Response(body, { status: 200, headers: { 'content-type': json ? 'application/json' : 'text/plain' } });
+      if (url === 'https://api.github.com/repos/acme/zorb') { return ok(JSON.stringify({ default_branch: 'main' }), true); }
+      if (url === 'https://api.github.com/repos/acme/zorb/git/trees/main?recursive=1') { return ok(JSON.stringify({ tree }), true); }
+      const m = /^https:\/\/raw\.githubusercontent\.com\/acme\/zorb\/main\/(.+)$/.exec(url);
+      return m && bodies[m[1]] ? ok(bodies[m[1]]) : new Response('nope', { status: 404 });
+    }) as typeof fetch;
+    const c = new SkillCatalog({ cacheFile: path.join(tmp, 'catalog.json'), repositories: () => ['acme/zorb/skills'], fetchImpl, ttlMs: 60_000 });
+    const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as vscode.LogOutputChannel;
+    const mgr = new SkillManager(log);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prevDisabled = cfg.inspect<string[]>('skills.disabled')?.globalValue;
+    const dest = skillsDestination('workspace', root);
+    try {
+      // Registry search shows the skill as not installed.
+      await c.refresh();
+      const hits = await c.search('zorb');
+      assert.strictEqual(hits[0]?.name, 'zorb-forms');
+      await mgr.refresh();
+      assert.ok(!mgr.getSkill('zorb-forms'), 'not installed yet');
+      // Install (explicit, like the Settings button: replace=true, not recorded as automatic).
+      const one = await c.install(hits[0], dest, { replace: true, timeoutMs: 5_000 });
+      assert.deepStrictEqual([one?.name, one?.files], ['zorb-forms', 2]);
+      assert.strictEqual(one?.dir, path.join(dest, 'zorb-forms'));
+      await mgr.refresh();
+      const skill = mgr.getSkill('zorb-forms');
+      assert.ok(skill && skill.source === 'workspace' && !skill.disabled, JSON.stringify(skill));
+      assert.ok(mgr.enabledSkills.some((k) => k.name === 'zorb-forms') && /^- zorb-forms:/m.test(mgr.skillsIndex()), 'visible to the agent');
+      assert.match((await mgr.loadSkillBody('zorb-forms')) ?? '', /ZORB-STEP/);
+      // Disable: stays on disk, hidden from the agent.
+      await setSkillEnabled('zorb-forms', false);
+      await mgr.refresh();
+      assert.ok(mgr.getSkill('zorb-forms')?.disabled && !mgr.enabledSkills.some((k) => k.name === 'zorb-forms') && !/zorb-forms/.test(mgr.skillsIndex()));
+      assert.strictEqual(await mgr.loadSkillBody('zorb-forms'), undefined);
+      assert.strictEqual(mgr.resolveSkill('zorb forms'), undefined);
+      // Re-enable, then delete the folder (what Delete does) and the disabled entry is cleaned up too.
+      await setSkillEnabled('zorb-forms', true);
+      await mgr.refresh();
+      assert.ok(!mgr.getSkill('zorb-forms')?.disabled);
+      await fs.rm(skill!.dir, { recursive: true, force: true });
+      await mgr.refresh();
+      assert.ok(!mgr.getSkill('zorb-forms'), 'gone after delete');
+      // Explicit installs are never marked "auto", so a later request can still pull the skill in automatically.
+      assert.strictEqual((await c.match('fill this zorb form for me', []))?.name, 'zorb-forms');
+    } finally {
+      mgr.dispose();
+      await cfg.update('skills.disabled', prevDisabled, vscode.ConfigurationTarget.Global);
+      await fs.rm(path.join(dest, 'zorb-forms'), { recursive: true, force: true });
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });

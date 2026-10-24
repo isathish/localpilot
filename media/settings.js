@@ -131,10 +131,22 @@
   const galleryState = (source) => (state.gallery.by[source] ||= { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {} });
 
   // ------------------------------------------------------------------ helpers
+  /** Makes a clickable card header a real disclosure control: focusable, announced, toggled with Enter/Space. */
+  function disclosure(head, open, label, toggle) {
+    if (!head) { return; }
+    head.setAttribute('role', 'button'); head.tabIndex = 0; head.setAttribute('aria-expanded', String(!!open)); head.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label}`);
+    head.onclick = (e) => { if (e.target.closest('button, a, input, select')) { return; } toggle(); };
+    head.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); toggle(); } };
+  }
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
   const S = (key) => (state.data && state.data.settings[key]) || { value: undefined, default: undefined, scope: 'default' };
   const val = (key) => S(key).value;
-  function set(key, value) { post({ type: 'set', key, value, scope: state.scope }); }
+  function set(key, value) { state.pendingSave = Date.now(); post({ type: 'set', key, value, scope: state.scope }); }
+  /** Brief "Saved" acknowledgement in the header after a setting round-trips through VS Code. */
+  function flashSaved() {
+    const t = app.querySelector('.top .saved'); if (!t) { return; }
+    t.classList.add('show'); clearTimeout(flashSaved.timer); flashSaved.timer = setTimeout(() => t.classList.remove('show'), 1400);
+  }
   function reset(key) { post({ type: 'reset', key, scope: state.scope === 'workspace' ? 'workspace' : 'user' }); }
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   const scopeBadge = (key) => { const s = S(key).scope; return s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`; };
@@ -177,13 +189,15 @@
     } else {
       const i = el('input'); i.type = kind === 'number' ? 'number' : kind === 'password' ? 'password' : 'text'; i.value = v ?? ''; i.placeholder = opts.placeholder || ''; i.setAttribute('aria-label', label);
       if (kind === 'number') { if (opts.min !== undefined) { i.min = opts.min; } if (opts.max !== undefined) { i.max = opts.max; } if (opts.step) { i.step = opts.step; } }
+      // `last` tracks what was sent so blur + the trailing debounce do not save the same value twice.
+      let last = v;
       const commit = () => {
         if (kind === 'number') {
           const n = Number(i.value);
-          if (i.value === '' || Number.isNaN(n) || (opts.min !== undefined && n < opts.min) || (opts.max !== undefined && n > opts.max)) { i.classList.add('invalid'); return; }
-          i.classList.remove('invalid'); if (n !== v) { set(key, n); }
-        } else if (opts.validate && i.value && !opts.validate(i.value)) { i.classList.add('invalid'); }
-        else { i.classList.remove('invalid'); if (i.value !== (v ?? '')) { set(key, i.value); } }
+          if (i.value === '' || Number.isNaN(n) || (opts.min !== undefined && n < opts.min) || (opts.max !== undefined && n > opts.max)) { i.classList.add('invalid'); i.setAttribute('aria-invalid', 'true'); i.title = `Enter a number${opts.min !== undefined ? ` from ${opts.min}` : ''}${opts.max !== undefined ? ` to ${opts.max}` : ''} — not saved yet`; return; }
+          i.classList.remove('invalid'); i.removeAttribute('aria-invalid'); i.title = ''; if (n !== last) { last = n; set(key, n); }
+        } else if (opts.validate && i.value && !opts.validate(i.value)) { i.classList.add('invalid'); i.setAttribute('aria-invalid', 'true'); i.title = opts.invalidHint || 'Not a valid value — not saved yet'; }
+        else { i.classList.remove('invalid'); i.removeAttribute('aria-invalid'); i.title = ''; if (i.value !== (last ?? '')) { last = i.value; set(key, i.value); } }
       };
       i.onchange = commit; i.onblur = commit; i.oninput = debounce(commit, 700);
       ctl.appendChild(i);
@@ -221,10 +235,14 @@
    * current page. Setting changes go through refreshComponents() and never reach here unless they restructure
    * the page. The setup wizard is small and still renders as a whole.
    */
+  let renderedSection = null;
   function render() {
     if (!state.data) { return; }
-    // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt.
-    const y = window.scrollY;
+    // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt — unless
+    // the user moved to another section, which must start at its top.
+    const sameSection = state.page === 'settings' && renderedSection === `${state.page}/${state.section}`;
+    const y = sameSection ? window.scrollY : 0;
+    renderedSection = `${state.page}/${state.section}`;
     app.removeAttribute('aria-busy');
     if (state.page === 'setup') {
       app.innerHTML = ''; app.dataset.page = 'setup';
@@ -234,20 +252,35 @@
       syncShell();
       renderSection();
     }
-    if (y) { window.scrollTo(0, y); }
+    window.scrollTo(0, y);
   }
   function renderShell() {
     const d = state.data;
     const top = el('header', 'top');
     top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div><span class="spacer"></span>
+      <span class="saved" role="status" aria-live="polite">${I.check}Saved</span>
       <div class="scope" role="radiogroup" aria-label="Settings scope"><button data-s="user">User</button><button data-s="workspace">Workspace</button></div>
-      <button class="btn" data-cmd="localpilot.openChat">${I.chat}Open chat</button>`;
+      <button class="btn" data-cmd="localpilot.openChat" title="Open chat" aria-label="Open chat">${I.chat}Open chat</button>`;
     top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled) { return; } state.scope = b.dataset.s; render(); }));
     app.appendChild(top);
     const layout = el('div', 'layout');
-    const side = el('nav', 'side');
-    side.innerHTML = `<div class="grp">Settings</div>${SECTIONS.map(([id, label, icon]) => `<a data-sec="${id}">${icon}${esc(label)}</a>`).join('')}<div class="grp">Help</div><a data-cmd="localpilot.openWelcome">${I.rocket}Run setup again</a><a data-url="https://isathish.github.io/localpilot/docs/configuration/">${I.book}Documentation</a>`;
-    side.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; state.expanded = null; render(); }));
+    const side = el('nav', 'side'); side.setAttribute('aria-label', 'Settings sections');
+    side.innerHTML = `<div class="grp">Settings</div><div class="tabs" role="tablist">${SECTIONS.map(([id, label, icon]) => `<a data-sec="${id}" role="tab" tabindex="-1">${icon}${esc(label)}</a>`).join('')}</div><div class="grp">Help</div><a data-cmd="localpilot.openWelcome" role="button" tabindex="0">${I.rocket}Run setup again</a><a data-url="https://isathish.github.io/localpilot/docs/configuration/" role="link" tabindex="0">${I.book}Documentation</a>`;
+    const tabs = [...side.querySelectorAll('[data-sec]')];
+    const go = (a) => { state.section = a.dataset.sec; state.expanded = null; render(); a.focus({ preventScroll: true }); };
+    tabs.forEach((a, i) => {
+      a.onclick = () => go(a);
+      // Keyboard: Enter/Space activates; arrows move between sections like a native tab strip.
+      a.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(a); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); go(tabs[(i + 1) % tabs.length]); }
+        else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); go(tabs[(i - 1 + tabs.length) % tabs.length]); }
+        else if (e.key === 'Home') { e.preventDefault(); go(tabs[0]); } else if (e.key === 'End') { e.preventDefault(); go(tabs[tabs.length - 1]); }
+      };
+    });
+    side.querySelectorAll('[data-cmd],[data-url]').forEach((a) => { a.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); } }; });
+    // Narrow layout turns the nav into a scrolling pill strip: show fades where more pills are hidden.
+    side.onscroll = () => updateNavFades(side);
     layout.appendChild(side);
     const main = el('main', 'content');
     main.appendChild(el('section', 'sec'));
@@ -263,7 +296,15 @@
       b.classList.toggle('on', state.scope === b.dataset.s);
       if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? '' : 'Open a folder to edit workspace settings'; }
     });
-    app.querySelectorAll('.side [data-sec]').forEach((a) => a.classList.toggle('on', a.dataset.sec === state.section));
+    app.querySelectorAll('.side [data-sec]').forEach((a) => { const on = a.dataset.sec === state.section; a.classList.toggle('on', on); a.setAttribute('aria-selected', String(on)); a.tabIndex = on ? 0 : -1; if (on) { a.setAttribute('aria-current', 'page'); } else { a.removeAttribute('aria-current'); } });
+    const side = app.querySelector('.side'); const on = side && side.querySelector('[data-sec].on');
+    if (side && on && side.scrollWidth > side.clientWidth + 2) { on.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'instant' }); }
+    if (side) { updateNavFades(side); }
+  }
+  function updateNavFades(side) {
+    const more = side.scrollWidth > side.clientWidth + 2;
+    side.classList.toggle('fade-l', more && side.scrollLeft > 4);
+    side.classList.toggle('fade-r', more && side.scrollLeft + side.clientWidth < side.scrollWidth - 4);
   }
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
@@ -337,7 +378,7 @@
     const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
     c.innerHTML = `<div class="prov-head"><span class="dot ${status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b>${esc(p.displayName || p.id)}</b><span>${esc(p.baseUrl)}</span></div><div class="prov-meta"><span class="badge">${p.type === 'ollama' ? 'Ollama API' : 'OpenAI API'}</span>${n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${p.enabled === false ? '<span class="badge">disabled</span>' : ''}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
-    c.querySelector('.prov-head').onclick = () => { state.expanded = open ? null : p.id; render(); };
+    disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
     const body = el('div', 'prov-body');
     const upd = (patch) => { Object.assign(p, patch); saveProviders(list); };
@@ -550,7 +591,7 @@
     const chips = el('div', 'chips');
     const filters = [['fits', 'Fits this machine'], ['all', 'All sizes'], ['agent', 'Agent'], ['completion', 'Completions'], ['vision', 'Vision'], ['reasoning', 'Reasoning']];
     for (const [k, l] of filters) { const b = el('button', `chip ${state.cat.filter === k ? 'on' : ''}`, esc(l)); b.onclick = () => { state.cat.filter = k; render(); }; chips.appendChild(b); }
-    const q = el('input'); q.type = 'search'; q.placeholder = 'Search models…'; q.value = state.cat.q; q.oninput = debounce(() => { state.cat.q = q.value; render(); }, 250);
+    const q = el('input'); q.type = 'search'; q.placeholder = 'Search models…'; q.setAttribute('aria-label', 'Search the model catalog'); q.value = state.cat.q; q.oninput = debounce(() => { state.cat.q = q.value; render(); }, 250);
     chips.appendChild(q);
     sec.appendChild(chips);
     if (!running.length) { sec.appendChild(el('p', 'muted small', 'Start a runtime to install from here — Ollama, Docker Model Runner (with host access) or LM Studio. Models can still be pulled by hand (<code>ollama pull …</code>) and appear after a refresh.')); }
@@ -1114,7 +1155,7 @@
       li.querySelector('button').onclick = () => set('skills.repositories', repos.filter((_, j) => j !== i));
       rul.appendChild(li);
     });
-    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills"><button class="btn sm">${I.plus}Add</button>`);
+    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills" aria-label="Skill repository to add (owner/repo/path)"><button class="btn sm">${I.plus}Add</button>`);
     raddRow.querySelector('button').onclick = () => { const v = raddRow.querySelector('input').value.trim(); if (v) { set('skills.repositories', [...repos, v]); } };
     rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl); rcard.appendChild(rf);
     const rbar = el('div', 'btnrow');
@@ -1132,7 +1173,7 @@
     const ctl = el('div', 'ctl');
     const ul = el('ul', 'list');
     paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skillsPaths', paths.filter((_, j) => j !== i)); ul.appendChild(li); });
-    const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills"><button class="btn sm">${I.plus}Add</button>`);
+    const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills" aria-label="Skills folder to add"><button class="btn sm">${I.plus}Add</button>`);
     addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
     ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
 
@@ -1214,7 +1255,7 @@
       const err = st && st.error;
       c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc([s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
       if (err && s.enabled !== false) { c.appendChild(el('div', 'prov-result err', `${I.x} ${esc(err)}`)); }
-      c.querySelector('.prov-head').onclick = () => { state.expanded = open ? null : `mcp:${name}`; render(); };
+      disclosure(c.querySelector('.prov-head'), open, `${name} server settings`, () => { state.expanded = open ? null : `mcp:${name}`; render(); });
       if (open) { c.appendChild(mcpForm(name, s, servers)); }
       list.appendChild(c);
     }
@@ -1278,6 +1319,76 @@
   }
   function kpi(label, value, sub, sparkHtml, tone) {
     return `<div class="kpi ${tone || ''}"><div class="kpi-l">${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
+  }
+  // --- charts: plain inline SVG, theme chart colours, hover titles, real axis labels. No library, no canvas. ---
+  const CH = { w: 600, h: 150, padL: 34, padR: 6, padT: 8, padB: 20 };
+  const dayLabel = (day) => { const d = new Date(`${day}T12:00:00`); return isNaN(d) ? day : `${d.getDate()} ${d.toLocaleString(undefined, { month: 'short' })}`; };
+  const niceMax = (v) => { if (v <= 0) { return 1; } const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; };
+  /** Y axis: 3 gridlines with labels; X axis: at most ~8 day labels. */
+  function axes(series, max, fmt) {
+    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+    let out = '';
+    for (const f of [0, 0.5, 1]) { const y = padT + ih - f * ih; out += `<line class="grid" x1="${padL}" x2="${w - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="ax" x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${esc(fmt(max * f))}</text>`; }
+    const step = Math.max(1, Math.ceil(series.length / 8));
+    series.forEach((d, i) => { if (i % step === 0 || i === series.length - 1) { const x = padL + (i + 0.5) * (iw / series.length); out += `<text class="ax" x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle">${esc(dayLabel(d.day))}</text>`; } });
+    return out;
+  }
+  /** Grouped or stacked bars per day. `keys`: [{ k, label, cls, pick }]. */
+  function barChart(series, keys, opts = {}) {
+    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+    const stacked = !!opts.stacked;
+    const vals = series.map((d) => keys.map((k) => Number(k.pick(d)) || 0));
+    const max = niceMax(Math.max(1, ...vals.map((v) => stacked ? v.reduce((a, b) => a + b, 0) : Math.max(...v))));
+    const fmt = opts.fmt || fmtN;
+    const slot = iw / Math.max(1, series.length); const gap = Math.min(6, slot * 0.25);
+    const bw = stacked ? slot - gap : (slot - gap) / keys.length;
+    let bars = '';
+    vals.forEach((v, i) => {
+      let acc = 0;
+      keys.forEach((k, j) => {
+        const val = v[j]; if (!val) { return; }
+        const bh = (val / max) * ih;
+        const x = padL + i * slot + gap / 2 + (stacked ? 0 : j * bw);
+        const y = padT + ih - bh - (stacked ? (acc / max) * ih : 0);
+        bars += `<rect class="s${j} ${k.cls || ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - (stacked ? 0 : 1)).toFixed(1)}" height="${Math.max(0.5, bh).toFixed(1)}" rx="1"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(val))}</title></rect>`;
+        acc += val;
+      });
+    });
+    return chartFrame(`${axes(series, max, fmt)}${bars}`, keys);
+  }
+  /** One or more lines (with a soft area under the first) over the day series. */
+  function lineChart(series, keys, opts = {}) {
+    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+    const fmt = opts.fmt || fmtN;
+    const max = niceMax(Math.max(1, ...series.flatMap((d) => keys.map((k) => Number(k.pick(d)) || 0))));
+    const px = (i) => padL + (i + 0.5) * (iw / Math.max(1, series.length)); const py = (v) => padT + ih - (v / max) * ih;
+    let out = axes(series, max, fmt);
+    keys.forEach((k, j) => {
+      const pts = series.map((d, i) => [px(i), py(Number(k.pick(d)) || 0), Number(k.pick(d)) || 0]);
+      const path = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+      if (j === 0 && pts.length > 1) { out += `<path class="area s0" d="${path} L${pts[pts.length - 1][0].toFixed(1)} ${(padT + ih).toFixed(1)} L${pts[0][0].toFixed(1)} ${(padT + ih).toFixed(1)} Z"/>`; }
+      out += `<path class="line s${j}" d="${path}"/>`;
+      out += pts.map((p, i) => `<circle class="pt s${j}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(p[2]))}</title></circle>`).join('');
+    });
+    return chartFrame(out, keys);
+  }
+  function chartFrame(inner, keys) {
+    const legend = keys.length > 1 || keys[0].cls ? `<div class="legend">${keys.map((k, j) => `<span><i class="s${j} ${k.cls || ''}"></i>${esc(k.label)}</span>`).join('')}</div>` : '';
+    return `<div class="chart"><svg viewBox="0 0 ${CH.w} ${CH.h}" role="img">${inner}</svg>${legend}</div>`;
+  }
+  /** Donut with a centred headline; `parts`: [{ label, value, cls }]. */
+  function donut(parts, centre, sub) {
+    const total = parts.reduce((a, p) => a + (Number(p.value) || 0), 0) || 1;
+    const r = 34, c = 2 * Math.PI * r; let off = 0; let arcs = '';
+    for (const p of parts) { const len = (Number(p.value) / total) * c; if (len > 0) { arcs += `<circle class="${p.cls}" r="${r}" cx="45" cy="45" stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"><title>${esc(p.label)}: ${fmtN(p.value)} (${pct((p.value / total) * 100)})</title></circle>`; off += len; } }
+    return `<div class="donut"><svg viewBox="0 0 90 90" aria-hidden="true"><circle class="track" r="${r}" cx="45" cy="45"/>${arcs}<text class="dv" x="45" y="43" text-anchor="middle">${esc(centre)}</text><text class="ds" x="45" y="56" text-anchor="middle">${esc(sub || '')}</text></svg><ul class="dl">${parts.map((p) => `<li><i class="${p.cls}"></i>${esc(p.label)}<b>${fmtN(p.value)}</b></li>`).join('')}</ul></div>`;
+  }
+  /** 24-bucket histogram (activity by hour of day) with hour labels. */
+  function hourChart(hourly) {
+    const max = Math.max(1, ...hourly); const w = 240, h = 70, bw = w / 24;
+    const bars = hourly.map((v, i) => `<rect class="s0" x="${(i * bw + 1).toFixed(1)}" y="${(50 - (v / max) * 46).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${((v / max) * 46 + 0.5).toFixed(1)}" rx="1"><title>${String(i).padStart(2, '0')}:00 – ${String(i).padStart(2, '0')}:59 · ${fmtN(v)} calls</title></rect>`).join('');
+    const labels = [0, 6, 12, 18, 23].map((i) => `<text class="ax" x="${(i * bw + bw / 2).toFixed(1)}" y="64" text-anchor="middle">${String(i).padStart(2, '0')}</text>`).join('');
+    return `<div class="chart hours"><svg viewBox="0 0 ${w} ${h}" role="img">${bars}${labels}</svg></div>`;
   }
   const pctl = (p) => p && (p.p50 || p.p95) ? `<span class="pctl" title="median · 95th percentile">${fmtMs(p.p50)} <i>/ ${fmtMs(p.p95)}</i></span>` : '<span class="muted">—</span>';
   function requestDashboard(days) {
@@ -1365,9 +1476,44 @@
       kpi('Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, spark(s.series, (d) => d.toolCalls)),
       kpi('Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', c.requested ? `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}` : 'no inline completions yet', spark(s.series, (d) => d.completionsShown)),
       kpi('Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(h.provider)} ${pct(h.uptime)}`).join(' · ') : 'no checks yet', '', health.length && up < health.length ? 'warn' : ''),
+      kpi('Throughput', t.tokPerSec ? `${t.tokPerSec} <span class="kpi-u">tok/s</span>` : '—', t.tokPerSec ? `generation speed across all calls${topTps ? ` · fastest ${esc(topTps.model)}` : ''}` : 'no completed calls yet', spark(s.series, (d) => d.tokPerSec)),
+      kpi('Turn time', t.runTime.p50 ? fmtMs(t.runTime.p50) : '—', t.runTime.p50 ? `median · p95 ${fmtMs(t.runTime.p95)} · ${t.steps.p50} step${t.steps.p50 === 1 ? '' : 's'} per turn` : 'no finished turns yet', ''),
+      kpi('Cache hits', t.toolCalls ? pct((t.cachedTools / t.toolCalls) * 100) : '—', t.toolCalls ? `${fmtN(t.cachedTools)} read-only tool calls answered from the turn cache` : 'no tool calls yet', spark(s.series, (d) => d.cachedTools)),
     ].join('');
     root.innerHTML = '';
     root.appendChild(kpis);
+    // Charts: activity per day, tokens in/out, generation speed, outcomes, tool reliability, hour of day.
+    const many = s.series.length > 1;
+    if (many) {
+      const charts = el('div', 'dash-cols charts');
+      const act = el('div', 'card');
+      act.innerHTML = `<h3>Activity <span class="count">${t.activeDays} of ${s.series.length} day${s.series.length === 1 ? '' : 's'} active</span></h3>` + barChart(s.series, [{ label: 'Model calls', pick: (d) => d.modelCalls }, { label: 'Tool calls', pick: (d) => d.toolCalls }, { label: 'Agent runs', pick: (d) => d.runs }, { label: 'Errors', cls: 'err', pick: (d) => d.errors }]);
+      charts.appendChild(act);
+      const tok = el('div', 'card');
+      tok.innerHTML = `<h3>Tokens <span class="count">${fmtN(tokens)}</span></h3>` + barChart(s.series, [{ label: 'Prompt (in)', pick: (d) => d.promptTokens }, { label: 'Completion (out)', pick: (d) => d.completionTokens }], { stacked: true });
+      charts.appendChild(tok);
+      root.appendChild(charts);
+      const charts2 = el('div', 'dash-cols charts');
+      const spd = el('div', 'card');
+      spd.innerHTML = `<h3>Generation speed <span class="count">tok/s per day</span></h3>` + lineChart(s.series, [{ label: 'Completion tokens / s', pick: (d) => d.tokPerSec }], { fmt: (v) => `${Math.round(v)}` });
+      charts2.appendChild(spd);
+      const acc = el('div', 'card');
+      acc.innerHTML = `<h3>Completions <span class="count">shown vs accepted</span></h3>` + barChart(s.series, [{ label: 'Shown', pick: (d) => d.completionsShown }, { label: 'Accepted', pick: (d) => d.completionsAccepted }]);
+      charts2.appendChild(acc);
+      root.appendChild(charts2);
+    }
+    const rings = el('div', 'dash-cols rings');
+    const oc = el('div', 'card');
+    oc.innerHTML = `<h3>Run outcomes</h3>` + (t.runs ? donut([{ label: 'Done', value: t.done, cls: 'ok' }, { label: 'Stopped', value: t.stopped, cls: 'muted' }, { label: 'Failed', value: t.failed, cls: 'err' }], pct(okRate), 'completed') : '<p class="empty">No runs yet.</p>');
+    rings.appendChild(oc);
+    const tc = el('div', 'card');
+    tc.innerHTML = `<h3>Tool reliability</h3>` + (t.toolCalls ? donut([{ label: 'Succeeded', value: t.toolCalls - t.toolErrors - t.cachedTools, cls: 'ok' }, { label: 'From cache', value: t.cachedTools, cls: 's0' }, { label: 'Failed', value: t.toolErrors, cls: 'err' }], pct(100 - (t.toolErrors / t.toolCalls) * 100), 'ok') : '<p class="empty">No tool calls yet.</p>');
+    rings.appendChild(tc);
+    const hc0 = el('div', 'card');
+    const peak = s.hourly.indexOf(Math.max(...s.hourly));
+    hc0.innerHTML = `<h3>Activity by hour <span class="count">${s.hourly.some(Boolean) ? `busiest ${String(peak).padStart(2, '0')}:00` : ''}</span></h3>` + (s.hourly.some(Boolean) ? hourChart(s.hourly) : '<p class="empty">No activity yet.</p>');
+    rings.appendChild(hc0);
+    root.appendChild(rings);
     // Models
     const cols = el('div', 'dash-cols');
     const models = el('div', 'card tblwrap');
@@ -1393,8 +1539,13 @@
     side.appendChild(cc);
     const wc = el('div', 'card');
     const w = s.worktrees;
-    wc.innerHTML = `<h3>Isolated worktrees</h3><dl class="kv dashkv"><dt>Created</dt><dd>${w.created}</dd><dt>Applied</dt><dd>${w.applied}<span class="muted small"> · ${w.files} file${w.files === 1 ? '' : 's'}</span></dd><dt>Discarded</dt><dd class="muted">${w.discarded}</dd><dt>Conflicts</dt><dd class="${w.conflicts ? 'err-text' : 'muted'}">${w.conflicts}</dd></dl>`;
+    wc.innerHTML = `<h3>Isolated worktrees</h3><dl class="kv dashkv"><dt>Isolated runs</dt><dd>${fmtN(t.isolatedRuns || 0)}${t.runs ? ` <span class="muted small">(${pct(((t.isolatedRuns || 0) / t.runs) * 100)})</span>` : ''}</dd><dt>Created</dt><dd>${w.created}</dd><dt>Applied</dt><dd>${w.applied}<span class="muted small"> · ${w.files} file${w.files === 1 ? '' : 's'}</span></dd><dt>Discarded</dt><dd class="muted">${w.discarded}</dd><dt>Conflicts</dt><dd class="${w.conflicts ? 'err-text' : 'muted'}">${w.conflicts}</dd></dl>`;
     side.appendChild(wc);
+    if (s.agents && s.agents.length) {
+      const ag = el('div', 'card tblwrap');
+      ag.innerHTML = `<h3>Subagents <span class="count">${fmtN(t.subagentRuns)} runs</span></h3><table class="tbl dash-tbl"><thead><tr><th>Agent</th><th>Runs</th><th>Done</th><th>Failed</th><th title="median / p95">Duration</th><th>Tools</th></tr></thead><tbody>${s.agents.map((a) => `<tr><td><span class="badge">${esc(a.agent)}</span></td><td>${a.runs}</td><td>${a.done}</td><td class="${a.failed ? 'err-text' : 'muted'}">${a.failed}</td><td>${pctl(a.duration)}</td><td>${fmtN(a.toolCalls)}</td></tr>`).join('')}</tbody></table>`;
+      side.appendChild(ag);
+    }
     cols2.appendChild(side);
     root.appendChild(cols2);
     // Recent errors
@@ -1566,6 +1717,7 @@
       case 'state': {
         const prev = state.data;
         state.data = m;
+        if (prev && state.pendingSave && Date.now() - state.pendingSave < 10_000) { state.pendingSave = 0; flashSaved(); }
         const nav = !prev || m.navigate !== false;
         const navChanged = nav && ((m.page && m.page !== state.page) || (m.section && m.section !== state.section));
         if (nav && m.page) { state.page = m.page; }

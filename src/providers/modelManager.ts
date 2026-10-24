@@ -60,7 +60,7 @@ function which(cmd: string, args: string[] = ['--version'], timeoutMs = 4000): P
   return new Promise((resolve) => {
     let child: cp.ChildProcess;
     try {
-      child = cp.spawn(cmd, args, { stdio: 'ignore', shell: process.platform === 'win32' });
+      child = cp.spawn(cmd, args, { stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
     } catch {
       return resolve(false);
     }
@@ -115,7 +115,7 @@ function runProcess(cmd: string, args: string[], opts: { timeoutMs?: number; sig
     let out = '';
     let child: cp.ChildProcess;
     try {
-      child = cp.spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd });
+      child = cp.spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: opts.cwd, windowsHide: true });
     } catch (e) {
       return reject(e);
     }
@@ -155,6 +155,35 @@ export async function findOllamaBinary(): Promise<string | undefined> {
   return undefined;
 }
 
+/** Windows tray app ("ollama app.exe") that owns the server; looked up next to each known CLI location, PATH or not. */
+async function findOllamaTrayApp(): Promise<string | undefined> {
+  if (process.platform !== 'win32') {
+    return undefined;
+  }
+  for (const p of OLLAMA_LOCATIONS.win32) {
+    const app = path.join(path.dirname(p), 'ollama app.exe');
+    try {
+      await fs.access(app);
+      return app;
+    } catch {
+      /* next */
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `localhost` resolves to `::1` first on many Windows machines while Ollama listens on 127.0.0.1 only; a health
+ * check that fails on the configured URL is retried on the IPv4 loopback so a running server is not reported down.
+ */
+async function ollamaUp(baseUrl: string): Promise<boolean> {
+  const probe = (url: string) => createProvider({ id: 'probe', type: 'ollama', baseUrl: url }).healthCheck().catch(() => false);
+  if (await probe(baseUrl)) {
+    return true;
+  }
+  return /\/\/localhost[:/]/i.test(baseUrl) ? probe(baseUrl.replace(/\/\/localhost/i, '//127.0.0.1')) : false;
+}
+
 /** Platform install command for Ollama, run in a visible terminal so the user sees what happens. */
 export interface InstallScript {
   /** Script to run in a fresh terminal; prints a final "LocalPilot: Ollama ready" / "failed" line. */
@@ -192,10 +221,11 @@ export function ollamaInstallCommand(platform: NodeJS.Platform = process.platfor
     const script = [
       '$ErrorActionPreference = "Continue"; Write-Host "LocalPilot: installing Ollama..."',
       '$ok = $false',
-      'if (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements --silent; if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) { $ok = $true } }',
-      'if (-not $ok) { Write-Host "LocalPilot: winget not available or failed - downloading the official installer"; $f = Join-Path $env:TEMP "OllamaSetup.exe"; Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $f -UseBasicParsing; Start-Process -FilePath $f -ArgumentList "/VERYSILENT","/NORESTART","/SP-" -Wait; $ok = Test-Path (Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama.exe") }',
+      'if (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements --silent --disable-interactivity; if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) { $ok = $true } }',
+      'if (-not $ok) { Write-Host "LocalPilot: winget not available or failed - downloading the official installer"; $f = Join-Path $env:TEMP "OllamaSetup.exe"; Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $f -UseBasicParsing; Start-Process -FilePath $f -ArgumentList "/VERYSILENT","/NORESTART","/SP-","/SUPPRESSMSGBOXES","/CLOSEAPPLICATIONS" -Wait; Remove-Item $f -ErrorAction SilentlyContinue }',
+      '$ok = (Test-Path (Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama.exe")) -or (Test-Path (Join-Path $env:ProgramFiles "Ollama\\ollama.exe"))',
       `$env:OLLAMA_NUM_PARALLEL = "${slots}"; [Environment]::SetEnvironmentVariable("OLLAMA_NUM_PARALLEL", "${slots}", "User")`,
-      '$app = Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama app.exe"; if ($ok -and (Test-Path $app)) { Start-Process -FilePath $app }',
+      '$app = Join-Path $env:LOCALAPPDATA "Programs\\Ollama\\ollama app.exe"; if (-not (Test-Path $app)) { $app = Join-Path $env:ProgramFiles "Ollama\\ollama app.exe" }; if ($ok -and (Test-Path $app)) { Start-Process -FilePath $app }',
       'if ($ok) { Write-Host "LocalPilot: Ollama ready" } else { Write-Host "LocalPilot: Ollama install failed - download it from https://ollama.com/download" }',
     ].join('; ');
     return { command: script, shellPath: 'powershell.exe', shellArgs: ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass'], note: 'winget when available, otherwise the official silent installer.' };
@@ -256,9 +286,9 @@ export class ModelManager implements vscode.Disposable {
     const dockerCfg = providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker');
     const lmsCfg = providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio');
     const health = (c?: ProviderConfig) => (c ? createProvider(c).healthCheck().catch(() => false) : Promise.resolve(false));
-    const [ollamaBin, ollamaUp, dockerModel, dockerUp, lms, lmsUp] = await Promise.all([
+    const [ollamaBin, ollamaIsUp, dockerModel, dockerUp, lms, lmsUp] = await Promise.all([
       findOllamaBinary().then((b) => !!b),
-      health(ollamaCfg),
+      ollamaUp(ollamaCfg.baseUrl.replace(/\/+$/, '')),
       which('docker', ['model', 'version']),
       health(dockerCfg),
       which('lms'),
@@ -269,12 +299,12 @@ export class ModelManager implements vscode.Disposable {
       {
         target: 'ollama',
         label: 'Ollama',
-        installed: ollamaBin || ollamaUp,
-        running: ollamaUp,
+        installed: ollamaBin || ollamaIsUp,
+        running: ollamaIsUp,
         providerId: ollamaCfg.id,
         baseUrl: ollamaCfg.baseUrl,
         canRemove: true,
-        hint: ollamaUp ? undefined : ollamaBin ? 'Installed but not running — LocalPilot can start it.' : `Not installed — ${plat === 'darwin' ? 'brew install --cask ollama' : plat === 'win32' ? 'winget install Ollama.Ollama' : 'curl -fsSL https://ollama.com/install.sh | sh'}`,
+        hint: ollamaIsUp ? undefined : ollamaBin ? 'Installed but not running — LocalPilot can start it.' : `Not installed — ${plat === 'darwin' ? 'brew install --cask ollama' : plat === 'win32' ? 'winget install Ollama.Ollama' : 'curl -fsSL https://ollama.com/install.sh | sh'}`,
       },
       {
         target: 'docker',
@@ -503,7 +533,7 @@ export class ModelManager implements vscode.Disposable {
   async startOllama(): Promise<ModelJob> {
     const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…');
     const { baseUrl } = this.ollamaBase();
-    const up = () => createProvider({ id: 'probe', type: 'ollama', baseUrl }).healthCheck().catch(() => false);
+    const up = () => ollamaUp(baseUrl);
     try {
       if (await up()) {
         return this.finish(job, 'done');
@@ -517,19 +547,22 @@ export class ModelManager implements vscode.Disposable {
           await which('launchctl', ['setenv', k, v], 4000);
         }
         launched = await which('open', ['-a', 'Ollama'], 6000);
-      } else if (process.platform === 'win32' && bin && bin !== 'ollama') {
-        // The tray app ("ollama app.exe") sits next to the CLI and starts the server; fall back to `ollama serve`.
-        const app = path.join(path.dirname(bin), 'ollama app.exe');
-        launched = await fs.access(app).then(() => {
-          const child = cp.spawn(app, [], { detached: true, stdio: 'ignore', env });
-          child.on('error', () => undefined);
-          child.unref();
-          return true;
-        }, () => false);
+      } else if (process.platform === 'win32') {
+        // The tray app owns the server on Windows. Prefer it even when `ollama` is on PATH — a bare `ollama serve`
+        // next to a running tray app fails with "address already in use" and leaves a console window behind.
+        const app = (bin && bin !== 'ollama' ? path.join(path.dirname(bin), 'ollama app.exe') : undefined) ?? (await findOllamaTrayApp());
+        if (app) {
+          launched = await fs.access(app).then(() => {
+            const child = cp.spawn(app, [], { detached: true, stdio: 'ignore', env, windowsHide: true });
+            child.on('error', () => undefined);
+            child.unref();
+            return true;
+          }, () => false);
+        }
       }
       if (!launched && bin) {
         try {
-          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', env, shell: process.platform === 'win32' && bin === 'ollama' });
+          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', env, shell: process.platform === 'win32' && bin === 'ollama', windowsHide: true });
           child.on('error', () => undefined);
           child.unref();
           this.servePid = child.pid;
@@ -541,7 +574,9 @@ export class ModelManager implements vscode.Disposable {
       if (!launched) {
         throw new Error('Could not launch Ollama. Install it from https://ollama.com/download');
       }
-      for (let i = 0; i < 40; i++) {
+      // A first launch on Windows unpacks runtimes and may show a welcome window before the server listens.
+      const waitMs = process.platform === 'win32' ? 90_000 : 30_000;
+      for (let i = 0; i * 500 < waitMs; i++) {
         if (this.aborts.get(job.id)?.signal.aborted) {
           return this.finish(job, 'cancelled');
         }
@@ -551,7 +586,7 @@ export class ModelManager implements vscode.Disposable {
         }
         this.update(job, { detail: `Waiting for Ollama at ${baseUrl}… (${((i + 1) / 2).toFixed(0)}s)` });
       }
-      throw new Error(`Ollama did not answer at ${baseUrl} within 20s`);
+      throw new Error(`Ollama did not answer at ${baseUrl} within ${waitMs / 1000}s${process.platform === 'win32' ? ' — check the Ollama tray icon; if a welcome window is open, close it and try Start again' : ''}`);
     } catch (e) {
       return this.finish(job, 'error', e instanceof Error ? e.message : String(e));
     }
@@ -634,14 +669,7 @@ export class ModelManager implements vscode.Disposable {
         // Clear the quarantine flag so Gatekeeper does not block the first launch of a downloaded app.
         await runProcess('xattr', ['-dr', 'com.apple.quarantine', path.join(dest, 'Ollama.app')], { signal }).catch(() => undefined);
       } else if (process.platform === 'win32') {
-        const exe = path.join(os.tmpdir(), `OllamaSetup-${Date.now()}.exe`);
-        await downloadFile('https://ollama.com/download/OllamaSetup.exe', exe, onProgress('Downloading Ollama for Windows'), signal);
-        this.update(job, { progress: -1, detail: 'Running the installer silently (per-user, no admin rights needed)…' });
-        const r = await runProcess(exe, ['/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES'], { signal, timeoutMs: 15 * 60_000 });
-        await fs.unlink(exe).catch(() => undefined);
-        if (r.code !== 0 && !(await findOllamaBinary())) {
-          throw new Error(`The Ollama installer exited with code ${r.code}`);
-        }
+        await this.installOllamaWindows(job, signal, onProgress);
       } else {
         await this.installOllamaLinuxUserSpace(job, signal, onProgress);
       }
@@ -660,6 +688,47 @@ export class ModelManager implements vscode.Disposable {
       }
       this.log.warn(`background Ollama install failed: ${e instanceof Error ? e.message : String(e)} — falling back to the terminal installer`);
       return this.installOllamaInTerminal(job, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Windows without a terminal or UAC prompt. `winget` first (signed package, handles proxies and SmartScreen),
+   * otherwise the official Inno Setup installer run silently per-user. Either way the install is verified by the
+   * presence of `ollama.exe` rather than trusting the exit code, and the installer's output is kept for the error.
+   */
+  private async installOllamaWindows(job: ModelJob, signal: AbortSignal, onProgress: (what: string) => (done: number, total?: number) => void): Promise<void> {
+    const installed = async () => (await findOllamaBinary()) ?? (await findOllamaTrayApp());
+    const tail = (s: string) => s.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' · ').slice(0, 300);
+    let wingetOut = '';
+    if (await which('winget', ['--version'], 8000)) {
+      this.update(job, { progress: -1, detail: 'Installing Ollama with winget…' });
+      try {
+        const r = await runProcess('winget', ['install', '--id', 'Ollama.Ollama', '-e', '--silent', '--disable-interactivity', '--accept-source-agreements', '--accept-package-agreements'], { signal, timeoutMs: 20 * 60_000 });
+        wingetOut = r.out;
+        // 0 = installed, 0x8A15002B = already installed; anything else falls through to the direct installer.
+        if ((r.code === 0 || r.code === -1978335189) && (await installed())) {
+          return;
+        }
+        this.log.warn(`winget install Ollama.Ollama exited ${r.code}: ${tail(r.out)}`);
+      } catch (e) {
+        this.log.warn(`winget failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (signal.aborted) {
+      return;
+    }
+    const exe = path.join(os.tmpdir(), `OllamaSetup-${Date.now()}.exe`);
+    await downloadFile('https://ollama.com/download/OllamaSetup.exe', exe, onProgress('Downloading Ollama for Windows'), signal);
+    this.update(job, { progress: -1, detail: 'Running the installer silently (per-user, no admin rights needed)…' });
+    const r = await runProcess(exe, ['/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/NOCANCEL'], { signal, timeoutMs: 15 * 60_000 });
+    await fs.unlink(exe).catch(() => undefined);
+    // Inno Setup can return before the files are visible to a second process; give the filesystem a moment.
+    for (let i = 0; i < 20 && !(await installed()); i++) {
+      await sleep(500);
+    }
+    if (!(await installed())) {
+      const why = r.code === 0 ? 'the installer finished but ollama.exe was not found under %LOCALAPPDATA%\\Programs\\Ollama or Program Files' : `the installer exited with code ${r.code}`;
+      throw new Error(`${why}${tail(r.out) ? ` — ${tail(r.out)}` : ''}${wingetOut ? ` (winget: ${tail(wingetOut)})` : ''}`);
     }
   }
 
@@ -721,7 +790,7 @@ export class ModelManager implements vscode.Disposable {
           return this.finish(job, 'cancelled');
         }
         await sleep(3000);
-        if (await createProvider({ id: 'probe', type: 'ollama', baseUrl: this.ollamaBase().baseUrl }).healthCheck().catch(() => false)) {
+        if (await ollamaUp(this.ollamaBase().baseUrl)) {
           return this.finish(job, 'done');
         }
         if (await findOllamaBinary()) {

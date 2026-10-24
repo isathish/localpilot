@@ -24,7 +24,22 @@
   --mono: var(--vscode-editor-font-family, Menlo, monospace);
   --radius: 8px;
   --shadow: 0 8px 28px rgba(0,0,0,.25);
+  /* Dashboard series follow the theme's chart palette (every VS Code theme defines these), not the button colour. */
+  --chart-1: var(--vscode-charts-blue, var(--vscode-button-background));
+  --chart-2: var(--vscode-charts-green, var(--ok));
+  --chart-3: var(--vscode-charts-orange, var(--brand));
+  --chart-4: var(--vscode-charts-purple, #a371f7);
+  --chart-err: var(--vscode-charts-red, var(--error));
+  --chart-warn: var(--vscode-charts-yellow, var(--warn));
+  --chart-lines: var(--vscode-charts-lines, color-mix(in srgb, var(--fg) 14%, transparent));
 }
+/* Native widgets (selects, scrollbars, date inputs) render in the theme's scheme instead of the OS default. */
+body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; } body.vscode-light, body.vscode-high-contrast-light, html.light body { color-scheme: light; }
+/* Light themes: shadows and tints are far too heavy on a white canvas. */
+body.vscode-light, html.light body { --shadow: 0 6px 20px rgba(20,20,30,.10); --shadow-sm: 0 1px 2px rgba(20,20,30,.06); --tint: color-mix(in srgb, var(--fg) 4%, transparent); --tint-2: color-mix(in srgb, var(--fg) 7%, transparent); }
+/* High-contrast themes: real borders everywhere, no translucent tints or shadows (they fail the contrast rules). */
+body.vscode-high-contrast, body.vscode-high-contrast-light { --border: var(--vscode-contrastBorder, var(--vscode-widget-border)); --border-2: var(--border); --border-soft: var(--border); --tint: transparent; --tint-2: transparent; --shadow: none; --shadow-sm: none; --card: var(--bg); --card-2: var(--bg); --hover: var(--vscode-list-hoverBackground, transparent); }
+body.vscode-high-contrast .badge, body.vscode-high-contrast-light .badge, body.vscode-high-contrast .kpi, body.vscode-high-contrast-light .kpi, body.vscode-high-contrast .preset, body.vscode-high-contrast-light .preset { border: 1px solid var(--border); }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size, 13px); line-height: 1.5; }
@@ -68,6 +83,8 @@ code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); p
 .side { width: 210px; flex: none; padding: 14px 10px; border-right: 1px solid var(--border); position: sticky; top: 55px; align-self: flex-start; max-height: calc(100vh - 55px); overflow: auto; }
 .side a { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 6px; color: var(--fg); font-size: 13px; cursor: pointer; }
 .side a:hover { background: var(--hover); text-decoration: none; }
+.side a:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.side .tabs { display: contents; }
 .side a.on { background: var(--code-bg); font-weight: 600; box-shadow: inset 2px 0 0 var(--brand); }
 .side a svg { color: var(--muted); width: 15px; height: 15px; }
 .side a.on svg { color: var(--fg); }
@@ -97,7 +114,7 @@ h2.sub .act { margin-left: auto; text-transform: none; letter-spacing: 0; font-w
 .badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .badge.err { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
 .badge.brand { background: var(--brand); color: var(--brand-fg); }
-.reset { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: var(--muted); }
+.reset { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; color: var(--muted); flex: none; }
 .reset:hover { background: var(--hover); color: var(--fg); }
 .reset svg { width: 12px; height: 12px; }
 input[type=text], input[type=number], input[type=password], input[type=url], select, textarea {
@@ -113,7 +130,8 @@ input.invalid, select.invalid { border-color: var(--error); }
 .seg button.on { background: var(--accent); color: var(--accent-fg); }
 .seg button:hover:not(.on) { background: var(--hover); color: var(--fg); }
 .toggle { position: relative; align-self: flex-start; width: 36px; height: 20px; border-radius: 10px; background: var(--border-2); transition: background .15s; flex: none; }
-.toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--vscode-button-foreground, #fff); transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+body.vscode-high-contrast .toggle, body.vscode-high-contrast-light .toggle { border: 1px solid var(--border); } body.vscode-high-contrast .toggle::after, body.vscode-high-contrast-light .toggle::after { border: 1px solid var(--border); top: 1px; left: 1px; box-shadow: none; }
 .toggle.on { background: var(--accent); } .toggle.on::after { transform: translateX(16px); }
 .range { display: flex; align-items: center; gap: 10px; }
 .range input[type=range] { flex: 1; accent-color: var(--accent); }
@@ -128,6 +146,9 @@ input.invalid, select.invalid { border-color: var(--error); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn svg { width: 13px; height: 13px; }
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.top .saved { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; font-size: 12px; color: var(--ok); opacity: 0; transform: translateY(2px); transition: opacity .2s, transform .2s; pointer-events: none; } .top .saved svg { width: 12px; height: 12px; stroke-width: 2.2; } .top .saved.show { opacity: 1; transform: none; }
+input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 22%, transparent); }
+.card > .btnrow { padding: 10px 14px 12px; border-top: 1px solid var(--border-soft); }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; background: var(--input-bg); }
 .list li code { background: none; padding: 0; }
@@ -139,6 +160,7 @@ input.invalid, select.invalid { border-color: var(--error); }
 /* ---- providers */
 .prov { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); margin-bottom: 10px; overflow: hidden; transition: border-color .15s; }
 .prov.off { opacity: .6; }
+.prov-head:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .prov-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; }
 .prov-head:hover { background: var(--hover); }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); color: var(--muted); }
@@ -462,6 +484,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .side::-webkit-scrollbar { display: none; }
   .side a { flex: none; height: 28px; padding: 0 11px; border-radius: 999px; font-size: var(--fs-sm); border: 1px solid transparent; }
   .side a.on { box-shadow: none; border-color: var(--border-soft); }
+  .side .tabs { display: contents; }
+  /* Edge fades tell the user the pill strip scrolls; drawn as sticky gradients so they stay put while scrolling. */
+  .side::before, .side::after { content: ''; position: sticky; top: 0; flex: none; width: 28px; margin: -8px 0; align-self: stretch; pointer-events: none; opacity: 0; transition: opacity .15s; z-index: 1; }
+  .side::before { left: 0; margin-right: -28px; background: linear-gradient(90deg, var(--bg), transparent); }
+  .side::after { right: 0; margin-left: -28px; background: linear-gradient(270deg, var(--bg), transparent); }
+  .side.fade-l::before, .side.fade-r::after { opacity: 1; }
   .content { padding: 16px 14px 48px; }
   .content h1 { font-size: 18px; }
   .btnrow .spacer + .muted { width: 100%; }
@@ -514,7 +542,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 /* ---- memory & history */
 .kv.store dd b { font-weight: 600; }
 .badge.on { color: var(--ok, #73c991); background: color-mix(in srgb, var(--ok, #73c991) 14%, transparent); }
-.tblwrap { padding: 0; overflow: hidden; }
+/* Any table card scrolls sideways instead of cutting off its last columns (the Delete column of memory notes, dashboard tables). */
+.tblwrap { padding: 0; overflow-x: auto; overflow-y: hidden; }
+.tblwrap::-webkit-scrollbar { height: 6px; } .tblwrap::-webkit-scrollbar-thumb { border-radius: 3px; }
+.tbl.notes td:nth-child(2) { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl.notes td, .tbl.notes th { white-space: nowrap; }
 .tbl.notes { width: 100%; margin: 0; }
 .tbl.notes td:nth-child(2) { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tbl.notes tr.busy { opacity: .5; pointer-events: none; }
@@ -547,9 +579,13 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .kpi-s { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 .kpi-s b { color: var(--fg); }
 .kpi-s .dot { display: inline-block; width: 7px; height: 7px; margin: 0 4px 0 0; vertical-align: 1px; box-shadow: none; }
-.spark { position: absolute; left: 0; right: 0; bottom: 0; height: 24px; width: 100%; opacity: .32; pointer-events: auto; }
-.spark rect { fill: var(--accent); }
-.kpi.warn .spark rect { fill: var(--warn); }
+/* Sparklines: flat bars in the theme's chart colour. The global `svg { stroke: currentColor }` must not apply — it drew a grey
+   outline around every bar and made the strip look like a staircase of blocks. */
+.spark { position: absolute; left: 0; right: 0; bottom: 0; height: 24px; width: 100%; opacity: .38; pointer-events: auto; stroke: none; }
+.spark rect { fill: var(--chart-1); stroke: none; shape-rendering: crispEdges; }
+.spark rect:hover { opacity: 1; }
+.kpi.warn .spark rect { fill: var(--chart-warn); }
+.kpi.err .spark rect { fill: var(--chart-err); }
 .dash-cols { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .dash-cols > .card { margin: 0; min-width: 0; }
 .dash-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -558,7 +594,6 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .dash .card h3 { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .dash .card h3 .count { color: var(--muted); font-weight: 400; }
 .dash .card { padding: 12px 14px; }
-.dash .card.tblwrap { overflow-x: auto; }
 .dash-tbl { width: 100%; font-variant-numeric: tabular-nums; }
 .dash-tbl th, .dash-tbl td { padding: 5px 8px; white-space: nowrap; }
 .dash-tbl td:first-child { min-width: 120px; }
@@ -567,7 +602,7 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .dash-tbl.errs td { white-space: normal; }
 .pctl i { font-style: normal; color: var(--muted); font-size: 11px; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--tint); overflow: hidden; vertical-align: middle; }
-.meter i { display: block; height: 100%; background: var(--accent); border-radius: 3px; min-width: 2px; }
+.meter i { display: block; height: 100%; background: var(--chart-1); border-radius: 3px; min-width: 2px; }
 .hlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .hlist li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
 .hlist li .dot { width: 8px; height: 8px; }
@@ -575,6 +610,43 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .dot.err { background: var(--error); color: var(--error); }
 .dashkv { gap: 3px 14px; }
 .dashkv dd b { font-weight: 600; }
+/* Charts: inline SVG in the theme's chart palette. Text is real SVG text so it scales with the card; preserveAspectRatio=none
+   stretches the drawing, so strokes use vector-effect to stay 1–2 px. */
+.kpi-u { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+.dash-cols.charts { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.dash-cols.rings { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart.hours svg { max-width: 360px; }
+.chart .grid { stroke: var(--chart-lines); stroke-width: 1; stroke-dasharray: 2 3; opacity: .6; }
+.chart .ax { fill: var(--muted); font-size: 9px; font-family: var(--vscode-font-family); font-variant-numeric: tabular-nums; stroke: none; }
+.chart rect { stroke: none; }
+/* Series colours: bars/areas/legend swatches are filled, lines/points are stroked, donut arcs only use `color`. */
+.chart .s0, .legend i.s0, .dl i.s0, .donut circle.s0 { color: var(--chart-1); }
+.chart .s1, .legend i.s1, .dl i.s1, .donut circle.s1 { color: var(--chart-2); }
+.chart .s2, .legend i.s2, .dl i.s2, .donut circle.s2 { color: var(--chart-4); }
+.chart .s3, .legend i.s3 { color: var(--chart-3); }
+.chart .err, .legend i.err, .dl i.err, .donut circle.err { color: var(--chart-err); }
+.chart rect, .chart .area, .chart .pt { fill: currentColor; }
+.donut circle.ok, .dl i.ok { color: var(--chart-2); } .donut circle.muted, .dl i.muted { color: var(--muted); }
+.chart .line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .area { opacity: .12; stroke: none; }
+.chart .pt { stroke: var(--card); stroke-width: 1.5; }
+.chart rect:hover, .chart .pt:hover { filter: brightness(1.25); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: currentColor; }
+.donut { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.donut svg { width: 110px; height: 110px; flex: none; transform: rotate(-90deg); overflow: visible; }
+.donut circle { fill: none !important; stroke: currentColor; stroke-width: 10; }
+.donut circle.track { color: var(--tint-2); }
+.donut text { transform: rotate(90deg); transform-origin: 45px 45px; fill: var(--fg); font-family: var(--vscode-font-family); stroke: none; }
+.donut .dv { font-size: 15px; font-weight: 700; } .donut .ds { font-size: 8px; fill: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.dl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12px; min-width: 0; flex: 1; }
+.dl li { display: flex; align-items: center; gap: 8px; white-space: nowrap; } .dl li b { margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; }
+.dl i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none; }
+body.vscode-high-contrast .chart .area, body.vscode-high-contrast-light .chart .area { display: none; }
+body.vscode-high-contrast .chart rect, body.vscode-high-contrast-light .chart rect { stroke: var(--border); stroke-width: 1; }
+body.vscode-high-contrast .legend i, body.vscode-high-contrast-light .legend i, body.vscode-high-contrast .dl i, body.vscode-high-contrast-light .dl i { outline: 1px solid var(--border); }
 .chips.small .chip { font-size: 11px; padding: 2px 8px; cursor: default; }
 .chips.small .chip i { font-style: normal; margin-left: 4px; }
 .logcard { padding: 0; overflow: hidden; }

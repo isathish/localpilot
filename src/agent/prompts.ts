@@ -12,6 +12,8 @@ export interface PromptOptions {
   /** Prompt-based tool calling for models without native tool support. */
   textToolProtocol?: boolean;
   skills: SkillManager;
+  /** Whether `load_skill` is among this run's tools; without it the index would only invite calls that cannot be made. */
+  canLoadSkills?: boolean;
   workspace: WorkspaceContext;
   append?: string;
   /** Extra instructions for subagents. */
@@ -118,7 +120,7 @@ Answer the user's question directly. You may read files and search the workspace
     parts.push(`# Images\nThe user may attach screenshots or images, and browser_screenshot returns rendered web pages as images. Inspect them carefully (UI bugs, error dialogs, layout, diagrams) and reference specific visual details in your answer.`);
   }
 
-  const skillsIdx = o.skills.skillsIndex();
+  const skillsIdx = o.canLoadSkills === false ? '' : o.skills.skillsIndex();
   if (skillsIdx) {
     parts.push(`# Available skills
 Skills are installed playbooks with project- or domain-specific steps you cannot know otherwise. Rules:
@@ -127,6 +129,8 @@ Skills are installed playbooks with project- or domain-specific steps you cannot
 - A skill whose instructions already appear in this conversation (a <skill> block or an earlier load_skill result) is loaded — do not load it again, just follow it.
 - Never claim to have followed a skill you did not load. Never describe a skill's content from its one-line description.
 ${skillsIdx}`);
+  } else if (o.canLoadSkills === false && o.roleOverride) {
+    parts.push(`# Skills\nAny skill (playbook) that applies to your task is already included in the request as a <skill> block — follow it step by step. You have no tool to load other skills; do not try.`);
   }
 
   const agentsIdx = o.skills.agentsIndex();

@@ -157,6 +157,8 @@ export interface ToolContext {
   readOnly?: boolean;
   /** Pause/stop/steer handle of the run executing this tool; subagents register their own control under it. */
   control?: import('./agent/runControl').RunControl;
+  /** Skills in force for this run (preloaded, pinned or loaded with load_skill); subagents spawned from here inherit them. */
+  skills?: string[];
 }
 
 export interface ToolResult {
@@ -204,6 +206,8 @@ export interface SubagentDefinition {
   /** Restrict tools available to the subagent. */
   tools?: string[];
   model?: string;
+  /** Skills preloaded into every run of this subagent (`skills:` in the agent file's front-matter). */
+  skills?: string[];
   source: 'workspace' | 'user' | 'builtin';
 }
 
@@ -259,6 +263,8 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'done' | 'skipped';
   /** Subagent to delegate this item to (run_todos_parallel); omit for items the main agent does itself. */
   agent?: string;
+  /** Skills the worker must follow for this item (preloaded into its brief). */
+  skills?: string[];
   /** Self-contained brief for the subagent. */
   prompt?: string;
   /** Optional provider/model override for the delegated item. */

@@ -20,6 +20,8 @@ const SUBAGENT_CONTRACT = `# You are a subagent
  */
 export type ScopedApprovalHandler = (sessionId: string, ...args: Parameters<ApprovalHandler>) => ReturnType<ApprovalHandler>;
 
+const strList = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map(String).map((x) => x.trim()).filter(Boolean) : typeof v === 'string' && v.trim() ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
+
 export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit: (e: AgentEvent) => void, approval: ScopedApprovalHandler): Tool[] {
   const loadSkill: Tool = {
     parallelSafe: true,
@@ -75,12 +77,13 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           agent: { type: 'string', description: 'Subagent name (see Available subagents): "clarifier", "explore", "planner", "coder", "tester", "debugger", "reviewer", "docs", "researcher" or a custom one. Common aliases ("review", "debug", "test") are accepted.' },
           prompt: { type: 'string', description: 'Complete, self-contained task description: goal, relevant files/symbols, constraints, and exactly what to return' },
           model: { type: 'string', description: 'Optional provider/model override' },
+          skills: { type: 'array', items: { type: 'string' }, description: 'Optional: installed skill names whose instructions the subagent must follow (loaded into its brief). Skills you are working with are passed on automatically.' },
         },
         required: ['agent', 'prompt'],
       },
     },
     async execute(args, ctx) {
-      return runChild(String(args.agent), String(args.prompt), typeof args.model === 'string' ? args.model : undefined, ctx);
+      return runChild(String(args.agent), String(args.prompt), typeof args.model === 'string' ? args.model : undefined, ctx, undefined, strList(args.skills));
     },
   };
 
@@ -96,7 +99,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
             description: 'Independent tasks to run in parallel',
             items: {
               type: 'object',
-              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' } },
+              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this task must follow' } },
               required: ['agent', 'prompt'],
             },
           },
@@ -105,12 +108,12 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       },
     },
     async execute(args, ctx) {
-      const tasks = Array.isArray(args.tasks) ? (args.tasks as { agent: string; prompt: string; model?: string }[]) : [];
+      const tasks = Array.isArray(args.tasks) ? (args.tasks as { agent: string; prompt: string; model?: string; skills?: unknown }[]) : [];
       if (!tasks.length) {
         return { content: 'tasks must be a non-empty array', isError: true };
       }
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
-      const settled = await pool.map(tasks, (t) => runChild(t.agent, t.prompt, t.model, ctx));
+      const settled = await pool.map(tasks, (t) => runChild(t.agent, t.prompt, t.model, ctx, undefined, strList(t.skills)));
       const out = settled.map((r, i) => {
         const header = `## Task ${i + 1} (${tasks[i].agent}): ${tasks[i].prompt.slice(0, 80)}`;
         return r.status === 'fulfilled' ? `${header}\n${r.value.content}` : `${header}\nFAILED: ${String(r.reason)}`;
@@ -119,7 +122,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     },
   };
 
-  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string) {
+  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string, extraSkills?: string[]) {
     const cfg = getConfig();
     if (ctx.depth >= cfg.parallel.maxSubagentDepth) {
       return { content: `Subagent depth limit (${cfg.parallel.maxSubagentDepth}) reached; do the work directly instead.`, isError: true };
@@ -160,6 +163,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         role,
         toolFilter: def.tools,
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
+        // The parent's active skills, the agent file's `skills:` and anything the task named: the swarm follows one playbook.
+        skills: [...new Set([...(ctx.skills ?? []), ...(def.skills ?? []), ...(extraSkills ?? [])])],
         workspaceRoot: ctx.workspaceRoot,
         depth: ctx.depth + 1,
         signal: control.signal,
@@ -204,6 +209,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
                 agent: { type: 'string', description: 'Worker: coder, tester, docs, explore, reviewer, debugger, researcher…' },
                 prompt: { type: 'string', description: 'Complete self-contained brief: goal, exact files, constraints, how to verify, what to report' },
                 dependsOn: { type: 'array', items: { type: 'string' }, description: 'Titles or ids of tasks that must finish first' },
+                skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this item must follow' },
               },
               required: ['agent', 'prompt'],
             },
@@ -220,20 +226,39 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       }
       let wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
       // Inline tasks: turn them into checklist items first, then run exactly those.
-      const inline = Array.isArray(args.tasks) ? (args.tasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
+      const inline = Array.isArray(args.tasks) ? (args.tasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown; skills?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
       if (inline.length) {
         const existing = ctx.todos.get();
         const used = new Set(existing.map((t) => t.id));
+        const norm = (x: unknown) => String(x ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
         const next = (): string => { let n = existing.length + 1; while (used.has(String(n))) { n++; } used.add(String(n)); return String(n); };
-        const created: TodoItem[] = inline.map((t) => ({ id: next(), title: String(t.title || t.prompt).replace(/\s+/g, ' ').trim().slice(0, 80), status: 'pending' as const, agent: String(t.agent), prompt: String(t.prompt) }));
+        // Models often restate the checklist they just wrote as inline tasks; an inline task that repeats a pending
+        // item (same prompt, or same title) runs that item instead of adding a duplicate that leaves the original pending.
+        const matched = new Set<string>();
+        const created: TodoItem[] = [];
+        const resolvedIds: string[] = inline.map((t) => {
+          const dup = existing.find((e) => e.status === 'pending' && !matched.has(e.id) && (norm(e.prompt) === norm(t.prompt) || (t.title && norm(e.title) === norm(t.title)) || norm(e.title) === norm(t.prompt).slice(0, 80)));
+          if (dup) {
+            matched.add(dup.id);
+            dup.agent = dup.agent || String(t.agent);
+            dup.prompt = dup.prompt || String(t.prompt);
+            if (strList(t.skills)?.length) { dup.skills = strList(t.skills); }
+            return dup.id;
+          }
+          const item: TodoItem = { id: next(), title: String(t.title || t.prompt).replace(/\s+/g, ' ').trim().slice(0, 80), status: 'pending', agent: String(t.agent), prompt: String(t.prompt), ...(strList(t.skills)?.length ? { skills: strList(t.skills) } : {}) };
+          created.push(item);
+          return item.id;
+        });
+        const all = [...existing, ...created];
         // dependsOn may name other inline tasks by title or by id; resolve titles to the ids just assigned.
         inline.forEach((t, i) => {
           const deps = Array.isArray(t.dependsOn) ? (t.dependsOn as unknown[]).map(String) : [];
-          const ids = deps.map((d) => created.find((c) => c.title === d.slice(0, 80) || c.id === d)?.id ?? existing.find((c) => c.id === d || c.title === d)?.id).filter((d): d is string => !!d);
-          if (ids.length) { created[i].dependsOn = ids; }
+          const ids = deps.map((d) => all.find((c) => c.id === d || c.title === d.slice(0, 80))?.id ?? inline.findIndex((x) => norm(x.title) === norm(d) || norm(x.prompt) === norm(d))).map((x) => (typeof x === 'number' ? (x >= 0 ? resolvedIds[x] : undefined) : x)).filter((d): d is string => !!d && d !== resolvedIds[i]);
+          const item = all.find((c) => c.id === resolvedIds[i]);
+          if (item && ids.length) { item.dependsOn = [...new Set([...(item.dependsOn ?? []), ...ids])]; }
         });
-        ctx.todos.set([...existing, ...created]);
-        wanted = new Set(created.map((c) => c.id));
+        ctx.todos.set(all);
+        wanted = new Set(resolvedIds);
       }
       const all = ctx.todos.get();
       const runnable = all.filter((t) => t.status === 'pending' && t.agent && (!wanted || wanted.has(t.id)));
@@ -281,7 +306,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           const deps = (t.dependsOn ?? []).filter((d) => reports.has(d));
           const depText = deps.length ? `\n\nReports from the prerequisite items you build on:\n${deps.map((d) => `### Item ${d}\n${reports.get(d)!.slice(0, 2500)}`).join('\n\n')}` : '';
           const brief = t.prompt?.trim() || `Carry out checklist item ${t.id}: "${t.title}". Use the tools to inspect the workspace, make the change (or produce the analysis) and verify it.`;
-          const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx, t.title);
+          const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx, t.title, t.skills);
           const ok = !r.isError;
           update(t.id, { status: ok ? 'done' : 'skipped', result: r.content.slice(0, 2000) });
           return r;
