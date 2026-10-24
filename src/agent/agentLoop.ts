@@ -143,7 +143,8 @@ export class AgentRunner {
     }
     // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
     // unavailable model is replaced for good so the picker reflects what is actually answering.
-    if (!route.reason || route.fallback) {
+    // Subagent sessions are ephemeral: record what actually answered so the parent can report or quarantine it.
+    if (!route.reason || route.fallback || depth > 0) {
       session.model = model.id;
     }
 
@@ -749,6 +750,11 @@ export class AgentRunner {
       this.log.warn(`${model.id} appears to serve one request at a time (first token after ${Math.round(waited / 1000)}s behind ${others} other request(s)); parallel subagents will queue`);
       this.onSerialServer?.(model);
     }
+  }
+
+  /** A routed model stalled on a subagent: keep automatic picks away from it for a while. */
+  markModelUnresponsive(modelId: string): void {
+    this.providers.markUnresponsive(modelId);
   }
 
   /** Model ids with a request in flight and the sessions using them (for the Agents view / tab tooltips). */

@@ -159,7 +159,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // The router may have picked a different (smaller) model for a read-only child. If that model stalls or cannot
     // be reached, run the child again on the parent's model instead of losing the lane — a broken small model must
     // not take the whole swarm down.
-    const routedElsewhere = !modelRef && !def.model && !!ctx.modelRef && !!child.model && child.model !== ctx.modelRef;
+    // Read-only children leave the choice to the router (child.model is empty here); it fills child.model in.
+    const routedElsewhere = !modelRef && !def.model && !routedModel && !!ctx.modelRef;
     let fellBack = false;
     const attempt = () =>
       runner.run({
@@ -187,11 +188,14 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         text = await attempt();
       } catch (e) {
         const kind = classifyModelError(e);
-        if (!routedElsewhere || control.aborted || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
+        if (!routedElsewhere || control.aborted || child.model === ctx.modelRef || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
           throw e;
         }
         fellBack = true;
-        emit({ sessionId: ctx.sessionId, type: 'status', payload: `${def.name}: ${child.model} is not responding — retrying on ${ctx.modelRef}` });
+        if (child.model) {
+          runner.markModelUnresponsive(child.model);
+        }
+        emit({ sessionId: ctx.sessionId, type: 'status', payload: `${def.name}: ${child.model || 'the routed model'} is not responding — retrying on ${ctx.modelRef}` });
         child.messages = [];
         child.contextTokens = 0;
         child.model = ctx.modelRef!;

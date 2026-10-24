@@ -165,10 +165,30 @@ export class ProviderRegistry implements vscode.Disposable {
    * default → the best model for the role on this machine. With routing enabled, image turns are redirected to
    * a vision model and an offline or disabled default falls back to the best available one instead of failing.
    */
+  /** Models that stalled or could not be reached recently: skipped by the automatic picks until the entry expires. */
+  private readonly unresponsive = new Map<string, number>();
+
+  /** Keep the router away from `modelId` for a while (a subagent fell back from it). Explicit choices still work. */
+  markUnresponsive(modelId: string, ms = 10 * 60_000): void {
+    this.unresponsive.set(modelId, Date.now() + ms);
+    this.log.warn(`route: ${modelId} marked unresponsive for ${Math.round(ms / 60_000)} min — automatic picks skip it`);
+  }
+
+  private responsive(models: ModelInfo[]): ModelInfo[] {
+    const now = Date.now();
+    for (const [id, until] of this.unresponsive) {
+      if (until <= now) {
+        this.unresponsive.delete(id);
+      }
+    }
+    return this.unresponsive.size ? models.filter((m) => !this.unresponsive.has(m.id)) : models;
+  }
+
   async route(req: RouteRequest): Promise<Route> {
     const cfg = getConfig();
     const role = req.role ?? 'agent';
     const models = await this.listModels();
+    const healthy = this.responsive(models);
     const profile = await getSystemProfile().catch(() => undefined);
     const find = (ref?: string) => (ref ? models.find((m) => m.id === ref || m.modelId === ref) : undefined);
 
@@ -214,7 +234,7 @@ export class ProviderRegistry implements vscode.Disposable {
         }
       } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
         // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model.
-        const fast = pickForRole(models, 'fast', profile);
+        const fast = pickForRole(healthy, 'fast', profile);
         if (fast && fast.id !== model.id && fast.supportsTools) {
           reason = `Read-only subagent — using ${fast.name}`;
           model = fast;
@@ -222,7 +242,7 @@ export class ProviderRegistry implements vscode.Disposable {
       }
     }
     if (!model) {
-      model = pickForRole(models, role, profile, req.needsVision) ?? pickForRole(models, 'agent', profile);
+      model = pickForRole(healthy, role, profile, req.needsVision) ?? pickForRole(healthy, 'agent', profile) ?? pickForRole(models, 'agent', profile);
     }
     if (!model) {
       throw new Error(
