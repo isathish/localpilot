@@ -87,7 +87,9 @@ export function parseSkillSource(input: string): SkillSource | undefined {
     }
     return { kind: 'github', owner, repo: repo.replace(/\.git$/, ''), ref, path: p };
   }
-  return { kind: 'local', path: s.replace(/^~(?=$|[\\/])/, os.homedir()) };
+  // `~/skills/x` → joined with the home folder so Windows gets native separators throughout.
+  const home = /^~(?=$|[\\/])/.test(s) ? path.join(os.homedir(), ...s.slice(1).split(/[\\/]+/).filter(Boolean)) : s;
+  return { kind: 'local', path: home };
 }
 
 export function describeSource(src: SkillSource): string {
