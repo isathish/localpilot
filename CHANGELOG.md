@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.15 — 2026-10-24
+### Added
+- Enhance model routing and unresponsive handling; implement unresponsive model tracking and improve fallback logic for subagents
+
 ## 1.1.14 — 2026-10-24
 ### Added
 - Enhance telemetry handling and provider management; add support for transient-failure retries and improve dashboard summary filtering
