@@ -126,20 +126,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /**
    * Right after a move the view is in transit (old pane disposed, new one created) and VS Code occasionally tears
    * the new pane down again when the target part had been closed. Watch for a moment and focus again while the
-   * view does not exist; a view that exists but was hidden (the user closed the part) is left alone. Not awaited,
-   * so callers (and `reveal()`) are not held up by the settle time.
+   * view has not come up yet; once it has been seen alive, a view that is hidden or gone again is the user's doing
+   * (they closed the part — closing a side bar disposes its panes) and is left alone. Not awaited, so callers (and
+   * `reveal()`) are not held up by the settle time.
    */
   private async watchAfterMove(): Promise<void> {
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     let lastFocus = -1000;
     let settled = 0;
+    let seenAlive = false;
     for (let waited = 0; waited < 3000 && settled < 600; waited += 100) {
       if (this.view) {
         if (!this.view.visible) {
           return;
         }
+        seenAlive = true;
         settled += 100;
       } else {
+        if (seenAlive) {
+          return;
+        }
         settled = 0;
         if (waited - lastFocus >= 500) {
           lastFocus = waited;
