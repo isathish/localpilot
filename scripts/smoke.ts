@@ -6,7 +6,7 @@
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
-import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
+import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
 import { ContextManager } from '../src/context/contextManager';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
@@ -235,6 +235,8 @@ async function pureLogic() {
   check('"Delegated to N background workers" without a call is a claimed change', claimsChange("Understood as: create two files.\n\nDelegated to 2 background workers. I'll report back when they finish.", 'create two files with background workers'));
   check('"I\'ll delegate this to workers" is an unfulfilled intent', looksLikeUnfulfilledIntent("Understood as: create two files.\n\nI'll delegate this task to background workers.", tools));
   check('a question is not a claimed change', !claimsChange("I've found the bug in add(). Should I fix it?", 'fix the bug'));
+  check('re-announcing a finished hand-off is a stale delegation', looksLikeStaleDelegation("Delegated to 3 background workers. I'll report back when they finish."));
+  check('a real report after the workers ran is not stale', !looksLikeStaleDelegation('Both files were created by the workers; alpha-worker.txt contains "alpha".'));
   check('an explanation to a question is not a claimed change', !claimsChange('add() returns a - b; the file has been like this since the first commit.', 'why does add() return the wrong value?'));
   check('a clarifying question is not', !looksLikeBareClaim('Which file should I update?', 'update the config'));
   check('a question-type request is not nudged', !looksLikeBareClaim('It returns the sum.', 'what does add do?'));
@@ -640,7 +642,7 @@ async function pauseAndSteer() {
       const hidden = s.messages.find((m) => m.role === 'user' && m.meta?.hidden);
       const order = sink.filter((e) => e.sessionId === s.id && (e.type === 'nudge' || e.type === 'tool_start')).map((e) => e.type);
       check('nudge: emitted once with reason=claimed before the tool finally runs', nudges.join() === 'claimed' && order.join() === 'nudge,tool_start', { nudges, order });
-      check('nudge: hidden steering message is tagged and names run_todos_parallel for a delegation claim', !!hidden && hidden.meta?.nudge === 'claimed' && /run_todos_parallel/.test(hidden.content), hidden?.content.slice(0, 120));
+      check('nudge: hidden steering message is tagged and names a fan-out tool for a delegation claim', !!hidden && hidden.meta?.nudge === 'claimed' && /run_todos_parallel|run_parallel_subagents/.test(hidden.content), hidden?.content.slice(0, 120));
       check('nudge: run completes with the real answer after acting', out === 'Created both.' && visible(s).filter((m) => m.role === 'assistant').length === 3, out);
     }
     check('pause/steer: model calls as expected', calls === 2 + 2 + 4 + 4 + 3, calls);
