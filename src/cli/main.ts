@@ -18,6 +18,7 @@ import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
 import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
+import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { McpManager } from '../mcp/mcpManager';
@@ -67,6 +68,7 @@ ${bold('Usage')}
   localpilot models                       list models from your local servers
   localpilot doctor                       check servers, settings and tools
   localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
+  localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
@@ -99,12 +101,14 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search';
   /** `skill install`: write into ~/.localpilot/skills instead of the workspace. */
   user: boolean;
+  /** `skill search --install`: install the best match. */
+  install: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -127,6 +131,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--version' || x === '-V') {a.cmd = 'version';}
     else if (x === '--parallel' || x === '-P') {a.cmd = a.cmd ?? 'ide';} // parallel sessions live in the editor's Agents panel
     else if (x === '--user' || x === '-u') {a.user = true;}
+    else if (x === '--install') {a.install = true;}
+    else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
     else if (!x.startsWith('-') && !words.length && !a.cmd && ['models', 'doctor', 'help', 'version'].includes(x)) {a.cmd = x as Args['cmd'];}
     else {words.push(x);}
@@ -423,6 +429,7 @@ interface Core {
   tracker: ChangeTracker;
   memory: MemoryStore;
   runner: AgentRunner;
+  catalog: SkillCatalog;
   mcp?: McpManager;
   log: vscode.LogOutputChannel;
   /** Live sessions, so gather_context can see the working set and recent turns. */
@@ -438,7 +445,8 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log);
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
-  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner);
+  const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
+  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const sessions = new Map<string, Session>();
   tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
@@ -448,7 +456,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp = new McpManager(tools, log, VERSION);
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, mcp, log, sessions };
+  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions };
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -499,7 +507,15 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
         case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
         case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
-        case 'skill_suggestions': { const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined; if (sk.length) {r.note(`Matching skills: ${sk.map((s) => s.name).join(', ')}`);} if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);} break; }
+        case 'skill_suggestions': {
+          const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined;
+          const inst = p.installed as { name: string; repo: string; dir: string } | undefined; const avail = p.available as { name: string; repo: string } | undefined;
+          if (inst) {r.note(`Installed skill "${inst.name}" from ${inst.repo} → ${inst.dir}`);}
+          if (sk.length) {r.note(`Matching skills: ${sk.map((s) => s.name).join(', ')}`);}
+          if (avail) {r.note(`"${avail.name}" from ${avail.repo} matches this request but is not installed — localpilot skill search ${avail.name} --install`);}
+          if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);}
+          break;
+        }
         case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
         case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.prompt).slice(0, 80)}`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
@@ -566,6 +582,54 @@ async function cmdDoctor(core: Core): Promise<void> {
   console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);
   const rg = await runProcess('rg', ['--version']).then(() => true).catch(() => false);
   console.log(`  ripgrep: ${rg ? green('found') : dim('not on PATH (using built-in search)')}   node: ${process.version}   platform: ${process.platform}`);
+}
+
+async function cmdSkillSearch(core: Core, args: Args, renderer: Renderer): Promise<void> {
+  if (!args.prompt) {
+    console.error(`${red('✖')} Usage: localpilot skill search <words> [--install] [--user]`);
+    process.exitCode = 2;
+    return;
+  }
+  const repos = getConfig().skillRepositories;
+  if (!repos.length) {
+    console.error(`${red('✖')} No skill repositories configured (localpilot.skills.repositories).`);
+    process.exitCode = 2;
+    return;
+  }
+  if (!(await core.catalog.ready())) {
+    renderer.status(`Indexing ${repos.join(', ')}…`);
+    await core.catalog.refresh();
+    renderer.status('');
+  }
+  const have = new Set(core.skills.allSkills.map((s) => s.name));
+  const hits = await core.catalog.search(args.prompt, 10);
+  for (const s of await core.catalog.status()) {
+    if (s.error) {
+      console.log(`  ${yellow('⚠')} ${s.repo}: ${s.error}`);
+    }
+  }
+  if (!hits.length) {
+    console.log(`  ${dim('No catalog skill matches')} "${args.prompt}" ${dim(`(${repos.join(', ')}). Try other words, or browse: localpilot skill search ""`)}`);
+    return;
+  }
+  hits.forEach((h, i) => {
+    console.log(`  ${have.has(h.name) ? green('✓') : i === 0 ? yellow('★') : dim('·')} ${bold(h.name)} ${dim(`${h.repo} · ${h.score}`)}\n    ${dim(h.description.replace(/\s+/g, ' ').slice(0, 140))}`);
+  });
+  if (!args.install) {
+    console.log(`\n${dim('Install the best match with')} localpilot skill search "${args.prompt}" --install ${dim('or any of them with')} localpilot skill install <repo>/<dir>`);
+    return;
+  }
+  // The first hit is what the agent itself would install for this request.
+  const pick = hits.find((h) => !have.has(h.name)) ?? hits[0];
+  const dest = skillsDestination(args.user ? 'user' : 'workspace', args.cwd);
+  const one = await core.catalog.install(pick, dest, { replace: args.yes, progress: (t) => renderer.status(t) });
+  renderer.status('');
+  await core.skills.refresh();
+  if (one) {
+    console.log(`\n  ${green('✓')} ${bold(one.name)} ${dim(`(${one.files} file${one.files === 1 ? '' : 's'}) → ${one.dir}`)}\n${dim('The agent loads it when a request matches; force it with')} /skill ${one.name} <task>`);
+  } else {
+    console.log(`\n  ${dim(`"${pick.name}" is already installed in ${dest} (use -y to replace it)`)}`);
+  }
 }
 
 // ------------------------------------------------------------------ main
@@ -644,6 +708,9 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'skill-install') {
     return cmdSkillInstall(core, args, renderer);
+  }
+  if (args.cmd === 'skill-search') {
+    return cmdSkillSearch(core, args, renderer);
   }
   if (args.cmd === 'doctor') {
     return cmdDoctor(core);

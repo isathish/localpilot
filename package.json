@@ -344,6 +344,12 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "localpilot.browseSkills",
+        "title": "Browse Skill Catalog…",
+        "category": "LocalPilot",
+        "icon": "$(library)"
+      },
+      {
         "command": "localpilot.reloadSkills",
         "title": "Reload Skills, Subagents & MCP Servers",
         "category": "LocalPilot"
@@ -1136,6 +1142,46 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Load the skills bundled with LocalPilot (requirements, design, implement, test, debug, review, deploy, …). A workspace or user skill with the same name overrides the bundled one; copy a bundled skill from the extension's `skills/` folder into `.localpilot/skills/` to customise it."
+        },
+        "localpilot.skills.repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "anthropics/skills/skills",
+            "obra/superpowers/skills",
+            "github/awesome-copilot/skills"
+          ],
+          "markdownDescription": "Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, github.com URLs) in the [Agent Skills](https://agentskills.io) format whose skills LocalPilot can install when a request matches one that is not installed yet. The first repository wins when several offer the same name. Browse them with **LocalPilot: Browse Skill Catalog…**. The index is cached in `~/.localpilot/skill-catalog.json` and refreshed daily; set `GITHUB_TOKEN` for private repositories or higher API limits."
+        },
+        "localpilot.skills.autoInstall": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "ask",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Install the best-matching catalog skill as the request starts, then load it — no prompt.",
+            "Show an \"Install …\" chip under the request; nothing is downloaded until you click it.",
+            "Never look up the catalog for a request (Browse Skill Catalog… still works)."
+          ],
+          "default": "auto",
+          "markdownDescription": "When a request matches a skill from `#localpilot.skills.repositories#` better than any installed skill (planning, design docs, debugging, writing Markdown, PDFs, …), install it on the spot or offer it. A skill you removed after an automatic install, or declined, is not installed again."
+        },
+        "localpilot.skills.autoInstallScope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "workspace"
+          ],
+          "enumDescriptions": [
+            "~/.localpilot/skills — available in every workspace, nothing added to the project.",
+            ".localpilot/skills in the workspace — shared with everyone who opens the project."
+          ],
+          "default": "user",
+          "description": "Where automatically installed skills are stored."
         },
         "localpilot.systemPromptAppend": {
           "type": "string",

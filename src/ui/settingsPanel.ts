@@ -102,7 +102,7 @@ const SETTING_KEYS = [
   'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
-  'mcpServers', 'skillsPaths', 'skills.builtin', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
+  'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
   'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding',
 ] as const;
 
@@ -111,7 +111,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels',
-  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill',
+  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {

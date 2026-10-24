@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { DEFAULT_SKILL_REPOSITORIES } from './agent/skillCatalog';
 import { ApprovalMode, ProviderConfig, ThinkingLevel } from './types';
 
 export interface WebSearchConfig {
@@ -44,6 +45,12 @@ export interface LocalPilotConfig {
   mcpServers: Record<string, McpServerConfig>;
   skillsPaths: string[];
   builtinSkills: boolean;
+  /** Repositories (owner/repo[/path]) whose skills can be installed automatically when a request matches one. */
+  skillRepositories: string[];
+  /** Install a matching catalog skill without asking, offer it as a chip, or never. */
+  skillAutoInstall: 'auto' | 'ask' | 'off';
+  /** Where automatically installed skills land: the user's ~/.localpilot/skills or the workspace's .localpilot/skills. */
+  skillAutoInstallScope: 'user' | 'workspace';
   thinking: ThinkingLevel;
   memoryEnabled: boolean;
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
@@ -106,6 +113,9 @@ export function getConfig(): LocalPilotConfig {
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
     skillsPaths: c.get<string[]>('skillsPaths', []),
     builtinSkills: c.get<boolean>('skills.builtin', true),
+    skillRepositories: (c.get<string[]>('skills.repositories', DEFAULT_SKILL_REPOSITORIES) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
+    skillAutoInstall: normalizeAutoInstall(c.get<unknown>('skills.autoInstall', 'auto')),
+    skillAutoInstallScope: c.get<string>('skills.autoInstallScope', 'user') === 'workspace' ? 'workspace' : 'user',
     thinking: normalizeThinking(c.get<unknown>('thinking', 'off')),
     memoryEnabled: c.get<boolean>('memory.enabled', true),
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
@@ -127,6 +137,13 @@ export function getConfig(): LocalPilotConfig {
       coding: c.get<string>('routing.coding', '') || undefined,
     },
   };
+}
+
+function normalizeAutoInstall(v: unknown): LocalPilotConfig['skillAutoInstall'] {
+  if (v === false || v === 'off' || v === 'never') {
+    return 'off';
+  }
+  return v === 'ask' ? 'ask' : 'auto';
 }
 
 function normalizeThinking(v: unknown): ThinkingLevel {

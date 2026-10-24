@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { AgentRunner } from '../agent/agentLoop';
 import { SkillLearner } from '../agent/skillRecommender';
+import { SkillCatalog } from '../agent/skillCatalog';
+import { skillsDestination } from '../agent/skillInstaller';
 import { ChangeTracker } from '../agent/changeTracker';
 import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel } from '../config';
@@ -33,6 +35,7 @@ export type ToWebview =
 
 export type FromWebview =
   | { type: 'ready' }
+  | { type: 'booted' }
   | { type: 'newSession'; mode?: Session['mode']; text?: string; attachments?: string[]; images?: string[] }
   | { type: 'runParallel'; tasks: string[]; mode?: Session['mode'] }
   | { type: 'selectSession'; id: string }
@@ -75,6 +78,9 @@ export type FromWebview =
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
   | { type: 'runParallelPrompt' }
   | { type: 'dismissSkillTopic'; topic: string }
+  /** Install a catalog skill offered under a request (`skills.autoInstall: ask`). */
+  | { type: 'installCatalogSkill'; name: string; repo: string }
+  | { type: 'dismissCatalogSkill'; name: string }
   | { type: 'openMarkdown'; text: string; title?: string }
   | { type: 'copyText'; text: string };
 
@@ -101,8 +107,12 @@ export class ChatController implements vscode.Disposable {
 
   /** Skill usage/recurrence tracker (set by the extension host). */
   learner?: SkillLearner;
+  /** Installable skills from the configured repositories (set by the extension host). */
+  catalog?: SkillCatalog;
   /** Rendered Markdown reader for long answers and generated documents (set by the extension host). */
   markdownViewer?: { showText(text: string, title?: string): Promise<void> };
+  /** Resolves once sessions and skills are loaded; `sendInit` waits for it so an early webview never sees an empty store. */
+  loaded: Promise<unknown> = Promise.resolve();
 
   constructor(
     readonly store: SessionStore,
@@ -139,8 +149,44 @@ export class ChatController implements vscode.Disposable {
   }
 
   private broadcast(msg: ToWebview): void {
+    // Fast models emit 100+ tokens/s; one webview message per token per host adds up. Text deltas are coalesced
+    // for a few ms and flushed before anything else so event order is preserved.
+    if (msg.type === 'event' && (msg.event.type === 'assistant_delta' || msg.event.type === 'thinking_delta') && typeof msg.event.payload === 'string') {
+      const pending = this.pendingDeltas.get(msg.event.sessionId);
+      if (pending && pending.type === msg.event.type) {
+        pending.payload += msg.event.payload;
+      } else {
+        if (pending) {
+          this.flushDeltas();
+        }
+        this.pendingDeltas.set(msg.event.sessionId, { sessionId: msg.event.sessionId, type: msg.event.type, payload: msg.event.payload });
+      }
+      this.deltaTimer ??= setTimeout(() => this.flushDeltas(), 25);
+      return;
+    }
+    this.flushDeltas();
     for (const s of this.sinks) {
       s.post(msg);
+    }
+  }
+
+  private readonly pendingDeltas = new Map<string, { sessionId: string; type: 'assistant_delta' | 'thinking_delta'; payload: string }>();
+  private deltaTimer?: NodeJS.Timeout;
+
+  private flushDeltas(): void {
+    if (this.deltaTimer) {
+      clearTimeout(this.deltaTimer);
+      this.deltaTimer = undefined;
+    }
+    if (!this.pendingDeltas.size) {
+      return;
+    }
+    const events = [...this.pendingDeltas.values()];
+    this.pendingDeltas.clear();
+    for (const event of events) {
+      for (const s of this.sinks) {
+        s.post({ type: 'event', event });
+      }
     }
   }
 
@@ -177,6 +223,8 @@ export class ChatController implements vscode.Disposable {
     switch (msg.type) {
       case 'ready':
         return this.sendInit();
+      case 'booted':
+        return;
       case 'newSession': {
         const s = this.createSession(msg.mode ?? 'agent');
         const text = msg.text?.trim();
@@ -253,6 +301,32 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'dismissSkillTopic':
         await this.learner?.dismiss(msg.topic);
+        return;
+      case 'installCatalogSkill': {
+        if (!this.catalog) {
+          return;
+        }
+        const entries = await this.catalog.entries();
+        const entry = entries.find((e) => e.name === msg.name && e.repo === msg.repo) ?? entries.find((e) => e.name === msg.name);
+        if (!entry) {
+          void vscode.window.showWarningMessage(`"${msg.name}" is no longer in the skill catalog.`);
+          return;
+        }
+        const cfg = getConfig();
+        const dest = skillsDestination(cfg.skillAutoInstallScope, this.workspace.root);
+        try {
+          const one = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing skill "${entry.name}" from ${entry.repo}…` }, () => this.catalog!.install(entry, dest, { replace: true }));
+          await this.skills.refresh();
+          if (one) {
+            void vscode.window.showInformationMessage(`Installed "${one.name}" into ${dest}. Send your request again or force it with /skill ${one.name} <task>.`);
+          }
+        } catch (e) {
+          void vscode.window.showErrorMessage(`Could not install "${entry.name}": ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return;
+      }
+      case 'dismissCatalogSkill':
+        await this.catalog?.dismiss(msg.name);
         return;
       case 'openMarkdown': {
         const title = msg.title?.trim() || this.store.get(this.activeSessionId ?? '')?.title || 'Answer';
@@ -479,12 +553,14 @@ export class ChatController implements vscode.Disposable {
   }
 
   async sendInit(): Promise<void> {
-    const sessions = this.store.list();
-    if (!this.activeSessionId) {
-      this.activeSessionId = sessions[0]?.id ?? this.store.create(getConfig().defaultModel).id;
+    await this.loaded.catch(() => undefined);
+    // The active chat may have been removed behind our back (retention, Settings → clear); never point at a ghost.
+    if (!this.activeSessionId || !this.store.get(this.activeSessionId)) {
+      this.activeSessionId = this.store.list()[0]?.id ?? this.store.create(getConfig().defaultModel).id;
     }
-    const models = await this.providers.listModels().catch(() => []);
-    this.broadcast({
+    // Boot must not wait on model discovery (several servers × health probes can take seconds, or hang on a dead
+    // host): send what we know now with the cached model list, then push the fresh list when it arrives.
+    const init = (models: ModelInfo[]): ToWebview => ({
       type: 'init',
       sessions: this.store.list(),
       activeSessionId: this.activeSessionId,
@@ -495,12 +571,14 @@ export class ChatController implements vscode.Disposable {
       running: [...this.runs.keys()],
       platform: process.platform,
     });
+    this.broadcast(init(this.providers.cachedModels()));
     const s = this.activeSession;
     if (s) {
       this.broadcast({ type: 'session', session: s });
       this.pushChanges(s.id);
       this._onDidChangeActive.fire(s);
     }
+    await this.pushModels();
   }
 
   private async pushModels(): Promise<void> {
@@ -816,7 +894,7 @@ export class ChatController implements vscode.Disposable {
             '- `/compact` — summarise older messages to free context',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents',
-            '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill',
+            '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill catalog',
             '- `/agent <name> <task>` — delegate directly to a subagent',
             '- `/context` — show context usage',
           ].join('\n')
@@ -855,6 +933,10 @@ export class ChatController implements vscode.Disposable {
           void vscode.commands.executeCommand('localpilot.installSkill', task.length ? { source: task.join(' ') } : undefined);
           return say(task.length ? `Installing skill from ${task.join(' ')}…` : 'Opening the skill installer…');
         }
+        if (name === 'browse' || name === 'search' || name === 'catalog') {
+          void vscode.commands.executeCommand('localpilot.browseSkills', task.join(' '));
+          return say('Opening the skill catalog…');
+        }
         const skill = this.skills.getSkill(name);
         if (!skill) {
           const hint = /[/:.]/.test(name) ? ` To install a skill from GitHub or a URL use \`/skill install ${name}\`.` : '';
@@ -880,6 +962,8 @@ export class ChatController implements vscode.Disposable {
     for (const [, a] of this.runs) {
       a.abort();
     }
+    clearTimeout(this.deltaTimer);
+    this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
     this._onDidChangeRuns.dispose();
     this.disposables.forEach((d) => d.dispose());

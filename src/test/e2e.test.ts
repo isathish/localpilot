@@ -80,6 +80,8 @@ suite('LocalPilot end-to-end (real local model)', () => {
     // The agent may legitimately run a command to verify its edit; with no human to answer, allow it.
     await cfg.update('approvals.terminal', 'always', vscode.ConfigurationTarget.Global);
     await cfg.update('showWelcomeOnStartup', false, vscode.ConfigurationTarget.Global);
+    // Test prompts must not pull skills from GitHub into the real ~/.localpilot/skills.
+    await cfg.update('skills.autoInstall', 'off', vscode.ConfigurationTarget.Global);
   });
 
   test('api exposes the real extension version', () => {

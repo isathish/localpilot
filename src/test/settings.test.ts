@@ -81,7 +81,7 @@ suite('LocalPilot settings & setup', () => {
     // Every container's chat view is a real, focusable view; switching the setting reveals it there.
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const before = cfg.inspect<string>('chat.location')?.globalValue;
-    const api = vscode.extensions.getExtension('localpilot.localpilot-agent')!.exports as { chatHost?: { viewId: string; visible: boolean } };
+    const api = vscode.extensions.getExtension('localpilot.localpilot-agent')!.exports as { chatHost?: { viewId: string; visible: boolean; ready: boolean } };
     const until = async (ok: () => boolean, ms = 8000) => { const t0 = Date.now(); while (!ok() && Date.now() - t0 < ms) { await new Promise((r) => setTimeout(r, 100)); } return ok(); };
     try {
       for (const [loc, viewId] of [['secondarySidebar', 'localpilot.chatView.secondary'], ['panel', 'localpilot.chatView.panel'], ['sidebar', 'localpilot.chatView']] as const) {
@@ -91,6 +91,9 @@ suite('LocalPilot settings & setup', () => {
         await vscode.commands.executeCommand('localpilot.openChat');
         const shown = await until(() => api.chatHost?.viewId === viewId && api.chatHost.visible);
         assert.ok(shown, `after choosing ${loc} the chat should be visible in ${viewId}, got ${JSON.stringify(api.chatHost)}`);
+        // Visible is not enough: the UI must leave its boot screen (first session rendered) in the new container.
+        const booted = await until(() => api.chatHost?.viewId === viewId && api.chatHost.ready, 10_000);
+        assert.ok(booted, `the chat in ${viewId} stayed on its loading screen, got ${JSON.stringify(api.chatHost)}`);
       }
       // The real "Move Chat To…" flow: run the command and answer its quick pick like a user would.
       const picked = vscode.commands.executeCommand('localpilot.moveChat');
@@ -99,8 +102,8 @@ suite('LocalPilot settings & setup', () => {
       await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
       await picked;
       assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('chat.location'), 'secondarySidebar', 'the second item (Secondary Side Bar) was accepted');
-      const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView.secondary' && api.chatHost.visible);
-      assert.ok(moved, `Move Chat To… should show the chat on the right, got ${JSON.stringify(api.chatHost)}`);
+      const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView.secondary' && api.chatHost.visible && api.chatHost.ready, 10_000);
+      assert.ok(moved, `Move Chat To… should show the booted chat on the right, got ${JSON.stringify(api.chatHost)}`);
     } finally {
       await cfg.update('chat.location', before, vscode.ConfigurationTarget.Global);
     }
@@ -108,7 +111,7 @@ suite('LocalPilot settings & setup', () => {
 
   test('package.json wires the settings UI: gear in chat toolbar, walkthrough, welcome setting', () => {
     const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
-    assert.ok(c.menus['view/title'].some((m: { command: string; when: string }) => m.command === 'localpilot.openSettings' && m.when.includes('localpilot.chatView')));
+    assert.ok(c.menus['view/title'].some((m: { command: string; when: string }) => m.command === 'localpilot.openSettings' && /localpilot\\?\.chatView/.test(m.when)));
     assert.strictEqual(c.walkthroughs[0].id, 'localpilot.gettingStarted');
     assert.ok(c.walkthroughs[0].steps.length >= 4);
     assert.strictEqual(c.configuration.properties['localpilot.showWelcomeOnStartup'].default, true);

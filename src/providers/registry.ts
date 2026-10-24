@@ -74,6 +74,12 @@ export class ProviderRegistry implements vscode.Disposable {
     this.lastRefresh = 0;
   }
 
+  /** Enabled models from the last discovery without touching the network (empty before the first one). */
+  cachedModels(): ModelInfo[] {
+    const disabled = new Set(getConfig().disabledModels);
+    return this.modelCache.filter((m) => !disabled.has(m.id));
+  }
+
   /** Lists enabled models from all reachable providers (cached for 30s). */
   async listModels(force = false): Promise<ModelInfo[]> {
     const all = await this.listAllModels(force);
@@ -82,36 +88,59 @@ export class ProviderRegistry implements vscode.Disposable {
 
   /** Every discovered model including disabled ones (flagged), for the model manager UI. */
   async listAllModels(force = false): Promise<ModelInfo[]> {
-    if (force || !this.modelCache.length || Date.now() - this.lastRefresh >= 30_000) {
-      const reachable = new Set<string>();
-      const results = await Promise.allSettled(
-        this.all.map(async (p) => {
-          if (!(await p.healthCheck())) {
-            return [];
-          }
-          reachable.add(p.id);
-          return p.listModels();
-        })
-      );
-      const models: ModelInfo[] = [];
-      results.forEach((r, i) => {
-        if (r.status === 'fulfilled') {
-          models.push(...r.value);
-        } else {
-          this.log.warn(`listModels failed for ${this.all[i].id}: ${String(r.reason)}`);
-        }
-      });
-      const changed = models.length !== this.modelCache.length || models.some((m, i) => m.id !== this.modelCache[i]?.id);
-      this.modelCache = models;
-      this.reachable = reachable;
-      this.lastRefresh = Date.now();
-      if (changed) {
-        // Pulled/removed/started models show up everywhere (chat picker, status bar, settings) without a manual refresh.
-        this._onDidChange.fire();
-      }
+    // An empty result is cached briefly too, so a machine with no server up is not re-probed by every caller
+    // (chat boot, status bar, completions, settings) within the same few seconds.
+    const ttl = this.modelCache.length ? 30_000 : 10_000;
+    if (force) {
+      // A forced refresh must observe servers as they are now; if a round is already running, probe again after it.
+      await (this.discovery ? this.discovery.then(() => this.startDiscovery()) : this.startDiscovery());
+    } else if (Date.now() - this.lastRefresh >= ttl) {
+      // Concurrent callers share one discovery round instead of each probing every server.
+      await (this.discovery ?? this.startDiscovery());
     }
     const disabled = new Set(getConfig().disabledModels);
     return this.modelCache.map((m) => ({ ...m, disabled: disabled.has(m.id) || undefined }));
+  }
+
+  private discovery?: Promise<void>;
+
+  private startDiscovery(): Promise<void> {
+    const p = this.discover().finally(() => {
+      if (this.discovery === p) {
+        this.discovery = undefined;
+      }
+    });
+    this.discovery = p;
+    return p;
+  }
+
+  private async discover(): Promise<void> {
+    const reachable = new Set<string>();
+    const results = await Promise.allSettled(
+      this.all.map(async (p) => {
+        if (!(await p.healthCheck())) {
+          return [];
+        }
+        reachable.add(p.id);
+        return p.listModels();
+      })
+    );
+    const models: ModelInfo[] = [];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        models.push(...r.value);
+      } else {
+        this.log.warn(`listModels failed for ${this.all[i].id}: ${String(r.reason)}`);
+      }
+    });
+    const changed = models.length !== this.modelCache.length || models.some((m, i) => m.id !== this.modelCache[i]?.id);
+    this.modelCache = models;
+    this.reachable = reachable;
+    this.lastRefresh = Date.now();
+    if (changed) {
+      // Pulled/removed/started models show up everywhere (chat picker, status bar, settings) without a manual refresh.
+      this._onDidChange.fire();
+    }
   }
 
   /** Resolves a `provider/model` id (or bare model name) to a provider + model info. */

@@ -20,6 +20,7 @@
     spin: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.2 3"/></svg>',
     chev: '<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>',
     copy: '<svg viewBox="0 0 16 16"><rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 11V4a1 1 0 0 1 1-1h7"/></svg>',
+    download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
     insert: '<svg viewBox="0 0 16 16"><path d="M8 3v8M4.5 7.5L8 11l3.5-3.5M3 13h10"/></svg>',
     apply: '<svg viewBox="0 0 16 16"><path d="M3 3h7l3 3v7H3z"/><path d="M5 13V9h6v4"/></svg>',
     open: '<svg viewBox="0 0 16 16"><path d="M6 3H3.5A.5.5 0 0 0 3 3.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10M9 3h4v4M13 3L7 9"/></svg>',
@@ -67,7 +68,7 @@
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   const SLASH = [
     ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/agent ', 'Delegate to a subagent'], ['/context', 'Context usage'],
+    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/context', 'Context usage'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -80,6 +81,8 @@
     status: new Map(), unread: new Set(), attention: new Set(), approvalSid: new Map(),
     // Per-tab isolation: composer draft + attachments, scroll offset and the model each agent is talking to.
     selected: new Set(), drafts: new Map(), scroll: new Map(), modelOf: new Map(), dismissed: new Set(),
+    // Sends the host has not acknowledged with `running` yet (sessionId → watchdog timer).
+    pendingSend: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -679,12 +682,22 @@
       if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.hidden))) { return; }
       if (m.meta && m.meta.summary) { const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       const node = m.role === 'user' ? userTurn(m, i) : assistantTurn(m, results);
-      if (node) { els.messages.appendChild(node); }
+      if (!node) { return; }
+      // Consecutive assistant messages (tool calls, then the answer) form one turn, exactly as they streamed live —
+      // so settling the transcript at the end of a turn does not shift the layout.
+      const prev = els.messages.lastElementChild;
+      if (m.role !== 'user' && prev && prev.classList.contains('assistant')) {
+        const act = node.querySelector(':scope > .actions');
+        if (act) { for (const old of prev.querySelectorAll(':scope > .actions')) { old.remove(); } }
+        while (node.firstChild) { prev.appendChild(node.firstChild); }
+        return;
+      }
+      els.messages.appendChild(node);
     });
     const live = state.live.get(s.id);
-    if (live) { els.messages.appendChild(live.root); }
-    setRunning(state.running.has(s.id));
-    if (state.running.has(s.id)) { setStatus(state.status.get(s.id) || 'Working…'); }
+    if (live) { els.messages.appendChild(live.root); if (live.dirty) { scheduleRender(live); } }
+    setRunning(state.running.has(s.id) || state.pendingSend.has(s.id));
+    if (state.running.has(s.id)) { setStatus(state.status.get(s.id) || 'Working…'); } else if (state.pendingSend.has(s.id)) { setStatus('Sending…'); }
     if (open.length) { const all = m.querySelectorAll('details'); for (const i of open) { if (all[i]) { all[i].open = true; } } }
     if (stick) { scrollToBottom(true); } else { m.scrollTop = y; }
     updateJump();
@@ -706,9 +719,9 @@
       sug.appendChild(b);
     }
     wrap.appendChild(sug);
-    if (!state.models.length) {
+    if (!state.models.length && !state.modelsLoading) {
       const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
-      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
+      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
     els.messages.appendChild(wrap);
@@ -744,7 +757,7 @@
       live.body.innerHTML = renderMarkdown(live.text);
       live.steps = el('div', 'steps'); live.root.appendChild(live.steps);
       live.body = el('div', 'body'); live.root.appendChild(live.body);
-      live.text = '';
+      live.text = ''; live.settled = null; live.dirty = false;
     }
   }
   function finishThinking(live) {
@@ -773,8 +786,37 @@
   els.messages.addEventListener('scroll', updateJump, { passive: true });
   window.addEventListener('resize', updateJump);
   function scheduleRender(live) {
+    // Agents streaming in other tabs render nothing until their tab is shown — a live turn is marked dirty instead.
+    if (!state.session || state.session.id !== live.sid) { live.dirty = true; return; }
     if (live.timer) { return; }
-    live.timer = setTimeout(() => { live.timer = 0; finishThinking(live); live.body.innerHTML = renderMarkdown(live.text) + '<span class="caret"></span>'; followLive(live); }, 50);
+    live.timer = setTimeout(() => {
+      live.timer = 0; finishThinking(live);
+      const t0 = performance.now();
+      live.body.innerHTML = renderStream(live) + '<span class="caret"></span>';
+      // Long answers re-render slower; back off so the webview never spends most of its time re-rendering.
+      live.interval = Math.min(400, Math.max(50, Math.round((performance.now() - t0) * 4)));
+      live.dirty = false; followLive(live);
+    }, live.interval || 50);
+  }
+  /** Index just past the last block boundary (blank line outside a code fence, next line not indented) — text before it is final. */
+  function settledCut(text) {
+    const lines = text.split('\n'); let fence = null; let pos = 0; let cut = 0;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i];
+      const f = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (f) { if (!fence) { fence = f[1]; } else if (f[1][0] === fence[0] && f[1].length >= fence.length) { fence = null; } }
+      pos += line.length + 1;
+      if (!fence && line.trim() === '' && i + 1 < lines.length - 1 && !/^\s/.test(lines[i + 1])) { cut = pos; }
+    }
+    return cut;
+  }
+  /** Streaming markdown: blocks that can no longer change are rendered once and reused; only the open tail is re-rendered. */
+  function renderStream(live) {
+    const text = live.text;
+    if (!live.settled || live.settled.len > text.length || text.slice(0, live.settled.len) !== live.settled.text) { live.settled = { len: 0, text: '', html: '' }; }
+    const cut = settledCut(text);
+    if (cut > live.settled.len) { live.settled.html += renderMarkdown(text.slice(live.settled.len, cut)); live.settled.len = cut; live.settled.text = text.slice(0, cut); }
+    return live.settled.html + renderMarkdown(text.slice(live.settled.len));
   }
   function finishLive(sessionId) {
     const live = state.live.get(sessionId);
@@ -867,11 +909,16 @@
     }
   }
 
-  /** Chips for skills matching the request (click → prefill `/skill name`) and for a recurring request type worth saving as a skill. */
+  /** Chips for skills matching the request (click → prefill `/skill name`), a catalog skill installed/offered for it, and a recurring request type worth saving as a skill. */
   function skillSuggestionNote(p) {
-    const skills = p.skills || []; const create = p.create;
-    if (!skills.length && !create) { return null; }
+    const skills = p.skills || []; const create = p.create; const installed = p.installed; const available = p.available;
+    if (!skills.length && !create && !installed && !available) { return null; }
     const n = el('div', 'note skills');
+    if (installed) {
+      const row = el('div', 'learn');
+      row.appendChild(el('span', 'lbl', `${I.download || ''}Installed “${esc(installed.name)}” from ${esc(installed.repo)} for this request.`));
+      n.appendChild(row);
+    }
     if (skills.length) {
       n.appendChild(el('span', 'lbl', 'Matching skills:'));
       for (const s of skills) {
@@ -879,6 +926,14 @@
         chip.onclick = () => { els.input.value = `/skill ${s.name} ${els.input.value.replace(/^\/skill \S+\s*/, '')}`; autoGrow(); updateSendEnabled(); els.input.focus(); };
         n.appendChild(chip);
       }
+    }
+    if (available) {
+      const wrap = el('div', 'learn');
+      wrap.appendChild(el('span', 'lbl', `The “${esc(available.name)}” skill from ${esc(available.repo)} matches this request but is not installed.`));
+      const get = el('button', 'chip brand', `${I.download || ''}Install “${esc(available.name)}”`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Set localpilot.skills.autoInstall to "auto" to skip this step.`;
+      get.onclick = () => { post({ type: 'installCatalogSkill', name: available.name, repo: available.repo }); get.disabled = true; get.textContent = 'Installing…'; };
+      const no = el('button', 'chip', 'Not now'); no.title = 'Do not offer this skill again'; no.onclick = () => { post({ type: 'dismissCatalogSkill', name: available.name }); wrap.remove(); if (!skills.length && !create && !installed) { n.remove(); } };
+      wrap.appendChild(get); wrap.appendChild(no); n.appendChild(wrap);
     }
     if (create) {
       const wrap = el('div', 'learn');
@@ -1289,7 +1344,7 @@
     const s = state.session; const cur = (s && s.model) || '';
     const items = [{ label: 'Auto', desc: state.defaultModel ? `Default: ${state.defaultModel.split('/').pop()}` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
     for (const m of state.models) { items.push({ group: m.providerId, label: m.name, desc: `${(m.contextWindow / 1024).toFixed(0)}k ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
-    items.push({ hr: true }, { label: 'Refresh models', icon: I.spin, onPick: () => { post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
+    items.push({ hr: true }, { label: 'Refresh models', icon: I.spin, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
   function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
@@ -1367,7 +1422,7 @@
   function sendCurrent(fromSuggestion) {
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
-    if (state.running.has(state.session.id)) { openMenu(els.box, [{ label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return; }
+    if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) { openMenu(els.box, [{ label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return; }
     const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
@@ -1377,8 +1432,14 @@
     const empty = els.messages.querySelector('.empty'); if (empty) { empty.remove(); }
     if (!finalText.startsWith('/')) {
       const u = userTurn({ content: finalText, images }, undefined);
+      u.classList.add('fresh');
       if (attachments.length) { u.insertBefore(el('div', 'att', attachments.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join('')), u.firstChild.nextSibling); }
       els.messages.appendChild(u); ensureLive(state.session.id); setStatus('Sending…');
+      // React before the host acknowledges: Stop and the progress bar appear now; a watchdog undoes it if nothing comes back.
+      const sid = state.session.id;
+      setRunning(true);
+      clearTimeout(state.pendingSend.get(sid));
+      state.pendingSend.set(sid, setTimeout(() => { state.pendingSend.delete(sid); if (!state.running.has(sid) && state.session && state.session.id === sid) { setRunning(false); toast('The request did not start — check the LocalPilot output log and try again', 'error'); } }, 10000));
     }
     state.drafts.delete(state.session.id);
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); scrollToBottom(true);
@@ -1428,17 +1489,35 @@
 
   // ------------------------------------------------------------------ messages from the extension
   // Branded boot screen shown until the first session arrives from the extension host.
+  let bootTimer = 0; let bootTries = 0;
   function dismissBoot() {
+    clearTimeout(bootTimer);
     const b = $('boot');
     if (!b) { return; }
     b.classList.add('out');
     setTimeout(() => b.remove(), 260);
+    post({ type: 'booted' });
+  }
+  // If the host is slow to answer (still activating, re-parented webview, lost message) ask again, and after a few
+  // tries say so and offer a manual retry — a spinner must never be the only thing on screen.
+  function requestInit() {
+    clearTimeout(bootTimer);
+    bootTries++;
+    post({ type: 'ready' });
+    const b = $('boot');
+    if (!b) { return; }
+    if (bootTries >= 3 && !b.querySelector('.boot-hint')) {
+      const hint = el('div', 'boot-hint', `<span>Still connecting to LocalPilot…</span><button class="btn" type="button">Retry</button>`);
+      hint.querySelector('button').onclick = () => { bootTries = 0; requestInit(); };
+      b.appendChild(hint);
+    }
+    bootTimer = setTimeout(requestInit, bootTries < 3 ? 2500 : 6000);
   }
 
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
@@ -1452,10 +1531,11 @@
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; break;
-      case 'models': { const hadNone = !state.models.length; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { toast(`${m.models.length} model(s) found`); if (state.session && !state.session.messages.length) { renderSession(); } } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model(s) found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': handleEvent(m.event); break;
       case 'running': {
         const isActive = state.session && state.session.id === m.sessionId;
+        clearTimeout(state.pendingSend.get(m.sessionId)); state.pendingSend.delete(m.sessionId);
         state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
         else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
@@ -1506,5 +1586,5 @@
   }
 
   updateSendEnabled();
-  post({ type: 'ready' });
+  requestInit();
 })();

@@ -700,6 +700,19 @@
     const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills"><button class="btn sm">${I.plus}Add</button>`);
     addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
     ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
+    sec.appendChild(el('h2', 'sub', 'Skill catalog'));
+    const cat = el('div', 'card');
+    cat.appendChild(field('skills.autoInstall', 'Install matching skills', 'When a request matches a skill from the repositories below better than anything installed — planning, design docs, debugging, writing Markdown, PDFs… — install it as the request starts, offer it as a chip, or never look.', 'seg', { options: [['auto', 'Automatically'], ['ask', 'Ask'], ['off', 'Off']] }));
+    cat.appendChild(field('skills.autoInstallScope', 'Install into', 'Automatically installed skills go to your home folder (every workspace) or the current project.', 'seg', { options: [['user', '~/.localpilot/skills'], ['workspace', '.localpilot/skills']] }));
+    const repos = Array.isArray(val('skills.repositories')) ? val('skills.repositories') : [];
+    const rf = el('div', 'field wide');
+    rf.innerHTML = `<div><div class="lbl">Skill repositories${scopeBadge('skills.repositories')}${resetBtn('skills.repositories')}</div><div class="desc">GitHub repositories or folders in the <a href="https://agentskills.io">Agent Skills</a> format (<code>owner/repo/path</code>). The first one wins when several offer the same skill name. Browse and install from them with the button below.</div></div>`;
+    const rctl = el('div', 'ctl');
+    const rul = el('ul', 'list');
+    repos.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skills.repositories', repos.filter((_, j) => j !== i)); rul.appendChild(li); });
+    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills"><button class="btn sm">${I.plus}Add</button>`);
+    raddRow.querySelector('button').onclick = () => { const v = raddRow.querySelector('input').value.trim(); if (v) { set('skills.repositories', [...repos, v]); } };
+    rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl); cat.appendChild(rf); sec.appendChild(cat);
     const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user' };
     const tableFor = (title, rows, empty, usage) => {
       const h = el('h2', 'sub', `${title} (${rows.length})`);
@@ -708,7 +721,7 @@
       const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th>${usage ? '<th title="Times the agent loaded this skill">Used</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>${usage ? `<td class="mono muted">${r.used ? `${r.used}×` : '—'}</td>` : ''}</tr>`).join('')}</tbody>`);
       sec.appendChild(card(t));
     };
-    tableFor('Skills', d.skills, 'No skills found. Use <b>Install skill…</b> below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
+    tableFor('Skills', d.skills, 'No skills found. Use <b>Browse catalog…</b> or <b>Install skill…</b> below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
     const recurring = (d.learning && d.learning.recurring) || [];
     if (recurring.length) {
       sec.appendChild(el('h2', 'sub', `Suggested skills (${recurring.length})`));
@@ -723,7 +736,7 @@
     }
     tableFor('Subagents', d.agents, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.');
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
-    bar.innerHTML = `<button class="btn primary" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install skill…</button><button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
+    bar.innerHTML = `<button class="btn primary" data-cmd="localpilot.browseSkills" title="Search the configured skill repositories and install from them">${I.book}Browse catalog…</button><button class="btn" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install skill…</button><button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
     sec.appendChild(bar);
   }
 

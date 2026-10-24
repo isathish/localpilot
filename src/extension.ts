@@ -1,3 +1,4 @@
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
@@ -5,6 +6,7 @@ import { ChangeTracker } from './agent/changeTracker';
 import { createGatherContextTool } from './agent/clarify';
 import { createSkillPrompt, SkillLearner } from './agent/skillRecommender';
 import { describeSource, discoverSkills, installSkills, parseSkillSource, skillsDestination } from './agent/skillInstaller';
+import { CatalogEntry, SkillCatalog, sourceFor } from './agent/skillCatalog';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -54,14 +56,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(context.globalStorageUri, log);
   const learner = new SkillLearner(path.join(context.globalStorageUri.fsPath, 'skill-learning.json'), log);
-  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner);
+  // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
+  const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
+  const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
   controller.learner = learner;
+  controller.catalog = catalog;
   context.subscriptions.push(learner);
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
   const modelManager = new ModelManager(providers, log);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
+
+  // Register the chat hosts before anything is awaited: VS Code shows a bare progress bar in the view until the
+  // provider exists, so this must not queue behind session/skill loading or model discovery.
+  const view = new ChatViewProvider(context, controller);
+  // The same chat/agents views exist once per container (sidebar, secondary side bar, panel); `when` clauses show one set.
+  for (const id of CHAT_VIEW_IDS) {
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(id, view, { webviewOptions: { retainContextWhenHidden: true } }));
+  }
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
@@ -99,22 +112,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(markdownViewer);
   tools.register(createShowMarkdownTool(markdownViewer, (p) => (path.isAbsolute(p) ? vscode.Uri.file(p) : workspace.root ? vscode.Uri.joinPath(vscode.Uri.file(workspace.root), p) : undefined)));
 
-  await Promise.all([store.load(), skills.refresh()]);
+  await (controller.loaded = Promise.all([store.load(), skills.refresh()]));
   void mcp.reload();
+  // Index the skill catalog off the critical path so the first request can already match uninstalled skills.
+  if (getConfig().skillAutoInstall !== 'off') {
+    setTimeout(() => void catalog.refresh().catch((e) => log.warn(`skill catalog: ${String(e)}`)), 5_000);
+  }
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('localpilot.skillsPaths') || e.affectsConfiguration('localpilot.skills.builtin')) {
         void skills.refresh();
       }
+      if (e.affectsConfiguration('localpilot.skills.repositories')) {
+        void catalog.refresh().catch((err) => log.warn(`skill catalog: ${String(err)}`));
+      }
     })
   );
 
   // --- UI ----------------------------------------------------------------------------------
-  const view = new ChatViewProvider(context, controller);
-  // The same chat/agents views exist once per container (sidebar, secondary side bar, panel); `when` clauses show one set.
-  for (const id of CHAT_VIEW_IDS) {
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider(id, view, { webviewOptions: { retainContextWhenHidden: true } }));
-  }
   const agentsTree = new AgentsTreeProvider(controller);
   const agentsViews = AGENTS_VIEW_IDS.map((id) => vscode.window.createTreeView(id, { treeDataProvider: agentsTree, showCollapseAll: true }));
   context.subscriptions.push(agentsTree, ...agentsViews);
@@ -679,7 +694,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
   });
   cmd('localpilot.installSkill', async (arg?: unknown) => {
-    const o = (arg && typeof arg === 'object' ? arg : typeof arg === 'string' ? { source: arg } : {}) as { source?: string; scope?: 'workspace' | 'user' };
+    const o = (arg && typeof arg === 'object' ? arg : typeof arg === 'string' ? { source: arg } : {}) as { source?: string; scope?: 'workspace' | 'user'; only?: string[] };
     const source =
       o.source?.trim() ||
       (await vscode.window.showInputBox({
@@ -717,8 +732,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         const ac = new AbortController();
         token.onCancellationRequested(() => ac.abort());
         const found = await discoverSkills(src, { signal: ac.signal });
-        let only: string[] | undefined;
-        if (found.length > 1) {
+        let only: string[] | undefined = o.only?.length ? o.only : undefined;
+        if (found.length > 1 && !only) {
           const picked = await vscode.window.showQuickPick(
             found.map((f) => ({ label: f.name, description: f.description.slice(0, 100), detail: f.dir || undefined, picked: true })),
             { title: `${found.length} skills found — choose which to install`, canPickMany: true, ignoreFocusOut: true }
@@ -754,6 +769,102 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       void vscode.window.showErrorMessage(`Could not install the skill: ${msg}`);
       return undefined;
     }
+  });
+  // Browse the configured skill repositories: type to filter, pick one or more, choose where to install.
+  cmd('localpilot.browseSkills', async (arg?: unknown) => {
+    const preset = typeof arg === 'string' ? arg : '';
+    type Item = vscode.QuickPickItem & { entry?: CatalogEntry };
+    const qp = vscode.window.createQuickPick<Item>();
+    qp.title = 'Skill catalog';
+    qp.placeholder = 'Type to search skills by name or description…';
+    qp.matchOnDescription = true;
+    qp.matchOnDetail = true;
+    qp.canSelectMany = true;
+    qp.ignoreFocusOut = true;
+    qp.value = preset;
+    const refreshBtn: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('refresh'), tooltip: 'Re-index the skill repositories' };
+    const settingsBtn: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: 'Edit localpilot.skills.repositories' };
+    qp.buttons = [refreshBtn, settingsBtn];
+    const render = async () => {
+      const have = new Set(skills.allSkills.map((s) => s.name));
+      const entries = await catalog.entries();
+      const status = await catalog.status();
+      const items: Item[] = [];
+      for (const s of status) {
+        const own = entries.filter((e) => e.repo === s.repo);
+        items.push({ label: s.repo, kind: vscode.QuickPickItemKind.Separator, description: s.error ? `⚠ ${s.error}` : `${own.length} skills` });
+        for (const e of own) {
+          items.push({ label: `${have.has(e.name) ? '$(check) ' : '$(book) '}${e.name}`, description: e.description.replace(/\s+/g, ' ').slice(0, 120), detail: have.has(e.name) ? 'Installed' : undefined, entry: e });
+        }
+      }
+      if (!entries.length) {
+        items.push({ label: status.some((s) => s.error) ? 'The catalog could not be fetched — check the repositories and your connection' : 'Indexing the skill repositories…', description: '', alwaysShow: true });
+      }
+      qp.items = items;
+    };
+    qp.busy = true;
+    qp.show();
+    await render();
+    if (!(await catalog.ready())) {
+      await catalog.refresh();
+      await render();
+    }
+    qp.busy = false;
+    qp.onDidTriggerButton(async (b) => {
+      if (b === settingsBtn) {
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.skills.repositories');
+        return;
+      }
+      qp.busy = true;
+      await catalog.refresh(true).catch((e) => log.warn(`skill catalog: ${String(e)}`));
+      await render();
+      qp.busy = false;
+    });
+    const picked = await new Promise<Item[]>((resolve) => {
+      qp.onDidAccept(() => resolve([...qp.selectedItems]));
+      qp.onDidHide(() => resolve([]));
+    });
+    qp.dispose();
+    const entries = picked.flatMap((p) => (p.entry ? [p.entry] : []));
+    if (!entries.length) {
+      return undefined;
+    }
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const scopePick = await vscode.window.showQuickPick(
+      [
+        ...(root ? [{ label: 'This workspace', description: path.join(root, '.localpilot', 'skills'), scope: 'workspace' as const }] : []),
+        { label: 'My skills (all workspaces)', description: skillsDestination('user'), scope: 'user' as const },
+      ],
+      { title: `Install ${entries.map((e) => e.name).join(', ')} into…`, ignoreFocusOut: true }
+    );
+    if (!scopePick) {
+      return undefined;
+    }
+    const dest = skillsDestination(scopePick.scope, root);
+    const done: string[] = [];
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Installing skills…', cancellable: true }, async (progress, token) => {
+      const ac = new AbortController();
+      token.onCancellationRequested(() => ac.abort());
+      for (const e of entries) {
+        try {
+          const exists = await vscode.workspace.fs.stat(vscode.Uri.file(path.join(dest, e.name))).then(() => true, () => false);
+          const replace = !exists || (await vscode.window.showWarningMessage(`A skill named "${e.name}" is already installed there. Replace it?`, { modal: true }, 'Replace')) === 'Replace';
+          const one = replace ? await catalog.install(e, dest, { signal: ac.signal, replace: true, progress: (t) => progress.report({ message: t }) }) : undefined;
+          if (one) {
+            done.push(one.name);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`install skill ${describeSource(sourceFor(e))}: ${msg}`);
+          void vscode.window.showErrorMessage(`Could not install "${e.name}": ${msg}`);
+        }
+      }
+    });
+    await skills.refresh();
+    if (done.length) {
+      void vscode.window.showInformationMessage(`Installed ${done.map((n) => `"${n}"`).join(', ')} into ${dest}. The agent loads them when a request matches, or force one with /skill ${done[0]} <task>.`, 'Open chat').then((p) => p === 'Open chat' && view.reveal());
+    }
+    return done;
   });
   cmd('localpilot.reloadSkills', async () => {
     await skills.refresh();
@@ -966,8 +1077,8 @@ export interface LocalPilotApi {
   screenshotUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number }): Promise<{ name: string; data: string; mime: string; url: string; width: number; height: number }>;
   /** DevTools inspection of a URL: screenshot, console, network trace, performance and layout checks (optionally after actions). */
   inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
-  /** The view hosting the chat right now (`localpilot.chatView`, `.secondary`, `.panel`) and whether it is visible; undefined before the view is first shown or when the chat lives in an editor tab. */
-  readonly chatHost: { viewId: string; visible: boolean } | undefined;
+  /** The view hosting the chat right now (`localpilot.chatView`, `.secondary`, `.panel`), whether it is visible and whether its UI has booted; undefined before the view is first shown or when the chat lives in an editor tab. */
+  readonly chatHost: { viewId: string; visible: boolean; ready: boolean } | undefined;
 }
 
 export function deactivate(): void {

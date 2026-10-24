@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createSkillPrompt, recommendSkills, skillHint, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
+import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
 import { routeSubagent } from '../agent/builtinAgents';
 import { builtinAgents } from '../agent/builtinAgents';
 import { pickForRole, scoreForRole } from '../providers/registry';
@@ -184,6 +185,86 @@ suite('Skill installation', () => {
     assert.deepStrictEqual(local.map((i) => [i.name, i.files]), [['pdf', 2]]);
     await assert.rejects(discoverSkills({ kind: 'local', path: path.join(tmp, 'missing') }), /does not exist/);
     await assert.rejects(discoverSkills(parseSkillSource('acme/skills/nothing-here')!, { fetchImpl }), /No SKILL\.md found/);
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+});
+
+suite('Skill catalog', () => {
+  const CATALOG: CatalogEntry[] = [
+    { name: 'writing-plans', description: 'Write a step-by-step implementation plan before coding. Use for "write a plan", "plan this", "planning".', repo: 'acme/superskills/skills', dir: 'skills/writing-plans' },
+    { name: 'systematic-debugging', description: 'Find the root cause of a bug with hypotheses, instrumentation and bisection before fixing. Use for "debug", "root cause".', repo: 'acme/superskills/skills', dir: 'skills/systematic-debugging' },
+    { name: 'pdf', description: 'Read, fill and merge PDF files with scripts. Use for "pdf", "fill a form".', repo: 'acme/skills/skills', dir: 'skills/pdf' },
+    { name: 'brand-guidelines', description: 'Apply the company colour palette and typography to generated artifacts.', repo: 'acme/skills/skills', dir: 'skills/brand-guidelines' },
+    { name: 'playwright-automation-fill-in-form', description: 'Automate filling in web forms and clicking through pages with Playwright.', repo: 'acme/more/skills', dir: 'skills/playwright-automation-fill-in-form' },
+    { name: 'add-educational-comments', description: 'Add explanatory comments to code for learners.', repo: 'acme/more/skills', dir: 'skills/add-educational-comments' },
+  ];
+  const catalog = () => new SkillCatalog({ cacheFile: path.join(os.tmpdir(), `lp-catalog-${Math.random().toString(36).slice(2)}.json`), repositories: () => ['acme/superskills/skills', 'acme/skills/skills', 'acme/more/skills'] });
+
+  test('picks a catalog skill only when it beats what is installed and clears the threshold', () => {
+    const c = catalog();
+    assert.strictEqual(c.pick('write a plan for migrating auth to OAuth', SKILLS, CATALOG)?.name, 'writing-plans');
+    assert.strictEqual(c.pick('fill this pdf form with the invoice data', SKILLS, CATALOG)?.name, 'pdf', 'exact name beats a partial match of a long name');
+    assert.strictEqual(c.pick('deploy this to production with docker', SKILLS, CATALOG), undefined, 'installed deploy skill wins');
+    assert.strictEqual(c.pick('hello', SKILLS, CATALOG), undefined);
+    assert.strictEqual(c.pick('rename getUser to fetchUser in src/api.ts', SKILLS, CATALOG), undefined, 'no evidence → nothing to install');
+    assert.strictEqual(c.pick('add a logout button to the header', SKILLS, CATALOG), undefined, 'one generic word of a long name is not a match');
+    assert.strictEqual(c.pick('use playwright to fill in the login form', SKILLS, CATALOG)?.name, 'playwright-automation-fill-in-form');
+    const weak = c.pick('apply some colour to the page', SKILLS, CATALOG);
+    assert.ok(!weak || weak.score >= AUTO_INSTALL_MIN_SCORE, `weak description-only hits stay below the bar: ${JSON.stringify(weak)}`);
+    // Already installed under the same name: never re-offered.
+    assert.strictEqual(c.pick('write a plan for the migration', [...SKILLS, { name: 'writing-plans', description: 'local copy' }], CATALOG), undefined);
+    assert.deepStrictEqual(sourceFor(CATALOG[0]), { kind: 'github', owner: 'acme', repo: 'superskills', ref: undefined, path: 'skills/writing-plans' });
+  });
+
+  test('indexes repositories through the trees API, caches the index, installs the match and respects removals', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-catalog-'));
+    const cacheFile = path.join(tmp, 'catalog.json');
+    const dest = path.join(tmp, 'skills');
+    const bodies: Record<string, string> = {
+      'skills/writing-plans/SKILL.md': '---\nname: writing-plans\ndescription: Write a step-by-step implementation plan before coding. Use for "write a plan", "planning".\n---\n# Plans',
+      'skills/writing-plans/template.md': '# Plan template',
+      'skills/systematic-debugging/SKILL.md': '---\nname: systematic-debugging\ndescription: Find the root cause of a bug before fixing. Use for "debug", "root cause".\n---\n# Debug',
+    };
+    const tree = Object.keys(bodies).map((p) => ({ path: p, type: 'blob', size: 50 }));
+    let apiCalls = 0;
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      const ok = (body: string, json = false) => new Response(body, { status: 200, headers: { 'content-type': json ? 'application/json' : 'text/plain' } });
+      if (url === 'https://api.github.com/repos/acme/superskills') { apiCalls++; return ok(JSON.stringify({ default_branch: 'main' }), true); }
+      if (url === 'https://api.github.com/repos/acme/superskills/git/trees/main?recursive=1') { apiCalls++; return ok(JSON.stringify({ tree }), true); }
+      const m = /^https:\/\/raw\.githubusercontent\.com\/acme\/superskills\/main\/(.+)$/.exec(url);
+      if (m && bodies[m[1]]) { return ok(bodies[m[1]]); }
+      return new Response('nope', { status: 404 });
+    }) as typeof fetch;
+    const repos = () => ['acme/superskills/skills', 'acme/missing'];
+    const c = new SkillCatalog({ cacheFile, repositories: repos, fetchImpl, ttlMs: 60_000 });
+    assert.strictEqual(await c.ready(), false);
+    const entries = await c.refresh();
+    assert.deepStrictEqual(entries.map((e) => [e.name, e.repo, e.dir]), [['systematic-debugging', 'acme/superskills/skills', 'skills/systematic-debugging'], ['writing-plans', 'acme/superskills/skills', 'skills/writing-plans']]);
+    const status = await c.status();
+    assert.ok(status.find((s) => s.repo === 'acme/missing')?.error, 'a broken repository is reported, not fatal');
+    assert.strictEqual(status.find((s) => s.repo === 'acme/superskills/skills')?.skills, 2);
+
+    // A second instance reads the cache instead of GitHub.
+    const before = apiCalls;
+    const c2 = new SkillCatalog({ cacheFile, repositories: repos, fetchImpl, ttlMs: 60_000 });
+    assert.strictEqual((await c2.entries()).length, 2);
+    assert.strictEqual(apiCalls, before, 'fresh cache → no API calls');
+
+    const match = await c2.match('write a plan for splitting the monolith', SKILLS);
+    assert.strictEqual(match?.name, 'writing-plans');
+    const installed = await c2.install(match!, dest, { timeoutMs: 5_000, auto: true });
+    assert.deepStrictEqual([installed?.name, installed?.files], ['writing-plans', 2]);
+    assert.strictEqual(await fs.readFile(path.join(dest, 'writing-plans', 'template.md'), 'utf8'), '# Plan template');
+    // Installed now → not matched again; removed by the user afterwards → not re-installed either.
+    const local = [...SKILLS, { name: 'writing-plans', description: 'Write a step-by-step implementation plan. Use for "write a plan".' }];
+    assert.strictEqual(await c2.match('write a plan for splitting the monolith', local), undefined);
+    const c3 = new SkillCatalog({ cacheFile, repositories: repos, fetchImpl, ttlMs: 60_000 });
+    assert.strictEqual(await c3.match('write a plan for splitting the monolith', SKILLS), undefined, 'auto-installed then deleted → left alone');
+    assert.strictEqual((await c3.match('debug why the login page crashes, find the root cause', SKILLS))?.name, 'systematic-debugging');
+    await c3.dismiss('systematic-debugging');
+    assert.strictEqual(await c3.match('debug why the login page crashes, find the root cause', SKILLS), undefined, 'dismissed skills are not offered');
+    assert.deepStrictEqual((await c3.search('debugging a crash')).map((h) => h.name), ['systematic-debugging']);
     await fs.rm(tmp, { recursive: true, force: true });
   });
 });

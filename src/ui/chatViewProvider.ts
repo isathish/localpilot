@@ -43,6 +43,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly panelViewType = 'localpilot.chatPanel';
   private view?: vscode.WebviewView;
   private panels = new Set<vscode.WebviewPanel>();
+  /** Webviews that dismissed their boot screen (rendered a session); a host missing here is still loading. */
+  private readonly booted = new WeakSet<vscode.Webview>();
 
   constructor(private readonly ctx: vscode.ExtensionContext, private readonly controller: ChatController) {
     controller.onDidChangeActive((s) => {
@@ -66,9 +68,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  /** Which view currently hosts the chat and whether it is on screen (for the API / tests). */
-  get host(): { viewId: string; visible: boolean } | undefined {
-    return this.view ? { viewId: this.view.viewType, visible: this.view.visible } : undefined;
+  /** Which view currently hosts the chat, whether it is on screen and whether its UI has booted (for the API / tests). */
+  get host(): { viewId: string; visible: boolean; ready: boolean } | undefined {
+    return this.view ? { viewId: this.view.viewType, visible: this.view.visible, ready: this.booted.has(this.view.webview) } : undefined;
   }
 
   /** Shows the chat as an editor tab; reuses the open tab instead of stacking duplicates. */
@@ -142,6 +144,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sink = { post: (m: ToWebview) => void webview.postMessage(m), visible: () => host.visible !== false };
     const attach = this.controller.attach(sink);
     const sub = webview.onDidReceiveMessage((m: FromWebview) => {
+      if (m.type === 'booted') {
+        this.booted.add(webview);
+        return;
+      }
+      if (m.type === 'ready') {
+        // A re-parented or reloaded webview starts over on its boot screen.
+        this.booted.delete(webview);
+      }
       if (m.type === 'attachActive' || m.type === 'pickAttachment') {
         return void this.handleAttachment(m, sink);
       }

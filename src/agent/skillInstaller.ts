@@ -44,6 +44,8 @@ export interface InstallOptions {
   fetchImpl?: typeof fetch;
   /** Reported as files land. */
   progress?: (text: string) => void;
+  /** Cap on the skills listed from a collection (default 60; the catalog raises it). */
+  maxSkills?: number;
 }
 
 const MAX_FILES_PER_SKILL = 200;
@@ -124,7 +126,7 @@ async function githubTree(src: Extract<SkillSource, { kind: 'github' }>, fetchIm
 }
 
 /** Finds the skill folders (dirs holding a SKILL.md) under `base` in a flat file list; pure so it can be unit-tested. */
-export function findSkillDirs(paths: readonly string[], base = ''): string[] {
+export function findSkillDirs(paths: readonly string[], base = '', maxSkills = MAX_SKILLS): string[] {
   const prefix = base ? `${base.replace(/\/+$/, '')}/` : '';
   const dirs = new Set<string>();
   for (const p of paths) {
@@ -137,18 +139,19 @@ export function findSkillDirs(paths: readonly string[], base = ''): string[] {
     }
   }
   // Exact folder first, then by depth so a collection lists its skills in a stable order.
-  return [...dirs].sort((a, b) => (a === base ? -1 : b === base ? 1 : a.split('/').length - b.split('/').length || a.localeCompare(b))).slice(0, MAX_SKILLS);
+  return [...dirs].sort((a, b) => (a === base ? -1 : b === base ? 1 : a.split('/').length - b.split('/').length || a.localeCompare(b))).slice(0, maxSkills);
 }
 
 /** Lists the skills a source offers without installing anything. */
-export async function discoverSkills(src: SkillSource, opts: Pick<InstallOptions, 'signal' | 'fetchImpl'> = {}): Promise<RemoteSkill[]> {
+export async function discoverSkills(src: SkillSource, opts: Pick<InstallOptions, 'signal' | 'fetchImpl' | 'maxSkills'> = {}): Promise<RemoteSkill[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   if (src.kind === 'github') {
     const { ref, tree } = await githubTree(src, fetchImpl, opts.signal);
     const blobs = tree.filter((t) => t.type === 'blob');
     const dirs = findSkillDirs(
       blobs.map((b) => b.path),
-      src.path
+      src.path,
+      opts.maxSkills
     );
     if (!dirs.length) {
       throw new Error(`No SKILL.md found in ${describeSource(src)} (branch ${ref}). Point at the skill folder, e.g. owner/repo/skills/<name>.`);
@@ -161,11 +164,13 @@ export async function discoverSkills(src: SkillSource, opts: Pick<InstallOptions
       const { meta } = parseFrontMatter(raw);
       return { dir, name: safeName(String(meta.name || path.posix.basename(dir) || src.repo)), description: String(meta.description ?? ''), files } as RemoteSkill;
     });
+    const ok = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
     const failed = settled.find((r) => r.status === 'rejected');
-    if (failed && failed.status === 'rejected') {
+    // A single skill must load; in a collection one unreadable SKILL.md should not hide the rest.
+    if (failed && failed.status === 'rejected' && !ok.length) {
       throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
     }
-    return settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    return ok;
   }
   if (src.kind === 'url') {
     const raw = await fetchText(src.url, fetchImpl, opts.signal);

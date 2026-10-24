@@ -11,7 +11,9 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
-import { recommendSkills, SkillLearner, skillHint } from './skillRecommender';
+import { recommendSkills, SkillLearner, skillHint, SkillMatch } from './skillRecommender';
+import { SkillCatalog } from './skillCatalog';
+import { skillsDestination } from './skillInstaller';
 import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
 import { MemoryStore } from './memory';
@@ -72,7 +74,9 @@ export class AgentRunner {
     private readonly log: vscode.LogOutputChannel,
     private readonly tracker?: ChangeTracker,
     private readonly memory?: MemoryStore,
-    private readonly learner?: SkillLearner
+    private readonly learner?: SkillLearner,
+    /** Skills that can be installed from configured repositories when a request matches one. */
+    readonly catalog?: SkillCatalog
   ) {}
 
   async run(o: AgentRunOptions): Promise<string> {
@@ -154,17 +158,43 @@ export class AgentRunner {
     }
 
     // Skill recommendation: nudge the model towards a matching playbook and tell the UI; the learner also
-    // notices recurring request types that no skill covers and proposes creating one.
-    if (depth === 0 && !o.roleOverride && this.skills.allSkills.length) {
+    // notices recurring request types that no skill covers and proposes creating one. When the best match is a
+    // skill from the catalog that is not installed yet, install it now (or offer it) so the model can load it.
+    if (depth === 0 && !o.roleOverride && (this.skills.allSkills.length || this.catalog)) {
       try {
-        const suggestions = this.learner ? await this.learner.observeRequest(o.userMessage.content, this.skills.allSkills) : { skills: recommendSkills(o.userMessage.content, this.skills.allSkills) };
+        const request = o.userMessage.content;
+        const forced = /^\/skill\b|^Use the "/.test(userText(request));
+        const suggestions = this.learner ? await this.learner.observeRequest(request, this.skills.allSkills) : { skills: recommendSkills(request, this.skills.allSkills) };
         const loaded = new Set(session.messages.filter((m) => m.role === 'tool' && m.toolName === 'load_skill').map((m) => /<skill name="([^"]+)"/.exec(m.content)?.[1]));
-        const fresh = suggestions.skills.filter((s) => !loaded.has(s.name));
-        if (fresh.length && !/^\/skill\b|^Use the "/.test(userText(o.userMessage.content))) {
-          session.messages.push({ role: 'user', content: skillHint(fresh), meta: { timestamp: Date.now(), hidden: true } });
+        let fresh: SkillMatch[] = suggestions.skills.filter((s) => !loaded.has(s.name));
+        let installed: { name: string; repo: string; dir: string } | undefined;
+        let available: { name: string; description: string; repo: string } | undefined;
+        if (this.catalog && cfg.skillAutoInstall !== 'off' && !forced) {
+          const remote = await this.catalog.match(request, this.skills.allSkills);
+          if (remote && cfg.skillAutoInstall === 'ask') {
+            available = { name: remote.name, description: remote.description, repo: remote.repo };
+          } else if (remote) {
+            status(`Installing skill "${remote.name}" from ${remote.repo}…`);
+            try {
+              const one = await this.catalog.install(remote, skillsDestination(cfg.skillAutoInstallScope, this.workspace.root), { signal: o.signal, timeoutMs: 20_000, progress: (t) => status(t), auto: true });
+              await this.skills.refresh();
+              if (one && this.skills.getSkill(one.name)) {
+                installed = { name: one.name, repo: remote.repo, dir: one.dir };
+                fresh = [{ name: one.name, description: remote.description, score: remote.score }, ...fresh.filter((f) => f.name !== one.name)];
+                this.log.info(`skill catalog: installed "${one.name}" from ${remote.repo} into ${one.dir}`);
+              }
+            } catch (e) {
+              this.log.warn(`skill catalog: could not install "${remote.name}" from ${remote.repo}: ${String(e)}`);
+              status(`Could not install skill "${remote.name}" — continuing without it`);
+            }
+          }
         }
-        if (fresh.length || suggestions.create) {
-          emit({ sessionId: session.id, type: 'skill_suggestions', payload: { skills: fresh, create: suggestions.create } });
+        if (fresh.length && !forced) {
+          const note = installed ? `The skill "${installed.name}" was just installed from ${installed.repo} because it matches this request. ` : '';
+          session.messages.push({ role: 'user', content: note + skillHint(fresh), meta: { timestamp: Date.now(), hidden: true } });
+        }
+        if (fresh.length || suggestions.create || available) {
+          emit({ sessionId: session.id, type: 'skill_suggestions', payload: { skills: fresh, create: suggestions.create, installed, available } });
         }
       } catch (e) {
         this.log.warn(`skill recommendation failed: ${String(e)}`);

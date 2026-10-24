@@ -248,7 +248,10 @@ export interface AgentEvent {
     | 'retry'
     /** The request looked ambiguous; the agent was given a workspace snapshot to resolve it. Payload: { reasons }. */
     | 'clarify'
-    /** Skills matching the request and/or a recurring request type worth turning into a skill. */
+    /**
+     * Skills matching the request and/or a recurring request type worth turning into a skill.
+     * Payload: { skills, create?, installed? (a catalog skill installed for this request), available? (one on offer) }.
+     */
     | 'skill_suggestions'
     | 'subagent_start'
     | 'subagent_end'

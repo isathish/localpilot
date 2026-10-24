@@ -85,7 +85,7 @@ function inverseDocumentFrequency(skills: SkillLike[]): Map<string, number> {
 }
 
 /** True when `phrase` occurs in `text` as whole words (so "ship" does not match "relationship"). */
-function containsPhrase(text: string, phrase: string): boolean {
+export function containsPhrase(text: string, phrase: string): boolean {
   const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
   return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, 'i').test(text);
 }
