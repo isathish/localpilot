@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode'; // → src/cli/vscodeShim.ts (aliased by the CLI build)
 import { AgentRunner } from '../agent/agentLoop';
+import { RunControl } from '../agent/runControl';
 import { ChangeTracker } from '../agent/changeTracker';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
@@ -85,7 +86,8 @@ ${bold('Options')}
 
 ${bold('In a session')}
   /mode agent|ask|plan   /model <name>   /models   /undo   /keep   /changes   /clear   /help   /exit
-  Ctrl+C stops the current run; press it again to quit.
+  Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
+  anything you type while a run is going is handed to the agent at its next step.
 
 ${bold('Settings')} read from ${dim(USER_SETTINGS_PATH)}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
 Log: ${dim(LOG_FILE)}`;
@@ -484,7 +486,7 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
   return a === 'y' || a === 'yes';
 }
 
-async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, signal: AbortSignal): Promise<string> {
+async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl): Promise<string> {
   let content = text;
   const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f)));
   if (blocks.some(Boolean)) {
@@ -493,10 +495,24 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   const userMessage: ChatMessage = { role: 'user', content };
   core.tracker.beginTurn(session.id, session.messages.length);
   let final = '';
+  // Pause / resume feedback, for the main run and for subagents the user paused or stopped individually.
+  const offControl = control.onDidChange((c) => {
+    const who = c === control ? '' : `${c.label ?? 'subagent'}: `;
+    if (c.aborted && c !== control) {
+      r.note(`■ ${who}stopped`);
+    } else if (c.holding) {
+      r.note(`⏸ ${who}paused${c === control ? ' — type to add instructions, Ctrl+Z to resume, Ctrl+C to stop' : ''}`);
+    } else if (c.paused) {
+      r.note(`⏸ ${who}pausing after the current step…`);
+    } else if (c.pendingSteering === 0 && !c.aborted) {
+      r.note(`▶ ${who}resumed`);
+    }
+  });
   const result = await core.runner.run({
     session,
     userMessage,
-    signal,
+    signal: control.signal,
+    control,
     emit: (e) => {
       const p = e.payload as Record<string, unknown>;
       switch (e.type) {
@@ -518,13 +534,14 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         }
         case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
         case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.prompt).slice(0, 80)}`); break;
+        case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
         case 'error': r.error(String(e.payload)); break;
         case 'turn_end': final = String(p.text ?? ''); break;
       }
     },
     requestApproval: (title, detail, kind) => approval(title, detail, kind, rl),
-  });
+  }).finally(offControl);
   r.end();
   return final || result;
 }
@@ -733,9 +750,11 @@ async function main(): Promise<void> {
     if (!quiet) {
       process.stdout.write(`${BRAND} ${dim(`${modelInfo.id} · ${args.mode} · ${cwdLabel}`)}\n\n`);
     }
-    const ctl = new AbortController();
-    process.once('SIGINT', () => ctl.abort(new Error('cancelled')));
-    const answer = await runTurn(core, session, args.prompt, args.files, renderer, undefined, ctl.signal);
+    const ctl = new RunControl(session.id);
+    process.once('SIGINT', () => ctl.stop());
+    // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
+    process.on('SIGTSTP', () => ctl.togglePause());
+    const answer = await runTurn(core, session, args.prompt, args.files, renderer, undefined, ctl);
     if (quiet) {
       process.stdout.write(answer.trimEnd() + '\n');
     } else {
@@ -756,24 +775,30 @@ async function main(): Promise<void> {
       process.stdin.on('data', (d) => (s += d));
       process.stdin.on('end', () => resolve(s));
     });
-    const answer = await runTurn(core, session, input.trim(), args.files, renderer, undefined, new AbortController().signal);
+    const answer = await runTurn(core, session, input.trim(), args.files, renderer, undefined, new RunControl(session.id));
     process.stdout.write(answer.trimEnd() + '\n');
     core.mcp?.dispose();
     return;
   }
 
-  process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Ctrl+C to stop a run, /exit to quit.')}\n\n`);
+  process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Ctrl+C to stop a run, Ctrl+Z to pause it, /exit to quit.')}\n\n`);
   rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: `${amber('◆')} `, historySize: 200 });
   setReadline(rl);
-  let current: AbortController | undefined;
+  let current: RunControl | undefined;
   let pendingFiles = [...args.files];
   rl.on('SIGINT', () => {
     if (current) {
-      current.abort(new Error('cancelled'));
+      current.stop();
       process.stdout.write(`\n${dim('stopped')}\n`);
     } else {
       process.stdout.write('\n');
       rl!.close();
+    }
+  });
+  // Ctrl+Z: hold the run after its current step (again to resume) instead of suspending the process.
+  rl.on('SIGTSTP', () => {
+    if (current) {
+      current.togglePause();
     }
   });
   rl.on('close', () => {
@@ -811,14 +836,24 @@ async function main(): Promise<void> {
   };
 
   rl.prompt();
+  const PROMPT = `${amber('◆')} `;
   rl.on('line', async (raw) => {
     const line = raw.trim();
+    if (current) {
+      // Typed while the agent works: queue it for the next step rather than refusing or waiting.
+      if (line) {
+        current.steer({ role: 'user', content: line });
+        renderer.note(`↩ queued for the agent: ${line.slice(0, 80)}${current.paused ? ' (Ctrl+Z to resume)' : ''}`);
+      }
+      return;
+    }
     if (!line) { rl!.prompt(); return; }
     if (line.startsWith('/')) { await slash(line); rl!.prompt(); return; }
-    rl!.pause();
-    current = new AbortController();
+    // The input stays live during the run so Ctrl+C / Ctrl+Z / steering lines keep working; only the prompt goes away.
+    rl!.setPrompt('');
+    current = new RunControl(session.id);
     try {
-      await runTurn(core, session, line, pendingFiles, renderer, rl, current.signal);
+      await runTurn(core, session, line, pendingFiles, renderer, rl, current);
       pendingFiles = [];
       changesSummary(core, session);
     } catch (e) {
@@ -826,7 +861,7 @@ async function main(): Promise<void> {
     } finally {
       current = undefined;
       process.stdout.write('\n');
-      rl!.resume();
+      rl!.setPrompt(PROMPT);
       rl!.prompt();
     }
   });

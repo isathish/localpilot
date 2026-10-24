@@ -7,6 +7,8 @@ type Node =
   | { kind: 'group'; id: 'running' | 'recent'; label: string }
   | { kind: 'session'; session: SessionSummary; running: boolean }
   | { kind: 'status'; sessionId: string; text: string }
+  /** A running subagent of a session, with its own pause/stop controls. */
+  | { kind: 'child'; sessionId: string; childId: string; label: string; paused: boolean }
   | { kind: 'file'; sessionId: string; fsPath: string; create: boolean }
   | { kind: 'empty'; label: string };
 
@@ -45,8 +47,9 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
         const model = (s.model || '').split('/').pop();
         item.description = n.running ? `${this.controller.runStatus.get(s.id) ?? 'Working…'}${model ? ` · ${model}` : ''}` : `${s.mode} · ${s.messageCount} msgs${files ? ` · ${files} file${files === 1 ? '' : 's'} changed` : ''}`;
         item.tooltip = `${s.title}\n${s.model || 'default model'} · ${new Date(s.updatedAt).toLocaleString()}`;
-        item.iconPath = new vscode.ThemeIcon(n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'localpilot-logo' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
-        item.contextValue = n.running ? 'session-running' : files ? 'session-changed' : 'session';
+        const paused = n.running && this.controller.isPaused(s.id);
+        item.iconPath = new vscode.ThemeIcon(paused ? 'debug-pause' : n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'localpilot-logo' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
+        item.contextValue = paused ? 'session-paused' : n.running ? 'session-running' : files ? 'session-changed' : 'session';
         item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [s.id] };
         if (this.controller.activeSession?.id === s.id) {
           item.resourceUri = vscode.Uri.parse(`localpilot-active:${s.id}`);
@@ -55,8 +58,17 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       }
       case 'status': {
         const item = new vscode.TreeItem(n.text, vscode.TreeItemCollapsibleState.None);
-        item.iconPath = new vscode.ThemeIcon('pulse');
+        item.iconPath = new vscode.ThemeIcon(n.text.startsWith('Paus') ? 'debug-pause' : 'pulse');
         item.contextValue = 'status';
+        return item;
+      }
+      case 'child': {
+        const item = new vscode.TreeItem(n.label, vscode.TreeItemCollapsibleState.None);
+        item.id = `${n.sessionId}/${n.childId}`;
+        item.description = n.paused ? 'paused' : 'subagent';
+        item.iconPath = new vscode.ThemeIcon(n.paused ? 'debug-pause' : 'loading~spin');
+        item.contextValue = n.paused ? 'child-paused' : 'child-running';
+        item.tooltip = `Subagent ${n.label}\nPause or stop it without affecting the main agent`;
         return item;
       }
       case 'file': {
@@ -99,6 +111,9 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       const out: Node[] = [];
       if (n.running) {
         out.push({ kind: 'status', sessionId: n.session.id, text: this.controller.runStatus.get(n.session.id) ?? 'Working…' });
+        for (const c of this.controller.childControls(n.session.id)) {
+          out.push({ kind: 'child', sessionId: n.session.id, childId: c.id, label: c.label ?? 'subagent', paused: c.pausedBySelf });
+        }
       }
       for (const c of this.controller.tracker.forSession(n.session.id)) {
         out.push({ kind: 'file', sessionId: n.session.id, fsPath: c.fsPath, create: c.original === undefined });

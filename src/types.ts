@@ -33,6 +33,10 @@ export interface ChatMessage {
     hidden?: boolean;
     /** User-role carrier for images produced by tools (browser_screenshot); lists the originating tool call ids. */
     toolImages?: string[];
+    /** A user message typed while the agent was running/paused and injected at a step boundary. */
+    steer?: boolean;
+    /** Correlates a steering message with the "queued" bubble the UI showed before it was injected. */
+    steerId?: string;
   };
 }
 
@@ -149,6 +153,8 @@ export interface ToolContext {
   modelRef?: string;
   /** True in Plan/Ask mode: subagents spawned from here must not mutate the workspace either. */
   readOnly?: boolean;
+  /** Pause/stop/steer handle of the run executing this tool; subagents register their own control under it. */
+  control?: import('./agent/runControl').RunControl;
 }
 
 export interface ToolResult {
@@ -255,6 +261,8 @@ export interface AgentEvent {
     | 'skill_suggestions'
     | 'subagent_start'
     | 'subagent_end'
+    /** Queued steering messages were appended to the conversation. Payload: { ids: string[], count }. */
+    | 'steer'
     | 'todos'
     | 'turn_end';
   payload?: unknown;

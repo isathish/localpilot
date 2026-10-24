@@ -239,6 +239,54 @@
         "icon": "$(stop-circle)"
       },
       {
+        "command": "localpilot.pauseSession",
+        "title": "Pause Agent",
+        "category": "LocalPilot",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "localpilot.resumeSession",
+        "title": "Resume Agent",
+        "category": "LocalPilot",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "localpilot.togglePause",
+        "title": "Pause or Resume Agent",
+        "category": "LocalPilot",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "localpilot.pauseAll",
+        "title": "Pause All Agents",
+        "category": "LocalPilot",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "localpilot.resumeAll",
+        "title": "Resume All Agents",
+        "category": "LocalPilot",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "localpilot.pauseChild",
+        "title": "Pause Subagent",
+        "category": "LocalPilot",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "localpilot.resumeChild",
+        "title": "Resume Subagent",
+        "category": "LocalPilot",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "localpilot.stopChild",
+        "title": "Stop Subagent",
+        "category": "LocalPilot",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "localpilot.showDiff",
         "title": "Show Diff",
         "category": "LocalPilot",
@@ -606,9 +654,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "localpilot.stopAll",
+          "command": "localpilot.pauseAll",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.stopAll",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "navigation@4"
         },
         {
           "command": "localpilot.keepAllChanges",
@@ -643,9 +696,34 @@
       ],
       "view/item/context": [
         {
-          "command": "localpilot.stopSession",
+          "command": "localpilot.pauseSession",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-running",
           "group": "inline@1"
+        },
+        {
+          "command": "localpilot.resumeSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-paused",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.stopSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(running|paused)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "localpilot.pauseChild",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == child-running",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.resumeChild",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == child-paused",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.stopChild",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^child-(running|paused)$/",
+          "group": "inline@2"
         },
         {
           "command": "localpilot.keepChanges",
@@ -700,6 +778,26 @@
         },
         {
           "command": "localpilot.stopSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.pauseSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.resumeSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.pauseChild",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.resumeChild",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.stopChild",
           "when": "false"
         },
         {

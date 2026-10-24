@@ -22,8 +22,8 @@ The bar at the top of the chat is a browser-style tab strip — **one tab per ag
 | Pin | Pinned: always first, never closed by "Close other tabs" or retention |
 
 - **✕** closes a tab (the chat stays in **All chats**); middle-click or <kbd>Delete</kbd> on a focused tab does the same. Closing the active tab moves to the neighbour.
-- **Double-click** (or <kbd>F2</kbd>) renames inline. **Right-click** for Rename · Pin · Fork · Export · Stop / Clear messages · Close · Delete.
-- Agents working in *other* tabs appear in a strip under the tab bar with their current step; click to switch, ■ to stop.
+- **Double-click** (or <kbd>F2</kbd>) renames inline. **Right-click** for Rename · Pin · Fork · Export · Pause / Resume · Stop / Clear messages · Close · Delete.
+- Agents working in *other* tabs appear in a strip under the tab bar with their current step; click to switch, ⏸ to pause / resume, ■ to stop.
 - Keyboard: <kbd>Alt↑</kbd>/<kbd>Alt↓</kbd> cycle tabs, <kbd>Alt1…9</kbd> jump, <kbd>←</kbd>/<kbd>→</kbd> move between focused tabs.
 - **Several at once:** ⌘/Ctrl-click or Shift-click to select tabs, then ✕ / <kbd>Delete</kbd> / right-click → *Close N selected*, *Stop and close all* or *Delete selected chats*. Right-click any tab for *Close other tabs*, *Close tabs to the right*, *Close finished tabs*, *Stop and close* and *Stop all agents*.
 - **Isolation:** every tab keeps its own draft, attachments, scroll position and status line; every agent has its own context window, abort switch, tool cache and model. The model is shown in the tab tooltip and the background strip. Two chats using the same local model are served one at a time by the server — the waiting chat shows *Waiting for <model> — busy with N other chats…* instead of a silent stall.
@@ -33,7 +33,17 @@ The bar at the top of the chat is a browser-style tab strip — **one tab per ag
 
 Press the clock icon → **Run tasks in parallel…**, type one task per line and hit **Run N agents** (<kbd>⌘Enter</kbd>). Each task becomes its own agent in its own tab, all streaming at once. The same launcher is available as **Command Palette → LocalPilot: Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) with tasks separated by ` | `, and from the CLI with `localpilot --ide --parallel "a | b | c"`.
 
-While an agent is busy you can still type: <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl⇧Enter</kbd>) **sends the draft in a new tab**, and pressing <kbd>Enter</kbd> offers the same choice instead of blocking.
+While an agent is busy you can still type: <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl⇧Enter</kbd>) **sends the draft in a new tab**, and pressing <kbd>Enter</kbd> offers *Add to this agent* (queued and read at its next step), *Send in a new tab* or *Stop this agent first* instead of blocking.
+
+## Pause, steer and stop
+
+Every running agent has two buttons next to the composer: **Pause** (<kbd>⌥Esc</kbd>) and **Stop** (<kbd>Esc</kbd>).
+
+- **Pause** is cooperative: the agent finishes the step it is in — the current model call or tool batch — then holds before the next one. The status line shows *Pausing after this step…* and then *Paused*; the tab shows a ⏸ glyph and the progress bar freezes. Press the button again (now **Resume**) to continue exactly where it left off.
+- **While paused, type.** Anything you send is queued inline in the transcript (a *queued* row) and appended to the conversation when the agent resumes, so you can correct course — "use the existing helper instead", "skip the README" — without losing the work done so far. The same works while the agent is running: pick *Add to this agent* and the message is taken into account at the next step.
+- **Stop** cancels the run; files already changed stay in the **changes** panel to keep or undo.
+- **Subagents.** Pausing or stopping the main agent pauses or stops every subagent it spawned. Each lane of a parallel fan-out also has its own ⏸ / ■ on the right of its pill: pausing holds just that subagent; stopping ends it and the main agent carries on, receiving a *stopped by the user* report for that task instead of a failure.
+- The same controls live in the tab's right-click menu, the background-agents strip, the **Agents** panel (running sessions and their subagents have inline Pause / Resume / Stop) and the Command Palette (*LocalPilot: Pause Agent*, *Resume Agent*, *Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents*, *Stop Agent*, *Stop All Agents*).
 
 ## The Agents panel
 

@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const els = {
-    messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), status: $('status'), statusText: $('statusText'),
+    messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
     modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), ctx: $('ctxMeter'),
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
@@ -39,6 +39,9 @@
     globe: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5a8 8 0 0 1 0 11M8 2.5a8 8 0 0 0 0 11"/></svg>',
     agent: '<svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="2"/><circle cx="6.5" cy="8" r="1" fill="currentColor"/><circle cx="9.5" cy="8" r="1" fill="currentColor"/><path d="M8 4V2"/></svg>',
     stop: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none"/></svg>',
+    pause: '<svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg>',
+    play: '<svg viewBox="0 0 16 16"><path d="M5 3.5l7 4.5-7 4.5z" fill="currentColor" stroke="none"/></svg>',
+    reply: '<svg viewBox="0 0 16 16"><path d="M6.5 4.5L3 8l3.5 3.5M3 8h6a4 4 0 0 1 4 4v.5"/></svg>',
     pin: '<svg viewBox="0 0 16 16"><path d="M9.5 2.5l4 4-2 1-2 2.5V13L8 11.5 4.5 15 1 11.5 4.5 8h3l2.5-2 1-2z"/></svg>',
     fork: '<svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5.5v1A2.5 2.5 0 0 0 6.5 9h3A2.5 2.5 0 0 0 12 6.5v-1M8 9v2"/></svg>',
     trash: '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>',
@@ -83,6 +86,8 @@
     selected: new Set(), drafts: new Map(), scroll: new Map(), modelOf: new Map(), dismissed: new Set(),
     // Sends the host has not acknowledged with `running` yet (sessionId → watchdog timer).
     pendingSend: new Map(),
+    /** sid → { paused, holding }: Pause was requested / the loop is actually holding at a step boundary. */
+    paused: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -546,8 +551,29 @@
     const mdl = modelName(model) || (currentModel() ? modelName(currentModel().id) : '');
     d.querySelector(':scope > summary .label').innerHTML = `<span class="pill"><span class="pico">${I.agent}</span><b>${esc(agent || 'subagent')}</b><i>·</i><span class="task" title="${esc(prompt || '')}">${short(prompt, 64)}</span>${mdl ? `<i>·</i><span class="model">${esc(mdl)}</span>` : ''}</span>`;
     const c = d.querySelector(':scope > .content'); c.className = 'content subbody'; c.innerHTML = '<div class="subrows"></div>';
+    // Per-lane controls: pause/resume or stop just this subagent; the parent keeps going with a "stopped" report.
+    const ctl = el('span', 'lanectl', `<button data-c="pause" title="Pause this subagent after its current step">${I.pause}</button><button data-c="stop" title="Stop this subagent">${I.stop}</button>`);
+    ctl.onclick = (e) => {
+      const b = e.target.closest('button'); if (!b) { return; }
+      e.preventDefault(); e.stopPropagation();
+      const sid = state.session && state.session.id; const childId = d.dataset.childId;
+      if (!sid || !childId) { toast('The subagent is still starting — try again in a moment'); return; }
+      if (b.dataset.c === 'stop') { post({ type: 'stopChild', sessionId: sid, childId }); return; }
+      post({ type: d.classList.contains('paused') ? 'resumeChild' : 'pauseChild', sessionId: sid, childId });
+    };
+    d.querySelector(':scope > summary .chev').before(ctl);
     d.open = true;
     return d;
+  }
+  /** Reflects a subagent's pause state on its lane (icon, badge, controls). */
+  function laneSetPaused(sid, childId, paused, holding) {
+    const live = state.live.get(sid); const d = live && live.subs.get(childId);
+    if (!d) { return; }
+    d.classList.toggle('paused', paused);
+    const b = d.querySelector(':scope > summary .lanectl [data-c="pause"]');
+    if (b) { b.innerHTML = paused ? I.play : I.pause; b.title = paused ? (holding ? 'Resume this subagent' : 'Pausing after its current step… click to cancel') : 'Pause this subagent after its current step'; }
+    const ico = d.querySelector(':scope > summary .ico'); if (ico && d.classList.contains('running')) { ico.innerHTML = paused ? I.pause : I.spin; }
+    if (state.session && state.session.id === sid) { noteStatus(sid, paused ? `${d.dataset.agent || 'subagent'} ${holding ? 'paused' : 'pausing'}` : `${d.dataset.agent || 'subagent'} resumed`); setStatus(state.status.get(sid)); }
   }
   /** Called when a child agent reports back: fold its rows into "Finished with N steps" and attach the report. */
   function finishSubagent(d, result, error) {
@@ -562,6 +588,8 @@
     const text = error || result || '';
     if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body">${error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000))}</div>`; body.appendChild(rep); }
     d.querySelector(':scope > summary .meta').textContent = '';
+    const ctl = d.querySelector(':scope > summary .lanectl'); if (ctl) { ctl.remove(); }
+    d.classList.remove('paused');
     delete d.dataset.pending;
   }
   /** Host step for run_parallel_subagents while live: a queued lane per task becomes the child's pill as it starts. */
@@ -681,6 +709,12 @@
     s.messages.forEach((m, i) => {
       if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.hidden))) { return; }
       if (m.meta && m.meta.summary) { const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
+      if (m.role === 'user' && m.meta && m.meta.steer) {
+        const prev = els.messages.lastElementChild;
+        const row = steerRow(m.content, m.images, m.meta.steerId, false);
+        if (prev && prev.classList.contains('assistant')) { prev.appendChild(row); } else { const t = el('div', 'turn assistant'); t.appendChild(row); els.messages.appendChild(t); }
+        return;
+      }
       const node = m.role === 'user' ? userTurn(m, i) : assistantTurn(m, results);
       if (!node) { return; }
       // Consecutive assistant messages (tool calls, then the answer) form one turn, exactly as they streamed live —
@@ -834,6 +868,13 @@
     const sid = e.sessionId; const live = ensureLive(sid); const visible = state.session && state.session.id === sid;
     switch (e.type) {
       case 'assistant_delta': live.text += e.payload; scheduleRender(live); break;
+      case 'steer': {
+        // Queued rows become part of the transcript; what streams next belongs after them.
+        rotateBody(live);
+        for (const id of (e.payload && e.payload.ids) || []) { const row = live.root.querySelector(`.steer[data-steer-id="${CSS.escape(id)}"]`); if (row) { row.classList.remove('queued'); row.querySelector('.badge').textContent = 'added'; live.root.appendChild(row); } }
+        if (live.root.lastElementChild !== live.body) { live.steps = el('div', 'steps'); live.root.appendChild(live.steps); live.body = el('div', 'body'); live.root.appendChild(live.body); }
+        showTyping(live); break;
+      }
       case 'thinking_delta':
         live.thinking += e.payload; clearTyping(live);
         if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = thinkingRow('', 0, true); live.steps.appendChild(live.thinkingEl); }
@@ -948,8 +989,19 @@
 
   // ------------------------------------------------------------------ composer state
   function setStatus(text) { els.statusText.textContent = text || ''; els.status.classList.toggle('hidden', !text); }
-  function setRunning(running) { els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } updateSendEnabled(); updateJump(); }
+  function setRunning(running) { els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
   function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; }
+  /** Pause button, progress bar and placeholder follow the active session's pause state. */
+  function syncPause() {
+    const sid = state.session && state.session.id; const p = (sid && state.paused.get(sid)) || { paused: false, holding: false };
+    els.pause.classList.toggle('on', p.paused);
+    els.pause.innerHTML = p.paused ? I.play : I.pause;
+    els.pause.title = p.paused ? (p.holding ? 'Resume (⌥Esc)' : 'Pausing after the current step… click to cancel') : 'Pause after the current step (⌥Esc)';
+    els.progress.classList.toggle('paused', p.paused);
+    document.body.classList.toggle('paused', !!(sid && state.running.has(sid) && p.paused));
+    syncPlaceholder();
+  }
+  function togglePause() { if (!state.session || !state.running.has(state.session.id)) { return; } const p = state.paused.get(state.session.id); post({ type: p && p.paused ? 'resume' : 'pause', sessionId: state.session.id }); }
   function updateCtx() {
     const s = state.session; if (!s) { return; }
     const model = state.models.find((m) => m.id === s.model) || state.models.find((m) => m.id === state.defaultModel) || state.models[0];
@@ -997,7 +1049,7 @@
   function tabTitle(s) {
     const running = state.running.has(s.id); const st = state.status.get(s.id);
     const lines = [s.title || 'New chat', `${MODES[s.mode] ? MODES[s.mode].label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${tabModel(s)}`];
-    if (running) { lines.push(`Running${st ? ` — ${st}` : '…'}`); }
+    if (running) { lines.push(state.paused.get(s.id) && state.paused.get(s.id).paused ? `Paused${st ? ` — ${st}` : ''}` : `Running${st ? ` — ${st}` : '…'}`); }
     if (state.selected.size > 1 && state.selected.has(s.id)) { lines.push(`${state.selected.size} tabs selected — ✕ or Delete closes them all`); }
     if (state.attention.has(s.id)) { lines.push('Waiting for your approval'); }
     if (state.unread.has(s.id)) { lines.push('Finished — new results'); }
@@ -1007,6 +1059,7 @@
   /** Model this chat talks to: the one it last requested, else its configured model, else the default. */
   function tabModel(s) { return modelName(state.modelOf.get(s.id) || s.model || state.defaultModel) || 'auto'; }
   function tabIndicator(s) {
+    if (state.running.has(s.id) && state.paused.get(s.id) && state.paused.get(s.id).paused) { return `<span class="pausedind" aria-label="Paused">${I.pause}</span>`; }
     if (state.running.has(s.id)) { return '<span class="spin" aria-label="Running"></span>'; }
     if (state.attention.has(s.id)) { return I.warn; }
     if (state.unread.has(s.id)) { return '<span class="dot" aria-label="Finished"></span>'; }
@@ -1018,7 +1071,7 @@
     const { list, active, hidden } = tabList();
     // The store broadcasts on every save while agents stream; only rebuild the DOM when something visible changed.
     if (els.tabs.querySelector('.rename')) { renderTabs.pending = true; return; }
-    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0, state.selected.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
+    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.paused.get(s.id) && state.paused.get(s.id).paused ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0, state.selected.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
     if (sig === tabSig) { for (const tab of els.tabs.querySelectorAll('.tab[data-id]')) { const s = list.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } renderBgRuns(); return; }
     tabSig = sig;
     els.tabs.innerHTML = '';
@@ -1136,6 +1189,7 @@
       { label: 'Fork', desc: 'Branch into a new tab from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) },
       { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
       { hr: true },
+      ...(running ? [(state.paused.get(s.id) && state.paused.get(s.id).paused) ? { label: 'Resume agent', desc: 'Continue from where it paused', icon: I.play, onPick: () => post({ type: 'resume', sessionId: s.id }) } : { label: 'Pause agent', desc: 'Holds after the current step; type to add instructions', icon: I.pause, onPick: () => post({ type: 'pause', sessionId: s.id }) }] : []),
       ...(running ? [{ label: 'Stop agent', desc: state.status.get(s.id) || 'Running', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
       ...(running || s.pinned ? [] : [{ label: 'Close tab', desc: 'Keeps the chat in All chats', icon: I.x, onPick: () => closeTab(s.id) }]),
       ...(running ? [{ label: 'Stop and close', desc: 'Cancels the agent and closes this tab', icon: I.x, onPick: () => closeTabs([s.id], { stop: true }) }] : []),
@@ -1169,15 +1223,16 @@
     const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active);
     els.bgruns.classList.toggle('hidden', !runs.length);
     // Rebuilding identical rows restarts their spinners on every store broadcast; skip when nothing visible changed.
-    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}`).join('|');
+    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}:${state.paused.get(s.id) && state.paused.get(s.id).paused ? 'p' : ''}`).join('|');
     if (sig === bgSig) { return; }
     bgSig = sig;
     els.bgruns.innerHTML = '';
     if (!runs.length) { return; }
     for (const s of runs.slice(0, 3)) {
-      const row = el('div', 'bgrun', `<span class="spin"></span><span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span><button class="stop" title="Stop this agent">${I.stop}</button>`);
+      const paused = state.paused.get(s.id) && state.paused.get(s.id).paused;
+      const row = el('div', `bgrun ${paused ? 'paused' : ''}`, `${paused ? `<span class="pausedind">${I.pause}</span>` : '<span class="spin"></span>'}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent">${I.stop}</button>`);
       row.title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
-      row.onclick = (e) => { if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
+      row.onclick = (e) => { if (e.target.closest('.pausebtn')) { post({ type: paused ? 'resume' : 'pause', sessionId: s.id }); return; } if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
       els.bgruns.appendChild(row);
     }
     if (runs.length > 3) { const more = el('button', 'bgrun more', `<span class="st">+${runs.length - 3} more running</span>`); more.onclick = openHistory; els.bgruns.appendChild(more); }
@@ -1241,7 +1296,12 @@
   els.history.onclick = openHistory;
   // Placeholder adapts to the composer width.
   const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask, plan or build… (@ context)'], [420, 'Plan, build, fix anything… (@ context, / commands)']];
-  new ResizeObserver(() => { const w = els.box.clientWidth; let p = PLACEHOLDERS[0][1]; for (const [min, t] of PLACEHOLDERS) { if (w >= min) { p = t; } } els.input.placeholder = p; }).observe(els.box);
+  function basePlaceholder() { const w = els.box.clientWidth; let p = PLACEHOLDERS[0][1]; for (const [min, t] of PLACEHOLDERS) { if (w >= min) { p = t; } } return p; }
+  new ResizeObserver(() => syncPlaceholder()).observe(els.box);
+  function syncPlaceholder() {
+    const sid = state.session && state.session.id; const p = sid && state.paused.get(sid);
+    els.input.placeholder = p && p.paused ? 'Add instructions — the agent reads them when it resumes…' : sid && state.running.has(sid) ? 'Type to steer this agent (used at its next step), ⌘⇧↵ for a new tab…' : basePlaceholder();
+  }
   let tasksSig = '';
   function renderTasks() {
     const todos = (state.session && state.session.todos) || [];
@@ -1419,10 +1479,36 @@
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled();
     toast('Started in a new tab');
   }
+  /** Queue the composer text for the running agent in this tab; the host echoes it back as a "queued" row. */
+  function steerCurrent() {
+    const text = els.input.value.trim();
+    if ((!text && !state.images.length) || !state.session) { return; }
+    const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
+    const attachments = [...new Set([...state.attachments, ...atRefs])];
+    const images = state.images.map((i) => i.data);
+    post({ type: 'steer', sessionId: state.session.id, text: text || 'Consider the attached image(s).', attachments, images: images.length ? images : undefined });
+    state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
+    state.drafts.delete(state.session.id);
+    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); els.input.focus();
+  }
+  /** A message typed while the agent was busy: a compact row inside the assistant's turn, "queued" until the loop takes it. */
+  function steerRow(content, images, id, queued) {
+    const d = el('div', `steer ${queued ? 'queued' : ''}`);
+    if (id) { d.dataset.steerId = id; }
+    d.innerHTML = `<span class="ico">${I.reply}</span><div class="txt"></div><span class="badge">${queued ? 'queued' : 'added'}</span>`;
+    d.querySelector('.txt').textContent = String(content || '').replace(/\n\n\[\d+ images? attached\]$/, '');
+    if (images && images.length) { const im = el('div', 'imgs', images.map((x) => `<img src="${x.startsWith('data:') ? x : `data:image/png;base64,${x}`}" alt="">`).join('')); d.appendChild(im); }
+    return d;
+  }
   function sendCurrent(fromSuggestion) {
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
-    if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) { openMenu(els.box, [{ label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return; }
+    if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) {
+      const p = state.paused.get(state.session.id);
+      // Paused: the message is plainly meant for this agent. Running: ask, since a new tab is just as likely.
+      if (p && p.paused) { steerCurrent(); return; }
+      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return;
+    }
     const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
@@ -1454,6 +1540,7 @@
     }
     if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
+    if (e.key === 'Escape' && e.altKey && state.session && state.running.has(state.session.id)) { e.preventDefault(); togglePause(); return; }
     if (e.key === 'Escape' && state.session && state.running.has(state.session.id)) { post({ type: 'stop', sessionId: state.session.id }); return; }
     if (e.key === 'ArrowUp' && !els.input.value && state.history.length) { e.preventDefault(); state.histIdx = Math.min(state.histIdx + 1, state.history.length - 1); els.input.value = state.history[state.histIdx]; autoGrow(); updateSendEnabled(); }
     if (e.key === 'ArrowDown' && state.histIdx >= 0 && els.input.value === state.history[state.histIdx]) { e.preventDefault(); state.histIdx--; els.input.value = state.histIdx >= 0 ? state.history[state.histIdx] : ''; autoGrow(); updateSendEnabled(); }
@@ -1461,6 +1548,7 @@
   els.input.addEventListener('paste', (e) => { const items = [...((e.clipboardData && e.clipboardData.items) || [])].filter((it) => /^image\//.test(it.type)); if (items.length) { e.preventDefault(); items.forEach((it) => addImageFile(it.getAsFile())); } });
   els.send.onclick = () => sendCurrent();
   els.stop.onclick = () => state.session && post({ type: 'stop', sessionId: state.session.id });
+  els.pause.onclick = togglePause;
   els.tasksToggle.onclick = () => { els.tasks.classList.toggle('open'); els.tasksList.classList.toggle('hidden'); };
   els.tasks.classList.add('open');
   els.changesToggle.onclick = () => { els.changes.classList.toggle('open'); els.changesList.classList.toggle('hidden'); };
@@ -1517,7 +1605,7 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
@@ -1533,8 +1621,24 @@
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; break;
       case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model(s) found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': handleEvent(m.event); break;
+      case 'paused': {
+        if (m.childId) { laneSetPaused(m.sessionId, m.childId, m.paused, m.holding); break; }
+        state.paused.set(m.sessionId, { paused: m.paused, holding: m.holding });
+        noteStatus(m.sessionId, m.paused ? (m.holding ? 'Paused' : 'Pausing after this step…') : 'Resuming…');
+        if (state.session && state.session.id === m.sessionId) { syncPause(); setStatus(state.status.get(m.sessionId) || ''); }
+        renderTabs();
+        break;
+      }
+      case 'steerQueued': {
+        const live = ensureLive(m.sessionId);
+        live.root.appendChild(steerRow(m.content, m.images, m.id, true));
+        noteStatus(m.sessionId, state.paused.get(m.sessionId) && state.paused.get(m.sessionId).paused ? 'Paused · message waiting' : 'Message queued for the next step');
+        if (state.session && state.session.id === m.sessionId) { setStatus(state.status.get(m.sessionId)); scrollToBottom(false); }
+        break;
+      }
       case 'running': {
         const isActive = state.session && state.session.id === m.sessionId;
+        if (!m.running) { state.paused.delete(m.sessionId); }
         clearTimeout(state.pendingSend.get(m.sessionId)); state.pendingSend.delete(m.sessionId);
         state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }

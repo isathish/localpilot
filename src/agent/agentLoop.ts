@@ -12,6 +12,7 @@ import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
 import { namesTool, recommendSkills, SkillLearner, skillHint, SkillMatch } from './skillRecommender';
+import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
 import { SkillManager } from './skills';
@@ -36,6 +37,8 @@ export interface AgentRunOptions {
   signal: AbortSignal;
   requestApproval: ApprovalHandler;
   maxIterations?: number;
+  /** Pause/resume/steer handle. When given, `signal` should be `control.signal`. */
+  control?: RunControl;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -203,10 +206,12 @@ export class AgentRunner {
       }
     }
 
+    const control = o.control ?? new RunControl(session.id, undefined, o.signal);
     const toolCtx: ToolContext = {
       sessionId: session.id,
       workspaceRoot: this.workspace.root,
       signal: o.signal,
+      control,
       depth,
       modelRef: model.id,
       readOnly: session.mode !== 'agent',
@@ -236,11 +241,37 @@ export class AgentRunner {
     /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
     const callCounts = new Map<string, number>();
     let completed = false;
+    /** Hold here while the user has the run paused; the step that was in flight has finished by now. */
+    const hold = async (): Promise<void> => {
+      if (!control.paused) {
+        return;
+      }
+      status('Paused');
+      await control.waitWhilePaused();
+      if (!control.aborted) {
+        status('Resuming…');
+      }
+    };
+    /** Append messages the user typed while the run was busy, so the next model call sees them. */
+    const injectSteering = (): boolean => {
+      const queued = control.takeSteering();
+      if (!queued.length) {
+        return false;
+      }
+      for (const m of queued) {
+        session.messages.push({ ...m, meta: { ...m.meta, timestamp: Date.now(), steer: true } });
+      }
+      emit({ sessionId: session.id, type: 'steer', payload: { ids: queued.map((m) => m.meta?.steerId).filter(Boolean), count: queued.length } });
+      status('Taking your new instructions into account…');
+      return true;
+    };
 
     for (let iter = 0; iter < maxIter; iter++) {
-      if (o.signal.aborted) {
+      await hold();
+      if (o.signal.aborted || control.aborted) {
         break;
       }
+      injectSteering();
 
       // --- Context management ---------------------------------------------------------------
       let budget = ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], session.messages, cfg.maxOutputTokens);
@@ -455,11 +486,24 @@ export class AgentRunner {
           });
           continue;
         }
+        // Instructions typed while the model was answering: continue with them instead of ending the turn.
+        if (injectSteering()) {
+          continue;
+        }
         completed = true;
         break;
       }
 
       // --- Tool execution (parallel for read-only tools) ------------------------------------
+      // A pause requested during the model call takes effect here, before any tool runs.
+      await hold();
+      if (o.signal.aborted || control.aborted) {
+        // Stopped while holding: close the assistant's tool calls so the history stays well-formed for the next turn.
+        for (const c of calls) {
+          session.messages.push({ role: 'tool', content: nativeTools ? 'Cancelled by user.' : `<tool_result name="${c.name}">\nCancelled by user.\n</tool_result>`, toolCallId: c.id, toolName: c.name, meta: { timestamp: Date.now() } });
+        }
+        break;
+      }
       const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts);
       toolsExecuted += calls.length;
       mutationsExecuted += calls.filter((c) => {

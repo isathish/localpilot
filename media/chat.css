@@ -401,6 +401,27 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .send { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius); background: var(--accent); color: var(--accent-fg); flex: none; margin-left: 4px; transition: opacity .12s, background .12s; }
 .send:hover { background: var(--accent-hover); } .send:disabled { opacity: .35; cursor: default; }
 .send.stop { background: var(--fg); color: var(--bg); } .send svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.send.pause { background: var(--tint-2); color: var(--fg); border: 1px solid var(--border-soft); }
+.send.pause:hover { background: var(--tint); } .send.pause.on { background: var(--brand); color: var(--brand-fg, #15181d); border-color: transparent; }
+.progress.paused::after { animation-play-state: paused; opacity: .45; }
+/* Steering rows: a message typed while the agent worked, shown inline in its turn. "queued" until the loop takes it. */
+.steer { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 4px; padding: 7px 10px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--tint); font-size: var(--fs-sm); line-height: 1.45; }
+.steer .ico { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--brand); flex: none; margin-top: 1px; } .steer .ico svg { width: 13px; height: 13px; }
+.steer .txt { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.steer .badge { flex: none; font-size: 10px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: var(--tint-2); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.steer.queued { border-color: color-mix(in srgb, var(--brand) 55%, var(--border)); } .steer.queued .badge { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand); }
+.steer .imgs { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; } .steer .imgs img { max-height: 90px; border-radius: 6px; border: 1px solid var(--border); }
+/* Paused indicators in tabs and the background strip. */
+.pausedind { display: inline-grid; place-items: center; color: var(--brand); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
+.tab .ind .pausedind svg { width: 12px; height: 12px; }
+.bgrun.paused .st { color: var(--brand); }
+/* Per-lane subagent controls, visible while the lane is running. */
+.lanectl { display: none; align-items: center; gap: 2px; flex: none; margin-left: 4px; }
+.step.subagent.running > summary .lanectl { display: inline-flex; }
+.lanectl button { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: var(--muted); }
+.lanectl button:hover { background: var(--tint-2); color: var(--fg); } .lanectl button svg { width: 11px; height: 11px; }
+.lanectl [data-c="stop"]:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.step.subagent.paused > summary .pill { border-style: dashed; } .step.subagent.paused > summary .ico { color: var(--brand); }
 
 /* popover menu */
 .popover { position: fixed; z-index: 60; min-width: 220px; max-width: min(360px, calc(100vw - 20px)); max-height: 60vh; overflow: auto; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; font-size: var(--fs-sm); animation: fadeUp .12s ease-out; }

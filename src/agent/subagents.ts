@@ -2,6 +2,7 @@ import { getConfig } from '../config';
 import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext } from '../types';
 import { AgentRunner, ApprovalHandler } from './agentLoop';
 import { nextWave, ParallelPool } from './parallel';
+import { RunControl } from './runControl';
 import { SkillManager } from './skills';
 import { newId } from '../providers/http';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
@@ -118,6 +119,10 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       mode: ctx.readOnly ? 'ask' : 'agent',
       attachments: [],
     };
+    // Own control under the parent's: pausing/stopping the parent reaches this child, while the user can also
+    // pause or stop just this lane — the parent then carries on with a "stopped" report instead of failing.
+    // Registered before subagent_start so a UI reacting to that event can already address the child.
+    const control = ctx.control ? ctx.control.child(childId, def.name) : new RunControl(childId, undefined, ctx.signal, def.name);
     emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined } });
     const user: ChatMessage = { role: 'user', content: prompt };
     try {
@@ -129,18 +134,26 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         toolFilter: def.tools,
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
         depth: ctx.depth + 1,
-        signal: ctx.signal,
+        signal: control.signal,
+        control,
         requestApproval: (title, detail, kind) => approval(ctx.sessionId, title, detail, kind),
         // Child progress is forwarded under the parent's session id so the UI can nest it.
         emit: (e) => emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type }),
         maxIterations: 25,
       });
+      if (control.aborted && !ctx.signal.aborted) {
+        const note = `Subagent "${def.name}" was stopped by the user before it finished.${text ? ` Partial output:\n${text}` : ''} Do not retry it; continue with what you have or do that part yourself.`;
+        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user' } });
+        return { content: fallbackNote + note };
+      }
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text } });
       return { content: fallbackNote + (text || '(subagent returned no text)') };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg } });
       return { content: `Subagent failed: ${msg}`, isError: true };
+    } finally {
+      control.dispose();
     }
   }
 

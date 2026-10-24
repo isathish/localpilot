@@ -234,6 +234,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <button id="btnImage" class="ib" title="Attach image or take a screenshot (area, window, screen)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send" title="Send (Enter)">${svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>')}</button>
+        <button id="btnPause" class="send pause hidden" title="Pause after the current step (⌥Esc)">${svg('<path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/>')}</button>
         <button id="btnStop" class="send stop hidden" title="Stop (Esc)">${svg('<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>')}</button>
       </div>
     </div>

@@ -46,6 +46,7 @@ An agent that reads your project, edits files, runs commands and tests, and show
 - **A full agent.** It reads, searches, edits, runs commands and tests, retries when something fails and asks before anything risky.
 - **Written for local models.** A text fallback for models without tool calling, and context trimming so 8k to 32k windows still finish long tasks.
 - **Parallel agents.** Run several at once, see every file each one touched, keep or undo per agent.
+- **Pause, steer, stop.** Pause any agent after its current step, type new instructions it picks up on resume, or stop it — for the whole run or a single parallel subagent.
 - **Works with your existing setup.** Reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are.
 - **Free, MIT licensed.**
 
@@ -85,6 +86,7 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 |---|---|
 | **Agent · Ask · Plan modes** | Autonomous edit/run loop with approval gates; read-only Q&A; investigate-then-plan with a live **Tasks** checklist. |
 | **Parallel agents & multitasking** | Chat tabs run independently; `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
+| **Pause / steer / stop** | **Pause** (<kbd>⌥Esc</kbd>) holds an agent after its current step; anything you type while it is paused or running is queued and read at its next step; **Stop** (<kbd>Esc</kbd>) cancels. Each parallel subagent lane has its own pause and stop; pausing or stopping the parent reaches all of them. Also in the tab menu, background strip, Agents panel, Command Palette and the CLI (Ctrl+Z / Ctrl+C). |
 | **Change review & checkpoints** | Every agent edit is snapshotted — Diff / Accept / Reject per file or per session, and **Restore checkpoint** on any message rewinds files and conversation. |
 | **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
 | **Model manager & auto-setup** | One-click setup installs Ollama and a smallest-first starter set sized to your RAM / GPU. **Settings → Models** shows what fits this machine, lets you enable / disable, set default or remove installed models, and installs from a curated catalog to Ollama, Docker Model Runner or LM Studio with live progress. |

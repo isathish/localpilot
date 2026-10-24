@@ -14,9 +14,10 @@ import { AgentEvent, ChatMessage, ModelInfo, Session } from '../types';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
 import { captureScreenshot, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
+import { RunControl } from '../agent/runControl';
 
 export type ToWebview =
-  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; running: string[]; platform: NodeJS.Platform }
+  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; running: string[]; paused: string[]; platform: NodeJS.Platform }
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
   | { type: 'session'; session: Session }
   | { type: 'models'; models: ModelInfo[]; defaultModel: string }
@@ -25,6 +26,10 @@ export type ToWebview =
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
   | { type: 'approvalResolved'; id: string }
   | { type: 'running'; sessionId: string; running: boolean }
+  /** Pause state of a run or of one of its subagents (`childId`). `paused` = requested; `holding` = the loop has actually stopped at a step boundary. */
+  | { type: 'paused'; sessionId: string; childId?: string; agent?: string; paused: boolean; holding: boolean }
+  /** A message typed while the agent was busy was queued; the loop reports `steer` when it is injected. */
+  | { type: 'steerQueued'; sessionId: string; id: string; content: string; images?: string[] }
   | { type: 'changes'; sessionId: string; files: { path: string; fsPath: string; kind: 'create' | 'modify' }[]; checkpoints: number[] }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'openFiles'; files: string[] }
@@ -49,6 +54,12 @@ export type FromWebview =
   | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
   | { type: 'retry'; sessionId: string }
   | { type: 'stop'; sessionId: string }
+  | { type: 'pause'; sessionId: string }
+  | { type: 'resume'; sessionId: string }
+  | { type: 'steer'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
+  | { type: 'stopChild'; sessionId: string; childId: string }
+  | { type: 'pauseChild'; sessionId: string; childId: string }
+  | { type: 'resumeChild'; sessionId: string; childId: string }
   | { type: 'approval'; id: string; approved: boolean; remember?: boolean }
   | { type: 'setModel'; sessionId: string; model: string; makeDefault?: boolean }
   | { type: 'setMode'; sessionId: string; mode: Session['mode'] }
@@ -93,7 +104,7 @@ interface Sink {
 /** Shared brain behind the sidebar view, editor panels and the @localpilot chat participant. */
 export class ChatController implements vscode.Disposable {
   private sinks = new Set<Sink>();
-  private runs = new Map<string, AbortController>();
+  private runs = new Map<string, RunControl>();
   private approvals = new Map<string, (ok: boolean) => void>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
   private activeSessionId?: string;
@@ -201,6 +212,24 @@ export class ChatController implements vscode.Disposable {
 
   get runningSessionIds(): string[] {
     return [...this.runs.keys()];
+  }
+
+  get pausedSessionIds(): string[] {
+    return [...this.runs].filter(([, c]) => c.pausedBySelf).map(([id]) => id);
+  }
+
+  isPaused(sessionId: string): boolean {
+    return this.runs.get(sessionId)?.pausedBySelf ?? false;
+  }
+
+  /** Subagent controls of a running session, for views that list them. */
+  childControls(sessionId: string): RunControl[] {
+    return this.runs.get(sessionId)?.descendants() ?? [];
+  }
+
+  private childControl(sessionId: string, childId: string): RunControl | undefined {
+    const c = this.runs.get(sessionId)?.find(childId);
+    return c && c.id !== sessionId ? c : undefined;
   }
 
   private setActive(s: Session): void {
@@ -340,6 +369,19 @@ export class ChatController implements vscode.Disposable {
       }
       case 'stop':
         return this.stop(msg.sessionId);
+      case 'pause':
+        return void this.pause(msg.sessionId);
+      case 'resume':
+        return void this.resume(msg.sessionId);
+      case 'steer':
+        await this.steer(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
+        return;
+      case 'stopChild':
+        return void this.childControl(msg.sessionId, msg.childId)?.stop();
+      case 'pauseChild':
+        return void this.childControl(msg.sessionId, msg.childId)?.pause();
+      case 'resumeChild':
+        return void this.childControl(msg.sessionId, msg.childId)?.resume();
       case 'approval': {
         const resolve = this.approvals.get(msg.id);
         if (resolve) {
@@ -569,6 +611,7 @@ export class ChatController implements vscode.Disposable {
       skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description })),
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description })),
       running: [...this.runs.keys()],
+      paused: this.pausedSessionIds,
       platform: process.platform,
     });
     this.broadcast(init(this.providers.cachedModels()));
@@ -643,7 +686,8 @@ export class ChatController implements vscode.Disposable {
       throw new Error('Session not found');
     }
     if (this.runs.has(sessionId)) {
-      this.broadcast({ type: 'toast', level: 'error', text: 'This session is still running. Stop it or open another session.' });
+      // Busy: the message becomes a steering instruction for the running agent instead of being refused.
+      await this.steer(sessionId, text, attachments, images);
       return '';
     }
     const slash = this.handleSlash(session, text);
@@ -662,8 +706,9 @@ export class ChatController implements vscode.Disposable {
       }
     }
 
-    const abort = new AbortController();
-    this.runs.set(sessionId, abort);
+    const control = new RunControl(sessionId);
+    this.runs.set(sessionId, control);
+    control.onDidChange((c) => this.onControlChange(sessionId, c));
     this.tracker.beginTurn(sessionId, session.messages.length);
     this.runStatus.set(sessionId, 'Starting…');
     this.broadcast({ type: 'running', sessionId, running: true });
@@ -683,7 +728,8 @@ export class ChatController implements vscode.Disposable {
       const result = await this.runner.run({
         session,
         userMessage,
-        signal: abort.signal,
+        signal: control.signal,
+        control,
         emit: (e) => {
           this.broadcast({ type: 'event', event: e });
           if (e.type === 'status' && typeof e.payload === 'string') {
@@ -809,13 +855,76 @@ export class ChatController implements vscode.Disposable {
   }
 
   stop(sessionId: string): void {
-    this.runs.get(sessionId)?.abort(new Error('cancelled'));
+    this.runs.get(sessionId)?.stop();
     for (const [id, resolve] of this.approvals) {
       if (id.startsWith(sessionId)) {
         resolve(false);
         this.approvals.delete(id);
       }
     }
+  }
+
+  /** Hold the agent after its current step; `resume` continues. Returns the new paused state (undefined when not running). */
+  pause(sessionId: string): boolean | undefined {
+    const c = this.runs.get(sessionId);
+    if (!c) {
+      return undefined;
+    }
+    c.pause();
+    return true;
+  }
+
+  resume(sessionId: string): boolean | undefined {
+    const c = this.runs.get(sessionId);
+    if (!c) {
+      return undefined;
+    }
+    c.resume();
+    return false;
+  }
+
+  togglePause(sessionId: string): boolean | undefined {
+    const c = this.runs.get(sessionId);
+    return c ? c.togglePause() : undefined;
+  }
+
+  /** Queue a user message for a running (or paused) agent; it is appended at the next step boundary. */
+  async steer(sessionId: string, text: string, attachments: string[] = [], images?: string[]): Promise<boolean> {
+    const c = this.runs.get(sessionId);
+    if (!c || !text.trim()) {
+      return false;
+    }
+    let content = text;
+    const attachedBlocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
+    if (attachedBlocks.some(Boolean)) {
+      content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
+    }
+    const id = `steer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    c.steer({ role: 'user', content, images, meta: { steerId: id } });
+    this.broadcast({ type: 'steerQueued', sessionId, id, content: text, images });
+    this.runStatus.set(sessionId, c.holding ? 'Paused · 1 message waiting' : 'Will take your message into account at the next step');
+    this._onDidChangeRuns.fire();
+    return true;
+  }
+
+  private onControlChange(sessionId: string, c: RunControl): void {
+    const root = this.runs.get(sessionId);
+    if (!root) {
+      return;
+    }
+    if (c === root) {
+      if (c.holding) {
+        this.runStatus.set(sessionId, c.pendingSteering ? `Paused · ${c.pendingSteering} message${c.pendingSteering === 1 ? '' : 's'} waiting` : 'Paused');
+      } else if (c.paused) {
+        this.runStatus.set(sessionId, 'Pausing after this step…');
+      } else if (this.runStatus.get(sessionId)?.startsWith('Paus')) {
+        this.runStatus.set(sessionId, 'Resuming…');
+      }
+      this.broadcast({ type: 'paused', sessionId, paused: c.pausedBySelf, holding: c.holding });
+    } else {
+      this.broadcast({ type: 'paused', sessionId, childId: c.id, agent: c.label, paused: c.pausedBySelf, holding: c.holding });
+    }
+    this._onDidChangeRuns.fire();
   }
 
   requestApproval(sessionId: string, title: string, detail: string, kind: string): Promise<boolean> {
@@ -959,8 +1068,8 @@ export class ChatController implements vscode.Disposable {
   }
 
   dispose(): void {
-    for (const [, a] of this.runs) {
-      a.abort();
+    for (const [, c] of this.runs) {
+      c.stop();
     }
     clearTimeout(this.deltaTimer);
     this.pendingDeltas.clear();

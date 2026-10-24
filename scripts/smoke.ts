@@ -16,6 +16,7 @@ import { parseFrontMatter } from '../src/agent/skills';
 import { parseArgs } from '../src/tools/registry';
 import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/types';
 import { AgentRunner } from '../src/agent/agentLoop';
+import { RunControl } from '../src/agent/runControl';
 import { ProviderRegistry } from '../src/providers/registry';
 import { ToolRegistry } from '../src/tools/registry';
 import { SkillManager } from '../src/agent/skills';
@@ -448,11 +449,171 @@ async function agentLoopE2E() {
   }
 }
 
+
+async function pauseAndSteer() {
+  console.log('\n[Pause, steer and subagent controls]');
+  // RunControl semantics on their own.
+  {
+    const root = new RunControl('root');
+    const kid = root.child('kid', 'explore');
+    root.pause();
+    check('control: parent pause reaches the child', root.paused && kid.paused && !kid.pausedBySelf);
+    root.resume();
+    kid.pause();
+    check('control: child pause stays local', kid.paused && !root.paused);
+    let woke = false;
+    const waiting = kid.waitWhilePaused().then(() => { woke = true; });
+    await new Promise((r) => setTimeout(r, 20));
+    check('control: waitWhilePaused holds while paused', !woke && kid.holding);
+    kid.resume();
+    await waiting;
+    check('control: resume wakes the waiter', woke && !kid.holding);
+    const changes: string[] = [];
+    root.onDidChange((c) => changes.push(c.id));
+    kid.stop();
+    check('control: child stop does not abort the parent and bubbles to parent listeners', kid.aborted && !root.aborted && changes.includes('kid'));
+    const kid2 = root.child('kid2');
+    root.stop();
+    check('control: parent stop aborts children', kid2.aborted && root.aborted);
+    kid2.dispose();
+    check('control: dispose unregisters the child', !root.children.has('kid2') && root.find('kid2') === undefined);
+  }
+
+  let calls = 0;
+  const srv = await listen(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.end(JSON.stringify({ data: [{ id: 'ctl', capabilities: ['tool_use'] }] }));
+    }
+    if (req.url === '/v1/chat/completions') {
+      const body = JSON.parse(await readBody(req));
+      calls++;
+      const transcript = JSON.stringify(body.messages);
+      // The first user message tells runs apart: a child's is its prompt, the parent's is 'PARENT-GO' (its tool call *mentions* CHILD-A/B).
+      const task = String((body.messages as { role: string; content: string }[]).find((m) => m.role === 'user')?.content ?? '');
+      res.setHeader('content-type', 'text/event-stream');
+      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      const text = (t: string) => { send({ choices: [{ delta: { content: t } }] }); send({ choices: [{ delta: {}, finish_reason: 'stop' }] }); };
+      const tool = (id: string, name: string, args: unknown) => { send({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] }); send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }); };
+      if (task.includes('CHILD-A')) {
+        await new Promise((r) => setTimeout(r, 600)); // slow child: the test stops it while this request is in flight
+        text('A-REPORT');
+      } else if (task.includes('CHILD-B')) {
+        text('B-REPORT');
+      } else if (task.includes('PARENT-GO')) {
+        if (transcript.includes('B-REPORT')) { text('Parent done.'); } else { tool('p1', 'run_parallel_subagents', { tasks: [{ agent: 'explore', prompt: 'CHILD-A task' }, { agent: 'explore', prompt: 'CHILD-B task' }] }); }
+      } else if (transcript.includes('FINISH-GO')) {
+        text(transcript.includes('STEER2') ? 'Second answer.' : 'First answer.');
+      } else if (!transcript.includes('ECHO:')) {
+        tool('e1', 'echo', { text: 'one' });
+      } else {
+        text(transcript.includes('STEER-MSG') && !transcript.includes('ACK steer') ? 'ACK steer' : 'Done.');
+      }
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  process.env.LP_MOCK_URL = `${srv.url}/v1`;
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    const providers = new ProviderRegistry(log);
+    const tools = new ToolRegistry();
+    const skills = new SkillManager(log);
+    await skills.refresh(); // loads the built-in subagent definitions (explore, coder, …)
+    const workspace = new WorkspaceContext(log);
+    let executions = 0;
+    tools.register({ parallelSafe: true, definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, async execute(args) { executions++; return { content: `ECHO:${args.text}` }; } });
+    const runner = new AgentRunner(providers, tools, skills, workspace, log);
+    const sink: AgentEvent[] = [];
+    let onEvent: ((e: AgentEvent) => void) | undefined;
+    const emit = (e: AgentEvent) => { sink.push(e); onEvent?.(e); };
+    tools.registerAll(createAgentTools(runner, skills, emit, async () => true));
+    const mkSession = (id: string): Session => ({ id, title: '', createdAt: 0, updatedAt: 0, model: 'mock/ctl', messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [] });
+    const visible = (s: Session) => s.messages.filter((m) => !m.meta?.hidden);
+    const statuses = () => sink.filter((e) => e.type === 'status').map((e) => String(e.payload));
+
+    // 1. Pause requested during the first model call → the loop holds before running the tool; steer while held; resume.
+    {
+      const s = mkSession('p1');
+      const control = new RunControl(s.id);
+      onEvent = (e) => { if (e.sessionId === s.id && e.type === 'model_request' && !control.paused) { control.pause(); } };
+      const run = runner.run({ session: s, userMessage: { role: 'user', content: 'go' }, emit, signal: control.signal, control, requestApproval: async () => true });
+      await new Promise((r) => setTimeout(r, 400));
+      check('pause: loop holds before the tool batch (tool not executed, status Paused)', control.holding && executions === 0 && statuses().includes('Paused'), { holding: control.holding, executions });
+      control.steer({ role: 'user', content: 'STEER-MSG', meta: { steerId: 'x1' } });
+      await new Promise((r) => setTimeout(r, 50));
+      check('pause: steering while held does not run anything', executions === 0 && control.pendingSteering === 1);
+      onEvent = undefined;
+      control.resume();
+      const out = await run;
+      const v = visible(s);
+      check('resume: tool ran, steer injected after its result, model acknowledged it', out === 'ACK steer' && executions === 1 && v.map((m) => m.role).join(',') === 'user,assistant,tool,user,assistant', { out, roles: v.map((m) => m.role) });
+      check('steer: injected message carries steer meta and a steer event names it', v[3].meta?.steer === true && v[3].content === 'STEER-MSG' && sink.some((e) => e.type === 'steer' && JSON.stringify(e.payload).includes('x1')));
+      check('steer: Resuming status emitted after the hold', statuses().includes('Resuming…'));
+    }
+
+    // 2. A steer queued while the model is producing its final answer continues the turn instead of ending it.
+    {
+      const s = mkSession('p2');
+      const control = new RunControl(s.id);
+      let steered = false;
+      onEvent = (e) => { if (e.sessionId === s.id && e.type === 'model_request' && !steered) { steered = true; control.steer({ role: 'user', content: 'STEER2' }); } };
+      const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'FINISH-GO' }, emit, signal: control.signal, control, requestApproval: async () => true });
+      onEvent = undefined;
+      const v = visible(s);
+      check('steer after a final answer continues the turn with a second model call', out === 'Second answer.' && v.map((m) => m.role).join(',') === 'user,assistant,user,assistant' && v[1].content === 'First answer.', { out, roles: v.map((m) => m.role) });
+    }
+
+    // 3. Stop one parallel subagent: the parent keeps going and gets a "stopped" report; the sibling finishes.
+    {
+      const s = mkSession('p3');
+      const control = new RunControl(s.id);
+      let stoppedChild = '';
+      onEvent = (e) => {
+        if (e.sessionId === s.id && e.type === 'subagent_start') {
+          const p = e.payload as { childId: string; prompt: string };
+          if (p.prompt.includes('CHILD-A')) { setTimeout(() => { const c = control.find(p.childId); stoppedChild = c ? c.id : ''; c?.stop(); }, 120); }
+        }
+      };
+      const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'PARENT-GO' }, emit, signal: control.signal, control, requestApproval: async () => true });
+      onEvent = undefined;
+      const toolMsg = s.messages.find((m) => m.role === 'tool' && m.toolName === 'run_parallel_subagents');
+      check('child stop: the child control was found through the parent', !!stoppedChild && stoppedChild.includes('explore'));
+      check('child stop: parent finishes and sees a stopped report for A and the real report for B', out === 'Parent done.' && !control.aborted && !!toolMsg && /stopped by the user/.test(toolMsg.content) && /B-REPORT/.test(toolMsg.content) && !/A-REPORT/.test(toolMsg.content), { out, tool: toolMsg?.content.slice(0, 300) });
+      check('child stop: subagent_end reports the stop for that child only', sink.filter((e) => e.sessionId === s.id && e.type === 'subagent_end').map((e) => (e.payload as { error?: string }).error).filter(Boolean).join() === 'Stopped by user');
+      check('child controls are disposed when their runs end', control.children.size === 0);
+    }
+
+    // 4. Pausing the parent while children run pauses the children too.
+    {
+      const s = mkSession('p4');
+      const control = new RunControl(s.id);
+      let seen = 0; let childPausedUnderParent = false;
+      onEvent = (e) => {
+        if (e.sessionId === s.id && e.type === 'subagent_start' && ++seen === 2) {
+          control.pause();
+          childPausedUnderParent = control.descendants().length === 2 && control.descendants().every((c) => c.paused && !c.pausedBySelf);
+          setTimeout(() => control.resume(), 150);
+        }
+      };
+      const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'PARENT-GO' }, emit, signal: control.signal, control, requestApproval: async () => true });
+      onEvent = undefined;
+      check('parent pause: both children were paused through the parent and the run completed after resume', childPausedUnderParent && out === 'Parent done.', { childPausedUnderParent, out });
+    }
+    check('pause/steer: model calls as expected', calls === 2 + 2 + 4 + 4, calls);
+  } finally {
+    srv.close();
+    delete process.env.LP_MOCK_URL;
+  }
+}
+
 (async () => {
   await mockOllama();
   await mockOpenAI();
   await pureLogic();
   await agentLoopE2E();
+  await pauseAndSteer();
   console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll smoke checks passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => {

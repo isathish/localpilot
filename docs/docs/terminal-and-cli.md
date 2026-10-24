@@ -61,7 +61,7 @@ localpilot skill search "write a plan" --install  # rank the skill catalog for a
 localpilot --ide "…"  ·  --settings  ·  --setup   # hand off to VS Code
 ```
 
-In a session: `/mode agent|ask|plan`, `/model <name>`, `/models`, `/changes`, `/undo`, `/keep`, `/file <path>`, `/clear`, `/doctor`, `/exit`. Ctrl+C stops the current run; press it again to quit.
+In a session: `/mode agent|ask|plan`, `/model <name>`, `/models`, `/changes`, `/undo`, `/keep`, `/file <path>`, `/clear`, `/doctor`, `/exit`. Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses the run after its current step (and resumes it); anything typed while a run is going is queued and handed to the agent at its next step. Subagents the agent spawns pause and stop with it.
 
 The CLI uses the same skills as the extension — recommendations, the catalog (`localpilot.skills.autoInstall`) and the shared index in `~/.localpilot/skill-catalog.json` — and notes when a catalog skill matches a request but is not installed yet. See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 

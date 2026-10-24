@@ -35,7 +35,7 @@ body{margin:0}
         <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
         <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
-        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
+        <button id="btnPause" class="send pause hidden"><svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
       </div>
     </div>
   </footer>
@@ -43,7 +43,7 @@ body{margin:0}
   <div id="toasts"></div>
 </div>
 <script>
-const listeners=[];
+const listeners=[]; const paused={};
 window.acquireVsCodeApi=()=>({postMessage(m){
   const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
   if(m.type==='ready'){
@@ -66,8 +66,26 @@ window.acquireVsCodeApi=()=>({postMessage(m){
       ]};
     send({type:'session',session});
     send({type:'changes',sessionId:'s1',files:[{path:'dice.py',fsPath:'/x/dice.py',kind:'modify'}],checkpoints:[0]});
-    setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal'}),50);
+    if (!/live=0/.test(location.search)) {
+      // Scripted live turn: the user asked for more and the agent fans out two subagents, so pause / steer / lane controls can be tried.
+      const ev=(type,payload)=>send({type:'event',event:{sessionId:'s1',type,payload}});
+      setTimeout(()=>{ send({type:'running',sessionId:'s1',running:true}); ev('status','Thinking with qwen2.5-coder:14b…'); },300);
+      setTimeout(()=>ev('assistant_delta','Updating the README and adding a test for the modifier syntax in parallel.\n\n'),900);
+      setTimeout(()=>{ ev('tool_start',{id:'p1',name:'run_parallel_subagents',args:{tasks:[{agent:'docs',prompt:'Update README examples for the new dice notation'},{agent:'tester',prompt:'Add tests for 2d10 - 1 and D20 parsing'}]}}); },1400);
+      setTimeout(()=>{ ev('subagent_start',{childId:'c1',agent:'docs',prompt:'Update README examples for the new dice notation',model:'ollama/qwen2.5-coder:14b'}); ev('subagent_start',{childId:'c2',agent:'tester',prompt:'Add tests for 2d10 - 1 and D20 parsing',model:'ollama/qwen2.5-coder:14b'}); },1900);
+      setTimeout(()=>{ ev('tool_start',{childId:'c1',agent:'docs',inner:'tool_start',data:{id:'t1',name:'read_file',args:{path:'README.md'}}}); ev('tool_start',{childId:'c2',agent:'tester',inner:'tool_start',data:{id:'t2',name:'read_file',args:{path:'tests/test_dice.py'}}}); },2400);
+    } else {
+      setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal'}),50);
+    }
   }
+  // Echo the host's side of the pause / steer protocol so the controls can be exercised without VS Code.
+  if(m.type==='pause'){ paused[m.sessionId]=true; send({type:'paused',sessionId:m.sessionId,paused:true,holding:false}); setTimeout(()=>send({type:'paused',sessionId:m.sessionId,paused:true,holding:true}),700); }
+  if(m.type==='resume'){ paused[m.sessionId]=false; send({type:'paused',sessionId:m.sessionId,paused:false,holding:false}); setTimeout(()=>send({type:'event',event:{sessionId:m.sessionId,type:'status',payload:'Continuing (3)…'}}),400); }
+  if(m.type==='steer'){ const id='st'+Date.now(); send({type:'steerQueued',sessionId:m.sessionId,id,content:m.text,images:m.images}); if(!paused[m.sessionId]){ setTimeout(()=>{ send({type:'event',event:{sessionId:m.sessionId,type:'steer',payload:{ids:[id],count:1}}}); send({type:'event',event:{sessionId:m.sessionId,type:'assistant_delta',payload:'Noted — switching to that.'}}); },900); } }
+  if(m.type==='stop'){ send({type:'running',sessionId:m.sessionId,running:false}); }
+  if(m.type==='pauseChild'){ send({type:'paused',sessionId:m.sessionId,childId:m.childId,agent:'docs',paused:true,holding:false}); setTimeout(()=>send({type:'paused',sessionId:m.sessionId,childId:m.childId,paused:true,holding:true}),600); }
+  if(m.type==='resumeChild'){ send({type:'paused',sessionId:m.sessionId,childId:m.childId,paused:false,holding:false}); }
+  if(m.type==='stopChild'){ send({type:'event',event:{sessionId:m.sessionId,type:'subagent_end',payload:{childId:m.childId,agent:'docs',error:'Stopped by user'}}}); }
 }});
 </script>
 <script src="../media/chat.js"></script>

@@ -467,8 +467,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     await controller.clearHistory({ keepPinned: choice !== 'Clear everything' });
   });
-  cmd('localpilot.stopSession', (id?: unknown) => controller.stop(typeof id === 'string' ? id : controller.activeSession?.id ?? ''));
+  // Session commands take a session id (palette / API) or the Agents-view node they were invoked on.
+  const sessionIdArg = (arg: unknown): string | undefined => {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    const n = arg as { sessionId?: string; session?: { id: string } } | undefined;
+    return n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;
+  };
+  const childArg = (arg: unknown): { sessionId: string; childId: string } | undefined => {
+    const n = arg as { sessionId?: string; childId?: string } | undefined;
+    return n?.sessionId && n?.childId ? { sessionId: n.sessionId, childId: n.childId } : undefined;
+  };
+  cmd('localpilot.stopSession', (arg?: unknown) => controller.stop(sessionIdArg(arg) ?? ''));
   cmd('localpilot.stopAll', () => controller.runningSessionIds.forEach((id) => controller.stop(id)));
+  cmd('localpilot.pauseSession', (arg?: unknown) => controller.pause(sessionIdArg(arg) ?? ''));
+  cmd('localpilot.resumeSession', (arg?: unknown) => controller.resume(sessionIdArg(arg) ?? ''));
+  cmd('localpilot.togglePause', (arg?: unknown) => {
+    const id = sessionIdArg(arg) ?? '';
+    const paused = controller.togglePause(id);
+    if (paused === undefined) {
+      void vscode.window.showInformationMessage('No agent is running in the current chat.');
+    }
+  });
+  cmd('localpilot.pauseAll', () => controller.runningSessionIds.forEach((id) => controller.pause(id)));
+  cmd('localpilot.resumeAll', () => controller.runningSessionIds.forEach((id) => controller.resume(id)));
+  cmd('localpilot.pauseChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'pauseChild', ...c }); } });
+  cmd('localpilot.resumeChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'resumeChild', ...c }); } });
+  cmd('localpilot.stopChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'stopChild', ...c }); } });
   cmd('localpilot.showDiff', (sessionId: unknown, fsPath: unknown) => typeof sessionId === 'string' && typeof fsPath === 'string' && tracker.showDiff(sessionId, fsPath));
   cmd('localpilot.keepChanges', (node?: unknown) => {
     const n = node as { sessionId?: string; fsPath?: string; session?: { id: string } } | undefined;
