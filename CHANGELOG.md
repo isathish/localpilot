@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.5 — 2026-10-24
 ### Changed
 - **Small models finish what they start.** The agent now notices when a reply shows a tool call or a patch as text, announces an action without taking it ("I will edit the file…"), or reports a change as done when no file-modifying tool ran, and hands the model one corrective turn instead of ending the run. Tool calls written as malformed JSON in a `tool_call` block are reported back for a resend rather than silently treated as prose. On a 7B coder model the end-to-end suite went from 7/13 to 11/13 passing.
 - **Skill hints no longer derail simple requests.** A request that names the tool to use ("use the write_file tool…", "fix it with edit_file") gets no skill recommendation, and a skill is only *required* when its name or a quoted trigger phrase appears in the request — overlapping description words now merely suggest it. A single token of a hyphenated skill name ("compute" in `azure-compute`) no longer counts as the name.

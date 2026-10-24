@@ -9,7 +9,7 @@ marketplace: https://marketplace.visualstudio.com/items?itemName=localpilot.loca
 openvsx: https://open-vsx.org/extension/localpilot/localpilot-agent
 extension_id: localpilot.localpilot-agent
 releases: https://github.com/isathish/localpilot/releases
-version: 1.1.4
+version: 1.1.5
 lang: en
 logo: /assets/og.png
 author:
