@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.14 — 2026-10-24
+### Added
+- Enhance telemetry handling and provider management; add support for transient-failure retries and improve dashboard summary filtering
+
 ## 1.1.13 — 2026-10-24
 ### Added
 - Dashboard charts and extra KPIs, skills across the subagent swarm, settings tab strip and theming, winget Ollama install
