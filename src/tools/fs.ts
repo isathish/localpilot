@@ -146,7 +146,16 @@ export const editFileTool: Tool = {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
     const oldText = typeof args.old_text === 'string' ? args.old_text : '';
     const newText = typeof args.new_text === 'string' ? args.new_text : '';
-    const doc = await vscode.workspace.openTextDocument(uri);
+    let doc: vscode.TextDocument;
+    try {
+      doc = await vscode.workspace.openTextDocument(uri);
+    } catch {
+      // Models routinely "append to" a file that does not exist yet; with nothing to match that is a create.
+      if (!oldText) {
+        return writeFileTool.execute({ path: args.path, content: newText }, ctx);
+      }
+      return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
+    }
     const text = doc.getText();
     let range: vscode.Range;
     if (!oldText) {

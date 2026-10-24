@@ -31,6 +31,7 @@ Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-ext
 | **Vision** | Screenshots and pasted images go to `qwen2.5vl`, `llava`, `gemma3` |
 | **Inline completions** | Ollama's FIM `suffix` support; routing picks the smallest FIM model (`qwen2.5-coder:1.5b`) automatically |
 | **Model management** | `ollama pull` / `ollama rm` from the Settings UI with progress, hardware-aware size recommendations, per-model enable/disable |
+| **Model gallery** | Search the whole [ollama.com library](https://ollama.com/library) inside VS Code — filter by tools / vision / thinking / embedding, see each tag's size marked fits / tight / too big for your machine, install any of them, or pull by name (`hf.co/…` GGUF repos too) |
 | **Parallel agents** | Several sessions at once; set `OLLAMA_NUM_PARALLEL=4` so Ollama serves them concurrently |
 
 ## Recommended Ollama models
@@ -39,7 +40,7 @@ Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-ext
 - **Fast completions:** `qwen2.5-coder:1.5b`, `starcoder2:3b`
 - **Screenshots:** `gemma3:4b`, `qwen2.5vl:7b`, `gemma3:12b`
 
-The catalog in **Settings → Models** marks each size *fits / tight / too big* for your machine and stars the recommended one, so you don't have to guess.
+The catalog in **Settings → Models** marks each size *fits / tight / too big* for your machine and stars the recommended one, so you don't have to guess. Anything not in the catalog is one search away in **Settings → Model gallery**, which browses the entire Ollama library with the same fit badges.
 
 ## Tips
 

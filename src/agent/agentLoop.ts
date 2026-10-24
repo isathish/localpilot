@@ -59,6 +59,8 @@ const FIRST_TOKEN_TIMEOUT_MAX_MS = 15 * 60_000;
 const IMPLEMENT_PLAN = /\b(implement|execute|run|start|apply|build|do|carry out|go ahead with|proceed with|kick off)\b[^.!?]{0,40}\b(plan|checklist|todos?|steps|items|tasks)\b|^\s*(go ahead|proceed|do it|go|make it so|implement|execute)[\s!.]*$/i;
 /** A request that waited this long for its first token while another request on the same model finished first was queued server-side. */
 const SERIAL_DETECT_MS = 8_000;
+/** Tools that hand work to subagents; running one is work done, and a later re-announcement of it is stale. */
+const DELEGATION_TOOLS = new Set(['run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
 
 /** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
 export class AgentRunner {
@@ -245,6 +247,8 @@ export class AgentRunner {
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
+    /** Fan-outs that actually started workers this turn; a later "I'll report back when they finish" is stale, not a plan. */
+    let delegationsExecuted = 0;
     /** Corrective turns handed out so far; small models often need one after the plan and one after the first tool result. */
     let nudges = 0;
     const MAX_NUDGES = 2;
@@ -480,20 +484,24 @@ export class AgentRunner {
         const canNudge = isWriteMode(session.mode) && toolDefs.length > 0 && nudges < MAX_NUDGES && depth === 0;
         const toolNames = toolDefs.map((t) => t.name);
         const shown = canNudge && showsToolCallAsText(text, toolNames);
-        const announced = canNudge && !shown && looksLikeUnfulfilledIntent(text, toolNames);
-        const claimed = canNudge && !shown && !announced && mutationsExecuted === 0 && claimsChange(text, o.userMessage.content);
-        if (shown || announced || claimed || (canNudge && toolsExecuted === 0 && looksLikeBareClaim(text, o.userMessage.content))) {
+        // Workers already ran and reported, yet the reply re-announces the hand-off ("I'll report back when they finish").
+        const stale = canNudge && !shown && delegationsExecuted > 0 && looksLikeStaleDelegation(text);
+        const announced = canNudge && !shown && !stale && looksLikeUnfulfilledIntent(text, toolNames);
+        const claimed = canNudge && !shown && !stale && !announced && mutationsExecuted === 0 && claimsChange(text, o.userMessage.content);
+        if (shown || stale || announced || claimed || (canNudge && toolsExecuted === 0 && looksLikeBareClaim(text, o.userMessage.content))) {
           nudges++;
           status('Verifying…');
-          const reason = shown ? 'shown' : claimed ? 'claimed' : announced ? 'announced' : 'bare';
+          const reason = shown ? 'shown' : stale ? 'stale' : claimed ? 'claimed' : announced ? 'announced' : 'bare';
           emit({ sessionId: session.id, type: 'nudge', payload: { reason } });
           const delegationClaim = claimed && /\bdelegat|\bworkers?\b|\bsubagents?\b/i.test(text);
           session.messages.push({
             role: 'user',
             content: shown
               ? 'You wrote the tool call (or the patch) as text, so it was not executed and the file is unchanged. Make the call through the tool interface now — one tool call with its JSON arguments, no code fence — and only then report.'
-              : delegationClaim
-                ? 'You said the work was delegated to workers, but no tool was called, so no worker exists and nothing has started. Call run_todos_parallel (or run_parallel_subagents) now — do not repeat the announcement — and report only when their results are back.'
+              : stale
+                ? 'The workers have already finished — their reports are in the tool result above. Do not announce the delegation again. If anything still needs checking, verify it with the tools (list_dir, read_file, get_diagnostics, tests); then give the user the final outcome in a few lines.'
+                : delegationClaim
+                ? `You said the work was delegated to workers, but no tool was called, so no worker exists and nothing has started. Start them now with one tool call — ${toolNames.includes('run_todos_parallel') && (session.todos ?? []).some((t) => t.agent && t.status === 'pending') ? 'run_todos_parallel for the checklist items that have an agent' : 'run_parallel_subagents with each task (agent + complete prompt) inline'} — do not repeat the announcement, and report only when their results are back.`
                 : claimed
                 ? 'You described the change as done, but no tool that modifies files or runs commands was called, so nothing has changed. Apply it now with the tools (edit_file / write_file / run_command) and only then report.'
                 : announced && toolsExecuted > 0
@@ -523,10 +531,13 @@ export class AgentRunner {
       }
       const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts);
       toolsExecuted += calls.length;
+      // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
+      // "created both files" is a report, not a claim.
       mutationsExecuted += calls.filter((c) => {
         const kind = toolList.find((t) => t.definition.name === c.name)?.approvalKind;
-        return kind === 'write' || kind === 'delete' || kind === 'terminal';
+        return kind === 'write' || kind === 'delete' || kind === 'terminal' || DELEGATION_TOOLS.has(c.name);
       }).length;
+      delegationsExecuted += calls.filter((c) => DELEGATION_TOOLS.has(c.name) && !results.find((r) => r.toolCallId === c.id)?.content.startsWith('Nothing to run')).length;
       for (const c of calls) {
         if (c.name === 'load_skill' && depth === 0) {
           const name = parseArgs(c.arguments).name;
@@ -771,6 +782,15 @@ export function claimsChange(reply: string, request: string): boolean {
     // "Delegated to N background workers" with no tool call: the workers do not exist.
     /\bdelegated\s+(?:this|these|the|it|them|\d+|to)\b/i.test(r);
   return imperative && claim;
+}
+
+/**
+ * After workers have run and reported, the reply still talks as if they were just dispatched
+ * ("Delegated to 3 background workers. I'll report back when they finish."). Small models echo their opening line.
+ */
+export function looksLikeStaleDelegation(reply: string): boolean {
+  const r = reply.trim();
+  return /\bdelegat(?:ed|ing)\b[^.\n]{0,80}\b(?:workers?|subagents?|agents?)\b/i.test(r) && /\b(?:report back|when they (?:finish|complete|are done)|once they(?:'re| are) done|will (?:report|update you))\b/i.test(r);
 }
 
 /** A code fence or line that starts with a tool name ("edit_file: path:…", "write_file("), or a unified diff with file headers: the model showed the action instead of doing it. */

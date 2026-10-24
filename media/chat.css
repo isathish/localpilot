@@ -77,8 +77,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* The tab that was clicked but whose chat has not arrived yet: shimmer label + busy indicator. */
 .tab.loading { background: var(--tint-2); color: var(--fg); border-color: var(--border-soft); }
 .tab.loading .t { background: linear-gradient(90deg, var(--muted), var(--fg), var(--muted)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.2s linear infinite; }
-.tab.loading .ind { color: transparent; position: relative; }
-.tab.loading .ind::after { content: ''; position: absolute; inset: 1px; border: 1.5px solid var(--muted); border-top-color: var(--fg); border-radius: 50%; animation: spin .7s linear infinite; }
+.tab.loading .ind { opacity: .45; }
 .tab .close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; opacity: 0; transition: opacity .12s, background .12s; }
 .tab .close svg { width: 11px; height: 11px; }
 .tab:hover .close, .tab.active .close, .tab:focus-visible .close { opacity: 1; }
@@ -279,14 +278,15 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step.subagent.running > summary .ico { color: var(--brand); }
 /* Narrow sidebar: who + step on the first line, the task on its own line underneath. */
 @container messages (max-width: 560px) {
-  .step.subagent > summary { grid-template-columns: 16px minmax(0, 1fr) auto auto auto; row-gap: 1px; }
+  /* The agent name never shrinks; the current-step text takes whatever is left and ellipsizes. */
+  .step.subagent > summary { grid-template-columns: 16px auto minmax(0, 1fr) auto auto; row-gap: 1px; }
   .step.subagent > summary .lane-task { grid-column: 2 / -1; grid-row: 2; white-space: normal; font-size: var(--fs-xs); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .step.subagent > summary .label { min-width: 0; overflow: hidden; }
-  .step.subagent > summary .meta .now { max-width: 140px; }
+  .step.subagent > summary .meta { min-width: 0; overflow: hidden; white-space: nowrap; justify-self: stretch; justify-content: flex-end; }
+  .step.subagent > summary .meta .now { max-width: none; flex: 0 1 auto; min-width: 0; }
+  .step.subagent > summary .meta .muted { display: none; }
   /* No room for the model name beside the step text; it stays in the row's tooltip. */
   .step.subagent > summary .pill .model, .step.subagent > summary .pill i { display: none; }
 }
-@container messages (max-width: 360px) { .step.subagent > summary .meta .muted { display: none; } }
 .step.subagent > summary .ico { margin-top: 0; }
 .step.subagent.running > summary .pill { border-color: color-mix(in srgb, var(--brand) 45%, var(--border)); }
 .step.subagent.error > summary .pill { border-color: color-mix(in srgb, var(--error) 50%, var(--border)); }

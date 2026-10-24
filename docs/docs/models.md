@@ -1,6 +1,6 @@
 ---
 title: Models & providers
-description: One-click model setup sized to your hardware, a model manager with catalog, enable/disable and remove, automatic per-task routing, and auto-detected providers — Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner or any OpenAI-compatible endpoint.
+description: One-click model setup sized to your hardware, a model manager with catalog, a gallery of the whole Ollama library with search and one-click install, enable/disable and remove, automatic per-task routing, and auto-detected providers — Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner or any OpenAI-compatible endpoint.
 permalink: /docs/models/
 ---
 
@@ -74,6 +74,17 @@ Already-installed models are skipped, so the flow is safe to re-run. Turn the st
 **Remove** asks for confirmation in a VS Code dialog, deletes the model files through the runtime (`/api/delete` for Ollama, `docker model rm` for Docker Model Runner), shows a toast with the result and refreshes the installed list, the chat's model picker and the status bar — no manual refresh needed. If the removed model was the default or pinned to a role, routing falls back to the best available model until you pick another.
 
 The same actions exist as commands: *Install Model from Catalog…*, *Remove Local Model…*, *Enable / Disable Model…*. Models pulled by hand (`ollama pull …`) show up on the next refresh.
+
+## Model gallery
+
+**Settings → Model gallery** (*LocalPilot: Browse Ollama Model Gallery…*) opens the **whole Ollama library** — every public model on [ollama.com/library](https://ollama.com/library), not only the curated catalog — so you can find and install models yourself:
+
+- **Search** as you type, filter by capability (**Tools / Vision / Thinking / Embedding**) and sort by popularity, newest or name; results page in with **Load more**. Each model shows its description, capability badges, published sizes, download count and a link to its page on ollama.com. Cloud-only models (`cloud` badge) are listed but cannot be downloaded.
+- **Choose size** fetches the model's tags. Every tag shows its download size, context length, accepted inputs and age, and is marked **fits / tight / too big** against this machine's model budget — the same rule as the catalog — plus **latest** (what a bare `ollama pull <name>` gets) and **installed** when your Ollama already has it. Plain sizes (`8b`, `e4b`, `30b-a3b`) are listed first; quantisation, MLX and bf16 variants sit behind *show all N tags*.
+- **Install** pulls the tag through your local Ollama server with live progress and a cancel button (the same job list as the Models page); when it finishes, the model appears under **Installed models**, in the chat's picker and in routing.
+- **Pull by name** takes anything `ollama pull` accepts — `qwen3:8b`, a user upload `user/model:tag`, or a GGUF repository from Hugging Face such as `hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M`.
+
+The gallery needs internet access to ollama.com (listings are cached for ten minutes) and a running Ollama server to install; the page offers **Start Ollama** / **Install Ollama** when there is none. Docker Model Runner and LM Studio keep installing from the curated catalog.
 
 ## Automatic routing
 

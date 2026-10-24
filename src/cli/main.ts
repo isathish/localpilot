@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as vscode from 'vscode'; // → src/cli/vscodeShim.ts (aliased by the CLI build)
 import { AgentRunner } from '../agent/agentLoop';
 import { RunControl } from '../agent/runControl';
+import { WorktreeInfo, WorktreeManager } from '../agent/worktrees';
 import { ChangeTracker } from '../agent/changeTracker';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
@@ -73,7 +74,9 @@ ${bold('Usage')}
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
-  --ask | --plan | --agent     mode (default: agent)
+  --ask | --plan | --agent     mode (default: agent); --multitask coordinates background workers, --debug fixes bugs
+  -i, --isolate                work in an isolated git worktree (your checkout is untouched); the result is applied
+                               back as uncommitted changes when the run ends — --no-apply keeps it in the worktree
   -m, --model <provider/model> model for this run (e.g. ollama/gemma4:e4b)
   -f, --file <path>            attach a file (repeatable; path#L10-L20 for a range)
   -y, --yes                    approve every command / edit / network call (CI, scripts)
@@ -85,7 +88,8 @@ ${bold('Options')}
   -h, --help · --version
 
 ${bold('In a session')}
-  /mode agent|ask|plan   /model <name>   /models   /undo   /keep   /changes   /clear   /help   /exit
+  /mode agent|multitask|debug|plan|ask   /model <name>   /models   /undo   /keep   /changes   /clear   /help   /exit
+  /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
   anything you type while a run is going is handed to the agent at its next step.
 
@@ -108,9 +112,12 @@ interface Args {
   user: boolean;
   /** `skill search --install`: install the best match. */
   install: boolean;
+  /** Work in an isolated git worktree; one-shot runs apply the result automatically unless --no-apply. */
+  isolate: boolean;
+  apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -119,6 +126,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--plan') {a.mode = 'plan';}
     else if (x === '--multitask') {a.mode = 'multitask';}
     else if (x === '--debug') {a.mode = 'debug';}
+    else if (x === '--isolate' || x === '-i') {a.isolate = true;}
+    else if (x === '--no-apply') {a.apply = false;}
     else if (x === '--agent') {a.mode = 'agent';}
     else if (x === '-m' || x === '--model') {a.model = next();}
     else if (x.startsWith('--model=')) {a.model = x.slice(8);}
@@ -515,6 +524,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     userMessage,
     signal: control.signal,
     control,
+    workspaceRoot: session.worktree?.path,
     emit: (e) => {
       const p = e.payload as Record<string, unknown>;
       switch (e.type) {
@@ -536,7 +546,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         }
         case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
         case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
-        case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
+        case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
         case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
         case 'error': r.error(String(e.payload)); break;
@@ -547,6 +557,41 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   }).finally(offControl);
   r.end();
   return final || result;
+}
+
+/** Create an isolated worktree for the CLI session (seeded with the checkout's uncommitted work) and route tools into it. */
+async function isolate(core: Core, session: Session, cwd: string, r: Renderer): Promise<{ info: WorktreeInfo; mgr: WorktreeManager } | undefined> {
+  const mgr = new WorktreeManager(getConfig().worktrees.location, core.log);
+  const repo = await mgr.repoRoot(cwd);
+  if (!repo) {
+    return undefined;
+  }
+  const info = await mgr.create(repo, session.id, { progress: (t) => r.status(t) });
+  session.worktree = info; // runTurn routes the tools into it
+  r.note(`Isolated: working in ${info.path} (your checkout stays untouched)`);
+  return { info, mgr };
+}
+
+/** Apply the worktree's result to the checkout (or not), report, and remove the worktree. */
+async function finishIsolated(wt: { info: WorktreeInfo; mgr: WorktreeManager }, apply: boolean, r: Renderer, quiet: boolean): Promise<void> {
+  const changes = await wt.mgr.changes(wt.info).catch(() => []);
+  const say = (s: string) => (quiet ? process.stderr.write(`${s}\n`) : console.log(s));
+  if (!changes.length) {
+    say(dim('isolated worktree: no changes'));
+  } else if (apply) {
+    const res = await wt.mgr.apply(wt.info);
+    say(green(`applied ${res.files.length} file${res.files.length === 1 ? '' : 's'} from the isolated worktree to your checkout (uncommitted)`));
+    if (res.conflicts.length) {
+      say(yellow(`conflict markers in: ${res.conflicts.join(', ')}`));
+    }
+  } else {
+    say(yellow(`${changes.length} changed file${changes.length === 1 ? '' : 's'} left in ${wt.info.path} (not applied)`));
+    for (const c of changes) {
+      say(`  ${c.kind === 'create' ? green('A') : c.kind === 'delete' ? red('D') : yellow('M')} ${c.path}  ${dim(`+${c.added} −${c.removed}`)}`);
+    }
+    return; // keep the worktree for the user to inspect
+  }
+  await wt.mgr.remove(wt.info);
 }
 
 function changesSummary(core: Core, session: Session): void {
@@ -757,6 +802,7 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => ctl.stop());
     // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
     process.on('SIGTSTP', () => ctl.togglePause());
+    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
     const answer = await runTurn(core, session, args.prompt, args.files, renderer, undefined, ctl);
     if (quiet) {
       process.stdout.write(answer.trimEnd() + '\n');
@@ -765,6 +811,9 @@ async function main(): Promise<void> {
       if (core.tracker.forSession(session.id).length) {
         core.tracker.keep(session.id); // one-shot runs keep their edits; the summary above tells the user what changed
       }
+    }
+    if (wt) {
+      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet);
     }
     core.mcp?.dispose();
     process.exit(ctl.signal.aborted ? 130 : 0);
@@ -789,6 +838,7 @@ async function main(): Promise<void> {
   setReadline(rl);
   let current: RunControl | undefined;
   let pendingFiles = [...args.files];
+  let isolated: { info: WorktreeInfo; mgr: WorktreeManager } | undefined = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
   rl.on('SIGINT', () => {
     if (current) {
       current.stop();
@@ -806,6 +856,9 @@ async function main(): Promise<void> {
   });
   rl.on('close', () => {
     core.mcp?.dispose();
+    if (isolated) {
+      process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — run \`localpilot --isolate\` again or apply it with git\n`));
+    }
     process.stdout.write(dim('bye\n'));
     process.exit(0);
   });
@@ -831,6 +884,19 @@ async function main(): Promise<void> {
       case 'changes': changesSummary(core, session); if (!core.tracker.forSession(session.id).length) { console.log(dim('no pending changes')); } return true;
       case 'undo': { const n = await core.tracker.undo(session.id); console.log(n ? yellow(`reverted ${n} file${n === 1 ? '' : 's'}`) : dim('nothing to undo')); return true; }
       case 'keep': core.tracker.keep(session.id); console.log(green('changes kept')); return true;
+      case 'isolate': {
+        if (isolated) { console.log(dim(`already isolated in ${isolated.info.path}`)); return true; }
+        isolated = await isolate(core, session, args.cwd, renderer);
+        if (!isolated) { console.log(red('not a git repository — cannot isolate')); }
+        return true;
+      }
+      case 'apply': case 'discard': {
+        if (!isolated) { console.log(dim('this session is not isolated — /isolate first')); return true; }
+        await finishIsolated(isolated, cmd === 'apply', renderer, false);
+        isolated = undefined;
+        session.worktree = undefined;
+        return true;
+      }
       case 'clear': session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;

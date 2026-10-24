@@ -347,7 +347,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       const plan = await mm.plan();
       assert.ok(plan.agent.entry.supportsTools && !plan.agent.variant.ollama?.startsWith('qwen'), plan.agent.variant.ollama);
       const commands = await vscode.commands.getCommands(true);
-      for (const id of ['localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.toggleModel', 'localpilot.manageModels']) {
+      for (const id of ['localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.toggleModel', 'localpilot.manageModels', 'localpilot.browseModelGallery']) {
         assert.ok(commands.includes(id), `missing command ${id}`);
       }
       const props = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes.configuration.properties;

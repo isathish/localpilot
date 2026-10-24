@@ -31,6 +31,8 @@ permalink: /docs/shortcuts/
 | <kbd>↑</kbd> / <kbd>↓</kbd> (empty input) | Previous / next prompt from history |
 | <kbd>Esc</kbd> | Close picker — or **stop the running agent** when no picker is open |
 | <kbd>⌥Esc</kbd> / <kbd>AltEsc</kbd> | **Pause** the running agent after its current step / **resume** it |
+| <kbd>⇧Tab</kbd> | Rotate the mode: Agent → Multitask → Debug → Plan → Ask |
+| <kbd>⌘↩</kbd> (empty input, Prepared plan showing) | **Build** the plan |
 | <kbd>Enter</kbd> (agent running) | *Add to this agent* — queue the message for its next step — or send in a new tab |
 | <kbd>⌘L</kbd> / <kbd>CtrlL</kbd> | Focus the input |
 | <kbd>⌘I</kbd> / <kbd>CtrlI</kbd> | Open the **@ Add context** menu |

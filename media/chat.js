@@ -626,6 +626,37 @@
     d.open = true;
     return d;
   }
+  /**
+   * Settled Workers card for a fan-out that already finished (transcript rebuild, reopening a chat): the tool's report is
+   * split back into one collapsed lane per worker, so the card looks the same as it did live instead of degrading to a
+   * plain "Ran 2 subagents in parallel" row. Returns null when the report has no per-worker sections (e.g. an argument error).
+   */
+  function subHostSettled(name, a, result) {
+    const text = String(result.content || '');
+    const sections = [];
+    for (const chunk of text.split(/\n(?=## )/)) {
+      const head = /^## (?:Task \d+ \(([^)]+)\): ?(.*)|\S+\. (.*?) \(([^)]+)\)( — FAILED)?)\s*$/m.exec(chunk);
+      if (!head) { continue; }
+      const body = chunk.slice(head.index + head[0].length).trim();
+      const agent = head[1] || head[4] || 'subagent'; const label = head[2] || head[3] || '';
+      const failed = !!head[5] || /^FAILED:|^Subagent failed|^Not run/i.test(body) || /stopped by the user before it finished/i.test(body);
+      sections.push({ agent, label, body, failed });
+    }
+    if (!sections.length) { return null; }
+    const failed = sections.filter((s) => s.failed).length;
+    const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, `<b>${sections.length} Done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}`, undefined, '');
+    d.__ico = I.layers; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
+    const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
+    for (const s of sections) {
+      const card = subagentCard(s.agent, s.label, undefined, s.label);
+      finishSubagent(card, s.failed ? '' : s.body, s.failed ? s.body : '');
+      card.open = false; c.appendChild(card);
+    }
+    const summary = text.split('\n')[0];
+    if (/^\d+\/\d+ items completed/.test(summary)) { d.querySelector(':scope > summary .meta').textContent = summary.replace(/\..*$/, ''); }
+    d.open = true;
+    return d;
+  }
   function hostFor(live) { const hosts = [...live.tools.values()].filter((n) => n.classList.contains('subhost') && n.classList.contains('running')); return hosts[hosts.length - 1] || null; }
   function hostProgress(host) {
     const total = Number(host.dataset.total || 1); const done = Number(host.dataset.done || 0);
@@ -653,6 +684,7 @@
     if (tc.name === 'edit_file' || tc.name === 'write_file') { const g = editGroup(container, true); const c = editCard(tc.name, a, result); c.dataset.callId = tc.id; g.querySelector(':scope > .content').appendChild(c); updateEditGroup(g); return c; }
     if (tc.name === 'run_command') { const s = termRow(a, result); s.dataset.callId = tc.id; container.appendChild(s); return s; }
     if (tc.name === 'run_parallel_subagents' && !result) { const h = subHost(tc.name, a); h.dataset.callId = tc.id; container.appendChild(h); return h; }
+    if ((tc.name === 'run_parallel_subagents' || tc.name === 'run_todos_parallel') && result) { const h = subHostSettled(tc.name, a, result); if (h) { h.dataset.callId = tc.id; container.appendChild(h); return h; } }
     if (tc.name === 'run_todos_parallel' && !result) {
       const wanted = Array.isArray(a.ids) ? new Set(a.ids.map(String)) : null;
       const tasks = ((state.session && state.session.todos) || []).filter((t) => t.agent && t.status !== 'done' && (!wanted || wanted.has(String(t.id)))).map((t) => ({ agent: t.agent, prompt: t.title }));
@@ -887,6 +919,7 @@
       claimed: 'The reply said this was done, but no tool ran — asking the model to actually do it.',
       announced: 'The reply announced an action without taking it — asking the model to do it.',
       shown: 'The tool call was written as text instead of being made — asking the model to call it.',
+      stale: 'The workers already finished — asking the model to report their results instead of re-announcing the hand-off.',
       malformed: 'The tool call could not be parsed — asking the model to resend it.',
     }[reason] || 'Nothing was executed — asking the model to act or explain.';
     return el('div', 'note nudge', `${I.warn}<span>${esc(why)}</span>`);
@@ -1766,6 +1799,8 @@
       else { els.popover.onkeydown(e); return; }
     }
     if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
+    // Shift+Tab rotates the mode (Agent → Multitask → Debug → Plan → Ask), like Cursor.
+    if (e.key === 'Tab' && e.shiftKey && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; setMode(next); toast(`${MODES[next].label} mode`); return; }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !els.input.value.trim() && state.session && els.messages.querySelector('.plancard') && !state.running.has(state.session.id)) { e.preventDefault(); post({ type: 'buildPlan', sessionId: state.session.id }); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
     if (e.key === 'Escape' && e.altKey && state.session && state.running.has(state.session.id)) { e.preventDefault(); togglePause(); return; }

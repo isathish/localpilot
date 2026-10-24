@@ -16,7 +16,7 @@ The bar at the top of the chat is a browser-style tab strip — **one tab per ag
 |---|---|
 | Underlined, highlighted tab | The chat you are looking at |
 | Shimmering title | You clicked the tab and its chat is loading |
-| Orange spinner · ■ | Agent running — ■ stops it without leaving the current tab |
+| Breathing orange dot · ■ | Agent running — ■ (shown on the active or hovered tab) stops it without leaving the current tab |
 | Green dot · bold title | Finished while you were in another tab — new results to read |
 | Pulsing ⚠ | Waiting for your approval (the prompt is also shown in the current tab with a link) |
 | Pin | Pinned: always first, never closed by "Close other tabs" or retention |

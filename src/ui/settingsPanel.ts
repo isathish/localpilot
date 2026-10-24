@@ -104,7 +104,7 @@ type FromSettings =
 /** Keys (relative to `localpilot.`) that the UI may read and write. Anything else is rejected. */
 const SETTING_KEYS = [
   'providers', 'defaultModel', 'contextWindow', 'maxOutputTokens', 'temperature', 'thinking', 'keepAlive', 'compactionThreshold', 'maxToolOutputChars',
-  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify',
+  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'worktrees.mode', 'worktrees.location',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',

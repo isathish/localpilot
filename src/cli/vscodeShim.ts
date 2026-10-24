@@ -250,6 +250,8 @@ const docs = new Map<string, TextDocument>();
 
 export class WorkspaceEdit {
   readonly edits = new Map<string, { range: Range; text: string }[]>();
+  /** Files to create (write_file on a new path); applied before text edits so an edit to a new file lands on it. */
+  readonly creates = new Map<string, { contents: Uint8Array; overwrite: boolean }>();
   replace(uri: Uri, range: Range, text: string): void {
     const list = this.edits.get(uri.fsPath) ?? [];
     list.push({ range, text });
@@ -260,6 +262,9 @@ export class WorkspaceEdit {
   }
   delete(uri: Uri, range: Range): void {
     this.replace(uri, range, '');
+  }
+  createFile(uri: Uri, options?: { overwrite?: boolean; ignoreIfExists?: boolean; contents?: Uint8Array }): void {
+    this.creates.set(uri.fsPath, { contents: options?.contents ?? new Uint8Array(), overwrite: !!options?.overwrite || !options?.ignoreIfExists });
   }
 }
 
@@ -475,6 +480,14 @@ export const workspace = {
     return doc;
   },
   async applyEdit(edit: WorkspaceEdit): Promise<boolean> {
+    for (const [fsPath, c] of edit.creates) {
+      if (fs.existsSync(fsPath) && !c.overwrite) {
+        continue;
+      }
+      await fsp.mkdir(path.dirname(fsPath), { recursive: true });
+      await fsp.writeFile(fsPath, c.contents);
+      docs.set(fsPath, new TextDocument(Uri.file(fsPath), Buffer.from(c.contents).toString('utf8')));
+    }
     for (const [fsPath, edits] of edit.edits) {
       let doc = docs.get(fsPath);
       if (!doc) {

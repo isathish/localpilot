@@ -65,8 +65,13 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
             }
             break;
           case 'subagent_start': {
-            const p = e.payload as { agent: string; prompt: string };
-            stream.progress(`Subagent ${p.agent}: ${p.prompt.slice(0, 60)}…`);
+            const p = e.payload as { agent: string; prompt: string; label?: string };
+            stream.progress(`Subagent ${p.agent}: ${p.label || `${p.prompt.slice(0, 60)}…`}`);
+            break;
+          }
+          case 'nudge': {
+            const p = e.payload as { reason?: string };
+            stream.progress(p.reason === 'stale' ? 'The workers already finished — asking the model for their results…' : p.reason === 'malformed' ? 'The tool call did not parse — asking the model to resend it…' : 'The reply claimed an action no tool performed — asking the model to act…');
             break;
           }
           case 'clarify': {

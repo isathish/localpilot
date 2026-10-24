@@ -122,7 +122,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // Own control under the parent's: pausing/stopping the parent reaches this child, while the user can also
     // pause or stop just this lane — the parent then carries on with a "stopped" report instead of failing.
     // Registered before subagent_start so a UI reacting to that event can already address the child.
-    const control = ctx.control ? ctx.control.child(childId, def.name) : new RunControl(childId, undefined, ctx.signal, def.name);
+    const control = ctx.control ? ctx.control.child(childId, label ? `${def.name} · ${label}` : def.name) : new RunControl(childId, undefined, ctx.signal, label ? `${def.name} · ${label}` : def.name);
     emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined } });
     const user: ChatMessage = { role: 'user', content: prompt };
     try {

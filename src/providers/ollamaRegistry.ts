@@ -60,11 +60,15 @@ export interface RegistryTag {
   isLatest: boolean;
   /** Runs on Ollama's cloud only. */
   cloud: boolean;
+  /** Weight format when the registry distinguishes them (`GGUF`, `safetensors`, `MLX`). */
+  format?: string;
 }
 
 export interface RegistryTagsResult {
   name: string;
   tags: RegistryTag[];
+  /** Description discovered while loading tags, for registries whose listing has none (Docker Hub). */
+  description?: string;
 }
 
 const CAPABILITIES = new Set<string>(['tools', 'vision', 'thinking', 'embedding', 'decision']);
@@ -152,6 +156,7 @@ export function parseOllamaTagsHtml(name: string, html: string): RegistryTag[] {
       digest: digest?.[1],
       isLatest: /^\s*latest\b/i.test(text.slice(model.length)) || model.endsWith(':latest'),
       cloud,
+      format: /-mlx\b/i.test(model) ? 'MLX' : undefined,
     });
   }
   // `:latest` duplicates a concrete tag with the same digest; keep the concrete one and mark it.
@@ -172,7 +177,7 @@ function toGb(n: number, unit: string): number {
   return Math.round(gb * 100) / 100;
 }
 
-function compactCount(n: number): string {
+export function compactCount(n: number): string {
   if (!Number.isFinite(n)) {
     return '';
   }

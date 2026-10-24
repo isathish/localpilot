@@ -298,6 +298,38 @@ input.invalid, select.invalid { border-color: var(--error); }
 .job:last-child { border-bottom: none; }
 .job .t { flex: 1; min-width: 0; } .job .t b { display: block; font-family: var(--mono); font-weight: 500; font-size: 12px; } .job .t > span { display: block; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job .pct, .cat-var .pct { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 36px; text-align: right; font-size: 12px; }
+
+/* ---- model gallery (ollama.com library browser) */
+.gal-status { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-top: 14px; }
+.gal-status .t { flex: 1; min-width: 0; } .gal-status .t b { display: block; font-size: 12.5px; } .gal-status .t span { display: block; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.gal-tools { margin: 14px 0 10px; }
+.gal-search { position: relative; display: flex; align-items: center; }
+.gal-search > svg { position: absolute; left: 11px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.gal-search input { width: 100%; height: 34px; padding: 0 12px 0 34px; border-radius: var(--radius); border: 1px solid var(--border-2); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: 13px; }
+.gal-search input::placeholder { color: var(--muted); }
+.gal-tools .chips { margin: 8px 0 0; }
+.gal-tools .chips select { margin-left: auto; width: auto; height: 26px; padding: 0 8px; font-size: 12px; line-height: 24px; }
+.gal-count { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; }
+.gal-model .cat-head .t .v svg { width: 10px; height: 10px; vertical-align: -1px; }
+.gal-sizes { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.gal-sizes:empty { display: none; }
+.gal-sizes .sz { font-family: var(--mono); font-size: 10.5px; line-height: 17px; padding: 0 6px; border-radius: 5px; background: var(--code-bg); color: var(--muted); }
+.gal-head-act { display: flex; gap: 4px; align-items: center; flex: none; padding-top: 2px; }
+.gal-head-act .btn svg:last-child { transform: rotate(90deg); transition: transform .15s; }
+.gal-head-act .btn.on svg:last-child { transform: rotate(-90deg); }
+.gal-model .cat-var .note { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gal-model .cat-var .spinner { margin-right: 4px; }
+.gal-more { width: 100%; margin: 4px 0 12px; }
+.gal-more svg { transform: rotate(90deg); }
+.gal-pull { padding: 12px 14px; }
+.gal-pull .desc { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.gal-pull-row { display: flex; gap: 8px; align-items: center; }
+.gal-pull-row input { flex: 1; min-width: 0; height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--input-bg); color: var(--input-fg); font-family: var(--mono); font-size: 12px; }
+.gal-pull-row input.invalid { border-color: var(--error); }
+.gal-pull-row .btn { height: 28px; }
+.gal-err { color: var(--error); font-size: 11.5px; margin-top: 6px; }
+.gal-err:empty { display: none; }
+.loading.short { height: auto; padding: 36px 0; }
 .job .t b .badge { font-family: var(--vscode-font-family); margin-left: 4px; }
 .route { display: grid; grid-template-columns: 1fr; gap: 0; }
 .route .auto { font-size: 11px; color: var(--muted); margin-top: 3px; }
