@@ -181,6 +181,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         emit: (e) => emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type }),
         maxIterations: 25,
         maxModelRetries: routedElsewhere && !fellBack ? 0 : undefined,
+        // A side model that has not produced a token in a minute is not loading, it is dead; the parent's model is ready.
+        firstTokenTimeoutMs: routedElsewhere && !fellBack ? 60_000 : undefined,
       });
     try {
       let text: string;

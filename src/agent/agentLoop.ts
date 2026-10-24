@@ -46,6 +46,8 @@ export interface AgentRunOptions {
   control?: RunControl;
   /** Transient-failure retries per model step (default 2). Subagents on a router-chosen model use 0 so a dead model fails fast and the caller can fall back. */
   maxModelRetries?: number;
+  /** First-token watchdog for this run (default 180 s, scaled by queue depth). Shorter for router-chosen subagent models, which have a fallback. */
+  firstTokenTimeoutMs?: number;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -492,7 +494,7 @@ export class AgentRunner {
           // A request queued behind `others` on a one-slot server legitimately waits for all of them: give it
           // their first-token budget too instead of calling it a stall and retrying (which only re-queues it).
           const guarded = withWatchdog(stream, {
-            firstTokenMs: Math.min(FIRST_TOKEN_TIMEOUT_MS * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS),
+            firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS),
             idleMs: IDLE_TIMEOUT_MS,
             abort: () => ac.abort(),
             onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}` : `Waiting for ${model.name}`} · ${s}s${s >= 30 && !others ? ' (loading the model or a long prompt)' : ''}…`),

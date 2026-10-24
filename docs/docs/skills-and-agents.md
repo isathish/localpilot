@@ -151,6 +151,8 @@ The main agent calls `run_subagent` (one child) or `run_parallel_subagents` (man
 
 A skill the parent is working with does not stop at the parent. Every subagent — whether started with `run_subagent`, fanned out with `run_parallel_subagents`, or run as a checklist item by `run_todos_parallel` — receives the parent's **active skills** (preloaded, pinned, forced with `/skill`, or loaded with `load_skill` during the turn) as a preloaded `<skill>` block that says *the agent that delegated this task is working with it*. On top of that, each worker gets a strong match on its **own brief** (a worker told to "run the quuxaudit on src" loads the `quuxaudit` skill even if the user never mentioned it), the `skills:` of its agent file, and any `skills` named on the task or checklist item (`run_subagent`, `run_parallel_subagents` tasks, `run_todos_parallel` tasks and `manage_todos` items all accept a `skills` array). Disabled skills are filtered out at every level, and a subagent whose tool list lacks `load_skill` is told that what applies is already in its brief instead of being shown an index it cannot use.
 
+Read-only subagents run on a small *fast* model when routing finds one. If that model stalls or is unreachable, the lane falls back to the parent's model after a minute instead of failing, and the router avoids the unresponsive model for the next ten minutes — a bad or half-downloaded small model costs one lane one minute, not the whole swarm.
+
 `run_todos_parallel` also recognises inline tasks that restate pending checklist items (same prompt or title) and runs those items instead of appending duplicates — a common small-model habit that used to leave the original items pending forever.
 
 ## Understanding vague requests
