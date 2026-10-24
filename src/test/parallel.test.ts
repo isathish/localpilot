@@ -174,6 +174,26 @@ suite('Parallel execution: dependency waves, sharding and plan handoff', () => {
     }
   });
 
+  test('run_todos_parallel accepts the work inline as "tasks": items are created, run and ticked off', async function () {
+    this.timeout(20_000);
+    const starts: string[] = [];
+    const { tool } = fanOutTool(async (prompt) => {
+      const id = /checklist item (\S+) \(/.exec(prompt)![1];
+      starts.push(id);
+      await new Promise((r) => setTimeout(r, 60));
+      return `report-${id}`;
+    });
+    let todos: TodoItem[] = [{ id: '1', title: 'Already there', status: 'done' }];
+    const ctx = fakeCtx({ get: () => todos, set: (t) => (todos = t) });
+    const r = await tool.execute({ tasks: [{ title: 'Create alpha', agent: 'coder', prompt: 'make alpha.txt' }, { title: 'Create beta', agent: 'coder', prompt: 'make beta.txt' }, { title: 'Verify both', agent: 'tester', prompt: 'check both files', dependsOn: ['Create alpha', 'Create beta'] }] }, ctx);
+    assert.ok(!r.isError, r.content);
+    assert.deepStrictEqual(todos.map((t) => `${t.id}:${t.title}:${t.status}`), ['1:Already there:done', '2:Create alpha:done', '3:Create beta:done', '4:Verify both:done'], JSON.stringify(todos));
+    assert.deepStrictEqual(todos[3].dependsOn, ['2', '3'], 'dependsOn by title resolved to the new ids');
+    assert.deepStrictEqual(starts.slice(0, 2).sort(), ['2', '3'], `independent inline tasks first: ${starts.join(',')}`);
+    assert.strictEqual(starts[2], '4', 'dependent inline task after its prerequisites');
+    assert.match(r.content, /report-2[\s\S]*report-3[\s\S]*report-4/);
+  });
+
   test('run_todos_parallel refuses in read-only modes and when nothing is delegable', async () => {
     const { tool } = fanOutTool(async () => 'ok');
     let todos: TodoItem[] = [{ id: '1', title: 'Do it', status: 'pending', agent: 'coder', prompt: 'x' }];

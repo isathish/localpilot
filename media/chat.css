@@ -67,6 +67,9 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tab.active .ind { color: var(--fg); }
 .tab .spin { width: 10px; height: 10px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 .tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent); }
+/* One quiet "running" marker everywhere a spinner would just add noise (tabs, background strip, worker lanes): a brand dot that breathes. */
+.dot.live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 22%, transparent); animation: breathe 1.6s ease-in-out infinite; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 10%, transparent); opacity: .75; } }
 .tab.running { color: var(--fg); }
 .tab.unread .t { font-weight: 600; color: var(--fg); }
 .tab.attention { color: var(--warn); } .tab.attention .ind { color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
@@ -80,7 +83,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tab .close svg { width: 11px; height: 11px; }
 .tab:hover .close, .tab.active .close, .tab:focus-visible .close { opacity: 1; }
 .tab .close:hover { background: var(--tint-2); color: var(--fg); }
-.tab.running .close { opacity: 1; color: var(--brand); } .tab.running .close:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+/* A running tab shows its stop square only when it is the active tab or hovered — the dot already says "running". */
+.tab.running .close { color: var(--brand); } .tab.running .close:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
 .tab.pinned .ind { color: var(--brand); }
 .tab.selected { background: color-mix(in srgb, var(--focus) 18%, transparent); border-color: color-mix(in srgb, var(--focus) 55%, transparent); color: var(--fg); }
 .tab.selected .close { opacity: 1; }
@@ -96,6 +100,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .bgrun { display: flex; align-items: center; gap: 8px; min-height: 22px; padding: 0 2px 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; min-width: 0; }
 .bgrun:hover { background: var(--tint); color: var(--fg); }
 .bgrun .spin { width: 9px; height: 9px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+.bgrun .dot.live { margin: 0 2px; }
 .bgrun .t { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; max-width: 45%; }
 .bgrun .st { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bgrun .mdl { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 8px; background: var(--tint-2); color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -111,7 +116,36 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .par textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 96px; padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); line-height: 1.5; }
 .par textarea:focus { outline: none; border-color: var(--focus); }
 .par-foot { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
-.par-foot .btn svg { width: 13px; height: 13px; }
+.par-foot .btn svg { width: 13px; height: 13px; } .par-foot .btn { white-space: nowrap; }
+.par { gap: 10px; max-height: min(78vh, 640px); overflow: auto; }
+.par .lbl { font-size: var(--fs-xs); color: var(--muted); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; } .par .lbl i { font-style: normal; opacity: .7; }
+.par-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.par-card { display: grid; grid-template-columns: 16px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: start; text-align: left; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--card); color: var(--muted); }
+.par-card svg { width: 14px; height: 14px; grid-row: 1 / span 2; margin-top: 2px; color: var(--brand); }
+.par-card b { font-size: var(--fs-sm); color: var(--fg); font-weight: 600; } .par-card span { font-size: var(--fs-xs); line-height: 1.35; }
+.par-card:hover { border-color: var(--border); background: var(--tint); }
+.par-card.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 9%, transparent); box-shadow: inset 0 0 0 1px var(--brand); }
+.par-tasks { display: flex; flex-direction: column; gap: 4px; }
+.task-row { position: relative; display: flex; align-items: center; gap: 6px; }
+.task-row .num { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--tint-2); color: var(--muted); font-size: 10px; font-weight: 600; }
+.task-row input.task { flex: 1; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); }
+.task-row input.task:focus { outline: none; border-color: var(--focus); }
+.task-row .rm { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); opacity: .6; } .task-row .rm:hover { opacity: 1; background: var(--tint); color: var(--error); } .task-row .rm svg { width: 11px; height: 11px; }
+.task-row .ac { position: absolute; left: 24px; right: 28px; top: 32px; z-index: 3; background: var(--vscode-editorWidget-background, var(--card)); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); overflow: hidden; }
+.task-row .ac .opt { padding: 5px 9px; font-size: var(--fs-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .task-row .ac .opt:hover, .task-row .ac .opt.sel { background: var(--tint); }
+.par-tasks .add { align-self: flex-start; height: 24px; font-size: var(--fs-xs); color: var(--muted); } .par-tasks .add svg { width: 12px; height: 12px; }
+.par-models .chips, .par-ideas .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.par-models .chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 6px; border: 1px solid var(--border-soft); border-radius: 12px; font-size: var(--fs-xs); cursor: pointer; background: var(--card); }
+.par-models .chip:has(input:checked) { border-color: var(--brand); color: var(--fg); background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.par-models input { margin: 0; accent-color: var(--brand); }
+.par .muted { font-size: var(--fs-xs); color: var(--muted); } .par .muted.loading { align-self: center; padding: 0 4px; }
+.par-ideas .lbl .more { margin-left: auto; height: 22px; font-size: var(--fs-xs); color: var(--brand); } .par-ideas .lbl .more svg { width: 12px; height: 12px; }
+.par-ideas .chips { max-height: 150px; overflow: auto; }
+.idea { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: 100%; padding: 5px 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--card); text-align: left; color: var(--fg); }
+.idea b { font-weight: 500; font-size: var(--fs-xs); } .idea span { font-size: 10.5px; color: var(--muted); line-height: 1.3; }
+.idea:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.idea.used { opacity: .45; } .idea.fix b::before { content: '🩹 '; } .idea.test b::before { content: '✅ '; } .idea.docs b::before { content: '📝 '; } .idea.cleanup b::before { content: '🧹 '; } .idea.feature b::before { content: '✨ '; } .idea.review b::before { content: '🔍 '; } .idea.explore b::before { content: '🧭 '; }
+.par-foot .n { flex: 1 1 auto; min-width: 0; line-height: 1.35; }
 
 /* approvals raised by another tab show where they come from */
 .approval .sess { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 10px 6px 13px; font-size: var(--fs-xs); color: var(--muted); text-align: left; }
@@ -123,7 +157,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 @keyframes slide { to { left: 100%; } }
 
 /* transcript */
-#messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px 0 8px; display: flex; flex-direction: column; }
+#messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px 0 8px; display: flex; flex-direction: column; container-type: inline-size; container-name: messages; }
 .turn { position: relative; padding: 6px 12px; min-width: 0; }
 /* Only turns that genuinely appear animate; a transcript rebuild (end of turn, mode change) must not blink. */
 .turn.fresh, .turn.live { animation: fadeUp .18s ease-out; }
@@ -142,6 +176,15 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
    hover actions, which hang above the turn, are never clipped. The live turn is excluded so streaming never flickers. */
 .turn.assistant:not(.live) > .body, .turn.assistant:not(.live) > .steps { content-visibility: auto; contain-intrinsic-size: auto 80px; }
 .body { min-width: 0; overflow-wrap: anywhere; }
+.turn.assistant > .body + .body, .turn.assistant > .note + .body { margin-top: .6em; }
+/* A reply the agent loop retracted (it claimed an action it never took): kept for honesty, visibly superseded. */
+.body.retracted { position: relative; color: var(--muted); opacity: .6; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--warn) 50%, transparent); }
+.body.retracted::before { content: 'retracted'; display: block; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--warn); margin-bottom: 2px; }
+.note.nudge { display: flex; align-items: flex-start; gap: 8px; border-style: solid; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 6%, transparent); color: var(--fg-2); }
+.note.nudge svg { width: 13px; height: 13px; flex: none; margin-top: 2px; color: var(--warn); }
+/* "Understood as: …" — the agent's restatement of an ambiguous request, set as a quiet kicker rather than body text. */
+.body .understood { margin: .3em 0 .7em; padding: 6px 10px; border-left: 2px solid var(--brand); background: var(--tint); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--fg-2); font-size: var(--fs-sm); line-height: 1.5; }
+.body .understood .k { display: block; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--brand); margin-bottom: 1px; }
 .body > :first-child { margin-top: 0; } .body > :last-child { margin-bottom: 0; }
 .body p { margin: .5em 0; } .body ul, .body ol { margin: .4em 0; padding-left: 1.5em; } .body li { margin: .15em 0; }
 .body h1, .body h2, .body h3, .body h4 { margin: .9em 0 .4em; line-height: 1.3; font-weight: 600; }
@@ -226,7 +269,25 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .pill { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; vertical-align: middle; height: 26px; padding: 0 11px 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--muted); font-size: var(--fs-sm); min-width: 0; box-shadow: var(--shadow-sm); }
 .pill .pico { display: inline-grid; place-items: center; color: var(--brand); } .pill .pico svg { width: 13px; height: 13px; }
 .pill b { font-weight: 600; color: var(--fg); } .pill i { font-style: normal; opacity: .5; } .pill .task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; } .pill .model { white-space: nowrap; opacity: .85; }
-.step.subagent > summary { align-items: center; } .step.subagent > summary .ico { margin-top: 0; }
+/* Subagent row: ● | who (pill) | what (task) | step · n steps | ⏸ ■ | › — a grid so the task can never be squeezed out of view. */
+.step.subagent > summary { display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto auto auto; align-items: center; column-gap: 10px; }
+.step.subagent > summary .label { flex: none; min-width: 0; overflow: visible; }
+.step.subagent > summary .lane-task { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.step.subagent[open] > summary .lane-task { white-space: normal; }
+.step.subagent > summary .meta { justify-self: end; }
+.step.subagent > summary .ico { margin: 0; justify-self: center; }
+.step.subagent.running > summary .ico { color: var(--brand); }
+/* Narrow sidebar: who + step on the first line, the task on its own line underneath. */
+@container messages (max-width: 560px) {
+  .step.subagent > summary { grid-template-columns: 16px minmax(0, 1fr) auto auto auto; row-gap: 1px; }
+  .step.subagent > summary .lane-task { grid-column: 2 / -1; grid-row: 2; white-space: normal; font-size: var(--fs-xs); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .step.subagent > summary .label { min-width: 0; overflow: hidden; }
+  .step.subagent > summary .meta .now { max-width: 140px; }
+  /* No room for the model name beside the step text; it stays in the row's tooltip. */
+  .step.subagent > summary .pill .model, .step.subagent > summary .pill i { display: none; }
+}
+@container messages (max-width: 360px) { .step.subagent > summary .meta .muted { display: none; } }
+.step.subagent > summary .ico { margin-top: 0; }
 .step.subagent.running > summary .pill { border-color: color-mix(in srgb, var(--brand) 45%, var(--border)); }
 .step.subagent.error > summary .pill { border-color: color-mix(in srgb, var(--error) 50%, var(--border)); }
 .step.subagent > .content.subbody { padding: 0 0 0 10px; margin: 0 0 6px 13px; background: none; border: none; border-left: 1px solid var(--border-soft); border-radius: 0; font-family: inherit; font-size: inherit; white-space: normal; max-height: none; overflow: visible; }
@@ -352,7 +413,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .todo .box svg { width: 10px; height: 10px; stroke-width: 2; }
 .todo.done .box { background: var(--ok); border-color: var(--ok); color: #fff; }
 .todo.done .title { color: var(--muted); text-decoration: line-through; }
-.todo.in_progress .box { border-color: var(--brand); color: var(--brand); } .todo.in_progress .box svg { animation: spin 1s linear infinite; }
+.todo.in_progress .box { border-color: var(--brand); color: var(--brand); } .todo.in_progress .box .now { width: 6px; height: 6px; border-radius: 2px; background: var(--brand); }
+.todo.skipped .box { color: var(--muted); }
 .todo.in_progress .title { font-weight: 500; }
 .todo.skipped .title { color: var(--muted); font-style: italic; }
 .todo .title { line-height: 1.4; min-width: 0; overflow-wrap: anywhere; flex: 1; }
@@ -363,7 +425,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .change { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; min-width: 0; }
 .change:hover { background: var(--tint); }
 .change .kind { flex: none; width: 14px; text-align: center; font-weight: 600; font-size: 10.5px; }
-.change .kind.create { color: var(--ok); } .change .kind.modify { color: var(--warn); }
+.change .kind.create { color: var(--ok); } .change .kind.modify { color: var(--warn); } .change .kind.delete { color: var(--error); } .change .kind.rename { color: var(--muted); }
+.change .stat { flex: none; display: inline-flex; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; } .change .stat i { font-style: normal; } .change .stat .add { color: var(--ok); } .change .stat .del { color: var(--error); }
+/* Isolated-worktree changes: not in the workspace yet, so the panel is tinted and headed by Apply / Discard. */
+.panel.isolated > .panel-head { background: color-mix(in srgb, var(--brand) 7%, transparent); }
+.panel.isolated .panel-toggle { color: var(--fg); }
 .change .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-family: var(--mono); font-size: 11.5px; }
 .change .acts { display: none; gap: 2px; flex: none; } .change:hover .acts { display: inline-flex; }
 .change .acts button { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted); }
@@ -421,7 +487,32 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .lanectl button { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: var(--muted); }
 .lanectl button:hover { background: var(--tint-2); color: var(--fg); } .lanectl button svg { width: 11px; height: 11px; }
 .lanectl [data-c="stop"]:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
-.step.subagent.paused > summary .pill { border-style: dashed; } .step.subagent.paused > summary .ico { color: var(--brand); }
+.step.subagent.paused > summary .pill { border-style: dashed; } .step.subagent.paused > summary .ico { color: var(--brand); } .step.subagent.paused > summary .ico svg { animation: none; }
+/* Workers card: "4 Working · Stop All", one row per background worker with its current step. */
+.step.subhost.workers { border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--card); margin: 6px 0; }
+.step.subhost.workers > summary { min-height: 34px; padding: 4px 8px 4px 8px; } .step.subhost.workers > summary .label b { font-weight: 600; color: var(--fg); }
+.step.subhost.workers > .content.subs { padding: 2px 6px 6px; }
+.step.subhost.workers .lane { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 3px 6px; color: var(--muted); font-size: var(--fs-sm); }
+.step.subhost.workers .lane .who { font-weight: 600; color: var(--fg); } .step.subhost.workers .lane .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .step.subhost.workers .lane .now { flex: none; font-size: var(--fs-xs); opacity: .7; }
+.lanectl.host { display: none; } .step.subhost.running > summary .lanectl.host { display: inline-flex; }
+.lanectl.host button { display: inline-flex; align-items: center; width: auto; height: 22px; padding: 0 8px; gap: 5px; font-size: var(--fs-xs); white-space: nowrap; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); } .lanectl.host button:hover { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
+.step.subagent > summary .meta .now { color: var(--muted); font-weight: 400; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step.subhost.workers > .content > .step.subagent > summary .pill { border: none; background: none; box-shadow: none; padding-left: 0; height: auto; }
+/* Prepared plan card (Plan mode result). */
+.plancard { padding: 8px 12px 12px; }
+.plan-kicker { font-size: var(--fs-xs); color: var(--muted); margin: 0 0 6px 2px; }
+.plan { border: 1px solid var(--border-soft); border-radius: var(--radius-lg); background: var(--card); padding: 12px 14px; }
+.plan-file { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--muted); margin-bottom: 8px; } .plan-file svg { width: 15px; height: 15px; } .plan-file .name { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-file button { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; color: var(--muted); } .plan-file button:hover { background: var(--tint); color: var(--fg); } .plan-file button svg { width: 13px; height: 13px; }
+.plan h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; } .plan p { margin: 0 0 6px; color: var(--muted); }
+.plan .link { color: var(--link, var(--brand)); font-size: var(--fs-sm); padding: 0; } .plan .link:hover { text-decoration: underline; }
+.plan-todos { margin: 10px 0 12px; padding: 10px 12px; border-radius: var(--radius); background: var(--tint); }
+.plan-todos .n { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
+.plan-todos .todo { display: flex; align-items: flex-start; gap: 9px; padding: 3px 0; font-size: var(--fs-sm); line-height: 1.45; }
+.plan-todos .todo i { flex: none; width: 13px; height: 13px; margin-top: 3px; border: 1.5px solid var(--muted); border-radius: 50%; } .plan-todos .todo.done i { background: var(--ok); border-color: var(--ok); } .plan-todos .todo.done span { text-decoration: line-through; color: var(--muted); }
+.plan-todos .todo em { font-style: normal; font-size: var(--fs-xs); color: var(--muted); margin-left: auto; padding-left: 8px; white-space: nowrap; }
+.plan-foot { display: flex; align-items: center; gap: 10px; } .plan-foot .hint { flex: 1; font-size: var(--fs-xs); color: var(--muted); }
+.plan-foot .build { background: var(--brand); color: var(--brand-fg, #15181d); font-weight: 600; height: 30px; padding: 0 12px; border-radius: var(--radius); gap: 6px; } .plan-foot .build kbd { font-family: inherit; font-size: var(--fs-xs); opacity: .8; } .plan-foot .build:disabled { opacity: .6; }
 
 /* popover menu */
 .popover { position: fixed; z-index: 60; min-width: 220px; max-width: min(360px, calc(100vw - 20px)); max-height: 60vh; overflow: auto; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; font-size: var(--fs-sm); animation: fadeUp .12s ease-out; }
@@ -618,7 +709,8 @@ pre.numbered .t { padding-right: 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   /* "Running" stays legible as a static, dimmed glyph instead of an endless spin. */
-  .step.running .ico svg, .tab .spin, .bgrun .spin, .status .spinner, .todo.in_progress .box svg, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
+  .step.running .ico svg, .tab .spin, .bgrun .spin, .status .spinner, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
+  .dot.live { animation: none !important; }
   .step.running .label > b { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--fg); animation: none; }
   .typing i, .boot-dots i, .caret { animation: none !important; opacity: .7; }
   .progress::after { animation: none !important; left: 0; width: 100%; opacity: .5; }

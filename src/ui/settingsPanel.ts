@@ -7,6 +7,7 @@ import { McpManager } from '../mcp/mcpManager';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
+import { isValidOllamaModelRef, OllamaRegistry, RegistryCapability, RegistryModel, RegistrySort, RegistryTag } from '../providers/ollamaRegistry';
 import { pickForRole, ProviderRegistry } from '../providers/registry';
 import { getSystemProfile, SystemProfile } from '../providers/system';
 import { SessionStore } from '../sessions/sessionStore';
@@ -16,7 +17,7 @@ export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'advanced';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'advanced';
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -72,6 +73,8 @@ type ToSettings =
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
   | { type: 'jobs'; jobs: ModelJob[] }
+  | { type: 'gallery'; q: string; capability: string; sort: string; page: number; models: RegistryModel[]; hasMore: boolean; error?: string }
+  | { type: 'galleryTags'; name: string; tags: RegistryTag[]; error?: string }
   | { type: 'busy'; busy: boolean }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
@@ -84,6 +87,8 @@ type FromSettings =
   | { type: 'refreshModels' }
   | { type: 'loadModels' }
   | { type: 'installModel'; target: InstallTarget; model: string }
+  | { type: 'gallerySearch'; q?: string; capability?: string; sort?: string; page?: number }
+  | { type: 'galleryTags'; name: string }
   | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string; name?: string }
   | { type: 'toggleModel'; id: string; enabled: boolean }
   | { type: 'cancelJob'; id: string }
@@ -110,7 +115,7 @@ const SETTING_KEYS = [
 const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
-  'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels',
+  'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills',
 ]);
 
@@ -123,6 +128,8 @@ const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'w
 export const WELCOMED_KEY = 'localpilot.welcomed';
 
 const TARGET_LABEL: Record<InstallTarget, string> = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
+const GALLERY_CAPABILITIES = new Set<string>(['tools', 'vision', 'thinking', 'embedding']);
+const GALLERY_SORTS = new Set<string>(['popular', 'newest', 'name']);
 
 /**
  * Settings, provider manager and first-run setup — one webview panel with two pages.
@@ -138,6 +145,8 @@ export class SettingsPanel implements vscode.Disposable {
   private modelsLoaded = false;
   private modelsRefresh?: ReturnType<typeof setTimeout>;
   private jobsTimer?: ReturnType<typeof setTimeout>;
+  private readonly registry = new OllamaRegistry();
+  private gallerySearchAbort?: AbortController;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -243,6 +252,9 @@ export class SettingsPanel implements vscode.Disposable {
       case 'loadModels':
         return this.pushModels();
       case 'installModel':
+        if (m.target === 'ollama' && !isValidOllamaModelRef(m.model)) {
+          throw new Error(`Not a valid Ollama model reference: ${m.model}`);
+        }
         void this.models.pull(m.target, m.model, this.runtimeProvider(m.target)).then((job) => {
           if (job.status === 'done') {
             this.post({ type: 'toast', level: 'info', text: `${job.model} installed` });
@@ -251,6 +263,17 @@ export class SettingsPanel implements vscode.Disposable {
           }
         });
         return;
+      case 'gallerySearch':
+        return this.gallerySearch(m);
+      case 'galleryTags': {
+        try {
+          const r = await this.registry.tags(m.name);
+          this.post({ type: 'galleryTags', name: r.name, tags: r.tags });
+        } catch (e) {
+          this.post({ type: 'galleryTags', name: m.name, tags: [], error: e instanceof Error ? e.message : String(e) });
+        }
+        return;
+      }
       case 'removeModel': {
         // Webviews cannot show `confirm()` dialogs (it silently returns false), so the host asks instead.
         const label = m.name || m.model;
@@ -330,6 +353,35 @@ export class SettingsPanel implements vscode.Disposable {
     const clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
     await vscode.workspace.getConfiguration('localpilot').update(key, clean, scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace);
     this.log.info(`settings: ${key} ${clean === undefined ? 'reset' : 'updated'} (${scope})`);
+  }
+
+  /** Searches ollama.com for the gallery. A newer search cancels the one in flight so a fast typist never sees stale pages land. */
+  private async gallerySearch(m: Extract<FromSettings, { type: 'gallerySearch' }>): Promise<void> {
+    this.gallerySearchAbort?.abort(new Error('superseded'));
+    const ctrl = new AbortController();
+    this.gallerySearchAbort = ctrl;
+    const q = String(m.q ?? '').slice(0, 100);
+    const capability = GALLERY_CAPABILITIES.has(String(m.capability)) ? (m.capability as RegistryCapability) : '';
+    const sort = GALLERY_SORTS.has(String(m.sort)) ? (m.sort as RegistrySort) : 'popular';
+    const page = Math.max(1, Math.min(50, Math.floor(Number(m.page) || 1)));
+    try {
+      const r = await this.registry.search({ q, capability, sort, page }, ctrl.signal);
+      if (ctrl.signal.aborted) {
+        return;
+      }
+      this.post({ type: 'gallery', q, capability, sort, page, models: r.models, hasMore: r.hasMore });
+    } catch (e) {
+      if (ctrl.signal.aborted) {
+        return;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      this.log.warn(`gallery: search failed: ${msg}`);
+      this.post({ type: 'gallery', q, capability, sort, page, models: [], hasMore: false, error: /fetch failed|ENOTFOUND|ECONNREFUSED|timeout/i.test(msg) ? 'Cannot reach ollama.com — check your internet connection.' : msg });
+    } finally {
+      if (this.gallerySearchAbort === ctrl) {
+        this.gallerySearchAbort = undefined;
+      }
+    }
   }
 
   private async finishSetup(m: Extract<FromSettings, { type: 'finishSetup' }>): Promise<void> {
@@ -495,6 +547,7 @@ export class SettingsPanel implements vscode.Disposable {
   dispose(): void {
     clearTimeout(this.modelsRefresh);
     clearTimeout(this.jobsTimer);
+    this.gallerySearchAbort?.abort(new Error('disposed'));
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }

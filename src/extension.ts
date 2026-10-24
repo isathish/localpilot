@@ -33,6 +33,7 @@ import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { AGENTS_VIEW_ID, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
+import { WorktreeManager } from './agent/worktrees';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
@@ -59,7 +60,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
   const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
-  const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
+  const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
+  const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
+  // "Before" side of worktree diffs: the file as the agent found it (the worktree's base commit).
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('localpilot-wtbase', {
+      provideTextDocumentContent: async (uri) => {
+        const s = store.get(decodeURIComponent(uri.query));
+        return s?.worktree ? worktrees.baseContent(s.worktree, uri.path.replace(/^\//, '')) : '';
+      },
+    })
+  );
+  // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start.
+  setTimeout(() => void controller.pruneWorktrees().then((n) => n && log.info(`removed ${n} orphaned worktree(s)`)), 5000);
   controller.learner = learner;
   controller.catalog = catalog;
   context.subscriptions.push(learner);
@@ -347,6 +360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       { label: '', kind: vscode.QuickPickItemKind.Separator },
       { label: '$(server) Select Model…', description: cfg.defaultModel || 'auto', run: () => vscode.commands.executeCommand('localpilot.selectModel') },
       { label: '$(library) Manage Models', run: () => vscode.commands.executeCommand('localpilot.manageModels') },
+      { label: '$(search) Browse Ollama Model Gallery…', run: () => vscode.commands.executeCommand('localpilot.browseModelGallery') },
       { label: `$(${cfg.inlineCompletion.enabled ? 'check' : 'circle-large-outline'}) Inline Completions`, description: cfg.inlineCompletion.enabled ? 'on' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleInlineCompletions') },
       { label: '', kind: vscode.QuickPickItemKind.Separator },
       { label: '$(layout) Move Chat To…', description: where?.label, run: () => view.pickLocation() },
@@ -440,7 +454,118 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         return controller.handle({ type: 'deleteSession', id: s.id });
     }
   });
+  // Session argument: id (palette / API) or an Agents-view node.
+  const worktreeSession = (arg: unknown): string | undefined => {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    const n = arg as { sessionId?: string; session?: { id: string } } | undefined;
+    return n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;
+  };
+  cmd('localpilot.applyWorktree', async (arg?: unknown) => {
+    const id = worktreeSession(arg);
+    if (!id) {
+      return;
+    }
+    const res = await controller.applyWorktree(id);
+    if (res?.conflicts.length) {
+      const open = await vscode.window.showWarningMessage(`${res.conflicts.length} file(s) have conflict markers.`, 'Open first conflict');
+      if (open && workspace.root) {
+        await vscode.window.showTextDocument(vscode.Uri.file(path.join(workspace.root, res.conflicts[0])));
+      }
+    }
+  });
+  cmd('localpilot.discardWorktree', async (arg?: unknown) => {
+    const id = worktreeSession(arg);
+    const s = id ? store.get(id) : undefined;
+    if (!s?.worktree) {
+      return;
+    }
+    const n = (await worktrees.changes(s.worktree).catch(() => [])).length;
+    const ok = !n || (await vscode.window.showWarningMessage(`Discard the agent's ${n} unapplied file change${n === 1 ? '' : 's'}?`, { modal: true }, 'Discard')) === 'Discard';
+    if (ok) {
+      await controller.discardWorktree(s.id);
+    }
+  });
+  cmd('localpilot.openWorktree', (arg?: unknown) => {
+    const id = worktreeSession(arg);
+    const s = id ? store.get(id) : undefined;
+    if (s?.worktree) {
+      void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(s.worktree.path), { forceNewWindow: true });
+    }
+  });
+  cmd('localpilot.runBestOfN', async (preset?: unknown) => {
+    const prompt = typeof preset === 'string' && preset.trim() ? preset : await vscode.window.showInputBox({ title: 'Best of N: one task, several models', prompt: 'The same task runs on every model you pick, each in its own isolated worktree. Compare the results and apply the best.', placeHolder: 'Refactor the payment module to use the new API client', ignoreFocusOut: true });
+    if (!prompt?.trim()) {
+      return;
+    }
+    const models = await providers.listModels().catch(() => []);
+    const picks = await vscode.window.showQuickPick(
+      models.filter((m) => m.supportsTools).map((m) => ({ label: m.name, description: m.providerId, detail: `${Math.round(m.contextWindow / 1024)}k context${m.parameterSize ? ` · ${m.parameterSize}` : ''}`, id: m.id })),
+      { title: 'Which models should attempt it? (up to 8)', canPickMany: true, placeHolder: 'Pick two or more models', ignoreFocusOut: true }
+    );
+    if (!picks?.length) {
+      return;
+    }
+    view.reveal();
+    await controller.runBestOfN(prompt.trim(), picks.slice(0, 8).map((p) => p.id));
+  });
+  cmd('localpilot.compareResults', async (groupArg?: unknown) => {
+    const groups = new Map<string, { prompt: string; size: number; kind: 'bestOf' | 'batch' }>();
+    for (const s of store.list()) {
+      if (s.group) {
+        groups.set(s.group.id, { prompt: s.group.prompt, size: s.group.size, kind: s.group.kind });
+      }
+    }
+    let groupId = typeof groupArg === 'string' ? groupArg : controller.activeSession?.group?.id;
+    if (!groupId || !groups.has(groupId)) {
+      const pick = await vscode.window.showQuickPick([...groups].map(([id, g]) => ({ label: g.prompt.slice(0, 80), description: `${g.size} agents · ${g.kind === 'bestOf' ? 'same task' : 'split tasks'}`, id })), { title: 'Review parallel agents', placeHolder: groups.size ? 'Which batch?' : 'No batches yet — start agents with Run Tasks in Parallel or Best of N first' });
+      groupId = pick?.id;
+    }
+    if (!groupId) {
+      return;
+    }
+    const sessions = controller.groupSessions(groupId);
+    const items = await Promise.all(
+      sessions.map(async (s) => {
+        const changes = s.worktree ? await worktrees.changes(s.worktree).catch(() => []) : [];
+        const added = changes.reduce((n, c) => n + c.added, 0);
+        const removed = changes.reduce((n, c) => n + c.removed, 0);
+        const last = [...s.messages].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content.replace(/\s+/g, ' ').trim() ?? '';
+        const running = controller.isRunning(s.id);
+        const kind = groups.get(groupId!)?.kind ?? 'bestOf';
+        return {
+          label: `$(${running ? 'loading~spin' : s.worktree?.appliedAt ? 'check' : 'git-compare'}) ${kind === 'bestOf' ? (s.model.split('/').pop() ?? s.model) : s.title}`,
+          description: running ? 'still running' : `${changes.length} file${changes.length === 1 ? '' : 's'} · +${added} −${removed}${s.worktree?.appliedAt ? ' · applied' : ''}`,
+          detail: last.slice(0, 160) || '(no answer yet)',
+          session: s,
+        };
+      })
+    );
+    const g = groups.get(groupId)!;
+    const pick = await vscode.window.showQuickPick(items, { title: g.kind === 'bestOf' ? `Best of ${sessions.length}: ${g.prompt.slice(0, 60)}` : `${sessions.length} agents: ${g.prompt.slice(0, 60)}`, placeHolder: g.kind === 'bestOf' ? 'Pick the result you like; you can apply it right away' : 'Pick an agent to review its changes; apply the ones you like', matchOnDescription: true, matchOnDetail: true });
+    if (pick) {
+      await controller.handle({ type: 'selectSession', id: pick.session.id });
+      view.reveal();
+      const action = await vscode.window.showInformationMessage(`${pick.label.replace(/^\$\([^)]*\)\s*/, '')}: ${pick.description}`, ...(g.kind === 'bestOf' ? ['Apply this result', 'Apply and discard the others'] : ['Apply this result']));
+      if (action) {
+        await controller.applyWorktree(pick.session.id);
+        if (action === 'Apply and discard the others') {
+          for (const s of sessions) {
+            if (s.id !== pick.session.id) {
+              await controller.discardWorktree(s.id);
+            }
+          }
+        }
+      }
+    }
+  });
   cmd('localpilot.runParallelTasks', async () => {
+    // The chat UI has the friendly launcher (task ideas, model picker); the input box is the fallback without it.
+    view.reveal();
+    if (controller.openLauncher('tasks')) {
+      return;
+    }
     const input = await vscode.window.showInputBox({
       title: 'Run tasks in parallel',
       prompt: 'Each task runs as its own agent at the same time. Separate tasks with " | ".',
@@ -561,6 +686,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
   });
   cmd('localpilot.manageModels', () => settingsPanel.show('settings', 'models'));
+  cmd('localpilot.browseModelGallery', () => settingsPanel.show('settings', 'gallery'));
   cmd('localpilot.enableOllamaParallel', async () => {
     const slots = ModelManager.ollamaParallelSlots();
     const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());
@@ -1077,6 +1203,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     send: (sessionId, text) => controller.send(sessionId, text),
     stop: (sessionId) => controller.stop(sessionId),
     getSession: (id) => store.get(id),
+    applyWorktree: (id) => controller.applyWorktree(id),
+    discardWorktree: (id) => controller.discardWorktree(id),
+    runBestOfN: (prompt, models, mode) => controller.runBestOfN(prompt, models, mode),
     get runningSessionIds() {
       return controller.runningSessionIds;
     },
@@ -1103,6 +1232,11 @@ export interface LocalPilotApi {
   send(sessionId: string, text: string): Promise<string>;
   stop(sessionId: string): void;
   getSession(id: string): Session | undefined;
+  /** Bring an isolated session's worktree changes onto the workspace (uncommitted). */
+  applyWorktree(sessionId: string): Promise<{ files: number; conflicts: string[] } | undefined>;
+  discardWorktree(sessionId: string): Promise<void>;
+  /** Run one prompt on several models at once (each isolated); returns the session ids. */
+  runBestOfN(prompt: string, models: string[], mode?: Session['mode']): Promise<string[]>;
   readonly runningSessionIds: string[];
   readonly onDidChangeRuns: vscode.Event<void>;
   listModels(): Promise<ModelInfo[]>;

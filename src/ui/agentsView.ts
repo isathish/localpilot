@@ -48,8 +48,13 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
         item.description = n.running ? `${this.controller.runStatus.get(s.id) ?? 'Working…'}${model ? ` · ${model}` : ''}` : `${s.mode} · ${s.messageCount} msgs${files ? ` · ${files} file${files === 1 ? '' : 's'} changed` : ''}`;
         item.tooltip = `${s.title}\n${s.model || 'default model'} · ${new Date(s.updatedAt).toLocaleString()}`;
         const paused = n.running && this.controller.isPaused(s.id);
+        const isolated = !!s.worktree;
+        if (isolated) {
+          item.description = `${item.description} · isolated${s.group ? ` · best of ${s.group.size}` : ''}`;
+          item.tooltip = `${item.tooltip}\nIsolated worktree: ${s.worktree!.path}\nApply its changes to the workspace or discard them from the context menu.`;
+        }
         item.iconPath = new vscode.ThemeIcon(paused ? 'debug-pause' : n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'localpilot-logo' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
-        item.contextValue = paused ? 'session-paused' : n.running ? 'session-running' : files ? 'session-changed' : 'session';
+        item.contextValue = paused ? 'session-paused' : n.running ? 'session-running' : isolated ? 'session-isolated' : files ? 'session-changed' : 'session';
         item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [s.id] };
         if (this.controller.activeSession?.id === s.id) {
           item.resourceUri = vscode.Uri.parse(`localpilot-active:${s.id}`);

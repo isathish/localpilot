@@ -33,7 +33,8 @@ suite('LocalPilot end-to-end (real local model)', () => {
     new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         sub.dispose();
-        reject(new Error(`session ${id} still running after ${timeoutMs} ms`));
+        api.stop(id);
+        reject(new Error(`session ${id} still running after ${timeoutMs} ms; transcript so far: ${transcript(id)}`));
       }, timeoutMs);
       const check = () => {
         if (!api.runningSessionIds.includes(id)) {
@@ -82,6 +83,56 @@ suite('LocalPilot end-to-end (real local model)', () => {
     await cfg.update('showWelcomeOnStartup', false, vscode.ConfigurationTarget.Global);
     // Test prompts must not pull skills from GitHub into the real ~/.localpilot/skills.
     await cfg.update('skills.autoInstall', 'off', vscode.ConfigurationTarget.Global);
+    // These tests assert on files in the workspace itself; the isolated-worktree test below turns isolation on explicitly.
+    await cfg.update('worktrees.mode', 'off', vscode.ConfigurationTarget.Global);
+  });
+
+  test('multitask mode: the coordinator delegates to background workers that run in parallel', async function () {
+    this.timeout(300_000);
+    const id = await api.runPrompt('Two independent pieces of work: (1) create the file alpha.txt in the workspace root containing exactly "alpha"; (2) create the file beta.txt in the workspace root containing exactly "beta". When both are done, confirm that both files exist.', 'multitask');
+    await waitForRun(id, 280_000);
+    const session = api.getSession(id)!;
+    const calls = session.messages.flatMap((m) => m.toolCalls ?? []).map((c) => c.name);
+    assert.ok(calls.some((c) => /^run_(todos_parallel|parallel_subagents|subagent)$/.test(c)), `multitask mode must delegate to workers, got tools: ${calls.join(', ')}; ${transcript(id)}`);
+    assert.ok(!calls.some((c) => c === 'write_file' || c === 'edit_file'), `the coordinator must not edit files itself, got tools: ${calls.join(', ')}`);
+    const a = await fs.readFile(path.join(root, 'alpha.txt'), 'utf8').catch(() => '');
+    const b = await fs.readFile(path.join(root, 'beta.txt'), 'utf8').catch(() => '');
+    assert.ok(a.trim() === 'alpha' && b.trim() === 'beta', `workers should have created both files (alpha=${JSON.stringify(a)}, beta=${JSON.stringify(b)}); ${transcript(id)}`);
+  });
+
+  test('isolated worktree: the agent edits a copy, the workspace stays untouched until Apply brings the change over', async function () {
+    this.timeout(240_000);
+    const cp = await import('child_process');
+    const sh = (cmd: string) => cp.execSync(cmd, { cwd: root, stdio: 'pipe' }).toString();
+    if (!(await fs.stat(path.join(root, '.git')).catch(() => undefined))) {
+      sh('git init -q && git config user.email e2e@localpilot && git config user.name e2e');
+    }
+    await fs.writeFile(path.join(root, 'notes.md'), '# Notes\n');
+    sh('git add -A && git commit -q -m base --allow-empty');
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    await cfg.update('worktrees.mode', 'always', vscode.ConfigurationTarget.Global);
+    try {
+      const file = 'e2e-isolated.txt';
+      const id = await api.runPrompt(`Use the write_file tool to create ${file} in the workspace root containing exactly the text: isolated hello\nThen reply "done".`, 'agent');
+      await waitForRun(id, 200_000);
+      const session = api.getSession(id)!;
+      assert.ok(session.worktree, `session should have a worktree: ${transcript(id)}`);
+      assert.ok(!session.worktree!.path.startsWith(root), 'worktree lives outside the workspace');
+      const inWorktree = await fs.readFile(path.join(session.worktree!.path, file), 'utf8').catch(() => undefined);
+      assert.strictEqual(inWorktree?.trim(), 'isolated hello', `file should exist in the worktree: ${transcript(id)}`);
+      assert.ok(!(await fs.stat(path.join(root, file)).catch(() => undefined)), 'workspace must not have the file before Apply');
+      assert.strictEqual(await fs.readFile(path.join(session.worktree!.path, 'notes.md'), 'utf8'), '# Notes\n', 'worktree started from the workspace state');
+      const res = await api.applyWorktree(id);
+      assert.ok(res && res.files >= 1 && res.conflicts.length === 0, `apply result: ${JSON.stringify(res)}`);
+      assert.strictEqual((await fs.readFile(path.join(root, file), 'utf8')).trim(), 'isolated hello', 'Apply brought the file into the workspace');
+      assert.ok(/\?\? e2e-isolated.txt|A  e2e-isolated.txt/.test(sh('git status --short')), 'applied as an uncommitted change');
+      const wtPath = session.worktree!.path;
+      await api.discardWorktree(id);
+      assert.ok(!(await fs.stat(wtPath).catch(() => undefined)), 'discard removes the worktree');
+      assert.ok(!api.getSession(id)!.worktree, 'session no longer has a worktree');
+    } finally {
+      await cfg.update('worktrees.mode', 'off', vscode.ConfigurationTarget.Global);
+    }
   });
 
   test('api exposes the real extension version', () => {

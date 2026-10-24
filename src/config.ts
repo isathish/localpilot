@@ -40,6 +40,7 @@ export interface LocalPilotConfig {
   maxToolOutputChars: number;
   approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
+  worktrees: { mode: 'always' | 'parallel' | 'off'; location?: string };
   webSearch: WebSearchConfig;
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
@@ -93,6 +94,10 @@ export function getConfig(): LocalPilotConfig {
       write: c.get<ApprovalMode>('approvals.write', 'always'),
       delete: c.get<ApprovalMode>('approvals.delete', 'ask'),
       network: c.get<ApprovalMode>('approvals.network', 'always'),
+    },
+    worktrees: {
+      mode: (['always', 'parallel', 'off'] as const).find((m) => m === c.get<string>('worktrees.mode', 'always')) ?? 'always',
+      location: c.get<string>('worktrees.location', '') || undefined,
     },
     parallel: {
       maxConcurrency: c.get<number>('parallel.maxConcurrency', 4),

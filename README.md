@@ -47,6 +47,7 @@ An agent that reads your project, edits files, runs commands and tests, and show
 - **Written for local models.** A text fallback for models without tool calling, and context trimming so 8k to 32k windows still finish long tasks.
 - **Parallel agents.** Run several at once, see every file each one touched, keep or undo per agent.
 - **Pause, steer, stop.** Pause any agent after its current step, type new instructions it picks up on resume, or stop it — for the whole run or a single parallel subagent.
+- **Multitask like Cursor — locally.** Split work across agents or run one task on several models and keep the best; every agent works in its own git worktree so nothing collides, and you apply what you like. The launcher suggests tasks for your project and autocompletes as you type.
 - **Works with your existing setup.** Reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are.
 - **Free, MIT licensed.**
 
@@ -154,6 +155,7 @@ LocalPilot has its own **Settings** screen (gear icon in the chat toolbar): a pr
 | `localpilot.contextWindow` | 32768 | Requested context (Ollama `num_ctx`) |
 | `localpilot.approvals.*` | terminal `ask` · write `always` · delete `ask` · network `always` | Autonomy level |
 | `localpilot.parallel.maxConcurrency` | 4 | Concurrent tools / subagents |
+| `localpilot.worktrees.mode` | always | Isolate each agent in its own git worktree (`always` / `parallel` / `off`) |
 | `localpilot.inlineCompletion.enabled` | false | Ghost-text completions |
 | `localpilot.mcpServers` | `{}` | MCP servers (stdio) |
 

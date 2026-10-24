@@ -17,6 +17,8 @@ import { parseArgs } from '../src/tools/registry';
 import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/types';
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
+import { WorktreeManager } from '../src/agent/worktrees';
+import { completeTask, parseModelSuggestions, quickSuggestions } from '../src/agent/taskSuggestions';
 import { ProviderRegistry } from '../src/providers/registry';
 import { ToolRegistry } from '../src/tools/registry';
 import { SkillManager } from '../src/agent/skills';
@@ -182,6 +184,28 @@ async function pureLogic() {
   const unknown = extractTextToolCalls('<tool_call>{"name": "rm_rf", "arguments": {}}</tool_call>', new Set(['read_file']));
   check('explicit tool_call with unknown tool is reported', unknown.calls.length === 0 && /unknown tool "rm_rf"/.test(unknown.malformed[0] ?? ''), unknown);
   check('plain json fence that fails to parse is not a malformed call', extractTextToolCalls('```json\n{oops}\n```').malformed.length === 0);
+  const defs = [
+    { name: 'run_todos_parallel', description: '', parameters: { type: 'object', properties: { ids: {}, tasks: {} } } },
+    { name: 'run_parallel_subagents', description: '', parameters: { type: 'object', properties: { tasks: {} }, required: ['tasks'] } },
+    { name: 'write_file', description: '', parameters: { type: 'object', properties: { path: {}, content: {} }, required: ['path', 'content'] } },
+    { name: 'read_file', description: '', parameters: { type: 'object', properties: { path: {}, start_line: {}, end_line: {} }, required: ['path'] } },
+  ];
+  const argsOnly = extractTextToolCalls('Delegating.\n```json\n{"tasks": [{"agent": "coder", "prompt": "make alpha.txt"}]}\n```', undefined, defs);
+  check('argument-only JSON fence resolves to the tool whose required parameters it satisfies', argsOnly.calls.length === 1 && argsOnly.calls[0].name === 'run_parallel_subagents' && JSON.parse(argsOnly.calls[0].arguments).tasks.length === 1 && argsOnly.remainder === 'Delegating.', argsOnly);
+  const wf = extractTextToolCalls('```json\n{"path": "a.txt", "content": "hi"}\n```', undefined, defs);
+  check('argument-only fence with path+content is a write_file call', wf.calls.length === 1 && wf.calls[0].name === 'write_file');
+  check('argument-only fence with unknown keys stays prose', extractTextToolCalls('```json\n{"foo": 1}\n```', undefined, defs).calls.length === 0);
+
+  console.log('\n[Task suggestions]');
+  const facts = { projectMap: 'src/ (12 files)\n  tests/ (3 files)\npackage.json tsconfig.json', gitSummary: '## main\n M src/a.ts\n?? src/b.ts', errors: { count: 3, files: 2, sample: 'src/a.ts' }, todos: 7, recent: ['Add a dark mode to the settings page'] };
+  const quick = quickSuggestions(facts);
+  check('quick suggestions lead with the concrete problems (errors, uncommitted changes)', quick[0].title.startsWith('Fix the 3 errors') && quick.some((s) => /uncommitted changes/.test(s.title)) && quick.some((s) => /7 TODO/.test(s.title)), quick.map((s) => s.title));
+  check('quick suggestions know the project has tests and dependencies and remember recent prompts', quick.some((s) => /Run the test suite/.test(s.title)) && quick.some((s) => /dependencies/.test(s.title)) && quick.some((s) => s.title === 'Add a dark mode to the settings page') && !quick.some((s) => /README/.test(s.title)) === false, quick.map((s) => s.title));
+  const noTests = quickSuggestions({ ...facts, projectMap: 'src/ (3 files)\nREADME.md', errors: { count: 0, files: 0 }, todos: 0, gitSummary: '' });
+  check('without tests or problems the ideas shift to adding tests, and README is not suggested when one exists', noTests.some((s) => /Add tests/.test(s.title)) && !noTests.some((s) => /README/.test(s.title)) && !noTests.some((s) => /Fix the/.test(s.title)), noTests.map((s) => s.title));
+  const parsed = parseModelSuggestions('Here you go:\n[{"title":"Let players save a game.","detail":"Adds a save file","kind":"feature"},{"title":"x","kind":"fix"},{"title":"Stop the crash on empty input","kind":"bogus"}]');
+  check('model suggestions are parsed leniently, trimmed, deduplicated and given a valid kind', parsed.length === 2 && parsed[0].title === 'Let players save a game' && parsed[1].kind === 'feature', parsed);
+  check('autocomplete: finished words must match whole words, the current word a word prefix', completeTask('write a re', quick, []).every((t) => /^Write a README/.test(t)) && completeTask('write a re', quick, []).length === 1 && completeTask('fix', quick, []).some((t) => /^Fix the 3 errors/.test(t)) && completeTask('zz', quick, ['zz top']).join() === 'zz top', completeTask('write a re', quick, []));
 
   console.log('\n[Inline completion post-processing]');
   check('mid-line: single line only', postProcess('bar)\nnext line', ')') === 'bar');
@@ -208,6 +232,8 @@ async function pureLogic() {
   check('tool-style call on its own line is a shown call', showsToolCallAsText('write_file("a.txt", "hello")', tools));
   check('"I\'ve edited" with code shown is a claimed change', claimsChange("Here is the updated code:\n\n```python\ndef add(a, b):\n    return a + b\n```\n\nI've edited the `add()` function to return `a + b`. The `mul()` function remains unchanged.\n\nFixed.", 'calc.py has a bug, fix it with edit_file'));
   check('a trailing "Fixed." is a claimed change', claimsChange('The bug was in add().\n\nFixed.', 'fix the bug'));
+  check('"Delegated to N background workers" without a call is a claimed change', claimsChange("Understood as: create two files.\n\nDelegated to 2 background workers. I'll report back when they finish.", 'create two files with background workers'));
+  check('"I\'ll delegate this to workers" is an unfulfilled intent', looksLikeUnfulfilledIntent("Understood as: create two files.\n\nI'll delegate this task to background workers.", tools));
   check('a question is not a claimed change', !claimsChange("I've found the bug in add(). Should I fix it?", 'fix the bug'));
   check('an explanation to a question is not a claimed change', !claimsChange('add() returns a - b; the file has been like this since the first commit.', 'why does add() return the wrong value?'));
   check('a clarifying question is not', !looksLikeBareClaim('Which file should I update?', 'update the config'));
@@ -501,6 +527,9 @@ async function pauseAndSteer() {
         text('B-REPORT');
       } else if (task.includes('PARENT-GO')) {
         if (transcript.includes('B-REPORT')) { text('Parent done.'); } else { tool('p1', 'run_parallel_subagents', { tasks: [{ agent: 'explore', prompt: 'CHILD-A task' }, { agent: 'explore', prompt: 'CHILD-B task' }] }); }
+      } else if (task.includes('CLAIM-GO')) {
+        // Small-model failure mode: announces the delegation without a tool call; acts only after the nudge.
+        if (transcript.includes('ECHO:two')) { text('Created both.'); } else if (transcript.includes('no worker exists')) { tool('e2', 'echo', { text: 'two' }); } else { text("Delegated to 2 background workers. I'll report back when they finish."); }
       } else if (transcript.includes('FINISH-GO')) {
         text(transcript.includes('STEER2') ? 'Second answer.' : 'First answer.');
       } else if (!transcript.includes('ECHO:')) {
@@ -601,14 +630,93 @@ async function pauseAndSteer() {
       onEvent = undefined;
       check('parent pause: both children were paused through the parent and the run completed after resume', childPausedUnderParent && out === 'Parent done.', { childPausedUnderParent, out });
     }
-    check('pause/steer: model calls as expected', calls === 2 + 2 + 4 + 4, calls);
+
+    // 5. A reply that only *claims* the delegation is retracted: the loop emits `nudge`, tags the hidden message and the model then acts.
+    {
+      const s = mkSession('p5');
+      const control = new RunControl(s.id);
+      const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'CLAIM-GO create two files' }, emit, signal: control.signal, control, requestApproval: async () => true });
+      const nudges = sink.filter((e) => e.sessionId === s.id && e.type === 'nudge').map((e) => (e.payload as { reason: string }).reason);
+      const hidden = s.messages.find((m) => m.role === 'user' && m.meta?.hidden);
+      const order = sink.filter((e) => e.sessionId === s.id && (e.type === 'nudge' || e.type === 'tool_start')).map((e) => e.type);
+      check('nudge: emitted once with reason=claimed before the tool finally runs', nudges.join() === 'claimed' && order.join() === 'nudge,tool_start', { nudges, order });
+      check('nudge: hidden steering message is tagged and names run_todos_parallel for a delegation claim', !!hidden && hidden.meta?.nudge === 'claimed' && /run_todos_parallel/.test(hidden.content), hidden?.content.slice(0, 120));
+      check('nudge: run completes with the real answer after acting', out === 'Created both.' && visible(s).filter((m) => m.role === 'assistant').length === 3, out);
+    }
+    check('pause/steer: model calls as expected', calls === 2 + 2 + 4 + 4 + 3, calls);
   } finally {
     srv.close();
     delete process.env.LP_MOCK_URL;
   }
 }
 
+
+async function worktrees() {
+  console.log('\n[Isolated worktrees]');
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const cp = await import('child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-wt-'));
+  const repo = path.join(tmp, 'repo');
+  const home = path.join(tmp, 'home');
+  fs.mkdirSync(repo);
+  const sh = (cmd: string, cwd = repo) => cp.execSync(cmd, { cwd, stdio: 'pipe' }).toString();
+  sh('git init -q -b main && git config user.email a@b && git config user.name a');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'line1\nline2\nline3\n');
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'ignored.txt\n');
+  fs.mkdirSync(path.join(repo, '.localpilot'));
+  fs.writeFileSync(path.join(repo, '.localpilot', 'worktrees.json'), JSON.stringify({ setup: ['echo setup-ran > setup.marker'] }));
+  sh('git add -A && git commit -q -m init');
+  // Work in progress in the main checkout: a tracked edit, an untracked file and an ignored file.
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'b changed\n');
+  fs.writeFileSync(path.join(repo, 'new.txt'), 'untracked\n');
+  fs.writeFileSync(path.join(repo, 'ignored.txt'), 'nope\n');
+  const mgr = new WorktreeManager(home);
+  try {
+    check('repoRoot finds the repository, undefined outside one', (await mgr.repoRoot(path.join(repo, '.localpilot'))) === fs.realpathSync(repo) && (await mgr.repoRoot(os.tmpdir())) === undefined);
+    const progress: string[] = [];
+    const wt = await mgr.create(fs.realpathSync(repo), 's_one', { progress: (t) => progress.push(t) });
+    check('worktree lives outside the repository', wt.path.startsWith(home) && !wt.path.startsWith(repo));
+    check('worktree carries the uncommitted edit and the untracked file, not the ignored one', fs.readFileSync(path.join(wt.path, 'b.txt'), 'utf8') === 'b changed\n' && fs.readFileSync(path.join(wt.path, 'new.txt'), 'utf8') === 'untracked\n' && !fs.existsSync(path.join(wt.path, 'ignored.txt')));
+    check('setup hook from .localpilot/worktrees.json ran inside the worktree', fs.existsSync(path.join(wt.path, 'setup.marker')) && progress.some((p) => p.includes('echo setup-ran')));
+    check('fresh worktree reports no changes (setup output is part of the base)', (await mgr.changes(wt)).length === 0, await mgr.changes(wt));
+    // The agent works in the worktree: edits a tracked file, creates one, deletes one.
+    fs.writeFileSync(path.join(wt.path, 'a.txt'), 'line1\nline2 edited\nline3\nline4\n');
+    fs.writeFileSync(path.join(wt.path, 'c.txt'), 'created\n');
+    fs.rmSync(path.join(wt.path, 'b.txt'));
+    const changes = await mgr.changes(wt);
+    const byPath = Object.fromEntries(changes.map((c) => [c.path, c]));
+    check('changes: modify / create / delete with line counts', byPath['a.txt']?.kind === 'modify' && byPath['a.txt'].added === 2 && byPath['a.txt'].removed === 1 && byPath['c.txt']?.kind === 'create' && byPath['b.txt']?.kind === 'delete', changes);
+    check('baseContent returns the file as it was before the agent touched it', (await mgr.baseContent(wt, 'a.txt')) === 'line1\nline2\nline3\n' && (await mgr.baseContent(wt, 'c.txt')) === '');
+    check('main checkout is untouched while the agent works', fs.readFileSync(path.join(repo, 'a.txt'), 'utf8') === 'line1\nline2\nline3\n' && fs.existsSync(path.join(repo, 'b.txt')));
+    // Apply back as uncommitted changes.
+    const snapshots: string[] = [];
+    const res = await mgr.apply(wt, async (p) => { snapshots.push(path.basename(p)); });
+    check('apply: main checkout now has the edit, the new file and the deletion, uncommitted', fs.readFileSync(path.join(repo, 'a.txt'), 'utf8') === 'line1\nline2 edited\nline3\nline4\n' && fs.readFileSync(path.join(repo, 'c.txt'), 'utf8') === 'created\n' && !fs.existsSync(path.join(repo, 'b.txt')) && /M a.txt|A c.txt|D b.txt|\?\? c.txt/.test(sh('git status --short')) && !sh('git log --oneline').includes('LocalPilot'), sh('git status --short'));
+    check('apply: no conflicts, snapshot hook called for every affected file', res.conflicts.length === 0 && snapshots.sort().join() === 'a.txt,b.txt,c.txt', { res, snapshots });
+    check('apply: untracked work in progress survives', fs.readFileSync(path.join(repo, 'new.txt'), 'utf8') === 'untracked\n');
+    // Conflict: a second worktree edits the same line the main checkout has since changed.
+    const wt2 = await mgr.create(fs.realpathSync(repo), 's_two', {});
+    fs.writeFileSync(path.join(wt2.path, 'a.txt'), 'line1\nline2 from agent two\nline3\nline4\n');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'line1\nline2 from the user\nline3\nline4\n');
+    const res2 = await mgr.apply(wt2);
+    const after = fs.readFileSync(path.join(repo, 'a.txt'), 'utf8');
+    check('apply with a conflicting edit falls back to a 3-way merge and reports the file', res2.conflicts.includes('a.txt') && /<<<<<<<|>>>>>>>/.test(after), { res2, after });
+    const listed = await mgr.list(fs.realpathSync(repo));
+    check('list sees both worktrees', listed.map((l) => l.id).sort().join() === 's_one,s_two', listed.map((l) => l.id));
+    const pruned = await mgr.prune(fs.realpathSync(repo), new Set(['s_two']));
+    check('prune removes worktrees whose session is gone', pruned === 1 && !fs.existsSync(wt.path) && fs.existsSync(wt2.path) && !sh('git worktree list').includes('s_one'));
+    await mgr.remove(wt2);
+    check('remove deletes the worktree and git forgets it', !fs.existsSync(wt2.path) && !sh('git worktree list').includes('s_two') && (await mgr.list(fs.realpathSync(repo))).length === 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
+  await worktrees();
   await mockOllama();
   await mockOpenAI();
   await pureLogic();

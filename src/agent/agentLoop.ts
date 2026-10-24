@@ -6,7 +6,7 @@ import { ProviderRegistry } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition } from '../types';
+import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
@@ -32,6 +32,8 @@ export interface AgentRunOptions {
   toolFilter?: string[];
   /** Replace the default persona (subagents). */
   roleOverride?: string;
+  /** Folder the tools operate in (an isolated worktree); defaults to the workspace root. */
+  workspaceRoot?: string;
   depth?: number;
   emit: (e: AgentEvent) => void;
   signal: AbortSignal;
@@ -114,6 +116,7 @@ export class AgentRunner {
 
     const system = await buildSystemPrompt({
       mode: session.mode,
+      workspaceRoot: o.workspaceRoot,
       model,
       toolsEnabled,
       textToolProtocol: toolsEnabled && !nativeTools,
@@ -125,7 +128,11 @@ export class AgentRunner {
       workingSet: session.workingSet,
       todos: session.todos,
     });
-    const systemWithTextTools = !nativeTools && toolDefs.length ? `${system}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : system;
+    const isolated = o.workspaceRoot && this.workspace.root && o.workspaceRoot !== this.workspace.root;
+    const systemIsolated = isolated
+      ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
+      : system;
+    const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
 
     session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
 
@@ -209,14 +216,16 @@ export class AgentRunner {
     const control = o.control ?? new RunControl(session.id, undefined, o.signal);
     const toolCtx: ToolContext = {
       sessionId: session.id,
-      workspaceRoot: this.workspace.root,
+      workspaceRoot: o.workspaceRoot ?? this.workspace.root,
       signal: o.signal,
       control,
       depth,
       modelRef: model.id,
-      readOnly: session.mode !== 'agent',
+      readOnly: !isWriteMode(session.mode),
       progress: (t) => status(t),
-      trackChange: (fsPath) => this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve(),
+      // Edits inside an isolated worktree need no undo snapshots: discarding the worktree is the undo, and the
+      // tracker stays about files in the real workspace (those applied from the worktree).
+      trackChange: (fsPath) => (isolated ? Promise.resolve() : (this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve())),
       todos: {
         get: () => session.todos ?? [],
         set: (items) => {
@@ -236,7 +245,9 @@ export class AgentRunner {
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
-    let nudged = false;
+    /** Corrective turns handed out so far; small models often need one after the plan and one after the first tool result. */
+    let nudges = 0;
+    const MAX_NUDGES = 2;
     let malformedNudged = false;
     /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
     const callCounts = new Map<string, number>();
@@ -432,7 +443,7 @@ export class AgentRunner {
       // parsing text whenever no native call arrived — restricted to known tool names.
       let malformedCalls: string[] = [];
       if (toolDefs.length && !calls.length) {
-        const parsed = extractTextToolCalls(text, nativeTools ? new Set(toolDefs.map((t) => t.name)) : undefined);
+        const parsed = extractTextToolCalls(text, nativeTools ? new Set(toolDefs.map((t) => t.name)) : undefined, toolDefs);
         if (parsed.calls.length) {
           calls.push(...parsed.calls);
           text = parsed.remainder;
@@ -454,10 +465,11 @@ export class AgentRunner {
           malformedNudged = true;
           status('Fixing tool call…');
           const names = toolDefs.map((t) => t.name).join(', ');
+          emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'malformed' } });
           session.messages.push({
             role: 'user',
             content: `Your tool call could not be executed: ${malformedCalls[0]}. Nothing has been done. Resend it as one complete, valid JSON object {"name": <tool>, "arguments": {...}} using only these tools: ${names}.`,
-            meta: { timestamp: Date.now(), hidden: true },
+            meta: { timestamp: Date.now(), hidden: true, nudge: 'malformed' },
           });
           continue;
         }
@@ -465,24 +477,29 @@ export class AgentRunner {
         // run, in agent mode, when nothing was executed and the reply is a bare claim, push back.
         // Small models also stop after announcing an action ("I will edit the file with edit_file.") or after
         // writing the call as text. The nudge fires once per run, so a false positive costs one short turn.
-        const canNudge = session.mode === 'agent' && toolDefs.length > 0 && !nudged && depth === 0;
+        const canNudge = isWriteMode(session.mode) && toolDefs.length > 0 && nudges < MAX_NUDGES && depth === 0;
         const toolNames = toolDefs.map((t) => t.name);
         const shown = canNudge && showsToolCallAsText(text, toolNames);
         const announced = canNudge && !shown && looksLikeUnfulfilledIntent(text, toolNames);
         const claimed = canNudge && !shown && !announced && mutationsExecuted === 0 && claimsChange(text, o.userMessage.content);
         if (shown || announced || claimed || (canNudge && toolsExecuted === 0 && looksLikeBareClaim(text, o.userMessage.content))) {
-          nudged = true;
+          nudges++;
           status('Verifying…');
+          const reason = shown ? 'shown' : claimed ? 'claimed' : announced ? 'announced' : 'bare';
+          emit({ sessionId: session.id, type: 'nudge', payload: { reason } });
+          const delegationClaim = claimed && /\bdelegat|\bworkers?\b|\bsubagents?\b/i.test(text);
           session.messages.push({
             role: 'user',
             content: shown
               ? 'You wrote the tool call (or the patch) as text, so it was not executed and the file is unchanged. Make the call through the tool interface now — one tool call with its JSON arguments, no code fence — and only then report.'
-              : claimed
+              : delegationClaim
+                ? 'You said the work was delegated to workers, but no tool was called, so no worker exists and nothing has started. Call run_todos_parallel (or run_parallel_subagents) now — do not repeat the announcement — and report only when their results are back.'
+                : claimed
                 ? 'You described the change as done, but no tool that modifies files or runs commands was called, so nothing has changed. Apply it now with the tools (edit_file / write_file / run_command) and only then report.'
                 : announced && toolsExecuted > 0
                   ? 'You announced the next action but did not call a tool, so it has not happened. Do it now with the tool and only then report.'
                   : 'You have not called any tools, so nothing has been done yet. If the request requires an action (creating or editing files, running commands), perform it now with the tools and only then report. If no action is needed, explain why in one or two sentences.',
-            meta: { timestamp: Date.now(), hidden: true },
+            meta: { timestamp: Date.now(), hidden: true, nudge: reason },
           });
           continue;
         }
@@ -576,9 +593,12 @@ export class AgentRunner {
       const allowed = new Set(filter);
       list = list.filter((t) => allowed.has(t.definition.name));
     }
-    if (mode !== 'agent') {
+    if (!isWriteMode(mode)) {
       // Read-only modes: strip mutating tools.
       list = list.filter((t) => !t.approvalKind || t.approvalKind === 'network');
+    } else if (mode === 'multitask') {
+      // The coordinator reads, plans, delegates and verifies; only its workers edit files.
+      list = list.filter((t) => t.approvalKind !== 'write' && t.approvalKind !== 'delete');
     }
     return list;
   }
@@ -746,8 +766,10 @@ export function claimsChange(reply: string, request: string): boolean {
   }
   const imperative = /\b(create|write|add|edit|fix|update|change|rename|delete|remove|refactor|implement|make|generate|replace|move|save)\b/i.test(request);
   const claim =
-    /\b(?:i'?ve|i have|has been|have been|is now|are now)\s+(?:\w+\s+){0,2}(?:edited|updated|fixed|changed|created|written|modified|applied|saved|removed|deleted|renamed|replaced|added|implemented)\b/i.test(r) ||
-    /(?:^|\n)\s*(?:fixed|done|updated|created|applied)[.!]?\s*$/i.test(r);
+    /\b(?:i'?ve|i have|has been|have been|is now|are now)\s+(?:\w+\s+){0,2}(?:edited|updated|fixed|changed|created|written|modified|applied|saved|removed|deleted|renamed|replaced|added|implemented|delegated|dispatched)\b/i.test(r) ||
+    /(?:^|\n)\s*(?:fixed|done|updated|created|applied)[.!]?\s*$/i.test(r) ||
+    // "Delegated to N background workers" with no tool call: the workers do not exist.
+    /\bdelegated\s+(?:this|these|the|it|them|\d+|to)\b/i.test(r);
   return imperative && claim;
 }
 
@@ -781,15 +803,37 @@ export function looksLikeUnfulfilledIntent(reply: string, toolNames: Iterable<st
   if (/let me know|would you like|do you want|should i\b/i.test(tail)) {
     return false;
   }
-  return /\b(?:let'?s|let us|i'?ll|i will|i'?m going to|i am going to|we'?ll|now i|next,? i|proceeding to|going to)\b[^.!?\n]{0,80}\b(?:proceed|start|begin|fix|edit|update|create|write|add|change|run|implement|apply|modify|read|open|check|look)/i.test(tail);
+  return /\b(?:let'?s|let us|i'?ll|i will|i'?m going to|i am going to|we'?ll|now i|next,? i|proceeding to|going to)\b[^.!?\n]{0,80}\b(?:proceed|start|begin|fix|edit|update|create|write|add|change|run|implement|apply|modify|read|open|check|look|delegate|hand off|dispatch|spawn|split)/i.test(tail);
 }
 
 /**
  * Parses tool calls out of free text: ```tool_call / ```json fenced blocks, <tool_call>…</tool_call> tags,
  * and bare `{"name": …, "arguments": …}` objects. When `known` is given, only those tool names count.
  */
-export function extractTextToolCalls(text: string, known?: ReadonlySet<string>): { calls: ToolCall[]; remainder: string; malformed: string[] } {
+export function extractTextToolCalls(text: string, known?: ReadonlySet<string>, tools?: readonly ToolDefinition[]): { calls: ToolCall[]; remainder: string; malformed: string[] } {
   const calls: ToolCall[] = [];
+  /**
+   * A fenced JSON object with no "name" but whose keys are the parameters of exactly one tool (`{"tasks": […]}`,
+   * `{"path": "…", "content": "…"}`) is the model printing the arguments instead of calling the tool. Resolve it.
+   */
+  const toolForArgs = (obj: Record<string, unknown>): string | undefined => {
+    const keys = Object.keys(obj);
+    if (!tools?.length || !keys.length) {
+      return undefined;
+    }
+    const matches = tools
+      .filter((t) => {
+        const props = (t.parameters as { properties?: Record<string, unknown>; required?: string[] } | undefined)?.properties ?? {};
+        return keys.every((k) => k in props) && (!known || known.has(t.name));
+      })
+      .map((t) => {
+        const req = (t.parameters as { required?: string[] }).required ?? [];
+        return { name: t.name, satisfied: req.every((k) => keys.includes(k)), reqCount: req.length };
+      })
+      .filter((m) => m.satisfied)
+      .sort((a, b) => b.reqCount - a.reqCount);
+    return matches.length && (matches.length === 1 || matches[0].reqCount > matches[1].reqCount) ? matches[0].name : undefined;
+  };
   // Blocks the model explicitly marked as tool calls but that did not parse — truncated JSON, a trailing
   // comma, an unknown tool name. Silently treating those as prose lets the model claim it acted when it did not.
   const malformed: string[] = [];
@@ -800,6 +844,9 @@ export function extractTextToolCalls(text: string, known?: ReadonlySet<string>):
       if (obj && typeof obj.name === 'string' && (!known || known.has(obj.name))) {
         const args = obj.arguments ?? obj.parameters ?? {};
         calls.push({ id: newId(), name: obj.name, arguments: typeof args === 'string' ? args : JSON.stringify(args) });
+        remainder = remainder.replace(raw, '');
+      } else if (obj && typeof obj === 'object' && !Array.isArray(obj) && obj.name === undefined && toolForArgs(obj as Record<string, unknown>)) {
+        calls.push({ id: newId(), name: toolForArgs(obj as Record<string, unknown>)!, arguments: JSON.stringify(obj) });
         remainder = remainder.replace(raw, '');
       } else if (explicit && obj && typeof obj.name === 'string') {
         malformed.push(`unknown tool "${obj.name}"`);

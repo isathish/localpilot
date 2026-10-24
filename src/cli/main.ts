@@ -31,7 +31,7 @@ import { ToolRegistry } from '../tools/registry';
 import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
-import { AgentEvent, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
+import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
 import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
@@ -117,6 +117,8 @@ function parseArgs(argv: string[]): Args {
     const next = () => argv[++i] ?? '';
     if (x === '--ask') {a.mode = 'ask';}
     else if (x === '--plan') {a.mode = 'plan';}
+    else if (x === '--multitask') {a.mode = 'multitask';}
+    else if (x === '--debug') {a.mode = 'debug';}
     else if (x === '--agent') {a.mode = 'agent';}
     else if (x === '-m' || x === '--model') {a.model = next();}
     else if (x.startsWith('--model=')) {a.model = x.slice(8);}
@@ -533,7 +535,8 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           break;
         }
         case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
-        case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.prompt).slice(0, 80)}`); break;
+        case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
+        case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
         case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
         case 'error': r.error(String(e.payload)); break;
@@ -814,7 +817,7 @@ async function main(): Promise<void> {
       case 'help': console.log(HELP); return true;
       case 'exit': case 'quit': case 'q': rl!.close(); return true;
       case 'mode':
-        if (['agent', 'ask', 'plan'].includes(arg)) { session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|ask|plan`)); }
+        if ((ALL_MODES as readonly string[]).includes(arg)) { session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|multitask|debug|plan|ask`)); }
         return true;
       case 'model': {
         if (!arg) { console.log(dim(`model is ${session.model}`)); return true; }

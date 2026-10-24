@@ -85,6 +85,8 @@ Values: `always`, `ask`, `never`.
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.parallel.maxConcurrency` | `4` | Concurrent tool calls / subagents |
+| `localpilot.worktrees.mode` | `always` | Isolate agents in git worktrees: `always`, `parallel` (only agents started together) or `off`. See [Parallel agents → Isolated worktrees](/docs/parallel-agents/#isolated-worktrees) |
+| `localpilot.worktrees.location` | `~/.localpilot/worktrees` | Where the worktrees live (one sub-folder per repository) |
 | `localpilot.parallel.maxSubagentDepth` | `2` | Nesting limit |
 | `localpilot.autoClarify` | `true` | Detect vague requests and hand the agent a workspace snapshot (editor, open files, errors, git) so it states its interpretation before acting |
 

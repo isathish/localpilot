@@ -29,9 +29,31 @@ The bar at the top of the chat is a browser-style tab strip — **one tab per ag
 - **Isolation:** every tab keeps its own draft, attachments, scroll position and status line; every agent has its own context window, abort switch, tool cache and model. The model is shown in the tab tooltip and the background strip. Two chats using the same local model are served one at a time by the server — the waiting chat shows *Waiting for <model> — busy with N other chats…* instead of a silent stall.
 - Open tabs persist when the view is hidden and restored; at most 12 are shown — the rest live under **+N** / **All chats**.
 
-## Run Tasks in Parallel
+## Multitask: several agents at once
 
-Press the clock icon → **Run tasks in parallel…**, type one task per line and hit **Run N agents** (<kbd>⌘Enter</kbd>). Each task becomes its own agent in its own tab, all streaming at once. The same launcher is available as **Command Palette → LocalPilot: Run Tasks in Parallel…** (<kbd>⌘⇧⌥P</kbd>) with tasks separated by ` | `, and from the CLI with `localpilot --ide --parallel "a | b | c"`.
+The simplest way is the **Multitask mode** in the composer: describe what you want and the agent splits it across background workers itself — see [Agent modes → Multitask](/docs/agent-modes/#multitask). The launcher below is for when *you* want to decide the split or try one task on several models.
+
+Press the clock icon → **Multitask…** (or **Command Palette → LocalPilot: Run Tasks in Parallel…**, <kbd>⌘⇧⌥P</kbd>). The launcher is built so you do not have to think in prompts:
+
+- **Split the work** — one row per task; each becomes its own agent in its own tab, all running at once. Press <kbd>Enter</kbd> for another row, paste a list to fill several, <kbd>⌘Enter</kbd> to start.
+- **Try several models** — the same task runs on every model you tick (2–8), each agent isolated; when they finish you **Compare results** and keep the one you like.
+- **Ideas for this project** — ready-made tasks worked out from your workspace right now: the errors VS Code shows, your uncommitted changes, missing README or tests, TODO notes, dependencies, plus your recent prompts. Click one to add it. **More ideas** asks the model for suggestions tailored to this codebase.
+- **Autocomplete** — start typing and matching ideas and recent prompts appear; <kbd>Tab</kbd> accepts.
+- The footer says in plain words what will happen ("3 agents will start, each in its own copy of your project").
+
+From the CLI: `localpilot --ide --parallel "a | b | c"`. When the last agent of a batch finishes, a notification offers **Review results** (or **Compare results** for Best of N), which lists each agent with its file counts and lets you apply its changes.
+
+## Isolated worktrees
+
+By default every agent chat works in its **own copy of the repository** — a git worktree under `~/.localpilot/worktrees/`, started from your checkout *including uncommitted work*. Several agents can therefore edit the same files at once without clobbering each other or the files you have open. While an agent works, the changes panel reads **N files changed in isolated copy**: click a file for a before/after diff, **Apply to workspace** to bring everything over as ordinary uncommitted edits (3-way merged if you changed the same lines meanwhile; conflicts are marked and listed), or **Discard** to throw the copy away. The **Agents** panel offers the same actions, plus *Open Agent's Worktree in New Window*.
+
+Setup commands for new worktrees (installing dependencies, generating code) go in `.localpilot/worktrees.json`:
+
+```json
+{ "setup": ["npm ci"], "setup-unix": [], "setup-windows": [] }
+```
+
+`localpilot.worktrees.mode` chooses when to isolate: `always` (default), `parallel` (only agents started together) or `off` (edit the workspace directly). Outside a git repository agents always edit directly. Worktrees of deleted chats are removed automatically.
 
 While an agent is busy you can still type: <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl⇧Enter</kbd>) **sends the draft in a new tab**, and pressing <kbd>Enter</kbd> offers *Add to this agent* (queued and read at its next step), *Send in a new tab* or *Stop this agent first* instead of blocking.
 

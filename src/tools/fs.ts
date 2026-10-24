@@ -2,15 +2,36 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Tool, ToolContext } from '../types';
 
+/** Path for messages and the UI: relative to the agent's root (worktree or workspace folder). */
+export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
+  if (ctx.workspaceRoot && (uri.fsPath === ctx.workspaceRoot || uri.fsPath.startsWith(ctx.workspaceRoot + path.sep))) {
+    return path.relative(ctx.workspaceRoot, uri.fsPath) || '.';
+  }
+  return displayPath(uri, ctx);
+}
+
 export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
     throw new Error('No workspace folder open');
   }
-  const abs = path.isAbsolute(p) ? p : path.join(root, p);
+  let abs = path.isAbsolute(p) ? p : path.join(root, p);
+  // Isolated worktree: an absolute path into the real workspace (the model may have seen it in context) is the
+  // same file inside the copy — never let the agent reach around its isolation.
+  if (ctx.workspaceRoot && path.isAbsolute(p)) {
+    for (const f of vscode.workspace.workspaceFolders ?? []) {
+      const main = f.uri.fsPath;
+      if (main !== ctx.workspaceRoot && (abs === main || abs.startsWith(main + path.sep))) {
+        abs = path.join(ctx.workspaceRoot, path.relative(main, abs));
+        break;
+      }
+    }
+  }
   const normalized = path.normalize(abs);
-  // Prevent path traversal outside the workspace unless the user opened that folder.
-  const inside = vscode.workspace.workspaceFolders?.some((f) => normalized.startsWith(f.uri.fsPath + path.sep) || normalized === f.uri.fsPath);
+  // Prevent path traversal outside the workspace unless the user opened that folder — or outside the agent's
+  // isolated copy of it when it works in a worktree.
+  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : [])];
+  const inside = roots.some((r) => normalized.startsWith(r + path.sep) || normalized === r);
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);
   }
@@ -49,7 +70,7 @@ export const readFileTool: Tool = {
     for (let i = start - 1; i < end; i++) {
       lines.push(`${String(i + 1).padStart(5)} | ${doc.lineAt(i).text}`);
     }
-    const header = `File: ${vscode.workspace.asRelativePath(uri)} (${doc.lineCount} lines total, showing ${start}-${end})`;
+    const header = `File: ${displayPath(uri, ctx)} (${doc.lineCount} lines total, showing ${start}-${end})`;
     return { content: `${header}\n${lines.join('\n')}` };
   },
 };
@@ -75,14 +96,14 @@ export const writeFileTool: Tool = {
     try {
       const st = await vscode.workspace.fs.stat(uri);
       if (st.type & vscode.FileType.Directory) {
-        const rel = vscode.workspace.asRelativePath(uri);
+        const rel = displayPath(uri, ctx);
         const label = rel === uri.fsPath || rel === '.' || rel === '' ? 'The workspace root' : `"${rel}"`;
         return { content: `${label} is a directory, not a file. Pass a file path such as "${path.posix.join(label === 'The workspace root' ? '' : rel, 'file.txt')}".`, isError: true };
       }
     } catch {
       exists = false;
     }
-    const ok = await ctx.requestApproval(`${exists ? 'Overwrite' : 'Create'} ${vscode.workspace.asRelativePath(uri)}`, `${content.length} characters`, 'write');
+    const ok = await ctx.requestApproval(`${exists ? 'Overwrite' : 'Create'} ${displayPath(uri, ctx)}`, `${content.length} characters`, 'write');
     if (!ok) {
       return { content: 'User declined the write.', isError: true };
     }
@@ -101,7 +122,7 @@ export const writeFileTool: Tool = {
     }
     const doc = await vscode.workspace.openTextDocument(uri);
     await doc.save();
-    return { content: `${exists ? 'Updated' : 'Created'} ${vscode.workspace.asRelativePath(uri)} (${doc.lineCount} lines).`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
+    return { content: `${exists ? 'Updated' : 'Created'} ${displayPath(uri, ctx)} (${doc.lineCount} lines).`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
   },
 };
 
@@ -136,7 +157,7 @@ export const editFileTool: Tool = {
         // Try a whitespace-insensitive match to tolerate indentation drift from the model.
         const loose = fuzzyFind(text, oldText);
         if (!loose) {
-          return { content: `old_text not found in ${vscode.workspace.asRelativePath(uri)}. Re-read the file and retry with the exact text.`, isError: true };
+          return { content: `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`, isError: true };
         }
         range = new vscode.Range(doc.positionAt(loose.start), doc.positionAt(loose.end));
       } else {
@@ -146,7 +167,7 @@ export const editFileTool: Tool = {
         range = new vscode.Range(doc.positionAt(first), doc.positionAt(first + oldText.length));
       }
     }
-    const ok = await ctx.requestApproval(`Edit ${vscode.workspace.asRelativePath(uri)}`, diffPreview(oldText, newText), 'write');
+    const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview(oldText, newText), 'write');
     if (!ok) {
       return { content: 'User declined the edit.', isError: true };
     }
@@ -154,12 +175,12 @@ export const editFileTool: Tool = {
     const edit = new vscode.WorkspaceEdit();
     edit.replace(uri, range, oldText ? newText : `\n${newText}`);
     if (!(await vscode.workspace.applyEdit(edit))) {
-      return { content: `Failed to apply the edit to ${vscode.workspace.asRelativePath(uri)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
+      return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
     }
     if (!(await doc.save())) {
-      return { content: `Edited ${vscode.workspace.asRelativePath(uri)} in the editor but could not save it to disk.`, isError: true };
+      return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
     }
-    return { content: `Edited ${vscode.workspace.asRelativePath(uri)} at line ${range.start.line + 1}.`, data: { path: uri.fsPath, line: range.start.line + 1 } };
+    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.`, data: { path: uri.fsPath, line: range.start.line + 1 } };
   },
 };
 
@@ -191,7 +212,7 @@ export const createDirTool: Tool = {
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
     await vscode.workspace.fs.createDirectory(uri);
-    return { content: `Created ${vscode.workspace.asRelativePath(uri)}/` };
+    return { content: `Created ${displayPath(uri, ctx)}/` };
   },
 };
 
@@ -204,13 +225,13 @@ export const deleteTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const ok = await ctx.requestApproval(`Delete ${vscode.workspace.asRelativePath(uri)}`, 'This moves the path to the trash.', 'delete');
+    const ok = await ctx.requestApproval(`Delete ${displayPath(uri, ctx)}`, 'This moves the path to the trash.', 'delete');
     if (!ok) {
       return { content: 'User declined the deletion.', isError: true };
     }
     await ctx.trackChange(uri.fsPath);
     await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
-    return { content: `Deleted ${vscode.workspace.asRelativePath(uri)}` };
+    return { content: `Deleted ${displayPath(uri, ctx)}` };
   },
 };
 

@@ -124,7 +124,15 @@
           },
           {
             "name": "plan",
-            "description": "Produce an implementation plan (read-only)"
+            "description": "Prepare a plan you can build with one click (read-only)"
+          },
+          {
+            "name": "multitask",
+            "description": "Split the work across background workers that run at the same time"
+          },
+          {
+            "name": "debug",
+            "description": "Reproduce the problem, find the cause, fix and verify"
           }
         ]
       }
@@ -251,6 +259,36 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "localpilot.runBestOfN",
+        "title": "Best of N: Run One Task on Several Models…",
+        "category": "LocalPilot",
+        "icon": "$(versions)"
+      },
+      {
+        "command": "localpilot.compareResults",
+        "title": "Compare Best-of-N Results…",
+        "category": "LocalPilot",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "localpilot.applyWorktree",
+        "title": "Apply Agent's Changes to Workspace",
+        "category": "LocalPilot",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "localpilot.discardWorktree",
+        "title": "Discard Agent's Isolated Changes",
+        "category": "LocalPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "localpilot.openWorktree",
+        "title": "Open Agent's Worktree in New Window",
+        "category": "LocalPilot",
+        "icon": "$(folder-opened)"
+      },
+      {
         "command": "localpilot.showDiff",
         "title": "Show Diff",
         "category": "LocalPilot",
@@ -325,6 +363,12 @@
         "title": "Manage Models",
         "category": "LocalPilot",
         "icon": "$(library)"
+      },
+      {
+        "command": "localpilot.browseModelGallery",
+        "title": "Browse Ollama Model Gallery…",
+        "category": "LocalPilot",
+        "icon": "$(search)"
       },
       {
         "command": "localpilot.openBrowser",
@@ -618,6 +662,16 @@
           "group": "navigation@1"
         },
         {
+          "command": "localpilot.runBestOfN",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "2_batch@1"
+        },
+        {
+          "command": "localpilot.compareResults",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "2_batch@2"
+        },
+        {
           "command": "localpilot.newSession",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@2"
@@ -695,6 +749,31 @@
           "group": "inline@2"
         },
         {
+          "command": "localpilot.applyWorktree",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-isolated",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.discardWorktree",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-isolated",
+          "group": "inline@2"
+        },
+        {
+          "command": "localpilot.applyWorktree",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
+          "group": "1_worktree@1"
+        },
+        {
+          "command": "localpilot.discardWorktree",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
+          "group": "1_worktree@2"
+        },
+        {
+          "command": "localpilot.openWorktree",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
+          "group": "1_worktree@3"
+        },
+        {
           "command": "localpilot.keepChanges",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-changed",
           "group": "inline@1"
@@ -767,6 +846,10 @@
         },
         {
           "command": "localpilot.stopChild",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.openWorktree",
           "when": "false"
         },
         {
@@ -1118,6 +1201,22 @@
           "default": 2,
           "minimum": 1,
           "maximum": 4
+        },
+        "localpilot.worktrees.mode": {
+          "type": "string",
+          "enum": ["always", "parallel", "off"],
+          "enumDescriptions": [
+            "Every agent chat works in its own isolated copy of the repository (a git worktree); you review and apply its changes.",
+            "Only agents started together (Run Tasks in Parallel, Best of N) are isolated; a single chat edits the workspace directly.",
+            "Agents always edit the workspace directly."
+          ],
+          "default": "always",
+          "markdownDescription": "Isolate agents in **git worktrees** so several can edit the same files at once without clobbering each other or your open editors. A worktree starts as a copy of your checkout *including uncommitted work*; when the agent is done you **Apply to workspace** (changes land as ordinary uncommitted edits, 3-way merged on conflict) or **Discard**. Setup commands for new worktrees (e.g. `npm install`) go in `.localpilot/worktrees.json`: `{ \"setup\": [\"npm ci\"] }`. Needs a git repository; otherwise agents edit directly."
+        },
+        "localpilot.worktrees.location": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder that holds the worktrees (one sub-folder per repository). Empty = `~/.localpilot/worktrees`."
         },
         "localpilot.autoClarify": {
           "type": "boolean",

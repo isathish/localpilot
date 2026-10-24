@@ -31,6 +31,8 @@ export interface ChatMessage {
     pruned?: boolean;
     /** Internal steering message (e.g. the completion nudge); sent to the model but not shown in the transcript. */
     hidden?: boolean;
+    /** Why a hidden nudge was sent ('claimed' | 'announced' | 'shown' | 'malformed' | 'bare'); the UI marks the retracted reply. */
+    nudge?: string;
     /** User-role carrier for images produced by tools (browser_screenshot); lists the originating tool call ids. */
     toolImages?: string[];
     /** A user message typed while the agent was running/paused and injected at a step boundary. */
@@ -195,15 +197,34 @@ export interface SubagentDefinition {
   source: 'workspace' | 'user' | 'builtin';
 }
 
+/** Modes whose agent may change files and run commands. */
+export const WRITE_MODES: ReadonlySet<string> = new Set(['agent', 'multitask', 'debug']);
+export const ALL_MODES = ['agent', 'multitask', 'debug', 'plan', 'ask'] as const;
+export function isWriteMode(mode: string): boolean {
+  return WRITE_MODES.has(mode);
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
   model: string;
-  mode: 'agent' | 'ask' | 'plan';
+  /**
+   * agent: edit/run/verify · multitask: coordinate several background workers · debug: reproduce → localise → fix
+   * · plan: read-only, produces an executable checklist · ask: read-only Q&A.
+   */
+  mode: 'agent' | 'multitask' | 'debug' | 'ask' | 'plan';
+  /** Plan mode output saved to `.localpilot/plans/<slug>.plan.md`, shown as the "Prepared plan" card. */
+  plan?: { file: string; title: string; summary: string };
   messageCount: number;
   pinned?: boolean;
+  /** Isolated git worktree this session's agent works in (see WorktreeManager); absent when it edits the workspace directly. */
+  worktree?: import('./agent/worktrees').WorktreeInfo;
+  /** Set when the session was started as part of a parallel batch, so `worktrees.mode = parallel` isolates it. */
+  isolated?: boolean;
+  /** Sessions started together on the same prompt (Best of N): compared and one result applied. */
+  group?: { id: string; kind: 'bestOf' | 'batch'; prompt: string; size: number };
 }
 
 export interface Session extends SessionSummary {
@@ -259,8 +280,14 @@ export interface AgentEvent {
      * Payload: { skills, create?, installed? (a catalog skill installed for this request), available? (one on offer) }.
      */
     | 'skill_suggestions'
+    /** A child agent started. Payload: { childId, agent, prompt, model?, label? (short checklist title when run from a todo) }. */
     | 'subagent_start'
     | 'subagent_end'
+    /**
+     * The reply claimed or announced an action without calling a tool (or the call did not parse); the model is being
+     * asked to act. Text that streams afterwards replaces the retracted reply. Payload: { reason }.
+     */
+    | 'nudge'
     /** Queued steering messages were appended to the conversation. Payload: { ids: string[], count }. */
     | 'steer'
     | 'todos'

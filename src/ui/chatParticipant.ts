@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ChatController } from './chatController';
+import { ALL_MODES, Session } from '../types';
 
 /**
  * Registers `@localpilot` in the built-in VS Code Chat view so users can reach the local agent from the
@@ -15,14 +16,14 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
     const key = first ? `${first.prompt}|${first.command ?? ''}` : `${request.prompt}|${Date.now()}`;
     let sessionId = threadToSession.get(key);
     if (!sessionId || !controller.store.get(sessionId)) {
-      const mode = request.command === 'ask' ? 'ask' : request.command === 'plan' ? 'plan' : 'agent';
+      const mode = (ALL_MODES as readonly string[]).includes(request.command ?? '') ? (request.command as Session['mode']) : 'agent';
       const s = controller.store.create(getConfig().defaultModel, mode);
       s.title = `[chat] ${request.prompt.slice(0, 50)}`;
       sessionId = s.id;
       threadToSession.set(key, sessionId);
     }
     const session = controller.store.get(sessionId)!;
-    if (request.command && ['agent', 'ask', 'plan'].includes(request.command)) {
+    if (request.command && (ALL_MODES as readonly string[]).includes(request.command)) {
       session.mode = request.command as typeof session.mode;
     }
 

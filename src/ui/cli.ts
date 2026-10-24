@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { ChatController } from './chatController';
+import { ALL_MODES, Session } from '../types';
 
 const EXT_ID = 'localpilot.localpilot-agent';
 
@@ -25,7 +26,7 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
           }
         }
         const prompt = (params.get('prompt') ?? '').trim();
-        const mode = (['agent', 'ask', 'plan'].includes(params.get('mode') ?? '') ? params.get('mode') : 'agent') as 'agent' | 'ask' | 'plan';
+        const mode = ((ALL_MODES as readonly string[]).includes(params.get('mode') ?? '') ? params.get('mode') : 'agent') as Session['mode'];
         const files = (params.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
         reveal();
         if (uri.path === '/run' && prompt) {

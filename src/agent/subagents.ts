@@ -92,7 +92,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     },
   };
 
-  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext) {
+  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string) {
     const cfg = getConfig();
     if (ctx.depth >= cfg.parallel.maxSubagentDepth) {
       return { content: `Subagent depth limit (${cfg.parallel.maxSubagentDepth}) reached; do the work directly instead.`, isError: true };
@@ -123,7 +123,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // pause or stop just this lane — the parent then carries on with a "stopped" report instead of failing.
     // Registered before subagent_start so a UI reacting to that event can already address the child.
     const control = ctx.control ? ctx.control.child(childId, def.name) : new RunControl(childId, undefined, ctx.signal, def.name);
-    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined } });
+    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined } });
     const user: ChatMessage = { role: 'user', content: prompt };
     try {
       const text = await runner.run({
@@ -133,6 +133,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         role,
         toolFilter: def.tools,
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
+        workspaceRoot: ctx.workspaceRoot,
         depth: ctx.depth + 1,
         signal: control.signal,
         control,
@@ -161,11 +162,25 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     definition: {
       name: 'run_todos_parallel',
       description:
-        'Execute the pending checklist items that carry an "agent" as subagents (set agent/prompt/dependsOn with manage_todos). Independent items run concurrently; items with "dependsOn" wait for their prerequisites and receive their reports, so a whole plan runs in dependency waves with one call. Each item is marked in_progress → done/skipped as it runs and the user watches the checklist. Items without an agent are left for you to do yourself.',
+        'Run pieces of work as background workers at the same time. Either pass them inline as "tasks" (each with agent + a complete prompt — the fastest way) or run the pending checklist items that carry an "agent" (set agent/prompt/dependsOn with manage_todos). Independent items run concurrently; items with "dependsOn" wait for their prerequisites and receive their reports, so a whole plan runs in dependency waves with one call. Each item is marked in_progress → done/skipped as it runs and the user watches the checklist. Items without an agent are left for you to do yourself.',
       parameters: {
         type: 'object',
         properties: {
           ids: { type: 'array', items: { type: 'string' }, description: 'Optional: only run these todo ids (default: every pending item that has an agent)' },
+          tasks: {
+            type: 'array',
+            description: 'Optional shortcut: define the pieces of work right here instead of calling manage_todos first. Each becomes a checklist item and runs now.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Short label shown in the checklist' },
+                agent: { type: 'string', description: 'Worker: coder, tester, docs, explore, reviewer, debugger, researcher…' },
+                prompt: { type: 'string', description: 'Complete self-contained brief: goal, exact files, constraints, how to verify, what to report' },
+                dependsOn: { type: 'array', items: { type: 'string' }, description: 'Titles or ids of tasks that must finish first' },
+              },
+              required: ['agent', 'prompt'],
+            },
+          },
         },
       },
     },
@@ -176,11 +191,27 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       if (ctx.readOnly) {
         return { content: 'run_todos_parallel executes the plan and is only available in Agent mode. Finish the checklist here; the user can switch to Agent mode and say "implement the plan".', isError: true };
       }
-      const wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
+      let wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
+      // Inline tasks: turn them into checklist items first, then run exactly those.
+      const inline = Array.isArray(args.tasks) ? (args.tasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
+      if (inline.length) {
+        const existing = ctx.todos.get();
+        const used = new Set(existing.map((t) => t.id));
+        const next = (): string => { let n = existing.length + 1; while (used.has(String(n))) { n++; } used.add(String(n)); return String(n); };
+        const created: TodoItem[] = inline.map((t) => ({ id: next(), title: String(t.title || t.prompt).replace(/\s+/g, ' ').trim().slice(0, 80), status: 'pending' as const, agent: String(t.agent), prompt: String(t.prompt) }));
+        // dependsOn may name other inline tasks by title or by id; resolve titles to the ids just assigned.
+        inline.forEach((t, i) => {
+          const deps = Array.isArray(t.dependsOn) ? (t.dependsOn as unknown[]).map(String) : [];
+          const ids = deps.map((d) => created.find((c) => c.title === d.slice(0, 80) || c.id === d)?.id ?? existing.find((c) => c.id === d || c.title === d)?.id).filter((d): d is string => !!d);
+          if (ids.length) { created[i].dependsOn = ids; }
+        });
+        ctx.todos.set([...existing, ...created]);
+        wanted = new Set(created.map((c) => c.id));
+      }
       const all = ctx.todos.get();
       const runnable = all.filter((t) => t.status === 'pending' && t.agent && (!wanted || wanted.has(t.id)));
       if (!runnable.length) {
-        return { content: 'Nothing to run: no pending todos with an "agent". Add one with manage_todos (e.g. {"id":"2","title":"…","status":"pending","agent":"coder","prompt":"…","dependsOn":["1"]}).', isError: true };
+        return { content: 'Nothing to run: no pending todos with an "agent". Pass the work inline — run_todos_parallel({"tasks":[{"title":"…","agent":"coder","prompt":"…"},{"title":"…","agent":"tester","prompt":"…"}]}) — or add items with manage_todos first.', isError: true };
       }
       const update = (id: string, patch: Partial<TodoItem>) => ctx.todos!.set(ctx.todos!.get().map((t) => (t.id === id ? { ...t, ...patch } : t)));
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
@@ -223,7 +254,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           const deps = (t.dependsOn ?? []).filter((d) => reports.has(d));
           const depText = deps.length ? `\n\nReports from the prerequisite items you build on:\n${deps.map((d) => `### Item ${d}\n${reports.get(d)!.slice(0, 2500)}`).join('\n\n')}` : '';
           const brief = t.prompt?.trim() || `Carry out checklist item ${t.id}: "${t.title}". Use the tools to inspect the workspace, make the change (or produce the analysis) and verify it.`;
-          const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx);
+          const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx, t.title);
           const ok = !r.isError;
           update(t.id, { status: ok ? 'done' : 'skipped', result: r.content.slice(0, 2000) });
           return r;

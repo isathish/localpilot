@@ -1,7 +1,14 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
-import { Tool } from '../types';
-import { resolveWorkspacePath } from './fs';
+import { Tool, ToolContext } from '../types';
+import { displayPath, resolveWorkspacePath } from './fs';
+
+/** `findFiles` scoped to the agent's root: the workspace by default, its isolated worktree when it has one. */
+function findIn(ctx: ToolContext, pattern: string, max: number): Thenable<vscode.Uri[]> {
+  const root = ctx.workspaceRoot;
+  const inWorkspace = !root || vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === root);
+  return inWorkspace ? vscode.workspace.findFiles(pattern, EXCLUDES, max) : vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(root), pattern), new vscode.RelativePattern(vscode.Uri.file(root), EXCLUDES), max);
+}
 
 const EXCLUDES = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/*.min.js,**/*.map}';
 
@@ -16,16 +23,16 @@ export const fileSearchTool: Tool = {
       required: ['pattern'],
     },
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const pattern = String(args.pattern ?? '**/*');
     const max = Number(args.max_results ?? 50);
-    const files = await vscode.workspace.findFiles(pattern, EXCLUDES, max);
+    const files = await findIn(ctx, pattern, max);
     if (!files.length) {
       // A bare identifier in a glob almost always means the model wanted a content search.
       const looksLikeSymbol = /^(\*\*\/)?[\w.-]+\*?$/.test(pattern) && !/\.[a-z]{1,5}$/i.test(pattern.replace(/\*$/, ''));
       return { content: `No files match ${pattern}.${looksLikeSymbol ? ` file_search only matches file names — to find "${pattern.replace(/^\*\*\//, '').replace(/\*$/, '')}" inside files use grep_search with that text as the query (or find_symbol for definitions).` : ''}` };
     }
-    return { content: files.map((f) => vscode.workspace.asRelativePath(f)).sort().join('\n') };
+    return { content: files.map((f) => displayPath(f, ctx)).sort().join('\n') };
   },
 };
 
@@ -80,7 +87,7 @@ export const grepSearchTool: Tool = {
         return out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
       }
       // Fallback: naive JS search (slower, but dependency-free).
-      const files = await vscode.workspace.findFiles(include ?? '**/*', EXCLUDES, 2000);
+      const files = await findIn(ctx, include ?? '**/*', 2000);
       const re = new RegExp(isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
       const results: string[] = [];
       for (const f of files) {
@@ -96,7 +103,7 @@ export const grepSearchTool: Tool = {
           const lines = text.split('\n');
           for (let i = 0; i < lines.length && results.length < max; i++) {
             if (re.test(lines[i])) {
-              results.push(`${vscode.workspace.asRelativePath(f)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
+              results.push(`${displayPath(f, ctx)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
             }
           }
         } catch {
@@ -179,7 +186,7 @@ export const findReferencesTool: Tool = {
 };
 
 let rgPath: string | null | undefined;
-async function findRipgrep(): Promise<string | null> {
+export async function findRipgrep(): Promise<string | null> {
   if (rgPath !== undefined) {
     return rgPath;
   }

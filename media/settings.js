@@ -30,9 +30,13 @@
     play: '<svg viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></svg>',
     star: '<svg viewBox="0 0 16 16"><path d="M8 2l1.8 3.7 4.2.6-3 2.9.7 4.1L8 11.4l-3.7 1.9.7-4.1-3-2.9 4.2-.6z"/></svg>',
     chip: '<svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6h1.5M1.5 10h1.5M13 6h1.5M13 10h1.5"/><rect x="6" y="6" width="4" height="4"/></svg>',
+    search: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>',
+    gallery: '<svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><path d="M11.5 9.5v5M9 12h5"/></svg>',
+    external: '<svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>',
+    cloud: '<svg viewBox="0 0 16 16"><path d="M5 12.5a3 3 0 0 1-.4-6A4 4 0 0 1 12.3 7.6 2.5 2.5 0 0 1 12 12.5z"/></svg>',
   };
   const SECTIONS = [
-    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
+    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
     ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['advanced', 'Advanced', I.wrench],
   ];
   const PRESET_PROVIDERS = [
@@ -113,7 +117,9 @@
     autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always' } },
   };
 
-  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null };
+  const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null,
+    // Ollama library browser: the current query, pages fetched so far, and per-model tag lists (fetched on expand).
+    gallery: { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {}, pullRef: '', pullError: '' } };
 
   // ------------------------------------------------------------------ helpers
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
@@ -252,7 +258,7 @@
   }
   function renderSection() {
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }

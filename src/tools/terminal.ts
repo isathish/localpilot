@@ -3,6 +3,7 @@ import * as cp from 'child_process';
 import * as os from 'os';
 import { getConfig } from '../config';
 import { Tool } from '../types';
+import { displayPath } from './fs';
 
 /** Runner that executes in a visible, branded VS Code terminal (set by the extension; absent in the CLI). */
 export interface IntegratedTerminalRunner {
@@ -42,7 +43,7 @@ export const runCommandTool: Tool = {
     const dangerous = DANGEROUS.test(command);
     const ok = await ctx.requestApproval(
       dangerous ? 'Potentially destructive command' : 'Run command',
-      `$ ${command}\nin ${vscode.workspace.asRelativePath(cwd) || cwd}`,
+      `$ ${command}\nin ${displayPath(vscode.Uri.file(cwd), ctx) || cwd}`,
       'terminal'
     );
     if (!ok) {
