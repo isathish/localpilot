@@ -118,8 +118,10 @@
   };
 
   const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null,
-    // Ollama library browser: the current query, pages fetched so far, and per-model tag lists (fetched on expand).
-    gallery: { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {}, pullRef: '', pullError: '' } };
+    // Model gallery: one browse state per registry source (Ollama library, Docker Hub ai/, Hugging Face GGUF) and
+    // the chosen install runtime per source; tag lists are fetched on expand.
+    gallery: { source: 'ollama', target: {}, pullRef: '', pullError: '', pullTarget: '', by: {} } };
+  const galleryState = (source) => (state.gallery.by[source] ||= { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {} });
 
   // ------------------------------------------------------------------ helpers
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
@@ -278,7 +280,7 @@
     const list = providersList();
     const bar = el('div', 'btnrow');
     bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${enabledModels().length} model(s) available</span>`;
-    bar.querySelector('#probe').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
+    bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     const wrap = el('div');
     wrap.style.marginTop = '14px';
@@ -306,7 +308,19 @@
     tip.style.marginTop = '14px';
     tip.innerHTML = 'Tip: <code>ollama</code> uses the native Ollama API (tools, thinking, vision, FIM). Every other server uses the OpenAI-compatible <code>/v1</code> API — LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenRouter, Azure OpenAI…';
     sec.appendChild(tip);
+    // Reachability is shown without being asked for: probe when the page opens, when the provider list changes
+    // (a server was added or its URL edited) and when the last check is older than a minute. The button stays for an
+    // immediate re-check. Results arrive as a `probe` message and re-render the cards with ok / unreachable.
+    const sig = providerSig(list);
+    const stale = !state.probe || sig !== state.probedSig || Date.now() - (state.probedAt || 0) > 60_000;
+    if (list.length && stale && !state.busy) {
+      state.probedSig = sig; state.probedAt = Date.now(); state.busy = true;
+      bar.querySelector('#probe').innerHTML = '<span class="spinner"></span>Check all connections';
+      for (const d of sec.querySelectorAll('.prov:not(.off) .dot:not(.ok):not(.err)')) { d.className = 'dot busy'; }
+      post({ type: 'probe' });
+    }
   }
+  const providerSig = (list) => list.map((p) => `${p.id}@${p.baseUrl}@${p.enabled === false ? 0 : 1}`).join('|');
   function providerCard(p, list) {
     const probe = (state.probe || []).find((r) => r.id === p.id) || state.tests[p.id];
     const open = state.expanded === p.id;
@@ -591,71 +605,141 @@
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
 
-  // ------------------------------------------------------------------ model gallery (ollama.com library)
-  const GALLERY_CAPS = [['', 'All'], ['tools', 'Tools'], ['vision', 'Vision'], ['thinking', 'Thinking'], ['embedding', 'Embedding']];
-  const GALLERY_SORTS = [['popular', 'Most popular'], ['newest', 'Newest'], ['name', 'Name']];
-  /** Mirrors the host-side check: `name`, `name:tag`, `user/name:tag`, `hf.co/org/repo:Q4_K_M`. */
-  const isModelRef = (s) => /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,3}(:[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(s) && s.length <= 200;
-  /** Plain size tags (`8b`, `e4b`, `30b-a3b`, `latest`) are shown first; quantisation variants hide behind “show all”. */
-  const isPrimaryTag = (t) => t.isLatest || /^(latest|e?\d+(\.\d+)?[bm](-a\d+(\.\d+)?b)?|\d+x\d+(\.\d+)?b)$/i.test(t.tag);
-  const fitOf = (gb) => { const b = state.models && state.models.system ? state.models.system.modelBudgetGb : 0; return gb === undefined || !b ? 'unknown' : gb <= b ? 'ok' : gb <= b * 1.25 ? 'tight' : 'over'; };
-  const ollamaRuntime = () => (state.models && state.models.runtimes || []).find((r) => r.target === 'ollama');
-  const installedOllama = (ref) => {
-    const rt = ollamaRuntime();
-    const pid = rt && rt.providerId;
-    const want = ref.includes(':') ? ref : `${ref}:latest`;
-    return (state.models && state.models.installed || []).find((m) => (!pid || m.providerId === pid) && (m.modelId === want || m.modelId === ref || `${m.modelId}:latest` === want));
+  // ------------------------------------------------------------------ model gallery (Ollama library · Docker Hub · Hugging Face)
+  /** Registries the gallery can browse; a source is offered when a runtime that installs from it is detected. */
+  const GALLERY_SOURCES = {
+    ollama: { label: 'Ollama library', site: 'ollama.com', url: 'https://ollama.com/library', placeholder: 'Search the Ollama library — e.g. coder, llama, embed…', caps: [['', 'All'], ['tools', 'Tools'], ['vision', 'Vision'], ['thinking', 'Thinking'], ['embedding', 'Embedding']], targets: ['ollama'], cli: { ollama: 'ollama pull' } },
+    docker: { label: 'Docker Hub', site: 'hub.docker.com', url: 'https://hub.docker.com/u/ai', placeholder: 'Search the ai/ namespace on Docker Hub — e.g. qwen, gemma, embed…', caps: [['', 'All'], ['vision', 'Vision'], ['embedding', 'Embedding']], targets: ['docker'], cli: { docker: 'docker model pull' } },
+    huggingface: { label: 'Hugging Face', site: 'huggingface.co', url: 'https://huggingface.co/models?library=gguf&sort=downloads', placeholder: 'Search GGUF repositories on Hugging Face — e.g. unsloth qwen3, bartowski…', caps: [['', 'All'], ['vision', 'Vision'], ['embedding', 'Embedding']], targets: ['ollama', 'lmstudio'], cli: { ollama: 'ollama pull', lmstudio: 'lms get' } },
   };
-  function gallerySearch(reset) {
-    const g = state.gallery;
+  const GALLERY_SORTS = [['popular', 'Most popular'], ['newest', 'Newest'], ['name', 'Name']];
+  const PULL_HINT = {
+    ollama: { placeholder: 'model[:tag] or hf.co/org/repo[:quant]', desc: 'Anything <code>ollama pull</code> accepts: a library model (<code>qwen3:8b</code>), a user upload (<code>user/model:tag</code>) or a GGUF repository from Hugging Face (<code>hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M</code>).' },
+    docker: { placeholder: 'ai/model[:tag]', desc: 'Anything <code>docker model pull</code> accepts: a Docker Hub model (<code>ai/qwen3:8b</code>) or an OCI artifact from another registry.' },
+    lmstudio: { placeholder: 'org/repo[@quant] or model-key', desc: 'Anything <code>lms get</code> accepts: a Hugging Face repository (<code>unsloth/Qwen3-8B-GGUF@q4_k_m</code>) or an LM Studio model key (<code>llama-3.1-8b</code>).' },
+  };
+  /** Mirrors the host-side checks per runtime. */
+  const isModelRef = (target, s) => s.length <= 240 && !/\.\./.test(s) && (
+    target === 'docker' ? /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*){0,3}(:[A-Za-z0-9][A-Za-z0-9._-]*)?$/i.test(s)
+      : target === 'lmstudio' ? /^[A-Za-z0-9][\w.-]*(\/[A-Za-z0-9][\w.-]*)?(@[\w.-]+)?$/.test(s)
+        : /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*){0,3}(:[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(s));
+  /** Plain size tags (`8b`, `e4b`, `30b-a3b`, `latest`) and the common Q4_K_M quant are shown first; the rest hide behind “show all”. */
+  const isPrimaryTag = (t) => t.isLatest || /^(latest|e?\d+(\.\d+)?[bm](-a\d+(\.\d+)?b)?|\d+x\d+(\.\d+)?b|q4_k_m|q8_0|q4_0)$/i.test(t.tag) || /^(e?\d+(\.\d+)?[bm])(-a\d+(\.\d+)?b)?-q4_K_M$/i.test(t.tag);
+  const fitOf = (gb) => { const b = state.models && state.models.system ? state.models.system.modelBudgetGb : 0; return gb === undefined || !b ? 'unknown' : gb <= b ? 'ok' : gb <= b * 1.25 ? 'tight' : 'over'; };
+  const runtimeOf = (target) => (state.models && state.models.runtimes || []).find((r) => r.target === target);
+  const runtimeRunning = (target) => { const r = runtimeOf(target); return !!(r && r.running); };
+  const runtimePresent = (target) => { const r = runtimeOf(target); return !!(r && (r.running || r.installed)); };
+  /** Sources worth showing: the Ollama library always; Docker Hub when Docker Model Runner is around; Hugging Face when LM Studio is, or Ollama runs (it pulls hf.co/…). */
+  const gallerySources = () => Object.keys(GALLERY_SOURCES).filter((s) => s === 'ollama' || (s === 'docker' ? runtimePresent('docker') : runtimePresent('lmstudio') || runtimeRunning('ollama')));
+  const galleryTargets = (source) => GALLERY_SOURCES[source].targets.filter(runtimeRunning);
+  const galleryTarget = (source) => { const avail = galleryTargets(source); const want = state.gallery.target[source]; return avail.includes(want) ? want : avail[0] || GALLERY_SOURCES[source].targets[0]; };
+  /** What the runtime downloads for a tag: `qwen3:8b`, `ai/qwen3:8b`, `hf.co/org/repo:Q4_K_M` or `org/repo@q4_k_m`. */
+  const installRef = (source, target, tag) => {
+    if (source !== 'huggingface') { return tag.model; }
+    const repo = tag.model.replace(/^hf\.co\//, '').replace(/:[^/]*$/, '');
+    return target === 'lmstudio' ? (tag.tag === 'latest' ? repo : `${repo}@${tag.tag.toLowerCase()}`) : tag.model;
+  };
+  /** Installed model (from the live discovery list) matching a gallery reference on a runtime, if any. */
+  const installedFor = (target, ref) => {
+    const rt = runtimeOf(target);
+    const pid = rt && rt.providerId;
+    const list = (state.models && state.models.installed || []).filter((m) => !pid || m.providerId === pid);
+    const low = ref.toLowerCase();
+    if (target === 'lmstudio') {
+      const repo = low.split('@')[0].split('/').pop().replace(/-gguf$/, '');
+      return list.find((m) => m.modelId.toLowerCase().includes(repo));
+    }
+    const want = low.includes(':') ? low : `${low}:latest`;
+    return list.find((m) => { const id = m.modelId.toLowerCase(); const idl = id.includes(':') ? id : `${id}:latest`; return idl === want || idl.endsWith(`/${want}`); });
+  };
+  function gallerySearch(source, reset) {
+    const g = galleryState(source);
     if (reset) { g.page = 1; g.models = []; g.hasMore = false; }
     g.loading = true; g.error = null; g.loaded = true;
-    post({ type: 'gallerySearch', q: g.q, capability: g.capability, sort: g.sort, page: g.page });
+    post({ type: 'gallerySearch', source, q: g.q, capability: g.capability, sort: g.sort, page: g.page });
   }
-  function galleryInstall(ref, label) {
-    if (!isModelRef(ref)) { toast(`Not a valid model reference: ${ref}`, 'error'); return; }
-    post({ type: 'installModel', target: 'ollama', model: ref });
-    toast(`Installing ${label || ref} on Ollama…`);
+  function galleryInstall(target, ref, label) {
+    if (!isModelRef(target, ref)) { toast(`Not a valid model reference: ${ref}`, 'error'); return; }
+    post({ type: 'installModel', target, model: ref });
+    toast(`Installing ${label || ref} on ${TARGET_LABEL[target]}…`);
+  }
+  /** One line of runtime status with the action that gets it running, shared by the gallery header and the pull box. */
+  function runtimeStatusRow(target, cls) {
+    const rt = runtimeOf(target);
+    const row = el('div', `gal-status ${cls || ''}`);
+    if (!state.models) {
+      row.innerHTML = `<span class="spinner"></span><div class="t"><b>Checking ${esc(TARGET_LABEL[target])}…</b></div>`;
+    } else if (rt && rt.running) {
+      row.innerHTML = `<span class="dot ok"></span><div class="t"><b>${esc(TARGET_LABEL[target])} is running</b><span>${esc(rt.baseUrl || '')} · ${esc(gbText(state.models.system.modelBudgetGb))} model budget on ${esc(state.models.system.summary)}</span></div>`;
+    } else if (rt && rt.installed) {
+      row.innerHTML = `<span class="dot warn"></span><div class="t"><b>${esc(TARGET_LABEL[target])} is installed but not running</b><span>${esc(rt.hint || 'Start it to install models from here.')}</span></div>`;
+      if (target === 'ollama') {
+        const b = el('button', 'btn sm', `${I.play}Start Ollama`); b.disabled = !!activeJob('start');
+        b.onclick = () => { b.disabled = true; post({ type: 'startRuntime', target: 'ollama' }); };
+        row.appendChild(b);
+      }
+    } else {
+      row.innerHTML = `<span class="dot"></span><div class="t"><b>${esc(TARGET_LABEL[target])} is not installed</b><span>${esc((rt && rt.hint) || 'Install it to download models from here.')}</span></div>`;
+      if (target === 'ollama') {
+        const b = el('button', 'btn sm', `${I.download}Install Ollama`);
+        b.onclick = () => post({ type: 'autoSetup', installRuntime: true, target: 'ollama' });
+        row.appendChild(b);
+      }
+    }
+    return row;
   }
   function secGallery(sec) {
-    head(sec, 'Model gallery', `Browse and install any model from the <a data-url="https://ollama.com/library">Ollama library</a> — not just the curated catalog. Sizes are compared against this machine; downloads run through your local Ollama server and show up under <a data-sec="models">Models</a> when done.`);
-    const g = state.gallery;
+    head(sec, 'Model gallery', `Browse and install any model from the registries your runtimes download from — the <a data-url="https://ollama.com/library">Ollama library</a>, Docker Hub's <a data-url="https://hub.docker.com/u/ai">ai/</a> models for Docker Model Runner and <a data-url="https://huggingface.co/models?library=gguf">Hugging Face GGUF</a> repositories for LM Studio and Ollama — not just the curated catalog. Sizes are compared against this machine; installed models show up under <a data-sec="models">Models</a>.`);
     if (!state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
+    const sources = gallerySources();
+    if (!sources.includes(state.gallery.source)) { state.gallery.source = sources[0]; }
+    const source = state.gallery.source;
+    const src = GALLERY_SOURCES[source];
+    const g = galleryState(source);
 
-    // --- Ollama status (the gallery can only install onto Ollama)
-    const rt = ollamaRuntime();
-    const status = el('div', 'card gal-status');
-    if (!state.models) {
-      status.innerHTML = `<span class="spinner"></span><div class="t"><b>Checking Ollama…</b></div>`;
-    } else if (rt && rt.running) {
-      status.innerHTML = `<span class="dot ok"></span><div class="t"><b>Ollama is running</b><span>${esc(rt.baseUrl || '')} · ${esc(gbText(state.models.system.modelBudgetGb))} model budget on ${esc(state.models.system.summary)}</span></div>`;
-    } else if (rt && rt.installed) {
-      status.innerHTML = `<span class="dot warn"></span><div class="t"><b>Ollama is installed but not running</b><span>Start it to install models from here.</span></div>`;
-      const b = el('button', 'btn sm', `${I.play}Start Ollama`); b.disabled = !!activeJob('start');
-      b.onclick = () => { b.disabled = true; post({ type: 'startRuntime', target: 'ollama' }); };
-      status.appendChild(b);
-    } else {
-      status.innerHTML = `<span class="dot"></span><div class="t"><b>Ollama is not installed</b><span>LocalPilot can install it for you — downloads from the gallery need a running Ollama server.</span></div>`;
-      const b = el('button', 'btn sm', `${I.download}Install Ollama`);
-      b.onclick = () => post({ type: 'autoSetup', installRuntime: true, target: 'ollama' });
-      status.appendChild(b);
+    // --- source tabs (one per registry a detected runtime installs from)
+    const tabs = el('div', 'gal-tabs'); tabs.setAttribute('role', 'tablist');
+    for (const s of sources) {
+      const b = el('button', `gal-tab ${s === source ? 'on' : ''}`, `${s === 'huggingface' ? vendorMark('hugging face', 'HF') : brandMark(s, GALLERY_SOURCES[s].label)}<span>${esc(GALLERY_SOURCES[s].label)}</span><small>${esc(GALLERY_SOURCES[s].site)}</small>`);
+      b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(s === source));
+      b.onclick = () => { state.gallery.source = s; render(); };
+      tabs.appendChild(b);
+    }
+    const missing = Object.keys(GALLERY_SOURCES).filter((s) => !sources.includes(s));
+    if (missing.length) { tabs.appendChild(el('span', 'gal-tabs-note', `${missing.map((s) => esc(GALLERY_SOURCES[s].label)).join(' and ')} appear${missing.length === 1 ? 's' : ''} here once ${missing.includes('docker') ? 'Docker Model Runner' : 'LM Studio'} is installed.`)); }
+    sec.appendChild(tabs);
+
+    // --- install target (runtime) for this source
+    const targets = galleryTargets(source);
+    const target = galleryTarget(source);
+    const status = el('div', 'card gal-status-card');
+    status.appendChild(runtimeStatusRow(target));
+    if (targets.length > 1) {
+      const pick = el('div', 'gal-target', `<span class="lbl">Install to</span>`);
+      const sel = el('select'); sel.setAttribute('aria-label', 'Install to');
+      for (const t of targets) { const o = el('option'); o.value = t; o.textContent = `${TARGET_LABEL[t]} (${src.cli[t]})`; o.selected = t === target; sel.appendChild(o); }
+      sel.onchange = () => { state.gallery.target[source] = sel.value; render(); };
+      pick.appendChild(sel);
+      status.appendChild(pick);
+    } else if (!targets.length && src.targets.length > 1) {
+      status.appendChild(el('div', 'gal-target muted small', `Installs to ${src.targets.map((t) => TARGET_LABEL[t]).join(' or ')} — start one of them.`));
     }
     sec.appendChild(status);
 
     // --- search tools
     const tools = el('div', 'gal-tools');
-    const q = el('input'); q.type = 'search'; q.id = 'gal-q'; q.placeholder = 'Search the Ollama library — e.g. coder, llama, embed…'; q.value = g.q; q.setAttribute('aria-label', 'Search models');
+    const q = el('input'); q.type = 'search'; q.id = 'gal-q'; q.placeholder = src.placeholder; q.value = g.q; q.setAttribute('aria-label', 'Search models');
     // A full render (finished pull → models refresh) must not steal the caret mid-typing.
     if (document.activeElement && document.activeElement.id === 'gal-q') { requestAnimationFrame(() => { const n = app.querySelector('#gal-q'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }
-    q.oninput = debounce(() => { if (q.value.trim() === g.q) { return; } g.q = q.value.trim(); gallerySearch(true); renderGalleryResults(); }, 350);
-    q.onkeydown = (e) => { if (e.key === 'Enter') { g.q = q.value.trim(); gallerySearch(true); renderGalleryResults(); } };
+    q.oninput = debounce(() => { if (q.value.trim() === g.q) { return; } g.q = q.value.trim(); gallerySearch(source, true); renderGalleryResults(); }, 350);
+    q.onkeydown = (e) => { if (e.key === 'Enter') { g.q = q.value.trim(); gallerySearch(source, true); renderGalleryResults(); } };
     const search = el('div', 'gal-search', I.search); search.appendChild(q);
     tools.appendChild(search);
     const chips = el('div', 'chips');
-    for (const [k, l] of GALLERY_CAPS) { const b = el('button', `chip ${g.capability === k ? 'on' : ''}`, esc(l)); b.onclick = () => { g.capability = k; gallerySearch(true); render(); }; chips.appendChild(b); }
+    for (const [k, l] of src.caps) { const b = el('button', `chip ${g.capability === k ? 'on' : ''}`, esc(l)); b.onclick = () => { g.capability = k; gallerySearch(source, true); render(); }; chips.appendChild(b); }
     const sort = el('select'); sort.setAttribute('aria-label', 'Sort');
     for (const [k, l] of GALLERY_SORTS) { const o = el('option'); o.value = k; o.textContent = l; o.selected = g.sort === k; sort.appendChild(o); }
-    sort.onchange = () => { g.sort = sort.value; gallerySearch(true); render(); };
+    sort.onchange = () => { g.sort = sort.value; gallerySearch(source, true); render(); };
     chips.appendChild(sort);
     tools.appendChild(chips);
     sec.appendChild(tools);
@@ -663,29 +747,37 @@
     // --- results
     const results = el('div', 'gal-results'); results.id = 'gal-results';
     sec.appendChild(results);
-    if (!g.loaded) { gallerySearch(true); }
+    if (!g.loaded) { gallerySearch(source, true); }
     renderGalleryResults(results);
 
-    // --- pull anything by name
+    // --- pull anything by name, on any running runtime
     sec.appendChild(el('h2', 'sub', 'Pull by name'));
     const pull = el('div', 'card gal-pull');
-    pull.innerHTML = `<p class="desc">Anything <code>ollama pull</code> accepts: a library model (<code>qwen3:8b</code>), a user upload (<code>user/model:tag</code>) or a GGUF repo from Hugging Face (<code>hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M</code>).</p>`;
+    const pullTargets = ['ollama', 'docker', 'lmstudio'].filter(runtimeRunning);
+    const pt = pullTargets.includes(state.gallery.pullTarget) ? state.gallery.pullTarget : pullTargets.includes(target) ? target : pullTargets[0] || 'ollama';
+    pull.innerHTML = `<p class="desc">${PULL_HINT[pt].desc}</p>`;
     const row = el('div', 'gal-pull-row');
-    const ref = el('input'); ref.type = 'text'; ref.placeholder = 'model[:tag] or hf.co/org/repo[:quant]'; ref.value = g.pullRef; ref.setAttribute('aria-label', 'Model reference'); ref.spellcheck = false;
-    if (g.pullError) { ref.classList.add('invalid'); }
-    const pj = g.pullRef.trim() ? activeJob('pull', 'ollama', g.pullRef.trim()) : null;
-    const go = el('button', 'btn primary sm', pj ? '<span class="spinner"></span>' : `${I.download}Pull`); go.disabled = !!pj || !(rt && rt.running);
-    go.title = rt && rt.running ? 'ollama pull' : 'Start Ollama first';
-    const submit = () => { const v = ref.value.trim(); g.pullRef = v; if (!isModelRef(v)) { g.pullError = 'Not a valid model reference'; ref.classList.add('invalid'); err.textContent = g.pullError; return; } g.pullError = ''; ref.classList.remove('invalid'); err.textContent = ''; galleryInstall(v); };
-    ref.oninput = () => { g.pullRef = ref.value; if (g.pullError) { g.pullError = ''; ref.classList.remove('invalid'); err.textContent = ''; } };
+    if (pullTargets.length > 1) {
+      const sel = el('select'); sel.setAttribute('aria-label', 'Runtime');
+      for (const t of pullTargets) { const o = el('option'); o.value = t; o.textContent = TARGET_LABEL[t]; o.selected = t === pt; sel.appendChild(o); }
+      sel.onchange = () => { state.gallery.pullTarget = sel.value; state.gallery.pullError = ''; render(); };
+      row.appendChild(sel);
+    }
+    const ref = el('input'); ref.type = 'text'; ref.placeholder = PULL_HINT[pt].placeholder; ref.value = state.gallery.pullRef; ref.setAttribute('aria-label', 'Model reference'); ref.spellcheck = false;
+    if (state.gallery.pullError) { ref.classList.add('invalid'); }
+    const pj = state.gallery.pullRef.trim() ? activeJob('pull', pt, state.gallery.pullRef.trim()) : null;
+    const go = el('button', 'btn primary sm', pj ? '<span class="spinner"></span>' : `${I.download}Pull`); go.disabled = !!pj || !pullTargets.length;
+    go.title = pullTargets.length ? (GALLERY_SOURCES[source].cli[pt] || { ollama: 'ollama pull', docker: 'docker model pull', lmstudio: 'lms get' }[pt]) : 'Start a runtime first';
+    const err = el('div', 'gal-err', esc(state.gallery.pullError));
+    const submit = () => { const v = ref.value.trim(); state.gallery.pullRef = v; if (!isModelRef(pt, v)) { state.gallery.pullError = `Not a valid ${TARGET_LABEL[pt]} model reference`; ref.classList.add('invalid'); err.textContent = state.gallery.pullError; return; } state.gallery.pullError = ''; ref.classList.remove('invalid'); err.textContent = ''; galleryInstall(pt, v); };
+    ref.oninput = () => { state.gallery.pullRef = ref.value; if (state.gallery.pullError) { state.gallery.pullError = ''; ref.classList.remove('invalid'); err.textContent = ''; } };
     ref.onkeydown = (e) => { if (e.key === 'Enter' && !go.disabled) { submit(); } };
     go.onclick = submit;
     row.appendChild(ref); row.appendChild(go);
     pull.appendChild(row);
-    const err = el('div', 'gal-err', esc(g.pullError));
     pull.appendChild(err);
     sec.appendChild(pull);
-    sec.appendChild(el('p', 'muted small', 'Listings come from ollama.com and are cached for a few minutes. “Cloud” models run on Ollama’s servers and cannot be downloaded.'));
+    sec.appendChild(el('p', 'muted small', 'Listings come from the registries’ public sites and are cached for a few minutes. “Cloud” models run on Ollama’s servers and cannot be downloaded; Hugging Face sizes are the sum of a quantisation’s files.'));
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
   /** Rebuilds just the result list — search responses, tag lists and job updates must not disturb the search box. */
@@ -693,19 +785,21 @@
     const box = container || app.querySelector('#gal-results');
     if (!box) { return; }
     box.innerHTML = '';
-    const g = state.gallery;
-    const rt = ollamaRuntime();
-    const canInstall = !!(rt && rt.running);
+    const source = state.gallery.source;
+    const src = GALLERY_SOURCES[source];
+    const g = galleryState(source);
+    const target = galleryTarget(source);
+    const canInstall = runtimeRunning(target);
     if (g.error) {
       const e = el('div', 'empty', `${esc(g.error)}<br>`);
-      const retry = el('button', 'btn sm', `${I.refresh}Try again`); retry.style.marginTop = '8px'; retry.onclick = () => { gallerySearch(true); renderGalleryResults(); };
+      const retry = el('button', 'btn sm', `${I.refresh}Try again`); retry.style.marginTop = '8px'; retry.onclick = () => { gallerySearch(source, true); renderGalleryResults(); };
       e.appendChild(retry);
       box.appendChild(e);
       return;
     }
-    if (g.loading && !g.models.length) { box.appendChild(el('div', 'loading short', '<span class="spinner"></span>Searching ollama.com…')); return; }
-    if (!g.models.length) { box.appendChild(el('div', 'empty', `No models match “${esc(g.q)}”${g.capability ? ` with ${esc(g.capability)}` : ''}. Try another word — or pull it by name below.`)); return; }
-    box.appendChild(el('div', 'gal-count', `${g.models.length}${g.hasMore ? '+' : ''} model${g.models.length === 1 ? '' : 's'}${g.q ? ` for “${esc(g.q)}”` : ''}${g.capability ? ` · ${esc(g.capability)}` : ''}`));
+    if (g.loading && !g.models.length) { box.appendChild(el('div', 'loading short', `<span class="spinner"></span>Searching ${esc(src.site)}…`)); return; }
+    if (!g.models.length) { box.appendChild(el('div', 'empty', `No models match “${esc(g.q)}”${g.capability ? ` with ${esc(g.capability)}` : ''} on ${esc(src.site)}. Try another word — or pull it by name below.`)); return; }
+    box.appendChild(el('div', 'gal-count', `${g.models.length}${g.hasMore ? '+' : ''} model${g.models.length === 1 ? '' : 's'}${g.q ? ` for “${esc(g.q)}”` : ''}${g.capability ? ` · ${esc(g.capability)}` : ''} · ${esc(src.site)}`));
     for (const m of g.models) {
       const c = el('div', 'cat gal-model');
       const open = !!g.open[m.name];
@@ -713,15 +807,16 @@
         ...m.capabilities.map((x) => `<span class="badge role">${esc(x)}</span>`),
         ...(m.cloud ? [`<span class="badge" title="Runs on Ollama’s cloud only">${I.cloud} cloud</span>`] : []),
       ].join('');
-      const inst = installedOllama(m.name);
+      const shortName = source === 'docker' ? m.name.replace(/^ai\//, '') : m.name;
+      const inst = source === 'huggingface' ? null : installedFor(target, m.name);
       const sizes = m.sizes.length ? m.sizes.map((s) => `<span class="sz">${esc(s)}</span>`).join('') : '';
-      const headEl = el('div', 'cat-head', `${vendorMark(vendorFromModelId(m.name), m.name)}<div class="t"><b>${esc(m.name)}</b>${m.pulls ? `<span class="v" title="Downloads">${I.download} ${esc(m.pulls)}</span>` : ''}${inst ? '<span class="badge ok" style="margin-left:6px">installed</span>' : ''}<p>${esc(m.description || '')}</p><div class="gal-sizes">${sizes}</div></div><div class="tags">${badges}</div>`);
+      const headEl = el('div', 'cat-head', `${vendorMark(vendorFromModelId(shortName.split('/').pop()), shortName)}<div class="t"><b title="${esc(m.name)}">${esc(shortName)}</b>${m.pulls ? `<span class="v" title="Downloads">${I.download} ${esc(m.pulls)}</span>` : ''}${inst ? '<span class="badge ok" style="margin-left:6px">installed</span>' : ''}<p>${esc(m.description || '')}</p><div class="gal-sizes">${sizes}</div></div><div class="tags">${badges}</div>`);
       const act = el('div', 'gal-head-act');
-      const link = el('button', 'btn ghost sm', I.external); link.title = 'Open on ollama.com'; link.dataset.url = m.url;
+      const link = el('button', 'btn ghost sm', I.external); link.title = `Open on ${src.site}`; link.dataset.url = m.url;
       act.appendChild(link);
       if (!m.cloud) {
         const b = el('button', `btn sm ${open ? 'on' : ''}`, `${open ? 'Hide sizes' : 'Choose size'}${I.chev}`);
-        b.onclick = () => { g.open[m.name] = !open; if (!open && !g.tags[m.name]) { g.tags[m.name] = { loading: true }; post({ type: 'galleryTags', name: m.name }); } renderGalleryResults(); };
+        b.onclick = () => { g.open[m.name] = !open; if (!open && !g.tags[m.name]) { g.tags[m.name] = { loading: true }; post({ type: 'galleryTags', source, name: m.name }); } renderGalleryResults(); };
         act.appendChild(b);
       }
       headEl.appendChild(act);
@@ -733,17 +828,19 @@
         } else if (t.error) {
           c.appendChild(el('div', 'cat-var', `<span class="note">${esc(t.error)}</span>`));
         } else if (!t.tags.length) {
-          c.appendChild(el('div', 'cat-var', `<span class="note">No downloadable sizes listed — try <code>ollama pull ${esc(m.name)}</code> below.</span>`));
+          c.appendChild(el('div', 'cat-var', `<span class="note">No downloadable sizes listed — try <code>${esc(src.cli[target] || 'ollama pull')} ${esc(m.name)}</code> below.</span>`));
         } else {
           const all = t.tags;
           const primary = all.filter(isPrimaryTag);
           const show = t.showAll || all.length <= 8 || !primary.length ? all : primary;
           for (const tag of show) {
             const fit = tag.cloud ? 'cloud' : fitOf(tag.sizeGb);
+            const ref = installRef(source, target, tag);
             const row = el('div', `cat-var ${fit === 'over' || fit === 'cloud' ? 'dim' : ''}`);
-            const ins = installedOllama(tag.model);
-            const job = state.jobs.find((j) => j.status === 'running' && j.kind === 'pull' && j.target === 'ollama' && (j.model === tag.model || (tag.isLatest && j.model === m.name)));
-            row.innerHTML = `<span class="sz" title="${esc(tag.model)}">${esc(tag.tag)}</span><span class="gb">${tag.cloud ? 'cloud' : esc(gbText(tag.sizeGb)) || '—'}</span><span class="fit">${fit === 'cloud' ? `<span class="badge">${I.cloud} cloud</span>` : fitBadge(fit)}</span>${tag.isLatest ? '<span class="badge brand" title="What `ollama pull ' + esc(m.name) + '` downloads">latest</span>' : ''}${ins ? `<span class="badge ok" title="${esc(ins.id)}">${I.check} installed</span>` : ''}<span class="note">${[tag.context ? `${esc(tag.context)} context` : '', tag.inputs ? `${esc(tag.inputs)} input` : '', tag.updated ? esc(tag.updated) : ''].filter(Boolean).join(' · ')}</span><span class="spacer"></span>`;
+            const ins = installedFor(target, ref);
+            const job = state.jobs.find((j) => j.status === 'running' && j.kind === 'pull' && j.target === target && (j.model === ref || (tag.isLatest && j.model === m.name)));
+            const meta = [tag.format && tag.format !== 'GGUF' ? esc(tag.format) : '', tag.context ? `${esc(tag.context)} context` : '', tag.inputs ? `${esc(tag.inputs)} input` : '', tag.updated ? esc(tag.updated) : ''].filter(Boolean).join(' · ');
+            row.innerHTML = `<span class="sz" title="${esc(ref)}">${esc(tag.tag)}</span><span class="gb">${tag.cloud ? 'cloud' : esc(gbText(tag.sizeGb)) || '—'}</span><span class="fit">${fit === 'cloud' ? `<span class="badge">${I.cloud} cloud</span>` : fitBadge(fit)}</span>${tag.isLatest ? `<span class="badge brand" title="What a bare ${esc(src.cli[target] || 'pull')} ${esc(m.name)} downloads">${source === 'huggingface' ? 'default' : 'latest'}</span>` : ''}${ins ? `<span class="badge ok" title="${esc(ins.id)}">${I.check} installed</span>` : ''}<span class="note">${meta}</span><span class="spacer"></span>`;
             const act2 = el('div', 'cat-act');
             if (job) {
               act2.classList.add('prog-grp');
@@ -753,9 +850,9 @@
             } else if (tag.cloud) {
               act2.appendChild(el('span', 'note', 'Not downloadable'));
             } else {
-              const b = el('button', `btn sm ${fit === 'ok' && !ins ? 'primary' : ''}`, `${I.download}${ins ? 'Reinstall' : 'Install'}`);
-              b.disabled = !canInstall; b.title = canInstall ? `ollama pull ${tag.model}` : 'Start Ollama first';
-              b.onclick = () => galleryInstall(tag.model);
+              const b = el('button', `btn sm ${fit === 'ok' && !ins ? 'primary' : ''}`, `${I.download}${ins ? 'Reinstall' : src.targets.length > 1 ? `Install to ${TARGET_LABEL[target]}` : 'Install'}`);
+              b.disabled = !canInstall; b.title = canInstall ? `${src.cli[target]} ${ref}` : `Start ${TARGET_LABEL[target]} first`;
+              b.onclick = () => galleryInstall(target, ref, `${shortName} ${tag.tag}`);
               act2.appendChild(b);
             }
             row.appendChild(act2);
@@ -777,7 +874,7 @@
     if (g.hasMore) {
       const more = el('button', 'btn gal-more', g.loading ? '<span class="spinner"></span>Loading…' : `${I.chev}Load more`);
       more.disabled = g.loading;
-      more.onclick = () => { g.page += 1; gallerySearch(false); renderGalleryResults(); };
+      more.onclick = () => { g.page += 1; gallerySearch(source, false); renderGalleryResults(); };
       box.appendChild(more);
     }
     wireGlobal(box);
@@ -1193,19 +1290,24 @@
         break;
       }
       case 'gallery': {
-        const g = state.gallery;
+        const g = galleryState(m.source || 'ollama');
         // Ignore pages from a query the user has since changed.
         if (m.q !== g.q || m.capability !== g.capability || m.sort !== g.sort) { break; }
         g.loading = false; g.error = m.error || null; g.hasMore = !!m.hasMore; g.page = m.page;
         const seen = new Set(m.page > 1 ? g.models.map((x) => x.name) : []);
         g.models = [...(m.page > 1 ? g.models : []), ...(m.models || []).filter((x) => !seen.has(x.name))];
-        if (state.section === 'gallery') { renderGalleryResults(); }
+        if (state.section === 'gallery' && state.gallery.source === (m.source || 'ollama')) { renderGalleryResults(); }
         break;
       }
-      case 'galleryTags':
-        state.gallery.tags[m.name] = { loading: false, tags: m.tags || [], error: m.error || null, showAll: false };
-        if (state.section === 'gallery') { renderGalleryResults(); }
+      case 'galleryTags': {
+        const g = galleryState(m.source || 'ollama');
+        g.tags[m.name] = { loading: false, tags: m.tags || [], error: m.error || null, showAll: false };
+        // Docker Hub's listing has no descriptions; the tags call brings one back.
+        const model = m.description && g.models.find((x) => x.name === m.name);
+        if (model && !model.description) { model.description = m.description; }
+        if (state.section === 'gallery' && state.gallery.source === (m.source || 'ollama')) { renderGalleryResults(); }
         break;
+      }
       case 'busy':
         state.busy = m.busy;
         if (!m.busy) { render(); }

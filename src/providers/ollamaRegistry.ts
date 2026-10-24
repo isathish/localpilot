@@ -206,6 +206,7 @@ async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
 
 /** Browses ollama.com so the user can install any public model, not only the curated catalog. Results are cached briefly. */
 export class OllamaRegistry {
+  readonly source = 'ollama' as const;
   private readonly cache = new Map<string, { at: number; value: unknown }>();
 
   constructor(

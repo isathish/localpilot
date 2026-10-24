@@ -14,7 +14,7 @@ keywords: LM Studio VS Code, LM Studio extension, LM Studio coding assistant, LM
 2. Install LocalPilot ([download VSIX]({{ site.download }})). The `lmstudio` provider on port 1234 is pre-configured — your loaded models appear in the model picker immediately.
 3. Pick the model and start an **Agent** chat.
 
-With the `lms` CLI installed (LM Studio → Developer → *Install lms*), **Settings → Models** can also download catalog models straight into LM Studio (`lms get`) and shows which sizes fit your hardware. Deleting LM Studio models stays in the LM Studio app; you can disable them in LocalPilot instead.
+With the `lms` CLI installed (LM Studio → Developer → *Install lms*), **Settings → Models** can also download catalog models straight into LM Studio (`lms get`) and shows which sizes fit your hardware, and **Settings → Model gallery** searches every GGUF repository on Hugging Face — pick a quantisation marked *fits / tight / too big* for your machine and LocalPilot runs `lms get org/repo@quant` with live progress. Deleting LM Studio models stays in the LM Studio app; you can disable them in LocalPilot instead.
 
 > Enable *Keep model loaded* and raise the server's context length in LM Studio's model settings — LocalPilot reads the reported `max_context_length` to budget its context.
 

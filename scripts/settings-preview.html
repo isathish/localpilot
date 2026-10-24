@@ -75,7 +75,7 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
       runtimes: [
         { target: 'ollama', label: 'Ollama', installed: true, running: true, providerId: 'ollama', baseUrl: 'http://localhost:11434', canRemove: true },
         { target: 'docker', label: 'Docker Model Runner', installed: true, running: true, providerId: 'docker', baseUrl: 'http://localhost:12434/engines/v1', canRemove: true },
-        { target: 'lmstudio', label: 'LM Studio', installed: false, running: false, canRemove: false, hint: 'Install from lmstudio.ai, then start the server in the Developer tab' },
+        { target: 'lmstudio', label: 'LM Studio', installed: true, running: q.get('lms') !== '0', providerId: 'lmstudio', baseUrl: 'http://localhost:1234/v1', canRemove: false, hint: 'Install from lmstudio.ai, then start the server in the Developer tab' },
       ],
       installed,
       catalog: [
@@ -99,6 +99,60 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
       starter: { agent: 'gemma4:e4b', completion: 'starcoder2:3b' },
     } });
   }, 200);
+  if (m.type === 'gallerySearch' && m.source === 'docker') setTimeout(() => {
+    const lib = [
+      { name: 'ai/gemma4', description: '', capabilities: [], sizes: [], pulls: '1.6M', pullsCount: 1583074, cloud: false, url: 'https://hub.docker.com/r/ai/gemma4' },
+      { name: 'ai/qwen3', description: '', capabilities: [], sizes: [], pulls: '888.4K', pullsCount: 888390, cloud: false, url: 'https://hub.docker.com/r/ai/qwen3' },
+      { name: 'ai/smollm2', description: 'Compact instruction model for 8 GB machines', capabilities: [], sizes: [], pulls: '868.8K', pullsCount: 868841, cloud: false, url: 'https://hub.docker.com/r/ai/smollm2' },
+      { name: 'ai/mxbai-embed-large', description: '', capabilities: ['embedding'], sizes: [], pulls: '49.0K', pullsCount: 48979, cloud: false, url: 'https://hub.docker.com/r/ai/mxbai-embed-large' },
+    ];
+    const q = (m.q || '').toLowerCase().replace(/^ai\//, '');
+    const models = lib.filter((x) => (!q || x.name.includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    send({ type: 'gallery', source: 'docker', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: false });
+  }, 400);
+  if (m.type === 'gallerySearch' && m.source === 'huggingface') setTimeout(() => {
+    const lib = [
+      { name: 'unsloth/Qwen3-8B-GGUF', description: '', capabilities: [], sizes: ['8b'], pulls: '118.5K', pullsCount: 118500, cloud: false, url: 'https://huggingface.co/unsloth/Qwen3-8B-GGUF' },
+      { name: 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF', description: '', capabilities: [], sizes: ['7b'], pulls: '402.1K', pullsCount: 402100, cloud: false, url: 'https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF' },
+      { name: 'unsloth/gemma-3-4b-it-GGUF', description: '', capabilities: ['vision'], sizes: ['4b'], pulls: '96.2K', pullsCount: 96200, cloud: false, url: 'https://huggingface.co/unsloth/gemma-3-4b-it-GGUF' },
+    ];
+    const q = (m.q || '').toLowerCase();
+    const models = lib.filter((x) => (!q || x.name.toLowerCase().includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    send({ type: 'gallery', source: 'huggingface', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: m.page < 2 });
+  }, 400);
+  if (m.type === 'galleryTags' && m.source === 'docker') setTimeout(() => {
+    const t = (tag, sizeGb, extra) => ({ model: `${m.name}:${tag}`, tag, sizeGb, updated: '2 months ago', digest: 'abc', isLatest: false, cloud: false, format: /safetensors/.test(tag) ? 'safetensors' : /mlx/.test(tag) ? 'MLX' : 'GGUF', ...extra });
+    send({ type: 'galleryTags', source: 'docker', name: m.name, description: 'Qwen3 is the latest generation of large language models in the Qwen series (from Docker Hub README).', tags: [t('0.6b', 0.37), t('4b', 2.4), t('8b', 4.9, { isLatest: true }), t('8b-q8_0', 8.7), t('8b-mlx-4bit', 4.5), t('8b-safetensors', 16.4), t('14b', 9.0), t('32b', 19.8), t('235b-a22b', 142)] });
+  }, 500);
+  if (m.type === 'galleryTags' && m.source === 'huggingface') setTimeout(() => {
+    const t = (tag, sizeGb, extra) => ({ model: `hf.co/${m.name}:${tag}`, tag, sizeGb, context: '40K', inputs: 'Text', updated: '4 months ago', isLatest: tag === 'Q4_K_M', cloud: false, format: 'GGUF', ...extra });
+    send({ type: 'galleryTags', source: 'huggingface', name: m.name, tags: [t('UD-IQ2_M', 2.9), t('Q3_K_M', 3.8), t('Q4_K_M', 4.7), t('Q5_K_M', 5.4), t('Q6_K', 6.3), t('Q8_0', 8.1), t('BF16', 15.3)] });
+  }, 500);
+  if (m.type === 'gallerySearch' && (!m.source || m.source === 'ollama')) setTimeout(() => {
+    const lib = [
+      { name: 'qwen3', description: 'Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models.', capabilities: ['tools', 'thinking'], sizes: ['0.6b', '1.7b', '4b', '8b', '14b', '30b', '32b', '235b'], pulls: '12.4M', pullsCount: 12400000, cloud: false, url: 'https://ollama.com/library/qwen3' },
+      { name: 'qwen2.5-coder', description: 'The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.', capabilities: ['tools'], sizes: ['0.5b', '1.5b', '3b', '7b', '14b', '32b'], pulls: '22.8M', pullsCount: 22800000, cloud: false, url: 'https://ollama.com/library/qwen2.5-coder' },
+      { name: 'gemma4', description: 'Frontier-class small models from Google DeepMind with native tool calling, vision and thinking.', capabilities: ['vision', 'tools', 'thinking'], sizes: ['e2b', 'e4b', '12b', '26b', '31b'], pulls: '3.1M', pullsCount: 3100000, cloud: false, url: 'https://ollama.com/library/gemma4' },
+      { name: 'nomic-embed-text', description: 'A high-performing open embedding model with a large token context window.', capabilities: ['embedding'], sizes: [], pulls: '41.2M', pullsCount: 41200000, cloud: false, url: 'https://ollama.com/library/nomic-embed-text' },
+      { name: 'glm-5.3', description: 'GLM-5.3 is a frontier reasoning model available through Ollama cloud.', capabilities: ['tools', 'thinking'], sizes: [], pulls: '890K', pullsCount: 890000, cloud: true, url: 'https://ollama.com/library/glm-5.3' },
+      { name: 'llama3.2', description: "Meta's Llama 3.2 goes small with 1B and 3B models.", capabilities: ['tools'], sizes: ['1b', '3b'], pulls: '38.9M', pullsCount: 38900000, cloud: false, url: 'https://ollama.com/library/llama3.2' },
+    ];
+    const q = (m.q || '').toLowerCase();
+    let models = lib.filter((x) => (!q || x.name.includes(q) || x.description.toLowerCase().includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    if (m.sort === 'name') models = [...models].sort((a, b) => a.name.localeCompare(b.name));
+    if (m.page > 1) models = models.map((x) => ({ ...x, name: `${x.name}-p${m.page}` }));
+    send({ type: 'gallery', source: 'ollama', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: m.page < 3 && !q });
+  }, 400);
+  if (m.type === 'galleryTags' && (!m.source || m.source === 'ollama')) setTimeout(() => {
+    const t = (tag, sizeGb, context, inputs, extra) => ({ model: `${m.name}:${tag}`, tag, sizeGb, context, inputs, updated: '3 weeks ago', digest: 'abc123def456', isLatest: false, cloud: false, ...extra });
+    const byName = {
+      qwen3: [t('8b', 5.2, '40K', 'Text', { isLatest: true }), t('0.6b', 0.52, '40K', 'Text'), t('1.7b', 1.4, '40K', 'Text'), t('4b', 2.6, '40K', 'Text'), t('14b', 9.3, '40K', 'Text'), t('30b-a3b', 19, '40K', 'Text'), t('32b', 20, '40K', 'Text'), t('235b-a22b', 142, '40K', 'Text'), t('8b-q8_0', 8.9, '40K', 'Text'), t('8b-fp16', 16, '40K', 'Text'), t('4b-q8_0', 4.4, '40K', 'Text'), t('14b-q8_0', 16, '40K', 'Text')],
+      'qwen2.5-coder': [t('7b', 4.7, '32K', 'Text', { isLatest: true }), t('0.5b', 0.4, '32K', 'Text'), t('1.5b', 1.0, '32K', 'Text'), t('3b', 1.9, '32K', 'Text'), t('14b', 9.0, '32K', 'Text'), t('32b', 20, '32K', 'Text')],
+      gemma4: [t('e4b', 6.6, '128K', 'Text, Image', { isLatest: true }), t('e2b', 4.6, '128K', 'Text, Image'), t('12b', 8.0, '128K', 'Text, Image'), t('26b', 16, '128K', 'Text, Image'), t('31b', 19, '128K', 'Text, Image'), t('31b-cloud', undefined, '128K', 'Text, Image', { cloud: true })],
+    };
+    if (m.name === 'nomic-embed-text') { send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: [], error: 'ollama.com answered HTTP 503' }); return; }
+    send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: byName[m.name] || [t('latest', 2.0, '8K', 'Text', { isLatest: true })] });
+  }, 500);
 } });
 </script>
 <script src="../media/settings.js"></script>

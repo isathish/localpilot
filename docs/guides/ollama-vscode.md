@@ -31,7 +31,7 @@ Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-ext
 | **Vision** | Screenshots and pasted images go to `qwen2.5vl`, `llava`, `gemma3` |
 | **Inline completions** | Ollama's FIM `suffix` support; routing picks the smallest FIM model (`qwen2.5-coder:1.5b`) automatically |
 | **Model management** | `ollama pull` / `ollama rm` from the Settings UI with progress, hardware-aware size recommendations, per-model enable/disable |
-| **Model gallery** | Search the whole [ollama.com library](https://ollama.com/library) inside VS Code — filter by tools / vision / thinking / embedding, see each tag's size marked fits / tight / too big for your machine, install any of them, or pull by name (`hf.co/…` GGUF repos too) |
+| **Model gallery** | Search the whole [ollama.com library](https://ollama.com/library) and Hugging Face GGUF repositories inside VS Code — filter by tools / vision / thinking / embedding, see each tag's size marked fits / tight / too big for your machine, install any of them (`ollama pull`, including `hf.co/…`), or pull by name |
 | **Parallel agents** | Several sessions at once; set `OLLAMA_NUM_PARALLEL=4` so Ollama serves them concurrently |
 
 ## Recommended Ollama models

@@ -563,7 +563,7 @@
   function subagentCard(agent, prompt, model, label) {
     const d = stepEl('subagent running', '');
     d.__ico = I.agent; d.dataset.calls = '0'; d.dataset.pending = '1'; d.dataset.agent = agent || ''; d.dataset.label = label || '';
-    const mdl = modelName(model) || (currentModel() ? modelName(currentModel().id) : '');
+    const mdl = modelName(model) || (model === null ? '' : currentModel() ? modelName(currentModel().id) : '');
     // Who (agent · model) and what (task) are separate cells so a narrow sidebar can put the task on its own line
     // instead of squeezing it to nothing.
     d.querySelector(':scope > summary .label').innerHTML = `<span class="pill"><span class="pico">${I.agent}</span><b>${esc(agent || 'subagent')}</b>${mdl ? `<i>·</i><span class="model">${esc(mdl)}</span>` : ''}</span>`;
@@ -602,7 +602,7 @@
     const steps = n ? ` ${error ? 'after' : 'with'} ${n} step${n === 1 ? '' : 's'}` : '';
     const fin = stepEl(`step finished ${error ? 'error' : 'ok'}`, `<b>${error ? 'Failed' : 'Finished'}</b>${steps}`); fin.__ico = I.check; setState(fin, error ? 'error' : 'ok');
     const finBody = fin.querySelector(':scope > .content'); finBody.className = 'content subrows-wrap'; finBody.innerHTML = '';
-    if (rows && n) { finBody.appendChild(rows); } else { fin.classList.add('empty'); }
+    if (rows && n) { finBody.appendChild(rows); } else { fin.classList.add('nosteps'); }
     body.innerHTML = ''; body.appendChild(fin);
     const text = error || result || '';
     if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body">${error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000))}</div>`; body.appendChild(rep); }
@@ -648,7 +648,7 @@
     d.__ico = I.layers; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
     const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
     for (const s of sections) {
-      const card = subagentCard(s.agent, s.label, undefined, s.label);
+      const card = subagentCard(s.agent, s.label, null, s.label);
       finishSubagent(card, s.failed ? '' : s.body, s.failed ? s.body : '');
       card.open = false; c.appendChild(card);
     }

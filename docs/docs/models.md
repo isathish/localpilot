@@ -77,14 +77,20 @@ The same actions exist as commands: *Install Model from Catalog…*, *Remove Loc
 
 ## Model gallery
 
-**Settings → Model gallery** (*LocalPilot: Browse Ollama Model Gallery…*) opens the **whole Ollama library** — every public model on [ollama.com/library](https://ollama.com/library), not only the curated catalog — so you can find and install models yourself:
+**Settings → Model gallery** (*LocalPilot: Browse Ollama Model Gallery…*) browses the registries your runtimes download from — the **whole** public catalog of each, not only the curated list — so you can find and install models yourself. One tab per registry appears when a runtime that installs from it is detected:
 
-- **Search** as you type, filter by capability (**Tools / Vision / Thinking / Embedding**) and sort by popularity, newest or name; results page in with **Load more**. Each model shows its description, capability badges, published sizes, download count and a link to its page on ollama.com. Cloud-only models (`cloud` badge) are listed but cannot be downloaded.
-- **Choose size** fetches the model's tags. Every tag shows its download size, context length, accepted inputs and age, and is marked **fits / tight / too big** against this machine's model budget — the same rule as the catalog — plus **latest** (what a bare `ollama pull <name>` gets) and **installed** when your Ollama already has it. Plain sizes (`8b`, `e4b`, `30b-a3b`) are listed first; quantisation, MLX and bf16 variants sit behind *show all N tags*.
-- **Install** pulls the tag through your local Ollama server with live progress and a cancel button (the same job list as the Models page); when it finishes, the model appears under **Installed models**, in the chat's picker and in routing.
-- **Pull by name** takes anything `ollama pull` accepts — `qwen3:8b`, a user upload `user/model:tag`, or a GGUF repository from Hugging Face such as `hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M`.
+| Tab | Shown when | Installs with |
+|---|---|---|
+| **Ollama library** ([ollama.com/library](https://ollama.com/library)) | always | `ollama pull <name>:<tag>` |
+| **Docker Hub** (the [`ai/` namespace](https://hub.docker.com/u/ai)) | Docker Model Runner is installed or running | `docker model pull ai/<name>:<tag>` |
+| **Hugging Face** (GGUF repositories) | LM Studio is installed or running, or Ollama is running | `lms get <org>/<repo>@<quant>` or `ollama pull hf.co/<org>/<repo>:<quant>` — pick the runtime in **Install to** |
 
-The gallery needs internet access to ollama.com (listings are cached for ten minutes) and a running Ollama server to install; the page offers **Start Ollama** / **Install Ollama** when there is none. Docker Model Runner and LM Studio keep installing from the curated catalog.
+- **Search** as you type, filter by capability (**Tools / Vision / Thinking / Embedding** on Ollama; **Vision / Embedding** elsewhere), sort by popularity, newest or name; results page in with **Load more**. Each model shows its description, capability badges, published sizes, download count and a link to its page. Cloud-only Ollama models (`cloud` badge) are listed but cannot be downloaded.
+- **Choose size** fetches the model's tags. Every tag shows its download size, context length, inputs, format (GGUF / safetensors / MLX) and age, and is marked **fits / tight / too big** against this machine's model budget — the same rule as the catalog — plus **latest** (what a bare pull gets; **default** = Q4_K_M on Hugging Face) and **installed** when the target runtime already has it. Plain sizes (`8b`, `e4b`, `30b-a3b`, `Q4_K_M`) are listed first; other quantisations, MLX and bf16 variants sit behind *show all N tags*. Hugging Face sizes are the sum of a quantisation's files, sharded repositories included.
+- **Install** pulls the tag through the chosen runtime with live progress and a cancel button (the same job list as the Models page); when it finishes, the model appears under **Installed models**, in the chat's picker and in routing.
+- **Pull by name** takes anything the chosen runtime's CLI accepts — `qwen3:8b` or `hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M` for Ollama, `ai/qwen3:8b` for Docker Model Runner, `unsloth/Qwen3-8B-GGUF@q4_k_m` or a model key for LM Studio. References are validated for the runtime's syntax before anything runs.
+
+The gallery needs internet access to the registry sites (listings are cached for ten minutes; Docker Hub rate-limits anonymous bursts) and a running runtime to install; the page offers **Start Ollama** / **Install Ollama** when there is none.
 
 ## Automatic routing
 

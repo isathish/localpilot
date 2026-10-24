@@ -7,7 +7,8 @@ import { McpManager } from '../mcp/mcpManager';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
-import { isValidOllamaModelRef, OllamaRegistry, RegistryCapability, RegistryModel, RegistrySort, RegistryTag } from '../providers/ollamaRegistry';
+import { createGalleryRegistries, GallerySource, isValidInstallRef } from '../providers/modelGallery';
+import { RegistryCapability, RegistryModel, RegistrySort, RegistryTag } from '../providers/ollamaRegistry';
 import { pickForRole, ProviderRegistry } from '../providers/registry';
 import { getSystemProfile, SystemProfile } from '../providers/system';
 import { SessionStore } from '../sessions/sessionStore';
@@ -73,8 +74,8 @@ type ToSettings =
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
   | { type: 'jobs'; jobs: ModelJob[] }
-  | { type: 'gallery'; q: string; capability: string; sort: string; page: number; models: RegistryModel[]; hasMore: boolean; error?: string }
-  | { type: 'galleryTags'; name: string; tags: RegistryTag[]; error?: string }
+  | { type: 'gallery'; source: GallerySource; q: string; capability: string; sort: string; page: number; models: RegistryModel[]; hasMore: boolean; error?: string }
+  | { type: 'galleryTags'; source: GallerySource; name: string; tags: RegistryTag[]; description?: string; error?: string }
   | { type: 'busy'; busy: boolean }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
@@ -87,8 +88,8 @@ type FromSettings =
   | { type: 'refreshModels' }
   | { type: 'loadModels' }
   | { type: 'installModel'; target: InstallTarget; model: string }
-  | { type: 'gallerySearch'; q?: string; capability?: string; sort?: string; page?: number }
-  | { type: 'galleryTags'; name: string }
+  | { type: 'gallerySearch'; source?: string; q?: string; capability?: string; sort?: string; page?: number }
+  | { type: 'galleryTags'; source?: string; name: string }
   | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string; name?: string }
   | { type: 'toggleModel'; id: string; enabled: boolean }
   | { type: 'cancelJob'; id: string }
@@ -130,6 +131,8 @@ export const WELCOMED_KEY = 'localpilot.welcomed';
 const TARGET_LABEL: Record<InstallTarget, string> = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
 const GALLERY_CAPABILITIES = new Set<string>(['tools', 'vision', 'thinking', 'embedding']);
 const GALLERY_SORTS = new Set<string>(['popular', 'newest', 'name']);
+const GALLERY_SOURCES = new Set<string>(['ollama', 'docker', 'huggingface']);
+const GALLERY_SITE: Record<GallerySource, string> = { ollama: 'ollama.com', docker: 'hub.docker.com', huggingface: 'huggingface.co' };
 
 /**
  * Settings, provider manager and first-run setup — one webview panel with two pages.
@@ -145,8 +148,8 @@ export class SettingsPanel implements vscode.Disposable {
   private modelsLoaded = false;
   private modelsRefresh?: ReturnType<typeof setTimeout>;
   private jobsTimer?: ReturnType<typeof setTimeout>;
-  private readonly registry = new OllamaRegistry();
-  private gallerySearchAbort?: AbortController;
+  private readonly registries = createGalleryRegistries();
+  private readonly gallerySearchAbort = new Map<GallerySource, AbortController>();
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -252,8 +255,8 @@ export class SettingsPanel implements vscode.Disposable {
       case 'loadModels':
         return this.pushModels();
       case 'installModel':
-        if (m.target === 'ollama' && !isValidOllamaModelRef(m.model)) {
-          throw new Error(`Not a valid Ollama model reference: ${m.model}`);
+        if (!isValidInstallRef(m.target, m.model)) {
+          throw new Error(`Not a valid ${TARGET_LABEL[m.target] ?? m.target} model reference: ${m.model}`);
         }
         void this.models.pull(m.target, m.model, this.runtimeProvider(m.target)).then((job) => {
           if (job.status === 'done') {
@@ -266,11 +269,12 @@ export class SettingsPanel implements vscode.Disposable {
       case 'gallerySearch':
         return this.gallerySearch(m);
       case 'galleryTags': {
+        const source = GALLERY_SOURCES.has(String(m.source)) ? (m.source as GallerySource) : 'ollama';
         try {
-          const r = await this.registry.tags(m.name);
-          this.post({ type: 'galleryTags', name: r.name, tags: r.tags });
+          const r = await this.registries[source].tags(m.name);
+          this.post({ type: 'galleryTags', source, name: m.name, tags: r.tags, description: r.description });
         } catch (e) {
-          this.post({ type: 'galleryTags', name: m.name, tags: [], error: e instanceof Error ? e.message : String(e) });
+          this.post({ type: 'galleryTags', source, name: m.name, tags: [], error: galleryError(e, source) });
         }
         return;
       }
@@ -355,31 +359,31 @@ export class SettingsPanel implements vscode.Disposable {
     this.log.info(`settings: ${key} ${clean === undefined ? 'reset' : 'updated'} (${scope})`);
   }
 
-  /** Searches ollama.com for the gallery. A newer search cancels the one in flight so a fast typist never sees stale pages land. */
+  /** Searches a registry for the gallery. A newer search on the same source cancels the one in flight so a fast typist never sees stale pages land. */
   private async gallerySearch(m: Extract<FromSettings, { type: 'gallerySearch' }>): Promise<void> {
-    this.gallerySearchAbort?.abort(new Error('superseded'));
+    const source = GALLERY_SOURCES.has(String(m.source)) ? (m.source as GallerySource) : 'ollama';
+    this.gallerySearchAbort.get(source)?.abort(new Error('superseded'));
     const ctrl = new AbortController();
-    this.gallerySearchAbort = ctrl;
+    this.gallerySearchAbort.set(source, ctrl);
     const q = String(m.q ?? '').slice(0, 100);
     const capability = GALLERY_CAPABILITIES.has(String(m.capability)) ? (m.capability as RegistryCapability) : '';
     const sort = GALLERY_SORTS.has(String(m.sort)) ? (m.sort as RegistrySort) : 'popular';
     const page = Math.max(1, Math.min(50, Math.floor(Number(m.page) || 1)));
     try {
-      const r = await this.registry.search({ q, capability, sort, page }, ctrl.signal);
+      const r = await this.registries[source].search({ q, capability, sort, page }, ctrl.signal);
       if (ctrl.signal.aborted) {
         return;
       }
-      this.post({ type: 'gallery', q, capability, sort, page, models: r.models, hasMore: r.hasMore });
+      this.post({ type: 'gallery', source, q, capability, sort, page, models: r.models, hasMore: r.hasMore });
     } catch (e) {
       if (ctrl.signal.aborted) {
         return;
       }
-      const msg = e instanceof Error ? e.message : String(e);
-      this.log.warn(`gallery: search failed: ${msg}`);
-      this.post({ type: 'gallery', q, capability, sort, page, models: [], hasMore: false, error: /fetch failed|ENOTFOUND|ECONNREFUSED|timeout/i.test(msg) ? 'Cannot reach ollama.com — check your internet connection.' : msg });
+      this.log.warn(`gallery: ${source} search failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.post({ type: 'gallery', source, q, capability, sort, page, models: [], hasMore: false, error: galleryError(e, source) });
     } finally {
-      if (this.gallerySearchAbort === ctrl) {
-        this.gallerySearchAbort = undefined;
+      if (this.gallerySearchAbort.get(source) === ctrl) {
+        this.gallerySearchAbort.delete(source);
       }
     }
   }
@@ -547,7 +551,7 @@ export class SettingsPanel implements vscode.Disposable {
   dispose(): void {
     clearTimeout(this.modelsRefresh);
     clearTimeout(this.jobsTimer);
-    this.gallerySearchAbort?.abort(new Error('disposed'));
+    this.gallerySearchAbort.forEach((c) => c.abort(new Error('disposed')));
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
@@ -582,6 +586,18 @@ export function sanitizeMcpServers(value: unknown): Record<string, McpServerConf
     out[name] = entry;
   }
   return out;
+}
+
+/** Plain-language gallery error: connectivity, Docker Hub's anonymous rate limit, or the registry's own message. */
+function galleryError(e: unknown, source: GallerySource): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout|aborted/i.test(msg)) {
+    return `Cannot reach ${GALLERY_SITE[source]} — check your internet connection.`;
+  }
+  if (source === 'docker' && /HTTP (403|429)/.test(msg)) {
+    return 'Docker Hub is rate-limiting anonymous requests — wait a minute and try again.';
+  }
+  return msg;
 }
 
 /** Keep only known fields and normalise URLs/ids so a malformed form can't produce a broken provider. */
