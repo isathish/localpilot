@@ -71,6 +71,8 @@ Already-installed models are skipped, so the flow is safe to re-run. Turn the st
 
 ![Model catalog: every size of a family marked fits / tight / too big, the recommended size starred, installed sizes ticked, and an Install-to-runtime button or live download progress per row]({{ '/assets/screenshots/settings-models-catalog.png' | relative_url }})
 
+**Remove** asks for confirmation in a VS Code dialog, deletes the model files through the runtime (`/api/delete` for Ollama, `docker model rm` for Docker Model Runner), shows a toast with the result and refreshes the installed list, the chat's model picker and the status bar — no manual refresh needed. If the removed model was the default or pinned to a role, routing falls back to the best available model until you pick another.
+
 The same actions exist as commands: *Install Model from Catalog…*, *Remove Local Model…*, *Enable / Disable Model…*. Models pulled by hand (`ollama pull …`) show up on the next refresh.
 
 ## Automatic routing

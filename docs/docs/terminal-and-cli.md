@@ -56,10 +56,14 @@ git diff | localpilot --ask "review this diff"     # piped stdin becomes the pro
 localpilot -m ollama/qwen3:8b "…"                   # pick a model for this run
 localpilot models                                 # models from every reachable server
 localpilot doctor                                 # servers, settings, skills, MCP, ripgrep
+localpilot skill install anthropics/skills/skills/pdf   # install a skill (owner/repo[/path][@ref], GitHub URL, SKILL.md URL or folder); --user for ~/.localpilot/skills
+localpilot skill search "write a plan" --install  # rank the skill catalog for a query; --install takes the best match
 localpilot --ide "…"  ·  --settings  ·  --setup   # hand off to VS Code
 ```
 
 In a session: `/mode agent|ask|plan`, `/model <name>`, `/models`, `/changes`, `/undo`, `/keep`, `/file <path>`, `/clear`, `/doctor`, `/exit`. Ctrl+C stops the current run; press it again to quit.
+
+The CLI uses the same skills as the extension — recommendations, the catalog (`localpilot.skills.autoInstall`) and the shared index in `~/.localpilot/skill-catalog.json` — and notes when a catalog skill matches a request but is not installed yet. See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 ### Approvals
 

@@ -37,12 +37,18 @@ permalink: /docs/features/
 
 ## Tools
 
-File read/edit/write/list/delete · ripgrep search · symbol & reference lookup · shell with destructive-command detection · diagnostics · open file · ask user · web search (DuckDuckGo, SearXNG, Brave, Tavily) · web fetch (HTML → readable text) · `load_skill` · `run_subagent` · `run_parallel_subagents` · any MCP server's tools.
+File read/edit/write/list/delete · ripgrep search · symbol & reference lookup · shell with destructive-command detection · diagnostics · open file · editor state · ask user · `gather_context` (what you are looking at and working on) · `analyze_workspace` (model-free repository map and shards) · `manage_todos` · memory save/read/list/delete · web search (DuckDuckGo, SearXNG, Brave, Tavily) · web fetch (HTML → readable text) · `open_browser` · `browser_screenshot` · `browser_inspect` · `show_markdown` · `load_skill` · `run_subagent` · `run_parallel_subagents` · `run_todos_parallel` · any MCP server's tools.
 
 ## Skills & subagents
 
-- Skills (`SKILL.md`) are loaded on demand via progressive disclosure.
-- Built-in subagents: `explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger` and `docs`; define your own in `.localpilot/agents/*.md`.
+- Skills (`SKILL.md`) are loaded on demand via progressive disclosure; 14 ship built in (`requirements`, `design`, `new-project`, `implement`, `test`, `debug`, `review`, `refactor`, `ui-design`, `claude-ui-ux`, `docs`, `deploy`, `ship`, `explore-codebase`) and a workspace or user skill with the same name overrides one.
+- **Recommendations** — each request is matched against the installed skills (name, quoted trigger phrases, distinctive description terms); matches are hinted to the model and shown as chips under the turn. Force one with `/skill <name> <task>`.
+- **Install from anywhere** — *LocalPilot: Install Skill…*, `/skill install <source>` or `localpilot skill install <source>` fetch a skill (or a whole collection to pick from) from `owner/repo[/path][@ref]`, a GitHub `tree`/`blob` link, any `SKILL.md` URL or a local folder, with its companion files.
+- **Skill catalog** — requests are also matched against the repositories in `localpilot.skills.repositories` (`anthropics/skills`, `obra/superpowers`, `github/awesome-copilot` by default); a clearly better catalog match is installed and loaded as the request starts (`localpilot.skills.autoInstall`: `auto` / `ask` / `off`). Browse it with *LocalPilot: Browse Skill Catalog…* or `localpilot skill search <words> [--install]`.
+- **Learning** — when the same kind of request keeps coming up with no skill covering it, the chat offers **Create "<name>" skill** and drafts the `SKILL.md` for you.
+- Built-in subagents: `explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger` and `docs`; define your own in `.localpilot/agents/*.md`. Checklist items can name an agent and depend on each other; `run_todos_parallel` runs the plan in dependency waves.
+
+Full guide: [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 ## Images
 
@@ -66,13 +72,13 @@ File read/edit/write/list/delete · ripgrep search · symbol & reference lookup 
 
 - Agent commands run in a visible, branded **LocalPilot Agent** terminal via shell integration (fallback: hidden process).
 - Right-click a terminal → **Explain Terminal Output**, **Fix Failed Command**, **Add Terminal Output to Chat**; `@terminal` in chat.
-- **`localpilot` CLI**: the full agent in any shell — streaming, tool steps, approvals, REPL, `models`, `doctor`. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
+- **`localpilot` CLI**: the full agent in any shell — streaming, tool steps, approvals, REPL, `models`, `doctor`, `skill install`, `skill search`. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
 
 ## Settings & setup
 
 - **Zero-config auto-detection** — at startup and on *Refresh models*, LocalPilot probes configured providers, the well-known local ports and running **Docker containers** (plus Docker Model Runner), adds every reachable server to your providers and picks the best tool-capable model when no default is set. See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **One-click model setup** — with no local model anywhere, LocalPilot starts or installs Ollama and downloads a smallest-first starter set sized to your RAM / GPU (agent + completion + optional vision model), then sets the defaults. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
-- **Model manager & catalog** — hardware profile and model budget, installed models with enable / disable, set-default and remove, and a curated catalog where every size is marked fits / tight / too big; install to Ollama, Docker Model Runner or LM Studio with live progress.
+- **Model manager & catalog** — hardware profile and model budget, installed models with enable / disable, set-default and remove (after a confirmation dialog; Ollama and Docker Model Runner models), and a curated catalog where every size is marked fits / tight / too big; install to Ollama, Docker Model Runner or LM Studio with live progress.
 - **Automatic routing** — a vision model for image turns, the smallest FIM model for completions, an optional reasoning model for Plan mode, and a graceful fallback when the chosen model is offline or disabled.
 - **Markdown reader** — a dedicated, distraction-free panel for long answers and the documents the agent writes (specs, plans, reports, memory notes, skills). Rendered by VS Code's own Markdown engine in a clean reading column with an outline, reading time, copy buttons on code blocks, adjustable text size, links that open files or the browser, and live reload while a file changes. Open it from **Open as document** under a chat answer, the preview icon in a Markdown editor's title bar, the Explorer context menu, or *LocalPilot: Open in Markdown Reader*; the agent can present a document itself with the `show_markdown` tool.
 - **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models, Agent & approvals, Inline completions, Web search, Memory & history, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.

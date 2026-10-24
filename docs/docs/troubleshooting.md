@@ -17,6 +17,10 @@ permalink: /docs/troubleshooting/
 
 Check **Settings → Models → Installed models**: disabled models are listed greyed out with their switch off. Embedding models are never shown. Models pulled by hand appear after **Refresh models**.
 
+## Removing a model does nothing, or it is still listed
+
+**Remove** in Settings → Models (and *LocalPilot: Remove Local Model…*) opens a VS Code confirmation dialog — look for it in the centre of the window; nothing happens until you click **Delete**. A toast reports *deleted* or the runtime's error, and the installed list refreshes by itself. If the model is still there afterwards, press **Refresh models**: the runtime may have been busy serving a request. Only Ollama and Docker Model Runner models can be deleted from LocalPilot — LM Studio models are removed in the LM Studio app (*My Models*); you can **disable** them here instead. A model deleted by hand (`ollama rm …`) disappears on the next refresh.
+
 ## The wrong model answers
 
 With routing on, LocalPilot substitutes a model in three cases and says so in the chat status line: the turn has images and the session model cannot see (→ vision model), you are in Plan mode with `localpilot.routing.reasoning` set, or the chosen model is offline / disabled (→ best available). Pin a model per role in **Settings → Models → Routing**, or turn `localpilot.routing.enabled` off.

@@ -12,13 +12,14 @@ LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, 
 - **Review every change** — diff, accept or reject per file or per agent, with changed lines highlighted; restore a checkpoint to rewind files and conversation.
 - **Zero configuration** — auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in Docker containers, and picks the best tool-capable model.
 - **Memory** — durable project and personal notes the agent saves and recalls across sessions.
-- **Skills & subagents** — reusable `SKILL.md` playbooks (14 ship built in, from `requirements` to `deploy`) and nine specialised subagents (`explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger`, `docs`), or define your own.
+- **Skills & subagents** — reusable `SKILL.md` playbooks (14 ship built in, from `requirements` to `deploy`) and nine specialised subagents (`explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger`, `docs`), or define your own. Install any skill from GitHub or a URL in one step, and let matching skills from a catalog (`anthropics/skills`, `obra/superpowers`, `github/awesome-copilot`) install themselves when a request needs them.
 - **Screenshots & images** — capture a selection, this VS Code window, another window or the full screen (optionally timed), paste or drop an image, and let a vision model fix what it sees.
 - **Inline edit (⌘⌥K)** — describe a change and the selection is rewritten in place. In a terminal, it turns English into a reviewed command.
 - **Context on demand** — `@workspace`, `@selection`, `@problems`, `@git`, `@file#L10-L20`; smart compaction keeps long tasks inside small context windows.
 - **Web search & MCP** — DuckDuckGo / SearXNG / Brave / Tavily search, readable page fetch, and any MCP server's tools.
 - **Inline completions** — ghost text from FIM models such as qwen2.5-coder or codestral.
-- **`localpilot` CLI** — `localpilot "fix the failing tests"` from any terminal; `--plan`, `--ask`, `--parallel`.
+- **`localpilot` CLI** — `localpilot "fix the failing tests"` from any terminal; `--plan`, `--ask`, `--parallel`, `skill install`, `skill search`.
+- **Markdown reader & movable chat** — a distraction-free reader for specs, plans and long answers; the chat lives in the Primary or Secondary Side Bar, the Panel or an editor tab.
 - **Fits your setup** — reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are.
 
 ## Get started in two minutes

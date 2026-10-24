@@ -56,7 +56,18 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.compactionThreshold` | `0.75` | Fraction of the window at which pruning/summarising starts |
 | `localpilot.maxToolOutputChars` | `24000` | Per-tool-output clamp (head + tail kept) |
 | `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
-| `localpilot.skillsPaths` | `[]` | Additional skill folders |
+
+## Skills
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.skillsPaths` | `[]` | Additional skill folders (each skill is a folder with a `SKILL.md`); `.localpilot/skills`, `.claude/skills`, `.github/skills` and `~/.agents/skills` are scanned automatically |
+| `localpilot.skills.builtin` | `true` | Load the 14 skills bundled with LocalPilot; a workspace or user skill with the same name overrides a bundled one |
+| `localpilot.skills.repositories` | `["anthropics/skills/skills", "obra/superpowers/skills", "github/awesome-copilot/skills"]` | Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, github.com URLs) whose skills can be installed when a request matches one. The first repository wins on duplicate names; the index is cached in `~/.localpilot/skill-catalog.json` for a day. `GITHUB_TOKEN` is used when set |
+| `localpilot.skills.autoInstall` | `auto` | What happens when a catalog skill matches a request better than any installed one: `auto` installs and loads it as the request starts, `ask` shows an **Install "…"** chip, `off` never consults the catalog |
+| `localpilot.skills.autoInstallScope` | `user` | Where automatically installed skills go: `user` (`~/.localpilot/skills`) or `workspace` (`.localpilot/skills`) |
+
+See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 ## Approvals
 
