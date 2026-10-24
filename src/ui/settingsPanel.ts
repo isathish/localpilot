@@ -84,7 +84,7 @@ type FromSettings =
   | { type: 'refreshModels' }
   | { type: 'loadModels' }
   | { type: 'installModel'; target: InstallTarget; model: string }
-  | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string }
+  | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string; name?: string }
   | { type: 'toggleModel'; id: string; enabled: boolean }
   | { type: 'cancelJob'; id: string }
   | { type: 'clearJobs' }
@@ -121,6 +121,8 @@ const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'w
 };
 
 export const WELCOMED_KEY = 'localpilot.welcomed';
+
+const TARGET_LABEL: Record<InstallTarget, string> = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
 
 /**
  * Settings, provider manager and first-run setup — one webview panel with two pages.
@@ -249,13 +251,22 @@ export class SettingsPanel implements vscode.Disposable {
           }
         });
         return;
-      case 'removeModel':
+      case 'removeModel': {
+        // Webviews cannot show `confirm()` dialogs (it silently returns false), so the host asks instead.
+        const label = m.name || m.model;
+        const ok = await vscode.window.showWarningMessage(`Delete ${label} from ${TARGET_LABEL[m.target]}?`, { modal: true, detail: 'The model files are removed from the runtime. You can download it again from the catalog.' }, 'Delete');
+        if (ok !== 'Delete') {
+          return;
+        }
         void this.models.remove(m.target, m.model, m.providerId).then((job) => {
-          if (job.status === 'error') {
+          if (job.status === 'done') {
+            this.post({ type: 'toast', level: 'info', text: `${label} deleted` });
+          } else if (job.status === 'error') {
             this.post({ type: 'toast', level: 'error', text: job.error ?? 'Remove failed' });
           }
         });
         return;
+      }
       case 'toggleModel':
         // The config change re-fires provider discovery listeners, so the chat picker and status bar follow.
         await setModelEnabled(m.id, m.enabled);

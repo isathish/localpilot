@@ -482,7 +482,7 @@
       if (m.removable) {
         const rj = activeJob('remove', m.removable, m.modelId);
         const b = el('button', 'btn ghost sm danger', rj ? '<span class="spinner"></span>' : I.trash); b.title = `Delete from ${TARGET_LABEL[m.removable]}`; b.disabled = !!rj;
-        b.onclick = () => { if (confirm(`Delete ${m.name} from ${TARGET_LABEL[m.removable]}? You can download it again from the catalog.`)) { post({ type: 'removeModel', target: m.removable, model: m.modelId, providerId: m.providerId }); } };
+        b.onclick = () => post({ type: 'removeModel', target: m.removable, model: m.modelId, providerId: m.providerId, name: m.name });
         acts.appendChild(b);
       }
       right.appendChild(acts);

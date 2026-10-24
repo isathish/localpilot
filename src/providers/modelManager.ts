@@ -449,8 +449,11 @@ export class ModelManager implements vscode.Disposable {
     try {
       if (target === 'ollama') {
         const { baseUrl, headers } = this.ollamaBase(providerId);
-        const res = await fetch(`${baseUrl}/api/delete`, { method: 'DELETE', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ model }), signal: this.aborts.get(job.id)!.signal });
-        if (!res.ok) {
+        // `name` is what Ollama servers before 0.1.33 expect; newer ones read `model`.
+        const res = await fetch(`${baseUrl}/api/delete`, { method: 'DELETE', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ model, name: model }), signal: this.aborts.get(job.id)!.signal });
+        if (res.status === 404) {
+          this.update(job, { detail: 'Already removed' });
+        } else if (!res.ok) {
           throw new Error(`Ollama answered HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
         }
       } else if (target === 'docker') {
