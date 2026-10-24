@@ -70,8 +70,18 @@ export class WorktreeManager {
   /** Repository root for `dir`, or undefined when it is not inside a git working tree. */
   async repoRoot(dir: string): Promise<string | undefined> {
     try {
-      const out = await git(['rev-parse', '--show-toplevel'], dir);
-      return out.trim() || undefined;
+      const out = (await git(['rev-parse', '--show-toplevel'], dir)).trim();
+      if (!out) {
+        return undefined;
+      }
+      // Git prints forward slashes (and may keep 8.3 short names) on Windows; return the same canonical form VS
+      // Code uses for workspace folders so callers can compare and hash paths.
+      const resolved = path.resolve(out);
+      try {
+        return fs.realpathSync.native(resolved);
+      } catch {
+        return resolved;
+      }
     } catch {
       return undefined;
     }

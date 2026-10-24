@@ -664,7 +664,11 @@ async function worktrees() {
   const home = path.join(tmp, 'home');
   fs.mkdirSync(repo);
   const sh = (cmd: string, cwd = repo) => cp.execSync(cmd, { cwd, stdio: 'pipe' }).toString();
-  sh('git init -q -b main && git config user.email a@b && git config user.name a');
+  // Git for Windows defaults to core.autocrlf=true, which would check the worktree out with CRLF while this test
+  // writes LF files straight to disk and compares bytes; pin LF so the comparisons mean the same on every OS.
+  sh('git init -q -b main && git config user.email a@b && git config user.name a && git config core.autocrlf false');
+  // Canonical form of the repo path (long names, native separators) — what repoRoot() promises to return.
+  const canonical = fs.realpathSync.native(repo);
   fs.writeFileSync(path.join(repo, 'a.txt'), 'line1\nline2\nline3\n');
   fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
   fs.writeFileSync(path.join(repo, '.gitignore'), 'ignored.txt\n');
@@ -677,9 +681,9 @@ async function worktrees() {
   fs.writeFileSync(path.join(repo, 'ignored.txt'), 'nope\n');
   const mgr = new WorktreeManager(home);
   try {
-    check('repoRoot finds the repository, undefined outside one', (await mgr.repoRoot(path.join(repo, '.localpilot'))) === fs.realpathSync(repo) && (await mgr.repoRoot(os.tmpdir())) === undefined);
+    check('repoRoot finds the repository, undefined outside one', (await mgr.repoRoot(path.join(repo, '.localpilot'))) === canonical && (await mgr.repoRoot(os.tmpdir())) === undefined, { got: await mgr.repoRoot(path.join(repo, '.localpilot')), canonical });
     const progress: string[] = [];
-    const wt = await mgr.create(fs.realpathSync(repo), 's_one', { progress: (t) => progress.push(t) });
+    const wt = await mgr.create(canonical, 's_one', { progress: (t) => progress.push(t) });
     check('worktree lives outside the repository', wt.path.startsWith(home) && !wt.path.startsWith(repo));
     check('worktree carries the uncommitted edit and the untracked file, not the ignored one', fs.readFileSync(path.join(wt.path, 'b.txt'), 'utf8') === 'b changed\n' && fs.readFileSync(path.join(wt.path, 'new.txt'), 'utf8') === 'untracked\n' && !fs.existsSync(path.join(wt.path, 'ignored.txt')));
     check('setup hook from .localpilot/worktrees.json ran inside the worktree', fs.existsSync(path.join(wt.path, 'setup.marker')) && progress.some((p) => p.includes('echo setup-ran')));
@@ -700,18 +704,18 @@ async function worktrees() {
     check('apply: no conflicts, snapshot hook called for every affected file', res.conflicts.length === 0 && snapshots.sort().join() === 'a.txt,b.txt,c.txt', { res, snapshots });
     check('apply: untracked work in progress survives', fs.readFileSync(path.join(repo, 'new.txt'), 'utf8') === 'untracked\n');
     // Conflict: a second worktree edits the same line the main checkout has since changed.
-    const wt2 = await mgr.create(fs.realpathSync(repo), 's_two', {});
+    const wt2 = await mgr.create(canonical, 's_two', {});
     fs.writeFileSync(path.join(wt2.path, 'a.txt'), 'line1\nline2 from agent two\nline3\nline4\n');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'line1\nline2 from the user\nline3\nline4\n');
     const res2 = await mgr.apply(wt2);
     const after = fs.readFileSync(path.join(repo, 'a.txt'), 'utf8');
     check('apply with a conflicting edit falls back to a 3-way merge and reports the file', res2.conflicts.includes('a.txt') && /<<<<<<<|>>>>>>>/.test(after), { res2, after });
-    const listed = await mgr.list(fs.realpathSync(repo));
+    const listed = await mgr.list(canonical);
     check('list sees both worktrees', listed.map((l) => l.id).sort().join() === 's_one,s_two', listed.map((l) => l.id));
-    const pruned = await mgr.prune(fs.realpathSync(repo), new Set(['s_two']));
+    const pruned = await mgr.prune(canonical, new Set(['s_two']));
     check('prune removes worktrees whose session is gone', pruned === 1 && !fs.existsSync(wt.path) && fs.existsSync(wt2.path) && !sh('git worktree list').includes('s_one'));
     await mgr.remove(wt2);
-    check('remove deletes the worktree and git forgets it', !fs.existsSync(wt2.path) && !sh('git worktree list').includes('s_two') && (await mgr.list(fs.realpathSync(repo))).length === 0);
+    check('remove deletes the worktree and git forgets it', !fs.existsSync(wt2.path) && !sh('git worktree list').includes('s_two') && (await mgr.list(canonical)).length === 0);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
