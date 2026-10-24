@@ -77,6 +77,8 @@ nav:
     url: /docs/configuration/
   - title: Keyboard shortcuts
     url: /docs/shortcuts/
+  - title: Dashboard, metrics & logs
+    url: /docs/dashboard/
   - title: Troubleshooting
     url: /docs/troubleshooting/
   - title: Development

@@ -6,9 +6,10 @@ import * as path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as vscode from 'vscode';
-import { DEFAULT_PROVIDERS, getConfig } from '../config';
+import { DEFAULT_PROVIDERS, forgetModel, getConfig } from '../config';
 import { ProviderConfig } from '../types';
 import { CatalogPick, InstallTarget, installId, starterPlan } from './catalog';
+import { withTimeout } from './http';
 import { createProvider, ProviderRegistry } from './registry';
 import { getSystemProfile, SystemProfile } from './system';
 
@@ -317,7 +318,8 @@ export class ModelManager implements vscode.Disposable {
     this.update(job, { status, error, finishedAt: Date.now(), detail: status === 'done' ? 'Done' : status === 'cancelled' ? 'Cancelled' : error ?? 'Failed', progress: status === 'done' ? 1 : job.progress });
     this.aborts.delete(job.id);
     this.log.info(`model job ${job.kind} ${job.target}/${job.model}: ${status}${error ? ` — ${error}` : ''}`);
-    if (status === 'done' && (job.kind === 'pull' || job.kind === 'remove')) {
+    if (status === 'done' && job.kind === 'pull') {
+      // `remove` refreshes discovery itself before finishing.
       this.registry.invalidate();
       void this.registry.listModels(true).then(() => this._onDidChange.fire());
     }
@@ -450,7 +452,7 @@ export class ModelManager implements vscode.Disposable {
       if (target === 'ollama') {
         const { baseUrl, headers } = this.ollamaBase(providerId);
         // `name` is what Ollama servers before 0.1.33 expect; newer ones read `model`.
-        const res = await fetch(`${baseUrl}/api/delete`, { method: 'DELETE', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ model, name: model }), signal: this.aborts.get(job.id)!.signal });
+        const res = await fetch(`${baseUrl}/api/delete`, { method: 'DELETE', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ model, name: model }), signal: withTimeout(30_000, this.aborts.get(job.id)!.signal) });
         if (res.status === 404) {
           this.update(job, { detail: 'Already removed' });
         } else if (!res.ok) {
@@ -461,10 +463,25 @@ export class ModelManager implements vscode.Disposable {
       } else {
         throw new Error('LM Studio models are removed from the LM Studio app (My Models). You can disable the model here instead.');
       }
+      // Real clean-up: the model is gone from the server, so nothing may keep pointing at it — default / completions /
+      // routing choices and the disabled list are cleared, and discovery is refreshed before anyone reads the list again.
+      const pid = providerId ?? this.providerIdFor(target);
+      const cleared = pid ? await forgetModel(`${pid}/${model}`).catch(() => [] as string[]) : [];
+      this.update(job, { detail: 'Refreshing model list…' });
+      this.registry.invalidate();
+      await this.registry.listModels(true).catch(() => []);
+      const where = target === 'ollama' ? 'Ollama' : target === 'docker' ? 'Docker Model Runner' : target;
+      void vscode.window.showInformationMessage(`Deleted ${model} from ${where}.${cleared.length ? ` It was your ${cleared.join(', ')} — switched back to automatic.` : ''}`);
       return this.finish(job, 'done');
     } catch (e) {
       return this.finish(job, 'error', e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /** Provider id a runtime's models are listed under (for the `${provider}/${model}` ids used in settings). */
+  private providerIdFor(target: InstallTarget): string | undefined {
+    const providers = getConfig().providers;
+    return target === 'ollama' ? providers.find((p) => p.type === 'ollama')?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
   }
 
   // ------------------------------------------------------------------ Ollama lifecycle

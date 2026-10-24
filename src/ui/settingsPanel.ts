@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
 import { MemoryStore } from '../agent/memory';
+import { CatalogEntry, SkillCatalog } from '../agent/skillCatalog';
+import { skillsDestination } from '../agent/skillInstaller';
 import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
-import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled } from '../config';
+import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
@@ -12,13 +15,14 @@ import { RegistryCapability, RegistryModel, RegistrySort, RegistryTag } from '..
 import { pickForRole, ProviderRegistry } from '../providers/registry';
 import { getSystemProfile, SystemProfile } from '../providers/system';
 import { SessionStore } from '../sessions/sessionStore';
+import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/telemetry';
 import { ModelInfo, ProviderConfig } from '../types';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'advanced';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'advanced';
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -59,6 +63,25 @@ export interface CatalogItem {
   targets: { target: InstallTarget; id: string }[];
 }
 
+/** Installed skill as shown in Settings → Skills. */
+export interface SettingsSkill {
+  name: string;
+  description: string;
+  source: string;
+  used?: number;
+  disabled?: boolean;
+  dir: string;
+  /** Workspace / user skills can be deleted from Settings; bundled ones cannot. */
+  removable: boolean;
+}
+
+/** Registry (catalog) skill as shown in the gallery. */
+export interface RegistrySkill extends CatalogEntry {
+  installed: boolean;
+  /** Source of the installed copy, when there is one. */
+  installedSource?: string;
+}
+
 export interface ModelsState {
   system: SystemProfile;
   runtimes: RuntimeStatus[];
@@ -69,14 +92,19 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: { name: string; description: string; source: string; used?: number }[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
   | { type: 'jobs'; jobs: ModelJob[] }
   | { type: 'gallery'; source: GallerySource; q: string; capability: string; sort: string; page: number; models: RegistryModel[]; hasMore: boolean; error?: string }
   | { type: 'galleryTags'; source: GallerySource; name: string; tags: RegistryTag[]; description?: string; error?: string }
+  | { type: 'skillRegistry'; q: string; entries: RegistrySkill[]; status: { repo: string; skills: number; fetched?: number; error?: string }[]; refreshing: boolean }
+  | { type: 'skillJob'; name: string; status: 'running' | 'done' | 'error'; detail?: string }
   | { type: 'busy'; busy: boolean }
+  | { type: 'dashboard'; days: number; summary: TelemetrySummary; logFile: string }
+  | { type: 'logs'; entries: LogEntry[]; level?: LogLevel; q?: string }
+  | { type: 'logLine'; entry: LogEntry }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
 
 type FromSettings =
@@ -90,6 +118,12 @@ type FromSettings =
   | { type: 'installModel'; target: InstallTarget; model: string }
   | { type: 'gallerySearch'; source?: string; q?: string; capability?: string; sort?: string; page?: number }
   | { type: 'galleryTags'; source?: string; name: string }
+  | { type: 'skillSearch'; q?: string }
+  | { type: 'refreshSkillRegistry' }
+  | { type: 'installRegistrySkill'; name: string; repo: string; scope?: 'user' | 'workspace' }
+  | { type: 'removeSkill'; name: string }
+  | { type: 'toggleSkill'; name: string; enabled: boolean }
+  | { type: 'openSkill'; name: string }
   | { type: 'removeModel'; target: InstallTarget; model: string; providerId: string; name?: string }
   | { type: 'toggleModel'; id: string; enabled: boolean }
   | { type: 'cancelJob'; id: string }
@@ -100,7 +134,13 @@ type FromSettings =
   | { type: 'deleteNote'; name: string; scope: 'project' | 'global' }
   | { type: 'openNote'; name: string; scope: 'project' | 'global' }
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
-  | { type: 'openExternal'; url: string };
+  | { type: 'openExternal'; url: string }
+  | { type: 'dashboard'; days?: number }
+  | { type: 'logs'; level?: string; q?: string; follow?: boolean }
+  | { type: 'exportTelemetry' }
+  | { type: 'clearTelemetry' }
+  | { type: 'openLogFile' }
+  | { type: 'openTelemetryFolder' };
 
 /** Keys (relative to `localpilot.`) that the UI may read and write. Anything else is rejected. */
 const SETTING_KEYS = [
@@ -108,8 +148,8 @@ const SETTING_KEYS = [
   'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'worktrees.mode', 'worktrees.location',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
-  'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
-  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding',
+  'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
+  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'telemetry.enabled', 'telemetry.retentionDays',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -117,7 +157,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
-  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills',
+  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
@@ -141,6 +181,8 @@ const GALLERY_SITE: Record<GallerySource, string> = { ollama: 'ollama.com', dock
 export class SettingsPanel implements vscode.Disposable {
   /** Skill usage / recurring-request tracker (set by the extension host). */
   learner?: SkillLearner;
+  /** Skill registry (configured repositories), set by the extension host. */
+  catalog?: SkillCatalog;
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
@@ -151,6 +193,8 @@ export class SettingsPanel implements vscode.Disposable {
   private readonly registries = createGalleryRegistries();
   private readonly gallerySearchAbort = new Map<GallerySource, AbortController>();
   private readonly disposables: vscode.Disposable[] = [];
+  /** Dashboard log viewer is open with "follow" on: new lines are streamed to it. */
+  private following = false;
 
   constructor(
     private readonly ctx: vscode.ExtensionContext,
@@ -162,8 +206,18 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly store: SessionStore,
     private readonly log: vscode.LogOutputChannel,
     /** Ids of chats currently streaming (they are never deleted by "Clear chat history"). */
-    private readonly running: () => string[] = () => []
+    private readonly running: () => string[] = () => [],
+    /** Local metrics + log mirror behind the Dashboard page. */
+    private readonly telemetry?: Telemetry
   ) {
+    if (telemetry) {
+      const off = telemetry.onLog((entry) => {
+        if (this.panel && this.following && this.panel.visible) {
+          this.post({ type: 'logLine', entry });
+        }
+      });
+      this.disposables.push(new vscode.Disposable(off));
+    }
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('localpilot') && this.panel) {
@@ -218,6 +272,7 @@ export class SettingsPanel implements vscode.Disposable {
     panel.webview.onDidReceiveMessage((m: FromSettings) => void this.handle(m).catch((e) => this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) })));
     panel.onDidDispose(() => {
       this.panel = undefined;
+      this.following = false;
       this.modelsLoaded = false;
     });
   }
@@ -268,6 +323,42 @@ export class SettingsPanel implements vscode.Disposable {
         return;
       case 'gallerySearch':
         return this.gallerySearch(m);
+      case 'skillSearch':
+        return this.pushSkillRegistry(String(m.q ?? ''));
+      case 'refreshSkillRegistry': {
+        if (!this.catalog) {
+          return;
+        }
+        this.post({ type: 'busy', busy: true });
+        try {
+          await this.catalog.refresh(true);
+        } finally {
+          this.post({ type: 'busy', busy: false });
+        }
+        return this.pushSkillRegistry(this.skillQuery);
+      }
+      case 'installRegistrySkill':
+        return this.installRegistrySkill(m.name, m.repo, m.scope);
+      case 'removeSkill':
+        return this.removeSkill(m.name);
+      case 'toggleSkill': {
+        const skill = this.skills.getSkill(m.name);
+        if (!skill) {
+          throw new Error(`Unknown skill "${m.name}"`);
+        }
+        await setSkillEnabled(skill.name, !!m.enabled);
+        await this.skills.refresh();
+        this.post({ type: 'toast', level: 'info', text: m.enabled ? `“${skill.name}” enabled` : `“${skill.name}” disabled — the agent no longer sees it` });
+        return this.pushState();
+      }
+      case 'openSkill': {
+        const skill = this.skills.getSkill(m.name);
+        if (!skill) {
+          throw new Error(`Unknown skill "${m.name}"`);
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(skill.path), { preview: true });
+        return;
+      }
       case 'galleryTags': {
         const source = GALLERY_SOURCES.has(String(m.source)) ? (m.source as GallerySource) : 'ollama';
         try {
@@ -285,11 +376,15 @@ export class SettingsPanel implements vscode.Disposable {
         if (ok !== 'Delete') {
           return;
         }
-        void this.models.remove(m.target, m.model, m.providerId).then((job) => {
+        void this.models.remove(m.target, m.model, m.providerId).then(async (job) => {
           if (job.status === 'done') {
-            this.post({ type: 'toast', level: 'info', text: `${label} deleted` });
+            // The manager already refreshed discovery and showed the notification; repaint the page from the fresh list
+            // right away rather than waiting for the debounced change listeners.
+            await this.pushState();
+            await this.pushModels();
           } else if (job.status === 'error') {
             this.post({ type: 'toast', level: 'error', text: job.error ?? 'Remove failed' });
+            void vscode.window.showErrorMessage(`Could not delete ${label}: ${job.error ?? 'unknown error'}`);
           }
         });
         return;
@@ -344,7 +439,68 @@ export class SettingsPanel implements vscode.Disposable {
           await vscode.env.openExternal(vscode.Uri.parse(m.url));
         }
         return;
+      case 'dashboard':
+        return this.pushDashboard(m.days);
+      case 'logs': {
+        if (typeof m.follow === 'boolean') {
+          this.following = m.follow;
+        }
+        const level = (['trace', 'debug', 'info', 'warn', 'error'] as const).find((l) => l === m.level);
+        return this.post({ type: 'logs', entries: this.telemetry?.logs({ level, q: m.q || undefined }) ?? [], level, q: m.q || undefined });
+      }
+      case 'exportTelemetry': {
+        if (!this.telemetry) {
+          return;
+        }
+        const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(`${process.env.HOME || process.env.USERPROFILE || ''}/localpilot-telemetry-${new Date().toISOString().slice(0, 10)}.json`), filters: { JSON: ['json'] }, title: 'Export LocalPilot telemetry' });
+        if (!target) {
+          return;
+        }
+        await vscode.workspace.fs.writeFile(target, Buffer.from(await this.telemetry.exportJson(), 'utf8'));
+        this.post({ type: 'toast', level: 'info', text: `Exported to ${target.fsPath}` });
+        return;
+      }
+      case 'clearTelemetry': {
+        if (!this.telemetry) {
+          return;
+        }
+        const pick = await vscode.window.showWarningMessage('Delete all recorded LocalPilot metrics and log files on this machine?', { modal: true }, 'Delete');
+        if (pick !== 'Delete') {
+          return;
+        }
+        await this.telemetry.clear();
+        this.post({ type: 'toast', level: 'info', text: 'Telemetry cleared' });
+        return this.pushDashboard();
+      }
+      case 'openLogFile': {
+        if (!this.telemetry) {
+          return;
+        }
+        await this.telemetry.flush();
+        try {
+          await vscode.window.showTextDocument(vscode.Uri.file(this.telemetry.logFile()), { preview: false });
+        } catch {
+          this.post({ type: 'toast', level: 'error', text: 'No log file has been written today yet' });
+        }
+        return;
+      }
+      case 'openTelemetryFolder':
+        if (this.telemetry) {
+          await fs.mkdir(this.telemetry.dir, { recursive: true });
+          await vscode.env.openExternal(vscode.Uri.file(this.telemetry.dir));
+        }
+        return;
     }
+  }
+
+  private lastDashboardDays = 7;
+  private async pushDashboard(days = this.lastDashboardDays): Promise<void> {
+    if (!this.telemetry) {
+      return;
+    }
+    this.lastDashboardDays = days;
+    const summary = await this.telemetry.summary(days);
+    this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile() });
   }
 
   private async update(key: string, value: unknown, scope: 'user' | 'workspace'): Promise<void> {
@@ -386,6 +542,88 @@ export class SettingsPanel implements vscode.Disposable {
         this.gallerySearchAbort.delete(source);
       }
     }
+  }
+
+  // ------------------------------------------------------------------ skills gallery
+  private skillQuery = '';
+
+  /** Registry entries ranked for `q` (all of them, popular repositories first, when empty) with the installed state of each. */
+  private async pushSkillRegistry(q: string): Promise<void> {
+    this.skillQuery = q;
+    if (!this.catalog) {
+      this.post({ type: 'skillRegistry', q, entries: [], status: [], refreshing: false });
+      return;
+    }
+    const [status, ready] = await Promise.all([this.catalog.status(), this.catalog.ready()]);
+    const installed = new Map(this.skills.allSkills.map((s) => [s.name, s.source]));
+    const decorate = (e: CatalogEntry): RegistrySkill => ({ ...e, installed: installed.has(e.name), installedSource: installed.get(e.name) });
+    let entries: RegistrySkill[];
+    if (q.trim()) {
+      entries = (await this.catalog.search(q, 40)).map(decorate);
+    } else {
+      // No query: the whole registry, one entry per name, in repository order (the order that wins on conflicts).
+      const seen = new Set<string>();
+      entries = (await this.catalog.entries()).filter((e) => !seen.has(e.name) && seen.add(e.name)).map(decorate);
+    }
+    this.post({ type: 'skillRegistry', q, entries, status, refreshing: !ready });
+    // A first visit with no index yet: fetch it and push again.
+    if (!ready) {
+      void this.catalog
+        .refresh()
+        .then(() => (this.skillQuery === q ? this.pushSkillRegistry(q) : undefined))
+        .catch((e) => this.log.warn(`skill registry: ${String(e)}`));
+    }
+  }
+
+  private async installRegistrySkill(name: string, repo: string, scope?: 'user' | 'workspace'): Promise<void> {
+    if (!this.catalog) {
+      return;
+    }
+    const entries = await this.catalog.entries();
+    const entry = entries.find((e) => e.name === name && e.repo === repo) ?? entries.find((e) => e.name === name);
+    if (!entry) {
+      throw new Error(`"${name}" is no longer in the skill registry`);
+    }
+    const dest = skillsDestination(scope ?? getConfig().skillAutoInstallScope, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+    this.post({ type: 'skillJob', name: entry.name, status: 'running', detail: `Installing from ${entry.repo}…` });
+    try {
+      const one = await this.catalog.install(entry, dest, { replace: true, timeoutMs: 60_000, progress: (t) => this.post({ type: 'skillJob', name: entry.name, status: 'running', detail: t }) });
+      await this.skills.refresh();
+      if (!one) {
+        throw new Error('nothing was installed');
+      }
+      // A skill that was disabled before being reinstalled stays disabled; a fresh install is enabled.
+      this.post({ type: 'skillJob', name: entry.name, status: 'done', detail: one.dir });
+      this.post({ type: 'toast', level: 'info', text: `Installed “${one.name}” into ${dest}` });
+      this.log.info(`skill registry: installed "${one.name}" from ${entry.repo} into ${one.dir}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.post({ type: 'skillJob', name: entry.name, status: 'error', detail: msg });
+      this.post({ type: 'toast', level: 'error', text: `Could not install “${entry.name}”: ${msg}` });
+    }
+    await this.pushState();
+    await this.pushSkillRegistry(this.skillQuery);
+  }
+
+  private async removeSkill(name: string): Promise<void> {
+    const skill = this.skills.getSkill(name);
+    if (!skill) {
+      throw new Error(`Unknown skill "${name}"`);
+    }
+    if (skill.source === 'builtin') {
+      throw new Error('Bundled skills cannot be deleted — disable them instead');
+    }
+    // Webviews cannot show confirm(); the host asks.
+    const ok = await vscode.window.showWarningMessage(`Delete the skill “${skill.name}”?`, { modal: true, detail: `Removes ${skill.dir} from disk. You can install it again from the registry.` }, 'Delete');
+    if (ok !== 'Delete') {
+      return;
+    }
+    await fs.rm(skill.dir, { recursive: true, force: true });
+    await setSkillEnabled(skill.name, true);
+    await this.skills.refresh();
+    this.post({ type: 'toast', level: 'info', text: `Deleted “${skill.name}”` });
+    await this.pushState();
+    await this.pushSkillRegistry(this.skillQuery);
   }
 
   private async finishSetup(m: Extract<FromSettings, { type: 'finishSetup' }>): Promise<void> {
@@ -515,7 +753,7 @@ export class SettingsPanel implements vscode.Disposable {
       hasWorkspace: !!vscode.workspace.workspaceFolders?.length,
       settings,
       models,
-      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count })),
+      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, dir: s.dir, removable: s.source !== 'builtin' })),
       learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
       mcp: this.mcp.status,

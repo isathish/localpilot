@@ -41,6 +41,8 @@ export interface LocalPilotConfig {
   approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
   worktrees: { mode: 'always' | 'parallel' | 'off'; location?: string };
+  /** Local-only usage metrics and log mirror shown on the dashboard. Nothing is sent anywhere. */
+  telemetry: { enabled: boolean; retentionDays: number };
   webSearch: WebSearchConfig;
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
@@ -52,6 +54,8 @@ export interface LocalPilotConfig {
   skillAutoInstall: 'auto' | 'ask' | 'off';
   /** Where automatically installed skills land: the user's ~/.localpilot/skills or the workspace's .localpilot/skills. */
   skillAutoInstallScope: 'user' | 'workspace';
+  /** Skill names hidden from the agent (not in the prompt, not loadable, not suggested) while staying on disk. */
+  skillsDisabled: string[];
   thinking: ThinkingLevel;
   memoryEnabled: boolean;
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
@@ -99,6 +103,10 @@ export function getConfig(): LocalPilotConfig {
       mode: (['always', 'parallel', 'off'] as const).find((m) => m === c.get<string>('worktrees.mode', 'always')) ?? 'always',
       location: c.get<string>('worktrees.location', '') || undefined,
     },
+    telemetry: {
+      enabled: c.get<boolean>('telemetry.enabled', true),
+      retentionDays: Math.max(0, Math.floor(c.get<number>('telemetry.retentionDays', 30))),
+    },
     parallel: {
       maxConcurrency: c.get<number>('parallel.maxConcurrency', 4),
       maxSubagentDepth: c.get<number>('parallel.maxSubagentDepth', 2),
@@ -121,6 +129,7 @@ export function getConfig(): LocalPilotConfig {
     skillRepositories: (c.get<string[]>('skills.repositories', DEFAULT_SKILL_REPOSITORIES) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     skillAutoInstall: normalizeAutoInstall(c.get<unknown>('skills.autoInstall', 'auto')),
     skillAutoInstallScope: c.get<string>('skills.autoInstallScope', 'user') === 'workspace' ? 'workspace' : 'user',
+    skillsDisabled: (c.get<string[]>('skills.disabled', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     thinking: normalizeThinking(c.get<unknown>('thinking', 'off')),
     memoryEnabled: c.get<boolean>('memory.enabled', true),
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
@@ -181,4 +190,43 @@ export async function setModelEnabled(modelId: string, enabled: boolean): Promis
   if (next.length !== cur.length) {
     await c.update('models.disabled', next, vscode.ConfigurationTarget.Global);
   }
+}
+
+/** Hide or show a skill for the agent (prompt index, load_skill, suggestions) without deleting it from disk. */
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+  const c = vscode.workspace.getConfiguration(SECTION);
+  const cur = (c.get<string[]>('skills.disabled', []) ?? []).filter((s) => typeof s === 'string');
+  const next = enabled ? cur.filter((n) => n !== name) : cur.includes(name) ? cur : [...cur, name];
+  if (next.length !== cur.length) {
+    await c.update('skills.disabled', next, vscode.ConfigurationTarget.Global);
+  }
+}
+
+/**
+ * A model was deleted from its runtime: drop every setting that still points at it (default, completions, routing,
+ * the disabled list) in both User and Workspace scope so nothing keeps routing to a model that no longer exists.
+ * Returns the labels of the settings that were cleared, for the notification.
+ */
+export async function forgetModel(modelId: string): Promise<string[]> {
+  const c = vscode.workspace.getConfiguration(SECTION);
+  const cleared: string[] = [];
+  const refs: [string, string][] = [['defaultModel', 'default model'], ['inlineCompletion.model', 'completions model'], ['routing.vision', 'image model'], ['routing.reasoning', 'plan model']];
+  for (const [key, label] of refs) {
+    const info = c.inspect<string>(key);
+    for (const [value, target] of [[info?.globalValue, vscode.ConfigurationTarget.Global], [info?.workspaceValue, vscode.ConfigurationTarget.Workspace]] as const) {
+      if (value === modelId) {
+        await c.update(key, undefined, target);
+        if (!cleared.includes(label)) {
+          cleared.push(label);
+        }
+      }
+    }
+  }
+  const disabled = c.inspect<string[]>('models.disabled');
+  for (const [value, target] of [[disabled?.globalValue, vscode.ConfigurationTarget.Global], [disabled?.workspaceValue, vscode.ConfigurationTarget.Workspace]] as const) {
+    if (Array.isArray(value) && value.includes(modelId)) {
+      await c.update('models.disabled', value.filter((id) => id !== modelId), target);
+    }
+  }
+  return cleared;
 }

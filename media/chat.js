@@ -4,7 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
-    modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), ctx: $('ctxMeter'),
+    modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), skillsBtn: $('skillsBtn'), skillsLabel: $('skillsLabel'), ctx: $('ctxMeter'),
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
@@ -102,7 +102,11 @@
   function el(tag, cls, html) { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; }
   function post(m) { vscode.postMessage(m); }
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); els.toasts.appendChild(t); setTimeout(() => t.remove(), 3200); }
-  function scrollToBottom(force) { const m = els.messages; if (force || m.scrollHeight - m.scrollTop - m.clientHeight < 160) { m.scrollTop = m.scrollHeight; } }
+  // "Stick to bottom" is decided from scroll events (layout is already clean there) instead of forcing a layout on every
+  // call — followLive runs once per frame while streaming and that read was the single biggest CPU cost of a long reply.
+  let stickToBottom = true;
+  function scrollToBottom(force) { const m = els.messages; if (force || stickToBottom) { m.scrollTop = m.scrollHeight; stickToBottom = true; } }
+  function noteScroll() { const m = els.messages; stickToBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 160; }
   function parseArgs(s) { try { return JSON.parse(s) || {}; } catch { return { raw: s }; } }
   function base(p) { return String(p || '').split('/').pop(); }
   function short(v, n = 70) { const t = typeof v === 'string' ? v : JSON.stringify(v ?? ''); return esc(t.length > n ? t.slice(0, n - 1) + '…' : t); }
@@ -351,6 +355,7 @@
     const c = node.querySelector(':scope > .content'); if (!c) { return; }
     c.className = 'content';
     const img = extra && (extra.image || (extra.data && extra.data.image));
+    // Images are placed eagerly (the row opens itself to show them); text bodies wait until the row is expanded.
     if (tool === 'browser_inspect' && !pending) {
       c.classList.add('inspect');
       c.innerHTML = `${img && img.data ? `<img class="shot-img" src="data:${img.mime || 'image/png'};base64,${img.data}" alt="${esc((args && args.url) || 'screenshot')}" title="Click to enlarge">` : ''}${inspectReport(String(content || ''))}`;
@@ -363,22 +368,27 @@
       return;
     }
     if (pending) {
-      const entries = Object.entries(args || {}).filter(([, v]) => v !== undefined && v !== '');
-      c.classList.add('args'); c.innerHTML = entries.length ? `<dl>${entries.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === 'string' ? v : JSON.stringify(v))}</dd>`).join('')}</dl>` : '<span class="muted">Running…</span>';
+      c.classList.add('args');
+      lazyFill(node, () => { const entries = Object.entries(args || {}).filter(([, v]) => v !== undefined && v !== ''); c.innerHTML = entries.length ? `<dl>${entries.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === 'string' ? v : JSON.stringify(v))}</dd>`).join('')}</dl>` : '<span class="muted">Running…</span>'; });
       return;
     }
     const text = String(content || '');
-    if (tool === 'read_file') {
-      const head = /^File: (.+?) \((\d+) lines total, showing (\d+)-(\d+)\)\n?/.exec(text);
-      const listing = numberedListing(head ? text.slice(head[0].length) : text, langForPath(head ? head[1] : args.path));
-      if (listing) { c.classList.add('file'); c.innerHTML = `${head ? `<div class="file-head"><span class="path-link" data-path="${esc(head[1])}" data-line="${head[3]}">${esc(head[1])}</span><span class="meta">lines ${head[3]}–${head[4]} of ${head[2]}</span></div>` : ''}${listing}`; return; }
-    }
-    if (tool === 'web_fetch' || tool === 'web_search' || tool === 'memory_read' || tool === 'load_skill' || tool === 'run_parallel_subagents' || tool === 'run_subagent') {
-      const src = /^Source: (\S+)\n\n?/.exec(text);
-      c.classList.add('doc'); c.innerHTML = `${src ? `<div class="file-head"><a href="${esc(src[1])}">${esc(src[1])}</a></div>` : ''}<div class="doc-body">${renderMarkdown(src ? text.slice(src[0].length) : text)}</div>`;
-      return;
-    }
-    c.innerHTML = linkify(text);
+    const isDoc = tool === 'web_fetch' || tool === 'web_search' || tool === 'memory_read' || tool === 'load_skill' || tool === 'run_parallel_subagents' || tool === 'run_subagent';
+    if (tool === 'read_file') { c.classList.add('file'); } else if (isDoc) { c.classList.add('doc'); }
+    lazyFill(node, () => {
+      if (tool === 'read_file') {
+        const head = /^File: (.+?) \((\d+) lines total, showing (\d+)-(\d+)\)\n?/.exec(text);
+        const listing = numberedListing(head ? text.slice(head[0].length) : text, langForPath(head ? head[1] : args.path));
+        if (listing) { c.innerHTML = `${head ? `<div class="file-head"><span class="path-link" data-path="${esc(head[1])}" data-line="${head[3]}">${esc(head[1])}</span><span class="meta">lines ${head[3]}–${head[4]} of ${head[2]}</span></div>` : ''}${listing}`; return; }
+        c.classList.remove('file');
+      }
+      if (isDoc) {
+        const src = /^Source: (\S+)\n\n?/.exec(text);
+        c.innerHTML = `${src ? `<div class="file-head"><a href="${esc(src[1])}">${esc(src[1])}</a></div>` : ''}<div class="doc-body">${renderMarkdown(src ? text.slice(src[0].length) : text)}</div>`;
+        return;
+      }
+      c.innerHTML = linkify(text);
+    });
   }
   /** Turns the stable text report of browser_inspect into sections: summary chips, console entries, failed requests, metrics, layout. */
   function inspectReport(text) {
@@ -425,6 +435,19 @@
     if (content !== undefined) { d.querySelector('.content').textContent = content; }
     setState(d, cls.includes('running') ? 'running' : cls.includes('error') ? 'error' : 'ok');
     return d;
+  }
+  /**
+   * Defers building a collapsed row's body until it is first expanded. A long transcript has hundreds of tool
+   * results (file listings, test output, diffs) that nobody opens; materialising them eagerly cost ~400k DOM nodes
+   * and made every render, scroll and tab switch pay for it. Open rows (and re-fills of open rows) render at once.
+   */
+  function lazyFill(node, fill) {
+    node.__fill = fill;
+    if (node.open) { node.__fill = null; fill(); return; }
+    if (!node.__lazy) {
+      node.__lazy = true;
+      node.addEventListener('toggle', () => { if (node.open && node.__fill) { const f = node.__fill; node.__fill = null; f(); } });
+    }
   }
   /** Settled rows keep their tool icon (muted) instead of a check mark; errors get ✕, running a spinner. Subagent lanes keep
    *  their agent glyph while running (the Workers card above them carries the one spinner) so a batch of workers is not a wall of spinners. */
@@ -510,8 +533,10 @@
     const oldT = isWrite ? '' : (a.old_text || ''); const newT = isWrite ? (a.content || '') : (a.new_text || '');
     const d = renderDiff(oldT, newT);
     card.dataset.path = a.path || ''; card.dataset.add = String(d.add); card.dataset.del = String(d.del); card.dataset.write = isWrite ? '1' : '0';
-    card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed">${d.html}</div>`;
-    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open }); return; } card.querySelector('.diff').classList.toggle('collapsed'); };
+    // The diff body is parsed into the DOM only when the card is expanded (most edits in a long transcript never are).
+    card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed"></div>`;
+    card.__diff = d.html;
+    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
   }
@@ -551,9 +576,9 @@
   function setTermRow(node, content, running) {
     const out = String(content || '').replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '');
     const pre = node.querySelector('.term');
-    pre.innerHTML = running ? '<span class="muted">Running…</span>' : out ? ansiToHtml(out) : '<span class="muted">(no output)</span>';
+    lazyFill(node, () => { pre.innerHTML = running ? '<span class="muted">Running…</span>' : out ? ansiToHtml(out) : '<span class="muted">(no output)</span>'; });
     const m = /\[exit code (\d+|null)\]/.exec(String(content || ''));
-    const n = out ? out.split('\n').length : 0;
+    let n = 0; if (out) { for (let i = -1; (i = out.indexOf('\n', i + 1)) >= 0;) { n++; } n++; }
     const meta = node.querySelector(':scope > summary .meta');
     meta.innerHTML = running ? '' : `${n > 1 ? `<span class="lines">${n} lines</span>` : ''}${m ? `<span class="exit ${m[1] === '0' ? 'good' : 'bad'}">exit ${m[1]}</span>` : ''}`;
   }
@@ -605,7 +630,7 @@
     if (rows && n) { finBody.appendChild(rows); } else { fin.classList.add('nosteps'); }
     body.innerHTML = ''; body.appendChild(fin);
     const text = error || result || '';
-    if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body">${error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000))}</div>`; body.appendChild(rep); }
+    if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body"></div>`; lazyFill(rep, () => { rep.querySelector('.doc-body').innerHTML = error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000)); }); body.appendChild(rep); }
     d.querySelector(':scope > summary .meta').textContent = '';
     const ctl = d.querySelector(':scope > summary .lanectl'); if (ctl) { ctl.remove(); }
     d.classList.remove('paused');
@@ -779,7 +804,7 @@
     els.messages.innerHTML = '';
     els.messages.dataset.sid = s ? s.id : '';
     if (!s) { return; }
-    syncMode(); syncModel(); updateCtx();
+    syncMode(); syncModel(); syncSkills(); updateCtx();
     if (!s.messages.length) { renderEmpty(); }
     const results = new Map();
     for (const m of s.messages) {
@@ -925,7 +950,14 @@
     return el('div', 'note nudge', `${I.warn}<span>${esc(why)}</span>`);
   }
   // Scrolls only when the event belongs to the transcript on screen — background agents must not move it.
-  const followLive = (live) => { if (state.session && state.session.id === live.sid) { scrollToBottom(false); updateJump(); } };
+  // Coalesced to one layout read per frame: a worker batch can emit hundreds of events in a burst, and a forced
+  // layout per event against a long transcript is what froze the view for seconds.
+  let followPending = false;
+  const followLive = (live) => {
+    if (!(state.session && state.session.id === live.sid) || followPending) { return; }
+    followPending = true;
+    requestAnimationFrame(() => { followPending = false; scrollToBottom(false); updateJump(); });
+  };
   // "Jump to latest": shown when the reader has scrolled up while the active agent is still producing output.
   const jump = el('button', 'jump hidden', `${I.chev}<span>Jump to latest</span>`);
   jump.title = 'Scroll to the newest message'; jump.type = 'button';
@@ -933,14 +965,14 @@
   jump.onclick = () => { scrollToBottom(true); updateJump(); els.input.focus(); };
   function updateJump() {
     const m = els.messages;
-    const away = m.scrollHeight - m.scrollTop - m.clientHeight > 160;
+    const away = !stickToBottom;
     const busy = state.session && (state.running.has(state.session.id) || state.live.has(state.session.id));
     const show = !!(away && busy);
     jump.classList.toggle('hidden', !show);
     if (show) { jump.style.top = `${Math.round(m.getBoundingClientRect().bottom - 40)}px`; }
   }
-  els.messages.addEventListener('scroll', updateJump, { passive: true });
-  window.addEventListener('resize', updateJump);
+  els.messages.addEventListener('scroll', () => { noteScroll(); updateJump(); }, { passive: true });
+  window.addEventListener('resize', () => { noteScroll(); updateJump(); });
   function scheduleRender(live) {
     // Agents streaming in other tabs render nothing until their tab is shown — a live turn is marked dirty instead.
     if (!state.session || state.session.id !== live.sid) { live.dirty = true; return; }
@@ -948,7 +980,7 @@
     live.timer = setTimeout(() => {
       live.timer = 0; finishThinking(live);
       const t0 = performance.now();
-      live.body.innerHTML = renderStream(live) + '<span class="caret"></span>';
+      renderStream(live);
       // Long answers re-render slower; back off so the webview never spends most of its time re-rendering.
       live.interval = Math.min(400, Math.max(50, Math.round((performance.now() - t0) * 4)));
       live.dirty = false; followLive(live);
@@ -966,13 +998,28 @@
     }
     return cut;
   }
-  /** Streaming markdown: blocks that can no longer change are rendered once and reused; only the open tail is re-rendered. */
+  /**
+   * Streaming markdown: blocks that can no longer change are rendered once and *stay in the DOM*; each tick only
+   * re-renders the open tail. (Rebuilding the whole reply's HTML every tick made a long answer re-parse hundreds of
+   * kilobytes of markup several times a second — the stream dropped to a few frames per second.)
+   */
   function renderStream(live) {
     const text = live.text;
-    if (!live.settled || live.settled.len > text.length || text.slice(0, live.settled.len) !== live.settled.text) { live.settled = { len: 0, text: '', html: '' }; }
+    const reset = !live.settled || live.settled.len > text.length || !text.startsWith(live.settled.text);
+    if (reset) { live.settled = { len: 0, text: '', html: '' }; }
+    if (reset || !live.tailEl || live.tailEl.parentNode !== live.body) {
+      // (Re)build the two-part body; anything else in it (typing dots) goes.
+      live.body.innerHTML = '<div class="settled"></div><div class="tail"></div>';
+      live.settledEl = live.body.firstElementChild; live.tailEl = live.body.lastElementChild;
+      if (live.settled.html) { live.settledEl.innerHTML = live.settled.html; }
+    }
     const cut = settledCut(text);
-    if (cut > live.settled.len) { live.settled.html += renderMarkdown(text.slice(live.settled.len, cut)); live.settled.len = cut; live.settled.text = text.slice(0, cut); }
-    return live.settled.html + renderMarkdown(text.slice(live.settled.len));
+    if (cut > live.settled.len) {
+      const html = renderMarkdown(text.slice(live.settled.len, cut));
+      live.settled.html += html; live.settled.len = cut; live.settled.text = text.slice(0, cut);
+      live.settledEl.insertAdjacentHTML('beforeend', html);
+    }
+    live.tailEl.innerHTML = renderMarkdown(text.slice(live.settled.len)) + '<span class="caret"></span>';
   }
   function finishLive(sessionId) {
     const live = state.live.get(sessionId);
@@ -1052,7 +1099,7 @@
         c.dataset.childId = e.payload.childId; live.subs.set(e.payload.childId, c);
         if (c.closest('.subhost.workers')) { c.open = false; }
         childStatus(live, sid, e.payload.childId, e.payload.agent, 'starting…', visible);
-        scrollToBottom(false);
+        followLive(live);
         break;
       }
       case 'subagent_end': {
@@ -1090,18 +1137,27 @@
 
   /** Chips for skills matching the request (click → prefill `/skill name`), a catalog skill installed/offered for it, and a recurring request type worth saving as a skill. */
   function skillSuggestionNote(p) {
-    const skills = p.skills || []; const create = p.create; const installed = p.installed; const available = p.available;
-    if (!skills.length && !create && !installed && !available) { return null; }
+    const skills = p.skills || []; const preloaded = p.preloaded || []; const create = p.create; const installed = p.installed; const available = p.available;
+    if (!skills.length && !preloaded.length && !create && !installed && !available) { return null; }
     const n = el('div', 'note skills');
     if (installed) {
       const row = el('div', 'learn');
       row.appendChild(el('span', 'lbl', `${I.download || ''}Installed “${esc(installed.name)}” from ${esc(installed.repo)} for this request.`));
       n.appendChild(row);
     }
+    if (preloaded.length) {
+      const REASON = { forced: 'you asked for it', pinned: 'pinned to this chat', installed: 'just installed', match: 'matches the request' };
+      n.appendChild(el('span', 'lbl', `Using skill${preloaded.length === 1 ? '' : 's'}:`));
+      for (const s of preloaded) {
+        const chip = el('span', 'chip on', `${I.check || ''}${esc(s.name)}${s.reason && s.reason !== 'match' ? `<small> · ${esc(REASON[s.reason] || s.reason)}</small>` : ''}`);
+        chip.title = `The full instructions of “${s.name}” were loaded into this request (${REASON[s.reason] || s.reason}). Change how this chat uses skills with the Skills button below the composer.`;
+        n.appendChild(chip);
+      }
+    }
     if (skills.length) {
-      n.appendChild(el('span', 'lbl', 'Matching skills:'));
+      n.appendChild(el('span', 'lbl', preloaded.length ? 'May also apply:' : 'Skills that may apply:'));
       for (const s of skills) {
-        const chip = el('button', 'chip', `${I.book || ''}${esc(s.name)}`); chip.title = `${s.description || ''}\n\nThe agent is nudged to load this skill automatically. Click to force it: /skill ${s.name} <task>`;
+        const chip = el('button', 'chip', `${I.book || ''}${esc(s.name)}`); chip.title = `${s.description || ''}\n\nThe agent decides whether to load this skill. Click to force it: /skill ${s.name} <task>`;
         chip.onclick = () => { els.input.value = `/skill ${s.name} ${els.input.value.replace(/^\/skill \S+\s*/, '')}`; autoGrow(); updateSendEnabled(); els.input.focus(); };
         n.appendChild(chip);
       }
@@ -1109,7 +1165,7 @@
     if (available) {
       const wrap = el('div', 'learn');
       wrap.appendChild(el('span', 'lbl', `The “${esc(available.name)}” skill from ${esc(available.repo)} matches this request but is not installed.`));
-      const get = el('button', 'chip brand', `${I.download || ''}Install “${esc(available.name)}”`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Set localpilot.skills.autoInstall to "auto" to skip this step.`;
+      const get = el('button', 'chip brand', `${I.download || ''}Install “${esc(available.name)}”`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Switch this chat to “Auto” in the Skills menu to skip this step.`;
       get.onclick = () => { post({ type: 'installCatalogSkill', name: available.name, repo: available.repo }); get.disabled = true; get.textContent = 'Installing…'; };
       const no = el('button', 'chip', 'Not now'); no.title = 'Do not offer this skill again'; no.onclick = () => { post({ type: 'dismissCatalogSkill', name: available.name }); wrap.remove(); if (!skills.length && !create && !installed) { n.remove(); } };
       wrap.appendChild(get); wrap.appendChild(no); n.appendChild(wrap);
@@ -1668,6 +1724,46 @@
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
   function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
+  // ------------------------------------------------------------------ skills for this chat
+  const SKILL_MODES = {
+    auto: { label: 'Auto', desc: 'Install matching registry skills as the request starts; strong matches load into the request' },
+    ask: { label: 'Ask', desc: 'Offer registry skills as an Install chip; installed skills still load when they clearly match' },
+    off: { label: 'Off', desc: 'No registry lookups and no skill suggestions in this chat — pinned skills and /skill still work' },
+  };
+  const sessionSkills = () => (state.session && state.session.skills) || {};
+  const effectiveSkillsMode = () => sessionSkills().mode || state.skillsMode || 'auto';
+  function syncSkills() {
+    if (!els.skillsBtn) { return; }
+    const ss = sessionSkills(); const pinned = ss.pinned || []; const mode = effectiveSkillsMode();
+    els.skillsLabel.textContent = pinned.length ? `${pinned.length} pinned` : ss.mode ? `Skills: ${SKILL_MODES[mode].label}` : 'Skills';
+    els.skillsBtn.classList.toggle('on', !!(pinned.length || ss.mode));
+    els.skillsBtn.classList.toggle('off', mode === 'off' && !pinned.length);
+    els.skillsBtn.title = `Skills in this chat: ${SKILL_MODES[mode].label}${ss.mode ? ' (overrides the global setting)' : ` (global setting)`}${pinned.length ? ` · pinned: ${pinned.join(', ')}` : ''}`;
+  }
+  function setSkills(patch) {
+    if (!state.session) { return; }
+    const cur = sessionSkills();
+    const next = { mode: 'mode' in patch ? patch.mode : cur.mode, pinned: 'pinned' in patch ? patch.pinned : cur.pinned };
+    state.session.skills = next.mode || (next.pinned && next.pinned.length) ? next : undefined;
+    syncSkills();
+    post({ type: 'setSkills', sessionId: state.session.id, mode: next.mode || null, pinned: next.pinned || [] });
+  }
+  els.skillsBtn.onclick = () => {
+    const ss = sessionSkills(); const pinned = new Set(ss.pinned || []); const g = state.skillsMode || 'auto';
+    const items = [
+      { group: 'This chat', label: `Inherit global (${SKILL_MODES[g].label})`, desc: 'Follow Settings → Skills', icon: I.sparkle, selected: !ss.mode, onPick: () => setSkills({ mode: undefined }) },
+      ...Object.entries(SKILL_MODES).map(([k, m]) => ({ group: 'This chat', label: m.label, desc: m.desc, icon: k === 'off' ? I.x : I.book, selected: ss.mode === k, onPick: () => setSkills({ mode: k }) })),
+    ];
+    if (state.skills.length) {
+      items.push({ hr: true });
+      for (const s of state.skills) {
+        const on = pinned.has(s.name);
+        items.push({ group: 'Pin to every request', label: s.name, desc: s.description, icon: I.book, selected: on, tag: on ? 'pinned' : undefined, onPick: () => { const next = new Set(pinned); on ? next.delete(s.name) : next.add(s.name); setSkills({ pinned: [...next] }); } });
+      }
+    }
+    items.push({ hr: true }, { label: 'Manage skills…', desc: 'Install from the registry, enable / disable, remove', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'skills' }) });
+    openMenu(els.skillsBtn, items, { search: state.skills.length > 6 ? 'Search skills…' : undefined });
+  };
   function openContextMenu() {
     post({ type: 'requestOpenFiles' });
     const items = [
@@ -1873,7 +1969,7 @@
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.running = new Set(m.running); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.skills = m.skills; state.agents = m.agents; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
@@ -1886,7 +1982,7 @@
         break;
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
-      case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; break;
+      case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model(s) found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': handleEvent(m.event); break;
       case 'paused': {

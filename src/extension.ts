@@ -42,14 +42,23 @@ import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineE
 import { LocalModelChatProvider } from './ui/lmProvider';
 import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
+import { mirrorLog } from './telemetry/logMirror';
+import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
-  const log = vscode.window.createOutputChannel('LocalPilot', { log: true });
-  context.subscriptions.push(log);
+  const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
+  context.subscriptions.push(channel);
+  // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
+  const telemetry = new Telemetry({ dir: path.join(os.homedir(), '.localpilot', 'telemetry'), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  const log = mirrorLog(channel, telemetry);
+  context.subscriptions.push(telemetry);
+  void telemetry.loadRecentLogs();
+  setTimeout(() => void telemetry.prune().then((n) => n && log.info(`removed ${n} expired telemetry file(s)`)), 8000);
   log.info('LocalPilot activating');
 
   // --- Core services -----------------------------------------------------------------------
   const providers = new ProviderRegistry(log);
+  providers.telemetry = telemetry;
   const tools = new ToolRegistry();
   const skills = new SkillManager(log, path.join(context.extensionPath, 'skills'));
   const workspace = new WorkspaceContext(log);
@@ -62,6 +71,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
+  runner.telemetry = telemetry;
+  controller.telemetry = telemetry;
   // "Before" side of worktree diffs: the file as the agent found it (the worktree's base commit).
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('localpilot-wtbase', {
@@ -130,7 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   }
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('localpilot.skillsPaths') || e.affectsConfiguration('localpilot.skills.builtin')) {
+      if (e.affectsConfiguration('localpilot.skillsPaths') || e.affectsConfiguration('localpilot.skills.builtin') || e.affectsConfiguration('localpilot.skills.disabled') || e.affectsConfiguration('localpilot.skills.autoInstall')) {
         void skills.refresh();
       }
       if (e.affectsConfiguration('localpilot.skills.repositories')) {
@@ -151,13 +162,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds);
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry);
   settingsPanel.learner = learner;
+  settingsPanel.catalog = catalog;
   context.subscriptions.push(settingsPanel);
   const lmProvider = new LocalModelChatProvider(providers, log);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', lmProvider), lmProvider);
   const inline = new InlineCompletionProvider(providers, log);
-  context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inline), inline);
+  inline.telemetry = telemetry;
+  context.subscriptions.push(
+    vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inline),
+    inline,
+    vscode.commands.registerCommand(InlineCompletionProvider.ACCEPTED_COMMAND, (model?: unknown, language?: unknown) => inline.accepted(typeof model === 'string' ? model : undefined, typeof language === 'string' ? language : undefined))
+  );
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
 
   const status = vscode.window.createStatusBarItem('localpilot.status', vscode.StatusBarAlignment.Right, 90);
@@ -361,10 +378,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       { label: '$(server) Select Model…', description: cfg.defaultModel || 'auto', run: () => vscode.commands.executeCommand('localpilot.selectModel') },
       { label: '$(library) Manage Models', run: () => vscode.commands.executeCommand('localpilot.manageModels') },
       { label: '$(search) Browse Ollama Model Gallery…', run: () => vscode.commands.executeCommand('localpilot.browseModelGallery') },
+      { label: '$(book) Manage Skills', run: () => vscode.commands.executeCommand('localpilot.manageSkills') },
       { label: `$(${cfg.inlineCompletion.enabled ? 'check' : 'circle-large-outline'}) Inline Completions`, description: cfg.inlineCompletion.enabled ? 'on' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleInlineCompletions') },
       { label: '', kind: vscode.QuickPickItemKind.Separator },
       { label: '$(layout) Move Chat To…', description: where?.label, run: () => view.pickLocation() },
       { label: '$(settings-gear) Settings', run: () => vscode.commands.executeCommand('localpilot.openSettings') },
+      { label: '$(dashboard) Dashboard', description: 'usage, latency, provider health, logs', run: () => vscode.commands.executeCommand('localpilot.openDashboard') },
       { label: '$(output) Show Logs', run: () => vscode.commands.executeCommand('localpilot.showLogs') },
     ];
     const pick = await vscode.window.showQuickPick(items, { title: 'LocalPilot', placeHolder: 'Everything runs on your machine' });
@@ -687,6 +706,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.manageModels', () => settingsPanel.show('settings', 'models'));
   cmd('localpilot.browseModelGallery', () => settingsPanel.show('settings', 'gallery'));
+  cmd('localpilot.manageSkills', () => settingsPanel.show('settings', 'skills'));
+  cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
   cmd('localpilot.enableOllamaParallel', async () => {
     const slots = ModelManager.ollamaParallelSlots();
     const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());
@@ -1218,6 +1239,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     get chatHost() {
       return view.host;
     },
+    telemetry: { summary: (days) => telemetry.summary(days), logs: (filter) => telemetry.logs(filter), dir: telemetry.dir },
   };
 }
 
@@ -1250,6 +1272,8 @@ export interface LocalPilotApi {
   inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
   /** The chat view (`localpilot.chatView`, wherever VS Code currently places it), whether it is visible and whether its UI has booted; undefined before the view is first shown or when the chat lives in an editor tab. */
   readonly chatHost: { viewId: string; visible: boolean; ready: boolean } | undefined;
+  /** Local-only metrics and log mirror behind the Dashboard (nothing leaves the machine). */
+  readonly telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: LogLevel; q?: string; limit?: number }): LogEntry[]; readonly dir: string };
 }
 
 export function deactivate(): void {

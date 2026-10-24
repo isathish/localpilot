@@ -2,7 +2,9 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { createSkillPrompt, namesTool, recommendSkills, skillHint, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { clampSkillBody, createSkillPrompt, namesTool, recommendSkills, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { normalizeSkillName, SkillManager } from '../agent/skills';
+import * as vscode from 'vscode';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
 import { routeSubagent } from '../agent/builtinAgents';
@@ -73,14 +75,13 @@ suite('Skill recommendation', () => {
     assert.strictEqual(topicKey('ok'), undefined);
   });
 
-  test('weak matches only suggest the skill; name or trigger-phrase matches require it', () => {
+  test('strong matches (name / trigger phrase) are flagged for preloading; weak ones only get a hint', () => {
     const strong = recommendSkills('deploy this with docker', SKILLS);
     assert.ok(strong[0]?.strong, JSON.stringify(strong));
-    assert.ok(/Required first step/.test(skillHint(strong)));
     const weak = recommendSkills('the spacing and typography on the settings page look off, improve the layout', SKILLS);
     assert.strictEqual(weak[0]?.name, 'ui-design');
     assert.ok(!weak[0]?.strong, JSON.stringify(weak));
-    assert.ok(/may apply/.test(skillHint(weak)) && !/Required first step/.test(skillHint(weak)));
+    assert.ok(/may apply/.test(skillHint(weak)) && /Use only these names/.test(skillHint(weak)));
     // One token of a hyphenated name is not the name: "compute_total" must not make "azure-compute" mandatory.
     const partial = recommendSkills('which file defines compute_total?', [...SKILLS, { name: 'azure-compute', description: 'Azure VM/VMSS router. WHEN: create / provision VM, recommend VM size, compare VM pricing.' }]);
     assert.ok(partial.every((m) => !m.strong), JSON.stringify(partial));
@@ -99,6 +100,63 @@ suite('Skill recommendation', () => {
     assert.ok(p.includes('.localpilot/skills/deploy-service-staging/SKILL.md'));
     assert.ok(skillHint(recommendSkills('deploy with docker', SKILLS)).includes('load_skill("deploy")'));
     assert.strictEqual(skillHint([]), '');
+  });
+
+  test('preload note explains why each skill is loaded and forbids re-loading or summarising; long bodies are clamped', () => {
+    const body = '<skill name="deploy" dir="/x">\n# Deploy\n1. build\n2. push\n</skill>';
+    const one = skillPreloadNote([{ name: 'deploy', body, reason: 'match' }]);
+    assert.ok(/"deploy" is loaded below because it matches this request/.test(one), one);
+    assert.ok(/do not call load_skill for it again/.test(one) && one.includes(body));
+    const many = skillPreloadNote([{ name: 'a', body: '<skill name="a">A</skill>', reason: 'pinned' }, { name: 'b', body: '<skill name="b">B</skill>', reason: 'forced' }]);
+    assert.ok(/"a" \(it is pinned to this chat\)/.test(many) && /"b" \(you were asked to use it\)/.test(many), many);
+    assert.strictEqual(skillPreloadNote([]), '');
+    const long = `<skill name="big" dir="/b">\n${'step line\n'.repeat(500)}</skill>`;
+    const clamped = clampSkillBody(long, 1000);
+    assert.ok(clamped.length < 1300 && /trimmed to fit the context window/.test(clamped) && clamped.trimEnd().endsWith('</skill>'), clamped.slice(-200));
+    assert.strictEqual(clampSkillBody('short', 1000), 'short');
+  });
+
+  test('skill names a model mangled resolve to the installed skill; disabled skills are invisible to the agent', async function () {
+    this.timeout(20_000);
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-skills-'));
+    const mk = async (name: string, desc: string) => {
+      await fs.mkdir(path.join(tmp, name), { recursive: true });
+      await fs.writeFile(path.join(tmp, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${desc}\n---\n# ${name}\n\n1. do the thing\n`);
+    };
+    await mk('pdf', 'Read and write PDF files. Use for "pdf"');
+    await mk('azure-compute', 'Create Azure VMs');
+    await mk('deploy', 'Deploy the service');
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prevDisabled = cfg.inspect<string[]>('skills.disabled')?.globalValue;
+    const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as vscode.LogOutputChannel;
+    const mgr = new SkillManager(log, tmp);
+    try {
+      await cfg.update('skills.disabled', ['deploy'], vscode.ConfigurationTarget.Global);
+      await mgr.refresh();
+      assert.strictEqual(normalizeSkillName('My PDF_Skill'), 'my-pdf');
+      assert.strictEqual(normalizeSkillName('Azure Compute'), 'azure-compute');
+      assert.strictEqual(mgr.resolveSkill('pdf')?.exact, true);
+      for (const mangled of ['PDF', 'pdf-skill', 'pdf_skill', 'pfd']) {
+        assert.strictEqual(mgr.resolveSkill(mangled)?.skill.name, 'pdf', mangled);
+        assert.strictEqual(mgr.resolveSkill(mangled)?.exact, false, mangled);
+      }
+      assert.strictEqual(mgr.resolveSkill('azure compute')?.skill.name, 'azure-compute');
+      assert.strictEqual(mgr.resolveSkill('AzureCompute')?.skill.name, 'azure-compute');
+      assert.strictEqual(mgr.resolveSkill('kubernetes'), undefined, 'no fuzzy match for an unrelated name');
+      assert.strictEqual(mgr.resolveSkill('deploy'), undefined, 'disabled skills do not resolve');
+      assert.ok(mgr.getSkill('deploy')?.disabled, 'but stay listed for Settings');
+      // The host also scans the machine's own skill folders, so check membership rather than the exact set.
+      const enabled = mgr.enabledSkills.map((s) => s.name);
+      assert.ok(enabled.includes('pdf') && enabled.includes('azure-compute') && !enabled.includes('deploy'), enabled.join(','));
+      assert.ok(!/^- deploy:/m.test(mgr.skillsIndex()) && /^- pdf:/m.test(mgr.skillsIndex()));
+      assert.strictEqual(await mgr.loadSkillBody('deploy'), undefined);
+      assert.match((await mgr.loadSkillBody('PDF')) ?? '', /^<skill name="pdf" dir=/);
+      assert.ok(mgr.similarSkillNames('pfd').includes('pdf'));
+    } finally {
+      mgr.dispose();
+      await cfg.update('skills.disabled', prevDisabled, vscode.ConfigurationTarget.Global);
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

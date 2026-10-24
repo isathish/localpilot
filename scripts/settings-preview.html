@@ -48,14 +48,14 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
   mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
   skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
-  'models.disabled': [], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '' };
+  'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '' };
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
 window.acquireVsCodeApi = () => ({ postMessage(m) {
   const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
   if (m.type === 'ready') {
     send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models,
-      skills: [{ name: 'release', description: 'Cut a release end to end', source: '.localpilot/skills', used: 4 }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: '~/.claude/skills' }],
+      skills: [{ name: 'release', description: 'Cut a release end to end: bump, changelog, tag, publish', source: 'workspace', used: 4, dir: '/repo/.localpilot/skills/release', removable: true }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: 'user', dir: '/Users/me/.claude/skills/pr-review', removable: true }, { name: 'pdf', description: 'Read, create, merge and fill PDF files with pypdf and reportlab', source: 'user', used: 2, dir: '/Users/me/.localpilot/skills/pdf', removable: true }, { name: 'debug', description: 'Reproduce, localise and fix a bug with a regression test', source: 'builtin', used: 11, dir: '/ext/skills/debug', removable: false }, { name: 'deploy', description: 'Deploy to the configured target and verify health', source: 'builtin', disabled: true, dir: '/ext/skills/deploy', removable: false }],
       learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
       mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true });
@@ -67,7 +67,7 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
     { id: 'docker-lp-ollama', displayName: 'Ollama (Docker · lp-ollama)', type: 'ollama', baseUrl: 'http://localhost:11435', configured: false, enabled: true, ok: true, latencyMs: 9, models: [models[1]], source: 'docker' },
   ] }), 300);
   if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
-  if (m.type === 'loadModels') setTimeout(() => {
+  const sendModels = () => {
     const installed = models.map(m => ({ ...m, gb: m.name.includes('gemma4') ? 6.6 : m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: 'ok', autoRoles: m.name.includes('gemma4') ? ['agent', 'vision'] : m.supportsVision ? [] : m.name.includes('7b') ? [] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('gemma4') ? { key: 'gemma4', name: 'Gemma 4', vendor: 'Google DeepMind', tag: 'e4b' } : m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', vendor: 'Alibaba', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
     const cat = (key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, rec, inst, targets) => ({ key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, recommendedFor: rec, installed: inst, targets });
     send({ type: 'models', models: {
@@ -98,7 +98,31 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
       ],
       starter: { agent: 'gemma4:e4b', completion: 'starcoder2:3b' },
     } });
-  }, 200);
+  };
+  if (m.type === 'loadModels') setTimeout(sendModels, 200);
+  if (m.type === 'removeModel') {
+    // Host side of a delete: a running job (spinner on the row), then the model disappears from the list and the
+    // models view is pushed again. The confirmation dialog and the native notification live in VS Code.
+    const job = { id: 'rm' + Date.now(), kind: 'remove', target: m.target, model: m.model, status: 'running', progress: -1, detail: 'Removing…', startedAt: Date.now() };
+    send({ type: 'jobs', jobs: [job] });
+    setTimeout(() => { const i = models.findIndex((x) => x.providerId === m.providerId && x.modelId === m.model); if (i >= 0) models.splice(i, 1); send({ type: 'jobs', jobs: [{ ...job, status: 'done', progress: 1, detail: 'Done', finishedAt: Date.now() }] }); sendModels(); }, 700);
+  }
+  if (m.type === 'skillSearch') setTimeout(() => {
+    const reg = [
+      ['pdf', 'Read, create, merge and fill PDF files with pypdf and reportlab', 'anthropics/skills/skills', 'pdf', true, 'user'],
+      ['docx', 'Create and edit Word documents with python-docx, tracked changes aware', 'anthropics/skills/skills', 'docx', false],
+      ['xlsx', 'Build spreadsheets with formulas, charts and formatting via openpyxl', 'anthropics/skills/skills', 'xlsx', false],
+      ['brainstorming', 'Explore the problem space and alternatives before designing', 'obra/superpowers/skills', 'brainstorming', false],
+      ['writing-plans', 'Turn a design into a step-by-step implementation plan with verification', 'obra/superpowers/skills', 'writing-plans', false],
+      ['systematic-debugging', 'Four-phase debugging: reproduce, isolate, hypothesise, verify', 'obra/superpowers/skills', 'systematic-debugging', false],
+      ['azure-deploy', 'Deploy applications to Azure with azd, Bicep and validation', 'github/awesome-copilot/skills', 'azure-deploy', false],
+      ['release', 'Cut a release end to end', 'github/awesome-copilot/skills', 'release', true, 'workspace'],
+    ].map(([name, description, repo, dir, installed, installedSource]) => ({ name, description, repo, dir, installed, installedSource }));
+    const q = (m.q || '').toLowerCase();
+    const entries = reg.filter((e) => !q || `${e.name} ${e.description}`.toLowerCase().includes(q));
+    send({ type: 'skillRegistry', q: m.q, entries, refreshing: false, status: [{ repo: 'anthropics/skills/skills', skills: 16, fetched: Date.now() - 3600e3 }, { repo: 'obra/superpowers/skills', skills: 14, fetched: Date.now() - 3600e3 }, { repo: 'github/awesome-copilot/skills', skills: 120, fetched: Date.now() - 86400e3, error: 'GitHub API rate limit exceeded' }] });
+  }, 350);
+  if (m.type === 'installRegistrySkill') { setTimeout(() => send({ type: 'skillJob', name: m.name, status: 'running', detail: `Fetching ${m.repo}…` }), 200); setTimeout(() => send({ type: 'skillJob', name: m.name, status: 'done', detail: '/Users/me/.localpilot/skills/' + m.name }), 1400); }
   if (m.type === 'gallerySearch' && m.source === 'docker') setTimeout(() => {
     const lib = [
       { name: 'ai/gemma4', description: '', capabilities: [], sizes: [], pulls: '1.6M', pullsCount: 1583074, cloud: false, url: 'https://hub.docker.com/r/ai/gemma4' },
@@ -153,6 +177,50 @@ window.acquireVsCodeApi = () => ({ postMessage(m) {
     if (m.name === 'nomic-embed-text') { send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: [], error: 'ollama.com answered HTTP 503' }); return; }
     send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: byName[m.name] || [t('latest', 2.0, '8K', 'Text', { isLatest: true })] });
   }, 500);
+  if (m.type === 'dashboard') setTimeout(() => {
+    const P = (p50, p95) => ({ p50, p95, avg: Math.round((p50 + p95) / 2) });
+    const days = m.days || 7; const n = days === 0 ? 30 : days; const series = [];
+    for (let i = n - 1; i >= 0; i--) { const d = new Date(Date.now() - i * 86400e3); const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; const f = 0.5 + Math.abs(Math.sin(i * 1.7)); series.push({ day: k, runs: Math.round(6 * f), tokens: Math.round(48000 * f), toolCalls: Math.round(40 * f), modelCalls: Math.round(22 * f), completionsShown: Math.round(60 * f), completionsAccepted: Math.round(19 * f), errors: i % 4 === 0 ? 2 : 0 }); }
+    const summary = {
+      days, from: Date.now() - n * 86400e3, to: Date.now(),
+      totals: { runs: 41, done: 34, stopped: 5, failed: 2, subagentRuns: 12, modelCalls: 163, modelErrors: 3, retries: 6, promptTokens: 284310, completionTokens: 61240, toolCalls: 288, toolErrors: 9, runTime: P(42000, 210000), steps: P(4, 11) },
+      series,
+      models: [
+        { model: 'qwen2.5-coder:7b', provider: 'ollama', calls: 118, promptTokens: 201000, completionTokens: 44800, tokPerSec: 38.4, ttft: P(640, 2900), duration: P(8200, 31000), errors: 1, last: Date.now() - 120000 },
+        { model: 'qwen3:14b', provider: 'ollama', calls: 31, promptTokens: 71000, completionTokens: 14100, tokPerSec: 17.9, ttft: P(1800, 9400), duration: P(21000, 88000), errors: 2, last: Date.now() - 3600000 },
+        { model: 'qwen2.5-coder:1.5b', provider: 'ollama', calls: 14, promptTokens: 12310, completionTokens: 2340, tokPerSec: 96.1, ttft: P(210, 480), duration: P(900, 2400), errors: 0, last: Date.now() - 7200000 },
+      ],
+      tools: [
+        { name: 'read_file', calls: 96, errors: 2, cached: 11, duration: P(12, 60), last: Date.now() }, { name: 'grep_search', calls: 54, errors: 1, cached: 6, duration: P(140, 900), last: Date.now() },
+        { name: 'edit_file', calls: 41, errors: 3, cached: 0, duration: P(35, 120), last: Date.now() }, { name: 'run_command', calls: 33, errors: 2, cached: 0, duration: P(2400, 19000), last: Date.now() },
+        { name: 'list_files', calls: 28, errors: 0, cached: 4, duration: P(20, 80), last: Date.now() }, { name: 'run_todos_parallel', calls: 9, errors: 0, cached: 0, duration: P(61000, 190000), last: Date.now() },
+        { name: 'get_diagnostics', calls: 15, errors: 1, cached: 0, duration: P(800, 2600), last: Date.now() }, { name: 'web_fetch', calls: 7, errors: 0, cached: 1, duration: P(1200, 4100), last: Date.now() },
+        { name: 'write_file', calls: 5, errors: 0, cached: 0, duration: P(18, 40), last: Date.now() },
+      ],
+      modes: [
+        { mode: 'agent', runs: 22, done: 19, stopped: 2, failed: 1, duration: P(38000, 190000), steps: P(5, 12), toolCalls: 171 }, { mode: 'multitask', runs: 7, done: 5, stopped: 1, failed: 1, duration: P(140000, 420000), steps: P(3, 6), toolCalls: 48 },
+        { mode: 'ask', runs: 8, done: 8, stopped: 0, failed: 0, duration: P(6000, 14000), steps: P(1, 2), toolCalls: 11 }, { mode: 'plan', runs: 3, done: 2, stopped: 1, failed: 0, duration: P(52000, 90000), steps: P(4, 7), toolCalls: 38 }, { mode: 'debug', runs: 1, done: 0, stopped: 1, failed: 0, duration: P(31000, 31000), steps: P(6, 6), toolCalls: 20 },
+      ],
+      completions: { requested: 412, shown: 236, accepted: 71, cached: 44, empty: 98, error: 4, acceptanceRate: 25.4, latency: P(380, 1400), byLanguage: [{ language: 'typescript', shown: 150, accepted: 48 }, { language: 'python', shown: 70, accepted: 15 }, { language: 'markdown', shown: 40, accepted: 6 }, { language: 'json', shown: 20, accepted: 2 }] },
+      health: [{ provider: 'ollama', checks: 240, ok: 238, uptime: 99.2, up: true, lastAt: Date.now() - 20000, latency: P(14, 60), models: 6 }, { provider: 'lmstudio', checks: 240, ok: 61, uptime: 25.4, up: false, lastAt: Date.now() - 20000, latency: P(9, 30), lastError: 'ECONNREFUSED 127.0.0.1:1234' }],
+      worktrees: { created: 9, applied: 6, discarded: 2, conflicts: 1, files: 23 },
+      errors: [
+        { t: Date.now() - 300000, kind: 'model', what: 'qwen3:14b', detail: 'stall' }, { t: Date.now() - 2400000, kind: 'run', what: 'multitask run', detail: 'ollama/qwen3:14b · failed after 3 steps' },
+        { t: Date.now() - 5400000, kind: 'health', what: 'lmstudio', detail: 'ECONNREFUSED 127.0.0.1:1234' }, { t: Date.now() - 9000000, kind: 'model', what: 'qwen2.5-coder:7b', detail: 'connection' },
+      ],
+      storage: { events: 4812, bytes: 1324000, files: 14, oldest: Date.now() - 7 * 86400e3, dir: '/Users/me/.localpilot/telemetry' },
+    };
+    send({ type: 'dashboard', days, summary, logFile: '/Users/me/.localpilot/telemetry/localpilot-2026-10-24.log' });
+  }, 250);
+  if (m.type === 'logs') setTimeout(() => {
+    const L = (ago, level, msg) => ({ t: Date.now() - ago, level, msg });
+    const all = [L(900000, 'info', 'LocalPilot activating'), L(899000, 'info', 'loaded 14 skills from 3 folders'), L(880000, 'debug', 'discover: ollama reachable (6 models) in 14ms'), L(879000, 'warn', 'listModels failed for lmstudio: connect ECONNREFUSED 127.0.0.1:1234'),
+      L(600000, 'info', 'session s_8f21: agent turn started with ollama/qwen2.5-coder:7b'), L(590000, 'debug', 'tool read_file src/extension.ts (12ms)'), L(560000, 'debug', 'tool grep_search "registerCommand" (140ms)'), L(300000, 'error', 'model call failed: the model stopped responding (stall) after 90s'),
+      L(299000, 'warn', 'model call failed (stall), retry 1/2 in 1500ms'), L(120000, 'info', 'session s_8f21: turn finished in 42s · 5 steps · 9 tool calls'), L(20000, 'debug', 'inline completion: typescript · 380ms · shown'), L(2000, 'info', 'worktree for s_9a01 created in 1.8s')];
+    const rank = { trace: 0, debug: 1, info: 2, warn: 3, error: 4 }; const q = (m.q || '').toLowerCase();
+    send({ type: 'logs', entries: all.filter((e) => rank[e.level] >= rank[m.level || 'trace'] && (!q || e.msg.toLowerCase().includes(q))), level: m.level, q: m.q });
+    if (m.follow) { let i = 0; clearInterval(window.__logTick); window.__logTick = setInterval(() => { if (i++ > 6) { clearInterval(window.__logTick); return; } send({ type: 'logLine', entry: L(0, i % 3 ? 'debug' : 'info', `tool read_file media/settings.js (${10 + i * 3}ms)`) }); }, 1500); }
+  }, 150);
 } });
 </script>
 <script src="../media/settings.js"></script>

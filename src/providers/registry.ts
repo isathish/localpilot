@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Telemetry } from '../telemetry/telemetry';
 import { getConfig, onConfigChange } from '../config';
 import { LLMProvider, ModelInfo, ProviderConfig } from '../types';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
@@ -30,6 +31,8 @@ export class ProviderRegistry implements vscode.Disposable {
   private modelCache: ModelInfo[] = [];
   /** Providers whose health check passed in the last discovery. */
   private reachable = new Set<string>();
+  /** Local-only provider health metrics for the dashboard. */
+  telemetry?: Pick<Telemetry, 'record'>;
   private lastRefresh = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
@@ -118,11 +121,20 @@ export class ProviderRegistry implements vscode.Disposable {
     const reachable = new Set<string>();
     const results = await Promise.allSettled(
       this.all.map(async (p) => {
+        const started = Date.now();
         if (!(await p.healthCheck())) {
+          this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: 'unreachable' });
           return [];
         }
         reachable.add(p.id);
-        return p.listModels();
+        try {
+          const list = await p.listModels();
+          this.telemetry?.record({ type: 'health', provider: p.id, ok: true, durationMs: Date.now() - started, models: list.length });
+          return list;
+        } catch (e) {
+          this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: e instanceof Error ? e.message : String(e) });
+          throw e;
+        }
       })
     );
     const models: ModelInfo[] = [];

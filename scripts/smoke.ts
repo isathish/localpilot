@@ -18,6 +18,7 @@ import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/type
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
 import { WorktreeManager } from '../src/agent/worktrees';
+import { percentiles, summarize, Telemetry, TelemetryEvent } from '../src/telemetry/telemetry';
 import { completeTask, parseModelSuggestions, quickSuggestions } from '../src/agent/taskSuggestions';
 import { ProviderRegistry } from '../src/providers/registry';
 import { ToolRegistry } from '../src/tools/registry';
@@ -721,7 +722,84 @@ async function worktrees() {
   }
 }
 
+async function telemetry() {
+  console.log('\n--- telemetry store & dashboard aggregation');
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-tm-'));
+  const DAY = 86400_000;
+  let now = Date.parse('2026-10-24T12:00:00');
+  let retention = 0; // auto-prune after a write must not remove the 10-day-old file we are about to assert on
+  const t = new Telemetry({ dir: tmp, retentionDays: () => retention, now: () => now, logBuffer: 5 });
+  try {
+    check('percentiles: p50/p95/avg', JSON.stringify(percentiles([10, 20, 30, 40, 100])) === JSON.stringify({ p50: 30, p95: 100, avg: 40 }) && percentiles([]).p95 === 0);
+    // Events across three days, one of them older than the window.
+    t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, promptTokens: 1000, completionTokens: 200, ttftMs: 500, durationMs: 2500, outcome: 'ok' });
+    t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, durationMs: 90000, outcome: 'error', reason: 'stall' });
+    t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, durationMs: 100, outcome: 'retry', reason: 'empty' });
+    t.record({ type: 'tool', sid: 's1', name: 'read_file', mode: 'agent', durationMs: 12, error: false });
+    t.record({ type: 'tool', sid: 's1', name: 'read_file', mode: 'agent', durationMs: 0, error: false, cached: true });
+    t.record({ type: 'tool', sid: 's1', name: 'edit_file', mode: 'agent', durationMs: 40, error: true });
+    t.record({ type: 'run', sid: 's1', mode: 'agent', model: 'ollama/qwen', depth: 0, outcome: 'done', durationMs: 4000, steps: 3, toolCalls: 3, promptTokens: 1000, completionTokens: 200 });
+    t.record({ type: 'run', sid: 's1::explore', mode: 'agent', model: 'ollama/qwen', depth: 1, outcome: 'failed', durationMs: 900, steps: 1, toolCalls: 0, promptTokens: 0, completionTokens: 0 });
+    t.record({ type: 'completion', action: 'requested', language: 'ts' });
+    t.record({ type: 'completion', action: 'shown', language: 'ts', durationMs: 300, model: 'ollama/small' });
+    t.record({ type: 'completion', action: 'accepted', language: 'ts', model: 'ollama/small' });
+    t.record({ type: 'completion', action: 'cached', language: 'ts' });
+    t.record({ type: 'health', provider: 'ollama', ok: true, durationMs: 10, models: 3 });
+    t.record({ type: 'health', provider: 'lmstudio', ok: false, durationMs: 5, error: 'ECONNREFUSED' });
+    t.record({ type: 'worktree', action: 'create' });
+    t.record({ type: 'worktree', action: 'apply', files: 4, conflicts: 1 });
+    t.record({ type: 'run', sid: 'old', mode: 'ask', model: 'm', depth: 0, outcome: 'done', durationMs: 1, steps: 1, toolCalls: 0, promptTokens: 0, completionTokens: 0, t: now - 10 * DAY });
+    t.log('info', 'hello');
+    t.log('error', 'boom\nsecond line');
+    await t.flush();
+    const files = fs.readdirSync(tmp).sort();
+    check('events and logs are written to daily files', files.includes('events-2026-10-24.jsonl') && files.includes('events-2026-10-14.jsonl') && files.includes('localpilot-2026-10-24.log'), files);
+    check('log lines are single-line with ISO time and level', /^2026-10-24T\S+ \[error\] boom\\nsecond line$/m.test(fs.readFileSync(path.join(tmp, 'localpilot-2026-10-24.log'), 'utf8')));
+    const s = await t.summary(7);
+    check('summary: totals count only the window', s.totals.runs === 2 && s.totals.done === 1 && s.totals.failed === 1 && s.totals.subagentRuns === 1 && s.totals.modelCalls === 3 && s.totals.modelErrors === 1 && s.totals.retries === 1, s.totals);
+    check('summary: tokens and tok/s per model', s.models.length === 1 && s.models[0].promptTokens === 1000 && s.models[0].completionTokens === 200 && s.models[0].tokPerSec === 100 && s.models[0].ttft.p50 === 500 && s.models[0].errors === 1, s.models[0]);
+    check('summary: tools with cached and error counts', s.tools.find((x) => x.name === 'read_file')?.calls === 2 && s.tools.find((x) => x.name === 'read_file')?.cached === 1 && s.tools.find((x) => x.name === 'edit_file')?.errors === 1 && s.totals.toolErrors === 1, s.tools);
+    check('summary: completions acceptance = accepted / (shown + cached)', s.completions.acceptanceRate === 50 && s.completions.requested === 1 && s.completions.latency.p50 === 300 && s.completions.byLanguage[0]?.language === 'ts', s.completions);
+    check('summary: provider health with last state and error', s.health.length === 2 && s.health.find((h) => h.provider === 'ollama')?.up === true && s.health.find((h) => h.provider === 'lmstudio')?.lastError === 'ECONNREFUSED' && s.health.find((h) => h.provider === 'ollama')?.models === 3, s.health);
+    check('summary: worktrees, recent problems newest first, one point per day', s.worktrees.applied === 1 && s.worktrees.conflicts === 1 && s.errors.length === 3 && s.series.length === 7 && s.series[6].day === '2026-10-24' && s.series[6].runs === 2, { w: s.worktrees, e: s.errors.length, d: s.series.length });
+    check('summary: storage reports files and bytes', s.storage.files === 3 && s.storage.bytes > 0 && s.storage.dir === tmp, s.storage);
+    const all = await t.summary(0);
+    check('summary(0) includes everything on disk', all.totals.runs === 3 && all.modes.find((m) => m.mode === 'ask')?.runs === 1);
+    check('logs(): ring buffer keeps the newest, filters by level and text', t.logs().length === 2 && t.logs({ level: 'error' }).length === 1 && t.logs({ q: 'HELLO' })[0]?.msg === 'hello');
+    for (let i = 0; i < 10; i++) { t.log('debug', `line ${i}`); }
+    check('logs(): bounded by logBuffer', t.logs().length === 5 && t.logs()[4].msg === 'line 9');
+    const exported = JSON.parse(await t.exportJson());
+    check('export bundles events and the log buffer', Array.isArray(exported.events) && exported.events.length === 17 && exported.logs.length === 5, { e: exported.events?.length, l: exported.logs?.length });
+    check('retention 0 keeps everything', (await t.prune()) === 0);
+    retention = 7;
+    const removed = await t.prune();
+    check('prune removes files older than the retention window', removed === 1 && !fs.existsSync(path.join(tmp, 'events-2026-10-14.jsonl')), removed);
+    retention = 0;
+    const t2 = new Telemetry({ dir: tmp, retentionDays: () => 0, now: () => now });
+    await t2.loadRecentLogs();
+    check('loadRecentLogs seeds the viewer from today\'s file', t2.logs().length === 12 && t2.logs()[1].msg === 'boom\nsecond line' && t2.logs()[1].level === 'error', t2.logs().length);
+    const off = new Telemetry({ dir: tmp, retentionDays: () => 0, enabled: () => false, now: () => now });
+    off.record({ type: 'worktree', action: 'discard' });
+    await off.flush();
+    check('disabled telemetry records nothing', (await off.summary(1)).worktrees.discarded === 0);
+    await t.clear();
+    check('clear removes every file and empties the log buffer', fs.readdirSync(tmp).length === 0 && t.logs().length === 0);
+    // Aggregation is pure: a stream of events from a torn write is tolerated by events().
+    fs.writeFileSync(path.join(tmp, 'events-2026-10-24.jsonl'), '{"t":1,"type":"worktree","action":"create"}\n{"t":2,"ty');
+    check('torn trailing line is skipped', (await t.summary(0)).worktrees.created === 1);
+    now += DAY;
+    const empty = summarize([] as TelemetryEvent[], { days: 1, from: now, to: now });
+    check('summarize([]) yields zeros and one series point', empty.totals.runs === 0 && empty.series.length === 1 && empty.completions.acceptanceRate === 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
+  await telemetry();
   await worktrees();
   await mockOllama();
   await mockOpenAI();

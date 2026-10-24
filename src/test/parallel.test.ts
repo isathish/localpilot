@@ -238,7 +238,7 @@ function fakeCtx(todos: ToolContext['todos']): ToolContext {
 function fanOutTool(answer: (prompt: string) => Promise<string>): { tool: Tool; events: AgentEvent[] } {
   const events: AgentEvent[] = [];
   const agents = builtinAgents();
-  const skills = { allAgents: agents, allSkills: [], getAgent: (n: string) => agents.find((a) => a.name === n), loadSkillBody: async () => undefined } as unknown as Parameters<typeof createAgentTools>[1];
+  const skills = { allAgents: agents, allSkills: [], enabledSkills: [], getAgent: (n: string) => agents.find((a) => a.name === n), getSkill: () => undefined, resolveSkill: () => undefined, similarSkillNames: () => [], loadSkillBody: async () => undefined } as unknown as Parameters<typeof createAgentTools>[1];
   const runner = { run: (o: { userMessage: { content: string } }) => answer(o.userMessage.content) } as unknown as Parameters<typeof createAgentTools>[0];
   const tools = createAgentTools(runner, skills, (e) => events.push(e), async () => true);
   return { tool: tools.find((t) => t.definition.name === 'run_todos_parallel')!, events };

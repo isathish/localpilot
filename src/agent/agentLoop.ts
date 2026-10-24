@@ -11,13 +11,14 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
-import { namesTool, recommendSkills, SkillLearner, skillHint, SkillMatch } from './skillRecommender';
+import { clampSkillBody, namesTool, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
 import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
 import { MemoryStore } from './memory';
+import { RunStats, Telemetry } from '../telemetry/telemetry';
 
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
 
@@ -86,7 +87,39 @@ export class AgentRunner {
     readonly catalog?: SkillCatalog
   ) {}
 
+  /** Local-only metrics (runs, model calls, tools); nothing is sent anywhere. */
+  telemetry?: Telemetry;
+
   async run(o: AgentRunOptions): Promise<string> {
+    const stats = new RunStats();
+    let outcome: 'done' | 'stopped' | 'failed' = 'done';
+    try {
+      const text = await this.runTurn(o, stats);
+      outcome = o.signal.aborted ? 'stopped' : 'done';
+      return text;
+    } catch (e) {
+      outcome = o.signal.aborted ? 'stopped' : 'failed';
+      throw e;
+    } finally {
+      this.telemetry?.record({
+        type: 'run',
+        sid: o.session.id,
+        mode: o.session.mode,
+        model: stats.model || o.session.model || '',
+        depth: o.depth ?? 0,
+        agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined,
+        outcome,
+        durationMs: Date.now() - stats.startedAt,
+        steps: stats.steps,
+        toolCalls: stats.toolCalls,
+        promptTokens: stats.promptTokens,
+        completionTokens: stats.completionTokens,
+        isolated: !!o.workspaceRoot && !!this.workspace.root && o.workspaceRoot !== this.workspace.root,
+      });
+    }
+  }
+
+  private async runTurn(o: AgentRunOptions, stats: RunStats): Promise<string> {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
     const session = o.session;
@@ -99,6 +132,7 @@ export class AgentRunner {
       needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
     });
     const { provider, model } = route;
+    stats.model = model.id;
     if (route.reason) {
       status(route.reason);
     }
@@ -169,32 +203,47 @@ export class AgentRunner {
       }
     }
 
-    // Skill recommendation: nudge the model towards a matching playbook and tell the UI; the learner also
-    // notices recurring request types that no skill covers and proposes creating one. When the best match is a
-    // skill from the catalog that is not installed yet, install it now (or offer it) so the model can load it.
-    if (depth === 0 && !o.roleOverride && (this.skills.allSkills.length || this.catalog)) {
+    // Skills: pick what this request should run with and put it in front of the model.
+    // - Strong matches (name / trigger phrase), pinned skills and `/skill <name>` are PRELOADED: their full
+    //   instructions go into a hidden message, so the model follows them instead of having to call load_skill —
+    //   the step small local models most often skip or get wrong (hallucinated names, summarised steps).
+    // - Loose matches are only hinted at. The chat's skills mode (session override, else the global setting)
+    //   decides whether registry skills are installed on the spot, offered as a chip, or left alone.
+    if (depth === 0 && !o.roleOverride && (this.skills.enabledSkills.length || this.catalog)) {
       try {
         const request = o.userMessage.content;
-        const forced = /^\/skill\b|^Use the "/.test(userText(request));
+        const text = userText(request);
+        const forcedName = /^Use the "([^"]+)" skill\b/.exec(text)?.[1];
+        const forced = !!forcedName || /^\/skill\b/.test(text);
         // "Use the write_file tool to…" — the user has prescribed the tool; a playbook detour would only cost turns.
         const prescribed = namesTool(request, toolDefs.map((t) => t.name));
-        const suggestions = this.learner ? await this.learner.observeRequest(request, this.skills.allSkills) : { skills: recommendSkills(request, this.skills.allSkills) };
-        const loaded = new Set(session.messages.filter((m) => m.role === 'tool' && m.toolName === 'load_skill').map((m) => /<skill name="([^"]+)"/.exec(m.content)?.[1]));
+        const ss = session.skills ?? {};
+        // Registry behaviour follows the chat override, else `skills.autoInstall`. Only the chat-level "off" also
+        // silences suggestions for installed skills — the global setting is about downloading, and matching what is
+        // already on disk costs nothing.
+        const mode: 'auto' | 'ask' | 'off' = ss.mode ?? cfg.skillAutoInstall;
+        const quiet = ss.mode === 'off';
+        const enabled = this.skills.enabledSkills;
+        // Already in context: load_skill results and skills preloaded into earlier hidden messages.
+        const loaded = new Set(
+          session.messages.flatMap((m) => ((m.role === 'tool' && m.toolName === 'load_skill') || (m.role === 'user' && m.meta?.hidden) ? [...m.content.matchAll(/<skill name="([^"]+)"/g)].map((x) => x[1]) : []))
+        );
+        const suggestions = quiet && !forced ? { skills: [] as SkillMatch[], create: undefined } : this.learner ? await this.learner.observeRequest(request, enabled) : { skills: recommendSkills(request, enabled), create: undefined };
         let fresh: SkillMatch[] = suggestions.skills.filter((s) => !loaded.has(s.name));
         let installed: { name: string; repo: string; dir: string } | undefined;
         let available: { name: string; description: string; repo: string } | undefined;
-        if (this.catalog && cfg.skillAutoInstall !== 'off' && !forced) {
-          const remote = await this.catalog.match(request, this.skills.allSkills);
-          if (remote && cfg.skillAutoInstall === 'ask') {
+        if (this.catalog && mode !== 'off' && !forced && !prescribed) {
+          const remote = await this.catalog.match(request, enabled);
+          if (remote && mode === 'ask') {
             available = { name: remote.name, description: remote.description, repo: remote.repo };
           } else if (remote) {
             status(`Installing skill "${remote.name}" from ${remote.repo}…`);
             try {
               const one = await this.catalog.install(remote, skillsDestination(cfg.skillAutoInstallScope, this.workspace.root), { signal: o.signal, timeoutMs: 20_000, progress: (t) => status(t), auto: true });
               await this.skills.refresh();
-              if (one && this.skills.getSkill(one.name)) {
+              if (one && this.skills.resolveSkill(one.name)) {
                 installed = { name: one.name, repo: remote.repo, dir: one.dir };
-                fresh = [{ name: one.name, description: remote.description, score: remote.score }, ...fresh.filter((f) => f.name !== one.name)];
+                fresh = [{ name: one.name, description: remote.description, score: remote.score, strong: true }, ...fresh.filter((f) => f.name !== one.name)];
                 this.log.info(`skill catalog: installed "${one.name}" from ${remote.repo} into ${one.dir}`);
               }
             } catch (e) {
@@ -203,12 +252,55 @@ export class AgentRunner {
             }
           }
         }
-        if (fresh.length && !forced && !prescribed) {
-          const note = installed ? `The skill "${installed.name}" was just installed from ${installed.repo} because it matches this request. ` : '';
-          session.messages.push({ role: 'user', content: note + skillHint(fresh), meta: { timestamp: Date.now(), hidden: true } });
+        // What to preload, in priority order: the forced skill, pinned skills, then the top strong match.
+        const wanted: { name: string; reason: 'forced' | 'pinned' | 'installed' | 'match' }[] = [];
+        if (forcedName) {
+          const r = this.skills.resolveSkill(forcedName);
+          if (r) {
+            wanted.push({ name: r.skill.name, reason: 'forced' });
+          }
         }
-        if (fresh.length || suggestions.create || available) {
-          emit({ sessionId: session.id, type: 'skill_suggestions', payload: { skills: fresh, create: suggestions.create, installed, available } });
+        for (const p of ss.pinned ?? []) {
+          const r = this.skills.resolveSkill(p);
+          if (r) {
+            wanted.push({ name: r.skill.name, reason: 'pinned' });
+          }
+        }
+        if (!quiet && !prescribed && !forcedName && fresh[0]?.strong) {
+          wanted.push({ name: fresh[0].name, reason: installed?.name === fresh[0].name ? 'installed' : 'match' });
+        }
+        const items: { name: string; body: string; reason: (typeof wanted)[number]['reason'] }[] = [];
+        // Roughly a fifth of the context window for skill text, so a long playbook cannot crowd out the code.
+        const budget = Math.min(24_000, Math.max(4_000, Math.floor(model.contextWindow * 4 * 0.2)));
+        for (const w of wanted) {
+          if (loaded.has(w.name) || items.some((i) => i.name === w.name)) {
+            continue;
+          }
+          const body = await this.skills.loadSkillBody(w.name);
+          if (body) {
+            items.push({ name: w.name, body: clampSkillBody(body, Math.max(2_000, Math.floor(budget / Math.max(1, wanted.length)))), reason: w.reason });
+            void this.learner?.recordSkillUsed(w.name);
+          }
+        }
+        const preloaded = items.map((i) => i.name);
+        const remaining = fresh.filter((f) => !preloaded.includes(f.name) && !loaded.has(f.name));
+        const notes: string[] = [];
+        if (items.length) {
+          notes.push(skillPreloadNote(items));
+        } else if (installed) {
+          notes.push(`The skill "${installed.name}" was just installed from ${installed.repo} because it matches this request.`);
+        }
+        if (remaining.length && !forced && !prescribed && !quiet) {
+          notes.push(skillHint(remaining));
+        }
+        if (notes.length) {
+          session.messages.push({ role: 'user', content: notes.join('\n\n'), meta: { timestamp: Date.now(), hidden: true } });
+        }
+        if (preloaded.length) {
+          status(`Using skill${preloaded.length === 1 ? '' : 's'} ${preloaded.join(', ')}…`);
+        }
+        if (preloaded.length || remaining.length || suggestions.create || available) {
+          emit({ sessionId: session.id, type: 'skill_suggestions', payload: { skills: remaining, preloaded: items.map((i) => ({ name: i.name, reason: i.reason })), create: suggestions.create, installed, available, mode } });
         }
       } catch (e) {
         this.log.warn(`skill recommendation failed: ${String(e)}`);
@@ -334,6 +426,11 @@ export class AgentRunner {
         o.signal.addEventListener('abort', onAbort, { once: true });
         let first = true;
         const requestedAt = Date.now();
+        let firstAt: number | undefined;
+        let usage: { promptTokens?: number; completionTokens?: number } | undefined;
+        const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) =>
+          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason });
+        stats.steps++;
         try {
           const stream = provider.chat({
             model: model.modelId,
@@ -357,6 +454,7 @@ export class AgentRunner {
           for await (const ev of guarded) {
             if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
               first = false;
+              firstAt = Date.now();
               emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
               this.noteFirstToken(model, others, requestedAt);
             }
@@ -373,8 +471,11 @@ export class AgentRunner {
                 calls.push(ev.call);
                 break;
               case 'usage':
+                usage = ev;
                 if (ev.promptTokens) {
                   session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
+                  stats.promptTokens += ev.promptTokens;
+                  stats.completionTokens += ev.completionTokens ?? 0;
                 }
                 break;
             }
@@ -382,11 +483,13 @@ export class AgentRunner {
         } catch (e) {
           o.signal.removeEventListener('abort', onAbort);
           if (o.signal.aborted) {
+            modelEvent('aborted');
             aborted = true;
             break;
           }
           const kind = classifyModelError(e);
           const msg = e instanceof Error ? e.message : String(e);
+          modelEvent(isTransient(kind) && first && attempt < MAX_MODEL_RETRIES ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
           if (kind === 'overflow' && !compactedForOverflow) {
             // The server knows better than our estimate: shrink the history and send again.
             compactedForOverflow = true;
@@ -426,6 +529,7 @@ export class AgentRunner {
         o.signal.removeEventListener('abort', onAbort);
         // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
         if (!text.trim() && !calls.length && attempt < MAX_MODEL_RETRIES && !o.signal.aborted) {
+          modelEvent('retry', 'empty');
           attempt++;
           this.log.warn(`empty completion from ${model.id}; retry ${attempt}/${MAX_MODEL_RETRIES}`);
           status(`The model returned nothing — asking again (${attempt}/${MAX_MODEL_RETRIES})…`);
@@ -433,6 +537,7 @@ export class AgentRunner {
           await sleep(RETRY_BACKOFF_MS[0], o.signal);
           continue;
         }
+        modelEvent(o.signal.aborted ? 'aborted' : 'ok');
         break;
       }
       if (aborted) {
@@ -529,7 +634,8 @@ export class AgentRunner {
         }
         break;
       }
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts);
+      stats.toolCalls += calls.length;
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -645,7 +751,8 @@ export class AgentRunner {
     nativeTools: boolean,
     cache: Map<string, Promise<ChatMessage>>,
     vision = false,
-    callCounts?: Map<string, number>
+    callCounts?: Map<string, number>,
+    mode = 'agent'
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
@@ -668,6 +775,7 @@ export class AgentRunner {
         }
       }
       const content = ctxMgr.clampToolOutput(text);
+      this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: Date.now() - started, error: !!result.isError });
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
       return {
         msg: { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } },
@@ -693,6 +801,7 @@ export class AgentRunner {
         const inflight = cache.get(cacheKey);
         if (inflight) {
           const hit = await inflight;
+          this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: 0, error: false, cached: true });
           emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: false, durationMs: 0, content: hit.content, cached: true } });
           return { ...hit, toolCallId: call.id, meta: { timestamp: Date.now() } };
         }

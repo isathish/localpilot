@@ -32,6 +32,7 @@ import { ToolRegistry } from '../tools/registry';
 import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
+import { Telemetry } from '../telemetry/telemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
 import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
@@ -447,6 +448,7 @@ interface Core {
   log: vscode.LogOutputChannel;
   /** Live sessions, so gather_context can see the working set and recent turns. */
   sessions: Map<string, Session>;
+  telemetry: Telemetry;
 }
 
 async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string) => Promise<boolean>): Promise<Core> {
@@ -460,6 +462,10 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
   const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
+  // Same local store as the extension, so CLI runs show up on the dashboard (events only; the CLI has its own log file).
+  const telemetry = new Telemetry({ dir: path.join(os.homedir(), '.localpilot', 'telemetry'), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  runner.telemetry = telemetry;
+  providers.telemetry = telemetry;
   const sessions = new Map<string, Session>();
   tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
@@ -469,7 +475,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp = new McpManager(tools, log, VERSION);
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions };
+  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry };
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -538,8 +544,10 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         case 'skill_suggestions': {
           const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined;
           const inst = p.installed as { name: string; repo: string; dir: string } | undefined; const avail = p.available as { name: string; repo: string } | undefined;
+          const pre = (p.preloaded as { name: string; reason: string }[]) ?? [];
           if (inst) {r.note(`Installed skill "${inst.name}" from ${inst.repo} → ${inst.dir}`);}
-          if (sk.length) {r.note(`Matching skills: ${sk.map((s) => s.name).join(', ')}`);}
+          if (pre.length) {r.note(`Using skill${pre.length === 1 ? '' : 's'}: ${pre.map((s) => `${s.name}${s.reason === 'pinned' ? ' (pinned)' : s.reason === 'forced' ? ' (requested)' : ''}`).join(', ')}`);}
+          if (sk.length) {r.note(`Skills that may apply: ${sk.map((s) => s.name).join(', ')}`);}
           if (avail) {r.note(`"${avail.name}" from ${avail.repo} matches this request but is not installed — localpilot skill search ${avail.name} --install`);}
           if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);}
           break;
@@ -816,6 +824,7 @@ async function main(): Promise<void> {
       await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet);
     }
     core.mcp?.dispose();
+    await core.telemetry.flush();
     process.exit(ctl.signal.aborted ? 130 : 0);
   }
 
@@ -860,7 +869,7 @@ async function main(): Promise<void> {
       process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — run \`localpilot --isolate\` again or apply it with git\n`));
     }
     process.stdout.write(dim('bye\n'));
-    process.exit(0);
+    void core.telemetry.flush().finally(() => process.exit(0));
   });
 
   const slash = async (line: string): Promise<boolean> => {

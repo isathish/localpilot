@@ -185,6 +185,16 @@ export interface Skill {
   /** Lazily loaded body. */
   body?: string;
   source: 'workspace' | 'user' | 'builtin';
+  /** Listed in `localpilot.skills.disabled`: kept on disk, hidden from the agent. */
+  disabled?: boolean;
+}
+
+/** How a chat uses skills; `mode` undefined inherits `localpilot.skills.autoInstall`. */
+export interface SessionSkills {
+  /** Registry behaviour for this chat (auto: install matches · ask: offer them · off: never). `off` here also silences suggestions for installed skills; pins and /skill still work. */
+  mode?: 'auto' | 'ask' | 'off';
+  /** Skills loaded into every request of this chat regardless of matching. */
+  pinned?: string[];
 }
 
 export interface SubagentDefinition {
@@ -225,6 +235,8 @@ export interface SessionSummary {
   isolated?: boolean;
   /** Sessions started together on the same prompt (Best of N): compared and one result applied. */
   group?: { id: string; kind: 'bestOf' | 'batch'; prompt: string; size: number };
+  /** Per-chat skill behaviour overriding the global setting (see SessionSkills). */
+  skills?: SessionSkills;
 }
 
 export interface Session extends SessionSummary {

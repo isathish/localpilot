@@ -185,6 +185,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .body .understood { margin: .3em 0 .7em; padding: 6px 10px; border-left: 2px solid var(--brand); background: var(--tint); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--fg-2); font-size: var(--fs-sm); line-height: 1.5; }
 .body .understood .k { display: block; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--brand); margin-bottom: 1px; }
 .body > :first-child { margin-top: 0; } .body > :last-child { margin-bottom: 0; }
+/* Streaming body: settled blocks + the open tail; they must read as one flow of text. */
+.body > .settled > :first-child { margin-top: 0; } .body > .tail > :last-child { margin-bottom: 0; } .body > .tail:empty { display: none; }
 .body p { margin: .5em 0; } .body ul, .body ol { margin: .4em 0; padding-left: 1.5em; } .body li { margin: .15em 0; }
 .body h1, .body h2, .body h3, .body h4 { margin: .9em 0 .4em; line-height: 1.3; font-weight: 600; }
 .body h1 { font-size: 1.25em; } .body h2 { font-size: 1.15em; } .body h3 { font-size: 1.05em; } .body h4 { font-size: 1em; }
@@ -459,6 +461,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .pick.model { flex: 0 1 auto; max-width: 220px; color: var(--muted); }
 .pick.model.warn { color: var(--warn); }
 .pick.model .ico { display: none; }
+.pick.skills { flex: 0 1 auto; max-width: 160px; color: var(--muted); }
+.pick.skills.on { color: var(--fg); } .pick.skills.on .ico { color: var(--brand, #f2a33a); }
+.pick.skills.off .ico { opacity: .5; }
+.note.skills .chip.on { border-color: color-mix(in srgb, var(--ok, #73c991) 50%, transparent); color: var(--fg); cursor: default; }
+.note.skills .chip.on small { color: var(--muted); font-size: .9em; margin-left: 2px; }
 .ctx { display: inline-flex; align-items: center; gap: 5px; height: 26px; font-size: var(--fs-xs); color: var(--muted); padding: 0 6px; flex: none; font-variant-numeric: tabular-nums; border-radius: var(--radius-sm); }
 .ctx:hover { background: var(--tint); }
 .ctx .ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--ring-color, var(--brand)) calc(var(--pct, 0) * 1%), var(--tint-2) 0); position: relative; flex: none; }
@@ -549,6 +556,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 @container (max-width: 420px) {
   .ctx .txt { display: none; }
   .pick.model { max-width: 150px; }
+  .pick.skills .lbl { display: none; }
 }
 @container (max-width: 340px) {
   .pick.mode .lbl { display: none; }

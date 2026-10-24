@@ -10,6 +10,7 @@ export class SessionStore implements vscode.Disposable {
   private sessions = new Map<string, Session>();
   private readonly dir: vscode.Uri;
   private saveTimers = new Map<string, NodeJS.Timeout>();
+  private changeTimer?: NodeJS.Timeout;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
@@ -68,7 +69,7 @@ export class SessionStore implements vscode.Disposable {
       attachments: [],
     };
     this.sessions.set(s.id, s);
-    this.save(s);
+    this.save(s, true);
     return s;
   }
 
@@ -82,7 +83,7 @@ export class SessionStore implements vscode.Disposable {
     s.title = `${src.title} (fork)`;
     s.messages = structuredClone(uptoIndex === undefined ? src.messages : src.messages.slice(0, uptoIndex + 1));
     s.attachments = [...src.attachments];
-    this.save(s);
+    this.save(s, true);
     return s;
   }
 
@@ -90,7 +91,7 @@ export class SessionStore implements vscode.Disposable {
     const s = this.sessions.get(id);
     if (s) {
       s.title = title.slice(0, 120);
-      this.save(s);
+      this.save(s, true);
     }
   }
 
@@ -98,7 +99,7 @@ export class SessionStore implements vscode.Disposable {
     const s = this.sessions.get(id);
     if (s) {
       s.pinned = !s.pinned;
-      this.save(s);
+      this.save(s, true);
     }
   }
 
@@ -165,8 +166,8 @@ export class SessionStore implements vscode.Disposable {
     return { count: this.sessions.size, bytes, messages, oldest };
   }
 
-  /** Debounced write so streaming turns do not hammer the disk. */
-  save(s: Session): void {
+  /** Debounced write so streaming turns do not hammer the disk. `immediate` notifies listeners right away (new / renamed / pinned chat). */
+  save(s: Session, immediate = false): void {
     s.updatedAt = Date.now();
     s.messageCount = s.messages.length;
     if (s.title === 'New chat') {
@@ -180,7 +181,20 @@ export class SessionStore implements vscode.Disposable {
       s.id,
       setTimeout(() => void this.flush(s), 400)
     );
-    this._onDidChange.fire();
+    // Listeners rebuild session lists / tree views; while agents stream, save() runs after every tool result,
+    // so coalesce the notification to a few times per second.
+    if (immediate) {
+      clearTimeout(this.changeTimer);
+      this.changeTimer = undefined;
+      this._onDidChange.fire();
+      return;
+    }
+    if (!this.changeTimer) {
+      this.changeTimer = setTimeout(() => {
+        this.changeTimer = undefined;
+        this._onDidChange.fire();
+      }, 250);
+    }
   }
 
   async flush(s: Session): Promise<void> {
@@ -215,6 +229,7 @@ export class SessionStore implements vscode.Disposable {
     for (const [, t] of this.saveTimers) {
       clearTimeout(t);
     }
+    clearTimeout(this.changeTimer);
     this._onDidChange.dispose();
   }
 }

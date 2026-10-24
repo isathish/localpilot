@@ -64,8 +64,9 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.skillsPaths` | `[]` | Additional skill folders (each skill is a folder with a `SKILL.md`); `.localpilot/skills`, `.claude/skills`, `.github/skills` and `~/.agents/skills` are scanned automatically |
 | `localpilot.skills.builtin` | `true` | Load the 14 skills bundled with LocalPilot; a workspace or user skill with the same name overrides a bundled one |
 | `localpilot.skills.repositories` | `["anthropics/skills/skills", "obra/superpowers/skills", "github/awesome-copilot/skills"]` | Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, github.com URLs) whose skills can be installed when a request matches one. The first repository wins on duplicate names; the index is cached in `~/.localpilot/skill-catalog.json` for a day. `GITHUB_TOKEN` is used when set |
-| `localpilot.skills.autoInstall` | `auto` | What happens when a catalog skill matches a request better than any installed one: `auto` installs and loads it as the request starts, `ask` shows an **Install "…"** chip, `off` never consults the catalog |
+| `localpilot.skills.autoInstall` | `auto` | What happens when a registry skill matches a request better than any installed one: `auto` installs and loads it as the request starts, `ask` shows an **Install "…"** chip, `off` never consults the registry. Installed skills are matched and preloaded in every mode; each chat can override this with its **Skills** button, where **Off** also silences suggestions for that chat |
 | `localpilot.skills.autoInstallScope` | `user` | Where automatically installed skills go: `user` (`~/.localpilot/skills`) or `workspace` (`.localpilot/skills`) |
+| `localpilot.skills.disabled` | `[]` | Skill names hidden from the agent (not in the prompt, not suggested, not loadable) while they stay on disk — toggled from Settings → Skills & subagents |
 
 See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
@@ -89,6 +90,8 @@ Values: `always`, `ask`, `never`.
 | `localpilot.worktrees.location` | `~/.localpilot/worktrees` | Where the worktrees live (one sub-folder per repository) |
 | `localpilot.parallel.maxSubagentDepth` | `2` | Nesting limit |
 | `localpilot.autoClarify` | `true` | Detect vague requests and hand the agent a workspace snapshot (editor, open files, errors, git) so it states its interpretation before acting |
+| `localpilot.telemetry.enabled` | `true` | Record local usage metrics for the [Dashboard](/docs/dashboard/) — model calls, tokens, latency, tools, runs, completions, provider health. Stays on this machine; nothing is sent anywhere |
+| `localpilot.telemetry.retentionDays` | `30` | Days of metrics and log files to keep; `0` keeps everything |
 
 ## Chat history & memory
 

@@ -80,9 +80,12 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
             break;
           }
           case 'skill_suggestions': {
-            const p = e.payload as { skills?: { name: string }[]; create?: { slug: string; count: number } };
+            const p = e.payload as { skills?: { name: string }[]; preloaded?: { name: string }[]; create?: { slug: string; count: number } };
+            if (p.preloaded?.length) {
+              stream.progress(`Using skill${p.preloaded.length === 1 ? '' : 's'}: ${p.preloaded.map((s) => s.name).join(', ')}`);
+            }
             if (p.skills?.length) {
-              stream.progress(`Matching skills: ${p.skills.map((s) => s.name).join(', ')}`);
+              stream.progress(`Skills that may apply: ${p.skills.map((s) => s.name).join(', ')}`);
             }
             if (p.create) {
               stream.button({ command: 'localpilot.createSkill', arguments: [p.create], title: `Create "${p.create.slug}" skill (${p.create.count}× requested)` });

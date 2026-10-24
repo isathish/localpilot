@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Telemetry } from '../telemetry/telemetry';
 import { AgentRunner } from '../agent/agentLoop';
 import { SkillLearner } from '../agent/skillRecommender';
 import { SkillCatalog } from '../agent/skillCatalog';
@@ -22,11 +23,11 @@ import { findRipgrep, runProcess } from '../tools/search';
 import * as path from 'path';
 
 export type ToWebview =
-  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; running: string[]; paused: string[]; platform: NodeJS.Platform }
+  | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; skillsMode: 'auto' | 'ask' | 'off'; running: string[]; paused: string[]; platform: NodeJS.Platform }
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
   | { type: 'session'; session: Session }
   | { type: 'models'; models: ModelInfo[]; defaultModel: string }
-  | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[] }
+  | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; skillsMode: 'auto' | 'ask' | 'off' }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
   | { type: 'approvalResolved'; id: string }
@@ -87,6 +88,7 @@ export type FromWebview =
   | { type: 'approval'; id: string; approved: boolean; remember?: boolean }
   | { type: 'setModel'; sessionId: string; model: string; makeDefault?: boolean }
   | { type: 'setMode'; sessionId: string; mode: Session['mode'] }
+  | { type: 'setSkills'; sessionId: string; mode?: string | null; pinned?: string[] }
   | { type: 'refreshModels' }
   | { type: 'openFile'; path: string; line?: number }
   | { type: 'insertCode'; code: string }
@@ -148,6 +150,8 @@ export class ChatController implements vscode.Disposable {
   markdownViewer?: { showText(text: string, title?: string): Promise<void> };
   /** Resolves once sessions and skills are loaded; `sendInit` waits for it so an early webview never sees an empty store. */
   loaded: Promise<unknown> = Promise.resolve();
+  /** Local-only worktree metrics for the dashboard. */
+  telemetry?: Pick<Telemetry, 'record'>;
 
   constructor(
     readonly store: SessionStore,
@@ -163,7 +167,7 @@ export class ChatController implements vscode.Disposable {
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       providers.onDidChange(() => void this.pushModels()),
       // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
-      skills.onDidChange(() => this.broadcast({ type: 'skills', skills: skills.allSkills.map((s) => ({ name: s.name, description: s.description })), agents: skills.allAgents.map((a) => ({ name: a.name, description: a.description })) })),
+      skills.onDidChange(() => this.broadcast({ type: 'skills', skills: skills.enabledSkills.map((s) => ({ name: s.name, description: s.description })), agents: skills.allAgents.map((a) => ({ name: a.name, description: a.description })), skillsMode: getConfig().skillAutoInstall })),
       tracker.onDidChange(() => {
         for (const id of new Set([...this.store.list().map((s) => s.id)])) {
           if (this.tracker.forSession(id).length || id === this.activeSessionId) {
@@ -265,8 +269,33 @@ export class ChatController implements vscode.Disposable {
   }
 
   private pushChanges(sessionId: string): void {
-    void this.pushChangesAsync(sessionId);
+    // Coalesced: tool results can land many times a second (parallel reads, several workers), and each push shells
+    // out to git for worktree sessions. One computation in flight per session; a request that arrives meanwhile
+    // runs once more afterwards so the result is never stale.
+    const st = this.pushState.get(sessionId) ?? { pending: false, running: false };
+    this.pushState.set(sessionId, st);
+    if (st.running) {
+      st.pending = true;
+      return;
+    }
+    if (st.timer) {
+      return;
+    }
+    st.timer = setTimeout(() => {
+      st.timer = undefined;
+      st.running = true;
+      void this.pushChangesAsync(sessionId)
+        .catch((e) => this.log.warn(`changes for ${sessionId}: ${String(e)}`))
+        .finally(() => {
+          st.running = false;
+          if (st.pending) {
+            st.pending = false;
+            this.pushChanges(sessionId);
+          }
+        });
+    }, 150);
   }
+  private readonly pushState = new Map<string, { pending: boolean; running: boolean; timer?: ReturnType<typeof setTimeout> }>();
 
   /** Last known conflicts from applying a worktree, shown until the next apply. */
   private readonly applyConflicts = new Map<string, string[]>();
@@ -314,9 +343,11 @@ export class ChatController implements vscode.Disposable {
       return;
     }
     try {
+      const started = Date.now();
       session.worktree = await this.worktrees.create(repo, session.id, { progress: status });
       session.isolated = true;
       this.store.save(session);
+      this.telemetry?.record({ type: 'worktree', action: 'create', durationMs: Date.now() - started });
     } catch (e) {
       this.log.warn(`worktree for ${session.id} could not be created, editing the workspace directly: ${String(e)}`);
       this.broadcast({ type: 'toast', level: 'error', text: `Could not create an isolated worktree (${e instanceof Error ? e.message : String(e)}); this chat edits the workspace directly.` });
@@ -334,6 +365,7 @@ export class ChatController implements vscode.Disposable {
     try {
       const res = await this.worktrees.apply(wt, (fsPath) => this.tracker.beforeChange(fsPath, sessionId));
       this.applyConflicts.set(sessionId, res.conflicts);
+      this.telemetry?.record({ type: 'worktree', action: 'apply', files: res.files.length, conflicts: res.conflicts.length });
       // Further work in the worktree is measured from here, so applying again never re-applies these changes.
       await this.worktrees.rebase(wt);
       this.store.save(session);
@@ -371,6 +403,7 @@ export class ChatController implements vscode.Disposable {
       this.stop(sessionId);
     }
     await this.worktrees.remove(session.worktree);
+    this.telemetry?.record({ type: 'worktree', action: 'discard' });
     session.worktree = undefined;
     this.applyConflicts.delete(sessionId);
     this.store.save(session);
@@ -681,6 +714,19 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       }
+      case 'setSkills': {
+        const s = this.store.get(msg.sessionId);
+        if (!s) {
+          return;
+        }
+        const mode = msg.mode === 'auto' || msg.mode === 'ask' || msg.mode === 'off' ? msg.mode : undefined;
+        const known = new Set(this.skills.enabledSkills.map((k) => k.name));
+        const pinned = (Array.isArray(msg.pinned) ? msg.pinned : s.skills?.pinned ?? []).filter((n): n is string => typeof n === 'string' && known.has(n));
+        s.skills = mode || pinned.length ? { ...(mode ? { mode } : {}), ...(pinned.length ? { pinned } : {}) } : undefined;
+        this.store.save(s);
+        this.broadcast({ type: 'session', session: s });
+        return;
+      }
       case 'refreshModels':
         await this.providers.listModels(true);
         return this.pushModels();
@@ -918,8 +964,9 @@ export class ChatController implements vscode.Disposable {
       activeSessionId: this.activeSessionId,
       models,
       defaultModel: getConfig().defaultModel,
-      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description })),
+      skills: this.skills.enabledSkills.map((s) => ({ name: s.name, description: s.description })),
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description })),
+      skillsMode: getConfig().skillAutoInstall,
       running: [...this.runs.keys()],
       paused: this.pausedSessionIds,
       platform: process.platform,
@@ -1063,7 +1110,8 @@ export class ChatController implements vscode.Disposable {
             this.runStatus.set(sessionId, `Running ${p.name}`);
             this._onDidChangeRuns.fire();
           }
-          if (e.type === 'turn_end' || e.type === 'tool_end') {
+          if (e.type === 'turn_end' || (e.type === 'tool_end' && !(e.payload as { childId?: string } | undefined)?.childId)) {
+            // Persist after the agent's own tool results; a subagent's steps are saved with its parent's next result.
             this.store.save(session);
             if (session.worktree) {
               this.pushChanges(sessionId);
@@ -1350,13 +1398,19 @@ export class ChatController implements vscode.Disposable {
             '- `/compact` — summarise older messages to free context',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents',
-            '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill catalog',
+            '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill registry',
+            '- `/skill mode auto|ask|off` — how this chat uses skills · `/skill pin <name>` / `unpin` — load a skill into every request of this chat',
             '- `/agent <name> <task>` — delegate directly to a subagent',
             '- `/context` — show context usage',
           ].join('\n')
         );
-      case 'skills':
-        return say(this.skills.allSkills.map((s) => `- **${s.name}** (${s.source}): ${s.description}`).join('\n') || 'No skills found. Add folders with SKILL.md under `.localpilot/skills/`.');
+      case 'skills': {
+        const all = this.skills.allSkills;
+        const ss = session.skills ?? {};
+        const mode = ss.mode ?? getConfig().skillAutoInstall;
+        const header = `Skills in this chat: **${mode}**${ss.mode ? ' (chat override)' : ' (global setting)'}${ss.pinned?.length ? ` · pinned: ${ss.pinned.map((p) => `\`${p}\``).join(', ')}` : ''}. Change with \`/skill mode auto|ask|off\`, \`/skill pin <name>\`, \`/skill unpin <name>\`.`;
+        return say(`${header}\n\n${all.map((s) => `- **${s.name}** (${s.source}${s.disabled ? ', disabled' : ''}): ${s.description}`).join('\n') || 'No skills found. Add folders with SKILL.md under `.localpilot/skills/`, or open Settings → Skills to install from the registry.'}`);
+      }
       case 'agents':
         return say(this.skills.allAgents.map((a) => `- **${a.name}** (${a.source}): ${a.description}`).join('\n'));
       case 'context':
@@ -1393,12 +1447,40 @@ export class ChatController implements vscode.Disposable {
           void vscode.commands.executeCommand('localpilot.browseSkills', task.join(' '));
           return say('Opening the skill catalog…');
         }
-        const skill = this.skills.getSkill(name);
-        if (!skill) {
-          const hint = /[/:.]/.test(name) ? ` To install a skill from GitHub or a URL use \`/skill install ${name}\`.` : '';
-          return say(`Unknown skill "${name}". Try /skills.${hint}`);
+        if (name === 'mode') {
+          const m = task[0];
+          if (m === 'auto' || m === 'ask' || m === 'off') {
+            session.skills = { ...session.skills, mode: m };
+          } else if (m === 'inherit' || m === 'default' || m === 'global') {
+            session.skills = { ...session.skills, mode: undefined };
+          } else {
+            return say('Usage: `/skill mode auto|ask|off|inherit` — registry skills in this chat: install matches as the request starts, offer them as a chip, or `off` (no registry lookups and no skill suggestions; pinned skills and /skill still work).');
+          }
+          this.store.save(session);
+          this.broadcast({ type: 'session', session });
+          return say(`Skills in this chat: **${session.skills.mode ?? `${getConfig().skillAutoInstall} (global)`}**.`);
         }
-        void this.send(session.id, `Use the "${name}" skill for this task: ${task.join(' ') || 'follow the skill instructions.'}\nFirst call load_skill("${name}"), then perform every step the skill describes using the tools, then report what you did.`);
+        if (name === 'pin' || name === 'unpin') {
+          const target = this.skills.resolveSkill(task[0] ?? '')?.skill;
+          if (!target) {
+            return say(`Unknown skill "${task[0] ?? ''}". Try /skills.`);
+          }
+          const pinned = new Set(session.skills?.pinned ?? []);
+          name === 'pin' ? pinned.add(target.name) : pinned.delete(target.name);
+          session.skills = { ...session.skills, pinned: [...pinned] };
+          this.store.save(session);
+          this.broadcast({ type: 'session', session });
+          return say(name === 'pin' ? `Pinned **${target.name}**: its instructions are loaded into every request of this chat.` : `Unpinned **${target.name}**.`);
+        }
+        const resolved = this.skills.resolveSkill(name);
+        if (!resolved) {
+          const hint = /[/:.]/.test(name) ? ` To install a skill from GitHub or a URL use \`/skill install ${name}\`.` : '';
+          const similar = this.skills.similarSkillNames(name);
+          const disabled = this.skills.getSkill(name)?.disabled ? ` "${name}" is disabled — enable it in Settings → Skills.` : '';
+          return say(`Unknown skill "${name}".${disabled}${similar.length ? ` Did you mean ${similar.map((s) => `\`${s}\``).join(', ')}?` : ''} Try /skills.${hint}`);
+        }
+        const skill = resolved.skill;
+        void this.send(session.id, `Use the "${skill.name}" skill for this task: ${task.join(' ') || 'follow the skill instructions.'}\nIts instructions are loaded for you; perform every step the skill describes using the tools, then report what you did.`);
         return '';
       }
       case 'agent': {

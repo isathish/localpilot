@@ -121,7 +121,11 @@ Answer the user's question directly. You may read files and search the workspace
   const skillsIdx = o.skills.skillsIndex();
   if (skillsIdx) {
     parts.push(`# Available skills
-Skills are expert playbooks. When a task matches a skill's description, call load_skill with its name FIRST and follow the instructions it returns.
+Skills are installed playbooks with project- or domain-specific steps you cannot know otherwise. Rules:
+- Use a skill only when the task matches its description. Call load_skill("<name>") FIRST — before other tools — then follow the returned steps with the tools.
+- Only the names below exist. Never invent, guess or abbreviate a skill name; if nothing fits, work with the ordinary tools and say so.
+- A skill whose instructions already appear in this conversation (a <skill> block or an earlier load_skill result) is loaded — do not load it again, just follow it.
+- Never claim to have followed a skill you did not load. Never describe a skill's content from its one-line description.
 ${skillsIdx}`);
   }
 

@@ -34,10 +34,13 @@
     gallery: '<svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><path d="M11.5 9.5v5M9 12h5"/></svg>',
     external: '<svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>',
     cloud: '<svg viewBox="0 0 16 16"><path d="M5 12.5a3 3 0 0 1-.4-6A4 4 0 0 1 12.3 7.6 2.5 2.5 0 0 1 12 12.5z"/></svg>',
+    gauge: '<svg viewBox="0 0 16 16"><path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-4"/><path d="M2 13.5h12"/></svg>',
+    file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3M6 8h4M6 10.5h4"/></svg>',
+    folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
   };
   const SECTIONS = [
-    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['advanced', 'Advanced', I.wrench],
+    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
+    ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['advanced', 'Advanced', I.wrench],
   ];
   const PRESET_PROVIDERS = [
     { key: 'ollama', label: 'Ollama', sub: 'localhost:11434', cfg: { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' } },
@@ -120,7 +123,11 @@
   const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null,
     // Model gallery: one browse state per registry source (Ollama library, Docker Hub ai/, Hugging Face GGUF) and
     // the chosen install runtime per source; tag lists are fetched on expand.
-    gallery: { source: 'ollama', target: {}, pullRef: '', pullError: '', pullTarget: '', by: {} } };
+    gallery: { source: 'ollama', target: {}, pullRef: '', pullError: '', pullTarget: '', by: {} },
+    // Dashboard: last summary + range, and the log viewer filters (follow streams new lines in).
+    dash: { days: 7, summary: null, logFile: '', loading: false, logs: [], level: 'info', q: '', follow: true, timer: null },
+    // Skill registry browser (Settings → Skills): query, results with installed state, per-repo index status, install jobs.
+    skillReg: { q: '', filter: 'all', scope: '', entries: [], status: [], loading: false, loaded: false, refreshing: false, jobs: {} }, skillFilter: '' };
   const galleryState = (source) => (state.gallery.by[source] ||= { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {} });
 
   // ------------------------------------------------------------------ helpers
@@ -259,8 +266,9 @@
     app.querySelectorAll('.side [data-sec]').forEach((a) => a.classList.toggle('on', a.dataset.sec === state.section));
   }
   function renderSection() {
+    if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, dashboard: secDashboard, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -956,7 +964,7 @@
   function fmtAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'just now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)} min ago`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)} h ago`; } return `${Math.floor(d / 86400e3)} d ago`; }
   function secMemory(sec) {
     const d = state.data;
-    head(sec, 'Memory & history', 'What LocalPilot keeps on this machine: chat history for this workspace, durable notes the agent writes, and the skills and subagents it can load.');
+    head(sec, 'Memory & history', 'What LocalPilot keeps on this machine: chat history for this workspace and durable notes the agent writes.');
     // ---- chat history (per-workspace storage) with retention
     const ss = d.sessions && typeof d.sessions === 'object' ? d.sessions : { count: Number(d.sessions) || 0, bytes: 0, messages: 0, running: 0, pinned: 0 };
     sec.appendChild(el('h2', 'sub', 'Chat history'));
@@ -989,40 +997,74 @@
     } else {
       sec.appendChild(el('p', 'empty', 'No notes yet. The agent saves notes with <code>memory_save</code> when it learns something worth keeping (conventions, decisions, gotchas).'));
     }
-    sec.appendChild(el('h2', 'sub', 'Skill folders'));
-    const paths = Array.isArray(val('skillsPaths')) ? val('skillsPaths') : [];
-    const sp = el('div', 'card');
-    sp.appendChild(field('skills.builtin', 'Built-in skills', 'Playbooks that ship with LocalPilot for the whole development loop: <code>requirements</code>, <code>design</code>, <code>new-project</code>, <code>implement</code>, <code>test</code>, <code>debug</code>, <code>review</code>, <code>refactor</code>, <code>ui-design</code>, <code>claude-ui-ux</code>, <code>docs</code>, <code>deploy</code>, <code>ship</code>, <code>explore-codebase</code>. A workspace or user skill with the same name overrides the bundled one.', 'toggle'));
-    const f = el('div', 'field wide');
-    f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
-    const ctl = el('div', 'ctl');
-    const ul = el('ul', 'list');
-    paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skillsPaths', paths.filter((_, j) => j !== i)); ul.appendChild(li); });
-    const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills"><button class="btn sm">${I.plus}Add</button>`);
-    addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
-    ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
-    sec.appendChild(el('h2', 'sub', 'Skill catalog'));
-    const cat = el('div', 'card');
-    cat.appendChild(field('skills.autoInstall', 'Install matching skills', 'When a request matches a skill from the repositories below better than anything installed — planning, design docs, debugging, writing Markdown, PDFs… — install it as the request starts, offer it as a chip, or never look.', 'seg', { options: [['auto', 'Automatically'], ['ask', 'Ask'], ['off', 'Off']] }));
-    cat.appendChild(field('skills.autoInstallScope', 'Install into', 'Automatically installed skills go to your home folder (every workspace) or the current project.', 'seg', { options: [['user', '~/.localpilot/skills'], ['workspace', '.localpilot/skills']] }));
-    const repos = Array.isArray(val('skills.repositories')) ? val('skills.repositories') : [];
-    const rf = el('div', 'field wide');
-    rf.innerHTML = `<div><div class="lbl">Skill repositories${scopeBadge('skills.repositories')}${resetBtn('skills.repositories')}</div><div class="desc">GitHub repositories or folders in the <a href="https://agentskills.io">Agent Skills</a> format (<code>owner/repo/path</code>). The first one wins when several offer the same skill name. Browse and install from them with the button below.</div></div>`;
-    const rctl = el('div', 'ctl');
-    const rul = el('ul', 'list');
-    repos.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skills.repositories', repos.filter((_, j) => j !== i)); rul.appendChild(li); });
-    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills"><button class="btn sm">${I.plus}Add</button>`);
-    raddRow.querySelector('button').onclick = () => { const v = raddRow.querySelector('input').value.trim(); if (v) { set('skills.repositories', [...repos, v]); } };
-    rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl); cat.appendChild(rf); sec.appendChild(cat);
-    const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user' };
-    const tableFor = (title, rows, empty, usage) => {
-      const h = el('h2', 'sub', `${title} (${rows.length})`);
-      sec.appendChild(h);
-      if (!rows.length) { sec.appendChild(el('div', 'empty', empty)); return; }
-      const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th>${usage ? '<th title="Times the agent loaded this skill">Used</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>${usage ? `<td class="mono muted">${r.used ? `${r.used}×` : '—'}</td>` : ''}</tr>`).join('')}</tbody>`);
-      sec.appendChild(card(t));
-    };
-    tableFor('Skills', d.skills, 'No skills found. Use <b>Browse catalog…</b> or <b>Install skill…</b> below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.', true);
+    sec.appendChild(el('p', 'muted small', `Skills and subagents moved to their own page: <a data-sec="skills">Skills &amp; subagents</a>.`));
+    sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
+  }
+
+  // ------------------------------------------------------------------ skills & subagents
+  const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user' };
+  const SKILL_MODE_DESC = {
+    auto: 'A registry skill that matches a request better than anything installed is installed as the request starts and loaded into it.',
+    ask: 'A matching registry skill is offered as an “Install” chip; nothing is downloaded until you click it.',
+    off: 'The registry is never consulted for a request. Installed skills are still matched and loaded.',
+  };
+  function skillSearch(q) {
+    state.skillReg.q = q; state.skillReg.loading = true;
+    post({ type: 'skillSearch', q });
+  }
+  function secSkills(sec) {
+    const d = state.data;
+    head(sec, 'Skills & subagents', 'Skills are step-by-step playbooks (<code>SKILL.md</code>) the agent loads when a request matches — project conventions, release procedures, document formats, cloud workflows. Install them from the registry below, write your own, and decide per chat how eagerly they are used.');
+    const mode = val('skills.autoInstall') || 'auto';
+
+    // ---- how skills are used
+    sec.appendChild(el('h2', 'sub', 'How skills are used'));
+    sec.appendChild(card(
+      field('skills.autoInstall', 'Registry skills', `${esc(SKILL_MODE_DESC[mode] || '')} Each chat can override this with the <b>Skills</b> button under its composer — there, <b>Off</b> also silences skill suggestions for that chat — and pin skills to every request.`, 'seg', { options: [['auto', 'Auto'], ['ask', 'Ask'], ['off', 'Off']] }),
+      field('skills.autoInstallScope', 'Install into', 'Where skills installed from the registry go: your home folder (every workspace) or the current project (shared with the team through <code>.localpilot/skills</code>).', 'seg', { options: [['user', '~/.localpilot/skills'], ['workspace', '.localpilot/skills']] }),
+      field('skills.builtin', 'Built-in skills', 'Playbooks that ship with LocalPilot: <code>requirements</code>, <code>design</code>, <code>new-project</code>, <code>implement</code>, <code>test</code>, <code>debug</code>, <code>review</code>, <code>refactor</code>, <code>ui-design</code>, <code>docs</code>, <code>deploy</code>, <code>ship</code>… A workspace or user skill with the same name overrides the bundled one.', 'toggle')
+    ));
+    sec.appendChild(el('p', 'muted small', 'What the model sees: the names and one-line descriptions of enabled skills, a rule to use only those names, and — for strong matches, pinned skills and <code>/skill</code> — the full instructions placed directly in the request, so it never has to guess what a skill says.'));
+
+    // ---- installed
+    const skills = d.skills || [];
+    const enabledCount = skills.filter((s) => !s.disabled).length;
+    sec.appendChild(el('h2', 'sub', `Installed skills<span class="count">${enabledCount} enabled · ${skills.length} total</span>`));
+    const inst = el('div', 'card');
+    if (!skills.length) {
+      inst.appendChild(el('div', 'empty', 'No skills installed. Search the registry below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.'));
+    }
+    const q = (state.skillFilter || '').toLowerCase();
+    if (skills.length > 8) {
+      const f = el('div', 'gal-search sk-filter', I.search);
+      const i = el('input'); i.type = 'search'; i.placeholder = 'Filter installed skills…'; i.value = state.skillFilter || ''; i.id = 'sk-filter';
+      i.oninput = debounce(() => { state.skillFilter = i.value; render(); }, 200);
+      if (document.activeElement && document.activeElement.id === 'sk-filter') { requestAnimationFrame(() => { const n = app.querySelector('#sk-filter'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }
+      f.appendChild(i); inst.appendChild(f);
+    }
+    const sorted = [...skills].sort((a, b) => (a.disabled ? 1 : 0) - (b.disabled ? 1 : 0) || (b.used || 0) - (a.used || 0) || a.name.localeCompare(b.name));
+    for (const s of sorted) {
+      if (q && !`${s.name} ${s.description}`.toLowerCase().includes(q)) { continue; }
+      const row = el('div', `mrow sk ${s.disabled ? 'off' : ''}`);
+      const tg = el('button', `toggle ${s.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.title = s.disabled ? 'Enable: the agent can see and load this skill' : 'Disable: hidden from the agent, stays on disk';
+      tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleSkill', name: s.name, enabled: !!s.disabled }); };
+      row.appendChild(tg);
+      row.appendChild(el('span', 'ic brand-mark sk-ic', I.book));
+      row.appendChild(el('div', 't', `<b title="${esc(s.dir || '')}">${esc(s.name)}</b><span>${esc(s.description || '')}</span>`));
+      const right = el('div', 'mrow-right');
+      const tags = el('div', 'tags');
+      tags.innerHTML = `<span class="badge">${esc(SOURCE_LABEL[s.source] || s.source)}</span>${s.used ? `<span class="badge" title="Times the agent loaded this skill">used ${s.used}×</span>` : ''}${s.disabled ? '<span class="badge warn">disabled</span>' : ''}`;
+      right.appendChild(tags);
+      const acts = el('div', 'acts');
+      const open = el('button', 'btn ghost sm', I.external); open.title = 'Open SKILL.md'; open.onclick = () => post({ type: 'openSkill', name: s.name }); acts.appendChild(open);
+      if (s.removable) {
+        const del = el('button', 'btn ghost sm danger', I.trash); del.title = 'Delete this skill from disk'; del.onclick = () => post({ type: 'removeSkill', name: s.name }); acts.appendChild(del);
+      }
+      right.appendChild(acts);
+      row.appendChild(right);
+      inst.appendChild(row);
+    }
+    sec.appendChild(inst);
     const recurring = (d.learning && d.learning.recurring) || [];
     if (recurring.length) {
       sec.appendChild(el('h2', 'sub', `Suggested skills (${recurring.length})`));
@@ -1035,12 +1077,126 @@
       }
       box.appendChild(ul); sec.appendChild(box);
     }
-    tableFor('Subagents', d.agents, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.');
+
+    // ---- registry
+    sec.appendChild(el('h2', 'sub', 'Skill registry'));
+    const reg = state.skillReg;
+    const tools = el('div', 'gal-tools');
+    const search = el('div', 'gal-search', I.search);
+    const sq = el('input'); sq.type = 'search'; sq.id = 'sk-q'; sq.placeholder = 'Search the registry — e.g. pdf, release, azure, design doc, debugging…'; sq.value = reg.q; sq.setAttribute('aria-label', 'Search skills');
+    if (document.activeElement && document.activeElement.id === 'sk-q') { requestAnimationFrame(() => { const n = app.querySelector('#sk-q'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }
+    sq.oninput = debounce(() => { if (sq.value.trim() === reg.q) { return; } skillSearch(sq.value.trim()); renderSkillRegistry(); }, 300);
+    sq.onkeydown = (e) => { if (e.key === 'Enter') { skillSearch(sq.value.trim()); renderSkillRegistry(); } };
+    search.appendChild(sq); tools.appendChild(search);
+    const chips = el('div', 'chips');
+    for (const [k, l] of [['all', 'All'], ['new', 'Not installed'], ['installed', 'Installed']]) { const b = el('button', `chip ${reg.filter === k ? 'on' : ''}`, l); b.onclick = () => { reg.filter = k; renderSkillRegistry(); }; chips.appendChild(b); }
+    const scopeSel = el('select'); scopeSel.setAttribute('aria-label', 'Install into');
+    for (const [k, l] of [['user', 'Install to ~/.localpilot/skills'], ['workspace', 'Install to .localpilot/skills']]) { const o = el('option'); o.value = k; o.textContent = l; o.selected = (reg.scope || val('skills.autoInstallScope') || 'user') === k; scopeSel.appendChild(o); }
+    scopeSel.onchange = () => { reg.scope = scopeSel.value; };
+    chips.appendChild(scopeSel);
+    tools.appendChild(chips);
+    sec.appendChild(tools);
+    const results = el('div', 'gal-results'); results.id = 'sk-results';
+    sec.appendChild(results);
+    if (!reg.loaded) { reg.loaded = true; skillSearch(reg.q); }
+    renderSkillRegistry(results);
+
+    // ---- repositories
+    const repos = Array.isArray(val('skills.repositories')) ? val('skills.repositories') : [];
+    const rcard = el('div', 'card');
+    const rf = el('div', 'field wide');
+    rf.innerHTML = `<div><div class="lbl">Repositories${scopeBadge('skills.repositories')}${resetBtn('skills.repositories')}</div><div class="desc">GitHub repositories or folders in the <a href="https://agentskills.io">Agent Skills</a> format (<code>owner/repo/path[@ref]</code>). The registry above is their combined index, cached for a day; the first repository wins when several offer the same skill name. Set <code>GITHUB_TOKEN</code> for private repositories or higher rate limits.</div></div>`;
+    const rctl = el('div', 'ctl');
+    const rul = el('ul', 'list');
+    const status = new Map((reg.status || []).map((s) => [s.repo, s]));
+    repos.forEach((p, i) => {
+      const li = el('li', '', `<code>${esc(p)}</code><span class="muted small sk-st" data-repo="${esc(p)}"> · ${repoStatusText(status.get(p))}</span><span class="spacer"></span><button class="reset x" title="Remove">${I.x}</button>`);
+      li.querySelector('button').onclick = () => set('skills.repositories', repos.filter((_, j) => j !== i));
+      rul.appendChild(li);
+    });
+    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills"><button class="btn sm">${I.plus}Add</button>`);
+    raddRow.querySelector('button').onclick = () => { const v = raddRow.querySelector('input').value.trim(); if (v) { set('skills.repositories', [...repos, v]); } };
+    rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl); rcard.appendChild(rf);
+    const rbar = el('div', 'btnrow');
+    rbar.innerHTML = `<span class="muted small">Index cached in <code>~/.localpilot/skill-catalog.json</code>.</span><span class="spacer"></span><button class="btn sm" id="sk-refresh" ${state.busy ? 'disabled' : ''}>${state.busy ? '<span class="spinner"></span>' : I.refresh}Re-index now</button><button class="btn sm" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install from URL or folder…</button>`;
+    rbar.querySelector('#sk-refresh').onclick = () => { state.busy = true; render(); post({ type: 'refreshSkillRegistry' }); };
+    rcard.appendChild(rbar);
+    sec.appendChild(rcard);
+
+    // ---- skill folders
+    sec.appendChild(el('h2', 'sub', 'Skill folders'));
+    const paths = Array.isArray(val('skillsPaths')) ? val('skillsPaths') : [];
+    const sp = el('div', 'card');
+    const f = el('div', 'field wide');
+    f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
+    const ctl = el('div', 'ctl');
+    const ul = el('ul', 'list');
+    paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skillsPaths', paths.filter((_, j) => j !== i)); ul.appendChild(li); });
+    const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills"><button class="btn sm">${I.plus}Add</button>`);
+    addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
+    ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
+
+    // ---- subagents
+    const agents = d.agents || [];
+    sec.appendChild(el('h2', 'sub', `Subagents (${agents.length})`));
+    if (!agents.length) {
+      sec.appendChild(el('div', 'empty', 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.'));
+    } else {
+      const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th></tr></thead><tbody>${agents.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td></tr>`).join('')}</tbody>`);
+      sec.appendChild(card(t));
+    }
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
-    bar.innerHTML = `<button class="btn primary" data-cmd="localpilot.browseSkills" title="Search the configured skill repositories and install from them">${I.book}Browse catalog…</button><button class="btn" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install skill…</button><button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
+    bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
     sec.appendChild(bar);
   }
-
+  const repoStatusText = (st) => (st ? (st.error ? `<span class="badge err" title="${esc(st.error)}">error</span> ${esc(st.error)}` : `${st.skills} skill${st.skills === 1 ? '' : 's'}${st.fetched ? ` · indexed ${fmtAgo(st.fetched)}` : ''}`) : 'not indexed yet');
+  /** Refreshes the per-repository index status in place (the list itself is rebuilt only when the setting changes). */
+  function renderSkillRepoStatus() {
+    const status = new Map((state.skillReg.status || []).map((s) => [s.repo, s]));
+    app.querySelectorAll('.sk-st[data-repo]').forEach((n) => { n.innerHTML = ` · ${repoStatusText(status.get(n.dataset.repo))}`; });
+  }
+  /** Rebuilds only the registry result list, so typing in the search box is never interrupted by a response. */
+  function renderSkillRegistry(container) {
+    const box = container || app.querySelector('#sk-results');
+    if (!box) { return; }
+    box.innerHTML = '';
+    const reg = state.skillReg;
+    const scope = reg.scope || val('skills.autoInstallScope') || 'user';
+    if (reg.loading && !reg.entries.length) { box.appendChild(el('div', 'loading short', `<span class="spinner"></span>${reg.refreshing ? 'Indexing the skill repositories for the first time…' : 'Searching the registry…'}`)); return; }
+    let rows = reg.entries;
+    if (reg.filter === 'new') { rows = rows.filter((e) => !e.installed); } else if (reg.filter === 'installed') { rows = rows.filter((e) => e.installed); }
+    if (!rows.length) {
+      const anyErr = (reg.status || []).find((s) => s.error);
+      box.appendChild(el('div', 'empty', reg.entries.length ? 'Nothing matches that filter.' : reg.q ? `No registry skill matches “${esc(reg.q)}”. Try other words, or install one from a URL below.` : anyErr ? `The registry could not be indexed: ${esc(anyErr.error)}` : 'The registry is empty — add a repository below.'));
+      return;
+    }
+    box.appendChild(el('div', 'gal-count', `${rows.length} skill${rows.length === 1 ? '' : 's'}${reg.q ? ` for “${esc(reg.q)}”` : ''}${reg.refreshing ? ' · index refreshing…' : ''}`));
+    const list = el('div', 'card');
+    for (const e of rows.slice(0, 60)) {
+      const row = el('div', `mrow sk ${e.installed ? 'have' : ''}`);
+      row.appendChild(el('span', 'ic brand-mark sk-ic', I.book));
+      row.appendChild(el('div', 't', `<b>${esc(e.name)}</b><span>${esc(e.description || '')}</span>`));
+      const right = el('div', 'mrow-right');
+      const tags = el('div', 'tags', `<span class="badge" title="${esc(e.repo)}/${esc(e.dir || '')}">${esc(e.repo.split('/').slice(0, 2).join('/'))}</span>${e.installed ? `<span class="badge ok">${I.check} installed${e.installedSource ? ` · ${esc(SOURCE_LABEL[e.installedSource] || e.installedSource)}` : ''}</span>` : ''}`);
+      right.appendChild(tags);
+      const acts = el('div', 'acts');
+      const job = reg.jobs[e.name];
+      if (job && job.status === 'running') {
+        acts.appendChild(el('span', 'note', `<span class="spinner"></span> ${esc(job.detail || 'Installing…')}`));
+      } else {
+        const b = el('button', `btn sm ${e.installed ? '' : 'primary'}`, `${I.download}${e.installed ? 'Reinstall' : 'Install'}`);
+        b.title = `Install “${e.name}” from ${e.repo} into ${scope === 'workspace' ? '.localpilot/skills' : '~/.localpilot/skills'}`;
+        b.onclick = () => { reg.jobs[e.name] = { status: 'running', detail: 'Installing…' }; renderSkillRegistry(); post({ type: 'installRegistrySkill', name: e.name, repo: e.repo, scope }); };
+        acts.appendChild(b);
+        if (job && job.status === 'error') { acts.appendChild(el('span', 'note err', esc(job.detail || 'failed'))); }
+      }
+      right.appendChild(acts);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+    if (rows.length > 60) { list.appendChild(el('div', 'cat-more', `${rows.length - 60} more — narrow the search`)); }
+    box.appendChild(list);
+  }
   // ------------------------------------------------------------------ mcp
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers (stdio) whose tools become available to the agent. Governed by the Network approval policy.');
@@ -1106,6 +1262,172 @@
   }
 
   // ------------------------------------------------------------------ advanced
+  // ------------------------------------------------------------------ dashboard (local metrics, telemetry, logs)
+  const DASH_RANGES = [[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'All']];
+  const fmtN = (n) => { n = Number(n) || 0; return n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n); };
+  const fmtMs = (ms) => { ms = Number(ms) || 0; return ms >= 60e3 ? `${(ms / 60e3).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10e3 ? 0 : 1)} s` : `${Math.round(ms)} ms`; };
+  const pct = (p) => `${Math.round(Number(p) || 0)}%`;
+  const fmtTime = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
+  /** Tiny inline SVG bar chart; `pick` maps a day point to a number. Bars are titled with day + value. */
+  function spark(series, pick, cls) {
+    const vals = series.map(pick);
+    const max = Math.max(1, ...vals);
+    const w = 100 / Math.max(1, vals.length);
+    const bars = vals.map((v, i) => `<rect x="${(i * w).toFixed(2)}" y="${(28 - (v / max) * 26).toFixed(2)}" width="${Math.max(0.6, w - 0.8).toFixed(2)}" height="${((v / max) * 26 + 0.5).toFixed(2)}" rx=".6"><title>${esc(series[i].day)} · ${fmtN(v)}</title></rect>`).join('');
+    return `<svg class="spark ${cls || ''}" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
+  }
+  function kpi(label, value, sub, sparkHtml, tone) {
+    return `<div class="kpi ${tone || ''}"><div class="kpi-l">${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
+  }
+  const pctl = (p) => p && (p.p50 || p.p95) ? `<span class="pctl" title="median · 95th percentile">${fmtMs(p.p50)} <i>/ ${fmtMs(p.p95)}</i></span>` : '<span class="muted">—</span>';
+  function requestDashboard(days) {
+    if (typeof days === 'number') { state.dash.days = days; }
+    state.dash.loading = true;
+    post({ type: 'dashboard', days: state.dash.days });
+  }
+  function requestLogs() { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: state.dash.follow }); }
+  function stopDashboardTimer() { if (state.dash.timer) { clearInterval(state.dash.timer); state.dash.timer = null; } if (state.dash.follow) { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: false }); } }
+  function secDashboard(sec) {
+    head(sec, 'Dashboard', 'What LocalPilot did on this machine: model throughput and latency, tool usage, agent runs, inline completions, provider health and the live log. Everything is recorded locally in <code>~/.localpilot/telemetry</code> — nothing is sent anywhere.');
+    const bar = el('div', 'dash-bar');
+    const seg = el('div', 'seg');
+    for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { requestDashboard(d); render(); }; seg.appendChild(b); }
+    bar.appendChild(seg);
+    bar.appendChild(el('span', 'spacer'));
+    const refresh = el('button', 'btn sm', `${I.refresh}Refresh`); refresh.onclick = () => requestDashboard(); bar.appendChild(refresh);
+    const exp = el('button', 'btn sm', `${I.download}Export…`); exp.title = 'Save every recorded event and the current log as JSON'; exp.onclick = () => post({ type: 'exportTelemetry' }); bar.appendChild(exp);
+    const folder = el('button', 'btn sm ghost', `${I.folder}Open folder`); folder.onclick = () => post({ type: 'openTelemetryFolder' }); bar.appendChild(folder);
+    sec.appendChild(bar);
+    const body = el('div', 'dash'); body.id = 'dash'; sec.appendChild(body);
+    renderDashboard();
+    // Logs
+    sec.appendChild(el('h2', 'sub', 'Logs <span class="count" id="logCount"></span>'));
+    const lc = el('div', 'card logcard');
+    const tools = el('div', 'logbar');
+    const lvl = el('select'); lvl.setAttribute('aria-label', 'Minimum level');
+    for (const [k, l] of [['trace', 'Trace'], ['debug', 'Debug'], ['info', 'Info'], ['warn', 'Warnings'], ['error', 'Errors']]) { const o = el('option', '', esc(l)); o.value = k; if (k === state.dash.level) { o.selected = true; } lvl.appendChild(o); }
+    lvl.onchange = () => { state.dash.level = lvl.value; requestLogs(); };
+    const q = el('input'); q.type = 'text'; q.placeholder = 'Filter log lines…'; q.value = state.dash.q; q.setAttribute('aria-label', 'Filter log lines');
+    q.oninput = debounce(() => { state.dash.q = q.value.trim(); requestLogs(); }, 250);
+    const follow = el('button', `btn sm ${state.dash.follow ? 'on' : ''}`, `${I.play}Follow`); follow.title = 'Stream new lines as they are written';
+    follow.onclick = () => { state.dash.follow = !state.dash.follow; follow.classList.toggle('on', state.dash.follow); requestLogs(); };
+    const openFile = el('button', 'btn sm', `${I.file}Open log file`); openFile.title = state.dash.logFile || "Today's log file"; openFile.onclick = () => post({ type: 'openLogFile' });
+    const channel = el('button', 'btn sm ghost', 'Output channel'); channel.onclick = () => post({ type: 'command', id: 'localpilot.showLogs' });
+    tools.append(lvl, q, follow, openFile, channel);
+    lc.appendChild(tools);
+    const pre = el('div', 'logview'); pre.id = 'logview'; pre.setAttribute('role', 'log'); pre.setAttribute('aria-live', 'polite'); lc.appendChild(pre);
+    sec.appendChild(lc);
+    renderLogs();
+    // Settings
+    sec.appendChild(el('h2', 'sub', 'Telemetry'));
+    sec.appendChild(card(
+      field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine so this page can show them. Turning it off stops recording; the log is still mirrored for the viewer above. <b>Nothing is ever sent to a third party.</b>', 'toggle'),
+      field('telemetry.retentionDays', 'Keep for', 'Days of metrics and log files to keep; older files are deleted automatically. <code>0</code> keeps everything.', 'number', { min: 0, max: 3650, step: 1 })
+    ));
+    const danger = el('div', 'btnrow');
+    danger.innerHTML = `<span class="muted small" id="dashStorage"></span><span class="spacer"></span><button class="btn sm danger" id="dashClear">${I.trash}Delete all recorded data…</button>`;
+    danger.querySelector('#dashClear').onclick = () => post({ type: 'clearTelemetry' });
+    sec.appendChild(danger);
+    renderStorage();
+    // Fresh numbers on open and every 15 s while this page is visible; the log follows live via logLine messages.
+    requestDashboard();
+    requestLogs();
+    if (state.dash.timer) { clearInterval(state.dash.timer); }
+    state.dash.timer = setInterval(() => { if (state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading) { requestDashboard(); } }, 15000);
+  }
+  function renderStorage() {
+    const n = document.getElementById('dashStorage'); const s = state.dash.summary;
+    if (!n || !s) { return; }
+    n.innerHTML = `${fmtN(s.storage.events)} events · ${fmtBytes(s.storage.bytes)} in ${s.storage.files} file(s)${s.storage.oldest ? ` · since ${new Date(s.storage.oldest).toLocaleDateString()}` : ''} · <code>${esc(s.storage.dir)}</code>`;
+  }
+  function renderDashboard() {
+    const root = document.getElementById('dash');
+    if (!root) { return; }
+    const s = state.dash.summary;
+    if (!s) { root.innerHTML = `<p class="empty">${state.dash.loading ? 'Loading…' : 'No data yet.'}</p>`; return; }
+    const t = s.totals;
+    const empty = !t.runs && !t.modelCalls && !s.completions.requested && !s.health.length;
+    if (empty) {
+      root.innerHTML = `<p class="empty">Nothing recorded in this period yet. Start a chat, use inline completions or run the CLI and the numbers appear here.</p>`;
+      return;
+    }
+    const tokens = t.promptTokens + t.completionTokens;
+    const okRate = t.runs ? Math.round((t.done / t.runs) * 100) : 0;
+    const topTps = s.models.filter((m) => m.tokPerSec).sort((a, b) => b.tokPerSec - a.tokPerSec)[0];
+    const health = s.health;
+    const up = health.filter((h) => h.up).length;
+    const c = s.completions;
+    const kpis = el('div', 'kpis');
+    kpis.innerHTML = [
+      kpi('Agent runs', fmtN(t.runs), `${t.done} done · ${t.stopped} stopped · <span class="${t.failed ? 'err-text' : ''}">${t.failed} failed</span>${t.subagentRuns ? ` · ${t.subagentRuns} subagent` : ''}`, spark(s.series, (d) => d.runs), t.failed && okRate < 70 ? 'warn' : ''),
+      kpi('Tokens', fmtN(tokens), `${fmtN(t.promptTokens)} in · ${fmtN(t.completionTokens)} out${topTps ? ` · best <b>${topTps.tokPerSec}</b> tok/s` : ''}`, spark(s.series, (d) => d.tokens)),
+      kpi('Model calls', fmtN(t.modelCalls), `${t.retries} retr${t.retries === 1 ? 'y' : 'ies'} · <span class="${t.modelErrors ? 'err-text' : ''}">${t.modelErrors} error${t.modelErrors === 1 ? '' : 's'}</span>`, spark(s.series, (d) => d.modelCalls)),
+      kpi('Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, spark(s.series, (d) => d.toolCalls)),
+      kpi('Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', c.requested ? `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}` : 'no inline completions yet', spark(s.series, (d) => d.completionsShown)),
+      kpi('Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(h.provider)} ${pct(h.uptime)}`).join(' · ') : 'no checks yet', '', health.length && up < health.length ? 'warn' : ''),
+    ].join('');
+    root.innerHTML = '';
+    root.appendChild(kpis);
+    // Models
+    const cols = el('div', 'dash-cols');
+    const models = el('div', 'card tblwrap');
+    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(m.provider)}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
+    cols.appendChild(models);
+    // Modes
+    const modes = el('div', 'card tblwrap');
+    modes.innerHTML = `<h3>Runs by mode <span class="count">${fmtN(t.runs)}</span></h3>` + (s.modes.length ? `<table class="tbl dash-tbl"><thead><tr><th>Mode</th><th>Runs</th><th>Done</th><th>Stopped</th><th>Failed</th><th title="model steps per run: median / p95">Steps</th><th title="turn time: median / p95">Duration</th><th>Tools</th></tr></thead><tbody>${s.modes.map((m) => `<tr><td><span class="badge">${esc(m.mode)}</span></td><td>${m.runs}</td><td>${m.done}</td><td class="muted">${m.stopped}</td><td class="${m.failed ? 'err-text' : 'muted'}">${m.failed}</td><td>${m.steps.p50} <i class="muted">/ ${m.steps.p95}</i></td><td>${pctl(m.duration)}</td><td>${fmtN(m.toolCalls)}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No agent runs in this period.</p>');
+    cols.appendChild(modes);
+    root.appendChild(cols);
+    const cols2 = el('div', 'dash-cols');
+    // Tools
+    const toolsCard = el('div', 'card tblwrap');
+    toolsCard.innerHTML = `<h3>Tools <span class="count">${s.tools.length}</span></h3>` + (s.tools.length ? `<table class="tbl dash-tbl"><thead><tr><th>Tool</th><th>Calls</th><th>Failed</th><th>Cached</th><th title="median / p95">Duration</th><th>Share</th></tr></thead><tbody>${s.tools.slice(0, 14).map((x) => { const share = t.toolCalls ? (x.calls / t.toolCalls) * 100 : 0; return `<tr><td class="mono">${esc(x.name)}</td><td>${fmtN(x.calls)}</td><td class="${x.errors ? 'err-text' : 'muted'}">${x.errors}${x.calls ? ` <i class="muted">(${pct((x.errors / x.calls) * 100)})</i>` : ''}</td><td class="muted">${x.cached || ''}</td><td>${pctl(x.duration)}</td><td><span class="meter" title="${pct(share)} of all tool calls"><i style="width:${share.toFixed(1)}%"></i></span></td></tr>`; }).join('')}</tbody></table>${s.tools.length > 14 ? `<p class="muted small">…and ${s.tools.length - 14} more</p>` : ''}` : '<p class="empty">No tool calls in this period.</p>');
+    cols2.appendChild(toolsCard);
+    // Health + completions + worktrees
+    const side = el('div', 'dash-side');
+    const hc = el('div', 'card');
+    hc.innerHTML = `<h3>Provider health</h3>` + (health.length ? `<ul class="hlist">${health.map((h) => `<li><span class="dot ${h.up ? 'ok' : 'err'}"></span><b>${esc(h.provider)}</b><span class="muted small">${h.up ? `up · ${h.models ?? 0} model${h.models === 1 ? '' : 's'}` : `down · ${esc(h.lastError || 'unreachable')}`}</span><span class="spacer"></span><span class="small" title="${h.ok} of ${h.checks} checks reachable">${pct(h.uptime)}</span><span class="muted small" title="probe latency: median / p95">${h.latency.p50 ? fmtMs(h.latency.p50) : ''}</span></li>`).join('')}</ul>` : '<p class="empty">No provider checks yet.</p>');
+    side.appendChild(hc);
+    const cc = el('div', 'card');
+    cc.innerHTML = `<h3>Inline completions</h3><dl class="kv dashkv"><dt>Requested</dt><dd>${fmtN(c.requested)}</dd><dt>Shown</dt><dd>${fmtN(c.shown)}${c.cached ? ` <span class="muted small">+ ${fmtN(c.cached)} from cache</span>` : ''}</dd><dt>Accepted</dt><dd><b>${fmtN(c.accepted)}</b>${c.shown + c.cached ? ` <span class="muted small">(${pct(c.acceptanceRate)})</span>` : ''}</dd><dt>Empty / failed</dt><dd class="muted">${c.empty} / ${c.error}</dd><dt>Latency</dt><dd>${pctl(c.latency)}</dd></dl>${c.byLanguage.length ? `<div class="chips small">${c.byLanguage.map((l) => `<span class="chip" title="${l.accepted} accepted of ${l.shown} shown">${esc(l.language)} <i class="muted">${l.shown ? pct((l.accepted / l.shown) * 100) : '0%'}</i></span>`).join('')}</div>` : ''}`;
+    side.appendChild(cc);
+    const wc = el('div', 'card');
+    const w = s.worktrees;
+    wc.innerHTML = `<h3>Isolated worktrees</h3><dl class="kv dashkv"><dt>Created</dt><dd>${w.created}</dd><dt>Applied</dt><dd>${w.applied}<span class="muted small"> · ${w.files} file${w.files === 1 ? '' : 's'}</span></dd><dt>Discarded</dt><dd class="muted">${w.discarded}</dd><dt>Conflicts</dt><dd class="${w.conflicts ? 'err-text' : 'muted'}">${w.conflicts}</dd></dl>`;
+    side.appendChild(wc);
+    cols2.appendChild(side);
+    root.appendChild(cols2);
+    // Recent errors
+    if (s.errors.length) {
+      const ec = el('div', 'card tblwrap');
+      ec.innerHTML = `<h3>Recent problems <span class="count">${s.errors.length}</span></h3><table class="tbl dash-tbl errs"><tbody>${s.errors.slice(0, 12).map((e) => `<tr><td class="muted small nowrap">${fmtAgo(e.t)}</td><td><span class="badge ${e.kind === 'health' ? 'warn' : 'err'}">${esc(e.kind)}</span></td><td class="mono">${esc(e.what)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join('')}</tbody></table>`;
+      root.appendChild(ec);
+    }
+    renderStorage();
+  }
+  const LOG_RANK = { trace: 0, debug: 1, info: 2, warn: 3, error: 4 };
+  function logLine(e) { return `<div class="ll ${e.level}"><span class="lt">${fmtTime(e.t)}</span><span class="lv">${e.level}</span><span class="lm">${esc(e.msg)}</span></div>`; }
+  function renderLogs() {
+    const v = document.getElementById('logview'); const n = document.getElementById('logCount');
+    if (!v) { return; }
+    const atBottom = v.scrollHeight - v.scrollTop - v.clientHeight < 40;
+    v.innerHTML = state.dash.logs.length ? state.dash.logs.map(logLine).join('') : `<p class="empty">${state.dash.q ? 'No log lines match.' : 'Nothing logged yet.'}</p>`;
+    if (n) { n.textContent = state.dash.logs.length ? String(state.dash.logs.length) : ''; }
+    if (atBottom || state.dash.follow) { v.scrollTop = v.scrollHeight; }
+  }
+  function appendLog(e) {
+    if (LOG_RANK[e.level] < LOG_RANK[state.dash.level] || (state.dash.q && !e.msg.toLowerCase().includes(state.dash.q.toLowerCase()))) { return; }
+    state.dash.logs.push(e);
+    if (state.dash.logs.length > 500) { state.dash.logs.shift(); }
+    const v = document.getElementById('logview');
+    if (!v) { return; }
+    const empty = v.querySelector('.empty'); if (empty) { empty.remove(); }
+    v.insertAdjacentHTML('beforeend', logLine(e));
+    while (v.childElementCount > 500) { v.firstElementChild.remove(); }
+    const n = document.getElementById('logCount'); if (n) { n.textContent = String(state.dash.logs.length); }
+    if (state.dash.follow) { v.scrollTop = v.scrollHeight; }
+  }
+
   function secAdvanced(sec) {
     const d = state.data;
     head(sec, 'Advanced', 'Housekeeping, diagnostics and the raw settings files.');
@@ -1253,7 +1575,7 @@
         // A settings round-trip: find what actually changed and refresh only those components.
         const keys = new Set([...Object.keys(prev.settings || {}), ...Object.keys(m.settings || {})]);
         const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
-        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], completions: ['models'], memory: ['skills', 'agents', 'memory'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], completions: ['models'], memory: ['memory'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
         const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
         if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
         if (changed.length) { refreshComponents(changed); }
@@ -1308,9 +1630,34 @@
         if (state.section === 'gallery' && state.gallery.source === (m.source || 'ollama')) { renderGalleryResults(); }
         break;
       }
+      case 'skillRegistry': {
+        const reg = state.skillReg;
+        if (m.q !== reg.q) { break; }
+        reg.loading = false; reg.entries = m.entries || []; reg.status = m.status || []; reg.refreshing = !!m.refreshing;
+        if (state.section === 'skills') { renderSkillRegistry(); renderSkillRepoStatus(); }
+        break;
+      }
+      case 'skillJob':
+        state.skillReg.jobs[m.name] = { status: m.status, detail: m.detail };
+        if (m.status === 'done') { setTimeout(() => { delete state.skillReg.jobs[m.name]; if (state.section === 'skills') { renderSkillRegistry(); } }, 1500); }
+        if (state.section === 'skills') { renderSkillRegistry(); }
+        break;
       case 'busy':
         state.busy = m.busy;
         if (!m.busy) { render(); }
+        break;
+      case 'dashboard':
+        state.dash.loading = false;
+        state.dash.summary = m.summary; state.dash.logFile = m.logFile || '';
+        if (typeof m.days === 'number') { state.dash.days = m.days; }
+        if (state.section === 'dashboard') { renderDashboard(); }
+        break;
+      case 'logs':
+        state.dash.logs = Array.isArray(m.entries) ? m.entries : [];
+        if (state.section === 'dashboard') { renderLogs(); }
+        break;
+      case 'logLine':
+        if (state.section === 'dashboard' && m.entry) { appendLog(m.entry); }
         break;
       case 'toast':
         toast(m.text, m.level);

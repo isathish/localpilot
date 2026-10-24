@@ -401,9 +401,15 @@
       },
       {
         "command": "localpilot.browseSkills",
-        "title": "Browse Skill Catalog…",
+        "title": "Browse Skill Registry (Quick Pick)…",
         "category": "LocalPilot",
         "icon": "$(library)"
+      },
+      {
+        "command": "localpilot.manageSkills",
+        "title": "Manage Skills",
+        "category": "LocalPilot",
+        "icon": "$(book)"
       },
       {
         "command": "localpilot.reloadSkills",
@@ -424,6 +430,12 @@
         "command": "localpilot.showLogs",
         "title": "Show Logs",
         "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.openDashboard",
+        "title": "Open Dashboard",
+        "category": "LocalPilot",
+        "icon": "$(dashboard)"
       },
       {
         "command": "localpilot.openSettings",
@@ -647,9 +659,14 @@
           "group": "2_manage"
         },
         {
+          "command": "localpilot.openDashboard",
+          "when": "view =~ /^localpilot\\.chatView/",
+          "group": "9_logs@1"
+        },
+        {
           "command": "localpilot.showLogs",
           "when": "view =~ /^localpilot\\.chatView/",
-          "group": "9_logs"
+          "group": "9_logs@2"
         },
         {
           "command": "localpilot.openChat",
@@ -1222,6 +1239,17 @@
           "default": "",
           "markdownDescription": "Folder that holds the worktrees (one sub-folder per repository). Empty = `~/.localpilot/worktrees`."
         },
+        "localpilot.telemetry.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Record local usage metrics — model calls, tokens and latency, tool runs, agent turns, inline completions, provider health — to daily JSONL files in `~/.localpilot/telemetry` for the **LocalPilot: Open Dashboard** page. Everything stays on this machine; nothing is ever sent to a third party."
+        },
+        "localpilot.telemetry.retentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "markdownDescription": "Days of metrics and log files to keep on disk; older files are deleted automatically. `0` keeps everything."
+        },
         "localpilot.autoClarify": {
           "type": "boolean",
           "default": true,
@@ -1352,6 +1380,14 @@
           ],
           "default": "user",
           "description": "Where automatically installed skills are stored."
+        },
+        "localpilot.skills.disabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Skill names the agent must not see or load (not in the prompt, not suggested, `load_skill` refuses them) while they stay on disk. Toggle skills in **Settings → Skills** instead of editing this by hand."
         },
         "localpilot.systemPromptAppend": {
           "type": "string",

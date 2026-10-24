@@ -1,5 +1,5 @@
 import { getConfig } from '../config';
-import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext } from '../types';
+import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext, ToolDefinition } from '../types';
 import { AgentRunner, ApprovalHandler } from './agentLoop';
 import { nextWave, ParallelPool } from './parallel';
 import { RunControl } from './runControl';
@@ -23,17 +23,44 @@ export type ScopedApprovalHandler = (sessionId: string, ...args: Parameters<Appr
 export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit: (e: AgentEvent) => void, approval: ScopedApprovalHandler): Tool[] {
   const loadSkill: Tool = {
     parallelSafe: true,
-    definition: {
-      name: 'load_skill',
-      description: 'Load the full instructions of a skill by name. Call this before performing a task that matches a skill description.',
-      parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+    // The allowed names are read on every access so the definition the model sees always matches what is installed
+    // and enabled — a static list would invite calls for skills that no longer exist.
+    get definition(): ToolDefinition {
+      const names = skills.enabledSkills.map((s) => s.name);
+      return {
+        name: 'load_skill',
+        description:
+          'Load the full step-by-step instructions of an installed skill (expert playbook) so you can follow them. Call it FIRST, before other tools, when the task matches a skill listed under "Available skills" — and only with a name from that list; never invent one. Skip it when the skill was already loaded in this conversation. After loading, carry out the steps with the tools; do not just summarise them.',
+        parameters: {
+          type: 'object' as const,
+          properties: {
+            name: {
+              type: 'string',
+              description: names.length ? `Exact skill name from the Available skills list. Currently installed: ${names.join(', ')}.` : 'Exact skill name from the Available skills list (none are installed right now).',
+              ...(names.length && names.length <= 40 ? { enum: names } : {}),
+            },
+          },
+          required: ['name'],
+        },
+      };
     },
     async execute(args) {
-      const body = await skills.loadSkillBody(String(args.name ?? ''));
-      if (!body) {
-        return { content: `Unknown skill "${args.name}". Available: ${skills.allSkills.map((s) => s.name).join(', ') || '(none)'}`, isError: true };
+      const raw = String(args.name ?? '').trim();
+      const resolved = skills.resolveSkill(raw);
+      if (!resolved) {
+        const disabled = skills.getSkill(raw)?.disabled;
+        const similar = skills.similarSkillNames(raw);
+        const available = skills.enabledSkills.map((s) => s.name);
+        return {
+          content: disabled
+            ? `The skill "${raw}" is disabled by the user and must not be used. Continue without it.`
+            : `Unknown skill "${raw}".${similar.length ? ` Did you mean: ${similar.join(', ')}?` : ''} Only these skills exist: ${available.join(', ') || '(none)'}. Do not invent skill names — if none applies, continue with the ordinary tools.`,
+          isError: true,
+        };
       }
-      return { content: `${body}\n\nThe skill is now loaded. Carry out each step above with the tools (write_file, edit_file, run_command, …) before replying — do not answer until the steps have actually been executed and their results confirm it.` };
+      const body = await skills.loadSkillBody(resolved.skill.name);
+      const note = resolved.exact ? '' : `(Resolved "${raw}" to the installed skill "${resolved.skill.name}".)\n`;
+      return { content: `${note}${body}\n\nThe skill "${resolved.skill.name}" is now loaded. Carry out each step above with the tools (write_file, edit_file, run_command, …) before replying — do not answer until the steps have actually been executed and their results confirm it. Do not call load_skill for this skill again.` };
     },
   };
 

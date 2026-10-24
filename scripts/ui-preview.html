@@ -31,6 +31,7 @@ body{margin:0}
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
         <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
         <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
@@ -48,7 +49,7 @@ window.acquireVsCodeApi=()=>({postMessage(m){
   const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
   if(m.type==='ready'){
     const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true}];
-    send({type:'init',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[],agents:[],running:['s2']});
+    send({type:'init',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[{name:'pdf',description:'Read, create and edit PDF files'},{name:'release',description:'Cut a release end to end'},{name:'debug',description:'Reproduce, localise and fix a bug'}],agents:[],skillsMode:'auto',running:['s2']});
     const oldT="def roll_dice(notation):\n    m = re.match(r'(\\d+)d(\\d+)', notation)\n    if not m:\n        raise ValueError('bad')\n    count, sides = int(m[1]), int(m[2])";
     const newT="def roll_dice(notation: str) -> int:\n    \"\"\"Roll dice such as '3d6+2', 'd20' or '2d10 - 1'.\"\"\"\n    m = re.fullmatch(r'\\s*(\\d*)\\s*d\\s*(\\d+)\\s*([+-]\\s*\\d+)?\\s*', notation, re.I)\n    if not m:\n        raise ValueError(f'Invalid dice notation: {notation!r}')\n    count = int(m.group(1) or 1)\n    sides = int(m.group(2))";
     const session={id:'s1',title:'Make dice parser friendlier',mode:/plan=1/.test(location.search)?'plan':'multitask',model:'',contextTokens:9800,compactions:0,

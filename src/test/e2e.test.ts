@@ -260,8 +260,9 @@ suite('LocalPilot end-to-end (real local model)', () => {
     await new Promise((r) => setTimeout(r, 500));
     const id = await api.runPrompt('/skill greeting create the greeting', 'agent');
     await waitForRun(id, 230_000);
-    const used = toolsUsed(id);
-    assert.ok(used.includes('load_skill'), `expected load_skill, got ${used.join(',')}; ${transcript(id)}`);
+    // `/skill <name>` preloads the skill's instructions into the request, so the model never has to call load_skill.
+    const pre = api.getSession(id)!.messages.find((m) => m.role === 'user' && m.meta?.hidden && /<skill name="greeting"/.test(m.content));
+    assert.ok(pre && /you were asked to use it/.test(pre.content), `greeting skill preloaded: ${transcript(id)}`);
     const txt = await fs.readFile(path.join(root, 'GREETING.txt'), 'utf8').catch((e) => {
       throw new Error(`${e.message}\n${transcript(id)}`);
     });
@@ -323,7 +324,7 @@ suite('LocalPilot end-to-end (real local model)', () => {
     assert.match(await fs.readFile(path.join(root, 'TWO.txt'), 'utf8'), /two/i);
   });
 
-  test('skill recommendation: a matching skill is suggested and loaded without /skill', async function () {
+  test('skill recommendation: a strongly matching skill is preloaded into the request without /skill', async function () {
     this.timeout(240_000);
     const skillDir = path.join(root, '.localpilot', 'skills', 'banner');
     await fs.mkdir(skillDir, { recursive: true });
@@ -333,9 +334,9 @@ suite('LocalPilot end-to-end (real local model)', () => {
     const id = await api.runPrompt('create the banner for this project', 'agent');
     await waitForRun(id, 230_000);
     const session = api.getSession(id)!;
-    const hint = session.messages.find((m) => m.role === 'user' && m.meta?.hidden && /Skills that match this request/.test(m.content));
-    assert.ok(hint && /"banner"/.test(hint.content), `skill hint injected: ${transcript(id)}`);
-    assert.ok(toolsUsed(id).includes('load_skill'), `skill loaded on the model's own initiative: ${toolsUsed(id).join(',')}`);
+    // "create the banner" is a quoted trigger phrase → strong match → the whole skill is preloaded, not just hinted.
+    const pre = session.messages.find((m) => m.role === 'user' && m.meta?.hidden && /<skill name="banner"/.test(m.content));
+    assert.ok(pre && /is loaded below because it matches this request/.test(pre.content), `banner skill preloaded: ${transcript(id)}`);
     assert.match(await fs.readFile(path.join(root, 'BANNER.txt'), 'utf8').catch(() => ''), /banner skill/i, transcript(id));
   });
 });

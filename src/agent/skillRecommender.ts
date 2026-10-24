@@ -322,15 +322,40 @@ export function createSkillPrompt(s: SkillCreateSuggestion): string {
   return `Create a reusable skill at .localpilot/skills/${s.slug}/SKILL.md for requests like these, which have come up ${s.count} times:\n${s.samples.map((x) => `- "${x}"`).join('\n')}\n\nUse YAML front-matter (name: ${s.slug}, description: one sentence saying when to use it, with 2–3 quoted trigger phrases) and a Markdown body with the concrete, step-by-step procedure that worked in this project: commands to run, files/patterns to follow, how to verify. Keep it under 60 lines. Then reload skills with the localpilot.reloadSkills command.`;
 }
 
-/** Hidden steering text so the model loads the matching skill before starting. */
+/** Hidden steering text for skills that matched only loosely: the model decides, with the bar set high for small requests. */
 export function skillHint(matches: SkillMatch[]): string {
   if (!matches.length) {
     return '';
   }
   const list = matches.map((m) => `"${m.name}" (${m.description.replace(/\s+/g, ' ').slice(0, 120)})`).join('; ');
-  if (matches[0].strong) {
-    return `Skills that match this request: ${list}. Required first step: call load_skill("${matches[0].name}") before any other tool — the skill holds project-specific steps and formats you cannot know otherwise — then follow its instructions. Skip it only if the skill clearly does not apply.`;
+  return `Skills that may apply to this request: ${list}. If one clearly fits, call load_skill("${matches[0].name}") first and follow it; if the request is small and specific, do it directly with the tools. Use only these names.`;
+}
+
+/**
+ * Hidden message that carries the full instructions of skills chosen for this request (a strong match, a pinned
+ * skill, or one the user forced with /skill), so the model follows them without having to call load_skill — the
+ * step small local models most often skip or get wrong.
+ */
+export function skillPreloadNote(items: { name: string; body: string; reason: 'match' | 'pinned' | 'forced' | 'installed' }[]): string {
+  if (!items.length) {
+    return '';
   }
-  // Only description words overlapped: a small, explicit request must not be detoured into a playbook it does not need.
-  return `Skills that may apply to this request: ${list}. If one of them clearly fits, call load_skill("${matches[0].name}") first and follow it; if the request is small and specific, do it directly with the tools instead.`;
+  const why = (r: (typeof items)[number]['reason']) => (r === 'forced' ? 'you were asked to use it' : r === 'pinned' ? 'it is pinned to this chat' : r === 'installed' ? 'it was just installed for this request' : 'it matches this request');
+  const names = items.map((i) => `"${i.name}"`).join(', ');
+  const head =
+    items.length === 1
+      ? `The skill ${names} is loaded below because ${why(items[0].reason)}.`
+      : `These skills are loaded below: ${items.map((i) => `"${i.name}" (${why(i.reason)})`).join(', ')}.`;
+  return `${head} Follow the steps exactly as written, using the tools; do not call load_skill for ${items.length === 1 ? 'it' : 'them'} again, and do not summarise the steps instead of doing them. If a skill clearly does not apply to what the user asked, say so briefly and proceed without it.\n\n${items.map((i) => i.body).join('\n\n')}`;
+}
+
+/** Trims a skill body that would swamp a small context window, keeping the start (where the procedure usually is). */
+export function clampSkillBody(body: string, maxChars: number): string {
+  if (body.length <= maxChars) {
+    return body;
+  }
+  const cut = body.lastIndexOf('\n', maxChars);
+  const kept = body.slice(0, cut > maxChars * 0.6 ? cut : maxChars);
+  const close = kept.includes('<skill ') && !kept.includes('</skill>') ? '\n</skill>' : '';
+  return `${kept}\n[… ${body.length - kept.length} more characters trimmed to fit the context window; read the SKILL.md in the skill's dir for the rest …]${close}`;
 }

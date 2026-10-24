@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Telemetry } from '../telemetry/telemetry';
 import { getConfig } from '../config';
 import { ProviderRegistry } from '../providers/registry';
 
@@ -22,7 +23,17 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
   /** Last seen length per document, to recognise deletions (backspace, cut) which should not trigger. */
   private readonly lastLength = new Map<string, number>();
 
+  /** Local-only completion metrics (requested / shown / accepted) for the dashboard. */
+  telemetry?: Pick<Telemetry, 'record'>;
+  /** Command id run when a completion is accepted (registered by the extension). */
+  static readonly ACCEPTED_COMMAND = 'localpilot.completionAccepted';
+
   constructor(private readonly providers: ProviderRegistry, private readonly log: vscode.LogOutputChannel) {}
+
+  /** Called by the accepted-command with the model and language the item was produced with. */
+  accepted(model?: string, language?: string): void {
+    this.telemetry?.record({ type: 'completion', action: 'accepted', model, language });
+  }
 
   dispose(): void {
     clearTimeout(this.debounceTimer);
@@ -71,6 +82,11 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     const suffix = document.getText(suffixRange);
     const key = `${docKey}:${document.languageId}:${prefix.slice(-600)}|${suffix.slice(0, 300)}`;
     let completion = this.cached(key);
+    const language = document.languageId;
+    let modelId: string | undefined;
+    const requestedAt = Date.now();
+    const fromCache = completion !== undefined;
+    this.telemetry?.record({ type: 'completion', action: 'requested', language });
 
     if (completion === undefined) {
       const abort = new AbortController();
@@ -79,6 +95,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
       try {
         // Routing picks the configured completion model, else the smallest FIM-capable model that fits this machine.
         const { provider, model } = await this.providers.route({ role: 'completion' });
+        modelId = model.id;
         if (abort.signal.aborted || gen !== this.generation) {
           return;
         }
@@ -98,6 +115,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
       } catch (e) {
         if (!abort.signal.aborted && !token.isCancellationRequested) {
           this.log.debug(`inline completion failed: ${String(e)}`);
+          this.telemetry?.record({ type: 'completion', action: 'error', model: modelId, language, durationMs: Date.now() - requestedAt });
         }
         return;
       } finally {
@@ -108,9 +126,15 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
       }
     }
     if (!completion || token.isCancellationRequested || gen !== this.generation) {
+      if (!completion && !token.isCancellationRequested && gen === this.generation) {
+        this.telemetry?.record({ type: 'completion', action: 'empty', model: modelId, language, durationMs: Date.now() - requestedAt });
+      }
       return;
     }
-    return [new vscode.InlineCompletionItem(completion, new vscode.Range(position, position))];
+    this.telemetry?.record({ type: 'completion', action: fromCache ? 'cached' : 'shown', model: modelId, language, durationMs: Date.now() - requestedAt });
+    const item = new vscode.InlineCompletionItem(completion, new vscode.Range(position, position));
+    item.command = { command: InlineCompletionProvider.ACCEPTED_COMMAND, title: 'LocalPilot completion accepted', arguments: [modelId, language] };
+    return [item];
   }
 
   private cached(key: string): string | undefined {
