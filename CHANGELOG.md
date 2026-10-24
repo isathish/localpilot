@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.13 — 2026-10-24
+### Added
+- Dashboard charts and extra KPIs, skills across the subagent swarm, settings tab strip and theming, winget Ollama install
+
 ## 1.1.12 — 2026-10-24
 ### Added
 - **Dashboard — metrics, telemetry and logs, all local.** *LocalPilot: Open Dashboard* (status-bar menu, chat title menu, **Settings → Dashboard**) shows what LocalPilot did on this machine over **Today / 7 / 30 / 90 days / All**: agent runs (done / stopped / failed, subagents), tokens in and out with **tok/s** per model, model calls with retries and errors, tool calls with failure rates, inline-completion acceptance, and how many providers are up — each with a per-day bar chart. Tables break it down by **model** (time to first token and request time as median / p95), **mode** (steps, duration, tools), **tool** (calls, failures, cached hits, share), **provider health** (uptime, last error, probe latency), completions by language, isolated-worktree activity and the most recent problems. A **Logs** card mirrors the *LocalPilot* output channel with level filter, search and live **Follow**, and opens the day's log file. Everything is computed from daily JSONL files in `~/.localpilot/telemetry` that the extension and the CLI share; prompts, file contents and tool arguments are never recorded, and **nothing is sent to a third party**. `localpilot.telemetry.enabled` turns recording off; `localpilot.telemetry.retentionDays` (default 30, `0` = forever) prunes old files. **Export…** saves everything as JSON; **Delete all recorded data…** clears it. The extension API exposes `telemetry.summary(days)` and `telemetry.logs()`.
