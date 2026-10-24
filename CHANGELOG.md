@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.11 — 2026-10-24
 ### Fixed
 - **CI on Windows: isolated-worktree smoke checks.** `repoRoot()` returned git's forward-slash (and possibly 8.3 short-name) path on Windows, which never matched the canonical workspace path; it now resolves to the OS-canonical form. The smoke test also pins `core.autocrlf=false` in its scratch repository so worktree checkouts compare byte-for-byte on runners where Git for Windows defaults to CRLF.
 
