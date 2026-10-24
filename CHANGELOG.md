@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.6 — 2026-10-24
 ### Added
 - **Pause, steer and stop — for agents and their subagents.** A **Pause** button (<kbd>⌥Esc</kbd>) sits next to **Stop** while an agent runs: the agent finishes its current model call or tool batch, then holds (*Pausing after this step… → Paused*, ⏸ in the tab, frozen progress bar) until you **Resume**. Anything typed while it is paused — or while it is running, via *Add to this agent* on <kbd>Enter</kbd> — is queued inline as a *queued* row and appended to the conversation at the next step, so you can redirect the agent without losing its work; a message that arrives as the model finishes continues the turn instead of ending it. Pausing or stopping the main agent now pauses or stops every subagent it spawned, and each lane of a parallel fan-out has its own ⏸ / ■: a stopped subagent hands the parent a *stopped by the user* report and the run carries on. Stopping while paused closes the pending tool calls cleanly so the next turn's history is valid. The same controls are in the tab's right-click menu, the background-agents strip, the **Agents** panel (sessions and their subagents, inline), the Command Palette (*Pause Agent*, *Resume Agent*, *Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents*) and the CLI (Ctrl+Z pauses/resumes, Ctrl+C stops, typed lines become steering messages).
 
