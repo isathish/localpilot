@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.9 — 2026-10-24
 ### Added
 - **Model gallery — search and install anything from the Ollama library.** A new **Settings → Model gallery** page (*LocalPilot: Browse Ollama Model Gallery…*, also in the LocalPilot menu) browses the whole public library on ollama.com, not just the curated catalog: search as you type, filter by **Tools / Vision / Thinking / Embedding**, sort by popularity / newest / name, and page through results. **Choose size** lists every tag of a model with its download size, context length, inputs and age, marked **fits / tight / too big** for this machine, **latest** and **installed**; plain sizes come first and quantisation / MLX / bf16 variants sit behind *show all*. **Install** pulls through your local Ollama server with live progress and cancel, and the model shows up under Models, in the picker and in routing when done. **Pull by name** accepts anything `ollama pull` does, including `user/model:tag` and `hf.co/org/repo:Q4_K_M` GGUF repositories; references are validated on both sides. Cloud-only models and tags are shown but marked not downloadable; the page offers *Start Ollama* / *Install Ollama* when no server is running. The Models catalog links to it.
 
