@@ -21,7 +21,7 @@ npm install
 | `npm run compile` | Type-check (`tsc`), lint (`eslint`) and bundle with esbuild → `dist/extension.js` |
 | `npm run watch` | Rebuild on change |
 | `npm run smoke` | Offline tests: mock Ollama & OpenAI servers, agent loop, context manager, parallel pool |
-| `npm test` | Mocha tests inside a real Extension Development Host (downloads VS Code on first run). Includes **end-to-end runs against a real local model** when Ollama is reachable on `:11434` — a real tool call writes a file, two sessions run in parallel, `stop()` aborts a run. Skipped otherwise; `LOCALPILOT_E2E_MODEL=ollama/<tag>` forces a model. |
+| `npm test` | Mocha tests inside a real Extension Development Host (downloads VS Code on first run). Includes **end-to-end runs against a real local model** when Ollama is reachable on `:11434` — a real tool call writes a file, two sessions run in parallel, `stop()` aborts a run. Skipped otherwise; `LOCALPILOT_E2E_MODEL=ollama/<tag>` forces a model. The runner sets `LOCALPILOT_TELEMETRY_DIR` to a scratch folder so the providers tests make up never appear on your real Dashboard. |
 | `npx @vscode/vsce package --no-dependencies` | Build the VSIX |
 
 Press <kbd>F5</kbd> to launch an Extension Development Host.

@@ -499,7 +499,9 @@ export class SettingsPanel implements vscode.Disposable {
       return;
     }
     this.lastDashboardDays = days;
-    const summary = await this.telemetry.summary(days);
+    // Only providers that are configured and enabled right now: disabling one hides its history, and providers that
+    // tests or old configs made up never show.
+    const summary = await this.telemetry.summary(days, { providers: getConfig().providers.map((p) => p.id) });
     this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile() });
   }
 

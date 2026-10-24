@@ -44,6 +44,8 @@ export interface AgentRunOptions {
   maxIterations?: number;
   /** Pause/resume/steer handle. When given, `signal` should be `control.signal`. */
   control?: RunControl;
+  /** Transient-failure retries per model step (default 2). Subagents on a router-chosen model use 0 so a dead model fails fast and the caller can fall back. */
+  maxModelRetries?: number;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -124,6 +126,7 @@ export class AgentRunner {
   private async runTurn(o: AgentRunOptions, stats: RunStats): Promise<string> {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
+    const maxModelRetries = o.maxModelRetries ?? MAX_MODEL_RETRIES;
     const session = o.session;
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
@@ -531,7 +534,7 @@ export class AgentRunner {
           }
           const kind = classifyModelError(e);
           const msg = e instanceof Error ? e.message : String(e);
-          modelEvent(isTransient(kind) && first && attempt < MAX_MODEL_RETRIES ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
+          modelEvent(isTransient(kind) && first && attempt < maxModelRetries ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
           if (kind === 'overflow' && !compactedForOverflow) {
             // The server knows better than our estimate: shrink the history and send again.
             compactedForOverflow = true;
@@ -546,12 +549,12 @@ export class AgentRunner {
             }
             continue;
           }
-          if (isTransient(kind) && first && attempt < MAX_MODEL_RETRIES) {
+          if (isTransient(kind) && first && attempt < maxModelRetries) {
             attempt++;
             const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
-            this.log.warn(`model call failed (${kind}), retry ${attempt}/${MAX_MODEL_RETRIES} in ${wait}ms: ${msg}`);
-            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? 'The server is rate limiting' : 'Connection to the model failed'} — retrying (${attempt}/${MAX_MODEL_RETRIES})…`);
-            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: MAX_MODEL_RETRIES, reason: kind, message: msg } });
+            this.log.warn(`model call failed (${kind}), retry ${attempt}/${maxModelRetries} in ${wait}ms: ${msg}`);
+            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? 'The server is rate limiting' : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
+            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: kind, message: msg } });
             await sleep(wait, o.signal);
             if (o.signal.aborted) {
               aborted = true;
@@ -570,12 +573,12 @@ export class AgentRunner {
         }
         o.signal.removeEventListener('abort', onAbort);
         // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
-        if (!text.trim() && !calls.length && attempt < MAX_MODEL_RETRIES && !o.signal.aborted) {
+        if (!text.trim() && !calls.length && attempt < maxModelRetries && !o.signal.aborted) {
           modelEvent('retry', 'empty');
           attempt++;
-          this.log.warn(`empty completion from ${model.id}; retry ${attempt}/${MAX_MODEL_RETRIES}`);
-          status(`The model returned nothing — asking again (${attempt}/${MAX_MODEL_RETRIES})…`);
-          emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: MAX_MODEL_RETRIES, reason: 'empty', message: 'empty completion' } });
+          this.log.warn(`empty completion from ${model.id}; retry ${attempt}/${maxModelRetries}`);
+          status(`The model returned nothing — asking again (${attempt}/${maxModelRetries})…`);
+          emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: 'empty', message: 'empty completion' } });
           await sleep(RETRY_BACKOFF_MS[0], o.signal);
           continue;
         }

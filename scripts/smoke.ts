@@ -794,6 +794,17 @@ async function telemetry() {
     now += DAY;
     const empty = summarize([] as TelemetryEvent[], { days: 1, from: now, to: now });
     check('summarize([]) yields zeros and one series point', empty.totals.runs === 0 && empty.series.length === 1 && empty.completions.acceptanceRate === 0);
+    // The dashboard passes the enabled provider ids: a disabled or made-up provider disappears along with its calls.
+    const mixed: TelemetryEvent[] = [
+      { t: now, type: 'health', provider: 'ollama', ok: true, durationMs: 5, models: 2 },
+      { t: now, type: 'health', provider: 'fake', ok: true, durationMs: 5, models: 3 },
+      { t: now, type: 'model', sid: 's', model: 'a', provider: 'ollama', mode: 'agent', depth: 0, promptTokens: 10, completionTokens: 5, durationMs: 50, outcome: 'ok' },
+      { t: now, type: 'model', sid: 's', model: 'b', provider: 'fake', mode: 'agent', depth: 0, promptTokens: 100, completionTokens: 50, durationMs: 50, outcome: 'ok' },
+    ];
+    const everyProvider = summarize(mixed, { days: 1, from: now, to: now });
+    const only = summarize(mixed, { days: 1, from: now, to: now }, { providers: ['ollama'] });
+    check('unfiltered summary keeps every provider', everyProvider.health.length === 2 && everyProvider.models.length === 2 && everyProvider.totals.promptTokens === 110);
+    check('provider filter drops other providers from health, models and totals', only.health.length === 1 && only.health[0].provider === 'ollama' && only.models.length === 1 && only.totals.modelCalls === 1 && only.totals.promptTokens === 10);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

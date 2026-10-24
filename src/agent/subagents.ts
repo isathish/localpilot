@@ -5,6 +5,7 @@ import { nextWave, ParallelPool } from './parallel';
 import { RunControl } from './runControl';
 import { SkillManager } from './skills';
 import { newId } from '../providers/http';
+import { classifyModelError } from './resilience';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
 
 /** Appended to every subagent persona (built-in or custom). */
@@ -155,8 +156,13 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     const control = ctx.control ? ctx.control.child(childId, label ? `${def.name} · ${label}` : def.name) : new RunControl(childId, undefined, ctx.signal, label ? `${def.name} · ${label}` : def.name);
     emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined } });
     const user: ChatMessage = { role: 'user', content: prompt };
-    try {
-      const text = await runner.run({
+    // The router may have picked a different (smaller) model for a read-only child. If that model stalls or cannot
+    // be reached, run the child again on the parent's model instead of losing the lane — a broken small model must
+    // not take the whole swarm down.
+    const routedElsewhere = !modelRef && !def.model && !!ctx.modelRef && !!child.model && child.model !== ctx.modelRef;
+    let fellBack = false;
+    const attempt = () =>
+      runner.run({
         session: child,
         userMessage: user,
         modelRef: child.model || undefined,
@@ -173,13 +179,30 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         // Child progress is forwarded under the parent's session id so the UI can nest it.
         emit: (e) => emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type }),
         maxIterations: 25,
+        maxModelRetries: routedElsewhere && !fellBack ? 0 : undefined,
       });
+    try {
+      let text: string;
+      try {
+        text = await attempt();
+      } catch (e) {
+        const kind = classifyModelError(e);
+        if (!routedElsewhere || control.aborted || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
+          throw e;
+        }
+        fellBack = true;
+        emit({ sessionId: ctx.sessionId, type: 'status', payload: `${def.name}: ${child.model} is not responding — retrying on ${ctx.modelRef}` });
+        child.messages = [];
+        child.contextTokens = 0;
+        child.model = ctx.modelRef!;
+        text = await attempt();
+      }
       if (control.aborted && !ctx.signal.aborted) {
         const note = `Subagent "${def.name}" was stopped by the user before it finished.${text ? ` Partial output:\n${text}` : ''} Do not retry it; continue with what you have or do that part yourself.`;
         emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user' } });
         return { content: fallbackNote + note };
       }
-      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text } });
+      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: fellBack ? child.model : undefined } });
       return { content: fallbackNote + (text || '(subagent returned no text)') };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

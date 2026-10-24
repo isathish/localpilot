@@ -1451,6 +1451,8 @@
     if (!n || !s) { return; }
     n.innerHTML = `${fmtN(s.storage.events)} events · ${fmtBytes(s.storage.bytes)} in ${s.storage.files} file(s)${s.storage.oldest ? ` · since ${new Date(s.storage.oldest).toLocaleDateString()}` : ''} · <code>${esc(s.storage.dir)}</code>`;
   }
+  /** Provider display name for a recorded provider id (the id itself when the provider is no longer configured). */
+  function provName(id) { const p = providersList().find((x) => x.id === id); return p ? p.displayName || p.id : id; }
   function renderDashboard() {
     const root = document.getElementById('dash');
     if (!root) { return; }
@@ -1475,7 +1477,7 @@
       kpi('Model calls', fmtN(t.modelCalls), `${t.retries} retr${t.retries === 1 ? 'y' : 'ies'} · <span class="${t.modelErrors ? 'err-text' : ''}">${t.modelErrors} error${t.modelErrors === 1 ? '' : 's'}</span>`, spark(s.series, (d) => d.modelCalls)),
       kpi('Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, spark(s.series, (d) => d.toolCalls)),
       kpi('Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', c.requested ? `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}` : 'no inline completions yet', spark(s.series, (d) => d.completionsShown)),
-      kpi('Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(h.provider)} ${pct(h.uptime)}`).join(' · ') : 'no checks yet', '', health.length && up < health.length ? 'warn' : ''),
+      kpi('Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(provName(h.provider))} ${pct(h.uptime)}`).join(' · ') : 'no checks yet', '', health.length && up < health.length ? 'warn' : ''),
       kpi('Throughput', t.tokPerSec ? `${t.tokPerSec} <span class="kpi-u">tok/s</span>` : '—', t.tokPerSec ? `generation speed across all calls${topTps ? ` · fastest ${esc(topTps.model)}` : ''}` : 'no completed calls yet', spark(s.series, (d) => d.tokPerSec)),
       kpi('Turn time', t.runTime.p50 ? fmtMs(t.runTime.p50) : '—', t.runTime.p50 ? `median · p95 ${fmtMs(t.runTime.p95)} · ${t.steps.p50} step${t.steps.p50 === 1 ? '' : 's'} per turn` : 'no finished turns yet', ''),
       kpi('Cache hits', t.toolCalls ? pct((t.cachedTools / t.toolCalls) * 100) : '—', t.toolCalls ? `${fmtN(t.cachedTools)} read-only tool calls answered from the turn cache` : 'no tool calls yet', spark(s.series, (d) => d.cachedTools)),
@@ -1517,7 +1519,7 @@
     // Models
     const cols = el('div', 'dash-cols');
     const models = el('div', 'card tblwrap');
-    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(m.provider)}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
+    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(provName(m.provider))}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
     cols.appendChild(models);
     // Modes
     const modes = el('div', 'card tblwrap');
@@ -1532,7 +1534,7 @@
     // Health + completions + worktrees
     const side = el('div', 'dash-side');
     const hc = el('div', 'card');
-    hc.innerHTML = `<h3>Provider health</h3>` + (health.length ? `<ul class="hlist">${health.map((h) => `<li><span class="dot ${h.up ? 'ok' : 'err'}"></span><b>${esc(h.provider)}</b><span class="muted small">${h.up ? `up · ${h.models ?? 0} model${h.models === 1 ? '' : 's'}` : `down · ${esc(h.lastError || 'unreachable')}`}</span><span class="spacer"></span><span class="small" title="${h.ok} of ${h.checks} checks reachable">${pct(h.uptime)}</span><span class="muted small" title="probe latency: median / p95">${h.latency.p50 ? fmtMs(h.latency.p50) : ''}</span></li>`).join('')}</ul>` : '<p class="empty">No provider checks yet.</p>');
+    hc.innerHTML = `<h3>Provider health</h3>` + (health.length ? `<ul class="hlist">${health.map((h) => `<li><span class="dot ${h.up ? 'ok' : 'err'}"></span><b>${esc(provName(h.provider))}</b><span class="muted small">${h.up ? `up · ${h.models ?? 0} model${h.models === 1 ? '' : 's'}` : `down · ${esc(h.lastError || 'unreachable')}`}</span><span class="spacer"></span><span class="small" title="${h.ok} of ${h.checks} checks reachable">${pct(h.uptime)}</span><span class="muted small" title="probe latency: median / p95">${h.latency.p50 ? fmtMs(h.latency.p50) : ''}</span></li>`).join('')}</ul>` : '<p class="empty">No provider checks yet.</p>');
     side.appendChild(hc);
     const cc = el('div', 'card');
     cc.innerHTML = `<h3>Inline completions</h3><dl class="kv dashkv"><dt>Requested</dt><dd>${fmtN(c.requested)}</dd><dt>Shown</dt><dd>${fmtN(c.shown)}${c.cached ? ` <span class="muted small">+ ${fmtN(c.cached)} from cache</span>` : ''}</dd><dt>Accepted</dt><dd><b>${fmtN(c.accepted)}</b>${c.shown + c.cached ? ` <span class="muted small">(${pct(c.acceptanceRate)})</span>` : ''}</dd><dt>Empty / failed</dt><dd class="muted">${c.empty} / ${c.error}</dd><dt>Latency</dt><dd>${pctl(c.latency)}</dd></dl>${c.byLanguage.length ? `<div class="chips small">${c.byLanguage.map((l) => `<span class="chip" title="${l.accepted} accepted of ${l.shown} shown">${esc(l.language)} <i class="muted">${l.shown ? pct((l.accepted / l.shown) * 100) : '0%'}</i></span>`).join('')}</div>` : ''}`;
@@ -1551,7 +1553,7 @@
     // Recent errors
     if (s.errors.length) {
       const ec = el('div', 'card tblwrap');
-      ec.innerHTML = `<h3>Recent problems <span class="count">${s.errors.length}</span></h3><table class="tbl dash-tbl errs"><tbody>${s.errors.slice(0, 12).map((e) => `<tr><td class="muted small nowrap">${fmtAgo(e.t)}</td><td><span class="badge ${e.kind === 'health' ? 'warn' : 'err'}">${esc(e.kind)}</span></td><td class="mono">${esc(e.what)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join('')}</tbody></table>`;
+      ec.innerHTML = `<h3>Recent problems <span class="count">${s.errors.length}</span></h3><table class="tbl dash-tbl errs"><tbody>${s.errors.slice(0, 12).map((e) => `<tr><td class="muted small nowrap">${fmtAgo(e.t)}</td><td><span class="badge ${e.kind === 'health' ? 'warn' : 'err'}">${esc(e.kind)}</span></td><td class="mono">${esc(e.kind === 'health' ? provName(e.what) : e.what)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join('')}</tbody></table>`;
       root.appendChild(ec);
     }
     renderStorage();

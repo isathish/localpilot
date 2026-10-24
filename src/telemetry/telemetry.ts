@@ -1,7 +1,16 @@
 // Local-only telemetry: what the models, tools and completions did on this machine, kept as daily JSONL files plus a
 // mirror of the LocalPilot log. Nothing here talks to the network. Pure Node so the extension and the CLI share it.
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+
+/**
+ * Where events and logs live: `~/.localpilot/telemetry`, shared by the extension and the CLI. `LOCALPILOT_TELEMETRY_DIR`
+ * overrides it — the test runner points it at a scratch folder so providers made up by tests never reach the real dashboard.
+ */
+export function defaultTelemetryDir(): string {
+  return process.env.LOCALPILOT_TELEMETRY_DIR || path.join(os.homedir(), '.localpilot', 'telemetry');
+}
 
 export type RunOutcome = 'done' | 'stopped' | 'failed';
 export type ModelOutcome = 'ok' | 'error' | 'retry' | 'aborted';
@@ -385,12 +394,16 @@ export class Telemetry {
   }
 
   // ------------------------------------------------------------------ aggregation
-  async summary(days: number): Promise<TelemetrySummary> {
+  /**
+   * Aggregates the last `days` days. `filter.providers` restricts model and health rows (and the totals they feed) to
+   * those provider ids, so the dashboard shows only providers that are configured and enabled right now.
+   */
+  async summary(days: number, filter?: SummaryFilter): Promise<TelemetrySummary> {
     const events = await this.events(days);
     const files = await this.files();
     const now = this.now;
     const from = days > 0 ? startOfDay(now) - (days - 1) * 86400_000 : events[0]?.t ?? now;
-    const s = summarize(events, { days, from, to: now });
+    const s = summarize(events, { days, from, to: now }, filter);
     s.storage = {
       events: events.length,
       bytes: files.reduce((a, f) => a + f.size, 0),
@@ -402,8 +415,14 @@ export class Telemetry {
   }
 }
 
+export interface SummaryFilter {
+  /** Only count model calls and health checks from these provider ids; `undefined` keeps everything. */
+  providers?: Iterable<string>;
+}
+
 /** Pure aggregation over a list of events (exported for tests and the preview). */
-export function summarize(events: TelemetryEvent[], range: { days: number; from: number; to: number }): TelemetrySummary {
+export function summarize(events: TelemetryEvent[], range: { days: number; from: number; to: number }, filter?: SummaryFilter): TelemetrySummary {
+  const onlyProviders = filter?.providers ? new Set(filter.providers) : undefined;
   const byDay = new Map<string, DayPoint>();
   const dayOf = (t: number) => {
     const k = dayKey(t);
@@ -443,6 +462,9 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
   const agents = new Map<string, AgentAgg>();
 
   for (const e of events) {
+    if (onlyProviders && (e.type === 'model' || e.type === 'health') && !onlyProviders.has(e.provider)) {
+      continue;
+    }
     const day = dayOf(e.t);
     switch (e.type) {
       case 'model': {

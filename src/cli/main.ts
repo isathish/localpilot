@@ -32,7 +32,7 @@ import { ToolRegistry } from '../tools/registry';
 import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
-import { Telemetry } from '../telemetry/telemetry';
+import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
 import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
@@ -463,7 +463,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   // Same local store as the extension, so CLI runs show up on the dashboard (events only; the CLI has its own log file).
-  const telemetry = new Telemetry({ dir: path.join(os.homedir(), '.localpilot', 'telemetry'), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
   runner.telemetry = telemetry;
   providers.telemetry = telemetry;
   const sessions = new Map<string, Session>();

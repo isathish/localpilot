@@ -43,13 +43,13 @@ import { LocalModelChatProvider } from './ui/lmProvider';
 import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 import { mirrorLog } from './telemetry/logMirror';
-import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
+import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(channel);
   // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
-  const telemetry = new Telemetry({ dir: path.join(os.homedir(), '.localpilot', 'telemetry'), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
   const log = mirrorLog(channel, telemetry);
   context.subscriptions.push(telemetry);
   void telemetry.loadRecentLogs();
