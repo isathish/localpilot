@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.3 — 2026-10-24
+### Fixed
+- Expand ~ in skill sources with native separators on Windows
+
 ## 1.1.2 — 2026-10-24
 
 ### Added
