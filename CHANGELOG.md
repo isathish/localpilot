@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.4 — 2026-10-24
+### Added
+- Enhance skills and subagents documentation, add installation from GitHub and catalog features
+
 ## 1.1.3 — 2026-10-24
 ### Fixed
 - Expand ~ in skill sources with native separators on Windows
