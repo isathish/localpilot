@@ -47,7 +47,7 @@ Every running agent has two buttons next to the composer: **Pause** (<kbd>⌥Esc
 
 ## The Agents panel
 
-Below the chat view (collapsed by default):
+Below the chat view (collapsed by default) — and still under the LocalPilot activity bar icon when the chat has been moved to the Secondary Side Bar or the Panel; its title bar has **Open Chat**:
 
 - **Running** — live status line (`Running grep_search…`), inline **Stop**, badge with the count.
 - **Idle** — recent sessions with mode, message count and changed-file count.

@@ -4,27 +4,20 @@ import { ChatController, FromWebview, ToWebview } from './chatController';
 /** Where the chat lives; mirrors the `localpilot.chat.location` setting. */
 export type ChatLocation = 'sidebar' | 'secondarySidebar' | 'panel' | 'editor';
 
+/** The chat and agents views exist once; VS Code moves them between containers like any other extension's views. */
+export const CHAT_VIEW_ID = 'localpilot.chatView';
+export const AGENTS_VIEW_ID = 'localpilot.agentsView';
 /**
- * Each container (activity bar, secondary side bar, panel) declares its own copy of the views in package.json,
- * shown only while `localpilot.chat.location` points at it. Switching the setting therefore moves the chat
- * without relying on runtime view-moving commands; a container with no visible views hides itself.
+ * Native move destinations for `localpilot.chat.location`. The secondary-side-bar and panel containers are
+ * contributed empty: they only exist so `vscode.moveViews` has somewhere to put the Chat view, and VS Code hides
+ * them while nothing is inside. Moving this way is what drag-and-drop does, so *Move View*, *Reset Location*
+ * and VS Code's own memory of where views live all keep working.
  */
-const CHAT_VIEW_FOR: Record<ChatLocation, string> = {
-  sidebar: 'localpilot.chatView',
-  editor: 'localpilot.chatView',
-  secondarySidebar: 'localpilot.chatView.secondary',
-  panel: 'localpilot.chatView.panel',
+export const CONTAINER_FOR: Record<Exclude<ChatLocation, 'editor'>, string> = {
+  sidebar: 'workbench.view.extension.localpilot',
+  secondarySidebar: 'workbench.view.extension.localpilot-secondary',
+  panel: 'workbench.view.extension.localpilot-panel',
 };
-const AGENTS_VIEW_FOR: Record<ChatLocation, string> = {
-  sidebar: 'localpilot.agentsView',
-  editor: 'localpilot.agentsView',
-  secondarySidebar: 'localpilot.agentsView.secondary',
-  panel: 'localpilot.agentsView.panel',
-};
-export const CHAT_VIEW_IDS = [...new Set(Object.values(CHAT_VIEW_FOR))];
-export const AGENTS_VIEW_IDS = [...new Set(Object.values(AGENTS_VIEW_FOR))];
-export const chatViewIdFor = (loc: ChatLocation): string => CHAT_VIEW_FOR[loc];
-export const agentsViewIdFor = (loc: ChatLocation): string => AGENTS_VIEW_FOR[loc];
 
 export const CHAT_LOCATIONS: { id: ChatLocation; label: string; detail: string; icon: string }[] = [
   { id: 'sidebar', label: 'Primary Side Bar', detail: 'Left, with the Explorer — under the LocalPilot activity bar icon', icon: 'layout-sidebar-left' },
@@ -91,30 +84,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.wire(panel.webview, () => this.panels.delete(panel), panel);
   }
 
-  /** Opens the chat wherever the user keeps it: the editor tab when `chat.location` is `editor`, otherwise the view. */
+  /** Location changes run one at a time; `reveal()` waits for a pending one so a focus never lands mid-move. */
+  private locationOp: Promise<void> = Promise.resolve();
+
+  /** Opens the chat wherever the user keeps it: the editor tab when `chat.location` is `editor`, otherwise the view (in whichever container VS Code has it). */
   reveal(): void {
-    const loc = getChatLocation();
-    if (loc === 'editor') {
+    if (getChatLocation() === 'editor') {
       this.openInEditor(vscode.ViewColumn.Active);
       return;
     }
-    if (this.view?.viewType === chatViewIdFor(loc)) {
-      this.view.show(true);
-    } else {
-      void vscode.commands.executeCommand(`${chatViewIdFor(loc)}.focus`);
+    // Always go through the focus command: it reveals the container wherever VS Code keeps the view, and never
+    // targets a view handle that a native move has just disposed ("unknown webview view").
+    void this.locationOp.then(() => vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`));
+  }
+
+  /**
+   * Moves the Chat view to the container for `loc` the way VS Code itself does (drag-and-drop, *Move View*), then
+   * focuses it. Only the chat moves: the Agents view stays under the activity bar icon, so the icon never vanishes
+   * and the primary side bar keeps a way back. Choosing the Primary Side Bar brings both views home.
+   */
+  applyLocation(loc: ChatLocation): Promise<void> {
+    if (loc === 'editor') {
+      this.openInEditor(vscode.ViewColumn.Active);
+      return Promise.resolve();
+    }
+    this.locationOp = this.locationOp.then(() => this.moveTo(loc));
+    return this.locationOp;
+  }
+
+  private async moveTo(loc: Exclude<ChatLocation, 'editor'>): Promise<void> {
+    try {
+      const viewIds = loc === 'sidebar' ? [CHAT_VIEW_ID, AGENTS_VIEW_ID] : [CHAT_VIEW_ID];
+      await vscode.commands.executeCommand('vscode.moveViews', { viewIds, destinationId: CONTAINER_FOR[loc] });
+      await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
+      void this.watchAfterMove();
+    } catch (e) {
+      void vscode.window.showWarningMessage(`LocalPilot could not move the chat to the ${CHAT_LOCATIONS.find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}. Drag the Chat view there instead — VS Code remembers the position.`);
     }
   }
 
-  /** Shows the chat in the container for `loc`; the views themselves switch through their `when` clauses. */
-  async applyLocation(loc: ChatLocation): Promise<void> {
-    if (loc === 'editor') {
-      this.openInEditor(vscode.ViewColumn.Active);
-      return;
-    }
-    try {
-      await vscode.commands.executeCommand(`${chatViewIdFor(loc)}.focus`);
-    } catch (e) {
-      void vscode.window.showWarningMessage(`LocalPilot could not open the chat in the ${CHAT_LOCATIONS.find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}`);
+  /**
+   * Right after a move the view is in transit (old pane disposed, new one created) and VS Code occasionally tears
+   * the new pane down again when the target part had been closed. Watch for a moment and focus again while the
+   * view does not exist; a view that exists but was hidden (the user closed the part) is left alone. Not awaited,
+   * so callers (and `reveal()`) are not held up by the settle time.
+   */
+  private async watchAfterMove(): Promise<void> {
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    let lastFocus = -1000;
+    let settled = 0;
+    for (let waited = 0; waited < 3000 && settled < 600; waited += 100) {
+      if (this.view) {
+        if (!this.view.visible) {
+          return;
+        }
+        settled += 100;
+      } else {
+        settled = 0;
+        if (waited - lastFocus >= 500) {
+          lastFocus = waited;
+          await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`).then(undefined, () => undefined);
+        }
+      }
+      await sleep(100);
     }
   }
 
@@ -123,7 +155,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const current = getChatLocation();
     const pick = await vscode.window.showQuickPick(
       CHAT_LOCATIONS.map((l) => ({ label: `$(${l.icon}) ${l.label}`, description: l.id === current ? 'current' : undefined, detail: l.detail, id: l.id })),
-      { title: 'Move LocalPilot Chat To…', placeHolder: 'Where should the chat live? You can also drag the view anywhere.', matchOnDetail: true }
+      { title: 'Move LocalPilot Chat To…', placeHolder: 'Where should the chat live? Dragging the view anywhere works too — VS Code remembers it.', matchOnDetail: true }
     );
     if (!pick) {
       return;
@@ -134,8 +166,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     await vscode.workspace.getConfiguration('localpilot').update('chat.location', pick.id, vscode.ConfigurationTarget.Global);
-    // The configuration listener reveals the chat too, but don't depend on its timing: show it now.
-    await this.applyLocation(pick.id);
+    // The configuration listener performs the move; wait for it (moves are serialised) rather than starting a second one.
+    await this.locationOp;
+    if (getChatLocation() !== pick.id) {
+      await this.applyLocation(pick.id);
+    }
   }
 
   private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void>; visible?: boolean }): void {

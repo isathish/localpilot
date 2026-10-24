@@ -54,7 +54,7 @@ suite('LocalPilot settings & setup', () => {
     }
   });
 
-  test('chat location: containers for every side, Move Chat To… everywhere, LocalPilot icon in editor title and status bar', async () => {
+  test('chat location: one set of views moved natively, destination containers for every side, Move Chat To… everywhere, LocalPilot icon in editor title and status bar', async () => {
     const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
     assert.ok(c.viewsContainers.activitybar.some((v: { id: string }) => v.id === 'localpilot'));
     assert.ok(c.viewsContainers.secondarySidebar.some((v: { id: string }) => v.id === 'localpilot-secondary'));
@@ -63,49 +63,60 @@ suite('LocalPilot settings & setup', () => {
     assert.strictEqual(c.configuration.properties['localpilot.chat.location'].default, 'sidebar');
     const menus = c.menus as Record<string, { command?: string; when?: string }[]>;
     assert.ok(menus['view/title'].some((m) => m.command === 'localpilot.moveChat' && /localpilot\\?\.chatView/.test(m.when ?? '')));
-    // One copy of the views per container, each shown only while the setting points at it.
+    // The views exist exactly once and are never gated on the location setting: VS Code moves them (drag-and-drop,
+    // Move View, Reset Location, or our vscode.moveViews call) exactly as it does for any other extension.
     const views = c.views as Record<string, { id: string; when?: string }[]>;
-    assert.ok(views['localpilot'].some((v) => v.id === 'localpilot.chatView' && /chat\.location/.test(v.when ?? '')));
-    assert.ok(views['localpilot-secondary'].some((v) => v.id === 'localpilot.chatView.secondary' && /== 'secondarySidebar'/.test(v.when ?? '')));
-    assert.ok(views['localpilot-panel'].some((v) => v.id === 'localpilot.chatView.panel' && /== 'panel'/.test(v.when ?? '')));
-    assert.ok(views['localpilot-secondary'].some((v) => v.id === 'localpilot.agentsView.secondary') && views['localpilot-panel'].some((v) => v.id === 'localpilot.agentsView.panel'));
-    for (const m of menus['view/title']) {
-      assert.ok(!/view == localpilot\.(chat|agents)View/.test(m.when ?? ''), `menu ${m.command} must match the per-container view ids: ${m.when}`);
+    assert.ok(views['localpilot'].some((v) => v.id === 'localpilot.chatView' && !v.when));
+    assert.ok(views['localpilot'].some((v) => v.id === 'localpilot.agentsView' && !v.when));
+    assert.deepStrictEqual(views['localpilot-secondary'], [], 'secondary side bar container is only a move destination');
+    assert.deepStrictEqual(views['localpilot-panel'], [], 'panel container is only a move destination');
+    for (const [, list] of Object.entries(views)) {
+      for (const v of list) {
+        assert.ok(!/chat\.location/.test(v.when ?? ''), `${v.id} must not be gated on the location setting`);
+      }
     }
     assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.openChat' && m.when?.includes('activeWebviewPanelId != localpilot.chatPanel')), 'LocalPilot icon on every editor');
     assert.ok(menus['editor/title'].some((m) => m.command === 'localpilot.moveChat' && m.when?.includes('activeWebviewPanelId == localpilot.chatPanel')), 'Move Chat To… on the chat tab');
     const commands = await vscode.commands.getCommands(true);
-    for (const id of ['localpilot.moveChat', 'localpilot.statusMenu', 'localpilot.openChatInEditor']) {
+    for (const id of ['localpilot.moveChat', 'localpilot.statusMenu', 'localpilot.openChatInEditor', 'vscode.moveViews', 'localpilot.chatView.focus', 'localpilot.agentsView.focus']) {
       assert.ok(commands.includes(id), `missing command ${id}`);
     }
-    // Every container's chat view is a real, focusable view; switching the setting reveals it there.
+    // Switching the setting moves the (single) chat view and reveals it; the UI must boot in its new home each time.
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const before = cfg.inspect<string>('chat.location')?.globalValue;
     const api = vscode.extensions.getExtension('localpilot.localpilot-agent')!.exports as { chatHost?: { viewId: string; visible: boolean; ready: boolean } };
     const until = async (ok: () => boolean, ms = 8000) => { const t0 = Date.now(); while (!ok() && Date.now() - t0 < ms) { await new Promise((r) => setTimeout(r, 100)); } return ok(); };
     try {
-      for (const [loc, viewId] of [['secondarySidebar', 'localpilot.chatView.secondary'], ['panel', 'localpilot.chatView.panel'], ['sidebar', 'localpilot.chatView']] as const) {
-        assert.ok(commands.includes(`${viewId}.focus`), `no focus command for ${viewId}`);
+      // Which workbench part hosts the view is not exposed by the API, so prove the move by closing the part it
+      // should be in: the chat must disappear with it.
+      const PARTS = { sidebar: 'workbench.action.closeSidebar', secondarySidebar: 'workbench.action.closeAuxiliaryBar', panel: 'workbench.action.closePanel' } as const;
+      for (const loc of ['secondarySidebar', 'panel', 'sidebar'] as const) {
         await cfg.update('chat.location', loc, vscode.ConfigurationTarget.Global);
-        // Simulates what Move Chat To… does after saving: the setting listener focuses the chat in its new home.
         await vscode.commands.executeCommand('localpilot.openChat');
-        const shown = await until(() => api.chatHost?.viewId === viewId && api.chatHost.visible);
-        assert.ok(shown, `after choosing ${loc} the chat should be visible in ${viewId}, got ${JSON.stringify(api.chatHost)}`);
-        // Visible is not enough: the UI must leave its boot screen (first session rendered) in the new container.
-        const booted = await until(() => api.chatHost?.viewId === viewId && api.chatHost.ready, 10_000);
-        assert.ok(booted, `the chat in ${viewId} stayed on its loading screen, got ${JSON.stringify(api.chatHost)}`);
+        const shown = await until(() => api.chatHost?.viewId === 'localpilot.chatView' && api.chatHost.visible);
+        assert.ok(shown, `after choosing ${loc} the chat view should be visible, got ${JSON.stringify(api.chatHost)}`);
+        const booted = await until(() => api.chatHost?.viewId === 'localpilot.chatView' && api.chatHost.ready, 10_000);
+        assert.ok(booted, `the chat stayed on its loading screen after moving to ${loc}, got ${JSON.stringify(api.chatHost)}`);
+        // Closing the part the chat was moved to must hide it; had it stayed elsewhere, this would leave it visible.
+        await vscode.commands.executeCommand(PARTS[loc]);
+        assert.ok(await until(() => !api.chatHost?.visible, 3000), `closing the ${loc} should hide the chat — it is not really there: ${JSON.stringify(api.chatHost)}`);
+        // The Agents view stays under the activity bar icon whatever the chat's location, so the icon never disappears.
+        await vscode.commands.executeCommand('localpilot.agentsView.focus');
       }
-      // The real "Move Chat To…" flow: run the command and answer its quick pick like a user would.
+      // The real "Move Chat To…" flow: run the command and answer its quick pick like a user would. Let the view
+      // settle first: a webview that becomes visible focuses its input, which would dismiss a quick pick opening at that instant.
+      await until(() => false, 800);
       const picked = vscode.commands.executeCommand('localpilot.moveChat');
-      await until(() => false, 400);
-      await vscode.commands.executeCommand('workbench.action.quickOpenNavigateNext');
+      await until(() => false, 1200);
+      await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
       await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
       await picked;
       assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('chat.location'), 'secondarySidebar', 'the second item (Secondary Side Bar) was accepted');
-      const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView.secondary' && api.chatHost.visible && api.chatHost.ready, 10_000);
-      assert.ok(moved, `Move Chat To… should show the booted chat on the right, got ${JSON.stringify(api.chatHost)}`);
+      const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView' && api.chatHost.visible && api.chatHost.ready, 10_000);
+      assert.ok(moved, `Move Chat To… should show the booted chat, got ${JSON.stringify(api.chatHost)}`);
     } finally {
       await cfg.update('chat.location', before, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand('vscode.moveViews', { viewIds: ['localpilot.chatView', 'localpilot.agentsView'], destinationId: 'workbench.view.extension.localpilot' });
     }
   });
 

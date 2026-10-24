@@ -92,7 +92,7 @@ Values: `always`, `ask`, `never`.
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). Change it with **LocalPilot: Move Chat To…** or by dragging the view |
+| `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). Changing it moves the Chat view with VS Code's own view mechanics (the same as drag-and-drop), so **Move View** / **Reset Location** in the view's context menu keep working; the Agents view and the activity bar icon stay in the Primary Side Bar. Also **LocalPilot: Move Chat To…** |
 | `localpilot.sessions.retention` | `50` | Max chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats never count. `0` keeps everything |
 | `localpilot.memory.enabled` | `true` | Let the agent save/read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
 

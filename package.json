@@ -79,54 +79,18 @@
           "id": "localpilot.chatView",
           "name": "Chat",
           "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot",
-          "when": "config.localpilot.chat.location != 'secondarySidebar' && config.localpilot.chat.location != 'panel'"
+          "contextualTitle": "LocalPilot"
         },
         {
           "id": "localpilot.agentsView",
           "name": "Agents",
           "icon": "media/icon.svg",
           "contextualTitle": "LocalPilot Agents",
-          "visibility": "collapsed",
-          "when": "config.localpilot.chat.location != 'secondarySidebar' && config.localpilot.chat.location != 'panel'"
+          "visibility": "collapsed"
         }
       ],
-      "localpilot-secondary": [
-        {
-          "type": "webview",
-          "id": "localpilot.chatView.secondary",
-          "name": "Chat",
-          "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot",
-          "when": "config.localpilot.chat.location == 'secondarySidebar'"
-        },
-        {
-          "id": "localpilot.agentsView.secondary",
-          "name": "Agents",
-          "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot Agents",
-          "visibility": "collapsed",
-          "when": "config.localpilot.chat.location == 'secondarySidebar'"
-        }
-      ],
-      "localpilot-panel": [
-        {
-          "type": "webview",
-          "id": "localpilot.chatView.panel",
-          "name": "Chat",
-          "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot",
-          "when": "config.localpilot.chat.location == 'panel'"
-        },
-        {
-          "id": "localpilot.agentsView.panel",
-          "name": "Agents",
-          "icon": "media/icon.svg",
-          "contextualTitle": "LocalPilot Agents",
-          "visibility": "collapsed",
-          "when": "config.localpilot.chat.location == 'panel'"
-        }
-      ]
+      "localpilot-secondary": [],
+      "localpilot-panel": []
     },
     "viewsWelcome": [
       {
@@ -642,6 +606,11 @@
           "command": "localpilot.showLogs",
           "when": "view =~ /^localpilot\\.chatView/",
           "group": "9_logs"
+        },
+        {
+          "command": "localpilot.openChat",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "navigation@0"
         },
         {
           "command": "localpilot.runParallelTasks",
@@ -1309,7 +1278,7 @@
           ],
           "default": "sidebar",
           "order": 1,
-          "markdownDescription": "Where the chat opens. Change it any time with *LocalPilot: Move Chat To…* (also in the chat toolbar and the status bar menu) or by dragging the view. The LocalPilot icon in the editor title bar and the status bar always opens the chat wherever it is."
+          "markdownDescription": "Where the chat opens. Changing it moves the Chat view there with VS Code's own view mechanics, so drag-and-drop, *Move View* and *Reset Location* keep working; the Agents view and the LocalPilot activity bar icon stay in the Primary Side Bar. Also available as *LocalPilot: Move Chat To…* in the chat toolbar and the status bar menu. The LocalPilot icon in the editor title bar and the status bar always opens the chat wherever it is."
         },
         "localpilot.models.autoSetup": {
           "type": "boolean",

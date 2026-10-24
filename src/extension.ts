@@ -32,7 +32,7 @@ import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
-import { AGENTS_VIEW_IDS, agentsViewIdFor, CHAT_LOCATIONS, CHAT_VIEW_IDS, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
+import { AGENTS_VIEW_ID, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
@@ -71,10 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // Register the chat hosts before anything is awaited: VS Code shows a bare progress bar in the view until the
   // provider exists, so this must not queue behind session/skill loading or model discovery.
   const view = new ChatViewProvider(context, controller);
-  // The same chat/agents views exist once per container (sidebar, secondary side bar, panel); `when` clauses show one set.
-  for (const id of CHAT_VIEW_IDS) {
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider(id, view, { webviewOptions: { retainContextWhenHidden: true } }));
-  }
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, view, { webviewOptions: { retainContextWhenHidden: true } }));
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
@@ -131,13 +128,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   // --- UI ----------------------------------------------------------------------------------
   const agentsTree = new AgentsTreeProvider(controller);
-  const agentsViews = AGENTS_VIEW_IDS.map((id) => vscode.window.createTreeView(id, { treeDataProvider: agentsTree, showCollapseAll: true }));
-  context.subscriptions.push(agentsTree, ...agentsViews);
+  const agentsView = vscode.window.createTreeView(AGENTS_VIEW_ID, { treeDataProvider: agentsTree, showCollapseAll: true });
+  context.subscriptions.push(agentsTree, agentsView);
   const updateAgentsBadge = () => {
     const n = controller.runningSessionIds.length;
-    for (const v of agentsViews) {
-      v.badge = n ? { value: n, tooltip: `${n} agent${n === 1 ? '' : 's'} running` } : undefined;
-    }
+    agentsView.badge = n ? { value: n, tooltip: `${n} agent${n === 1 ? '' : 's'} running` } : undefined;
     void vscode.commands.executeCommand('setContext', 'localpilot.hasChanges', tracker.count > 0);
   };
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
@@ -326,7 +321,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.moveChat', () => view.pickLocation());
   // The views switch containers through their `when` clauses; a settings change (from Move Chat To…, the Settings
   // UI or settings.json) only needs the chat revealed in its new home — a container is hidden until something focuses it.
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('localpilot.chat.location') && void view.applyLocation(getChatLocation())));
+  const LOCATION_APPLIED = 'localpilot.chat.locationApplied';
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration('localpilot.chat.location')) {
+      void context.globalState.update(LOCATION_APPLIED, getChatLocation());
+      void view.applyLocation(getChatLocation());
+    }
+  }));
+  // The setting is applied once per value: VS Code itself remembers where the views were dragged afterwards, and
+  // re-applying on every start would yank a view the user moved by hand back to the setting's container.
+  if (getChatLocation() !== 'editor' && context.globalState.get<string>(LOCATION_APPLIED) !== getChatLocation()) {
+    void context.globalState.update(LOCATION_APPLIED, getChatLocation());
+    if (getChatLocation() !== 'sidebar') {
+      setTimeout(() => void view.applyLocation(getChatLocation()), 1500);
+    }
+  }
   // Copilot-style status bar menu: one click reaches the chat, model, layout and settings.
   cmd('localpilot.statusMenu', async () => {
     const cfg = getConfig();
@@ -444,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     view.reveal();
     await controller.runParallel(tasks);
-    void vscode.commands.executeCommand(`${agentsViewIdFor(getChatLocation())}.focus`);
+    void vscode.commands.executeCommand(`${AGENTS_VIEW_ID}.focus`);
   });
   cmd('localpilot.clearHistory', async () => {
     const all = controller.store.list();
@@ -1105,7 +1114,7 @@ export interface LocalPilotApi {
   screenshotUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number }): Promise<{ name: string; data: string; mime: string; url: string; width: number; height: number }>;
   /** DevTools inspection of a URL: screenshot, console, network trace, performance and layout checks (optionally after actions). */
   inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
-  /** The view hosting the chat right now (`localpilot.chatView`, `.secondary`, `.panel`), whether it is visible and whether its UI has booted; undefined before the view is first shown or when the chat lives in an editor tab. */
+  /** The chat view (`localpilot.chatView`, wherever VS Code currently places it), whether it is visible and whether its UI has booted; undefined before the view is first shown or when the chat lives in an editor tab. */
   readonly chatHost: { viewId: string; visible: boolean; ready: boolean } | undefined;
 }
 
