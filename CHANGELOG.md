@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.1.10 — 2026-10-24
 ### Fixed
 - **Providers show their connection status without being asked.** The status dots on **Settings → Providers** stayed grey until *Check all connections* was clicked; the page now probes on its own when it opens, again when a provider is added or its URL changes, and when the last check is older than a minute — showing *checking* while it runs, then *N models · 12 ms* or *unreachable*. The button remains for an immediate re-check.
 - **The Workers card survives reopening a chat.** A finished fan-out used to collapse into a plain *Ran 2 subagents in parallel* row when the transcript was rebuilt; the report is now split back into the same **N Done** card with one collapsed lane per worker (report or error inside), including *N failed*. The Agents panel and `@localpilot` chat participant also show the checklist title for each worker.
