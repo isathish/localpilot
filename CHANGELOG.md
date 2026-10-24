@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.1.16 — 2026-10-24
+### Added
+- Improve subagent model handling; implement fast fallback for unresponsive models and enhance first-token timeout management
+
 ## 1.1.15 — 2026-10-24
 ### Added
 - Enhance model routing and unresponsive handling; implement unresponsive model tracking and improve fallback logic for subagents
