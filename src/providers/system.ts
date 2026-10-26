@@ -117,6 +117,11 @@ export function buildProfile(input: { platform: NodeJS.Platform; arch: string; c
 
 let cached: Promise<SystemProfile> | undefined;
 
+/** Pins the detected profile (tests: routing decisions must not depend on the runner's RAM); undefined re-detects. */
+export function overrideSystemProfile(profile: SystemProfile | undefined): void {
+  cached = profile ? Promise.resolve(profile) : undefined;
+}
+
 /** Detects the machine once per session (GPU probing shells out, so it is memoised). */
 export function getSystemProfile(force = false): Promise<SystemProfile> {
   if (!cached || force) {

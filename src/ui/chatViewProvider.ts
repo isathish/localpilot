@@ -186,7 +186,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let refocused = 0;
     for (let waited = 0; waited < 4000 && settled < 800; waited += 100) {
       if (this.view) {
-        if (!this.view.visible) {
+        // Hidden, or up and booted: the move is over and whatever happens next is the user's doing.
+        if (!this.view.visible || this.booted.has(this.view.webview)) {
           return;
         }
         settled += 100;

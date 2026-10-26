@@ -89,7 +89,8 @@ async function listMarkdown(dir: string, depth = 2): Promise<string[]> {
   return out;
 }
 
-const substitute = (v: string, root: string) => v.replace(/\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT/g, root);
+// The path that follows the variable is normalised with it so `${CLAUDE_PLUGIN_ROOT}/x` yields native separators on Windows.
+const substitute = (v: string, root: string) => v.replace(/(?:\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT)((?:[\\/][^\s"']*)?)/g, (_m, rest: string) => path.normalize(root + rest));
 
 function normalizeMcp(raw: unknown, root: string): Record<string, McpServerConfig> {
   const out: Record<string, McpServerConfig> = {};

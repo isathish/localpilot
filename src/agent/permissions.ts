@@ -146,7 +146,9 @@ export function matchPathRule(spec: string, target: string, root: string | undef
   let candidates: string[];
   const abs = norm(path.isAbsolute(target) ? target : path.resolve(root ?? process.cwd(), target));
   if (pattern.startsWith('//')) {
-    pattern = pattern.slice(1);
+    // `//etc/**` is absolute; on Windows `//C:/...` names a drive and must not keep a leading slash.
+    pattern = pattern.slice(2);
+    pattern = /^[a-zA-Z]:/.test(pattern) ? pattern : `/${pattern}`;
     candidates = [abs];
   } else if (pattern.startsWith('~/')) {
     pattern = norm(home) + pattern.slice(1);

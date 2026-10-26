@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
 import { isSaturated, pickAlternative, pickForRole, ProviderRegistry, scoreForRole } from '../providers/registry';
-import { buildProfile, estimateModelGb, fits, parameterSizeB } from '../providers/system';
+import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB } from '../providers/system';
 import { ModelInfo } from '../types';
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
@@ -245,6 +245,9 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const prev = { providers: cfg.inspect('providers')?.globalValue, disabled: cfg.inspect('models.disabled')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, vision: cfg.inspect('routing.vision')?.globalValue, fim: cfg.inspect('inlineCompletion.model')?.globalValue };
     const reg = new ProviderRegistry(log);
+    // Routing scores and the parallel spread weigh model footprints against the machine; pin a roomy one so the
+    // expectations below hold on a 7 GB CI runner as well as on a workstation.
+    overrideSystemProfile(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 64, vramGb: 0 }));
     try {
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
       await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
@@ -319,6 +322,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     } finally {
       reg.dispose();
       srv.close();
+      overrideSystemProfile(undefined);
       await cfg.update('routing.enabled', undefined, vscode.ConfigurationTarget.Global);
       await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
       await cfg.update('models.disabled', prev.disabled, vscode.ConfigurationTarget.Global);

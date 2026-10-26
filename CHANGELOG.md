@@ -38,6 +38,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - Message actions are reachable from the keyboard (they appear when a button in them takes focus, not only on hover); Escape closes an open picker even when focus has left it.
 - Stylesheet declares its encoding, so the `·` separators and `…` in the work strip and worker lanes no longer render as mojibake when the host does not pass a charset.
 - `run_command` with an **absolute `cwd`** (models routinely pass the workspace root itself) was glued onto the workspace root and failed with `spawn /bin/zsh ENOENT`; absolute paths are now honoured and a missing directory is reported as such.
+- Windows: `//C:/…` absolute permission rules match drive paths, and `${CLAUDE_PLUGIN_ROOT}/file` in plugin hooks and MCP definitions resolves with native separators.
+- The post-move watcher stops as soon as the chat UI has booted in its new container, so closing that part right after a move is never undone.
 
 ## 1.1.16 — 2026-10-24
 ### Added
