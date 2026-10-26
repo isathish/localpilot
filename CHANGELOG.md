@@ -3,12 +3,10 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
-### Fixed
-- **"The window is not responding" while a chat was open.** The chat view's syntax highlighter never advanced past a bare `@` in a code block (decorators such as `@Component` / `@dataclass` / `@Override`, e-mail addresses, `$@`), spinning VS Code's UI thread until the webview ran out of memory — and *Reopen* restored the same chat and froze again. The scanner now always moves forward and a decorator is one token. The same highlighter also copied the rest of the block for every identifier and every shell `$var` / `--flag`, which made long streaming code blocks quadratic (a 40 KB Python block took 330 ms per repaint; now 10 ms). A test now runs the highlighter under a time budget so a hang fails the suite instead of the editor.
 
 ## 1.2.1 — 2026-10-26
 ### Fixed
-- Optimize regex handling in shell script parsing to improve performance
+- **"The window is not responding" while a chat was open.** The chat view's syntax highlighter never advanced past a bare `@` in a code block (decorators such as `@Component` / `@dataclass` / `@Override`, e-mail addresses, `$@`), spinning VS Code's UI thread until the webview ran out of memory — and *Reopen* restored the same chat and froze again. The scanner now always moves forward and a decorator is one token. The same highlighter also copied the rest of the block for every identifier and every shell `$var` / `--flag`, which made long streaming code blocks quadratic (a 40 KB Python block took 330 ms per repaint; now 10 ms). A test now runs the highlighter under a time budget so a hang fails the suite instead of the editor.
 
 ## 1.2.0 — 2026-10-26
 ### Added
