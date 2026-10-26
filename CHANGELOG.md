@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.2.0 — 2026-10-26
 ### Added
 - **Claude Code project configuration works as-is.** LocalPilot now reads the same files Claude Code does — from both `.claude/` and `.localpilot/` — so a repository set up for Claude Code needs no changes:
   - **`settings.json` permission rules** (`~/.claude/settings.json` → `.claude/settings.json` → `.localpilot/settings.json` → `settings.local.json`): `permissions.allow / ask / deny` with Claude Code's rule syntax — `Bash(npm run test:*)` (prefix), `Bash(git status)` (exact), `Edit(src/**)` / `Read(.env)` / `Read(~/.zshrc)` / `Read(//abs/**)` (gitignore-style paths; `Read` covers search tools, `Edit` covers writes and deletes), `WebFetch(domain:github.com)`, `mcp__server` / `mcp__server__tool`, `Task`, `Skill`. Our own tool names work too (`run_command(git *)`). `deny` beats `ask` beats `allow`; a matching `allow` runs without the approval prompt, `ask` always prompts, `deny` returns a refusal to the model instead of running. Chained commands (`a && b | c`) must be allowed in every part and are denied if any part is. `permissions.defaultMode` (`acceptEdits`, `bypassPermissions`, `dontAsk`) decides when no rule matches. `/permissions` lists the rules in force.
