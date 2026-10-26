@@ -315,7 +315,7 @@
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
   }
   function wireGlobal(root) {
-    root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => post({ type: 'command', id: b.dataset.cmd, args: b.dataset.args ? JSON.parse(b.dataset.args) : undefined })));
+    root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => { let args; try { args = b.dataset.args ? JSON.parse(b.dataset.args) : undefined; } catch { args = undefined; } post({ type: 'command', id: b.dataset.cmd, args }); }));
     root.querySelectorAll('[data-url]').forEach((b) => (b.onclick = () => post({ type: 'openExternal', url: b.dataset.url })));
     root.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); reset(b.dataset.reset); }));
   }
@@ -1715,8 +1715,21 @@
   }
 
   // ------------------------------------------------------------------ messaging
+  // One handler that throws must cost one message, not the panel; what went wrong is reported to the extension log.
+  let reported = 0;
+  function reportError(where, err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[LocalPilot settings] ${where}: ${message}`, err);
+    if (reported++ < 20) { try { post({ type: 'clientError', where, message, stack: err instanceof Error && err.stack ? String(err.stack).split('\n').slice(0, 8).join('\n') : undefined }); } catch { /* bridge gone */ } }
+  }
+  window.addEventListener('error', (e) => reportError('uncaught', e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => reportError('unhandled rejection', e.reason));
   window.addEventListener('message', (ev) => {
     const m = ev.data;
+    if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
+    try { onMessage(m); } catch (err) { reportError(`message '${m.type}'`, err); }
+  });
+  function onMessage(m) {
     switch (m.type) {
       case 'state': {
         const prev = state.data;
@@ -1738,11 +1751,13 @@
         break;
       }
       case 'probe': {
-        state.probe = m.results; state.busy = false; state.dmr = m.dockerModelRunner || null; state.runtimes = m.runtimes || state.runtimes; state.starter = m.starter || state.starter;
-        for (const r of m.results) { state.tests[r.id] = r; }
+        // Results come from probing user-configured servers; a malformed entry must not take the whole page down.
+        const results = (Array.isArray(m.results) ? m.results : []).filter((r) => r && typeof r === 'object' && r.id).map((r) => ({ ...r, models: Array.isArray(r.models) ? r.models.filter(Boolean) : [] }));
+        state.probe = results; state.busy = false; state.dmr = m.dockerModelRunner || null; state.runtimes = m.runtimes || state.runtimes; state.starter = m.starter || state.starter;
+        for (const r of results) { state.tests[r.id] = r; }
         // After a one-click setup from the wizard, jump straight to the model step with the recommendation selected.
-        const found = m.results.filter((r) => r.ok && r.models.length);
-        if (state.page === 'setup' && state.setup.pendingAuto && found.length) { state.setup.pendingAuto = false; state.setup.providers = m.results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); state.setup.model = recommend(found); state.setup.step = 1; }
+        const found = results.filter((r) => r.ok && r.models.length);
+        if (state.page === 'setup' && state.setup.pendingAuto && found.length) { state.setup.pendingAuto = false; state.setup.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); state.setup.model = recommend(found); state.setup.step = 1; }
         render();
         break;
       }
@@ -1773,7 +1788,9 @@
         if (m.q !== g.q || m.capability !== g.capability || m.sort !== g.sort) { break; }
         g.loading = false; g.error = m.error || null; g.hasMore = !!m.hasMore; g.page = m.page;
         const seen = new Set(m.page > 1 ? g.models.map((x) => x.name) : []);
-        g.models = [...(m.page > 1 ? g.models : []), ...(m.models || []).filter((x) => !seen.has(x.name))];
+        g.models = [...(m.page > 1 ? g.models : []), ...(m.models || []).filter((x) => x && !seen.has(x.name))];
+        // "Load more" is open-ended; the list is re-rendered whole, so keep what fits on screen comfortably.
+        if (g.models.length > 600) { g.models = g.models.slice(g.models.length - 600); }
         if (state.section === 'gallery' && state.gallery.source === (m.source || 'ollama')) { renderGalleryResults(); }
         break;
       }
@@ -1819,6 +1836,6 @@
         toast(m.text, m.level);
         break;
     }
-  });
+  }
   post({ type: 'ready' });
 })();

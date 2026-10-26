@@ -160,28 +160,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   projectSettings.pluginLayers = plugins.settingsLayers();
   await projectSettings.reload();
   await (controller.loaded = Promise.all([store.load(), skills.refresh(), commands.refresh()]));
-  void mcp.reload();
+  /** Background refreshes must never surface as unhandled rejections: one failing layer is logged, the others still apply. */
+  const refresh = (what: string, p: Promise<unknown>) => void p.catch((e) => log.warn(`${what}: ${e instanceof Error ? e.message : String(e)}`));
+  refresh('mcp', mcp.reload());
   context.subscriptions.push(
     plugins.onDidChange(() => {
       projectSettings.pluginLayers = plugins.settingsLayers();
-      void projectSettings.reload();
-      void skills.refresh();
-      void commands.refresh();
-      void mcp.reload();
+      refresh('settings', projectSettings.reload());
+      refresh('skills', skills.refresh());
+      refresh('commands', commands.refresh());
+      refresh('mcp', mcp.reload());
     }),
-    projectSettings.onDidChange(() => void plugins.refresh())
+    projectSettings.onDidChange(() => refresh('plugins', plugins.refresh()))
   );
   // Index the skill catalog off the critical path so the first request can already match uninstalled skills.
   if (getConfig().skillAutoInstall !== 'off') {
-    setTimeout(() => void catalog.refresh().catch((e) => log.warn(`skill catalog: ${String(e)}`)), 5_000);
+    setTimeout(() => refresh('skill catalog', catalog.refresh()), 5_000);
   }
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('localpilot.skillsPaths') || e.affectsConfiguration('localpilot.skills.builtin') || e.affectsConfiguration('localpilot.skills.disabled') || e.affectsConfiguration('localpilot.skills.autoInstall')) {
-        void skills.refresh();
+        refresh('skills', skills.refresh());
       }
       if (e.affectsConfiguration('localpilot.skills.repositories')) {
-        void catalog.refresh().catch((err) => log.warn(`skill catalog: ${String(err)}`));
+        refresh('skill catalog', catalog.refresh());
       }
     })
   );

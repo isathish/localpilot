@@ -131,6 +131,8 @@ export type FromWebview =
   | { type: 'inspectUrl'; url?: string; mobile?: boolean }
   | { type: 'openBrowser'; url?: string }
   | { type: 'requestOpenFiles' }
+  /** The webview's script hit an error (uncaught exception, rejected promise or a handler that threw): logged host-side so a dead UI is never silent. */
+  | { type: 'clientError'; where: string; message: string; stack?: string }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
   | { type: 'showDiff'; sessionId: string; fsPath: string }
@@ -1121,6 +1123,9 @@ export class ChatController implements vscode.Disposable {
       }
       case 'requestOpenFiles':
         this.broadcast({ type: 'openFiles', files: this.workspace.openEditors() });
+        return;
+      case 'clientError':
+        this.log.error(`chat webview (${msg.where}): ${msg.message}${msg.stack ? `\n${msg.stack}` : ''}`);
         return;
       case 'keepChanges':
         this.tracker.keep(msg.sessionId, msg.fsPath);

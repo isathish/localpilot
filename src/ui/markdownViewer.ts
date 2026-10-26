@@ -6,6 +6,7 @@ type Source = { kind: 'file'; uri: vscode.Uri } | { kind: 'text'; title: string;
 
 type FromViewer =
   | { type: 'ready' }
+  | { type: 'clientError'; where: string; message: string; stack?: string }
   | { type: 'openEditor' }
   | { type: 'saveAs' }
   | { type: 'reload' }
@@ -79,7 +80,8 @@ export class MarkdownViewer implements vscode.Disposable {
   }
 
   private post(m: ToViewer): void {
-    void this.panel?.webview.postMessage(m);
+    // Rejects once the panel is disposed (a file change can race the close); nothing to do about it.
+    this.panel?.webview.postMessage(m).then(undefined, () => undefined);
   }
 
   private watch(uri: vscode.Uri): void {
@@ -165,6 +167,9 @@ export class MarkdownViewer implements vscode.Disposable {
   private async handle(m: FromViewer): Promise<void> {
     const s = this.source;
     switch (m.type) {
+      case 'clientError':
+        this.log.error(`markdown viewer webview (${m.where}): ${m.message}${m.stack ? `\n${m.stack}` : ''}`);
+        return;
       case 'ready':
       case 'reload':
         return this.render();

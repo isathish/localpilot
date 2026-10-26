@@ -97,19 +97,42 @@
   });
   window.addEventListener('resize', () => { if (state.outline === null && els.outline.innerHTML && window.innerWidth < 720) { setOutline(false, false); } });
 
+  // Rendered HTML comes from VS Code's Markdown engine over text the model or a file wrote. The CSP already blocks
+  // inline script; this strips what it would not — embedded frames, forms, on* attributes and script: URLs — so
+  // a document can only ever be a document.
+  function scrub(html) {
+    const t = document.createElement('template'); t.innerHTML = String(html || '');
+    for (const n of t.content.querySelectorAll('script,iframe,object,embed,link,meta,base,form,style')) { n.remove(); }
+    for (const n of t.content.querySelectorAll('*')) { for (const a of [...n.attributes]) { if (/^on/i.test(a.name) || (/^(href|src|xlink:href|action|formaction|srcdoc)$/i.test(a.name) && /^\s*(javascript|vbscript|data:text\/html)/i.test(a.value))) { n.removeAttribute(a.name); } } }
+    return t.innerHTML;
+  }
+  let reported = 0;
+  function reportError(where, err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[LocalPilot markdown] ${where}: ${message}`, err);
+    if (reported++ < 20) { try { post({ type: 'clientError', where, message, stack: err instanceof Error && err.stack ? String(err.stack).split('\n').slice(0, 8).join('\n') : undefined }); } catch { /* bridge gone */ } }
+  }
+  window.addEventListener('error', (e) => reportError('uncaught', e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => reportError('unhandled rejection', e.reason));
+
   window.addEventListener('message', (ev) => {
     const m = ev.data;
+    if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
+    try { onMessage(m); } catch (err) { reportError(`message '${m.type}'`, err); }
+  });
+  function onMessage(m) {
     if (m.type === 'content') {
       const y = els.doc.scrollTop;
-      markdown = m.markdown;
-      document.documentElement.style.setProperty('--fs', `${m.fontSize}px`);
-      els.title.textContent = m.title; els.subtitle.textContent = `${m.subtitle} · ${m.words.toLocaleString()} words · ~${Math.max(1, Math.round(m.words / 220))} min`;
-      els.doc.innerHTML = `<article class="md">${m.html}</article>`;
+      markdown = String(m.markdown || '');
+      const words = Number.isFinite(m.words) ? m.words : 0;
+      document.documentElement.style.setProperty('--fs', `${Number(m.fontSize) || 14}px`);
+      els.title.textContent = m.title || ''; els.subtitle.textContent = `${m.subtitle || ''} · ${words.toLocaleString()} words · ~${Math.max(1, Math.round(words / 220))} min`;
+      els.doc.innerHTML = `<article class="md">${scrub(m.html)}</article>`;
       els.save.title = m.isFile ? 'Save a copy as…' : 'Save as…';
       els.open.title = m.isFile ? 'Open in editor' : 'Open as a new Markdown document';
       decorate();
       els.doc.scrollTop = y; // live reload keeps your place
     } else if (m.type === 'toast') { toast(m.text, m.level); }
-  });
+  }
   post({ type: 'ready' });
 })();

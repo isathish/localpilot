@@ -82,7 +82,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }, view);
     view.onDidChangeVisibility(() => {
       if (view.visible) {
-        void view.webview.postMessage({ type: 'focusInput' } satisfies ToWebview);
+        view.webview.postMessage({ type: 'focusInput' } satisfies ToWebview).then(undefined, () => undefined);
       }
       this.controller.surfaceVisibilityChanged();
     });
@@ -98,7 +98,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const existing = this.panels.values().next().value as vscode.WebviewPanel | undefined;
     if (existing) {
       existing.reveal(undefined, false);
-      void existing.webview.postMessage({ type: 'focusInput' } satisfies ToWebview);
+      existing.webview.postMessage({ type: 'focusInput' } satisfies ToWebview).then(undefined, () => undefined);
       return;
     }
     const panel = vscode.window.createWebviewPanel(ChatViewProvider.panelViewType, 'LocalPilot Chat', column, {
@@ -123,7 +123,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     // Always go through the focus command: it reveals the container wherever VS Code keeps the view, and never
     // targets a view handle that a native move has just disposed ("unknown webview view").
-    void this.locationOp.then(() => this.focusView());
+    void this.locationOp.then(() => this.focusView()).catch(() => undefined);
   }
 
   /**
@@ -164,7 +164,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
       // The move disposed the view in the old container; only what happens to the new one matters from here.
       this.lastDisposal = undefined;
-      void this.watchAfterMove();
+      void this.watchAfterMove().catch(() => undefined);
     } catch (e) {
       void vscode.window.showWarningMessage(`LocalPilot could not move the chat to the ${describeChatLocations().find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}. Drag the Chat view there instead — VS Code remembers the position.`);
     }
@@ -236,7 +236,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void>; visible?: boolean }): void {
     webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')] };
     webview.html = this.html(webview);
-    const sink = { post: (m: ToWebview) => void webview.postMessage(m), visible: () => host.visible !== false };
+    // `postMessage` rejects once the webview is gone (a view torn down mid-stream, an editor tab closed while a
+    // run is in flight); a rejection per streamed token would flood the extension host with unhandled errors.
+    let disposed = false;
+    const sink = {
+      post: (m: ToWebview) => {
+        if (!disposed) {
+          webview.postMessage(m).then(undefined, () => undefined);
+        }
+      },
+      visible: () => host.visible !== false,
+    };
     const attach = this.controller.attach(sink);
     const sub = webview.onDidReceiveMessage((m: FromWebview) => {
       if (m.type === 'booted') {
@@ -256,6 +266,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       void this.controller.handle(m).catch((e) => sink.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) }));
     });
     host.onDidDispose(() => {
+      disposed = true;
       attach.dispose();
       sub.dispose();
       onDispose();

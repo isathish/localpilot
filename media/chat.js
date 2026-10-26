@@ -166,6 +166,8 @@
     const SH_VAR = /\$(?:\{[^}]*\}|[\w@#?*!$-]+)/y; const SH_FLAG = /-{1,2}[\w-]+/y;
     const at = (re) => { re.lastIndex = i; return re.exec(code); };
     while (i < n) {
+      const start = i;
+      do {
       const ch = code[i]; const two = code.slice(i, i + 2);
       if (two === '/*' && lang !== 'py' && lang !== 'sh') { const e = code.indexOf('*/', i + 2); const end = e < 0 ? n : e + 2; push('c', code.slice(i, end)); i = end; continue; }
       if (code.startsWith(lineC, i)) { const e = code.indexOf('\n', i); const end = e < 0 ? n : e; push('c', code.slice(i, end)); i = end; continue; }
@@ -196,6 +198,10 @@
       if (/[=+\-*/%<>!&|^~?:]/.test(ch)) { let j = i; while (j < n && /[=+\-*/%<>!&|^~?:]/.test(code[j]) && j - i < 3) { j++; } push('op', code.slice(i, j)); i = j; continue; }
       let j = i; while (j < n && !/[\w$"'`#/{}()[\];,.=+\-*%<>!&|^~?:@]/.test(code[j])) { j++; } if (j === i) { j++; }
       push('', code.slice(i, j)); i = j;
+      } while (false);
+      // No branch may ever leave `i` where it was: this loop runs on the UI thread, and one character it cannot
+      // classify must cost one character, not the window.
+      if (i === start) { push('', code[i]); i++; }
     }
     return out.join('');
   }
@@ -1958,14 +1964,14 @@
     // Isolated worktree: the agent's edits are not in the workspace yet — Apply brings them over, Discard throws the copy away.
     els.changes.classList.toggle('isolated', !!wt);
     const head = els.changes.querySelector('.panel-head');
-    const undoAll = head.querySelector('[data-a="undoAll"]'); const keepAll = head.querySelector('[data-a="keepAll"]');
+    // The two buttons are relabelled in place as the session moves between a worktree and the workspace; look them up by either name.
+    const undoAll = head.querySelector('[data-a="undoAll"], [data-a="discardWorktree"]'); const keepAll = head.querySelector('[data-a="keepAll"], [data-a="applyWorktree"]');
     if (wt) {
-      undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree';
-      keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree';
+      if (undoAll) { undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
+      if (keepAll) { keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
     } else {
-      const u = head.querySelector('[data-a="discardWorktree"]'); const k = head.querySelector('[data-a="applyWorktree"]');
-      if (u) { u.title = 'Reject all changes'; u.querySelector('.long').textContent = 'Reject all'; u.dataset.a = 'undoAll'; }
-      if (k) { k.title = 'Accept all changes'; k.querySelector('.long').textContent = 'Accept all'; k.dataset.a = 'keepAll'; }
+      if (undoAll) { undoAll.title = 'Reject all changes'; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.dataset.a = 'undoAll'; }
+      if (keepAll) { keepAll.title = 'Accept all changes'; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; }
     }
     const sig = `${s.id}|${wt ? 'wt' : ''}|${files.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}`).join('|')}`;
     if (sig === changesSig) { return; }
@@ -2312,7 +2318,30 @@
     bootTimer = setTimeout(requestInit, bootTries < 3 ? 2500 : 6000);
   }
 
+  // ------------------------------------------------------------------ error boundary
+  // The webview shares VS Code's UI thread; a handler that throws must cost one message, not the whole chat. Errors
+  // are reported to the extension (they end up in the LocalPilot output log) — a silent, half-dead UI is the worst outcome.
+  let reported = 0;
+  function reportError(where, err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? String(err.stack).split('\n').slice(0, 8).join('\n') : undefined;
+    console.error(`[LocalPilot chat] ${where}: ${message}`, err);
+    if (reported++ < 20) { try { post({ type: 'clientError', where, message, stack }); } catch { /* the bridge itself is gone */ } }
+  }
+  window.addEventListener('error', (e) => reportError('uncaught', e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => reportError('unhandled rejection', e.reason));
+
   window.addEventListener('message', (ev) => onMessage(ev.data));
+  function onMessage(m) {
+    if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
+    try {
+      dispatch(m);
+    } catch (err) {
+      reportError(`message '${m.type}'`, err);
+      // A render that threw midway can leave the live turn or the tab strip half-drawn; a fresh paint is cheap.
+      if (m.type === 'event' || m.type === 'session' || m.type === 'replay') { try { if (state.session) { renderSession(); } renderTabs(); } catch { /* already reported */ } }
+    }
+  }
   /**
    * A run that was in flight when this webview was created (chat closed and reopened, moved to another container,
    * opened in an editor tab) arrives as one `replay`: the same events, queued steering rows and pending approvals the
@@ -2329,9 +2358,9 @@
     if (state.session && state.session.id === sid) { if (live.dirty) { scheduleRender(live); } scrollToBottom(true); updateJump(); }
     renderTabs();
   }
-  function onMessage(m) {
+  function dispatch(m) {
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models; state.modelsLoading = !m.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills; state.agents = m.agents; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (hist.open) { renderHistory(); } break;
       case 'searchResults': if (hist.open && m.query === hist.q.trim()) { hist.hits = m; hist.pending = false; renderHistory(); } break;
       case 'session': {
@@ -2347,7 +2376,7 @@
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model(s) found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
-      case 'event': handleEvent(m.event); break;
+      case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'paused': {
         if (m.childId) { laneSetPaused(m.sessionId, m.childId, m.paused, m.holding); break; }
         state.paused.set(m.sessionId, { paused: m.paused, holding: m.holding });

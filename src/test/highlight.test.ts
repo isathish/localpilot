@@ -43,6 +43,14 @@ suite('Chat syntax highlighter', () => {
     }
   });
 
+  test('every character class terminates and the text survives (progress guard)', () => {
+    // One of every 37th code point across the BMP: punctuation, symbols, CJK, surrogates, controls.
+    const exotic = Array.from({ length: 2000 }, (_, i) => String.fromCharCode(32 + ((i * 37) % 60000))).join('');
+    for (const lang of ['ts', 'py', 'sh', 'go', 'java', 'c', 'sql', 'ruby', 'php', 'unknown-lang']) {
+      assert.strictEqual(text(highlight(exotic, lang)), exotic, `${lang}: text must survive`);
+    }
+  });
+
   test('a decorator is one token; keywords, calls and members are still classified', () => {
     const out = highlight('@Component() class X { run() { this.items.map(f); return 42; } }', 'ts');
     assert.ok(out.includes('<span class="tk-f">@Component</span>'), out);

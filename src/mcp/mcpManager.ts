@@ -136,6 +136,7 @@ class McpClient implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.failPending(new Error('MCP server stopped'));
     this.child?.kill();
   }
 }
@@ -156,7 +157,15 @@ export class McpManager implements vscode.Disposable {
     this.configSub = onConfigChange(() => void this.reload());
   }
 
-  async reload(): Promise<void> {
+  /** Reloads run one at a time: a second settings change while servers are still starting must not race `stopAll()` against `start()`. */
+  private reloading: Promise<void> = Promise.resolve();
+
+  reload(): Promise<void> {
+    this.reloading = this.reloading.then(() => this.doReload()).catch((e) => this.log.error(`MCP reload failed: ${e instanceof Error ? e.message : String(e)}`));
+    return this.reloading;
+  }
+
+  private async doReload(): Promise<void> {
     this.stopAll();
     this.errors.clear();
     const servers = { ...this.extraServers(), ...getConfig().mcpServers };

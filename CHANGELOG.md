@@ -3,6 +3,12 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Fixed
+- **Stability pass after the window-freeze fix.** The three webviews (chat, settings, Markdown reader) now have an error boundary: a message handler that throws costs that one message instead of leaving a half-dead panel, malformed payloads are ignored rather than crashing the page, and uncaught errors / rejected promises inside a webview are reported to the LocalPilot output log (`clientError`), so a broken UI is never silent. The chat's syntax highlighter has a progress guard — no branch can ever leave the scanner where it was, whatever character the model emits (tested across the BMP). The Markdown reader scrubs frames, forms, `on*` handlers and `javascript:` URLs out of rendered HTML on top of the CSP.
+- **Extension host: no more unhandled rejections from the UI bridge.** `postMessage` to a webview that was just disposed (view torn down mid-stream, editor tab closed during a run) rejected once per streamed token; every bridge now swallows that and a disposed chat host stops posting. Background refreshes (plugins, skills, commands, MCP, skill catalog) log a failure instead of surfacing as an unhandled rejection, and one failing layer no longer blocks the others.
+- **MCP**: settings changes while servers are still starting no longer race `stop` against `start` (reloads are serialised), and stopping a server fails its in-flight tool calls immediately instead of leaving them hanging until their timeout.
+- **Telemetry**: a dashboard listener that throws can no longer break event/log recording, and the write queue is capped so a stuck disk cannot grow memory without bound.
+- Settings: model-gallery "Load more" keeps the last 600 entries instead of growing forever; a malformed command button no longer throws on click.
 
 ## 1.2.1 — 2026-10-26
 ### Fixed

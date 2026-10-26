@@ -109,6 +109,7 @@ type ToSettings =
 
 type FromSettings =
   | { type: 'ready' }
+  | { type: 'clientError'; where: string; message: string; stack?: string }
   | { type: 'set'; key: string; value: unknown; scope: 'user' | 'workspace' }
   | { type: 'reset'; key: string; scope: 'user' | 'workspace' }
   | { type: 'test'; provider: ProviderConfig }
@@ -282,12 +283,16 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   private post(m: ToSettings): void {
-    void this.panel?.webview.postMessage(m);
+    // Rejects once the panel is disposed (a coalesced jobs/models refresh can fire after close); nothing to do about it.
+    this.panel?.webview.postMessage(m).then(undefined, () => undefined);
   }
 
   // ------------------------------------------------------------------ messages
   private async handle(m: FromSettings): Promise<void> {
     switch (m.type) {
+      case 'clientError':
+        this.log.error(`settings webview (${m.where}): ${m.message}${m.stack ? `\n${m.stack}` : ''}`);
+        return;
       case 'ready':
         this.navigate = true;
         return this.pushState();
@@ -313,13 +318,16 @@ export class SettingsPanel implements vscode.Disposable {
         if (!isValidInstallRef(m.target, m.model)) {
           throw new Error(`Not a valid ${TARGET_LABEL[m.target] ?? m.target} model reference: ${m.model}`);
         }
-        void this.models.pull(m.target, m.model, this.runtimeProvider(m.target)).then((job) => {
-          if (job.status === 'done') {
-            this.post({ type: 'toast', level: 'info', text: `${job.model} installed` });
-          } else if (job.status === 'error') {
-            this.post({ type: 'toast', level: 'error', text: `Install failed: ${job.error}` });
-          }
-        });
+        void this.models.pull(m.target, m.model, this.runtimeProvider(m.target)).then(
+          (job) => {
+            if (job.status === 'done') {
+              this.post({ type: 'toast', level: 'info', text: `${job.model} installed` });
+            } else if (job.status === 'error') {
+              this.post({ type: 'toast', level: 'error', text: `Install failed: ${job.error}` });
+            }
+          },
+          (e: unknown) => this.post({ type: 'toast', level: 'error', text: `Install failed: ${e instanceof Error ? e.message : String(e)}` })
+        );
         return;
       case 'gallerySearch':
         return this.gallerySearch(m);

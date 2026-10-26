@@ -126,6 +126,14 @@ const FLUSH_MS = 400;
 const MAX_SUMMARY_DAYS = 365;
 const LOG_PREFIX = 'localpilot-';
 const EVENT_PREFIX = 'events-';
+/** Lines queued for one file between flushes. Only reachable when the disk is stuck; then the oldest lines go rather than memory. */
+const MAX_PENDING_LINES = 20_000;
+
+const capPending = (lines: string[]): void => {
+  if (lines.length > MAX_PENDING_LINES) {
+    lines.splice(0, lines.length - MAX_PENDING_LINES);
+  }
+};
 
 const dayKey = (t: number): string => {
   const d = new Date(t);
@@ -186,10 +194,9 @@ export class Telemetry {
       this.pendingEvents.set(key, lines);
     }
     lines.push(JSON.stringify(ev));
+    capPending(lines);
     this.schedule();
-    for (const l of this.eventListeners) {
-      l(ev);
-    }
+    this.notify(this.eventListeners, ev);
   }
 
   onEvent(l: (e: TelemetryEvent) => void): () => void {
@@ -212,9 +219,19 @@ export class Telemetry {
       this.pendingLogs.set(key, lines);
     }
     lines.push(`${new Date(entry.t).toISOString()} [${level}] ${entry.msg.replace(/\r?\n/g, '\\n')}`);
+    capPending(lines);
     this.schedule();
-    for (const l of this.logListeners) {
-      l(entry);
+    this.notify(this.logListeners, entry);
+  }
+
+  /** A listener that throws (a dashboard mid-teardown, say) must not take the recorder — or the other listeners — down with it. */
+  private notify<T>(listeners: Set<(e: T) => void>, e: T): void {
+    for (const l of listeners) {
+      try {
+        l(e);
+      } catch {
+        /* the listener's problem, not the recorder's */
+      }
     }
   }
 
