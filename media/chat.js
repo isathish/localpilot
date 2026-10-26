@@ -161,6 +161,10 @@
     const TRIPLE = ['"""', "'''"];
     const out = []; let i = 0; const n = code.length;
     const push = (cls, t) => out.push(cls ? tok(cls, t) : esc(t));
+    // Sticky regexes match at `i` without copying the rest of the block (`code.slice(i)` per token made a long
+    // streaming block quadratic — enough to freeze the window).
+    const SH_VAR = /\$(?:\{[^}]*\}|[\w@#?*!$-]+)/y; const SH_FLAG = /-{1,2}[\w-]+/y;
+    const at = (re) => { re.lastIndex = i; return re.exec(code); };
     while (i < n) {
       const ch = code[i]; const two = code.slice(i, i + 2);
       if (two === '/*' && lang !== 'py' && lang !== 'sh') { const e = code.indexOf('*/', i + 2); const end = e < 0 ? n : e + 2; push('c', code.slice(i, end)); i = end; continue; }
@@ -172,12 +176,15 @@
         push('s', code.slice(i, j + 1)); i = j + 1; continue;
       }
       if (/[0-9]/.test(ch) && !/[\w$]/.test(code[i - 1] || ' ')) { let j = i; while (j < n && /[0-9a-fA-FxX._]/.test(code[j])) { j++; } push('n', code.slice(i, j)); i = j; continue; }
-      if (lang === 'sh' && ch === '$') { const m = /^\$(?:\{[^}]*\}|[\w@#?*!$-]+)/.exec(code.slice(i)); if (m) { push('v', m[0]); i += m[0].length; continue; } }
-      if (lang === 'sh' && ch === '-' && (i === 0 || /\s/.test(code[i - 1]))) { const m = /^-{1,2}[\w-]+/.exec(code.slice(i)); if (m) { push('p', m[0]); i += m[0].length; continue; } }
+      if (lang === 'sh' && ch === '$') { const m = at(SH_VAR); if (m) { push('v', m[0]); i += m[0].length; continue; } }
+      if (lang === 'sh' && ch === '-' && (i === 0 || /\s/.test(code[i - 1]))) { const m = at(SH_FLAG); if (m) { push('p', m[0]); i += m[0].length; continue; } }
       if (/[A-Za-z_$@]/.test(ch)) {
-        let j = i; while (j < n && /[\w$]/.test(code[j])) { j++; }
+        // Start past `ch`: `@` opens a decorator but is not a word character, and a scanner that never advanced
+        // on it spun the UI thread forever.
+        let j = i + 1; while (j < n && /[\w$]/.test(code[j])) { j++; }
         const w = code.slice(i, j); let k = j; while (k < n && code[k] === ' ') { k++; }
-        const prev = code.slice(0, i).replace(/\s+$/, '').slice(-1);
+        let p = i - 1; while (p >= 0 && /\s/.test(code[p])) { p--; }
+        const prev = p >= 0 ? code[p] : '';
         if (kws.has(w)) { push('k', w); }
         else if (prev === '.' && code[k] !== '(') { push('p', w); }
         else if (code[k] === '(') { push('f', w); }
