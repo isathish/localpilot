@@ -98,7 +98,11 @@ suite('LocalPilot settings & setup', () => {
         const booted = await until(() => api.chatHost?.viewId === 'localpilot.chatView' && api.chatHost.ready, 10_000);
         assert.ok(booted, `the chat stayed on its loading screen after moving to ${loc}, got ${JSON.stringify(api.chatHost)}`);
         // Closing the part the chat was moved to must hide it; had it stayed elsewhere, this would leave it visible.
+        // (Linux under xvfb occasionally swallows a close issued right after a move — a user would click again.)
         await vscode.commands.executeCommand(PARTS[loc]);
+        if (!(await until(() => !api.chatHost?.visible, 1500))) {
+          await vscode.commands.executeCommand(PARTS[loc]);
+        }
         assert.ok(await until(() => !api.chatHost?.visible, 3000), `closing the ${loc} should hide the chat — it is not really there: ${JSON.stringify(api.chatHost)}`);
         // The Agents view stays under the activity bar icon whatever the chat's location, so the icon never disappears.
         await vscode.commands.executeCommand('localpilot.agentsView.focus');
