@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.2.1 — 2026-10-26
+### Fixed
+- Optimize regex handling in shell script parsing to improve performance
+
 ## 1.2.0 — 2026-10-26
 ### Added
 - **Claude Code project configuration works as-is.** LocalPilot now reads the same files Claude Code does — from both `.claude/` and `.localpilot/` — so a repository set up for Claude Code needs no changes:
