@@ -51,6 +51,8 @@ Values: `always` (auto-approve), `ask` (inline prompt with *Allow* / *Allow for 
 
 Potentially destructive commands (`rm -rf /`, `sudo`, `git push --force`, …) are flagged in the approval card even when the policy is `always`-for-writes.
 
+A prompt waits as long as it takes — and follows you. If the chat is hidden, closed or moved while an agent waits, the prompt is mirrored as a VS Code notification (*Allow / Allow for session / Deny / Show chat*); reopening the chat shows the card again together with the rest of the turn in flight. Answering in either place closes it everywhere, and **Stop** denies the chat's pending prompts.
+
 ## Models without native tool calling
 
 If the selected model lacks function calling, LocalPilot injects a text protocol:

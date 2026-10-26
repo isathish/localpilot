@@ -5,7 +5,7 @@ import { LLMProvider, ModelInfo, ProviderConfig } from '../types';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
-import { getSystemProfile, SystemProfile } from './system';
+import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
 
 export interface RouteRequest {
   /** What the model is needed for. Defaults to `agent`. */
@@ -14,6 +14,27 @@ export interface RouteRequest {
   modelRef?: string;
   /** The turn carries images: route to a vision model when the chosen one cannot see. */
   needsVision?: boolean;
+  /**
+   * Current load, for spreading parallel work across models: how many runs are assigned to each model id right
+   * now, and which model ids are known to answer one request at a time (see AgentRunner).
+   */
+  load?: ModelLoad;
+  /**
+   * The caller did not insist on this exact model (Auto, or a worker that merely inherited its parent's model):
+   * when the chosen model is saturated, a comparable idle model that fits in memory alongside may answer instead.
+   */
+  spread?: boolean;
+}
+
+export interface ModelLoad {
+  /** Runs currently assigned to each model id — a live view, so two requests routed in the same tick see each other. */
+  assigned: ReadonlyMap<string, number>;
+  /** Model ids observed to serve one request at a time (Ollama's default); others are assumed to take `slots`. */
+  serial: ReadonlySet<string>;
+  /** Parallel requests a model is assumed to take unless it is known to be serial (what LocalPilot asks Ollama for). */
+  slots: number;
+  /** Called synchronously with the decision, before `route()` returns, so concurrent callers cannot all pick the same model. */
+  reserve?(modelId: string): void;
 }
 
 export interface Route {
@@ -23,6 +44,8 @@ export interface Route {
   reason?: string;
   /** True when the requested model was unavailable (offline/disabled) and a substitute was chosen for good. */
   fallback?: boolean;
+  /** True when the model was chosen only because the intended one was busy: the next run should route again. */
+  spread?: boolean;
 }
 
 /** Builds providers from settings, discovers models, resolves `provider/model` ids and routes work to the best fitting model. */
@@ -160,6 +183,39 @@ export class ProviderRegistry implements vscode.Disposable {
     return this.route({ modelRef });
   }
 
+  /** Models warmed recently, so focusing the composer repeatedly does not hammer the server. */
+  private readonly warmed = new Map<string, number>();
+
+  /**
+   * Loads the model a request is about to use so the first token is not preceded by a weight load (often 5–30 s for a
+   * local model). Best effort: throttled per model, silent on failure, and a no-op for providers without a load API.
+   */
+  async warm(modelRef: string | undefined, role: ModelRole = 'agent', signal?: AbortSignal): Promise<void> {
+    let route: Route;
+    try {
+      route = await this.route({ modelRef, role });
+    } catch {
+      return;
+    }
+    const { provider, model } = route;
+    if (!provider.warm) {
+      return;
+    }
+    const last = this.warmed.get(model.id) ?? 0;
+    if (Date.now() - last < 4 * 60_000) {
+      return;
+    }
+    this.warmed.set(model.id, Date.now());
+    const startedAt = Date.now();
+    try {
+      await provider.warm(model.modelId, getConfig().keepAlive || undefined, signal);
+      this.log.debug(`warm: ${model.id} ready in ${Date.now() - startedAt} ms`);
+    } catch (e) {
+      this.warmed.delete(model.id);
+      this.log.debug(`warm: ${model.id} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /**
    * Picks the model for a piece of work. Order: an explicit/session model → the role override / configured
    * default → the best model for the role on this machine. With routing enabled, image turns are redirected to
@@ -204,7 +260,7 @@ export class ProviderRegistry implements vscode.Disposable {
       // one that lists models but not this one, or that is offline, does not — fall back below instead.
       const providerId = wanted.slice(0, wanted.indexOf('/'));
       const listsModels = models.some((m) => m.providerId === providerId);
-      const unlisted = listsModels || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow, cfg.maxOutputTokens);
+      const unlisted = listsModels || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow > 0 ? cfg.contextWindow : 32768, cfg.maxOutputTokens);
       if (unlisted && !cfg.disabledModels.includes(unlisted.id)) {
         model = unlisted;
       }
@@ -249,14 +305,28 @@ export class ProviderRegistry implements vscode.Disposable {
         'No local models found. Run "LocalPilot: Set up models automatically", start Ollama (`ollama serve`), LM Studio, llama.cpp or vLLM, or configure `localpilot.providers`.'
       );
     }
+    // Parallel work: a saturated model makes every extra run queue behind the others, so Auto picks and workers
+    // that only inherited a model move to a comparable idle one that fits in memory alongside (the user's
+    // explicit choice for a chat is never second-guessed — callers pass `spread` only when it was not one).
+    let spread = false;
+    if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
+      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision);
+      if (alt) {
+        const n = req.load.assigned.get(model.id) ?? 0;
+        reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
+        model = alt;
+        spread = true;
+      }
+    }
     const provider = this.providers.get(model.providerId);
     if (!provider) {
       throw new Error(`Provider ${model.providerId} not configured`);
     }
+    req.load?.reserve?.(model.id);
     if (reason) {
       this.log.info(`route(${role}): ${reason}`);
     }
-    return { provider, model, reason, fallback };
+    return { provider, model, reason, fallback, spread };
   }
 
   /** Allow referencing a model not in discovery (e.g. provider with no /models endpoint). */
@@ -337,4 +407,52 @@ export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: Syst
   const ranked = [...pool].sort((a, b) => scoreForRole(b, role, profile) - scoreForRole(a, role, profile));
   const best = ranked[0];
   return best && scoreForRole(best, role, profile) > -50 ? best : undefined;
+}
+
+/** A model is saturated when as many runs are assigned to it as it can serve at once (one, if it is known to be serial). */
+export function isSaturated(model: ModelInfo, load: ModelLoad): boolean {
+  const n = load.assigned.get(model.id) ?? 0;
+  return n >= (load.serial.has(model.id) ? 1 : Math.max(1, load.slots));
+}
+
+/** Within this many score points of the intended model a candidate counts as comparable for the role. */
+const COMPARABLE_SCORE_GAP = 8;
+/** …and, when sizes are known, at least this fraction of its parameters: the score's size term is too flat to keep a 1B model away from a 32B one. */
+const COMPARABLE_SIZE_RATIO = 1 / 3;
+
+function paramsB(m: ModelInfo): number | undefined {
+  return lookupCatalog(m)?.variant.paramsB ?? (m.parameterSize ? parameterSizeB(m.parameterSize) : undefined) ?? parameterSizeB(m.modelId);
+}
+
+/**
+ * When `chosen` is saturated, the best comparable model that is not: same hard capabilities (tools, vision when
+ * needed), a role score within a few points of the intended one, the fewest runs already on it, and — when
+ * footprints are known — small enough to sit in memory next to the models already in use, so a second model does
+ * not evict the first and make both slower. Undefined when nothing qualifies: the caller then queues as before.
+ */
+export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean): ModelInfo | undefined {
+  if (!isSaturated(chosen, load)) {
+    return undefined;
+  }
+  const floor = scoreForRole(chosen, role, profile) - COMPARABLE_SCORE_GAP;
+  const chosenB = paramsB(chosen);
+  // Memory already committed: every distinct model with at least one run assigned (the chosen one included).
+  const inUse = models.filter((m) => (load.assigned.get(m.id) ?? 0) > 0 || m.id === chosen.id);
+  const committedGb = inUse.reduce((sum, m) => sum + (modelFootprintGb(m) ?? 0), 0);
+  const candidates = models
+    .filter((m) => m.id !== chosen.id && !isSaturated(m, load))
+    .filter((m) => (!chosen.supportsTools || m.supportsTools) && (!needsVision || m.supportsVision))
+    .filter((m) => scoreForRole(m, role, profile) >= floor && scoreForRole(m, role, profile) > -50)
+    .filter((m) => {
+      const b = paramsB(m);
+      return chosenB === undefined || b === undefined || b >= chosenB * COMPARABLE_SIZE_RATIO;
+    })
+    .filter((m) => {
+      if (!profile || (load.assigned.get(m.id) ?? 0) > 0) {
+        return true; // already loaded, or no machine profile to judge by
+      }
+      const gb = modelFootprintGb(m);
+      return gb === undefined || committedGb + gb <= profile.modelBudgetGb * 1.1;
+    });
+  return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || scoreForRole(b, role, profile) - scoreForRole(a, role, profile))[0];
 }

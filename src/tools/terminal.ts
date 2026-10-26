@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import { getConfig } from '../config';
 import { Tool } from '../types';
 import { displayPath } from './fs';
@@ -39,7 +41,11 @@ export const runCommandTool: Tool = {
       return { content: 'command is required', isError: true };
     }
     const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
-    const cwd = typeof args.cwd === 'string' && args.cwd ? vscode.Uri.joinPath(vscode.Uri.file(root), args.cwd).fsPath : root;
+    // Models often pass the workspace root itself (absolute) as cwd; joining that onto root gave a nonexistent path.
+    const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? path.resolve(root, args.cwd.trim()) : root;
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      return { content: `cwd does not exist or is not a directory: ${cwd}. Omit cwd to run in the workspace root (${root}).`, isError: true };
+    }
     const dangerous = DANGEROUS.test(command);
     const ok = await ctx.requestApproval(
       dangerous ? 'Potentially destructive command' : 'Run command',

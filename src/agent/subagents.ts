@@ -155,12 +155,16 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // Registered before subagent_start so a UI reacting to that event can already address the child.
     const control = ctx.control ? ctx.control.child(childId, label ? `${def.name} · ${label}` : def.name) : new RunControl(childId, undefined, ctx.signal, label ? `${def.name} · ${label}` : def.name);
     emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined } });
+    const announcedModel = child.model;
     const user: ChatMessage = { role: 'user', content: prompt };
     // The router may have picked a different (smaller) model for a read-only child. If that model stalls or cannot
     // be reached, run the child again on the parent's model instead of losing the lane — a broken small model must
     // not take the whole swarm down.
     // Read-only children leave the choice to the router (child.model is empty here); it fills child.model in.
     const routedElsewhere = !modelRef && !def.model && !routedModel && !!ctx.modelRef;
+    // The model came from the task or the agent file: that is a choice, never spread. Inherited from the parent (or
+    // left to the router): when it is saturated the router may run this worker on a comparable idle model instead.
+    const spreadable = !modelRef && !def.model;
     let fellBack = false;
     const attempt = () =>
       runner.run({
@@ -168,6 +172,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         userMessage: user,
         modelRef: child.model || undefined,
         role,
+        spreadModels: spreadable && !fellBack,
         toolFilter: def.tools,
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
         // The parent's active skills, the agent file's `skills:` and anything the task named: the swarm follows one playbook.
@@ -190,7 +195,10 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         text = await attempt();
       } catch (e) {
         const kind = classifyModelError(e);
-        if (!routedElsewhere || control.aborted || child.model === ctx.modelRef || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
+        // A router-chosen side model (read-only pick, or a spread onto an idle model) that stalls is retried on the
+        // parent's model; an explicitly chosen model, or the parent's own, is not second-guessed.
+        const onSideModel = (routedElsewhere || spreadable) && !!ctx.modelRef && !!child.model && child.model !== ctx.modelRef;
+        if (!onSideModel || control.aborted || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
           throw e;
         }
         fellBack = true;
@@ -208,7 +216,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user' } });
         return { content: fallbackNote + note };
       }
-      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: fellBack ? child.model : undefined } });
+      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: child.model && child.model !== announcedModel ? child.model : undefined } });
       return { content: fallbackNote + (text || '(subagent returned no text)') };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

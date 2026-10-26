@@ -1,5 +1,19 @@
 import * as vscode from 'vscode';
 import { Session, SessionSummary } from '../types';
+import { userText } from '../agent/clarify';
+
+/** A chat with nothing in it yet: no messages, no plan, not pinned — nothing would be lost by removing it. */
+export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>): boolean {
+  return !s.messages.length && !s.pinned && !s.plan;
+}
+
+export interface SessionSearchHit {
+  id: string;
+  /** The matching line, trimmed around the first occurrence. */
+  snippet: string;
+  /** Which side said it. */
+  role: 'user' | 'assistant';
+}
 
 /**
  * Persists chat sessions as individual JSON files under the extension's workspace storage
@@ -37,6 +51,12 @@ export class SessionStore implements vscode.Disposable {
           this.log.warn(`Skipping corrupt session file ${name}: ${String(e)}`);
         }
       }
+      // Every window reload used to leave another untouched "New chat" behind; they only clutter the history.
+      for (const s of [...this.sessions.values()]) {
+        if (isEmptySession(s)) {
+          await this.delete(s.id, false);
+        }
+      }
     } catch (e) {
       this.log.error(`Failed to load sessions: ${String(e)}`);
     }
@@ -51,6 +71,47 @@ export class SessionStore implements vscode.Disposable {
 
   get(id: string): Session | undefined {
     return this.sessions.get(id);
+  }
+
+  /**
+   * Full-text search over what was said (not tool output or hidden steering), newest chat first. A chat appears once,
+   * with the first matching line; title matches count too so the result set is a superset of the title filter.
+   */
+  search(query: string, limit = 20): SessionSearchHit[] {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) {
+      return [];
+    }
+    const hits: SessionSearchHit[] = [];
+    for (const s of [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)) {
+      let hit: SessionSearchHit | undefined;
+      if (s.title.toLowerCase().includes(q)) {
+        hit = { id: s.id, snippet: '', role: 'user' };
+      }
+      for (const m of s.messages) {
+        if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages) {
+          continue;
+        }
+        const text = m.role === 'user' ? userText(m.content) : m.content;
+        const at = text.toLowerCase().indexOf(q);
+        if (at < 0) {
+          continue;
+        }
+        const lineStart = text.lastIndexOf('\n', at) + 1;
+        const lineEnd = (text.indexOf('\n', at) + 1 || text.length + 1) - 1;
+        const from = Math.max(lineStart, at - 40);
+        const snippet = `${from > lineStart ? '…' : ''}${text.slice(from, Math.min(lineEnd, at + q.length + 80)).replace(/\s+/g, ' ').trim()}${Math.min(lineEnd, at + q.length + 80) < lineEnd ? '…' : ''}`;
+        hit = { id: s.id, snippet, role: m.role };
+        break;
+      }
+      if (hit) {
+        hits.push(hit);
+        if (hits.length >= limit) {
+          break;
+        }
+      }
+    }
+    return hits;
   }
 
   create(model: string, mode: Session['mode'] = 'agent'): Session {
@@ -103,14 +164,18 @@ export class SessionStore implements vscode.Disposable {
     }
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string, notify = true): Promise<void> {
     this.sessions.delete(id);
+    clearTimeout(this.saveTimers.get(id));
+    this.saveTimers.delete(id);
     try {
       await vscode.workspace.fs.delete(vscode.Uri.joinPath(this.dir, `${id}.json`));
     } catch {
       /* already gone */
     }
-    this._onDidChange.fire();
+    if (notify) {
+      this._onDidChange.fire();
+    }
   }
 
   async clearAll(): Promise<void> {
@@ -171,9 +236,10 @@ export class SessionStore implements vscode.Disposable {
     s.updatedAt = Date.now();
     s.messageCount = s.messages.length;
     if (s.title === 'New chat') {
-      const firstUser = s.messages.find((m) => m.role === 'user');
+      // The first thing the user said — their own words, not the attachment or context blocks the UI prepended.
+      const firstUser = s.messages.find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages);
       if (firstUser) {
-        s.title = firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
+        s.title = userText(firstUser.content).replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
       }
     }
     clearTimeout(this.saveTimers.get(s.id));

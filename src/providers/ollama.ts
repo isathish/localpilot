@@ -188,6 +188,11 @@ export class OllamaProvider implements LLMProvider {
     const res = await postJson<{ embeddings: number[][] }>(`${this.baseUrl}/api/embed`, { model, input }, this.headers);
     return res.embeddings;
   }
+
+  /** An empty `messages` array makes Ollama load the weights (and keep them for `keep_alive`) without generating anything. */
+  async warm(model: string, keepAlive: string | undefined, signal?: AbortSignal): Promise<void> {
+    await postJson(`${this.baseUrl}/api/chat`, { model, messages: [], stream: false, ...(keepAlive ? { keep_alive: keepAlive } : {}) }, this.headers, signal);
+  }
 }
 
 function toOllamaMessage(m: ChatMessage): Record<string, unknown> {

@@ -63,6 +63,8 @@ nav:
     url: /docs/parallel-agents/
   - title: Skills & subagents
     url: /docs/skills-and-agents/
+  - title: Claude Code compatibility
+    url: /docs/claude-code-compatibility/
   - title: Memory & planning
     url: /docs/memory-and-planning/
   - title: Terminal & CLI

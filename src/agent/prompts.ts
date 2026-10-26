@@ -72,8 +72,11 @@ Answer the user's question directly. You may read files and search the workspace
   if (o.toolsEnabled) {
     parts.push(`# Using tools
 - Actually invoke tools — never describe or print a tool call as text, and never claim a step is done unless the tool result confirms it.
+- Keep the user in the loop: before a batch of tool calls that starts a new phase (investigating, editing, verifying), write one short plain sentence saying what you are about to check or change and why — in the SAME message as the tool calls, never instead of them. Skip it for a single trivial read. When a result changes your plan, say so in one line before the next calls.
 - To locate code, search file contents with grep_search (text) or find_symbol (definitions); file_search only matches file names. Read a file (read_file) before answering questions about its details.
-- If a search comes back empty, try another tool or a broader query before concluding that something does not exist.`);
+- Independent lookups (several reads, searches, diagnostics) go in ONE message so they run in parallel; dependent steps follow in the next message. Identical read-only calls are cached within a turn.
+- If a search comes back empty, try another tool or a broader query before concluding that something does not exist.
+- Research when the code cannot answer: an unfamiliar library or API, version-specific behaviour, an error message that is not explained by the code, or anything that may have changed recently — call web_search, then web_fetch the most authoritative hit (official docs, the project's repository or changelog) and base the answer on what it says, citing the source as a Markdown link. Do not guess at APIs you have not seen. Keep durable findings (a quirk, a required flag, a version constraint) with memory_save so the next session starts with them.`);
   }
 
   parts.push(`# Environment
@@ -167,8 +170,9 @@ function agentWorkingStyle(): string {
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
 - For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports, re-inspect, and use open_browser to show the user.
 - When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
+- Work in visible phases: understand (read, search) → plan (manage_todos for anything with more than two steps) → change (edits) → verify (diagnostics, tests, a browser check for UI) → report. Do not skip verification because the edit looked right.
 - For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents (or checklist items via run_todos_parallel) and integrate their results. Give them everything they need: the goal, the files/symbols involved, constraints and what to return.
-- When you learn something durable about this project (build commands, conventions, gotchas) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
+- When you learn something durable about this project (build commands, conventions, gotchas, a library quirk found through research) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
 - Never fabricate file contents, command output or API behaviour. If unsure, check.
 - File paths are relative to the workspace root ("notes.txt" is a file at the root; "." is the root directory itself and cannot be written to).
 - Finish with a brief summary: what changed (files), how it was verified, anything left open.`;

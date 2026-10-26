@@ -8,7 +8,7 @@ import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
-import { ContextManager } from '../src/context/contextManager';
+import { ContextManager, effectiveContextWindow } from '../src/context/contextManager';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
@@ -25,7 +25,9 @@ import { ToolRegistry } from '../src/tools/registry';
 import { SkillManager } from '../src/agent/skills';
 import { WorkspaceContext } from '../src/context/workspaceContext';
 import { createAgentTools } from '../src/agent/subagents';
-import { diffLines } from '../src/agent/changeTracker';
+import { ChatController, ToWebview } from '../src/ui/chatController';
+import { SessionStore } from '../src/sessions/sessionStore';
+import { ChangeTracker, diffLines } from '../src/agent/changeTracker';
 import { callKey, classifyModelError, ModelStallError, withWatchdog } from '../src/agent/resilience';
 import { HttpError } from '../src/providers/http';
 import { StreamEvent } from '../src/types';
@@ -281,6 +283,37 @@ async function pureLogic() {
   };
   const c = await cm.compact(history, fake, model, undefined, 6);
   check('compact replaces older turns with summary and keeps split on user boundary', c.removed > 0 && c.messages[0].meta?.summary === true && c.messages[1].role === 'user' && c.after < c.before, { removed: c.removed, before: c.before, after: c.after });
+  const onlySummary = await cm.compact([c.messages[0], { role: 'user', content: 'next' }, { role: 'assistant', content: 'ok' }], fake, model, undefined, 2);
+  check('compact: nothing but a prior summary to fold → no model call, history unchanged', onlySummary.removed === 0);
+
+  console.log('\n[Effective context window]');
+  const wide = { contextWindow: 131072 };
+  check('setting caps the native window', effectiveContextWindow(wide, 32768) === 32768);
+  check('0 = the model\'s full native window (largest)', effectiveContextWindow(wide, 0) === 131072 && effectiveContextWindow(wide, -1) === 131072);
+  check('a small model is never asked for more than it has', effectiveContextWindow({ contextWindow: 8192 }, 32768) === 8192);
+  check('floor at 4k, unknown native falls back to 32k', effectiveContextWindow(wide, 1000) === 4096 && effectiveContextWindow({ contextWindow: 0 }, 0) === 32768);
+
+  console.log('\n[Fit: keep splitting until it fits]');
+  {
+    // 30 turns, each with a 3k-char tool result, into an 8k window: prune old results, then one summary pass.
+    const budgetOf = (h: ChatMessage[]) => cm.budget(model, 'sys', [], h, 1024);
+    let calls = 0;
+    const counting = { ...fake, chat: async function* () { calls++; yield { type: 'text', text: '## Task & goals\n- summarised' } as StreamEvent; } };
+    const fit = await cm.fit(history, counting, model, budgetOf);
+    check('fit: pruning old tool results alone is enough here — no model call is spent', !cm.needsCompaction(fit.budget) && fit.compactions.length === 0 && calls === 0 && fit.messages.some((m) => m.meta?.pruned), { ratio: fit.budget.usageRatio, passes: fit.compactions.length, calls });
+    check('fit: the newest turn is kept verbatim', fit.messages[fit.messages.length - 1].content === history[history.length - 1].content);
+    // Recent results alone overflow a tiny window: the verbatim window is tightened and summarised again rather than giving up.
+    const tiny = { ...model, contextWindow: 4096 };
+    const heavy: ChatMessage[] = [];
+    for (let i = 0; i < 12; i++) {
+      heavy.push({ role: 'user', content: `q${i}` }, { role: 'assistant', content: '', toolCalls: [{ id: `h${i}`, name: 'read_file', arguments: '{}' }] }, { role: 'tool', content: 'line1\n' + 'z'.repeat(6000), toolCallId: `h${i}` });
+    }
+    const tightBudget = (h: ChatMessage[]) => cm.budget(tiny, 'sys', [], h, 1024);
+    const fit2 = await cm.fit(heavy, counting, tiny, tightBudget);
+    check('fit: tightens the window in later passes until the history fits', !cm.needsCompaction(fit2.budget) && fit2.compactions.length >= 1 && fit2.messages.filter((m) => m.meta?.summary).length === 1, { ratio: fit2.budget.usageRatio, passes: fit2.compactions.length, left: fit2.messages.length });
+    const already = await cm.fit(fit.messages, counting, model, budgetOf);
+    check('fit: a history that already fits is returned untouched', already.compactions.length === 0 && already.messages === fit.messages);
+  }
 
   console.log('\n[Parallel pool]');
   const pool = new ParallelPool(3);
@@ -859,6 +892,9 @@ async function skillsInHarness() {
         if (has(/Unknown skill \\"turbo-wizard\\"/)) { text(`refused:${has(/Only these skills exist/)}:${has(/Do not invent skill names/)}`); } else { tool('b1', 'load_skill', { name: 'turbo-wizard' }); }
       } else if (task.includes('DISABLED-GO')) {
         if (has(/disabled by the user/)) { text(`refused:${!has(/SHOULD-NEVER-APPEAR/)}`); } else { tool('x1', 'load_skill', { name: 'offlimits' }); }
+      } else if (task.includes('BRIEF-GO') || task.includes('LONG-GO')) {
+        seen[task.includes('BRIEF-GO') ? 'brief' : 'long'] = `preloaded=${has(/<skill name=\\"quuxaudit\\"/)} hinted=${has(/Skills that may apply/)}`;
+        text('Audit done.');
       } else {
         text('?');
       }
@@ -907,10 +943,201 @@ async function skillsInHarness() {
     check('load_skill: an invented name is refused with the real list and an anti-hallucination note', out4 === 'refused:true:true', out4);
     const out5 = await run(mkSession('sk5'), 'DISABLED-GO');
     check('load_skill: a disabled skill is refused and its body never reaches the model', out5 === 'refused:true', out5);
+
+    // 4. A loose match (description words only, no name / trigger phrase) is preloaded for a brief request, hinted for a long one.
+    const out6 = await run(mkSession('sk6'), 'BRIEF-GO audit src for findings');
+    check('brief request + single loose match: skill preloaded, no load_skill round trip needed', out6 === 'Audit done.' && seen.brief === 'preloaded=true hinted=false', { out6, seen: seen.brief });
+    const out7 = await run(mkSession('sk7'), `LONG-GO audit src for findings ${'and also look very carefully at every single module in the tree '.repeat(2)}then report`);
+    check('long request + loose match: only hinted (model decides)', out7 === 'Audit done.' && seen.long === 'preloaded=false hinted=true', { out7, seen: seen.long });
   } finally {
     srv.close();
     delete process.env.LP_SKILLS_DISABLED;
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Chat surface closed and reopened while an agent runs: the new webview must get the run in flight back — the live
+ * turn's events, the approval the agent is waiting on — without the surfaces that stayed open receiving anything
+ * twice, and `session` messages must tell the UI where the live turn starts so a tab switch never shows steps twice.
+ */
+async function reopenReplay() {
+  console.log('\n[Chat reopen: replay of a run in flight]');
+  const vscode = await import('vscode');
+  const srv = await listen(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.end(JSON.stringify({ data: [{ id: 'reopen', capabilities: ['tool_use'] }] }));
+    }
+    if (req.url === '/v1/chat/completions') {
+      const body = JSON.parse(await readBody(req));
+      const transcript = JSON.stringify(body.messages);
+      res.setHeader('content-type', 'text/event-stream');
+      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      if (transcript.includes('GATE-PASSED')) {
+        send({ choices: [{ delta: { content: 'All ' } }] });
+        send({ choices: [{ delta: { content: 'clear.' } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+      } else {
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'g1', function: { name: 'gate', arguments: '{}' } }] } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+      }
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  process.env.LP_MOCK_URL = `${srv.url}/v1`;
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    const providers = new ProviderRegistry(log);
+    const tools = new ToolRegistry();
+    const skills = new SkillManager(log);
+    await skills.refresh();
+    const workspace = new WorkspaceContext(log);
+    // A tool that needs permission: the run holds inside requestApproval until the UI answers.
+    tools.register({ parallelSafe: true, definition: { name: 'gate', description: 'gated', parameters: { type: 'object', properties: {} } }, async execute(_args, ctx) { const ok = await ctx.requestApproval('Open the gate', 'gate --now', 'delete'); return { content: ok ? 'GATE-PASSED' : 'GATE-DENIED' }; } });
+    const runner = new AgentRunner(providers, tools, skills, workspace, log);
+    const store = new SessionStore({ storageUri: vscode.Uri.file('/tmp/lp-smoke-reopen') } as unknown as import('vscode').ExtensionContext, log);
+    const tracker = { onDidChange: new vscode.EventEmitter<void>().event, beginTurn() {}, forSession: () => [], keep() {}, restoreToTurn: async () => 0 } as unknown as ChangeTracker;
+    const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
+
+    const first: ToWebview[] = [];
+    let firstVisible = true;
+    controller.attach({ post: (m) => first.push(m), visible: () => firstVisible });
+    const session = store.create('mock/reopen');
+    const has = (list: ToWebview[], type: string) => list.filter((m) => m.type === type);
+
+    const run = controller.send(session.id, 'APPROVE-GO', []);
+    for (let i = 0; i < 100 && !has(first, 'approval').length; i++) { await new Promise((r) => setTimeout(r, 50)); }
+    const approval = has(first, 'approval')[0] as Extract<ToWebview, { type: 'approval' }> | undefined;
+    check('run holds at the approval prompt in the attached chat', !!approval && controller.isRunning(session.id), approval);
+
+    // The chat is closed (view disposed) and reopened: a brand-new webview announces `ready`.
+    const second: ToWebview[] = [];
+    const firstBefore = first.length;
+    let secondVisible = true;
+    const secondSink = { post: (m: ToWebview) => second.push(m), visible: () => secondVisible };
+    controller.attach(secondSink);
+    await controller.sendInit(secondSink);
+    const init = has(second, 'init')[0] as Extract<ToWebview, { type: 'init' }> | undefined;
+    const sess = has(second, 'session')[0] as Extract<ToWebview, { type: 'session' }> | undefined;
+    const replay = has(second, 'replay')[0] as Extract<ToWebview, { type: 'replay' }> | undefined;
+    check('reopen: init lists the run as running', !!init && init.running.includes(session.id), init?.running);
+    check('reopen: session says where the live turn starts (after the user message)', !!sess && sess.liveFrom === 1 && sess.session.messages[0]?.role === 'user' && sess.session.messages.length > 1, { liveFrom: sess?.liveFrom, len: sess?.session.messages.length });
+    const kinds = (replay?.items ?? []).map((m) => (m.type === 'event' ? m.event.type : m.type));
+    check('reopen: replay carries the tool_start and the pending approval, in order', !!replay && kinds.includes('tool_start') && kinds.indexOf('tool_start') < kinds.indexOf('approval') && (replay.items.find((m) => m.type === 'approval') as { id?: string } | undefined)?.id === approval?.id && replay.startedAt > 0 && !replay.truncated, kinds);
+    check('reopen: the surface that stayed open received nothing again', first.length === firstBefore, first.slice(firstBefore).map((m) => m.type));
+
+    // Hiding every surface while the prompt waits mirrors it as a notification exactly once.
+    const notes = (vscode.window as unknown as { notifications: string[] }).notifications;
+    const n0 = notes.length;
+    firstVisible = false; secondVisible = false;
+    controller.surfaceVisibilityChanged();
+    controller.surfaceVisibilityChanged();
+    check('hidden chat: the pending approval is mirrored as one notification', notes.length === n0 + 1 && /Open the gate/.test(notes[n0] ?? ''), notes.slice(n0));
+
+    // Answer from the webview: the run continues, both surfaces see the prompt resolved, replay forgets it.
+    await controller.handle({ type: 'approval', id: approval!.id, approved: true });
+    const out = await run;
+    check('approval answered: run completes with the gated answer', out === 'All clear.', out);
+    check('approval answered: both surfaces get approvalResolved', has(first, 'approvalResolved').length === 1 && has(second, 'approvalResolved').length === 1);
+    check('run finished: running:false broadcast and no replay kept', has(second, 'running').some((m) => m.type === 'running' && !m.running) && !controller.isRunning(session.id));
+
+    // After the run, `session` messages carry the whole transcript (no liveFrom): the settled turn is drawn from the store.
+    second.length = 0;
+    await controller.handle({ type: 'selectSession', id: session.id });
+    const settled = has(second, 'session')[0] as Extract<ToWebview, { type: 'session' }> | undefined;
+    check('settled: session has no liveFrom and the full transcript', !!settled && settled.liveFrom === undefined && settled.session.messages.filter((m) => !m.meta?.hidden).map((m) => m.role).join(',') === 'user,assistant,tool,assistant', settled?.session.messages.map((m) => m.role));
+
+    // Stopping a run denies its pending prompt and takes it down everywhere (a fresh chat: the loop caches identical tool calls per session).
+    first.length = 0; second.length = 0;
+    const other = store.create('mock/reopen');
+    const run2 = controller.send(other.id, 'APPROVE-GO', []);
+    for (let i = 0; i < 100 && !has(first, 'approval').length; i++) { await new Promise((r) => setTimeout(r, 50)); }
+    check('stop: a second chat raises its own prompt', has(first, 'approval').length === 1);
+    controller.stop(other.id);
+    await run2;
+    check('stop: pending approval resolved as denied and removed from both surfaces', has(first, 'approvalResolved').length === 1 && has(second, 'approvalResolved').length === 1 && !controller.isRunning(other.id), { first: first.map((m) => m.type), second: second.map((m) => m.type) });
+    controller.dispose();
+  } finally {
+    srv.close();
+    delete process.env.LP_MOCK_URL;
+  }
+}
+
+async function parallelModels() {
+  console.log('\n[Parallel models: a fan-out on a serial model spreads workers to a comparable idle model]');
+  const used: Record<string, string> = {};
+  const srv = await listen(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.end(JSON.stringify({ data: [{ id: 'qwen2.5-coder:3b', capabilities: ['tool_use'] }, { id: 'qwen2.5-coder:1.5b', capabilities: ['tool_use'] }] }));
+    }
+    if (req.url === '/v1/chat/completions') {
+      const body = JSON.parse(await readBody(req));
+      const msgs = body.messages as { role: string; content: string }[];
+      const transcript = JSON.stringify(msgs);
+      const task = String(msgs.find((m) => m.role === 'user')?.content ?? '');
+      res.setHeader('content-type', 'text/event-stream');
+      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      const text = (t: string) => { send({ choices: [{ delta: { content: t } }] }); send({ choices: [{ delta: {}, finish_reason: 'stop' }] }); };
+      const tool = (id: string, name: string, args: unknown) => { send({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] }); send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }); };
+      if (task.includes('SPREAD-GO')) {
+        used.parent = body.model;
+        if (/W1-REPORT/.test(transcript) && /W2-REPORT/.test(transcript)) { text('Spread done.'); } else { tool('p1', 'run_parallel_subagents', { tasks: [{ agent: 'coder', prompt: 'W1 do the first half' }, { agent: 'coder', prompt: 'W2 do the second half' }] }); }
+      } else if (/^W[12] /.test(task)) {
+        const w = task.slice(0, 2);
+        used[w] = body.model;
+        // Keep the lane busy for a moment so the second worker routes while the first still holds its model.
+        await new Promise((r) => setTimeout(r, 250));
+        text(`${w}-REPORT`);
+      } else {
+        text('?');
+      }
+      return res.end();
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  process.env.LP_MOCK_URL = `${srv.url}/v1`;
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    const providers = new ProviderRegistry(log);
+    const tools = new ToolRegistry();
+    const skills = new SkillManager(log);
+    await skills.refresh();
+    const workspace = new WorkspaceContext(log);
+    const runner = new AgentRunner(providers, tools, skills, workspace, log);
+    const events: AgentEvent[] = [];
+    tools.registerAll(createAgentTools(runner, skills, (e) => events.push(e), async () => true));
+    const mkSession = (id: string): Session => ({ id, title: '', createdAt: 0, updatedAt: 0, model: 'mock/qwen2.5-coder:3b', messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [] });
+    const run = (s: Session, content: string) => runner.run({ session: s, userMessage: { role: 'user', content }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+
+    // 1. Nothing known about the server: both workers inherit the parent's model (no spreading on a guess).
+    const out0 = await run(mkSession('pm0'), 'SPREAD-GO');
+    check('unknown server: workers stay on the inherited model', out0 === 'Spread done.' && used.W1 === 'qwen2.5-coder:3b' && used.W2 === 'qwen2.5-coder:3b', { out0, used: { ...used } });
+
+    // 2. The model is known to answer one request at a time: the second worker runs on the comparable idle model.
+    runner.markServedSerially('mock/qwen2.5-coder:3b');
+    events.length = 0;
+    const out1 = await run(mkSession('pm1'), 'SPREAD-GO');
+    const models = [used.W1, used.W2].sort();
+    check('serial model: the two workers run on two different models', out1 === 'Spread done.' && models.join(',') === 'qwen2.5-coder:1.5b,qwen2.5-coder:3b', { out1, used: { ...used } });
+    check('the parent itself stayed on its own model', used.parent === 'qwen2.5-coder:3b', used.parent);
+    const reasons = events.filter((e) => e.type === 'status' && typeof e.payload === 'object' && e.payload && /busy with 1 other request — running this on qwen2.5-coder:1.5b alongside/.test(String((e.payload as { data?: unknown }).data)));
+    check('the spread is announced on the worker lane', reasons.length === 1, events.filter((e) => e.type === 'status').map((e) => JSON.stringify(e.payload)).slice(0, 8));
+    const req = events.filter((e) => e.type === 'model_request' && (e.payload as { childId?: string }).childId).map((e) => ((e.payload as { data: { model: string } }).data.model));
+    check("each worker's model_request names the model that really answers it", req.sort().join(',') === 'mock/qwen2.5-coder:1.5b,mock/qwen2.5-coder:3b', req);
+    check('once the run ends no model is left assigned', runner.load.assigned.size === 0, [...runner.load.assigned]);
+
+    // 3. Setting off: everything queues on the inherited model again.
+    process.env.LP_CONFIG = JSON.stringify({ 'routing.parallelModels': false });
+    const out2 = await run(mkSession('pm2'), 'SPREAD-GO');
+    check('routing.parallelModels off: no spreading', out2 === 'Spread done.' && used.W1 === 'qwen2.5-coder:3b' && used.W2 === 'qwen2.5-coder:3b', { ...used });
+    delete process.env.LP_CONFIG;
+  } finally {
+    srv.close();
+    delete process.env.LP_MOCK_URL;
   }
 }
 
@@ -922,7 +1149,9 @@ async function skillsInHarness() {
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();
+  await reopenReplay();
   await skillsInHarness();
+  await parallelModels();
   console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll smoke checks passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => {

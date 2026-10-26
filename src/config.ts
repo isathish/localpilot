@@ -28,11 +28,14 @@ export interface RoutingConfig {
   fast?: string;
   /** Model for implementing subagents — coder, tester, debugger, docs (empty = keep the session model). */
   coding?: string;
+  /** Spread simultaneous runs over comparable idle models when the intended one is saturated (Auto picks and inherited worker models only). */
+  parallelModels?: boolean;
 }
 
 export interface LocalPilotConfig {
   providers: ProviderConfig[];
   defaultModel: string;
+  /** Requested context window in tokens, capped by the model; 0 = the model's full native window. */
   contextWindow: number;
   maxOutputTokens: number;
   temperature: number;
@@ -47,6 +50,10 @@ export interface LocalPilotConfig {
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
   skillsPaths: string[];
+  /** Extra folders scanned for Claude Code-style plugins (`.claude-plugin/plugin.json`). */
+  pluginPaths: string[];
+  /** Run the hooks configured in settings.json (PreToolUse, PostToolUse, Stop, …). */
+  hooksEnabled: boolean;
   builtinSkills: boolean;
   /** Repositories (owner/repo[/path]) whose skills can be installed automatically when a request matches one. */
   skillRepositories: string[];
@@ -61,6 +68,8 @@ export interface LocalPilotConfig {
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
   sessionRetention: number;
   keepAlive: string;
+  /** Load the chat's model when the composer is focused so the first token is not preceded by a weight load. */
+  prewarm: boolean;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
   terminal: { runInIntegratedTerminal: boolean; reveal: boolean };
@@ -88,7 +97,7 @@ export function getConfig(): LocalPilotConfig {
   return {
     providers,
     defaultModel: c.get<string>('defaultModel', ''),
-    contextWindow: c.get<number>('contextWindow', 32768),
+    contextWindow: Math.max(0, Math.floor(c.get<number>('contextWindow', 32768))),
     maxOutputTokens: c.get<number>('maxOutputTokens', 4096),
     temperature: c.get<number>('temperature', 0.2),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
@@ -125,6 +134,8 @@ export function getConfig(): LocalPilotConfig {
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
     skillsPaths: c.get<string[]>('skillsPaths', []),
+    pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
+    hooksEnabled: c.get<boolean>('hooks.enabled', true),
     builtinSkills: c.get<boolean>('skills.builtin', true),
     skillRepositories: (c.get<string[]>('skills.repositories', DEFAULT_SKILL_REPOSITORIES) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     skillAutoInstall: normalizeAutoInstall(c.get<unknown>('skills.autoInstall', 'auto')),
@@ -134,6 +145,7 @@ export function getConfig(): LocalPilotConfig {
     memoryEnabled: c.get<boolean>('memory.enabled', true),
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
     keepAlive: c.get<string>('keepAlive', '30m'),
+    prewarm: c.get<boolean>('prewarm', true),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
     showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
     terminal: {
@@ -149,6 +161,7 @@ export function getConfig(): LocalPilotConfig {
       reasoning: c.get<string>('routing.reasoning', '') || undefined,
       fast: c.get<string>('routing.fast', '') || undefined,
       coding: c.get<string>('routing.coding', '') || undefined,
+      parallelModels: c.get<boolean>('routing.parallelModels', true),
     },
   };
 }

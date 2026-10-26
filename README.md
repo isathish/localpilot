@@ -121,8 +121,13 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 ```
 .localpilot/skills/<name>/SKILL.md      # name + description front-matter, Markdown instructions
 .localpilot/agents/<name>.md            # name, description, tools, model + system prompt body
-.localpilot/rules.md · AGENTS.md · CLAUDE.md · .cursorrules · .github/copilot-instructions.md
+.localpilot/commands/<name>.md          # custom slash command: prompt body with $ARGUMENTS, @file, !`cmd`
+.localpilot/settings.json               # permission rules (allow/ask/deny) and hooks, Claude Code format
+.localpilot/plugins/<name>/             # .claude-plugin/plugin.json bundling commands, agents, skills, hooks, MCP
+.localpilot/rules.md · AGENTS.md · CLAUDE.md · .claude/CLAUDE.md · CLAUDE.local.md · .cursorrules · .github/copilot-instructions.md
 ```
+
+Everything above is also read from the `.claude/` folder (and `~/.claude/`), so a repository configured for Claude Code works unchanged: `settings.json` permission rules such as `Bash(npm run test:*)`, `Edit(src/**)` or `Read(.env)` decide what runs without a prompt, what always asks and what is refused; **hooks** (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, …) run your shell commands with the event as JSON on stdin and block with exit code 2; `CLAUDE.md` files are loaded from user, parent and project folders with `@imports` resolved. `/permissions`, `/hooks`, `/commands` and `/memory` show what is in force. Guide: [Claude Code compatibility](https://isathish.github.io/localpilot/docs/claude-code-compatibility/).
 
 Skills you do not have yet install themselves: requests are matched against a registry of skill repositories (`anthropics/skills`, `obra/superpowers`, `github/awesome-copilot` by default — planning, design docs, debugging, PDF/Word/PowerPoint, architecture and more) and the best match is installed and loaded as the request starts. **Settings → Skills & subagents** is the management page: search the registry and install with one click, enable / disable / open / delete installed skills, see which ones get used, and set the default mode (`auto` / `ask` / `off`); the **Skills** button under each chat overrides that mode per chat and **pins** skills to every request. You can still install from GitHub or a URL with **LocalPilot: Install Skill…** (`/skill install anthropics/skills/skills/pdf`, `localpilot skill install owner/repo`). The model only sees enabled skills' names + descriptions with a rule to use those names only; a skill that clearly matches (name or trigger phrase), is pinned or forced with `/skill` is **preloaded** into the request so it is followed rather than guessed, and `load_skill` resolves mangled names instead of failing. Subagents run with a fresh context window and return only a final report. Full guide: [Skills & subagents](https://isathish.github.io/localpilot/docs/skills-and-agents/).
 
@@ -153,7 +158,7 @@ LocalPilot has its own **Settings** screen (gear icon in the chat toolbar): a pr
 |---|---|---|
 | `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Model servers (`ollama` or any `openai`-compatible) |
 | `localpilot.defaultModel` | auto | `provider/model`, e.g. `ollama/qwen2.5-coder:14b` |
-| `localpilot.contextWindow` | 32768 | Requested context (Ollama `num_ctx`) |
+| `localpilot.contextWindow` | 32768 | Requested context (Ollama `num_ctx`), capped by the model; `0` = model maximum |
 | `localpilot.approvals.*` | terminal `ask` · write `always` · delete `ask` · network `always` | Autonomy level |
 | `localpilot.parallel.maxConcurrency` | 4 | Concurrent tools / subagents |
 | `localpilot.worktrees.mode` | always | Isolate each agent in its own git worktree (`always` / `parallel` / `off`) |

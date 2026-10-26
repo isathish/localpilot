@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ChangeTracker } from '../agent/changeTracker';
 import { getConfig } from '../config';
+import { effectiveContextWindow } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { ChatMessage } from '../types';
@@ -19,7 +20,7 @@ export async function quickPrompt(
     messages,
     temperature: opts.temperature ?? 0.1,
     maxTokens: opts.maxTokens ?? cfg.maxOutputTokens,
-    contextWindow: Math.min(model.contextWindow, cfg.contextWindow),
+    contextWindow: effectiveContextWindow(model, cfg.contextWindow),
     signal: opts.signal,
   })) {
     if (ev.type === 'text') {

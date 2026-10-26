@@ -5,6 +5,7 @@ import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
 import { builtinAgents } from './builtinAgents';
 import { parseFrontMatter } from './frontMatter';
+import type { PluginSource } from './plugins';
 
 export { parseFrontMatter } from './frontMatter';
 
@@ -26,6 +27,8 @@ export class SkillManager implements vscode.Disposable {
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
   private watchers: vscode.FileSystemWatcher[] = [];
+  /** Plugins whose `skills/` and `agents/` folders are loaded after the user's own (set by the extension). */
+  plugins?: PluginSource;
 
   constructor(
     private readonly log: vscode.LogOutputChannel,
@@ -131,6 +134,13 @@ export class SkillManager implements vscode.Disposable {
     const cfg = getConfig();
     for (const p of cfg.skillsPaths) {
       skillDirs.push({ dir: p.replace(/^~/, home), source: 'user' });
+    }
+    // Plugins come after the user's own folders, so a local skill or agent of the same name wins.
+    for (const d of this.plugins?.skillDirs() ?? []) {
+      skillDirs.push(d);
+    }
+    for (const d of this.plugins?.agentDirs() ?? []) {
+      agentDirs.push(d);
     }
     if (this.builtinDir && cfg.builtinSkills) {
       skillDirs.push({ dir: this.builtinDir, source: 'builtin' });

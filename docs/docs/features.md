@@ -12,10 +12,13 @@ permalink: /docs/features/
 - **Ask mode** — read-only Q&A about your code.
 - **Plan mode** — investigates and produces a numbered implementation plan without editing.
 - **Streaming** responses with live tool steps, thinking (for reasoning models) and status.
+- **Work strip** — every turn starts with one line that says what the agent is doing right now (*Reading the code*, *Researching on the web*, *Editing files*, *Coordinating workers*, *Waiting for your approval*…), how much it has done (steps, files read, searches, files edited, commands, workers) and for how long. When the turn ends it becomes **Worked for 1m 12s · 9 steps · …** and folds the steps away on click; reopened chats show the same summary.
+- **Folded exploration** — a burst of reads and searches is one row (*Read a.ts, b.ts +2 more · Searched 3 times*) that expands to the individual steps, instead of a stack of near-identical lines. Edits are grouped the same way; **web searches** render as link cards (title · domain · snippet).
+- **Narrated phases** — the agent is asked to say in one line what it is about to check or change before each batch of tool calls, and to batch independent lookups so they run in parallel; the harness still verifies that announced actions actually happened.
 - **Multiple sessions** persisted per workspace; several can run concurrently in an always-visible **tab bar** (running chats first, History popover with search). Fork, pin, rename, export to Markdown.
 - **Planning & memory** — the agent keeps a live **Tasks** checklist for multi-step work and saves durable notes to `.localpilot/memory/` (project) or user storage (global) that are recalled in later sessions. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
 - **Slash commands** — `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill`, `/agent`, `/context`.
-- **Lives where you want it** — Primary Side Bar, Secondary Side Bar (like Copilot Chat), bottom Panel or an editor tab. **Move Chat To…** in the chat toolbar, the status bar menu or the Command Palette moves it the way VS Code moves any view (`localpilot.chat.location`), so dragging the Chat view, **Move View** and **Reset Location** all keep working and VS Code remembers the position. The Agents view and the LocalPilot activity bar icon stay in the Primary Side Bar, so there is always a way back. The LocalPilot icon in every editor's title bar and in the status bar opens the chat wherever it is, and the status bar menu also reaches New Chat, model selection, inline completions and Settings.
+- **Lives where you want it** — Primary Side Bar, Secondary Side Bar (like Copilot Chat), bottom Panel or an editor tab. **Move Chat To…** in the chat toolbar, the status bar menu or the Command Palette moves it the way VS Code moves any view (`localpilot.chat.location`), so dragging the Chat view, **Move View** and **Reset Location** all keep working and VS Code remembers the position. The picker spells out which side each bar is on for your layout (`workbench.sideBar.location`), and the chat stays up after the move even when the destination part was closed (VS Code briefly tears the new pane down in that case; LocalPilot brings it back, and never fights you if you close the part yourself). The Agents view and the LocalPilot activity bar icon stay in the Primary Side Bar, so there is always a way back. The LocalPilot icon in every editor's title bar and in the status bar opens the chat wherever it is, and the status bar menu also reaches New Chat, model selection, inline completions and Settings.
 
 ## Parallel agents & change review
 
@@ -26,6 +29,7 @@ permalink: /docs/features/
 - **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task; each streams into its own tab.
 - **Agents panel** lists running/idle sessions with live status, badge counts and inline Stop.
 - **Change tracker** snapshots files before edits — Diff / Accept / Reject per file or per session, highlighted lines in editors.
+- **Edit** on any of your messages removes it and the turns after it (files are kept) and puts the text back in the composer to rephrase and resend.
 - **Restore checkpoint** on any of your messages rewinds the files changed since that turn and puts the prompt back in the composer.
 
 ## Context

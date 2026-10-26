@@ -4,7 +4,7 @@ import { AddressInfo } from 'net';
 import * as vscode from 'vscode';
 import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
-import { pickForRole, ProviderRegistry, scoreForRole } from '../providers/registry';
+import { isSaturated, pickAlternative, pickForRole, ProviderRegistry, scoreForRole } from '../providers/registry';
 import { buildProfile, estimateModelGb, fits, parameterSizeB } from '../providers/system';
 import { ModelInfo } from '../types';
 
@@ -207,6 +207,38 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(pickForRole(withGemma, 'reasoning', profile)?.modelId, 'gemma4:e4b');
   });
 
+  test('parallel work spreads to a comparable idle model only when the intended one is saturated and the pair fits in memory', () => {
+    const profile = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 0 });
+    const coder = m('qwen2.5-coder:14b', { sizeBytes: 9e9 });
+    const gemma = m('gemma4:12b', { supportsVision: true, sizeBytes: 8e9 });
+    const tiny = m('qwen2.5-coder:1.5b-base', { supportsFim: true, supportsTools: false, sizeBytes: 1e9 });
+    const big = m('qwen2.5-coder:32b', { sizeBytes: 20e9 });
+    const models = [coder, gemma, tiny, big];
+    const load = (assigned: Record<string, number>, serial: string[] = [], slots = 4) => ({ assigned: new Map(Object.entries(assigned).map(([k, v]) => [`ollama/${k}`, v])), serial: new Set(serial.map((s) => `ollama/${s}`)), slots });
+
+    // Idle, or busy on a server with free slots: no reason to move.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({}), profile), undefined);
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }), profile), undefined, 'one run on a 4-slot model is not saturation');
+    assert.strictEqual(isSaturated(coder, load({ 'qwen2.5-coder:14b': 4 })), true);
+    // Known to answer one request at a time: the second run goes to the comparable model next door.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), profile)?.modelId, 'gemma4:12b');
+    // Never to a model that cannot call tools, and not to one that is itself saturated.
+    assert.strictEqual(pickAlternative([coder, tiny], coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), profile), undefined, 'the FIM base model cannot run the agent loop');
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1, 'gemma4:12b': 1 }, ['qwen2.5-coder:14b', 'gemma4:12b']), profile), undefined, 'both busy: queue');
+    // Memory: on a 16 GB laptop the 14b coder plus a 12b Gemma do not fit side by side, so the run queues instead of thrashing.
+    const laptop = buildProfile({ platform: 'win32', arch: 'x64', cpuCores: 8, ramGb: 16, vramGb: 0 });
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), laptop), undefined);
+    // …but a model that is already loaded (has a run on it, with a free slot) is always a fine neighbour.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1, 'gemma4:12b': 1 }, ['qwen2.5-coder:14b']), laptop)?.modelId, 'gemma4:12b');
+    // Image turns only spread to a model that can see.
+    assert.strictEqual(pickAlternative([gemma, coder], gemma, 'agent', load({ 'gemma4:12b': 1 }, ['gemma4:12b']), profile, true), undefined);
+    // Quality floor: a much weaker model is not "comparable" even when idle.
+    const weak = m('tinyllama:1.1b', { sizeBytes: 0.7e9 });
+    assert.strictEqual(pickAlternative([big, weak], big, 'agent', load({ 'qwen2.5-coder:32b': 1 }, ['qwen2.5-coder:32b']), profile), undefined);
+    // The least loaded comparable model wins; ties go to the better score.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 4, 'gemma4:12b': 2, 'qwen2.5-coder:32b': 1 }), profile)?.modelId, 'qwen2.5-coder:32b');
+  });
+
   test('registry lists, hides disabled models and routes per role against a real Ollama-style server', async function () {
     this.timeout(30_000);
     const srv = await fakeOllama();
@@ -238,6 +270,30 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       const same = await reg.route({ modelRef: 'fake/qwen2.5vl:7b', needsVision: true });
       assert.strictEqual(same.model.modelId, 'qwen2.5vl:7b');
       assert.strictEqual(same.reason, undefined);
+
+      // Parallel work: the coder is known to answer one request at a time and already has a run; a spreadable
+      // request (Auto / inherited) moves to the comparable idle model, an explicit choice never does, and the
+      // setting turns the behaviour off. (Only the VL model is comparable here; it cannot call tools, so nothing
+      // qualifies for an agent run — pull a second tool-capable model to see the spread.)
+      const busy = { assigned: new Map([['fake/qwen2.5-coder:14b', 1]]), serial: new Set(['fake/qwen2.5-coder:14b']), slots: 4 };
+      await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.strictEqual((await reg.route({ spread: true, load: busy })).model.modelId, 'qwen2.5-coder:14b', 'no tool-capable neighbour: queue on the same model');
+      await (await fetch(`${srv.url}/api/pull`, { method: 'POST', body: JSON.stringify({ model: 'gemma4:12b' }) })).text();
+      await reg.listModels(true);
+      const spread = await reg.route({ spread: true, load: busy });
+      assert.strictEqual(spread.model.modelId, 'gemma4:12b');
+      assert.ok(spread.spread && /busy with 1 other request/.test(spread.reason!), spread.reason);
+      assert.strictEqual((await reg.route({ load: busy })).model.modelId, 'qwen2.5-coder:14b', 'not spreadable: stays');
+      assert.strictEqual((await reg.route({ modelRef: 'fake/qwen2.5-coder:14b', spread: true, load: busy })).model.modelId, 'gemma4:12b', 'an inherited ref is still spreadable when the caller says so');
+      assert.strictEqual((await reg.route({ spread: true, load: { ...busy, serial: new Set() } })).model.modelId, 'qwen2.5-coder:14b', 'one run on a model with free slots is not saturation');
+      await cfg.update('routing.parallelModels', false, vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.strictEqual((await reg.route({ spread: true, load: busy })).model.modelId, 'qwen2.5-coder:14b', 'setting off: queue');
+      await cfg.update('routing.parallelModels', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await (await fetch(`${srv.url}/api/delete`, { method: 'DELETE', body: JSON.stringify({ model: 'gemma4:12b' }) })).text();
+      await reg.listModels(true);
 
       // Offline / unknown default → best available, flagged as a fallback.
       await cfg.update('defaultModel', 'fake/gone:70b', vscode.ConfigurationTarget.Global);

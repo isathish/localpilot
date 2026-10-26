@@ -10,6 +10,10 @@ import { CatalogEntry, SkillCatalog, sourceFor } from './agent/skillCatalog';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
+import { ProjectSettingsManager } from './agent/settings';
+import { HookRunner } from './agent/hooks';
+import { PluginManager } from './agent/plugins';
+import { CommandManager } from './agent/commands';
 import { getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
@@ -73,6 +77,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
   runner.telemetry = telemetry;
   controller.telemetry = telemetry;
+  // Claude Code-compatible project configuration: settings.json (permission rules, hooks), plugins and custom
+  // slash commands from both `.claude/` and `.localpilot/`.
+  const projectSettings = new ProjectSettingsManager(log);
+  const plugins = new PluginManager(log);
+  plugins.extraDirs = () => getConfig().pluginPaths;
+  plugins.enabledPlugins = () => projectSettings.current.enabledPlugins;
+  const commands = new CommandManager(log, plugins);
+  skills.plugins = plugins;
+  runner.projectSettings = () => projectSettings.current;
+  runner.hooks = new HookRunner(() => (getConfig().hooksEnabled ? projectSettings.current : { ...projectSettings.current, hooks: {} }), log, (text, event) => {
+    log.info(`[hook:${event}] ${text}`);
+    controller.toast(text.length > 160 ? `${text.slice(0, 160)}…` : text);
+  });
+  controller.commands = commands;
+  context.subscriptions.push(projectSettings, plugins, commands);
   // "Before" side of worktree diffs: the file as the agent found it (the worktree's base commit).
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('localpilot-wtbase', {
@@ -89,6 +108,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(learner);
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
+  mcp.extraServers = () => plugins.mcpServers();
   const modelManager = new ModelManager(providers, log);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
 
@@ -133,8 +153,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(markdownViewer);
   tools.register(createShowMarkdownTool(markdownViewer, (p) => (path.isAbsolute(p) ? vscode.Uri.file(p) : workspace.root ? vscode.Uri.joinPath(vscode.Uri.file(workspace.root), p) : undefined)));
 
-  await (controller.loaded = Promise.all([store.load(), skills.refresh()]));
+  // Settings first (plugins may be disabled there), then plugins (they contribute skills, agents, commands, hooks,
+  // MCP servers), then everything that reads them.
+  await projectSettings.reload();
+  await plugins.refresh();
+  projectSettings.pluginLayers = plugins.settingsLayers();
+  await projectSettings.reload();
+  await (controller.loaded = Promise.all([store.load(), skills.refresh(), commands.refresh()]));
   void mcp.reload();
+  context.subscriptions.push(
+    plugins.onDidChange(() => {
+      projectSettings.pluginLayers = plugins.settingsLayers();
+      void projectSettings.reload();
+      void skills.refresh();
+      void commands.refresh();
+      void mcp.reload();
+    }),
+    projectSettings.onDidChange(() => void plugins.refresh())
+  );
   // Index the skill catalog off the critical path so the first request can already match uninstalled skills.
   if (getConfig().skillAutoInstall !== 'off') {
     setTimeout(() => void catalog.refresh().catch((e) => log.warn(`skill catalog: ${String(e)}`)), 5_000);
@@ -722,7 +758,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   runner.onSerialServer = (model) => {
     const provider = getConfig().providers.find((p) => p.id === model.providerId);
     const isOllama = provider?.type === 'ollama';
-    const msg = `${model.name} is answering one request at a time, so parallel subagents are queuing instead of running concurrently.${isOllama ? ` LocalPilot can restart Ollama with ${ModelManager.ollamaParallelSlots()} parallel slots.` : ' Enable parallel requests on the server (e.g. OLLAMA_NUM_PARALLEL, or more replicas) to speed this up.'}`;
+    const msg = `${model.name} is answering one request at a time. LocalPilot now spreads extra workers to comparable idle models that fit in memory alongside; for several workers on ${model.name} itself,${isOllama ? ` it can restart Ollama with ${ModelManager.ollamaParallelSlots()} parallel slots.` : ' enable parallel requests on the server (e.g. OLLAMA_NUM_PARALLEL, or more replicas).'}`;
     void vscode.window.showWarningMessage(msg, ...(isOllama ? ['Restart Ollama with parallel slots'] : []), 'Learn more').then((p) => {
       if (p === 'Restart Ollama with parallel slots') {
         void vscode.commands.executeCommand('localpilot.enableOllamaParallel');

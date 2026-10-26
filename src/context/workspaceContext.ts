@@ -1,9 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { runProcess } from '../tools/search';
-
-/** Project instruction files honoured automatically (first match per name wins; all distinct files are concatenated). */
-const RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules'];
+import { buildInstructions, InstructionFile } from './instructions';
 
 const TREE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/.next/**,**/target/**,**/coverage/**,**/.vscode-test/**}';
 
@@ -29,7 +27,7 @@ const STACK_MARKERS: [RegExp, string][] = [
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
   private mapCache?: { text: string; at: number };
-  private rulesCache?: { text: string; max: number };
+  private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[] };
   private readonly watcher: vscode.FileSystemWatcher;
   private readonly rulesWatcher: vscode.FileSystemWatcher;
 
@@ -42,7 +40,7 @@ export class WorkspaceContext implements vscode.Disposable {
     this.watcher.onDidCreate(invalidate);
     this.watcher.onDidDelete(invalidate);
     // Rules files are re-read only when one of them changes, not on every prompt build.
-    this.rulesWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot/rules.md,.localpilot/rules/*,AGENTS.md,CLAUDE.md,.cursorrules,.cursor/rules/*,.github/copilot-instructions.md,.windsurfrules}');
+    this.rulesWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot/rules.md,.localpilot/rules.local.md,.localpilot/rules/*,.localpilot/CLAUDE.md,AGENTS.md,CLAUDE.md,CLAUDE.local.md,.claude/CLAUDE.md,.claude/rules/*,.cursorrules,.cursor/rules/*,.github/copilot-instructions.md,.windsurfrules}');
     const dropRules = () => (this.rulesCache = undefined);
     this.rulesWatcher.onDidChange(dropRules);
     this.rulesWatcher.onDidCreate(dropRules);
@@ -58,43 +56,31 @@ export class WorkspaceContext implements vscode.Disposable {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
-  /** Concatenated project rules (AGENTS.md, CLAUDE.md, .cursorrules, copilot-instructions…), capped. */
+  /**
+   * Concatenated project instructions in Claude Code's order — user-level `~/.claude/CLAUDE.md`, ancestor folders'
+   * CLAUDE.md, the project's AGENTS.md / CLAUDE.md / .claude/CLAUDE.md / .cursorrules / copilot-instructions and rule
+   * folders, then CLAUDE.local.md — with `@path` imports resolved; capped.
+   */
   async loadInstructions(maxChars = 12000): Promise<string> {
-    if (this.rulesCache && this.rulesCache.max === maxChars) {
+    // Files outside the workspace (user level, ancestors, imports) have no watcher: refresh those on a short TTL.
+    if (this.rulesCache && this.rulesCache.max === maxChars && Date.now() - this.rulesCache.at < 60_000) {
       return this.rulesCache.text;
     }
-    const parts: string[] = [];
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      for (const rel of RULE_FILES) {
-        try {
-          const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, rel));
-          const text = Buffer.from(bytes).toString('utf8').trim();
-          if (text) {
-            parts.push(`<!-- ${rel} -->\n${text}`);
-          }
-        } catch {
-          /* not present */
-        }
-      }
-      // Cursor-style rule directories.
-      for (const dir of ['.cursor/rules', '.localpilot/rules']) {
-        try {
-          const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(folder.uri, dir));
-          for (const [name, type] of entries) {
-            if (type === vscode.FileType.File && /\.(md|mdc)$/.test(name)) {
-              const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, dir, name));
-              parts.push(`<!-- ${dir}/${name} -->\n${Buffer.from(bytes).toString('utf8').replace(/^---[\s\S]*?---\s*/, '').trim()}`);
-            }
-          }
-        } catch {
-          /* not present */
-        }
-      }
+    const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    try {
+      const { text, files } = await buildInstructions(roots, { maxChars });
+      this.rulesCache = { text, max: maxChars, at: Date.now(), files };
+      return text;
+    } catch (e) {
+      this.log.warn(`instructions: ${String(e)}`);
+      return this.rulesCache?.text ?? '';
     }
-    const joined = parts.join('\n\n');
-    const text = joined.length > maxChars ? joined.slice(0, maxChars) + '\n…(rules truncated)' : joined;
-    this.rulesCache = { text, max: maxChars };
-    return text;
+  }
+
+  /** The instruction files currently in force (for `/memory` and the settings UI). */
+  async instructionFiles(): Promise<InstructionFile[]> {
+    await this.loadInstructions(this.rulesCache?.max ?? 12000);
+    return this.rulesCache?.files ?? [];
   }
 
   /** `git status` + `git diff` for the @git mention. */

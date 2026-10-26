@@ -19,7 +19,9 @@ The agent can save durable notes and reads them back at the start of every sessi
 
 ## Chat history
 
-Chats are stored per workspace in VS Code's workspace storage (never sent anywhere). **Settings → Memory & history** shows how many chats and messages exist, how much disk they use, and lets you:
+Chats are stored per workspace in VS Code's workspace storage (never sent anywhere). The **All chats** button in the tab bar (also **+N** when more chats exist than fit as tabs) opens the history panel: chats grouped by **Running · Pinned · Today · Yesterday · Previous 7 / 30 days · Older**, searchable by title *and by what was said* — type two or more characters and chats whose messages contain the text appear with the matching line. Every row has **pin**, **rename**, **more…** (open, fork, export as Markdown, clear messages) and **delete** (with an inline confirmation), so a chat does not have to be opened to be managed; <kbd>↑</kbd>/<kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>F2</kbd> and <kbd>Delete</kbd> work on the selected row. Untouched empty chats never show up here, pressing **New chat** on an empty chat re-uses it, and leftovers from earlier windows are discarded on startup. A chat's title is its first message (your own words, without attachments or context blocks) until you rename it.
+
+**Settings → Memory & history** shows how many chats and messages exist, how much disk they use, and lets you:
 
 - set **Keep at most** (`localpilot.sessions.retention`, default 50) — the oldest idle chats are pruned automatically whenever a new chat starts; pinned and running chats never count;
 - **Clear chat history…** (also in the chat's All-chats menu and the Command Palette) — deletes idle chats, optionally keeping pinned ones; running agents keep going.
@@ -40,6 +42,7 @@ For any multi-step task the agent calls `manage_todos` first, then updates items
 
 - **Per-turn tool cache** — identical read-only calls (same tool, same arguments) run once per turn, including when a model requests duplicates in parallel. Any mutating tool (edit, write, delete, shell) clears the cache. Cached results show a *cached* badge.
 - **Model keep-alive** — `localpilot.keepAlive` (default `30m`) keeps the Ollama model loaded so follow-up turns skip the reload.
+- **Pre-warm** — `localpilot.prewarm` (default on) loads the chat's model as soon as you focus the composer or switch models, so the first token of your first message is not preceded by a 5–30 s weight load. Ollama only (an empty `/api/chat` request); throttled to once every few minutes per model and never while a run is in flight.
 - **Workspace tree cache** — `@workspace` listings are cached for 5 minutes and invalidated when files are created or deleted.
 - **Working set** — files read or edited in the session are listed in the prompt, so after compaction the model still knows what it touched.
 

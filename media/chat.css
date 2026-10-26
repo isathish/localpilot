@@ -1,3 +1,4 @@
+@charset "UTF-8";
 :root {
   --bg: var(--vscode-sideBar-background);
   --fg: var(--vscode-foreground);
@@ -95,7 +96,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 @media (max-width: 300px) { .tab { max-width: 120px; } }
 
 /* agents working in other tabs */
-.bgruns { display: flex; flex-direction: column; gap: 1px; padding: 3px 8px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--brand) 5%, transparent); flex: none; }
+.bgruns { display: flex; flex-direction: column; gap: 1px; padding: 3px 8px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--brand) 5%, transparent); flex: none; container: bgruns / inline-size; }
 .bgrun { display: flex; align-items: center; gap: 8px; min-height: 22px; padding: 0 2px 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; min-width: 0; }
 .bgrun:hover { background: var(--tint); color: var(--fg); }
 .bgrun .spin { width: 9px; height: 9px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
@@ -106,6 +107,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .bgrun .stop { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; }
 .bgrun .stop:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); } .bgrun .stop svg { width: 11px; height: 11px; }
 .bgrun.more { justify-content: center; }
+/* Narrow bar: the title and step matter more than the model chip (still in the row's tooltip). */
+@container bgruns (max-width: 380px) { .bgrun .mdl { display: none; } .bgrun .t { max-width: 55%; } }
 
 /* parallel task composer (popover) */
 .par { display: flex; flex-direction: column; gap: 8px; padding: 6px; min-width: 300px; }
@@ -165,11 +168,14 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .turn.user .imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .turn.user .imgs img { max-width: min(100%, 300px); max-height: 200px; border-radius: 6px; border: 1px solid var(--border); cursor: zoom-in; }
 .turn.user .imgs img.zoom { max-width: 100%; max-height: none; cursor: zoom-out; }
-.turn .actions { position: absolute; right: 12px; top: -10px; display: none; gap: 2px; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 2px; box-shadow: var(--shadow-sm); z-index: 2; }
-.turn:hover .actions { display: inline-flex; }
+.turn .actions { position: absolute; right: 12px; top: -10px; display: inline-flex; gap: 2px; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 2px; box-shadow: var(--shadow-sm); z-index: 2; opacity: 0; pointer-events: none; transition: opacity .12s; }
+/* Kept in the layout (not display:none) so the buttons stay tabbable and appear when one of them takes focus. */
+.turn:hover .actions, .turn:focus-within .actions { opacity: 1; pointer-events: auto; }
 .turn .actions button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 4px; color: var(--muted); font-size: 11px; }
 .turn .actions button:hover { background: var(--hover); color: var(--fg); }
 .turn .actions svg { width: 13px; height: 13px; }
+/* Narrow sidebar: the action bar must not outgrow the bubble it sits on — icons only, the title carries the label. */
+@container messages (max-width: 420px) { .turn .actions button span { display: none; } }
 .turn.assistant { padding: 8px 12px 10px; }
 /* Settled turns off screen skip layout and paint entirely; the inner wrappers (not .turn) carry the containment so the
    hover actions, which hang above the turn, are never clipped. The live turn is excluded so streaming never flickers. */
@@ -258,6 +264,33 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* edit group: "Edited settings.js, 2 other steps +4 −2" → expands to per-file cards */
 .step.editgroup > .content.edits { padding: 4px; background: none; border: none; font-family: inherit; white-space: normal; max-height: none; display: flex; flex-direction: column; gap: 4px; margin-left: 30px; }
 .step.editgroup > .content.edits .card { margin: 0; }
+/* explore group: a burst of reads/searches as one row — "Read a.ts, b.ts +2 more · Searched 3 times" → expands to the rows */
+.step.explore > .content.rows { padding: 0 0 0 4px; margin: 0 6px 6px 22px; background: none; border: none; border-left: 1px solid var(--border-soft); border-radius: 0; font-family: inherit; font-size: inherit; white-space: normal; max-height: none; overflow: visible; display: flex; flex-direction: column; }
+.step.explore > summary .label .dot { font-style: normal; opacity: .5; margin: 0 3px; }
+.step.explore > summary .label .muted { opacity: .75; }
+/* work strip: what the agent is doing now, how much it has done, for how long — then "Worked for …" that folds the steps */
+.work { display: flex; align-items: center; gap: 8px; min-height: 26px; margin: 0 0 4px; padding: 2px 6px 2px 4px; font-size: var(--fs-sm); color: var(--muted); border-radius: var(--radius-sm); user-select: none; }
+.work .ico { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; color: var(--fg); } .work .ico svg { width: 14px; height: 14px; }
+.work.running .ico svg { animation: spin 1s linear infinite; }
+.work .phase { font-weight: 500; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.work.running .phase { background: linear-gradient(90deg, var(--muted), var(--fg), var(--muted)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
+.work .facts { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work .facts:not(:empty)::before { content: '·'; margin-right: 8px; opacity: .6; }
+.work .time { flex: none; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; opacity: .85; }
+.work .chev { display: none; flex: none; opacity: .5; transition: transform .15s; } .work .chev svg { width: 12px; height: 12px; }
+.work.done { cursor: pointer; } .work.done:hover { background: var(--tint); }
+.work.done .ico { color: var(--ok); } .work.done.failed .ico { color: var(--error); }
+.work.done .chev { display: inline-flex; transform: rotate(90deg); } .turn.folded > .work.done .chev { transform: none; }
+.turn.folded > .steps, .turn.folded > .note { display: none; }
+/* web search hits: title · domain · snippet, each a link */
+.web-hits { display: flex; flex-direction: column; font-family: var(--vscode-font-family); white-space: normal; }
+.web-hits .hit { display: flex; gap: 9px; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); color: inherit; text-decoration: none; }
+.web-hits .hit:last-child { border-bottom: none; } .web-hits .hit:hover { background: var(--tint); text-decoration: none; }
+.web-hits .hit > svg { width: 13px; height: 13px; flex: none; margin-top: 3px; color: var(--muted); }
+.web-hits .hit-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.web-hits .t { color: var(--link); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-hits .u { font-size: var(--fs-xs); color: var(--muted); }
+.web-hits .s { font-size: var(--fs-xs); color: var(--fg-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* terminal row */
 .step.term > .content.termout { padding: 0; background: var(--editor-bg); white-space: normal; }
 .term-acts { display: flex; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--border-soft); }
@@ -540,6 +573,39 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .popover .empty-i { padding: 8px; color: var(--muted); }
 .popover hr { border: none; border-top: 1px solid var(--border-soft); margin: 4px 0; }
 
+/* All chats: searchable, date-grouped history with per-row actions */
+.hist { display: flex; flex-direction: column; width: min(340px, calc(100vw - 28px)); }
+.hist > .search { margin: 2px 0; }
+.hist-list { overflow: auto; max-height: min(400px, calc(60vh - 110px)); padding: 2px 0; scrollbar-width: thin; }
+.hist-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px 5px 8px; border-radius: var(--radius-sm); cursor: pointer; min-width: 0; min-height: 36px; }
+.hist-row.sel { background: var(--tint-2); }
+.hist-row.current .lbl { font-weight: 600; }
+.hist-row .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); } .hist-row .ico svg { width: 14px; height: 14px; }
+.hist-row .txt { flex: 1 1 auto; min-width: 0; }
+.hist-row .lbl, .hist-row .desc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-row .desc { font-size: 11px; color: var(--muted); }
+.hist-row .desc.snippet { color: var(--fg); opacity: .85; } .hist-row .desc.snippet b { font-weight: 600; color: var(--muted); }
+.hist-row mark { background: color-mix(in srgb, var(--brand) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.hist-row .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
+.hist-row .acts { display: none; align-items: center; gap: 1px; flex: none; }
+.hist-row.sel .acts, .hist-row:hover .acts, .hist-row.confirm .acts { display: inline-flex; }
+.hist-row.sel .tag, .hist-row:hover .tag, .hist-row.confirm .tag { display: none; }
+.hist-row .acts button { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); }
+.hist-row .acts button:hover { background: var(--hover); color: var(--fg); }
+.hist-row .acts button[aria-pressed="true"] { color: var(--brand); }
+.hist-row .acts svg { width: 13px; height: 13px; }
+.hist-row .acts .q { font-size: 11px; color: var(--muted); margin-right: 3px; white-space: nowrap; }
+.hist-row .acts button[data-a="confirm"], .hist-row .acts button[data-a="cancel"] { width: auto; padding: 0 7px; font-size: 11px; }
+.hist-row .acts .danger { color: var(--error); } .hist-row .acts .danger:hover { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+.hist-row input.rename { flex: 1 1 auto; min-width: 0; height: 20px; padding: 0 4px; border: 1px solid var(--focus); border-radius: 3px; background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); outline: none; }
+.hist-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 2px 2px; margin-top: 2px; border-top: 1px solid var(--border-soft); }
+.hist-foot .spacer { flex: 1 1 auto; }
+.hist-foot button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: var(--radius-sm); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hist-foot button:hover:not(:disabled) { background: var(--tint-2); color: var(--fg); }
+.hist-foot button:disabled { opacity: .45; cursor: default; }
+.hist-foot button svg { width: 13px; height: 13px; flex: none; }
+.hist-foot button.danger:hover:not(:disabled) { color: var(--error); }
+
 /* toasts */
 #toasts { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 70; pointer-events: none; max-width: 90%; }
 .jump { position: fixed; left: 50%; transform: translateX(-50%); z-index: 60; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--vscode-notifications-background, var(--bg)); color: var(--fg); border: 1px solid var(--border); box-shadow: var(--shadow); font: inherit; font-size: var(--fs-sm); cursor: pointer; animation: fadeUp .18s ease-out; }
@@ -548,6 +614,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .jump.hidden { display: none; }
 .toast { background: var(--vscode-notifications-background, var(--bg)); color: var(--vscode-notifications-foreground, var(--fg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 12px; font-size: var(--fs-sm); box-shadow: var(--shadow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: fadeUp .18s ease-out; }
 .toast.error { border-color: color-mix(in srgb, var(--error) 60%, transparent); }
+.toast.warn { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
 
 @media (max-width: 300px) {
   .turn { padding-left: 10px; padding-right: 10px; }

@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
-import { ContextManager } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
-import { ProviderRegistry } from '../providers/registry';
+import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { AgentEvent, ApprovalMode, ChatMessage, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
+import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
@@ -19,8 +19,24 @@ import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
 import { MemoryStore } from './memory';
 import { RunStats, Telemetry } from '../telemetry/telemetry';
+import { HookRunner } from './hooks';
+import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
+import { emptySettings, ProjectSettings } from './settings';
 
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
+
+/** Per-run permission/hook policy handed to tool execution. */
+interface ToolPolicy {
+  settings: ProjectSettings;
+  /** Extra allow rules for this run (a slash command's `allowed-tools`). */
+  extraAllow: string[];
+  hooks?: HookRunner;
+  root?: string;
+  sessionId: string;
+  /** Asks the user regardless of the approval settings (an `ask` rule or hook verdict). */
+  ask: ApprovalHandler;
+  signal: AbortSignal;
+}
 
 export interface AgentRunOptions {
   session: Session;
@@ -48,6 +64,14 @@ export interface AgentRunOptions {
   maxModelRetries?: number;
   /** First-token watchdog for this run (default 180 s, scaled by queue depth). Shorter for router-chosen subagent models, which have a fallback. */
   firstTokenTimeoutMs?: number;
+  /**
+   * The model was not the user's explicit choice (Auto, or inherited from a parent): when it is saturated the router
+   * may run this on a comparable idle model instead so parallel work really runs in parallel. Default: Auto chats
+   * (no session model) and every subagent.
+   */
+  spreadModels?: boolean;
+  /** Permission rules allowed for this run only (a custom slash command's `allowed-tools`). */
+  permissionAllow?: string[];
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -68,11 +92,20 @@ const IMPLEMENT_PLAN = /\b(implement|execute|run|start|apply|build|do|carry out|
 const SERIAL_DETECT_MS = 8_000;
 /** Tools that hand work to subagents; running one is work done, and a later re-announcement of it is stale. */
 const DELEGATION_TOOLS = new Set(['run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
+/** Up to this many words a request is "brief": its single matching skill is preloaded rather than hinted, saving a load_skill round trip. */
+const BRIEF_REQUEST_WORDS = 24;
+/** A Stop / SubagentStop hook may send the agent back to work this many times in one turn. */
+const MAX_STOP_HOOK_CONTINUES = 5;
 
 /** Drives the model ⇄ tools loop for one user turn. Safe to run concurrently for different sessions. */
 export class AgentRunner {
   /** Sessions currently streaming from each model id — lets a waiting chat say *why* it is waiting (local servers serve one request per model at a time). */
   private readonly inflight = new Map<string, Set<string>>();
+  /**
+   * Sessions assigned to each model id for the whole run (not only while a request streams): what the router
+   * spreads parallel work against, so four workers started in the same tick do not all land on one model.
+   */
+  private readonly assigned = new Map<string, Set<string>>();
   /** When the last request to each model id finished — used to notice a server that answers one request at a time. */
   private readonly lastFinished = new Map<string, number>();
   /** Model ids already flagged as served serially, so the user is told once. */
@@ -95,6 +128,10 @@ export class AgentRunner {
 
   /** Local-only metrics (runs, model calls, tools); nothing is sent anywhere. */
   telemetry?: Telemetry;
+  /** Merged settings.json (permission rules, hooks); absent = no rules. */
+  projectSettings?: () => ProjectSettings;
+  /** Runs the settings' hooks; absent = hooks disabled. */
+  hooks?: HookRunner;
 
   async run(o: AgentRunOptions): Promise<string> {
     const stats = new RunStats();
@@ -107,6 +144,7 @@ export class AgentRunner {
       outcome = o.signal.aborted ? 'stopped' : 'failed';
       throw e;
     } finally {
+      this.unassign(o.session.id);
       this.telemetry?.record({
         type: 'run',
         sid: o.session.id,
@@ -137,16 +175,24 @@ export class AgentRunner {
       role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
       modelRef: o.modelRef ?? session.model,
       needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
+      spread: o.spreadModels ?? (depth > 0 || !(o.modelRef ?? session.model)),
+      load: this.loadFor(session.id),
     });
-    const { provider, model } = route;
+    const { provider } = route;
+    // One number for the budget and for the request: the window the model is actually given (the setting, capped by
+    // the model; 0 = the model's full native window). Budgeting against the native window while sending a smaller
+    // num_ctx would let the server truncate silently before compaction ever triggered.
+    const model: ModelInfo = { ...route.model, contextWindow: effectiveContextWindow(route.model, cfg.contextWindow) };
     stats.model = model.id;
+    this.assign(model.id, session.id);
     if (route.reason) {
       status(route.reason);
     }
     // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
-    // unavailable model is replaced for good so the picker reflects what is actually answering.
+    // unavailable model is replaced for good so the picker reflects what is actually answering. A model chosen only
+    // because the intended one was busy is not kept either: the next turn routes afresh.
     // Subagent sessions are ephemeral: record what actually answered so the parent can report or quarantine it.
-    if (!route.reason || route.fallback || depth > 0) {
+    if ((!route.reason || route.fallback || depth > 0) && !(route.spread && depth === 0)) {
       session.model = model.id;
     }
 
@@ -179,7 +225,35 @@ export class AgentRunner {
       : system;
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
 
+    const wasEmpty = session.messages.length === 0;
     session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
+
+    // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
+    const hookRoot = o.workspaceRoot ?? this.workspace.root;
+    if (depth === 0 && this.hooks && (this.hooks.has('SessionStart') || this.hooks.has('UserPromptSubmit'))) {
+      const hookContext: string[] = [];
+      if (wasEmpty && this.hooks.has('SessionStart')) {
+        const r = await this.hooks.run('SessionStart', { session_id: session.id, source: 'startup' }, { cwd: hookRoot, matchKey: 'startup', signal: o.signal });
+        hookContext.push(...r.context);
+      }
+      if (this.hooks.has('UserPromptSubmit')) {
+        status('Running prompt hooks…');
+        const r = await this.hooks.run('UserPromptSubmit', { session_id: session.id, prompt: userText(o.userMessage.content) }, { cwd: hookRoot, signal: o.signal });
+        if (r.block || r.stop) {
+          const reason = r.reasons.join('\n') || r.stop || 'A UserPromptSubmit hook blocked this prompt.';
+          const note = `Prompt blocked by a hook: ${reason}`;
+          session.messages.pop(); // the prompt is erased, like Claude Code
+          session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
+          emit({ sessionId: session.id, type: 'assistant_delta', payload: note });
+          emit({ sessionId: session.id, type: 'turn_end', payload: { text: note, contextTokens: session.contextTokens, durationMs: Date.now() - stats.startedAt, steps: 0, toolCalls: 0 } });
+          return note;
+        }
+        hookContext.push(...r.context);
+      }
+      if (hookContext.length) {
+        session.messages.push({ role: 'user', content: `<hook-context>\n${hookContext.join('\n\n')}\n</hook-context>`, meta: { timestamp: Date.now(), hidden: true } });
+      }
+    }
 
     // Vague request ("fix this", "make it faster")? Hand the model a snapshot of what the user is looking at and
     // working on so it resolves the target itself and states its interpretation, instead of guessing or stalling.
@@ -216,8 +290,11 @@ export class AgentRunner {
     // - Strong matches (name / trigger phrase), pinned skills and `/skill <name>` are PRELOADED: their full
     //   instructions go into a hidden message, so the model follows them instead of having to call load_skill —
     //   the step small local models most often skip or get wrong (hallucinated names, summarised steps).
-    // - Loose matches are only hinted at. The chat's skills mode (session override, else the global setting)
-    //   decides whether registry skills are installed on the spot, offered as a chip, or left alone.
+    // - Loose matches are only hinted at — except on a brief request with a single candidate, where the hint would
+    //   cost a whole model round trip (load_skill, then the real work) for a decision with nothing to weigh; the
+    //   skill is preloaded and the note lets the model set it aside if it does not apply.
+    // - The chat's skills mode (session override, else the global setting) decides whether registry skills are
+    //   installed on the spot, offered as a chip, or left alone.
     // Skills in force for this run — handed to every subagent it spawns so a swarm follows the same playbook.
     const activeSkills = new Set<string>(session.skills?.pinned ?? []);
     if (depth === 0 && !o.roleOverride && (this.skills.enabledSkills.length || this.catalog)) {
@@ -277,7 +354,8 @@ export class AgentRunner {
             wanted.push({ name: r.skill.name, reason: 'pinned' });
           }
         }
-        if (!quiet && !prescribed && !forcedName && fresh[0]?.strong) {
+        const brief = text.trim().split(/\s+/).length <= BRIEF_REQUEST_WORDS;
+        if (!quiet && !prescribed && !forcedName && fresh[0] && (fresh[0].strong || (brief && fresh.length === 1))) {
           wanted.push({ name: fresh[0].name, reason: installed?.name === fresh[0].name ? 'installed' : 'match' });
         }
         const items: { name: string; body: string; reason: (typeof wanted)[number]['reason'] }[] = [];
@@ -375,8 +453,22 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'todos', payload: items });
         },
       },
-      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id),
+      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot }),
     };
+    const policy: ToolPolicy = {
+      settings: this.projectSettings?.() ?? emptySettings(),
+      extraAllow: o.permissionAllow ?? [],
+      hooks: this.hooks,
+      root: hookRoot,
+      sessionId: session.id,
+      ask: (title, detail, kind) => {
+        emit({ sessionId: session.id, type: 'approval_request', payload: { kind } });
+        return o.requestApproval(title, detail, kind);
+      },
+      signal: o.signal,
+    };
+    /** Times a Stop / SubagentStop hook sent the agent back to work this turn. */
+    let stopHookContinues = 0;
 
     let finalText = '';
     const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
@@ -429,27 +521,27 @@ export class AgentRunner {
       injectSteering();
 
       // --- Context management ---------------------------------------------------------------
-      let budget = ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], session.messages, cfg.maxOutputTokens);
+      // Keep splitting until it fits: prune old tool outputs, summarise the older part, and tighten the verbatim
+      // window if a few huge recent results still do not leave room for the answer.
+      const budgetOf = (h: ChatMessage[]) => ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], h, cfg.maxOutputTokens);
+      let budget = budgetOf(session.messages);
       if (ctxMgr.needsCompaction(budget)) {
-        const pruned = ctxMgr.pruneToolOutputs(session.messages);
-        if (pruned.saved > 0) {
-          session.messages = pruned.messages;
-          budget = ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], session.messages, cfg.maxOutputTokens);
+        if (this.hooks?.has('PreCompact')) {
+          await this.hooks.run('PreCompact', { session_id: session.id, trigger: 'auto', custom_instructions: '' }, { cwd: hookRoot, matchKey: 'auto', signal: o.signal });
         }
-      }
-      if (ctxMgr.needsCompaction(budget)) {
-        status('Compacting conversation to fit the context window…');
-        const result = await ctxMgr.compact(session.messages, provider, model, o.signal);
-        if (result.removed > 0) {
-          session.messages = result.messages;
+        const fit = await ctxMgr.fit(session.messages, provider, model, budgetOf, o.signal, () => status('Compacting conversation to fit the context window…'));
+        session.messages = fit.messages;
+        budget = fit.budget;
+        for (const result of fit.compactions) {
           session.compactions++;
           emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
-          budget = { ...budget, historyTokens: result.after };
         }
       }
       session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
 
       // --- Model call -----------------------------------------------------------------------
+      // Back on the model after tools ran: hold the slot again (it was handed to workers during tool execution).
+      this.assign(model.id, session.id);
       const busy = this.inflight.get(model.id) ?? new Set<string>();
       const others = [...busy].filter((id) => id !== session.id).length;
       status(others ? `Waiting for ${model.name} — busy with ${others} other chat${others === 1 ? '' : 's'}…` : iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
@@ -486,7 +578,7 @@ export class AgentRunner {
             tools: nativeTools && toolDefs.length ? toolDefs : undefined,
             temperature: cfg.temperature,
             maxTokens: cfg.maxOutputTokens,
-            contextWindow: Math.min(model.contextWindow, Math.max(cfg.contextWindow, 4096)),
+            contextWindow: model.contextWindow,
             think,
             keepAlive: cfg.keepAlive || undefined,
             signal: ac.signal,
@@ -668,6 +760,20 @@ export class AgentRunner {
         if (injectSteering()) {
           continue;
         }
+        // Stop / SubagentStop hooks may judge the work unfinished and send the agent back (bounded).
+        const stopEvent = depth === 0 ? 'Stop' : 'SubagentStop';
+        if (this.hooks?.has(stopEvent) && !o.signal.aborted) {
+          status('Running stop hooks…');
+          const r = await this.hooks.run(stopEvent, { session_id: session.id, stop_hook_active: stopHookContinues > 0, last_assistant_message: text }, { cwd: hookRoot, signal: o.signal });
+          if (r.block && stopHookContinues < MAX_STOP_HOOK_CONTINUES && !r.stop) {
+            stopHookContinues++;
+            const reason = r.reasons.join('\n') || 'A stop hook asked you to continue.';
+            emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'hook' } });
+            session.messages.push({ role: 'user', content: `A Stop hook blocked finishing: ${reason}\nAddress this, then report again.`, meta: { timestamp: Date.now(), hidden: true, nudge: 'hook' } });
+            status('Continuing (stop hook)…');
+            continue;
+          }
+        }
         completed = true;
         break;
       }
@@ -683,7 +789,10 @@ export class AgentRunner {
         break;
       }
       stats.toolCalls += calls.length;
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode);
+      // While tools run this session makes no requests: give the model slot up so workers it delegates to can take
+      // it instead of being spread away from an idle model.
+      this.unassign(session.id);
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -722,7 +831,12 @@ export class AgentRunner {
     }
 
     session.updatedAt = Date.now();
-    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens } });
+    const durationMs = Date.now() - stats.startedAt;
+    const last = session.messages[session.messages.length - 1];
+    if (last?.role === 'assistant') {
+      last.meta = { ...last.meta, durationMs };
+    }
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls } });
     return finalText;
   }
 
@@ -737,6 +851,40 @@ export class AgentRunner {
     }
   }
 
+  private assign(modelId: string, sessionId: string): void {
+    this.unassign(sessionId);
+    const set = this.assigned.get(modelId) ?? new Set<string>();
+    set.add(sessionId);
+    this.assigned.set(modelId, set);
+    this.assignedCount.set(modelId, set.size);
+  }
+
+  private unassign(sessionId: string): void {
+    for (const [id, set] of this.assigned) {
+      if (set.delete(sessionId)) {
+        if (set.size) {
+          this.assignedCount.set(id, set.size);
+        } else {
+          this.assigned.delete(id);
+          this.assignedCount.delete(id);
+        }
+      }
+    }
+  }
+
+  /** Live run counts per model id (the Map instance the router reads, kept current by assign/unassign). */
+  private readonly assignedCount = new Map<string, number>();
+
+  /** Current load as the router sees it: runs per model and the models known to serve one request at a time. */
+  get load(): ModelLoad {
+    return { assigned: this.assignedCount, serial: this.serialWarned, slots: Math.min(4, Math.max(1, getConfig().parallel.maxConcurrency)) };
+  }
+
+  /** The load view for one run: the router reserves its pick for that session the moment it decides. */
+  private loadFor(sessionId: string): ModelLoad {
+    return { ...this.load, reserve: (modelId) => this.assign(modelId, sessionId) };
+  }
+
   /**
    * Heuristic for a server that serves one request per model at a time (Ollama's default `OLLAMA_NUM_PARALLEL`):
    * our request was queued behind others, waited a while, and only got its first token after one of them finished.
@@ -748,10 +896,20 @@ export class AgentRunner {
     const finished = this.lastFinished.get(model.id) ?? 0;
     const waited = Date.now() - requestedAt;
     if (finished > requestedAt && waited >= SERIAL_DETECT_MS) {
-      this.serialWarned.add(model.id);
-      this.log.warn(`${model.id} appears to serve one request at a time (first token after ${Math.round(waited / 1000)}s behind ${others} other request(s)); parallel subagents will queue`);
+      this.markServedSerially(model.id);
+      this.log.warn(`${model.id} appears to serve one request at a time (first token after ${Math.round(waited / 1000)}s behind ${others} other request(s)); parallel work spreads to other models where possible`);
       this.onSerialServer?.(model);
     }
+  }
+
+  /** Treat `modelId` as serving one request at a time: from now on a second simultaneous run on it is spread to a comparable idle model. */
+  markServedSerially(modelId: string): void {
+    this.serialWarned.add(modelId);
+  }
+
+  /** Model ids currently known to serve one request at a time. */
+  get serialModels(): ReadonlySet<string> {
+    return this.serialWarned;
   }
 
   /** A routed model stalled on a subagent: keep automatic picks away from it for a while. */
@@ -812,16 +970,63 @@ export class AgentRunner {
     cache: Map<string, Promise<ChatMessage>>,
     vision = false,
     callCounts?: Map<string, number>,
-    mode = 'agent'
+    mode = 'agent',
+    policy?: ToolPolicy
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
+    const toolMsg = (call: ToolCall, content: string): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } });
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       const started = Date.now();
-      let result = tool
-        ? await this.tools.execute(call.name, args, ctx)
-        : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+      let result: { content: string; isError?: boolean; data?: unknown } | undefined;
+      let callCtx = ctx;
+      if (tool && policy) {
+        // Permission rules from settings.json: deny → ask → allow, then the project's default mode.
+        const verdict = evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
+        let decision: 'allow' | 'deny' | 'ask' | 'none' = verdict.decision;
+        let reason = verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
+        if (decision === 'deny') {
+          result = { content: `Blocked by ${reason} in settings.json. Do not retry this exact action; choose another approach or ask the user to change the rule.`, isError: true };
+        } else if (policy.hooks?.has('PreToolUse')) {
+          const r = await policy.hooks.run('PreToolUse', { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), localpilot_tool_name: call.name }, { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal });
+          if (r.block || r.permission === 'deny') {
+            result = { content: `Blocked by a PreToolUse hook: ${r.reasons.join('\n') || 'no reason given'}. Nothing was done.`, isError: true };
+          } else {
+            if (r.updatedInput) {
+              args = fromClaudeToolInput(call.name, r.updatedInput, args);
+            }
+            if (r.permission) {
+              decision = r.permission;
+              reason = 'a PreToolUse hook';
+            }
+            if (r.stop) {
+              result = { content: `Stopped by a hook: ${r.stop}`, isError: true };
+            }
+          }
+        }
+        if (!result) {
+          if (decision === 'none') {
+            decision = defaultModeDecision(policy.settings.permissions.defaultMode, call.name);
+            reason = decision === 'none' ? '' : `permissions.defaultMode = ${policy.settings.permissions.defaultMode}`;
+          }
+          if (decision === 'deny') {
+            result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
+          } else if (decision === 'allow') {
+            callCtx = { ...ctx, requestApproval: async () => true };
+          } else if (decision === 'ask') {
+            callCtx = { ...ctx, requestApproval: policy.ask };
+          }
+        }
+        if (result?.isError) {
+          this.log.info(`tool ${call.name} blocked: ${result.content.split('\n')[0]}`);
+        }
+      }
+      if (!result) {
+        result = tool
+          ? await this.tools.execute(call.name, args, callCtx)
+          : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+      }
       if (ctx.signal.aborted) {
         result = { content: 'Cancelled by user.', isError: true };
       }
@@ -834,13 +1039,21 @@ export class AgentRunner {
           text += ' Note: the current model cannot see images — the screenshot is shown to the user only. Switch to a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl) to inspect it, or use web_fetch for the page text.';
         }
       }
-      const content = ctxMgr.clampToolOutput(text);
+      let content = ctxMgr.clampToolOutput(text);
+      if (tool && policy?.hooks?.has('PostToolUse') && !ctx.signal.aborted) {
+        const r = await policy.hooks.run(
+          'PostToolUse',
+          { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), tool_response: { content, is_error: !!result.isError }, localpilot_tool_name: call.name },
+          { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal }
+        );
+        const extra = [...(r.block ? r.reasons.map((x) => `[hook] ${x}`) : []), ...r.context];
+        if (extra.length) {
+          content = `${content}\n\n${extra.join('\n')}`;
+        }
+      }
       this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: Date.now() - started, error: !!result.isError });
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
-      return {
-        msg: { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } },
-        isError: !!result.isError,
-      };
+      return { msg: toolMsg(call, content), isError: !!result.isError };
     };
     const runOne = async (call: ToolCall): Promise<ChatMessage> => {
       const args = parseArgs(call.arguments);
@@ -902,7 +1115,7 @@ export class AgentRunner {
     return imageMsg ? [...ordered, imageMsg] : ordered;
   }
 
-  private async gateApproval(kind: NonNullable<Tool['approvalKind']>, mode: ApprovalMode, ask: () => Promise<boolean>, emit: (e: AgentEvent) => void, sessionId: string): Promise<boolean> {
+  private async gateApproval(kind: NonNullable<Tool['approvalKind']>, mode: ApprovalMode, ask: () => Promise<boolean>, emit: (e: AgentEvent) => void, sessionId: string, info?: { title: string; detail: string; root?: string }): Promise<boolean> {
     if (mode === 'always') {
       return true;
     }
@@ -910,6 +1123,10 @@ export class AgentRunner {
       return false;
     }
     emit({ sessionId, type: 'approval_request', payload: { kind } });
+    if (info && this.hooks?.has('Notification')) {
+      // Fire-and-forget: a Notification hook may ping the user (desktop notification, sound) while the prompt waits.
+      void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt' });
+    }
     return ask();
   }
 }

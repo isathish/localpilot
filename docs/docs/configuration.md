@@ -26,7 +26,7 @@ Expand a provider to edit it and press **Test connection** — LocalPilot checks
 | `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model that fits this machine |
 | `localpilot.models.disabled` | `[]` | `provider/model` ids hidden from pickers, routing and the status bar (toggle in **Settings → Models**) |
 | `localpilot.models.autoSetup` | `true` | Offer to install Ollama + a starter model when no local model is found |
-| `localpilot.contextWindow` | `32768` | Requested context (Ollama `num_ctx`); capped by the model's maximum |
+| `localpilot.contextWindow` | `32768` | Requested context (Ollama `num_ctx`), capped by the model's maximum; `0` = the model's full native window. Compaction is budgeted against the same number |
 | `localpilot.maxOutputTokens` | `4096` | Max tokens per response |
 | `localpilot.temperature` | `0.2` | Sampling temperature |
 | `localpilot.thinking` | `false` | Extended thinking for reasoning models |
@@ -46,6 +46,7 @@ Expand a provider to edit it and press **Test connection** — LocalPilot checks
 | `localpilot.routing.reasoning` | `""` (keep session model) | `provider/model` used in Plan mode |
 | `localpilot.routing.fast` | `""` (auto) | `provider/model` for read-only subagents (`explore`, `clarifier`, `researcher`). Empty = smallest tool-capable model that fits; `session` = keep the session model |
 | `localpilot.routing.coding` | `""` (keep session model) | `provider/model` for implementing subagents (`coder`, `tester`, `debugger`, `docs`) |
+| `localpilot.routing.parallelModels` | `true` | Spread simultaneous runs across models: when workers or Auto chats would land on a model already serving as many runs as it can, the extra ones go to a comparable idle model that fits in memory alongside. Explicit model choices are never swapped. See [Several models at once]({{ '/docs/parallel-agents/#several-models-at-once' | relative_url }}) |
 
 See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 

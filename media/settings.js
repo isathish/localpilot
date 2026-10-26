@@ -573,17 +573,19 @@
       field('routing.vision', 'Images', `Used when a turn has images and the session model cannot see. ${esc(autoFor('vision'))}.`, 'select', { options: [['', 'Auto (best vision model)', ''], ...(modelOptions((m) => m.supportsVision).length ? modelOptions((m) => m.supportsVision) : opts)] }),
       field('routing.reasoning', 'Plan mode', 'Optional reasoning model for planning (qwen3, deepseek-r1, gpt-oss — pair with Extended thinking below). Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] }),
       field('routing.fast', 'Read-only subagents', `<code>explore</code>, <code>clarifier</code>, <code>researcher</code> run many short tool calls, often several in parallel — a small tool-capable model keeps them snappy. ${esc(autoFor('fast'))}.`, 'select', { options: [['', 'Auto (smallest tool-capable model that fits)', ''], ['session', 'Keep the session model', ''], ...opts] }),
-      field('routing.coding', 'Implementing subagents', '<code>coder</code>, <code>tester</code>, <code>debugger</code>, <code>docs</code>. Pick a stronger coding model here while chatting with a lighter one. Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] })
+      field('routing.coding', 'Implementing subagents', '<code>coder</code>, <code>tester</code>, <code>debugger</code>, <code>docs</code>. Pick a stronger coding model here while chatting with a lighter one. Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] }),
+      field('routing.parallelModels', 'Spread parallel work across models', 'When several workers (or Auto chats) need a model that is already serving as many requests as it can — one, on a server that answers one request per model at a time — the extra ones run on a comparable idle model that fits in memory alongside, instead of queuing. A model you picked explicitly for a chat is never swapped.', 'toggle')
     ));
 
     // --- generation
     sec.appendChild(el('h2', 'sub', 'Generation'));
     sec.appendChild(card(
-      field('contextWindow', 'Context window', 'Requested context size in tokens (<code>num_ctx</code> for Ollama). Capped by the model. Larger = more memory and slower prompts.', 'select', { options: [[8192, '8k'], [16384, '16k'], [32768, '32k'], [65536, '64k'], [131072, '128k'], [262144, '256k']], cast: Number }),
+      field('contextWindow', 'Context window', 'Requested context size in tokens (<code>num_ctx</code> for Ollama), capped by the model. <b>Model maximum</b> asks for the largest window the model supports. Larger = more memory and slower prompts; the conversation is compacted before it fills up.', 'select', { options: [[0, 'Model maximum', 'largest the model supports'], [8192, '8k'], [16384, '16k'], [32768, '32k'], [65536, '64k'], [131072, '128k'], [262144, '256k']], cast: Number }),
       field('maxOutputTokens', 'Max output tokens', 'Upper bound per response.', 'number', { min: 256, max: 65536, step: 256 }),
       field('temperature', 'Temperature', 'Lower is more deterministic. 0.2 is a good default for code.', 'range', { min: 0, max: 1.5, step: 0.05, fmt: (v) => Number(v).toFixed(2) }),
       field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>). Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] }),
-      field('keepAlive', 'Keep model loaded', 'How long Ollama keeps the model in memory after a request (e.g. <code>5m</code>, <code>30m</code>, <code>-1</code> = forever).', 'text', { placeholder: '30m', validate: (v) => /^(-1|0|\d+(ms|s|m|h))$/.test(v) })
+      field('keepAlive', 'Keep model loaded', 'How long Ollama keeps the model in memory after a request (e.g. <code>5m</code>, <code>30m</code>, <code>-1</code> = forever).', 'text', { placeholder: '30m', validate: (v) => /^(-1|0|\d+(ms|s|m|h))$/.test(v) }),
+      field('prewarm', 'Pre-load the model while you type', 'Loads the chat’s model as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; at most once every few minutes per model.', 'toggle')
     ));
 
     // --- catalog

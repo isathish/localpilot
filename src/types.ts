@@ -39,6 +39,10 @@ export interface ChatMessage {
     steer?: boolean;
     /** Correlates a steering message with the "queued" bubble the UI showed before it was injected. */
     steerId?: string;
+    /** On the last assistant message of a turn: wall-clock time of the whole turn, for the "Worked for …" summary. */
+    durationMs?: number;
+    /** What the transcript shows instead of the content (a slash command whose expanded prompt is the content). */
+    display?: string;
   };
 }
 
@@ -120,6 +124,8 @@ export interface LLMProvider {
   complete(opts: CompletionRequestOptions): Promise<string>;
   embed?(model: string, input: string[]): Promise<number[][]>;
   healthCheck(signal?: AbortSignal): Promise<boolean>;
+  /** Load the model into memory ahead of the first request so the first token arrives sooner (optional, best effort). */
+  warm?(model: string, keepAlive: string | undefined, signal?: AbortSignal): Promise<void>;
 }
 
 export interface ProviderConfig {

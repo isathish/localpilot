@@ -115,10 +115,20 @@ Read-only subagents (`explore`, `clarifier`, `researcher`) are routed to a small
 
 ## Parallel requests
 
-Parallel subagents are only as parallel as the model server. **Ollama serves one request per model at a time by default** (`OLLAMA_NUM_PARALLEL` unset), so four subagents would queue behind each other — the status line shows *Waiting for <model> — queued behind N other requests…* and the first-token timeout grows with the queue so queued requests are not mistaken for stalls.
+Parallel subagents are only as parallel as the model server. **Ollama serves one request per model at a time by default** (`OLLAMA_NUM_PARALLEL` unset), so four subagents on one model would queue behind each other — the status line shows *Waiting for <model> — queued behind N other requests…* and the first-token timeout grows with the queue so queued requests are not mistaken for stalls.
+
+### Several models at once
+
+LocalPilot's answer to a one-slot server is to **use more than one model**. Every run holds a slot on the model it was routed to, and the router sees those counts live. When a worker (or an *Auto* chat) would land on a model that is already serving as many runs as it can — one, once the model is known to answer serially; otherwise the slot count LocalPilot asks Ollama for — the router picks a **comparable idle model** instead and says so on the worker's lane (*qwen2.5-coder:14b is busy with 1 other request — running this on gemma4:12b alongside*). Comparable means: the same hard capabilities (tool calling; vision when the turn has images), a role score within a few points of the intended model, at least a third of its parameters, and — when sizes are known — small enough to sit in memory **next to** the models already in use, so a second model never evicts the first and makes both slower. When nothing qualifies the run queues as before. Two workers routed in the same instant cannot both grab the last slot: the pick is reserved the moment it is made.
+
+What is never swapped: a model you chose explicitly for a chat, a model named in a `run_subagent` call or an agent file. Workers that merely **inherit** the parent's model are spreadable; so are Auto chats, which stay on *Auto* after a spread turn instead of being pinned to the stand-in. A spread worker whose stand-in stalls is retried on the parent's model. A parent waiting for its workers gives its slot up, so the parent's own model is the first one its workers fill. The whole behaviour is `localpilot.routing.parallelModels` (default on) and needs `routing.enabled`.
+
+The *Auto* entry in the model picker names the model the router would answer with right now, so what you see is what runs.
+
+### More slots on one model
 
 - When LocalPilot **starts Ollama itself** (automatic setup, *Start* in Settings → Models, the installer scripts) it sets `OLLAMA_NUM_PARALLEL` to `localpilot.parallel.maxConcurrency` (capped at 4).
-- When LocalPilot notices requests queuing at a server, it says so once and offers **Restart Ollama with parallel slots** (also *LocalPilot: Restart Ollama with Parallel Request Slots* in the Command Palette). A systemd-managed Ollama on Linux needs `sudo systemctl edit ollama` → `Environment="OLLAMA_NUM_PARALLEL=4"` → `sudo systemctl restart ollama`; a remote server needs the variable set where it runs.
+- When LocalPilot notices requests queuing at a server, it starts spreading (above), says so once and offers **Restart Ollama with parallel slots** (also *LocalPilot: Restart Ollama with Parallel Request Slots* in the Command Palette) for true parallelism on that one model. A systemd-managed Ollama on Linux needs `sudo systemctl edit ollama` → `Environment="OLLAMA_NUM_PARALLEL=4"` → `sudo systemctl restart ollama`; a remote server needs the variable set where it runs.
 - Each slot keeps its own KV cache, so memory use grows with slots × `localpilot.contextWindow`. If a model becomes slow or spills to CPU after enabling slots, lower `maxConcurrency` (fewer slots) or the context window. Gemma 4's sliding-window attention keeps per-slot memory small, which is one reason it is the recommended local model.
 - LM Studio, llama.cpp (`--parallel N`), vLLM and Docker Model Runner have their own concurrency settings; LocalPilot's detection and status messages work the same way with them.
 

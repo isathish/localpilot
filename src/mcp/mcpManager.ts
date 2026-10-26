@@ -149,6 +149,8 @@ export class McpManager implements vscode.Disposable {
   /** Fires after every (re)load so UIs can refresh connection status. */
   readonly onDidChange = this._onDidChange.event;
   private configSub: vscode.Disposable;
+  /** Servers contributed by plugins (`.mcp.json`), merged below the user's `localpilot.mcpServers`. */
+  extraServers: () => Record<string, McpServerConfig> = () => ({});
 
   constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
     this.configSub = onConfigChange(() => void this.reload());
@@ -157,7 +159,7 @@ export class McpManager implements vscode.Disposable {
   async reload(): Promise<void> {
     this.stopAll();
     this.errors.clear();
-    const servers = getConfig().mcpServers;
+    const servers = { ...this.extraServers(), ...getConfig().mcpServers };
     await Promise.all(
       Object.entries(servers)
         .filter(([, c]) => c.enabled !== false && c.command)

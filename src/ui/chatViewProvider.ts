@@ -26,6 +26,23 @@ export const CHAT_LOCATIONS: { id: ChatLocation; label: string; detail: string; 
   { id: 'editor', label: 'Editor Area', detail: 'A tab in the main area, like a file — most room for long answers', icon: 'layout-centered' },
 ];
 
+/**
+ * The locations with their side spelled out for this user's layout: with `workbench.sideBar.location: right` the
+ * Primary Side Bar is on the right and the Secondary on the left, and the picker must say so.
+ */
+export function describeChatLocations(): typeof CHAT_LOCATIONS {
+  const primaryRight = vscode.workspace.getConfiguration('workbench').get<string>('sideBar.location', 'left') === 'right';
+  return CHAT_LOCATIONS.map((l) => {
+    if (l.id === 'sidebar') {
+      return { ...l, detail: `${primaryRight ? 'Right' : 'Left'}, with the Explorer — under the LocalPilot activity bar icon`, icon: primaryRight ? 'layout-sidebar-right' : 'layout-sidebar-left' };
+    }
+    if (l.id === 'secondarySidebar') {
+      return { ...l, detail: `${primaryRight ? 'Left' : 'Right'}, where Copilot Chat lives — keeps the Explorer visible`, icon: primaryRight ? 'layout-sidebar-left' : 'layout-sidebar-right' };
+    }
+    return l;
+  });
+}
+
 export function getChatLocation(): ChatLocation {
   return vscode.workspace.getConfiguration('localpilot').get<ChatLocation>('chat.location', 'sidebar');
 }
@@ -35,6 +52,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'localpilot.chatView';
   static readonly panelViewType = 'localpilot.chatPanel';
   private view?: vscode.WebviewView;
+  /** How the last Chat view went away: how long it lived and whether its UI had booted — tells a VS Code teardown from a user closing the part. */
+  private lastDisposal?: { aliveMs: number; booted: boolean };
   private panels = new Set<vscode.WebviewPanel>();
   /** Webviews that dismissed their boot screen (rendered a session); a host missing here is still loading. */
   private readonly booted = new WeakSet<vscode.Webview>();
@@ -52,12 +71,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.lastDisposal = undefined;
+    const resolvedAt = Date.now();
     // When the location changes, the old container's view is disposed after the new one resolved; only forget our own.
-    this.wire(view.webview, () => { if (this.view === view) { this.view = undefined; } }, view);
+    this.wire(view.webview, () => {
+      if (this.view === view) {
+        this.view = undefined;
+        this.lastDisposal = { aliveMs: Date.now() - resolvedAt, booted: this.booted.has(view.webview) };
+      }
+    }, view);
     view.onDidChangeVisibility(() => {
       if (view.visible) {
         void view.webview.postMessage({ type: 'focusInput' } satisfies ToWebview);
       }
+      this.controller.surfaceVisibilityChanged();
     });
   }
 
@@ -82,6 +109,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
     this.panels.add(panel);
     this.wire(panel.webview, () => this.panels.delete(panel), panel);
+    panel.onDidChangeViewState(() => this.controller.surfaceVisibilityChanged());
   }
 
   /** Location changes run one at a time; `reveal()` waits for a pending one so a focus never lands mid-move. */
@@ -95,7 +123,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     // Always go through the focus command: it reveals the container wherever VS Code keeps the view, and never
     // targets a view handle that a native move has just disposed ("unknown webview view").
-    void this.locationOp.then(() => vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`));
+    void this.locationOp.then(() => this.focusView());
+  }
+
+  /**
+   * Focuses the Chat view and makes sure it actually came up: right after a container change VS Code sometimes
+   * accepts the focus, creates the pane and tears it down again a moment later, which would leave the user with an
+   * empty part until they click the icon a second time. One verification pass covers that without ever fighting a
+   * user who genuinely closed the part (a closed part hides the view; it does not dispose it).
+   */
+  private async focusView(): Promise<void> {
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`).then(undefined, () => undefined);
+      await sleep(400);
+      if (this.view) {
+        return;
+      }
+    }
   }
 
   /**
@@ -117,38 +162,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const viewIds = loc === 'sidebar' ? [CHAT_VIEW_ID, AGENTS_VIEW_ID] : [CHAT_VIEW_ID];
       await vscode.commands.executeCommand('vscode.moveViews', { viewIds, destinationId: CONTAINER_FOR[loc] });
       await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
+      // The move disposed the view in the old container; only what happens to the new one matters from here.
+      this.lastDisposal = undefined;
       void this.watchAfterMove();
     } catch (e) {
-      void vscode.window.showWarningMessage(`LocalPilot could not move the chat to the ${CHAT_LOCATIONS.find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}. Drag the Chat view there instead — VS Code remembers the position.`);
+      void vscode.window.showWarningMessage(`LocalPilot could not move the chat to the ${describeChatLocations().find((l) => l.id === loc)?.label ?? loc}: ${e instanceof Error ? e.message : String(e)}. Drag the Chat view there instead — VS Code remembers the position.`);
     }
   }
 
   /**
-   * Right after a move the view is in transit (old pane disposed, new one created) and VS Code occasionally tears
-   * the new pane down again when the target part had been closed. Watch for a moment and focus again while the
-   * view has not come up yet; once it has been seen alive, a view that is hidden or gone again is the user's doing
-   * (they closed the part — closing a side bar disposes its panes) and is left alone. Not awaited, so callers (and
-   * `reveal()`) are not held up by the settle time.
+   * Right after a move the view is in transit (old pane disposed, new one created), and VS Code — reliably when
+   * the target part was closed, e.g. the Panel — tears the freshly created pane down again a moment *after* it
+   * resolved and was focused. Watch for a few seconds and focus again (bounded) when that happens, so the user is
+   * not left with an empty part until they click the icon a second time. Only a pane that vanished almost at once,
+   * before its UI had even booted, counts as such a teardown: a view that is hidden, or disposed after it was
+   * visibly up, is the user closing the part and is left alone. Not awaited, so callers (and `reveal()`) are not
+   * held up by the settle time.
    */
   private async watchAfterMove(): Promise<void> {
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     let lastFocus = -1000;
     let settled = 0;
-    let seenAlive = false;
-    for (let waited = 0; waited < 3000 && settled < 600; waited += 100) {
+    let refocused = 0;
+    for (let waited = 0; waited < 4000 && settled < 800; waited += 100) {
       if (this.view) {
         if (!this.view.visible) {
           return;
         }
-        seenAlive = true;
         settled += 100;
       } else {
-        if (seenAlive) {
+        const d = this.lastDisposal;
+        if (d && (d.booted || d.aliveMs > 1000)) {
           return;
         }
         settled = 0;
         if (waited - lastFocus >= 500) {
+          if (refocused >= 4) {
+            return;
+          }
           lastFocus = waited;
+          refocused++;
           await vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`).then(undefined, () => undefined);
         }
       }
@@ -160,7 +213,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async pickLocation(): Promise<void> {
     const current = getChatLocation();
     const pick = await vscode.window.showQuickPick(
-      CHAT_LOCATIONS.map((l) => ({ label: `$(${l.icon}) ${l.label}`, description: l.id === current ? 'current' : undefined, detail: l.detail, id: l.id })),
+      describeChatLocations().map((l) => ({ label: `$(${l.icon}) ${l.label}`, description: l.id === current ? 'current' : undefined, detail: l.detail, id: l.id })),
       { title: 'Move LocalPilot Chat To…', placeHolder: 'Where should the chat live? Dragging the view anywhere works too — VS Code remembers it.', matchOnDetail: true }
     );
     if (!pick) {
@@ -190,8 +243,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (m.type === 'ready') {
-        // A re-parented or reloaded webview starts over on its boot screen.
+        // A re-parented or reloaded webview starts over on its boot screen; it alone gets the snapshot (and the
+        // replay of any run in flight) — other hosts have been receiving the live stream all along.
         this.booted.delete(webview);
+        void this.controller.sendInit(sink).catch((e) => sink.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) }));
+        return;
       }
       if (m.type === 'attachActive' || m.type === 'pickAttachment') {
         return void this.handleAttachment(m, sink);

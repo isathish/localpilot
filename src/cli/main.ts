@@ -19,6 +19,10 @@ import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
+import { loadProjectSettings, ProjectSettings } from '../agent/settings';
+import { HookRunner } from '../agent/hooks';
+import { discoverPlugins, PluginInfo, pluginSource } from '../agent/plugins';
+import { CustomCommand, discoverCommands, expandCommand, indexCommands } from '../agent/commands';
 import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
@@ -91,6 +95,7 @@ ${bold('Options')}
 ${bold('In a session')}
   /mode agent|multitask|debug|plan|ask   /model <name>   /models   /undo   /keep   /changes   /clear   /help   /exit
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
+  /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins)   /permissions   /hooks   settings.json rules
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
   anything you type while a run is going is handed to the agent at its next step.
 
@@ -449,6 +454,11 @@ interface Core {
   /** Live sessions, so gather_context can see the working set and recent turns. */
   sessions: Map<string, Session>;
   telemetry: Telemetry;
+  /** Merged settings.json (permission rules, hooks) for the working folder. */
+  settings: ProjectSettings;
+  plugins: PluginInfo[];
+  /** Custom slash commands (.claude/commands, .localpilot/commands, plugins), by `/name`. */
+  commands: CustomCommand[];
 }
 
 async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string) => Promise<boolean>): Promise<Core> {
@@ -466,16 +476,31 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
   runner.telemetry = telemetry;
   providers.telemetry = telemetry;
+  // Claude Code-compatible project configuration: settings.json, plugins, custom commands (both .claude and .localpilot).
+  const roots = [args.cwd];
+  let settings = await loadProjectSettings(roots, { log });
+  const plugins = await discoverPlugins(roots, { extraDirs: getConfig().pluginPaths, enabledPlugins: settings.enabledPlugins });
+  const pluginParts = pluginSource(plugins);
+  const pluginLayers = pluginParts.settingsLayers();
+  if (pluginLayers.length) {
+    settings = await loadProjectSettings(roots, { log, extra: pluginLayers });
+  }
+  runner.projectSettings = () => settings;
+  runner.hooks = new HookRunner(() => (getConfig().hooksEnabled ? settings : { ...settings, hooks: {} }), log, (text) => process.stderr.write(`${dim('hook:')} ${text}\n`));
+  skills.plugins = pluginParts;
+  const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
   tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
-  if (args.mcp && Object.keys(getConfig().mcpServers).length) {
+  const pluginMcp = pluginParts.mcpServers();
+  if (args.mcp && (Object.keys(getConfig().mcpServers).length || Object.keys(pluginMcp).length)) {
     mcp = new McpManager(tools, log, VERSION);
+    mcp.extraServers = () => pluginMcp;
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry };
+  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, settings, plugins, commands };
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -503,13 +528,13 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
   return a === 'y' || a === 'yes';
 }
 
-async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl): Promise<string> {
+async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string } = {}): Promise<string> {
   let content = text;
   const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f)));
   if (blocks.some(Boolean)) {
     content = `${blocks.filter(Boolean).join('\n\n')}\n\n${text}`;
   }
-  const userMessage: ChatMessage = { role: 'user', content };
+  const userMessage: ChatMessage = { role: 'user', content, meta: opts.display ? { display: opts.display } : undefined };
   core.tracker.beginTurn(session.id, session.messages.length);
   let final = '';
   // Pause / resume feedback, for the main run and for subagents the user paused or stopped individually.
@@ -528,6 +553,8 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   const result = await core.runner.run({
     session,
     userMessage,
+    modelRef: opts.modelRef,
+    permissionAllow: opts.permissionAllow,
     signal: control.signal,
     control,
     workspaceRoot: session.worktree?.path,
@@ -800,6 +827,17 @@ async function main(): Promise<void> {
   const session = newSession(args.mode, modelInfo.id);
   core.sessions.set(session.id, session);
   const cwdLabel = vscode.workspace.asRelativePath(args.cwd) === args.cwd ? path.basename(args.cwd) : args.cwd;
+  /** `/name args` as a one-shot prompt runs the custom command (like `claude -p "/cmd"`); anything else is sent as typed. */
+  const prepare = async (text: string): Promise<{ text: string; opts: { modelRef?: string; permissionAllow?: string[]; display?: string } }> => {
+    const m = /^\/([\w:-]+)\s*([\s\S]*)$/.exec(text.trim());
+    const custom = m ? indexCommands(core.commands).get(`/${m[1]}`) : undefined;
+    if (!custom) {
+      return { text, opts: {} };
+    }
+    const { prompt, notes } = await expandCommand(custom, m![2], { root: session.worktree?.path ?? args.cwd });
+    notes.forEach((n) => process.stderr.write(`${yellow('⚠')} ${n}\n`));
+    return { text: prompt, opts: { modelRef: custom.model, permissionAllow: custom.allowedTools, display: text.trim() } };
+  };
 
   // One-shot mode -----------------------------------------------------------
   if (args.prompt) {
@@ -811,7 +849,8 @@ async function main(): Promise<void> {
     // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
     process.on('SIGTSTP', () => ctl.togglePause());
     const wt = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
-    const answer = await runTurn(core, session, args.prompt, args.files, renderer, undefined, ctl);
+    const prepared = await prepare(args.prompt);
+    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
     if (quiet) {
       process.stdout.write(answer.trimEnd() + '\n');
     } else {
@@ -836,7 +875,8 @@ async function main(): Promise<void> {
       process.stdin.on('data', (d) => (s += d));
       process.stdin.on('end', () => resolve(s));
     });
-    const answer = await runTurn(core, session, input.trim(), args.files, renderer, undefined, new RunControl(session.id));
+    const prepared = await prepare(input.trim());
+    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, new RunControl(session.id), prepared.opts);
     process.stdout.write(answer.trimEnd() + '\n');
     core.mcp?.dispose();
     return;
@@ -909,7 +949,44 @@ async function main(): Promise<void> {
       case 'clear': session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
-      default: console.log(dim(`unknown command /${cmd} — /help`)); return true;
+      case 'commands':
+        console.log(core.commands.length ? core.commands.map((c) => `  ${bold(c.invoke)}${c.argumentHint ? ` ${dim(c.argumentHint)}` : ''}  ${c.description}${c.plugin ? dim(`  (plugin ${c.plugin})`) : ''}`).join('\n') : dim('no custom commands — add markdown files under .localpilot/commands or .claude/commands'));
+        return true;
+      case 'permissions': {
+        const p = core.settings.permissions;
+        const fmt = (l: string[]) => (l.length ? l.join(', ') : dim('none'));
+        console.log(`  deny:  ${fmt(p.deny)}\n  ask:   ${fmt(p.ask)}\n  allow: ${fmt(p.allow)}${p.defaultMode ? `\n  defaultMode: ${p.defaultMode}` : ''}\n  ${dim(core.settings.sources.length ? `from ${core.settings.sources.join(', ')}` : 'no settings.json found')}`);
+        return true;
+      }
+      case 'hooks': {
+        const entries = Object.entries(core.settings.hooks);
+        console.log(entries.length ? entries.map(([ev, ms]) => `  ${bold(ev)}: ${ms.map((m) => `${m.matcher ? `${m.matcher} → ` : ''}${m.hooks.map((h) => h.command).join(', ')}`).join('; ')}`).join('\n') : dim('no hooks configured (settings.json → "hooks")'));
+        return true;
+      }
+      default: {
+        const custom = indexCommands(core.commands).get(`/${cmd}`);
+        if (custom) {
+          const { prompt, notes } = await expandCommand(custom, arg, { root: session.worktree?.path ?? args.cwd });
+          notes.forEach((n) => console.log(yellow(`  ${n}`)));
+          if (!prompt) { console.log(red(`${custom.invoke}: the command file has no prompt body`)); return true; }
+          rl!.setPrompt('');
+          current = new RunControl(session.id);
+          try {
+            await runTurn(core, session, prompt, pendingFiles, renderer, rl, current, { modelRef: custom.model, permissionAllow: custom.allowedTools, display: line });
+            pendingFiles = [];
+            changesSummary(core, session);
+          } catch (e) {
+            renderer.error(e instanceof Error ? e.message : String(e));
+          } finally {
+            current = undefined;
+            process.stdout.write('\n');
+            rl!.setPrompt(PROMPT);
+          }
+          return true;
+        }
+        console.log(dim(`unknown command /${cmd} — /help`));
+        return true;
+      }
     }
   };
 

@@ -1115,7 +1115,8 @@
         "localpilot.contextWindow": {
           "type": "number",
           "default": 32768,
-          "description": "Requested context window (num_ctx for Ollama). Capped by the model's maximum."
+          "minimum": 0,
+          "description": "Requested context window in tokens (num_ctx for Ollama), capped by the model's maximum. 0 = use the model's full native window (the largest it supports — needs enough RAM/VRAM). The same number drives compaction, so the conversation is summarised before the server would have to truncate it."
         },
         "localpilot.maxOutputTokens": {
           "type": "number",
@@ -1143,6 +1144,11 @@
           "type": "string",
           "default": "30m",
           "description": "How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, -1 for forever). Avoids reload latency between turns."
+        },
+        "localpilot.prewarm": {
+          "type": "boolean",
+          "default": true,
+          "description": "Load the chat's model into memory as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; throttled to once every few minutes per model."
         },
         "localpilot.memory.enabled": {
           "type": "boolean",
@@ -1328,6 +1334,19 @@
             }
           }
         },
+        "localpilot.pluginPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra folders containing Claude Code-style plugins (a folder with `.claude-plugin/plugin.json` bundling `commands/`, `agents/`, `skills/`, `hooks/hooks.json` and `.mcp.json`). `.localpilot/plugins`, `.claude/plugins`, `~/.localpilot/plugins` and `~/.claude/plugins` are scanned automatically; disable one with `enabledPlugins` in `settings.json`."
+        },
+        "localpilot.hooks.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the hooks configured in `.localpilot/settings.json` / `.claude/settings.json` (and `~/.claude/settings.json`): shell commands on `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart`, `PreCompact` and `Notification`, with the Claude Code stdin/exit-code protocol (exit 2 blocks). Turn off to ignore hooks from a repository you do not trust."
+        },
         "localpilot.skillsPaths": {
           "type": "array",
           "items": {
@@ -1461,6 +1480,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "provider/model for implementing subagents (`coder`, `tester`, `debugger`, `docs`). Empty = keep the session model."
+        },
+        "localpilot.routing.parallelModels": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run parallel work on several models at once. When workers (or Auto chats) all land on a model that is already serving as many requests as it can — one, on a server that answers one request per model at a time — the extra ones go to a comparable idle model that fits in memory alongside (same capabilities, similar quality score), instead of queuing. A model you picked explicitly for a chat is never swapped; each worker's lane shows the model that answered it."
         },
         "localpilot.terminal.runInIntegratedTerminal": {
           "type": "boolean",

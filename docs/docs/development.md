@@ -33,7 +33,7 @@ The webviews can be opened in a plain browser with mock data for quick visual ch
 | File | What it shows |
 |---|---|
 | `scripts/ui-preview.html` | Chat view with a full sample transcript (steps, diff and terminal cards, approvals, tasks, changes). |
-| `scripts/ui-preview-parallel.html` | Chat view with a stateful mock controller; `window.sim.start/tool/text/end(sessionId, …)` drives several sessions streaming at once to check tabs and background runs. |
+| `scripts/ui-preview-parallel.html` | Chat view with a stateful mock controller; `window.sim.start/tool/text/end(sessionId, …)` drives several sessions streaming at once to check tabs and background runs. `sim.reopen()` reloads the page the way a re-created webview boots (init + `session` with `liveFrom` + `replay`) to check that runs in flight are rebuilt. |
 | `scripts/settings-preview.html?section=models&light=1` | Settings / setup wizard (`?page=setup`) with mocked providers, probe results, hardware profile, installed models, catalog and jobs. |
 
 ## Extension API
