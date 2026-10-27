@@ -4,6 +4,8 @@ import { ContextManager, effectiveContextWindow } from '../context/contextManage
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
+import { streamsFromDisk } from '../providers/colibri';
+import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
@@ -86,6 +88,16 @@ const IDLE_TIMEOUT_MS = 90_000;
 const MAX_IDENTICAL_CALLS = 3;
 /** Queued requests wait for the ones ahead of them; the first-token budget grows with the queue, up to this. */
 const FIRST_TOKEN_TIMEOUT_MAX_MS = 15 * 60_000;
+/**
+ * colibri prefills at a few tokens per second and, streaming experts from disk, decodes a token every few seconds when
+ * cold: a long first-token wait and long gaps are progress there, not a stall. Multipliers for the watchdog limits.
+ */
+export function watchdogFor(model: Pick<ModelInfo, 'runtime' | 'diskGb'>, budgetGb: number | undefined): { first: number; idle: number } {
+  if (model.runtime !== 'colibri') {
+    return { first: 1, idle: 1 };
+  }
+  return streamsFromDisk(model, budgetGb) ? { first: 4, idle: 4 } : { first: 2, idle: 2 };
+}
 /** "implement the plan", "run the checklist", "go ahead with it"… — the plan's checklist should now be executed. */
 const IMPLEMENT_PLAN = /\b(implement|execute|run|start|apply|build|do|carry out|go ahead with|proceed with|kick off)\b[^.!?]{0,40}\b(plan|checklist|todos?|steps|items|tasks)\b|^\s*(go ahead|proceed|do it|go|make it so|implement|execute)[\s!.]*$/i;
 /** A request that waited this long for its first token while another request on the same model finished first was queued server-side. */
@@ -152,6 +164,7 @@ export class AgentRunner {
         model: stats.model || o.session.model || '',
         depth: o.depth ?? 0,
         agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined,
+        role: (o.depth ?? 0) > 0 && (o.role ?? 'agent') === 'agent' ? 'coding' : o.role ?? (o.session.mode === 'plan' ? 'reasoning' : 'agent'),
         outcome,
         durationMs: Date.now() - stats.startedAt,
         steps: stats.steps,
@@ -185,6 +198,7 @@ export class AgentRunner {
     const model: ModelInfo = { ...route.model, contextWindow: effectiveContextWindow(route.model, cfg.contextWindow) };
     stats.model = model.id;
     this.assign(model.id, session.id);
+    const profile = model.runtime ? await getSystemProfile().catch(() => undefined) : undefined;
     if (route.reason) {
       status(route.reason);
     }
@@ -585,9 +599,10 @@ export class AgentRunner {
           });
           // A request queued behind `others` on a one-slot server legitimately waits for all of them: give it
           // their first-token budget too instead of calling it a stall and retrying (which only re-queues it).
+          const patience = watchdogFor(model, profile?.modelBudgetGb);
           const guarded = withWatchdog(stream, {
-            firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS),
-            idleMs: IDLE_TIMEOUT_MS,
+            firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
+            idleMs: IDLE_TIMEOUT_MS * patience.idle,
             abort: () => ac.abort(),
             onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}` : `Waiting for ${model.name}`} · ${s}s${s >= 30 && !others ? ' (loading the model or a long prompt)' : ''}…`),
           });

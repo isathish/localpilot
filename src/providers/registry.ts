@@ -3,6 +3,7 @@ import { Telemetry } from '../telemetry/telemetry';
 import { getConfig, onConfigChange } from '../config';
 import { LLMProvider, ModelInfo, ProviderConfig } from '../types';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
+import { streamsFromDisk } from './colibri';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
@@ -37,6 +38,12 @@ export interface ModelLoad {
   reserve?(modelId: string): void;
 }
 
+/**
+ * Learned adjustment to a model's role score from how it actually performed on this machine (see usageAdvisor):
+ * positive for models that finished their runs quickly and reliably, negative for ones that failed or crawled.
+ */
+export type UsageBonus = (m: ModelInfo, role: ModelRole) => number;
+
 export interface Route {
   provider: LLMProvider;
   model: ModelInfo;
@@ -56,6 +63,8 @@ export class ProviderRegistry implements vscode.Disposable {
   private reachable = new Set<string>();
   /** Local-only provider health metrics for the dashboard. */
   telemetry?: Pick<Telemetry, 'record'>;
+  /** Learned per-model adjustments from local usage, applied to automatic picks (never to explicit choices). */
+  usageBonus?: UsageBonus;
   private lastRefresh = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
@@ -246,6 +255,7 @@ export class ProviderRegistry implements vscode.Disposable {
     const models = await this.listModels();
     const healthy = this.responsive(models);
     const profile = await getSystemProfile().catch(() => undefined);
+    const bonus = cfg.routing.enabled ? this.usageBonus : undefined;
     const find = (ref?: string) => (ref ? models.find((m) => m.id === ref || m.modelId === ref) : undefined);
 
     const roleOverride =
@@ -271,14 +281,14 @@ export class ProviderRegistry implements vscode.Disposable {
     }
     if (model && cfg.routing.enabled) {
       if (req.needsVision && !model.supportsVision) {
-        const vision = find(cfg.routing.vision) ?? pickForRole(models, 'vision', profile);
+        const vision = find(cfg.routing.vision) ?? pickForRole(models, 'vision', profile, false, bonus);
         if (vision?.supportsVision) {
           reason = `${model.name} cannot see images — using ${vision.name} for this turn`;
           model = vision;
         }
       } else if (role === 'completion' && !req.modelRef && !roleOverride) {
         // No explicit completion model: prefer a small FIM model over the (usually larger) default.
-        const fim = pickForRole(models, 'completion', profile);
+        const fim = pickForRole(models, 'completion', profile, false, bonus);
         if (fim && fim.id !== model.id && (fim.supportsFim || !model.supportsFim)) {
           model = fim;
         }
@@ -290,7 +300,7 @@ export class ProviderRegistry implements vscode.Disposable {
         }
       } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
         // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model.
-        const fast = pickForRole(healthy, 'fast', profile);
+        const fast = pickForRole(healthy, 'fast', profile, false, bonus);
         if (fast && fast.id !== model.id && fast.supportsTools) {
           reason = `Read-only subagent — using ${fast.name}`;
           model = fast;
@@ -298,7 +308,7 @@ export class ProviderRegistry implements vscode.Disposable {
       }
     }
     if (!model) {
-      model = pickForRole(healthy, role, profile, req.needsVision) ?? pickForRole(healthy, 'agent', profile) ?? pickForRole(models, 'agent', profile);
+      model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(models, 'agent', profile, false, bonus);
     }
     if (!model) {
       throw new Error(
@@ -310,7 +320,7 @@ export class ProviderRegistry implements vscode.Disposable {
     // explicit choice for a chat is never second-guessed — callers pass `spread` only when it was not one).
     let spread = false;
     if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
-      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision);
+      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus);
       if (alt) {
         const n = req.load.assigned.get(model.id) ?? 0;
         reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
@@ -353,15 +363,30 @@ export function createProvider(cfg: ProviderConfig): LLMProvider {
  * Scores a model for a role on this machine. Capability and family matter most; among comparable models the
  * one that fits in memory wins, and for completions smaller is better (latency).
  */
-export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProfile): number {
+export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProfile, bonus?: UsageBonus): number {
   const n = m.modelId.toLowerCase();
   if (/embed|rerank|whisper/.test(n)) {
     return -100;
   }
+  return baseScore(m, n, role, profile) + (bonus ? clampBonus(bonus(m, role)) : 0);
+}
+
+/** Learned usage never outweighs a hard capability (tools, vision, FIM): those terms are 20–60 points. */
+const MAX_USAGE_BONUS = 12;
+function clampBonus(b: number): number {
+  return Number.isFinite(b) ? Math.max(-MAX_USAGE_BONUS, Math.min(MAX_USAGE_BONUS, b)) : 0;
+}
+
+function baseScore(m: ModelInfo, n: string, role: ModelRole, profile?: SystemProfile): number {
   const cat = lookupCatalog(m);
   const gb = modelFootprintGb(m);
   const fit = profile && gb !== undefined ? (gb <= profile.modelBudgetGb ? 1 : gb <= profile.modelBudgetGb * 1.25 ? 0 : -1) : 0.5;
   let s = fit * 8;
+  // colibri streaming experts from disk: minutes of prefill and ~1 tok/s decode. Worth it for one careful answer
+  // (Plan mode), too slow for agent loops, chatty read-only subagents and ghost text.
+  if (streamsFromDisk(m, profile?.modelBudgetGb)) {
+    s += role === 'reasoning' ? 2 : role === 'agent' || role === 'vision' ? -6 : -40;
+  }
   if (role === 'vision') {
     s += m.supportsVision ? 30 : -50;
     // A vision model that can also call tools keeps the agent loop going after it looks at a screenshot.
@@ -402,17 +427,19 @@ export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProf
 }
 
 /** Best enabled model for a role, or undefined when nothing meets the hard constraints (e.g. no vision model). */
-export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: SystemProfile, needsVision?: boolean): ModelInfo | undefined {
+export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus): ModelInfo | undefined {
   const pool = needsVision || role === 'vision' ? models.filter((m) => m.supportsVision) : models;
-  const ranked = [...pool].sort((a, b) => scoreForRole(b, role, profile) - scoreForRole(a, role, profile));
+  const score = new Map(pool.map((m) => [m, scoreForRole(m, role, profile, bonus)]));
+  const ranked = [...pool].sort((a, b) => score.get(b)! - score.get(a)!);
   const best = ranked[0];
-  return best && scoreForRole(best, role, profile) > -50 ? best : undefined;
+  return best && score.get(best)! > -50 ? best : undefined;
 }
 
 /** A model is saturated when as many runs are assigned to it as it can serve at once (one, if it is known to be serial). */
 export function isSaturated(model: ModelInfo, load: ModelLoad): boolean {
   const n = load.assigned.get(model.id) ?? 0;
-  return n >= (load.serial.has(model.id) ? 1 : Math.max(1, load.slots));
+  const capacity = model.parallelSlots ?? (load.serial.has(model.id) ? 1 : load.slots);
+  return n >= Math.max(1, capacity);
 }
 
 /** Within this many score points of the intended model a candidate counts as comparable for the role. */
@@ -430,11 +457,12 @@ function paramsB(m: ModelInfo): number | undefined {
  * footprints are known — small enough to sit in memory next to the models already in use, so a second model does
  * not evict the first and make both slower. Undefined when nothing qualifies: the caller then queues as before.
  */
-export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean): ModelInfo | undefined {
+export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus): ModelInfo | undefined {
   if (!isSaturated(chosen, load)) {
     return undefined;
   }
-  const floor = scoreForRole(chosen, role, profile) - COMPARABLE_SCORE_GAP;
+  const scoreOf = (m: ModelInfo) => scoreForRole(m, role, profile, bonus);
+  const floor = scoreOf(chosen) - COMPARABLE_SCORE_GAP;
   const chosenB = paramsB(chosen);
   // Memory already committed: every distinct model with at least one run assigned (the chosen one included).
   const inUse = models.filter((m) => (load.assigned.get(m.id) ?? 0) > 0 || m.id === chosen.id);
@@ -442,7 +470,7 @@ export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: Mo
   const candidates = models
     .filter((m) => m.id !== chosen.id && !isSaturated(m, load))
     .filter((m) => (!chosen.supportsTools || m.supportsTools) && (!needsVision || m.supportsVision))
-    .filter((m) => scoreForRole(m, role, profile) >= floor && scoreForRole(m, role, profile) > -50)
+    .filter((m) => scoreOf(m) >= floor && scoreOf(m) > -50)
     .filter((m) => {
       const b = paramsB(m);
       return chosenB === undefined || b === undefined || b >= chosenB * COMPARABLE_SIZE_RATIO;
@@ -454,5 +482,5 @@ export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: Mo
       const gb = modelFootprintGb(m);
       return gb === undefined || committedGb + gb <= profile.modelBudgetGb * 1.1;
     });
-  return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || scoreForRole(b, role, profile) - scoreForRole(a, role, profile))[0];
+  return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || scoreOf(b) - scoreOf(a))[0];
 }

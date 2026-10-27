@@ -2,6 +2,7 @@ import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS } from '../config';
 import { ProviderConfig } from '../types';
+import { COLIBRI_DEFAULT_PORT } from './colibri';
 import { createProvider } from './registry';
 
 /** Well-known local endpoints beyond the shipped defaults; probed (never written) unless they answer. */
@@ -26,6 +27,8 @@ export interface ProbeResult {
   error?: string;
   /** Where the candidate came from (Docker container name for container-hosted servers). */
   source?: 'settings' | 'known' | 'docker';
+  /** Engine the server identified itself as (colibri answers on vLLM's port, :8000). */
+  engine?: 'colibri';
 }
 
 /** Health-check one provider and list its models, with a hard timeout so an unreachable host never hangs the UI. */
@@ -46,6 +49,8 @@ export async function probeProvider(cfg: ProviderConfig, configured: boolean, so
     const models = await provider.listModels(ctl.signal);
     return {
       ...base,
+      displayName: provider.displayName,
+      engine: models.some((m) => m.runtime === 'colibri') ? 'colibri' : undefined,
       ok: true,
       latencyMs: Date.now() - started,
       models: models.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, supportsTools: m.supportsTools, supportsVision: m.supportsVision, supportsFim: m.supportsFim })),
@@ -82,6 +87,7 @@ interface DockerImageRule {
 /** Container images that serve models; matched against `docker ps` image names. */
 const DOCKER_IMAGES: DockerImageRule[] = [
   { match: /ollama/i, label: 'Ollama', type: 'ollama', port: 11434, path: '' },
+  { match: /colibri/i, label: 'colibri', type: 'openai', port: 8000, path: '/v1' },
   { match: /vllm/i, label: 'vLLM', type: 'openai', port: 8000, path: '/v1' },
   { match: /llama\.?cpp|ggml|ggerganov/i, label: 'llama.cpp', type: 'openai', port: 8080, path: '/v1' },
   { match: /localai/i, label: 'LocalAI', type: 'openai', port: 8080, path: '/v1' },
@@ -215,7 +221,9 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
 
   const docker = discoverDockerProviders();
   const candidates: { cfg: ProviderConfig; configured: boolean; source: ProbeResult['source'] }[] = configured.map((c) => ({ cfg: c, configured: true, source: 'settings' as const }));
-  for (const k of KNOWN_ENDPOINTS) {
+  const colibriPort = cfg.get<number>('colibri.port', COLIBRI_DEFAULT_PORT);
+  const known = colibriPort && colibriPort !== COLIBRI_DEFAULT_PORT ? [...KNOWN_ENDPOINTS, { id: 'colibri', type: 'openai' as const, baseUrl: `http://localhost:${colibriPort}/v1`, displayName: 'colibri' }] : KNOWN_ENDPOINTS;
+  for (const k of known) {
     if (!seen.has(norm(k.baseUrl))) {
       seen.add(norm(k.baseUrl));
       candidates.push({ cfg: k, configured: false, source: 'known' });
@@ -240,7 +248,9 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
     if (!r.ok || r.configured) {
       continue;
     }
-    const c = candidates.find((x) => x.cfg.baseUrl === r.baseUrl)!.cfg;
+    const found = candidates.find((x) => x.cfg.baseUrl === r.baseUrl)!.cfg;
+    // A well-known port answered by colibri (vLLM's :8000, or the configured colibri port) is labelled for what it is.
+    const c = r.engine === 'colibri' && r.source !== 'docker' ? { ...found, id: 'colibri', displayName: 'colibri' } : found;
     let id = c.id;
     for (let n = 2; ids.has(id); n++) {
       id = `${c.id}-${n}`;

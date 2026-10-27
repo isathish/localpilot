@@ -1,4 +1,5 @@
 import * as os from 'os';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
@@ -21,6 +22,8 @@ import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './pro
 import { autoDetectProviders } from './providers/discovery';
 import { AutoSetupResult, ModelManager } from './providers/modelManager';
 import { ProviderRegistry } from './providers/registry';
+import { coliLauncher, colibriServeCommand, COLIBRI_REPO_URL } from './providers/colibri';
+import { ModelTuner } from './ui/modelAutoTune';
 import { getSystemProfile } from './providers/system';
 import { SessionStore } from './sessions/sessionStore';
 import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/browser';
@@ -49,11 +52,11 @@ import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(channel);
-const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
-
   // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
   const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
   const log = mirrorLog(channel, telemetry);
@@ -118,10 +121,10 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
   // provider exists, so this must not queue behind session/skill loading or model discovery.
   const view = new ChatViewProvider(context, controller);
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, view, { webviewOptions: { retainContextWhenHidden: true } }));
+  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelViewType, { deserializeWebviewPanel: async (panel) => view.adoptPanel(panel) }));
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
-  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelViewType, { deserializeWebviewPanel: async (panel) => view.adoptPanel(panel) }));
   context.subscriptions.push(terminals, new vscode.Disposable(() => setIntegratedTerminalRunner(undefined)));
   setIntegratedTerminalRunner(terminals);
   workspace.terminalContext = () => terminals.format(terminals.lastExecution());
@@ -205,6 +208,10 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
   registerUriHandler(context, controller, () => view.reveal());
   const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry);
   settingsPanel.learner = learner;
+  // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
+  const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
+  context.subscriptions.push(tuner);
+  settingsPanel.tuner = tuner;
   settingsPanel.catalog = catalog;
   context.subscriptions.push(settingsPanel);
   const lmProvider = new LocalModelChatProvider(providers, log);
@@ -292,6 +299,7 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
     }
   };
   const detection = autoDetect();
+  void detection.then(() => tuner.start());
 
   // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
   if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
@@ -749,6 +757,74 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
   cmd('localpilot.browseModelGallery', () => settingsPanel.show('settings', 'gallery'));
   cmd('localpilot.manageSkills', () => settingsPanel.show('settings', 'skills'));
   cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
+  cmd('localpilot.tuneModels', () => tuner.runCommand());
+  cmd('localpilot.startColibri', async () => {
+    const cfg = getConfig().colibri;
+    let folder = cfg.path;
+    if (!folder) {
+      const pick = await vscode.window.showQuickPick(
+        [
+          { label: '$(folder-opened) Choose my colibri folder…', description: 'the git checkout that has c/coli', id: 'folder' },
+          { label: '$(terminal) Use `coli` on PATH', id: 'path' },
+          { label: '$(link-external) Get colibri', description: 'github.com/JustVugg/colibri — its setup picks a model for this machine', id: 'get' },
+        ],
+        { title: 'LocalPilot: start colibri', placeHolder: 'colibri runs huge MoE models by streaming experts from disk' }
+      );
+      if (!pick) {
+        return;
+      }
+      if (pick.id === 'get') {
+        return void vscode.env.openExternal(vscode.Uri.parse(COLIBRI_REPO_URL));
+      }
+      if (pick.id === 'folder') {
+        const uri = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, title: 'colibri checkout folder' });
+        if (!uri?.[0]) {
+          return;
+        }
+        folder = uri[0].fsPath;
+        await vscode.workspace.getConfiguration('localpilot').update('colibri.path', folder, vscode.ConfigurationTarget.Global);
+      }
+    }
+    if (folder && !fs.existsSync(coliLauncher(folder))) {
+      const fix = await vscode.window.showErrorMessage(`No colibri launcher at ${coliLauncher(folder)}. Run colibri's own setup (start-here) in that folder once, or pick another folder.`, 'Choose folder', 'Open colibri on GitHub');
+      if (fix === 'Choose folder') {
+        await vscode.workspace.getConfiguration('localpilot').update('colibri.path', undefined, vscode.ConfigurationTarget.Global);
+        void vscode.commands.executeCommand('localpilot.startColibri');
+      } else if (fix) {
+        void vscode.env.openExternal(vscode.Uri.parse(COLIBRI_REPO_URL));
+      }
+      return;
+    }
+    const term = vscode.window.createTerminal({ name: 'LocalPilot · colibri', cwd: folder });
+    term.show(true);
+    term.sendText(colibriServeCommand({ folder, model: cfg.model, port: cfg.port, kvSlots: Math.min(cfg.kvSlots, Math.max(1, getConfig().parallel.maxConcurrency)) }));
+    const url = `http://127.0.0.1:${cfg.port}/v1/models`;
+    const up = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: starting colibri (loading the resident part of the model)…', cancellable: true }, async (progress, token) => {
+      const started = Date.now();
+      while (!token.isCancellationRequested && Date.now() - started < 10 * 60_000) {
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+          if (res.ok) {
+            return true;
+          }
+        } catch {
+          /* not listening yet */
+        }
+        progress.report({ message: `${Math.round((Date.now() - started) / 1000)} s — watch the colibri terminal for progress` });
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      return false;
+    });
+    if (!up) {
+      return;
+    }
+    await autoDetect();
+    await providers.listModels(true);
+    await controller.handle({ type: 'refreshModels' });
+    void refreshStatus();
+    const models = (await providers.listModels()).filter((m) => m.runtime === 'colibri');
+    void vscode.window.showInformationMessage(`colibri is serving ${models.map((m) => m.name).join(', ') || 'a model'} on port ${cfg.port}. LocalPilot routes to it automatically where it fits.`);
+  });
   cmd('localpilot.enableOllamaParallel', async () => {
     const slots = ModelManager.ollamaParallelSlots();
     const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());

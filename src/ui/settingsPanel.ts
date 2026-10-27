@@ -16,6 +16,7 @@ import { pickForRole, ProviderRegistry } from '../providers/registry';
 import { getSystemProfile, SystemProfile } from '../providers/system';
 import { SessionStore } from '../sessions/sessionStore';
 import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/telemetry';
+import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
 
 export { probeProvider, recommendModel };
@@ -102,7 +103,7 @@ type ToSettings =
   | { type: 'skillRegistry'; q: string; entries: RegistrySkill[]; status: { repo: string; skills: number; fetched?: number; error?: string }[]; refreshing: boolean }
   | { type: 'skillJob'; name: string; status: 'running' | 'done' | 'error'; detail?: string }
   | { type: 'busy'; busy: boolean }
-  | { type: 'dashboard'; days: number; summary: TelemetrySummary; logFile: string }
+  | { type: 'dashboard'; days: number; summary: TelemetrySummary; logFile: string; tuning?: TuneReport }
   | { type: 'logs'; entries: LogEntry[]; level?: LogLevel; q?: string }
   | { type: 'logLine'; entry: LogEntry }
   | { type: 'toast'; level: 'info' | 'error'; text: string };
@@ -137,6 +138,8 @@ type FromSettings =
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
   | { type: 'openExternal'; url: string }
   | { type: 'dashboard'; days?: number }
+  | { type: 'applyTune'; role: string; model: string }
+  | { type: 'retune' }
   | { type: 'logs'; level?: string; q?: string; follow?: boolean }
   | { type: 'exportTelemetry' }
   | { type: 'clearTelemetry' }
@@ -150,7 +153,7 @@ const SETTING_KEYS = [
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
-  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'telemetry.enabled', 'telemetry.retentionDays',
+  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'telemetry.enabled', 'telemetry.retentionDays',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -182,6 +185,8 @@ const GALLERY_SITE: Record<GallerySource, string> = { ollama: 'ollama.com', dock
 export class SettingsPanel implements vscode.Disposable {
   /** Skill usage / recurring-request tracker (set by the extension host). */
   learner?: SkillLearner;
+  /** Usage-based model tuning shown on the dashboard. */
+  tuner?: ModelTuner;
   /** Skill registry (configured repositories), set by the extension host. */
   catalog?: SkillCatalog;
   private panel?: vscode.WebviewPanel;
@@ -449,6 +454,15 @@ export class SettingsPanel implements vscode.Disposable {
         return;
       case 'dashboard':
         return this.pushDashboard(m.days);
+      case 'applyTune':
+        if (this.tuner && !(await this.tuner.applyFromDashboard(m.role, m.model))) {
+          void vscode.window.showWarningMessage('That suggestion no longer applies — the numbers changed. The dashboard has been refreshed.');
+        }
+        return this.pushDashboard();
+      case 'retune':
+        await this.tuner?.refresh(true);
+        await this.tuner?.autoApply();
+        return this.pushDashboard();
       case 'logs': {
         if (typeof m.follow === 'boolean') {
           this.following = m.follow;
@@ -509,8 +523,8 @@ export class SettingsPanel implements vscode.Disposable {
     this.lastDashboardDays = days;
     // Only providers that are configured and enabled right now: disabling one hides its history, and providers that
     // tests or old configs made up never show.
-    const summary = await this.telemetry.summary(days, { providers: getConfig().providers.map((p) => p.id) });
-    this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile() });
+    const [summary, tuning] = await Promise.all([this.telemetry.summary(days, { providers: getConfig().providers.map((p) => p.id) }), this.tuner?.report().catch(() => undefined)]);
+    this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile(), tuning });
   }
 
   private async update(key: string, value: unknown, scope: 'user' | 'workspace'): Promise<void> {

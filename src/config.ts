@@ -79,6 +79,10 @@ export interface LocalPilotConfig {
   autoSetupModels: boolean;
   /** Detect vague requests and give the agent a workspace snapshot to resolve them before acting. */
   autoClarify: boolean;
+  /** Learn from local usage which installed models work best per role: apply them (auto), offer them (suggest) or neither (off). */
+  autoTune: 'auto' | 'suggest' | 'off';
+  /** colibri (experts streamed from disk): checkout folder, model and port for `LocalPilot: Start colibri`. */
+  colibri: { path?: string; model?: string; port: number; kvSlots: number };
   routing: RoutingConfig;
 }
 
@@ -155,6 +159,13 @@ export function getConfig(): LocalPilotConfig {
     disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
     autoSetupModels: c.get<boolean>('models.autoSetup', true),
     autoClarify: c.get<boolean>('autoClarify', true),
+    autoTune: (['auto', 'suggest', 'off'] as const).find((m) => m === c.get<string>('models.autoTune', 'auto')) ?? 'auto',
+    colibri: {
+      path: c.get<string>('colibri.path', '') || undefined,
+      model: c.get<string>('colibri.model', '') || undefined,
+      port: Math.max(1, Math.floor(c.get<number>('colibri.port', 8000))),
+      kvSlots: Math.max(1, Math.min(16, Math.floor(c.get<number>('colibri.kvSlots', 2)))),
+    },
     routing: {
       enabled: c.get<boolean>('routing.enabled', true),
       vision: c.get<string>('routing.vision', '') || undefined,

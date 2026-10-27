@@ -77,6 +77,14 @@ export interface ModelInfo {
   parameterSize?: string;
   /** Hidden from pickers and routing via `localpilot.models.disabled`. Only set by the registry's full listing. */
   disabled?: boolean;
+  /** Inference engine behind the server when it identified itself (colibri: experts streamed from disk). */
+  runtime?: 'colibri';
+  /** RAM the model needs while running when it differs from its size on disk (MoE engines that stream experts), in GB. */
+  residentGb?: number;
+  /** Size on disk in GB when known and different from the resident size. */
+  diskGb?: number;
+  /** Requests the server decodes at once for this model (colibri KV slots); undefined = LocalPilot's default assumption. */
+  parallelSlots?: number;
 }
 
 export interface ChatRequestOptions {

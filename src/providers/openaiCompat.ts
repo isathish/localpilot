@@ -7,7 +7,11 @@ import {
   ProviderConfig,
   StreamEvent,
 } from '../types';
+import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, newId, postJson, streamSse, withTimeout } from './http';
+
+/** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
+const STOCK_NAMES = /^(vllm( \/ unsloth)?|vllm-\d+)$/i;
 
 interface OpenAIModel {
   id: string;
@@ -19,6 +23,8 @@ interface OpenAIModel {
   loaded_context_length?: number;
   type?: string;
   capabilities?: string[];
+  /** colibri: `["text"]` or `["text", "image"]`. */
+  input_modalities?: string[];
 }
 interface OpenAIChunk {
   choices?: {
@@ -41,15 +47,22 @@ interface OpenAIChunk {
 export class OpenAICompatProvider implements LLMProvider {
   readonly type = 'openai' as const;
   readonly id: string;
-  readonly displayName: string;
   readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly explicitModels?: string[];
   private readonly defaultCtx: number;
+  private readonly configuredName: string;
+  /** Engine the server identified itself as on the last model listing. */
+  engine?: 'colibri';
+
+  /** The configured name, unless it is the stock vLLM label on :8000 and the server turned out to be colibri. */
+  get displayName(): string {
+    return this.engine === 'colibri' && STOCK_NAMES.test(this.configuredName) ? 'colibri' : this.configuredName;
+  }
 
   constructor(cfg: ProviderConfig) {
     this.id = cfg.id;
-    this.displayName = cfg.displayName ?? cfg.id;
+    this.configuredName = cfg.displayName ?? cfg.id;
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
     this.headers = cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {};
     this.explicitModels = cfg.models;
@@ -83,10 +96,37 @@ export class OpenAICompatProvider implements LLMProvider {
         }
       }
     }
+    const colibri = models.some((m) => m.owned_by === COLIBRI_OWNER);
+    this.engine = colibri ? 'colibri' : undefined;
+    // colibri decodes one request per KV slot; its /health says how many there are.
+    const slots = colibri ? colibriSlots(await colibriHealth(this.baseUrl, this.headers, signal)) : undefined;
     return models
       .filter((m) => m.type !== 'embeddings' && !/embed/i.test(m.id))
+      // colibri decision (System One) and picture models cannot chat.
+      .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || m.capabilities.includes('chat'))
       .map((m) => {
         const ctx = m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? this.defaultCtx;
+        if (m.owned_by === COLIBRI_OWNER) {
+          const spec = colibriSpec(m.id);
+          return {
+            id: `${this.id}/${m.id}`,
+            providerId: this.id,
+            modelId: m.id,
+            name: m.id,
+            family: COLIBRI_OWNER,
+            contextWindow: ctx,
+            maxOutputTokens: 8192,
+            supportsTools: spec?.tools ?? true,
+            supportsVision: m.input_modalities ? m.input_modalities.includes('image') : !!spec?.vision,
+            // colibri's /v1/completions has no `suffix`, so fill-in-the-middle is not available.
+            supportsFim: false,
+            parameterSize: spec ? `${spec.paramsB}B` : undefined,
+            runtime: 'colibri',
+            residentGb: spec?.ramMinGb,
+            diskGb: spec?.diskGb,
+            parallelSlots: slots,
+          } satisfies ModelInfo;
+        }
         return {
           id: `${this.id}/${m.id}`,
           providerId: this.id,

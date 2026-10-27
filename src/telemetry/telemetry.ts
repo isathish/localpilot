@@ -26,7 +26,7 @@ export type TelemetryEvent =
   /** One tool execution. */
   | (Base & { type: 'tool'; sid: string; name: string; mode: string; durationMs: number; error: boolean; cached?: boolean })
   /** One agent turn (depth > 0 is a subagent). */
-  | (Base & { type: 'run'; sid: string; mode: string; model: string; depth: number; agent?: string; outcome: RunOutcome; durationMs: number; steps: number; toolCalls: number; promptTokens: number; completionTokens: number; isolated?: boolean })
+  | (Base & { type: 'run'; sid: string; mode: string; model: string; depth: number; agent?: string; /** Routing role the run was picked for (agent, reasoning, fast, coding…). */ role?: string; outcome: RunOutcome; durationMs: number; steps: number; toolCalls: number; promptTokens: number; completionTokens: number; isolated?: boolean })
   /** Isolated worktree lifecycle. */
   | (Base & { type: 'worktree'; action: 'create' | 'apply' | 'discard'; files?: number; conflicts?: number; durationMs?: number })
   /** Inline completion lifecycle. */

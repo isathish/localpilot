@@ -392,6 +392,10 @@ export function lookupCatalog(m: ModelInfo): CatalogPick | undefined {
 
 /** Runtime footprint of an installed model in GB: reported size, catalog size, or an estimate from its name. */
 export function modelFootprintGb(m: ModelInfo): number | undefined {
+  // MoE engines that stream experts from disk (colibri) need only their resident part in memory.
+  if (m.residentGb !== undefined) {
+    return m.residentGb;
+  }
   if (m.sizeBytes) {
     return q((m.sizeBytes / 1024 ** 3) * 1.2);
   }

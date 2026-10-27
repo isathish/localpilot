@@ -569,6 +569,7 @@
     const opts = modelOptions();
     sec.appendChild(card(
       field('routing.enabled', 'Route automatically', 'Send image turns to a vision model, completions to the smallest FIM model, Plan mode to the reasoning model, subagents to the models below, and fall back to the best available model when the chosen one is offline or disabled.', 'toggle'),
+      field('models.autoTune', 'Learn from usage', 'Watch how your installed models actually perform here — runs finished, tok/s, time to first token, errors, completions accepted — and prefer the ones that work. <b>Tune automatically</b> also updates the picks below (with Undo; a model you chose by hand is only replaced when it keeps failing). Local telemetry only; see <b>Dashboard → Model tuning</b>.', 'select', { options: [['auto', 'Tune automatically', ''], ['suggest', 'Suggest only', ''], ['off', 'Off', '']] }),
       field('defaultModel', 'Agent & chat', opts.length ? `New chats and editor actions. ${esc(autoFor('agent'))}.` : 'No models enabled yet.', 'select', { options: [['', 'Auto (best for this machine)', ''], ...opts] }),
       field('inlineCompletion.model', 'Inline completions', `Fill-in-the-middle model for ghost text. ${esc(autoFor('completion'))}.`, 'select', { options: [['', 'Auto (smallest FIM model)', ''], ...(modelOptions((m) => m.supportsFim).length ? modelOptions((m) => m.supportsFim) : opts)] }),
       field('routing.vision', 'Images', `Used when a turn has images and the session model cannot see. ${esc(autoFor('vision'))}.`, 'select', { options: [['', 'Auto (best vision model)', ''], ...(modelOptions((m) => m.supportsVision).length ? modelOptions((m) => m.supportsVision) : opts)] }),
@@ -1456,6 +1457,30 @@
   }
   /** Provider display name for a recorded provider id (the id itself when the provider is no longer configured). */
   function provName(id) { const p = providersList().find((x) => x.id === id); return p ? p.displayName || p.id : id; }
+  /** Model tuning: what usage says about each installed model per role, open suggestions and recent automatic changes. */
+  function tuningCard(tu) {
+    if (!tu || tu.mode === 'off' || !tu.rankings.length) { return null; }
+    const c = el('div', 'card tblwrap');
+    const modeLabel = tu.mode === 'auto' ? 'tuning automatically' : 'suggesting only';
+    const shortId = (id) => id ? id.slice(id.indexOf('/') + 1) : 'auto';
+    const conf = (x) => `<span class="badge ${x === 'high' ? 'ok' : x === 'medium' ? '' : 'muted'}">${esc(x)}</span>`;
+    let html = `<h3>Model tuning <span class="count">${fmtN(tu.analysed.runs)} runs · ${fmtN(tu.analysed.calls)} model calls · last ${tu.analysed.days} days · ${esc(modeLabel)}</span></h3>`;
+    if (tu.suggestions.length) {
+      html += `<table class="tbl dash-tbl"><thead><tr><th>Role</th><th>Suggested</th><th>Instead of</th><th>Why</th><th>Confidence</th><th></th></tr></thead><tbody>${tu.suggestions.map((g, i) => `<tr><td>${esc(roleLabel(g.role))}</td><td class="mono"><b>${esc(shortId(g.suggested))}</b></td><td class="mono muted">${esc(shortId(g.current))}${g.currentStruggling ? ' <span class="err-text">struggling</span>' : ''}</td><td class="small">${esc(g.reason)}</td><td>${conf(g.confidence)}</td><td>${g.kind === 'routing' ? '<span class="muted small" title="The setting is on Auto, and Auto routing already uses this model">Auto uses it</span>' : `<button class="btn sm" data-tune="${i}">Apply</button>`}</td></tr>`).join('')}</tbody></table>`;
+    } else {
+      html += `<p class="muted small">${tu.analysed.runs + tu.analysed.calls ? 'Your current picks are the best installed fit for every role.' : 'No usage recorded yet — use the chat for a while and LocalPilot learns which installed models work best here.'}</p>`;
+    }
+    html += `<div class="dash-cols">${tu.rankings.map((r) => `<div><div class="lbl small">${esc(r.label)}${r.current ? ` <span class="muted">· set to ${esc(shortId(r.current))}</span>` : ''}</div><ol class="small rank">${r.models.map((m) => `<li><span class="mono">${esc(shortId(m.id))}</span> <span class="muted">${m.evidence ? esc(m.detail) : 'not measured yet'}${m.bonus ? ` · <span class="${m.bonus > 0 ? 'ok-text' : 'err-text'}">${m.bonus > 0 ? '+' : ''}${m.bonus}</span>` : ''}</span></li>`).join('')}</ol></div>`).join('')}</div>`;
+    if (tu.history.length) {
+      html += `<p class="muted small">Recent automatic changes: ${tu.history.slice(0, 4).map((h) => `<code>${esc(h.setting)}</code> → ${esc(shortId(h.value))} (${new Date(h.at).toLocaleString()})`).join(' · ')}</p>`;
+    }
+    html += `<div class="btnrow"><span class="spacer"></span><button class="btn sm" data-retune="1">${I.refresh}Analyse now</button></div>`;
+    c.innerHTML = html;
+    c.querySelectorAll('[data-tune]').forEach((b) => { b.onclick = () => { const g = tu.suggestions[Number(b.dataset.tune)]; b.disabled = true; post({ type: 'applyTune', role: g.role, model: g.suggested }); }; });
+    const re = c.querySelector('[data-retune]'); if (re) { re.onclick = () => { re.disabled = true; post({ type: 'retune' }); }; }
+    return c;
+  }
+  function roleLabel(role) { return ({ agent: 'Chat & agent', reasoning: 'Plan mode', coding: 'Coding subagents', fast: 'Read-only subagents', completion: 'Inline completions', vision: 'Images' })[role] || role; }
   function renderDashboard() {
     const root = document.getElementById('dash');
     if (!root) { return; }
@@ -1487,6 +1512,8 @@
     ].join('');
     root.innerHTML = '';
     root.appendChild(kpis);
+    const tuning = tuningCard(state.dash.tuning);
+    if (tuning) { root.appendChild(tuning); }
     // Charts: activity per day, tokens in/out, generation speed, outcomes, tool reliability, hour of day.
     const many = s.series.length > 1;
     if (many) {
@@ -1822,7 +1849,7 @@
         break;
       case 'dashboard':
         state.dash.loading = false;
-        state.dash.summary = m.summary; state.dash.logFile = m.logFile || '';
+        state.dash.summary = m.summary; state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
         if (typeof m.days === 'number') { state.dash.days = m.days; }
         if (state.section === 'dashboard') { renderDashboard(); }
         break;

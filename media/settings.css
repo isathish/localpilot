@@ -662,3 +662,5 @@ body.vscode-high-contrast .legend i, body.vscode-high-contrast-light .legend i, 
 .ll .lv { color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .04em; padding-top: 1px; }
 .ll.warn .lv { color: var(--warn); } .ll.error .lv { color: var(--error); } .ll.error .lm { color: var(--error); }
 .ll.debug, .ll.trace { opacity: .7; }
+.rank { margin: 4px 0 10px; padding-left: 18px; }
+.rank li { margin: 2px 0; }

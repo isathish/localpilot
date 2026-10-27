@@ -431,6 +431,18 @@
         "icon": "$(dashboard)"
       },
       {
+        "command": "localpilot.tuneModels",
+        "title": "Tune Models From Usage",
+        "category": "LocalPilot",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "localpilot.startColibri",
+        "title": "Start colibri (stream huge MoE models from disk)",
+        "category": "LocalPilot",
+        "icon": "$(server-process)"
+      },
+      {
         "command": "localpilot.openSettings",
         "title": "Settings",
         "category": "LocalPilot",
@@ -1435,6 +1447,45 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "When no local model is found, offer to set one up automatically: start or install Ollama and download the smallest coder model that suits this machine (plus a tiny completion model when it fits)."
+        },
+        "localpilot.models.autoTune": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "suggest",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Learn from usage and apply the best installed model per role automatically (with Undo). A model you picked by hand is only replaced when it is measurably failing.",
+            "Learn from usage for Auto routing and offer better picks in a notification; never write settings without asking.",
+            "Do not learn from usage."
+          ],
+          "default": "auto",
+          "markdownDescription": "Learn from local telemetry which of your **installed** models work best on this machine for each role (chat & agent, Plan mode, coding and read-only subagents, inline completions, images): how often their runs finish, generation speed, time to first token, errors and completion acceptance. Auto routing prefers the models that perform; `auto` also writes better picks to `#localpilot.defaultModel#`, `#localpilot.routing.reasoning#`, `#localpilot.routing.coding#` and the other role settings. Needs `#localpilot.telemetry.enabled#`; nothing leaves the machine. Run *LocalPilot: Tune Models From Usage* to review now."
+        },
+        "localpilot.colibri.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder of a [colibri](https://github.com/JustVugg/colibri) checkout (the one with `c/coli`). colibri runs very large mixture-of-experts models (GLM-5.2, DeepSeek V4 Flash, Qwen3-Coder-30B…) by keeping the dense part in RAM and streaming experts from disk. *LocalPilot: Start colibri* runs `coli serve` from here; empty = `coli` on PATH. A running `coli serve` is detected either way."
+        },
+        "localpilot.colibri.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`--model` for *LocalPilot: Start colibri*: a colibri model name (e.g. `qwen3-coder-30b`, `glm-5.2`) or a model folder. Empty = the model colibri's setup installed."
+        },
+        "localpilot.colibri.port": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1,
+          "maximum": 65535,
+          "markdownDescription": "Port `coli serve` listens on. Auto-detect also probes it when it is not 8000."
+        },
+        "localpilot.colibri.kvSlots": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 16,
+          "markdownDescription": "`--kv-slots` for *LocalPilot: Start colibri*: conversations colibri decodes together, each with its own cached prefix, so parallel agents do not evict each other's context. Each slot costs a few hundred MB; capped by `#localpilot.parallel.maxConcurrency#`."
         },
         "localpilot.models.disabled": {
           "type": "array",
