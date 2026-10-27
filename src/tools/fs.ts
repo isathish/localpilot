@@ -7,7 +7,7 @@ export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
   if (ctx.workspaceRoot && (uri.fsPath === ctx.workspaceRoot || uri.fsPath.startsWith(ctx.workspaceRoot + path.sep))) {
     return path.relative(ctx.workspaceRoot, uri.fsPath) || '.';
   }
-  return displayPath(uri, ctx);
+  return vscode.workspace.asRelativePath(uri, false);
 }
 
 export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {

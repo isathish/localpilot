@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">LocalPilot</h1>
 <p align="center"><strong>The AI coding agent that runs on your machine.</strong><br>
-An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>. No accounts, no telemetry, and nothing leaves your machine unless you point it at a remote endpoint.</p>
+An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>. No accounts, no telemetry sent anywhere, and your code never leaves your machine unless you point it at a remote endpoint.</p>
 <p align="center">
   <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/v/localpilot.localpilot-agent?label=marketplace&color=0078d4" alt="VS Code Marketplace"></a>
@@ -42,7 +42,7 @@ An agent that reads your project, edits files, runs commands and tests, and show
 
 **Three checks, under a minute.** Turn off Wi‑Fi: LocalPilot keeps editing and running tests. Open *Settings → Providers*: every address is `localhost` unless you added one. Read the source: it is MIT-licensed, and `npm test` runs against your own Ollama.
 
-- **Private and offline.** Your code only reaches the model servers you list, and the defaults are `localhost`. No account, no telemetry SDK, no update check.
+- **Private and offline.** Your code only reaches the model servers you list, and the defaults are `localhost`. No account, no telemetry SDK, no update check; the Dashboard's metrics live in `~/.localpilot/telemetry` and never leave the disk (`localpilot.telemetry.enabled: false` turns them off). The only other outbound calls are ones you control: the skill registry index from GitHub (`localpilot.skills.autoInstall: off` stops it), the web tools (each fetch asks for approval), and model downloads you start yourself.
 - **A full agent.** It reads, searches, edits, runs commands and tests, retries when something fails and asks before anything risky.
 - **Written for local models.** A text fallback for models without tool calling, and context trimming so 8k to 32k windows still finish long tasks.
 - **Parallel agents.** Run several at once, see every file each one touched, keep or undo per agent.

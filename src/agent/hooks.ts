@@ -12,7 +12,8 @@ import { HookCommand, HookEvent, HookMatcher, ProjectSettings } from './settings
  *   other   — non-blocking failure; stderr is logged.
  *
  * `matcher` is a regex (or exact name, `*` / empty = all) tested against the tool name for PreToolUse / PostToolUse,
- * the trigger for SessionStart (startup|resume|clear|compact) and PreCompact (manual|auto), and ignored elsewhere.
+ * the trigger for SessionStart (startup|resume|clear|compact), PreCompact (manual|auto) and SessionEnd
+ * (clear|prompt_input_exit|other), and ignored elsewhere.
  */
 
 export interface HookOutcome {
@@ -254,7 +255,7 @@ export class HookRunner {
       return out;
     }
     const keys = opts.matchKeys ?? (opts.matchKey ? [opts.matchKey] : []);
-    const needsMatch = event === 'PreToolUse' || event === 'PostToolUse' || event === 'SessionStart' || event === 'PreCompact' || event === 'Notification';
+    const needsMatch = event === 'PreToolUse' || event === 'PostToolUse' || event === 'SessionStart' || event === 'PreCompact' || event === 'Notification' || event === 'SessionEnd';
     const seen = new Set<string>();
     const hooks: HookCommand[] = [];
     for (const m of matchers) {
@@ -283,4 +284,22 @@ export class HookRunner {
     }
     return out;
   }
+
+  /**
+   * Fires `SessionEnd` for a conversation that is being cleared or deleted (or whose CLI is exiting). Hooks cannot
+   * block it; their output is only surfaced. Resolves once every hook has finished.
+   */
+  async sessionEnd(sessionId: string, reason: SessionEndReason, cwd: string | undefined, opts: { signal?: AbortSignal } = {}): Promise<void> {
+    if (!this.has('SessionEnd')) {
+      return;
+    }
+    try {
+      await this.run('SessionEnd', { session_id: sessionId, reason }, { cwd, matchKey: reason, signal: opts.signal });
+    } catch (e) {
+      this.log.warn(`hooks: SessionEnd failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 }
+
+/** Why a session ended — Claude Code's values; `other` covers deleting a chat. */
+export type SessionEndReason = 'clear' | 'prompt_input_exit' | 'other';

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { applyHookResult, execHook, hookMatches, HookOutcome } from '../agent/hooks';
+import { applyHookResult, execHook, hookMatches, HookOutcome, HookRunner } from '../agent/hooks';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, splitCommandChain } from '../agent/permissions';
 import { emptySettings, loadProjectSettings, mergeSettings, normalizeSettings, parseJsonc } from '../agent/settings';
 import { discoverCommands, expandCommand, indexCommands, parseCommandFile, splitArgs, splitRules } from '../agent/commands';
@@ -221,6 +221,30 @@ suite('Claude Code compatibility: hooks', () => {
     assert.strictEqual(blocked.stderr.trim(), 'nope');
     const slow = await execHook({ type: 'command', command: 'sleep 5', timeout: 1 }, {}, { cwd: dir });
     assert.ok(slow.timedOut);
+  });
+
+  (posix ? test : test.skip)('SessionEnd fires with the reason as matcher key, cannot block, and is skipped when unconfigured', async function () {
+    this.timeout(10_000);
+    const dir = await tmp('session-end');
+    const settings = emptySettings();
+    settings.hooks.SessionEnd = [
+      { matcher: 'clear', hooks: [{ type: 'command', command: `cat > "$CLAUDE_PROJECT_DIR/clear.json"; echo bye >&2; exit 2` }] },
+      { matcher: 'other', hooks: [{ type: 'command', command: `cat > "$CLAUDE_PROJECT_DIR/other.json"` }] },
+    ];
+    const said: string[] = [];
+    const runner = new HookRunner(() => settings, { info() {}, warn() {}, debug() {} }, (t) => said.push(t));
+    assert.ok(runner.has('SessionEnd'));
+    await runner.sessionEnd('s1', 'clear', dir);
+    const input = JSON.parse(await fs.readFile(path.join(dir, 'clear.json'), 'utf8')) as Record<string, unknown>;
+    assert.strictEqual(input.hook_event_name, 'SessionEnd');
+    assert.strictEqual(input.session_id, 's1');
+    assert.strictEqual(input.reason, 'clear');
+    await assert.rejects(fs.stat(path.join(dir, 'other.json')), 'the matcher on reason keeps the other hook out');
+    await runner.sessionEnd('s1', 'other', dir);
+    await fs.stat(path.join(dir, 'other.json'));
+    const none = new HookRunner(() => emptySettings(), { info() {}, warn() {}, debug() {} });
+    assert.ok(!none.has('SessionEnd'));
+    await none.sessionEnd('s1', 'prompt_input_exit', dir);
   });
 });
 

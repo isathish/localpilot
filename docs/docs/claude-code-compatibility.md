@@ -57,7 +57,7 @@ Settings files are merged lowest-to-highest: `~/.claude/settings.json` → `~/.l
 }
 ```
 
-Events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart` (matcher `startup`), `PreCompact` (matcher `auto`), `Notification` (matcher `permission_prompt`). `matcher` is a regular expression on the tool name — Claude's names (`Bash`, `Edit`, `Write`, `Read`, `Glob`, `Grep`, `WebFetch`, `Task`, `mcp__server__tool`) **and** LocalPilot's (`run_command`, `edit_file`, …) both match; empty or `*` matches everything.
+Events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart` (matcher `startup`), `SessionEnd` (matcher `clear` for *Clear conversation* / `/clear`, `prompt_input_exit` when the CLI REPL exits, `other` when a chat is deleted or a one-shot CLI run finishes), `PreCompact` (matcher `auto`), `Notification` (matcher `permission_prompt`). `matcher` is a regular expression on the tool name — Claude's names (`Bash`, `Edit`, `Write`, `Read`, `Glob`, `Grep`, `WebFetch`, `Task`, `mcp__server__tool`) **and** LocalPilot's (`run_command`, `edit_file`, …) both match; empty or `*` matches everything.
 
 Each hook runs through the shell in the project folder with the event as JSON on **stdin**:
 
@@ -126,5 +126,5 @@ Plugins are found in `.claude/plugins`, `.localpilot/plugins`, `~/.claude/plugin
 ## Differences from Claude Code
 
 - There is no `SlashCommand` tool yet: custom commands are run by you, not invoked by the model (`disable-model-invocation` is accepted and ignored).
-- `SessionEnd` hooks and remote (`url`) MCP servers in plugins are not supported; `transcript_path` is not provided to hooks.
+- Remote (`url`) MCP servers in plugins are not supported; `transcript_path` is not provided to hooks, and `SessionEnd` does not fire when the VS Code window closes (only on clear / delete / CLI exit).
 - Permission rules decide the **approval prompt**; the mode still rules: Ask and Plan mode never edit, whatever the rules say.

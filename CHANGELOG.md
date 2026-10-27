@@ -3,6 +3,17 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Added
+- **`SessionEnd` hooks** (Claude Code compatibility). They fire when a chat is cleared (`reason: clear`), deleted or swept by *Clear history* (`other`), when the CLI REPL exits (`prompt_input_exit`) and when a one-shot CLI run finishes (`other`); the matcher is tested against the reason. Hooks run in the session's worktree when it is isolated. Not fired when the VS Code window closes.
+- Tests for the context budget (`ContextManager`, tokenizer, `effectiveContextWindow`), the filesystem / search / editor tools, and `WorktreeManager` (seeding, change classification, apply with 3-way merge and conflicts, setup commands, prune) — all offline.
+
+### Fixed
+- `displayPath` for a file outside the agent's root recursed forever instead of falling back to the workspace-relative path (reachable from `find_references`/`open_file` on a non-workspace file).
+- Removed `viewsWelcome` and walkthrough `completionEvents` entries for `localpilot.agentsView.secondary|.panel` / `localpilot.chatView.secondary|.panel` — those view ids no longer exist (a moved view keeps its id), so they were dead configuration.
+
+### Changed
+- README, Marketplace page and site: the privacy statement now spells out what the extension does contact besides your model servers — the skill registry index on GitHub (`localpilot.skills.autoInstall: off` disables it) and the approval-gated web tools — and that Dashboard metrics are local-only files (`localpilot.telemetry.enabled`).
+- The development guide documents the whole `LocalPilotApi` surface (`stop`, `applyWorktree` / `discardWorktree`, `runBestOfN`, `autoSetupModels`, `installModel`, `screenshotUrl` / `inspectUrl`, `chatHost`, `telemetry`).
 
 ## 1.2.2 — 2026-10-26
 ### Fixed

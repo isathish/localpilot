@@ -50,6 +50,26 @@ lp.stop(id);
 
 `send(sessionId, text)` resolves with the final answer, `getSession(id)` returns the transcript, `listModels()` the discovered models and `version` the installed extension version.
 
+The full surface (`LocalPilotApi` in `src/extension.ts`):
+
+| Member | What it does |
+|---|---|
+| `runPrompt(prompt, mode?, attachments?)` | Starts a new session and returns its id; the run streams in the background. |
+| `runParallel(tasks, mode?)` | One independent agent per task, all concurrent; returns the session ids. |
+| `runBestOfN(prompt, models, mode?)` | The same prompt on several models at once, each in its own git worktree; returns the session ids. |
+| `send(sessionId, text)` | Follow-up in an existing session; resolves with the final assistant text. |
+| `stop(sessionId)` | Cancels a running session. |
+| `getSession(id)` | The persisted `Session` (messages, todos, model, worktree…). |
+| `applyWorktree(sessionId)` / `discardWorktree(sessionId)` | Bring an isolated session's edits onto the workspace (uncommitted) or throw them away. |
+| `runningSessionIds` / `onDidChangeRuns` | Ids currently running and an event that fires when the set changes. |
+| `listModels()` | Every model discovered across the configured providers. |
+| `autoSetupModels(opts?)` | Installs a starter model set sized for this machine (`installRuntime`, `target`, `force`). |
+| `installModel(target, model)` | Pulls one model onto a runtime; resolves `true` on success. |
+| `screenshotUrl(url, opts?)` | Renders a URL in a local headless Chromium and returns the PNG (base64) with its size. |
+| `inspectUrl(url, opts?)` | DevTools report for a URL — screenshot, console, network, performance and layout checks, optionally after scripted actions. |
+| `chatHost` | `{ viewId, visible, ready }` for the chat view wherever VS Code currently places it (undefined before first shown). |
+| `telemetry` | `summary(days)`, `logs(filter)` and `dir` — the local-only metrics behind the Dashboard. |
+
 ## Architecture
 
 ```

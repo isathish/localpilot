@@ -1,6 +1,6 @@
 # LocalPilot: a coding agent for VS Code that runs on your own machine
 
-LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, edits files, runs tests and shows you the diff. The difference is where the model runs: every token comes from a server you host with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner** — or any OpenAI-compatible endpoint you choose to point it at. No subscription, no account, no telemetry.
+LocalPilot does what Copilot, Cursor and Claude Code do. It reads your project, edits files, runs tests and shows you the diff. The difference is where the model runs: every token comes from a server you host with **Ollama**, **LM Studio**, **llama.cpp**, **vLLM** or **Docker Model Runner** — or any OpenAI-compatible endpoint you choose to point it at. No subscription, no account, and no telemetry sent anywhere (usage metrics stay in a local folder you can switch off).
 
 **It costs nothing per month.** Cloud assistants charge $10 to $200 per developer and meter usage on top. LocalPilot runs on the laptop you already have and keeps working with the network unplugged. To check for yourself, open *Settings → Providers*: every address is `localhost` unless you added one. The source is MIT-licensed on GitHub.
 

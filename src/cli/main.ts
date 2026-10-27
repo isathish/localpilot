@@ -863,6 +863,8 @@ async function main(): Promise<void> {
       await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet);
     }
     core.mcp?.dispose();
+    // After finishIsolated the worktree may be gone, so hooks run in the real workspace.
+    await core.runner.hooks?.sessionEnd(session.id, 'other', args.cwd, { signal: ctl.signal });
     await core.telemetry.flush();
     process.exit(ctl.signal.aborted ? 130 : 0);
   }
@@ -909,7 +911,9 @@ async function main(): Promise<void> {
       process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — run \`localpilot --isolate\` again or apply it with git\n`));
     }
     process.stdout.write(dim('bye\n'));
-    void core.telemetry.flush().finally(() => process.exit(0));
+    void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', isolated?.info.path ?? args.cwd) : Promise.resolve())
+      ?.then(() => core.telemetry.flush())
+      .finally(() => process.exit(0));
   });
 
   const slash = async (line: string): Promise<boolean> => {
@@ -946,7 +950,9 @@ async function main(): Promise<void> {
         session.worktree = undefined;
         return true;
       }
-      case 'clear': session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
+      case 'clear':
+        await core.runner.hooks?.sessionEnd(session.id, 'clear', isolated?.info.path ?? args.cwd);
+        session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
       case 'commands':

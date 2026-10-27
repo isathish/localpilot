@@ -96,14 +96,6 @@
       {
         "view": "localpilot.agentsView",
         "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
-      },
-      {
-        "view": "localpilot.agentsView.secondary",
-        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
-      },
-      {
-        "view": "localpilot.agentsView.panel",
-        "contents": "Every chat is an independent agent. Run several at once and review their changes here.\n[Run tasks in parallel](command:localpilot.runParallelTasks)\n[New chat](command:localpilot.newSession)\n\nNeed to connect a model server? [Open setup](command:localpilot.openWelcome) · [Settings](command:localpilot.openSettings)"
       }
     ],
     "chatParticipants": [
@@ -1525,9 +1517,7 @@
             },
             "completionEvents": [
               "onCommand:localpilot.openChat",
-              "onView:localpilot.chatView",
-              "onView:localpilot.chatView.secondary",
-              "onView:localpilot.chatView.panel"
+              "onView:localpilot.chatView"
             ]
           },
           {

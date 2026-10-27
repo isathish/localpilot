@@ -757,6 +757,11 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
+  /** Folder hooks run in for a session: its worktree while isolated, otherwise the workspace. */
+  private sessionRoot(sessionId: string): string | undefined {
+    return this.store.get(sessionId)?.worktree?.path ?? this.workspace.root;
+  }
+
   /** Delete worktrees left behind by sessions that no longer exist (e.g. after a crash). */
   async pruneWorktrees(): Promise<number> {
     if (!this.worktrees || !this.workspace.root) {
@@ -830,6 +835,7 @@ export class ChatController implements vscode.Disposable {
       case 'deleteSession':
         this.stop(msg.id);
         this.tracker.keep(msg.id);
+        await this.runner.hooks?.sessionEnd(msg.id, 'other', this.sessionRoot(msg.id));
         await this.dropWorktree(msg.id);
         await this.store.delete(msg.id);
         if (this.activeSessionId === msg.id) {
@@ -1048,6 +1054,7 @@ export class ChatController implements vscode.Disposable {
       case 'clearSession': {
         const s = this.store.get(msg.sessionId);
         if (s && !this.isRunning(s.id)) {
+          await this.runner.hooks?.sessionEnd(s.id, 'clear', this.sessionRoot(s.id));
           s.messages = [];
           s.contextTokens = 0;
           s.compactions = 0;
@@ -1550,6 +1557,9 @@ export class ChatController implements vscode.Disposable {
       if (!keep.has(s.id)) {
         this.tracker.keep(s.id);
         this.sessionApprovalMemory.delete(s.id);
+        if (s.messageCount) {
+          await this.runner.hooks?.sessionEnd(s.id, 'other', this.sessionRoot(s.id));
+        }
       }
     }
     const n = await this.store.clearExcept(keep);
