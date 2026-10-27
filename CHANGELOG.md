@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.2.3 — 2026-10-27
 ### Added
 - **`SessionEnd` hooks** (Claude Code compatibility). They fire when a chat is cleared (`reason: clear`), deleted or swept by *Clear history* (`other`), when the CLI REPL exits (`prompt_input_exit`) and when a one-shot CLI run finishes (`other`); the matcher is tested against the reason. Hooks run in the session's worktree when it is isolated. Not fired when the VS Code window closes.
 - Tests for the context budget (`ContextManager`, tokenizer, `effectiveContextWindow`), the filesystem / search / editor tools, and `WorktreeManager` (seeding, change classification, apply with 3-way merge and conflicts, setup commands, prune) — all offline.
