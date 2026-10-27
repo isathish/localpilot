@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.2.4 — 2026-10-27
 ### Fixed
 - **Approvals and permission rules now cover every gated tool.** `browser_screenshot`, `browser_inspect`, MCP tools and `memory_delete` declared an approval kind but never asked, so `approvals.network: ask|never`, `approvals.delete` and settings.json `ask`/`allow` rules (e.g. `mcp__server__tool`) were silently ignored for them.
 - **Stop cancels MCP tool calls.** The run's cancellation reaches the pending request (and the server gets `notifications/cancelled`) instead of waiting up to 120 s.
