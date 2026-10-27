@@ -207,8 +207,12 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
       description: 'Delete a memory note that is wrong or obsolete.',
       parameters: { type: 'object', properties: { name: { type: 'string' }, scope: { type: 'string', enum: ['project', 'global'] } }, required: ['name', 'scope'] },
     },
-    async execute(args) {
-      const ok = await memory.delete(String(args.name), args.scope === 'global' ? 'global' : 'project');
+    async execute(args, ctx) {
+      const scope = args.scope === 'global' ? 'global' : 'project';
+      if (!(await ctx.requestApproval(`Delete memory "${String(args.name)}"`, `${scope} memory note`, 'delete'))) {
+        return { content: 'User declined deleting the memory note.', isError: true };
+      }
+      const ok = await memory.delete(String(args.name), scope);
       return { content: ok ? `Deleted memory "${args.name}".` : `No memory named "${args.name}".`, isError: !ok };
     },
   };

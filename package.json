@@ -45,7 +45,8 @@
     }
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:localpilot.chatPanel"
   ],
   "main": "./dist/extension.js",
   "contributes": {

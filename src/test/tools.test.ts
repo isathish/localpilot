@@ -51,19 +51,25 @@ suite('Filesystem tools', () => {
     assert.throws(() => resolveWorkspacePath('../../etc/passwd', c), /outside the workspace/);
     assert.throws(() => resolveWorkspacePath('/etc/passwd', c), /outside the workspace/);
     assert.strictEqual(resolveWorkspacePath('', c).fsPath, root(), 'empty path is the root itself');
+    if (process.platform === 'win32') {
+      const upper = root().replace(/^[a-z]:/, (d) => d.toUpperCase());
+      assert.strictEqual(resolveWorkspacePath(path.join(upper, 'x.ts'), c).fsPath.toLowerCase(), path.join(root(), 'x.ts').toLowerCase(), 'drive-letter case does not matter');
+    }
+    // Uri.file normalises the drive letter on Windows, so compare in that form.
+    const fsp = (p: string) => vscode.Uri.file(p).fsPath;
     // Isolated: an absolute path into the real workspace is redirected into the worktree copy.
     const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-wt-'));
     try {
       const iso = ctx({ workspaceRoot: wt });
-      assert.strictEqual(resolveWorkspacePath(path.join(root(), 'src', 'a.ts'), iso).fsPath, path.join(wt, 'src', 'a.ts'));
-      assert.strictEqual(resolveWorkspacePath('src/a.ts', iso).fsPath, path.join(wt, 'src', 'a.ts'));
+      assert.strictEqual(resolveWorkspacePath(path.join(root(), 'src', 'a.ts'), iso).fsPath, fsp(path.join(wt, 'src', 'a.ts')));
+      assert.strictEqual(resolveWorkspacePath('src/a.ts', iso).fsPath, fsp(path.join(wt, 'src', 'a.ts')));
       assert.strictEqual(displayPath(vscode.Uri.file(path.join(wt, 'src', 'a.ts')), iso), path.join('src', 'a.ts'));
       assert.strictEqual(displayPath(vscode.Uri.file(wt), iso), '.');
     } finally {
       await fs.rm(wt, { recursive: true, force: true });
     }
     assert.strictEqual(displayPath(vscode.Uri.file(path.join(root(), 'src', 'a.ts')), c), 'src/a.ts', 'falls back to the workspace-relative path');
-    assert.strictEqual(displayPath(vscode.Uri.file('/somewhere/else.ts'), c), '/somewhere/else.ts', 'outside everything: absolute');
+    assert.strictEqual(displayPath(vscode.Uri.file('/somewhere/else.ts'), c), fsp('/somewhere/else.ts'), 'outside everything: absolute');
   });
 
   test('write_file creates (with parents), overwrites, asks for approval and refuses directories', async () => {

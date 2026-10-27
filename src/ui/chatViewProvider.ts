@@ -106,6 +106,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     });
+    this.adoptPanel(panel);
+  }
+
+  /** Wires a chat editor tab — a new one, or one VS Code restored after a reload (so the chat stays where it was). */
+  adoptPanel(panel: vscode.WebviewPanel): void {
+    const title = this.controller.activeSession?.title;
+    panel.title = title ? `LocalPilot · ${title}` : 'LocalPilot Chat';
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
     this.panels.add(panel);
     this.wire(panel.webview, () => this.panels.delete(panel), panel);
@@ -315,8 +322,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   </header>
   <div id="bgruns" class="bgruns hidden" aria-label="Agents running in other tabs"></div>
   <main id="messages" role="log" aria-label="Conversation"></main>
-  <div id="approvals"></div>
   <footer id="composer">
+    <div id="approvals" aria-live="assertive"></div>
     <div id="tasks" class="panel hidden">
       <button id="tasksToggle" class="panel-head"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="tasksLabel">Tasks</span><span class="spacer"></span><span id="tasksMeter" class="meter"><i></i></span></button>
       <ul id="tasksList" class="panel-body"></ul>

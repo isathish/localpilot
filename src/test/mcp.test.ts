@@ -57,6 +57,15 @@ suite('LocalPilot MCP client', () => {
       });
       assert.strictEqual(res.content, 'echo: hello');
       assert.strictEqual(res.isError, false);
+      const declined = await tool.execute({ text: 'hello' }, {
+        sessionId: 't',
+        signal: new AbortController().signal,
+        requestApproval: async () => false,
+        progress: () => undefined,
+        trackChange: async () => undefined,
+        depth: 0,
+      });
+      assert.ok(declined.isError && /declined/.test(declined.content), 'MCP calls honour approvals and permission rules');
     } finally {
       mcp.dispose();
     }

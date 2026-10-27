@@ -290,6 +290,9 @@ export const browserScreenshotTool: Tool = {
       signal: ctx.signal,
     };
     try {
+      if (!(await ctx.requestApproval('Load page in headless browser', normalizeUrl(String(args.url ?? '')), 'network'))) {
+        return { content: 'User declined loading the page.', isError: true };
+      }
       ctx.progress(`Rendering ${String(args.url ?? '')}…`);
       let shot: ImageAttachment & { url: string; width: number; height: number; browser: string; note?: string };
       try {
@@ -353,6 +356,9 @@ export const browserInspectTool: Tool = {
   },
   async execute(args, ctx) {
     try {
+      if (!(await ctx.requestApproval('Inspect page in headless browser', normalizeUrl(String(args.url ?? '')), 'network'))) {
+        return { content: 'User declined loading the page.', isError: true };
+      }
       const actions = Array.isArray(args.actions) ? (args.actions as InspectAction[]).filter((a) => a && typeof a === 'object').slice(0, 20) : undefined;
       const r = await inspectUrl(String(args.url ?? ''), {
         width: typeof args.width === 'number' ? args.width : undefined,

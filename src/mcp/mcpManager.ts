@@ -71,8 +71,8 @@ class McpClient implements vscode.Disposable {
     this.log.info(`[mcp:${this.name}] ${this.tools.length} tools`);
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
-    const res = (await this.request('tools/call', { name, arguments: args }, 120_000)) as { content?: { type: string; text?: string; data?: string }[]; isError?: boolean };
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
+    const res = (await this.request('tools/call', { name, arguments: args }, 120_000, signal)) as { content?: { type: string; text?: string; data?: string }[]; isError?: boolean };
     const text = (res.content ?? []).map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type} content]`)).join('\n');
     return { text, isError: !!res.isError };
   }
@@ -104,20 +104,34 @@ class McpClient implements vscode.Disposable {
     }
   }
 
-  private request(method: string, params: unknown, timeoutMs = 30_000): Promise<unknown> {
+  private request(method: string, params: unknown, timeoutMs = 30_000, signal?: AbortSignal): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(new Error('Cancelled'));
+      }
+      const onAbort = () => {
+        if (this.pending.delete(id)) {
+          clearTimeout(t);
+          this.notify('notifications/cancelled', { requestId: id, reason: 'Cancelled by user' });
+          reject(new Error('Cancelled'));
+        }
+      };
       const t = setTimeout(() => {
         this.pending.delete(id);
+        signal?.removeEventListener('abort', onAbort);
         reject(new Error(`MCP ${method} timed out`));
       }, timeoutMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.pending.set(id, {
         resolve: (v) => {
           clearTimeout(t);
+          signal?.removeEventListener('abort', onAbort);
           resolve(v);
         },
         reject: (e) => {
           clearTimeout(t);
+          signal?.removeEventListener('abort', onAbort);
           reject(e);
         },
       });
@@ -125,6 +139,7 @@ class McpClient implements vscode.Disposable {
       if (!stdin || stdin.destroyed) {
         this.pending.delete(id);
         clearTimeout(t);
+        signal?.removeEventListener('abort', onAbort);
         return reject(new Error('MCP server is not running'));
       }
       stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
@@ -198,8 +213,11 @@ export class McpManager implements vscode.Disposable {
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },
       approvalKind: 'network',
-      async execute(args) {
-        const r = await client.callTool(t.name, args);
+      async execute(args, ctx) {
+        if (!(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'network'))) {
+          return { content: 'User declined the MCP tool call.', isError: true };
+        }
+        const r = await client.callTool(t.name, args, ctx.signal);
         return { content: r.text, isError: r.isError };
       },
     };

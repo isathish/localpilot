@@ -5,6 +5,7 @@
   const LOGO = document.body.dataset.logo;
   const post = (m) => vscode.postMessage(m);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; };
   const I = {
     server: '<svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2"/><rect x="2" y="9" width="12" height="4.5" rx="1.2"/><path d="M4.5 4.8h.01M4.5 11.3h.01"/></svg>',
@@ -328,7 +329,7 @@
     head(sec, 'Providers', 'Model servers LocalPilot can talk to. Everything runs on the machines you choose — nothing is sent anywhere else.');
     const list = providersList();
     const bar = el('div', 'btnrow');
-    bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${enabledModels().length} model(s) available</span>`;
+    bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
     bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     const wrap = el('div');
@@ -1024,7 +1025,7 @@
     // ---- memory notes
     sec.appendChild(el('h2', 'sub', 'Memory notes'));
     const mem = el('div', 'btnrow');
-    mem.innerHTML = `<span class="muted small">${d.memory.project} project note(s) · ${d.memory.global} global note(s)</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
+    mem.innerHTML = `<span class="muted small">${plural(d.memory.project, 'project note')} · ${plural(d.memory.global, 'global note')}</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
     sec.appendChild(card(
       field('memory.enabled', 'Enable memory', 'The agent can <code>memory_save</code> / <code>memory_read</code> notes in <code>.localpilot/memory/</code> (project, commit-able) and in global storage. A compact index is added to every prompt.', 'toggle', { after: mem })
     ));
@@ -1451,7 +1452,7 @@
   function renderStorage() {
     const n = document.getElementById('dashStorage'); const s = state.dash.summary;
     if (!n || !s) { return; }
-    n.innerHTML = `${fmtN(s.storage.events)} events · ${fmtBytes(s.storage.bytes)} in ${s.storage.files} file(s)${s.storage.oldest ? ` · since ${new Date(s.storage.oldest).toLocaleDateString()}` : ''} · <code>${esc(s.storage.dir)}</code>`;
+    n.innerHTML = `${fmtN(s.storage.events)} events · ${fmtBytes(s.storage.bytes)} in ${plural(s.storage.files, 'file')}${s.storage.oldest ? ` · since ${new Date(s.storage.oldest).toLocaleDateString()}` : ''} · <code>${esc(s.storage.dir)}</code>`;
   }
   /** Provider display name for a recorded provider id (the id itself when the provider is no longer configured). */
   function provName(id) { const p = providersList().find((x) => x.id === id); return p ? p.displayName || p.id : id; }
@@ -1608,7 +1609,7 @@
     sec.appendChild(grid);
     sec.appendChild(el('h2', 'sub', 'About'));
     const about = el('div', 'card');
-    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions && typeof d.sessions === 'object' ? d.sessions.count : d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${providersList().filter((p) => p.enabled !== false).length} provider(s)</dd><dt>Privacy</dt><dd>LocalPilot talks only to the servers listed under Providers. No telemetry, no account.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
+    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions && typeof d.sessions === 'object' ? d.sessions.count : d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${plural(providersList().filter((p) => p.enabled !== false).length, 'provider')}</dd><dt>Privacy</dt><dd>Your code goes only to the model servers listed under Providers (plus web tools and MCP servers you enable). No cloud telemetry, no account — Dashboard metrics stay on this machine.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
     sec.appendChild(about);
   }
 

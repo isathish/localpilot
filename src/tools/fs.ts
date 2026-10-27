@@ -2,9 +2,19 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Tool, ToolContext } from '../types';
 
+// Windows paths are case-insensitive and VS Code lowercases drive letters (`c:\`) while models and users write `C:\`.
+const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
+
+/** True when `p` is `root` or inside it. */
+function isWithin(p: string, root: string): boolean {
+  const a = foldCase(p);
+  const b = foldCase(root);
+  return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+}
+
 /** Path for messages and the UI: relative to the agent's root (worktree or workspace folder). */
 export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
-  if (ctx.workspaceRoot && (uri.fsPath === ctx.workspaceRoot || uri.fsPath.startsWith(ctx.workspaceRoot + path.sep))) {
+  if (ctx.workspaceRoot && isWithin(uri.fsPath, ctx.workspaceRoot)) {
     return path.relative(ctx.workspaceRoot, uri.fsPath) || '.';
   }
   return vscode.workspace.asRelativePath(uri, false);
@@ -21,7 +31,7 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   if (ctx.workspaceRoot && path.isAbsolute(p)) {
     for (const f of vscode.workspace.workspaceFolders ?? []) {
       const main = f.uri.fsPath;
-      if (main !== ctx.workspaceRoot && (abs === main || abs.startsWith(main + path.sep))) {
+      if (foldCase(main) !== foldCase(ctx.workspaceRoot) && isWithin(abs, main)) {
         abs = path.join(ctx.workspaceRoot, path.relative(main, abs));
         break;
       }
@@ -31,7 +41,7 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   // Prevent path traversal outside the workspace unless the user opened that folder — or outside the agent's
   // isolated copy of it when it works in a worktree.
   const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : [])];
-  const inside = roots.some((r) => normalized.startsWith(r + path.sep) || normalized === r);
+  const inside = roots.some((r) => isWithin(normalized, r));
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);
   }

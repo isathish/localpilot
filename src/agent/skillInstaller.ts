@@ -225,7 +225,8 @@ export async function installSkills(src: SkillSource, opts: InstallOptions): Pro
       await fs.rm(target, { recursive: true, force: true });
     }
     await fs.mkdir(target, { recursive: true });
-    const safe = skill.files.filter((rel) => !rel.split('/').some((seg) => seg === '..'));
+    // Remote file lists are untrusted: `..\` and drive/absolute paths would escape the target on Windows.
+    const safe = skill.files.filter((rel) => !path.isAbsolute(rel) && !/^[a-z]:/i.test(rel) && !rel.includes('\\') && !rel.split('/').includes('..'));
     const results = await new ParallelPool(6).map(safe, async (rel) => {
       opts.progress?.(`${skill.name}: ${rel}`);
       const out = path.join(target, ...rel.split('/'));

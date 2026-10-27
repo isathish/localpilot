@@ -596,7 +596,7 @@ export class ChatController implements vscode.Disposable {
       this.broadcast({
         type: 'toast',
         level: res.conflicts.length ? 'error' : 'info',
-        text: res.conflicts.length ? `Applied ${res.files.length} file(s); ${res.conflicts.length} with conflict markers: ${res.conflicts.join(', ')}` : `Applied ${res.files.length} file(s) to the workspace`,
+        text: res.conflicts.length ? `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'}; ${res.conflicts.length} with conflict markers: ${res.conflicts.join(', ')}` : `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'} to the workspace`,
       });
       return { files: res.files.length, conflicts: res.conflicts };
     } catch (e) {
@@ -989,7 +989,7 @@ export class ChatController implements vscode.Disposable {
         return this.pushModels();
       case 'openFile': {
         const root = this.workspace.root;
-        const uri = msg.path.startsWith('/') || /^[a-z]:\\/i.test(msg.path) ? vscode.Uri.file(msg.path) : root ? vscode.Uri.joinPath(vscode.Uri.file(root), msg.path) : undefined;
+        const uri = msg.path.startsWith('/') || /^[a-z]:[\\/]/i.test(msg.path) ? vscode.Uri.file(msg.path) : root ? vscode.Uri.joinPath(vscode.Uri.file(root), msg.path) : undefined;
         if (!uri) {
           return;
         }

@@ -18,10 +18,17 @@ function hasGit(): boolean {
   }
 }
 
+/** `git init` with line endings pinned: Windows runners default to core.autocrlf=true, which rewrites LF fixtures. */
+function initRepo(dir: string): void {
+  git(['init', '-q', '-b', 'main'], dir);
+  git(['config', 'core.autocrlf', 'false'], dir);
+  git(['config', 'core.eol', 'lf'], dir);
+}
+
 /** Fresh repo with one commit: README.md + src/app.ts, plus an uncommitted edit and an untracked file. */
 async function makeRepo(): Promise<string> {
   const repo = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lp-repo-')));
-  git(['init', '-q', '-b', 'main'], repo);
+  initRepo(repo);
   await fs.mkdir(path.join(repo, 'src'));
   await fs.writeFile(path.join(repo, 'README.md'), '# Demo\n');
   await fs.writeFile(path.join(repo, 'src', 'app.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n');
@@ -126,7 +133,7 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
       await fs.writeFile(path.join(wt.path, 'src', 'new.ts'), 'export const n = 1;\n');
       const snapshots: string[] = [];
       const res = await mgr.apply(wt, async (p) => {
-        snapshots.push(path.relative(repo, p));
+        snapshots.push(path.relative(repo, p).split(path.sep).join('/'));
       });
       assert.deepStrictEqual(res.conflicts, []);
       assert.deepStrictEqual(res.files.map((f) => f.path).sort(), ['src/app.ts', 'src/new.ts']);
@@ -215,7 +222,7 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
   test('an empty repository (no commits) still gets an isolated worktree', async () => {
     const empty = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lp-empty-')));
     try {
-      git(['init', '-q', '-b', 'main'], empty);
+      initRepo(empty);
       await fs.writeFile(path.join(empty, 'first.txt'), 'hello\n');
       const wt = await mgr.create(empty, 'fresh');
       try {

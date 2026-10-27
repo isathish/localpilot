@@ -18,6 +18,7 @@
     check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
     x: '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
     spin: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.2 3"/></svg>',
+    refresh: '<svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.5h-2.5"/></svg>',
     chev: '<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>',
     copy: '<svg viewBox="0 0 16 16"><rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 11V4a1 1 0 0 1 1-1h7"/></svg>',
     download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
@@ -673,17 +674,18 @@
     delete d.dataset.pending;
   }
   /** Host step for run_parallel_subagents while live: a queued lane per task becomes the child's pill as it starts. */
-  /** Workers card ("4 Working · Stop All"): one row per background worker with its current step; rows expand to the full trace. */
+  /** Workers card ("4 working · Stop all"): one row per background worker with its current step; rows expand to the full trace. */
   function subHost(name, a, tasks) {
     const list = tasks || a.tasks || [];
     const n = list.length;
-    const d = stepEl('step subhost workers running', `<b>${n} Working</b>`, undefined, '');
+    const d = stepEl('step subhost workers running', `<b>${n} working</b>`, undefined, '');
     d.__ico = I.layers; d.dataset.total = String(n); d.dataset.done = '0'; d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
-    const ctl = el('span', 'lanectl host', `<button data-c="stopall" title="Stop every worker in this batch">${I.stop}<span>Stop All</span></button>`);
+    const ctl = el('span', 'lanectl host', `<button data-c="stopall" title="Stop every worker in this batch">${I.stop}<span>Stop all</span></button>`);
     ctl.onclick = (e) => { const b = e.target.closest('button'); if (!b) { return; } e.preventDefault(); e.stopPropagation(); const sid = state.session && state.session.id; const live = sid && state.live.get(sid); if (!live) { return; } for (const [childId, node] of live.subs) { if (d.contains(node) && node.classList.contains('running')) { post({ type: 'stopChild', sessionId: sid, childId }); } } };
     d.querySelector(':scope > summary .chev').before(ctl);
     const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
-    for (const t of list) { const lane = el('div', 'lane pending', `<span class="ico">${I.agent}</span><span class="who">${esc(t.agent || 'explore')}</span><span class="what">${short(t.prompt, 90)}</span>`); lane.dataset.what = String(t.prompt || ''); lane.title = String(t.prompt || ''); c.appendChild(lane); }
+    for (const t of list) { const lane = el('div', 'lane pending', `<span class="ico"><span class="dot idle"></span></span><span class="pill"><span class="pico">${I.agent}</span><b class="who">${esc(t.agent || 'explore')}</b></span><span class="what">${short(t.prompt, 90)}</span>`); lane.dataset.what = String(t.prompt || ''); lane.title = String(t.prompt || ''); c.appendChild(lane); }
+    hostProgress(d);
     d.open = true;
     return d;
   }
@@ -705,7 +707,7 @@
     }
     if (!sections.length) { return null; }
     const failed = sections.filter((s) => s.failed).length;
-    const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, `<b>${sections.length} Done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}`, undefined, '');
+    const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, `<b>${sections.length} done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}`, undefined, '');
     d.__ico = I.layers; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
     const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
     for (const s of sections) {
@@ -719,17 +721,24 @@
     return d;
   }
   function hostFor(live) { const hosts = [...live.tools.values()].filter((n) => n.classList.contains('subhost') && n.classList.contains('running')); return hosts[hosts.length - 1] || null; }
+  function hostCounts(host) {
+    const c = host.querySelector(':scope > .content');
+    return { running: c ? c.querySelectorAll(':scope > .step.subagent.running').length : 0, queued: c ? c.querySelectorAll(':scope > .lane.pending').length : 0, done: Number(host.dataset.done || 0) };
+  }
   function hostProgress(host) {
-    const total = Number(host.dataset.total || 1); const done = Number(host.dataset.done || 0);
     const label = host.querySelector(':scope > summary .label'); const meta = host.querySelector(':scope > summary .meta');
-    if (host.classList.contains('running')) { if (label) { label.innerHTML = `<b>${Math.max(0, total - done)} Working</b>${done ? `<span class="muted"> · ${done} done</span>` : ''}`; } if (meta) { meta.textContent = ''; } }
+    if (!host.classList.contains('running')) { return; }
+    const { running, queued, done } = hostCounts(host);
+    const extra = [queued && `${queued} queued`, done && `${done} done`].filter(Boolean).join(' · ');
+    if (label) { label.innerHTML = `<b>${running ? `${running} working` : queued ? 'Starting workers' : 'Finishing'}</b>${extra ? `<span class="muted"> · ${extra}</span>` : ''}`; }
+    if (meta) { meta.textContent = ''; }
   }
   /** Tool label as plain text: drops the language badge inside file chips, then all markup. */
   function plainLabel(html) { return String(html).replace(/<i class="lang[^"]*">[^<]*<\/i>/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
   /** Current step of a worker, shown on its row like Cursor's "Exploring challenge codebase structure". */
   function laneNow(sub, text) { const m = sub.querySelector(':scope > summary .meta'); if (!m) { return; } const steps = Number(sub.dataset.calls || 0); m.innerHTML = `<span class="now">${esc(text)}</span>${steps ? `<span class="muted"> · ${steps} step${steps === 1 ? '' : 's'}</span>` : ''}`; }
   /** "2 workers running · 1 done" for the status line while a Workers card is live — the lanes carry each worker's own step. */
-  function workersSummary(host) { const total = Number(host.dataset.total || 0); const done = Number(host.dataset.done || 0); const n = Math.max(0, total - done); return `${n} worker${n === 1 ? '' : 's'} running${done ? ` · ${done} done` : ''}`; }
+  function workersSummary(host) { const { running, queued, done } = hostCounts(host); return [`${running} worker${running === 1 ? '' : 's'} running`, queued && `${queued} queued`, done && `${done} done`].filter(Boolean).join(' · '); }
   /** A child agent reported progress: its lane shows the step; the status line shows it directly only when there is no Workers card to show it in. */
   function childStatus(live, sid, childId, agent, text, visible) {
     const sub = live.subs.get(childId);
@@ -808,7 +817,7 @@
     if (node.classList.contains('subhost')) {
       setState(node, ok ? 'ok' : 'error');
       const total = Number(node.dataset.total || 0); const failed = node.querySelectorAll(':scope > .content > .step.subagent.error').length;
-      node.querySelector(':scope > summary .label').innerHTML = total ? `<b>${total} Done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}` : toolLabel(node.dataset.tool, parseArgs(node.dataset.args || '{}'), false);
+      node.querySelector(':scope > summary .label').innerHTML = total ? `<b>${total} done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}` : toolLabel(node.dataset.tool, parseArgs(node.dataset.args || '{}'), false);
       node.querySelector(':scope > summary .meta').textContent = secs;
       const ctl = node.querySelector(':scope > summary .lanectl.host'); if (ctl) { ctl.remove(); }
       for (const lane of node.querySelectorAll(':scope > .content > .lane.pending')) { lane.className = 'lane ' + (ok ? 'skipped' : 'error'); }
@@ -1053,12 +1062,27 @@
     work.onclick = () => { root.classList.toggle('folded'); };
   }
   let workTicker = 0;
+  /** Output speed over the last few seconds (≈ chars/4 per token); 0 once the stream has paused. */
+  function noteStream(live, n) { const now = Date.now(); (live.stream || (live.stream = [])).push([now, n]); }
+  function streamRate(live, now) {
+    const s = live.stream; if (!s || !s.length) { return 0; }
+    while (s.length && now - s[0][0] > 3000) { s.shift(); }
+    if (!s.length || now - s[s.length - 1][0] > 1500) { return 0; }
+    const span = Math.max(1000, now - s[0][0]);
+    return Math.round(s.reduce((a, x) => a + x[1], 0) / 4 / (span / 1000));
+  }
   function tickWork() {
     let any = false;
+    const now = Date.now();
     for (const live of state.live.values()) {
       if (!live.work) { continue; }
       any = true;
-      if (state.session && state.session.id === live.sid) { live.work.querySelector('.time').textContent = fmtDur(Date.now() - live.startedAt); }
+      if (state.session && state.session.id === live.sid) {
+        const rate = streamRate(live, now);
+        const t = live.work.querySelector('.time');
+        t.textContent = rate ? `~${rate} tok/s · ${fmtDur(now - live.startedAt)}` : fmtDur(now - live.startedAt);
+        t.title = rate ? 'Model output speed over the last few seconds, and time since you sent' : 'Time since you sent';
+      }
     }
     if (!any) { clearInterval(workTicker); workTicker = 0; }
   }
@@ -1203,7 +1227,7 @@
   function handleEvent(e) {
     const sid = e.sessionId; const live = ensureLive(sid); const visible = state.session && state.session.id === sid;
     switch (e.type) {
-      case 'assistant_delta': live.text += e.payload; setPhase(live, 'Writing'); scheduleRender(live); break;
+      case 'assistant_delta': live.text += e.payload; noteStream(live, String(e.payload).length); setPhase(live, 'Writing'); scheduleRender(live); break;
       case 'steer': {
         // Queued rows become part of the transcript; what streams next belongs after them.
         rotateBody(live);
@@ -1212,7 +1236,7 @@
         showTyping(live); break;
       }
       case 'thinking_delta':
-        live.thinking += e.payload; clearTyping(live); setPhase(live, 'Thinking');
+        live.thinking += e.payload; noteStream(live, String(e.payload).length); clearTyping(live); setPhase(live, 'Thinking');
         if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = thinkingRow('', 0, true); live.steps.appendChild(live.thinkingEl); }
         live.thinkingEl.querySelector(':scope > .content').textContent = live.thinking;
         live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
@@ -1262,6 +1286,7 @@
             const byLabel = e.payload.label && lanes.find((l) => l.dataset.what === e.payload.label);
             const lane = byLabel || lanes.find((l) => l.querySelector('.who').textContent === e.payload.agent) || lanes[0];
             if (lane) { lane.replaceWith(c); } else { host.querySelector(':scope > .content').appendChild(c); }
+            hostProgress(host);
           } else { live.steps.appendChild(c); }
         }
         c.dataset.childId = e.payload.childId; live.subs.set(e.payload.childId, c);
@@ -1307,7 +1332,7 @@
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
-      case 'error': { rotateBody(live); live.failed = true; setPhase(live, 'Failed'); const box = el('div', 'error-box', `<span class="msg">${esc(String(e.payload))}</span>`); const b = el('button', 'btn ghost sm retry-btn', `${I.spin}Retry`); b.title = 'Send the last message again'; b.onclick = () => { if (state.running.has(sid)) { return; } post({ type: 'retry', sessionId: sid }); }; box.appendChild(b); live.root.insertBefore(box, live.body); break; }
+      case 'error': { rotateBody(live); live.failed = true; setPhase(live, 'Failed'); const box = el('div', 'error-box', `<span class="msg">${esc(String(e.payload))}</span>`); const b = el('button', 'btn ghost sm retry-btn', `${I.refresh}Retry`); b.title = 'Send the last message again'; b.onclick = () => { if (state.running.has(sid)) { return; } post({ type: 'retry', sessionId: sid }); }; box.appendChild(b); live.root.insertBefore(box, live.body); break; }
       case 'turn_end': noteStatus(sid, 'Finishing…'); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
   }
@@ -1481,8 +1506,14 @@
     els.history.dataset.n = String(state.running.size);
     els.history.title = state.running.size ? `All chats · ${state.running.size} agent${state.running.size === 1 ? '' : 's'} running` : 'All chats';
     const act = els.tabs.querySelector('.tab.active'); if (act) { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+    tabEdges();
     renderBgRuns();
     saveState();
+  }
+  function tabEdges() {
+    const t = els.tabs; const max = t.scrollWidth - t.clientWidth;
+    t.classList.toggle('ovf-l', max > 1 && t.scrollLeft > 1);
+    t.classList.toggle('ovf-r', max > 1 && t.scrollLeft < max - 1);
   }
   // Composer isolation: each tab keeps its own draft, attachments, images and scroll offset while you switch around.
   function saveDraft(sid) {
@@ -1581,6 +1612,10 @@
   // Roving focus inside the tab list (WAI-ARIA tabs) plus global shortcuts: Alt+↑/↓ cycle, Alt+1…9 jump, Delete closes.
   function cycleTab(delta) { const { list, active } = tabList(); if (!list.length) { return; } const i = list.findIndex((s) => s.id === active); selectTab(list[(Math.max(0, i) + delta + list.length) % list.length].id); }
   els.tabs.setAttribute('role', 'tablist');
+  els.tabs.addEventListener('scroll', tabEdges, { passive: true });
+  new ResizeObserver(tabEdges).observe(els.tabs);
+  // Vertical wheel scrolls the tab strip sideways (mouse users have no horizontal wheel).
+  els.tabs.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && els.tabs.scrollWidth > els.tabs.clientWidth) { els.tabs.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
   els.tabs.addEventListener('keydown', (e) => {
     const tabs = [...els.tabs.querySelectorAll('.tab:not(.more)')]; const i = tabs.indexOf(document.activeElement);
     if (i < 0 || e.target.classList.contains('rename')) { return; }
@@ -1695,7 +1730,7 @@
       const acts = hist.confirm === s.id
         ? `<span class="q">${running ? 'Stop and delete?' : 'Delete?'}</span><button data-a="confirm" class="danger">Delete</button><button data-a="cancel">Keep</button>`
         : `<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…">${I.list}</button><button data-a="delete" title="${running ? 'Stop the agent and delete this chat' : 'Delete this chat'}">${I.trash}</button>`;
-      row.innerHTML = `<span class="ico">${running ? I.spin : s.pinned ? I.pin : mode.icon}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span></span>${tag}<span class="acts">${acts}</span>`;
+      row.innerHTML = `<span class="ico">${running ? LIVE_DOT : s.pinned ? I.pin : mode.icon}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span></span>${tag}<span class="acts">${acts}</span>`;
       row.title = `${s.title || 'New chat'}\n${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${new Date(s.updatedAt).toLocaleString()}${s.pinned ? '\nPinned' : ''}`;
       // mousedown (not click) so the search box keeps focus, like the other menus.
       row.onmousedown = (e) => { if (e.button !== 0) { return; } e.preventDefault(); const b = e.target.closest('[data-a]'); if (b) { historyAction(b.dataset.a, s, row); } else { historyOpen(s.id); } };
@@ -2060,8 +2095,8 @@
     const s = state.session; const cur = (s && s.model) || '';
     const autoName = modelName(autoModelId());
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
-    for (const m of state.models) { items.push({ group: m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
-    items.push({ hr: true }, { label: 'Refresh models', icon: I.spin, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
+    for (const m of state.models) { items.push({ group: m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
+    items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
   function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
@@ -2354,6 +2389,8 @@
     if (m.startedAt) { live.startedAt = m.startedAt; }
     if (m.truncated && !live.root.querySelector('.note.replay')) { live.root.insertBefore(el('div', 'note replay', 'Earlier steps of this run are not shown — the full transcript appears when it finishes.'), live.steps); }
     for (const item of m.items || []) { onMessage(item); }
+    // Replayed deltas arrive in one burst; they say nothing about the model's current speed.
+    live.stream = [];
     if (m.status) { noteStatus(sid, m.status); if (state.session && state.session.id === sid) { setStatus(m.status); } }
     if (state.session && state.session.id === sid) { if (live.dirty) { scheduleRender(live); } scrollToBottom(true); updateJump(); }
     renderTabs();
@@ -2375,7 +2412,7 @@
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model(s) found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'paused': {
         if (m.childId) { laneSetPaused(m.sessionId, m.childId, m.paused, m.holding); break; }
@@ -2450,6 +2487,8 @@
     document.addEventListener('keydown', key, true);
     d._dispose = () => document.removeEventListener('keydown', key, true);
     els.approvals.appendChild(d);
+    // The footer scrolls on short hosts (bottom Panel); prompts sit at its top.
+    els.approvals.parentElement.scrollTop = 0;
     if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
   }
 

@@ -52,6 +52,8 @@ import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(channel);
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
   // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
   const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
   const log = mirrorLog(channel, telemetry);
@@ -119,6 +121,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
+  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelViewType, { deserializeWebviewPanel: async (panel) => view.adoptPanel(panel) }));
   context.subscriptions.push(terminals, new vscode.Disposable(() => setIntegratedTerminalRunner(undefined)));
   setIntegratedTerminalRunner(terminals);
   workspace.terminalContext = () => terminals.format(terminals.lastExecution());
@@ -237,7 +240,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     status.backgroundColor = models.length || pulling ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
     status.tooltip = pulling
       ? `LocalPilot · downloading ${pulling.model} — ${pulling.detail}`
-      : `LocalPilot · ${models.length} local model(s) from ${providers.all.length} provider(s)${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick for chat, models, layout and settings`;
+      : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick for chat, models, layout and settings`;
     status.show();
   };
   void refreshStatus();
@@ -360,8 +363,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const notes = await memory.list();
     const pick = await vscode.window.showQuickPick(
       [
-        { label: '$(repo) Project memory', description: `${notes.filter((n) => n.scope === 'project').length} note(s) in .localpilot/memory/`, scope: 'project' as const },
-        { label: '$(globe) Global memory', description: `${notes.filter((n) => n.scope === 'global').length} note(s) shared across workspaces`, scope: 'global' as const },
+        { label: '$(repo) Project memory', description: `${plural(notes.filter((n) => n.scope === 'project').length, 'note')} in .localpilot/memory/`, scope: 'project' as const },
+        { label: '$(globe) Global memory', description: `${plural(notes.filter((n) => n.scope === 'global').length, 'note')} shared across workspaces`, scope: 'global' as const },
       ],
       { title: 'LocalPilot: clear memory', placeHolder: 'Which notes should be deleted?' }
     );
@@ -372,7 +375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     if (!targets.length) {
       return void vscode.window.showInformationMessage('No notes to delete.');
     }
-    const ok = await vscode.window.showWarningMessage(`Delete ${targets.length} ${pick.scope} memory note(s)? This cannot be undone.`, { modal: true }, 'Delete');
+    const ok = await vscode.window.showWarningMessage(`Delete ${plural(targets.length, `${pick.scope} memory note`)}? This cannot be undone.`, { modal: true }, 'Delete');
     if (ok) {
       let n = 0;
       for (const t of targets) {
@@ -380,7 +383,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
           n++;
         }
       }
-      vscode.window.setStatusBarMessage(`LocalPilot: deleted ${n} memory note(s)`, 3000);
+      vscode.window.setStatusBarMessage(`LocalPilot: deleted ${plural(n, 'memory note')}`, 3000);
     }
   });
 
@@ -526,7 +529,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     const res = await controller.applyWorktree(id);
     if (res?.conflicts.length) {
-      const open = await vscode.window.showWarningMessage(`${res.conflicts.length} file(s) have conflict markers.`, 'Open first conflict');
+      const open = await vscode.window.showWarningMessage(`${res.conflicts.length === 1 ? '1 file has' : `${res.conflicts.length} files have`} conflict markers.`, 'Open first conflict');
       if (open && workspace.root) {
         await vscode.window.showTextDocument(vscode.Uri.file(path.join(workspace.root, res.conflicts[0])));
       }
@@ -699,12 +702,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const sid = n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;
     if (sid) {
       const count = await tracker.undo(sid, n?.fsPath);
-      vscode.window.setStatusBarMessage(`LocalPilot: reverted ${count} file(s)`, 2500);
+      vscode.window.setStatusBarMessage(`LocalPilot: reverted ${plural(count, 'file')}`, 2500);
     }
   });
   cmd('localpilot.keepAllChanges', () => tracker.all().forEach((c) => tracker.keep(c.sessionId)));
   cmd('localpilot.undoAllChanges', async () => {
-    const ok = await vscode.window.showWarningMessage(`Revert all ${tracker.count} file(s) changed by agents?`, { modal: true }, 'Revert');
+    const ok = await vscode.window.showWarningMessage(`Revert ${tracker.count === 1 ? 'the file' : `all ${tracker.count} files`} changed by agents?`, { modal: true }, 'Revert');
     if (ok) {
       for (const sid of new Set(tracker.all().map((c) => c.sessionId))) {
         await tracker.undo(sid);
@@ -776,7 +779,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const r = await runAutoSetup(o);
     switch (r.status) {
       case 'already':
-        void vscode.window.showInformationMessage(`LocalPilot already has ${r.models} local model(s). Install more from the catalog in Settings → Models.`, 'Open Models').then((p) => p && settingsPanel.show('settings', 'models'));
+        void vscode.window.showInformationMessage(`LocalPilot already has ${plural(r.models, 'local model')}. Install more from the catalog in Settings → Models.`, 'Open Models').then((p) => p && settingsPanel.show('settings', 'models'));
         return r;
       case 'installed':
         void vscode.window.showInformationMessage(`LocalPilot is ready: ${r.agent.split('/').pop()} is the default model${r.completion ? `, ${r.completion.split('/').pop()} handles inline completions` : ''}${r.vision ? `, ${r.vision.split('/').pop()} handles images` : ''}.`, 'Open chat').then((p) => p && view.reveal());

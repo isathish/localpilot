@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../config';
 import { Tool } from '../types';
-import { displayPath } from './fs';
+import { displayPath, resolveWorkspacePath } from './fs';
 
 /** Runner that executes in a visible, branded VS Code terminal (set by the extension; absent in the CLI). */
 export interface IntegratedTerminalRunner {
@@ -42,7 +42,15 @@ export const runCommandTool: Tool = {
     }
     const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
     // Models often pass the workspace root itself (absolute) as cwd; joining that onto root gave a nonexistent path.
-    const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? path.resolve(root, args.cwd.trim()) : root;
+    let cwd = typeof args.cwd === 'string' && args.cwd.trim() ? path.resolve(root, args.cwd.trim()) : root;
+    if (ctx.workspaceRoot && cwd !== root) {
+      // Isolated worktree: map the real checkout onto the copy and never run outside it.
+      try {
+        cwd = resolveWorkspacePath(cwd, ctx).fsPath;
+      } catch {
+        return { content: `cwd must be inside the isolated workspace (${root}): ${cwd}`, isError: true };
+      }
+    }
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
       return { content: `cwd does not exist or is not a directory: ${cwd}. Omit cwd to run in the workspace root (${root}).`, isError: true };
     }
@@ -78,6 +86,8 @@ export const runCommandTool: Tool = {
       const child = cp.spawn(shell, process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
         cwd,
         env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', FORCE_COLOR: '0', NO_COLOR: '1' },
+        // Own process group so a timeout/stop can take down everything the command started, not just the shell.
+        detached: process.platform !== 'win32',
       });
       let out = '';
       const cap = 200_000;
@@ -89,16 +99,19 @@ export const runCommandTool: Tool = {
       child.stdout.on('data', push);
       child.stderr.on('data', push);
       const timer = setTimeout(() => {
-        child.kill('SIGKILL');
+        killTree(child);
         out += `\n[timed out after ${timeoutMs / 1000}s]`;
       }, timeoutMs);
-      ctx.signal.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+      const onAbort = () => killTree(child);
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
       child.on('error', (e) => {
         clearTimeout(timer);
+        ctx.signal.removeEventListener('abort', onAbort);
         resolve({ content: `Failed to start: ${e.message}`, isError: true });
       });
       child.on('close', (code) => {
         clearTimeout(timer);
+        ctx.signal.removeEventListener('abort', onAbort);
         const cleaned = stripAnsi(out).trim();
         resolve({
           content: `$ ${command}\n${cleaned || '(no output)'}\n[exit code ${code ?? 'null'}]`,
@@ -111,6 +124,23 @@ export const runCommandTool: Tool = {
 };
 
 /** Removes CSI colour/cursor codes and OSC sequences (titles, hyperlinks, shell-integration 633/133 markers). */
+/** Kill the shell and every process it started (servers, watchers, test runners). */
+function killTree(child: cp.ChildProcess): void {
+  // No exitCode check: the shell may be gone while a backgrounded child still holds the output pipes.
+  if (child.pid === undefined) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32') {
+      cp.spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => child.kill('SIGKILL'));
+    } else {
+      process.kill(-child.pid, 'SIGKILL');
+    }
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
+
 export function stripAnsi(s: string): string {
   return s
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')

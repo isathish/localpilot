@@ -3,6 +3,19 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Fixed
+- **Approvals and permission rules now cover every gated tool.** `browser_screenshot`, `browser_inspect`, MCP tools and `memory_delete` declared an approval kind but never asked, so `approvals.network: ask|never`, `approvals.delete` and settings.json `ask`/`allow` rules (e.g. `mcp__server__tool`) were silently ignored for them.
+- **Stop cancels MCP tool calls.** The run's cancellation reaches the pending request (and the server gets `notifications/cancelled`) instead of waiting up to 120 s.
+- **`run_command` timeout / Stop kills the whole process tree** (process group on macOS/Linux, `taskkill /T` on Windows), so dev servers and watchers started by a command no longer outlive it — and a backgrounded child holding the output pipe can no longer keep the tool waiting. In an isolated (worktree) session `cwd` is mapped into the worktree and cannot point outside it.
+- **Windows paths**: workspace containment checks are case-insensitive, so `C:\…` paths from the model or the user are no longer rejected as "outside the workspace" when VS Code reports the folder as `c:\…`; chat file links accept `C:/…` too.
+- Skill installer: remote file lists with `..\`, drive or absolute paths are skipped (could write outside the skill folder on Windows).
+- Worktree/filesystem tests pin line endings and path separators, fixing the Windows CI leg.
+
+### Changed
+- **The chat works the same wherever it lives** — left or right side bar, bottom Panel or an editor tab. On a short Panel the input never leaves the screen: permission prompts, tasks and changes share a bounded footer that scrolls above the pinned input, and prompts fold to one row (title · Deny / Allow) over a two-line detail. On wide hosts the conversation is centred at a readable width while scrollbars stay at the window edge. A chat opened as an editor tab is restored after a window reload instead of vanishing.
+- **Live progress you can read at a glance.** The turn header shows the model's output speed (`~38 tok/s · 12s`) while it streams; the Workers card and status line count running, queued and finished workers separately ("2 working · 2 queued") instead of calling every queued worker "working".
+- **Chat polish.** The turn header keeps its "Worked for 12s" label and shortens the stats instead; queued worker rows line up with running ones (same columns, hollow "queued" dot) and the card reads "4 working · Stop all"; the tab strip fades at a cut-off edge and scrolls sideways with the mouse wheel; the Skills picker no longer shrinks to a single letter; running chats in *All chats* use the same breathing dot as tabs; Retry / Refresh models use a proper refresh icon; the model menu no longer says "vision" twice.
+- Counts read naturally everywhere ("1 file", "3 models", "1 file has conflict markers") instead of "file(s)". The settings *About* privacy line and the README now match what the extension actually contacts (web tools follow `localpilot.approvals.network`, default `always`).
 
 ## 1.2.3 — 2026-10-27
 ### Added
