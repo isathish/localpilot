@@ -343,6 +343,7 @@ async function pureLogic() {
   check('classify: ECONNREFUSED → network', classifyModelError(Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } })) === 'network');
   check('classify: HTTP 503 → server, 429 → ratelimit, 400 → other', classifyModelError(new HttpError(503, 'overloaded', 'u')) === 'server' && classifyModelError(new HttpError(429, '', 'u')) === 'ratelimit' && classifyModelError(new HttpError(400, 'bad request', 'u')) === 'other');
   check('classify: context-length message → overflow', classifyModelError(new HttpError(400, "This model's maximum context length is 32768 tokens", 'u')) === 'overflow' && classifyModelError(new Error('the input length exceeds num_ctx')) === 'overflow');
+  check('classify: Ollama could not parse the model\'s tool call → toolcall', classifyModelError(new HttpError(500, '{"error":"error parsing tool call: raw=\'{\\"path\\":\\"src\\",\\"}\', err=unexpected end of JSON input"}', 'u')) === 'toolcall');
   check('callKey ignores argument order', callKey('read_file', { path: 'a', start_line: 1 }) === callKey('read_file', { start_line: 1, path: 'a' }) && callKey('read_file', { path: 'a' }) !== callKey('read_file', { path: 'b' }));
   {
     let aborted = false;

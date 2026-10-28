@@ -7,14 +7,14 @@ permalink: /
 <section class="hero">
   <div class="wrap">
     <a class="pill" href="{{ site.repo }}/blob/main/CHANGELOG.md"><span class="dot"></span>v{{ site.version }} · free and open source</a>
-    <h1>A coding agent for VS Code<br><span>that runs on your own machine.</span></h1>
-    <p class="sub">LocalPilot reads your project, edits files, runs your tests and shows you the diff before anything is kept. It uses the models you run with Ollama, LM Studio, llama.cpp, vLLM or colibri. No subscription, no account, no telemetry.</p>
+    <h1>Your AI coding agent.<br><span>Your models. Your machine.</span></h1>
+    <p class="sub">Build, debug, test and review code with local models, right inside VS Code. LocalPilot makes the edit, runs your tests and shows you the diff before anything is kept. No subscription, no account, no telemetry.</p>
     <div class="cta">
       <a class="btn btn-primary btn-lg" href="{{ site.marketplace }}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         Install for VS Code
       </a>
-      <a class="btn btn-lg" href="{{ '/docs/getting-started/' | relative_url }}">Get started</a>
+      <a class="btn btn-lg" href="#setup">Find the right setup for my computer</a>
     </div>
     <p class="hero-note"><code>code --install-extension {{ site.extension_id }}</code><span>·</span><a href="{{ site.download }}">Download VSIX</a><span>·</span><a href="{{ site.repo }}">Source on GitHub</a></p>
 
@@ -126,26 +126,80 @@ permalink: /
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-7 7"/></svg></span><h3>Screenshots &amp; vision</h3><p>Capture a region, window or web page and let a vision model fix what it sees.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/></svg></span><h3>Long tasks, small contexts</h3><p>Old tool output goes first, then older turns are summarised, so an 8k model still finishes.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></span><h3>No tool calling? Still works</h3><p>Models without native tools fall back to a text protocol for agent mode.</p></div>
-      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><h3>Private by default</h3><p>No account, no telemetry upload. Model servers are <code>localhost</code> unless you add one. <a href="{{ '/privacy/' | relative_url }}">Details</a></p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><h3>Private by default</h3><p>No account, no telemetry upload. Model servers are <code>localhost</code> unless you add one. <a href="{{ '/privacy/' | relative_url }}">Privacy</a> · <a href="{{ '/security/' | relative_url }}">Security</a></p></div>
     </div>
     <p class="section-foot"><a class="more" href="{{ '/docs/features/' | relative_url }}">See every feature</a></p>
   </div>
 </section>
 
-<section id="how">
+<section id="setup">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Get started</span>
-      <h2>Up and running in three steps</h2>
+      <h2>Find the right setup for your computer</h2>
+      <p>Answer a few questions to get a starting model, its download size and the exact steps. After you install, LocalPilot measures your real hardware and adjusts.</p>
     </div>
-    <div class="steps">
-      <div class="step"><h3>Install LocalPilot</h3><p>From the Marketplace, or download the VSIX from GitHub releases.</p><pre><code>code --install-extension {{ site.extension_id }}</code></pre></div>
-      <div class="step"><h3>Get a model</h3><p>Click <strong>Set up automatically</strong>. LocalPilot installs Ollama if needed and downloads a starter model sized for your RAM. A server you already run is found on its own.</p><pre><code>ollama pull gemma4:e4b   # or let LocalPilot do it</code></pre></div>
-      <div class="step"><h3>Ask for a change</h3><p>Open the chat, describe the change, read the diff, keep it. Add larger models later from Settings → Models.</p><pre><code>⌘⇧L  open chat
-⌘⌥K  inline edit</code></pre></div>
+    <div class="advisor">
+      <form class="adv-form" id="advisor" aria-label="Setup advisor">
+        <fieldset>
+          <legend>Computer</legend>
+          <div class="seg">
+            <label><input type="radio" name="os" value="mac" checked><span>Mac, Apple Silicon</span></label>
+            <label><input type="radio" name="os" value="macintel"><span>Mac, Intel</span></label>
+            <label><input type="radio" name="os" value="win"><span>Windows</span></label>
+            <label><input type="radio" name="os" value="linux"><span>Linux</span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Memory (RAM)</legend>
+          <div class="seg">
+            <label><input type="radio" name="ram" value="8"><span>8 GB</span></label>
+            <label><input type="radio" name="ram" value="16" checked><span>16 GB</span></label>
+            <label><input type="radio" name="ram" value="32"><span>32 GB</span></label>
+            <label><input type="radio" name="ram" value="64"><span>64 GB+</span></label>
+          </div>
+        </fieldset>
+        <fieldset data-gpu hidden>
+          <legend>Graphics card memory (VRAM)</legend>
+          <div class="seg">
+            <label><input type="radio" name="vram" value="0" checked><span>None / integrated</span></label>
+            <label><input type="radio" name="vram" value="8"><span>6–8 GB</span></label>
+            <label><input type="radio" name="vram" value="16"><span>12–16 GB</span></label>
+            <label><input type="radio" name="vram" value="24"><span>24 GB+</span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Model runtime</legend>
+          <div class="seg">
+            <label><input type="radio" name="rt" value="none" checked><span>None yet</span></label>
+            <label><input type="radio" name="rt" value="ollama"><span>Ollama</span></label>
+            <label><input type="radio" name="rt" value="lmstudio"><span>LM Studio</span></label>
+            <label><input type="radio" name="rt" value="other"><span>vLLM, llama.cpp, other</span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Main goal</legend>
+          <div class="seg">
+            <label><input type="radio" name="goal" value="agent" checked><span>Fix, build and test</span></label>
+            <label><input type="radio" name="goal" value="complete"><span>Inline completions</span></label>
+            <label><input type="radio" name="goal" value="parallel"><span>Parallel agents</span></label>
+            <label><input type="radio" name="goal" value="vision"><span>Screenshots &amp; UI bugs</span></label>
+          </div>
+        </fieldset>
+        <label class="adv-check"><input type="checkbox" name="offline"> It must work offline</label>
+      </form>
+      <div class="adv-result" id="advisor-result" aria-live="polite">
+        <ol class="adv-steps">
+          <li><b>Install LocalPilot</b><span>From the Marketplace: <code>code --install-extension {{ site.extension_id }}</code></span></li>
+          <li><b>Get a model</b><span>Click <strong>Set up automatically</strong>. LocalPilot installs Ollama if needed and downloads a starter model sized for your RAM.</span></li>
+          <li><b>Run a first task</b><span>Open the chat and ask for a small, concrete change. <a href="{{ '/docs/getting-started/' | relative_url }}">Full walkthrough</a></span></li>
+        </ol>
+      </div>
     </div>
   </div>
 </section>
+<script>window.LP_ADVISOR = { ext: {{ site.extension_id | jsonify }}, market: {{ site.marketplace | jsonify }}, start: {{ '/docs/getting-started/' | relative_url | jsonify }}, models: {{ '/docs/models/' | relative_url | jsonify }}, privacy: {{ '/privacy/' | relative_url | jsonify }} };</script>
+<script src="{{ '/assets/advisor.js' | relative_url }}?v={{ site.version }}" defer></script>
 
 <section id="compare" class="alt">
   <div class="wrap">
@@ -158,8 +212,8 @@ permalink: /
       <table>
         <thead><tr><th></th><th>LocalPilot</th><th>GitHub Copilot</th><th>Cursor</th><th>Claude Code</th></tr></thead>
         <tbody>
-          <tr><td>Price per developer</td><td class="y">Free · MIT</td><td>$10–39 / month</td><td>$20 / month</td><td>$20–200 / month</td></tr>
-          <tr><td>Usage limits</td><td class="y">Your hardware</td><td class="p">Request metering</td><td class="p">Request metering</td><td class="p">Usage limits</td></tr>
+          <tr><td>Price per developer</td><td class="y">Free · MIT</td><td>$10–100 / month</td><td>$8–100 / month</td><td>$20–200 / month</td></tr>
+          <tr><td>Usage limits</td><td class="y">Your hardware</td><td class="p">Monthly AI credits</td><td class="p">Usage pool</td><td class="p">Usage limits</td></tr>
           <tr><td>Works offline</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td></tr>
           <tr><td>Where your code is processed</td><td class="y">Your machine</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td></tr>
           <tr><td>Bring any local model</td><td class="y">Yes</td><td class="p">Limited</td><td class="p">Limited</td><td class="p">Limited</td></tr>
@@ -171,7 +225,7 @@ permalink: /
         </tbody>
       </table>
     </div>
-    <p class="muted small fine">List prices for individual plans in USD, from each vendor's public pages at the time of writing. They change often; if a cell is wrong, <a href="{{ site.repo }}/issues">open an issue</a>. A 7B model needs about 8 GB of RAM; 14B to 32B models want 16 to 32 GB.</p>
+    <p class="muted small fine">Monthly list prices for individual plans in USD, from each vendor's pricing page in October 2026. Cursor bills third-party models separately. Prices change often; if a cell is wrong, <a href="{{ site.repo }}/issues">open an issue</a>. A 7B model needs about 8 GB of RAM; 14B to 32B models want 16 to 32 GB.</p>
 
     <ul class="proof" aria-label="Facts you can check">
       <li><a href="{{ site.repo }}/blob/main/LICENSE"><b>MIT licensed</b><span>all source on GitHub</span></a></li>

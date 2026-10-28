@@ -2,7 +2,7 @@ import { HttpError } from '../providers/http';
 import { StreamEvent } from '../types';
 
 /** Why a model request failed, used to decide whether and how to retry. */
-export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'other';
+export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'other';
 
 export class ModelStallError extends Error {
   constructor(public readonly phase: 'first-token' | 'mid-stream', seconds: number) {
@@ -23,6 +23,10 @@ export function classifyModelError(e: unknown): ModelFailure {
     }
     if (OVERFLOW.test(e.body)) {
       return 'overflow';
+    }
+    // Ollama's parser rejected the tool call the model generated (gpt-oss does this now and then): the model, not the server, should retry.
+    if (/error parsing tool call/i.test(e.body)) {
+      return 'toolcall';
     }
     if (e.status >= 500 || e.status === 408) {
       return 'server';

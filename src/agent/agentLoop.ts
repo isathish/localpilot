@@ -80,6 +80,8 @@ const MAX_ITERATIONS_DEFAULT = 40;
 /** Transient model failures (network, 5xx/429, stall, empty completion) are retried this many times per step. */
 const MAX_MODEL_RETRIES = 2;
 const RETRY_BACKOFF_MS = [800, 2500];
+/** Tool calls the server could not parse are handed back to the model at most this many times per run. */
+const MAX_TOOLCALL_REPAIRS = 2;
 /** Local models may need to load weights and prefill a long prompt before the first token. */
 const FIRST_TOKEN_TIMEOUT_MS = 180_000;
 /** Once streaming, this much silence means the server hung (a slow token is seconds, not a minute). */
@@ -499,6 +501,7 @@ export class AgentRunner {
     let nudges = 0;
     const MAX_NUDGES = 2;
     let malformedNudged = false;
+    let toolCallRepairs = 0;
     /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
     const callCounts = new Map<string, number>();
     let completed = false;
@@ -644,6 +647,19 @@ export class AgentRunner {
           }
           const kind = classifyModelError(e);
           const msg = e instanceof Error ? e.message : String(e);
+          if (kind === 'toolcall' && toolCallRepairs < MAX_TOOLCALL_REPAIRS) {
+            toolCallRepairs++;
+            modelEvent('retry', kind);
+            this.log.warn(`model sent a tool call the server could not parse; asking it to resend (${toolCallRepairs}/${MAX_TOOLCALL_REPAIRS}): ${msg}`);
+            status('Fixing tool call…');
+            emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'malformed' } });
+            session.messages.push({
+              role: 'user',
+              content: `Your last tool call was rejected as invalid JSON (${msg.replace(/^HTTP \d+ from \S+:\s*/, '').slice(0, 200)}). Nothing was executed. Send the call again with complete, valid JSON arguments.`,
+              meta: { timestamp: Date.now(), hidden: true, nudge: 'malformed' },
+            });
+            continue;
+          }
           modelEvent(isTransient(kind) && first && attempt < maxModelRetries ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
           if (kind === 'overflow' && !compactedForOverflow) {
             // The server knows better than our estimate: shrink the history and send again.
@@ -807,11 +823,16 @@ export class AgentRunner {
       // While tools run this session makes no requests: give the model slot up so workers it delegates to can take
       // it instead of being spread away from an idle model.
       this.unassign(session.id);
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy);
+      // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
+      const coordinatorFirst = session.mode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
+      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
       mutationsExecuted += calls.filter((c) => {
+        if (coordinatorFirst && c.name === 'run_command') {
+          return false;
+        }
         const kind = toolList.find((t) => t.definition.name === c.name)?.approvalKind;
         return kind === 'write' || kind === 'delete' || kind === 'terminal' || DELEGATION_TOOLS.has(c.name);
       }).length;
@@ -984,7 +1005,8 @@ export class AgentRunner {
     vision = false,
     callCounts?: Map<string, number>,
     mode = 'agent',
-    policy?: ToolPolicy
+    policy?: ToolPolicy,
+    coordinatorFirst = false
   ): Promise<ChatMessage[]> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
@@ -994,7 +1016,10 @@ export class AgentRunner {
       const started = Date.now();
       let result: { content: string; isError?: boolean; data?: unknown } | undefined;
       let callCtx = ctx;
-      if (tool && policy) {
+      if (coordinatorFirst && call.name === 'run_command') {
+        result = { content: 'Nothing was run. In Multitask mode you coordinate and workers do the work: call run_todos_parallel now with each piece in "tasks" (title, agent, complete prompt). Use run_command only to verify after the workers report.', isError: true };
+      }
+      if (tool && policy && !result) {
         // Permission rules from settings.json: deny → ask → allow, then the project's default mode.
         const verdict = evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
         let decision: 'allow' | 'deny' | 'ask' | 'none' = verdict.decision;

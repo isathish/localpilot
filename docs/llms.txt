@@ -29,7 +29,7 @@ Install: VS Code Marketplace {{ site.marketplace }} or `code --install-extension
 {% for item in site.guides %}{% assign p = site.pages | where: "url", item.url | first %}- [{{ item.title }}]({{ item.url | absolute_url }}){% if p.description %}: {{ p.description }}{% endif %}
 {% endfor %}
 ## Optional
-- [Home page]({{ site.url }}{{ site.baseurl }}/): landing page with feature overview, comparison table and FAQ
+- [Home page]({{ site.url }}{{ site.baseurl }}/): landing page with feature overview, a setup advisor (recommended models and download sizes by RAM, GPU, runtime and goal), comparison table and FAQ
 - [Changelog]({{ site.repo }}/blob/main/CHANGELOG.md): release notes
 - [README]({{ site.repo }}#readme): repository overview
 - [Markdown sources]({{ site.repo }}/tree/main/docs): every documentation page is available as Markdown under docs/

@@ -289,7 +289,7 @@ export class SkillCatalog {
     const entries = dedupe(await this.entries());
     const byName = new Map(entries.map((e) => [e.name, e]));
     const best = this.pick(query, [], entries);
-    const ranked = recommendSkills(query, entries, max).flatMap((m: SkillMatch) => (byName.has(m.name) ? [{ ...byName.get(m.name)!, score: m.score }] : []));
+    const ranked = recommendSkills(query, entries, max, { search: true }).flatMap((m: SkillMatch) => (byName.has(m.name) ? [{ ...byName.get(m.name)!, score: m.score }] : []));
     return best ? [best, ...ranked.filter((m) => m.name !== best.name)].slice(0, max) : ranked;
   }
 

@@ -55,7 +55,7 @@ suite('LocalPilot end-to-end (real local model)', () => {
     );
 
   suiteSetup(async function () {
-    this.timeout(60_000);
+    this.timeout(240_000);
     const ext = vscode.extensions.getExtension<LocalPilotApi>('localpilot.localpilot-agent');
     assert.ok(ext);
     api = await ext.activate();
@@ -85,6 +85,9 @@ suite('LocalPilot end-to-end (real local model)', () => {
     await cfg.update('skills.autoInstall', 'off', vscode.ConfigurationTarget.Global);
     // These tests assert on files in the workspace itself; the isolated-worktree test below turns isolation on explicitly.
     await cfg.update('worktrees.mode', 'off', vscode.ConfigurationTarget.Global);
+    // Load the model with the context size real runs use, so the first test's budget is not spent on a cold load.
+    const warm = await api.runPrompt('Reply with the single word OK.', 'ask');
+    await waitForRun(warm, 200_000);
   });
 
   test('multitask mode: the coordinator delegates to background workers that run in parallel', async function () {

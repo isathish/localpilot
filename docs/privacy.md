@@ -5,7 +5,7 @@ description: What the LocalPilot extension sends and to whom, what stays on your
 permalink: /privacy/
 ---
 
-LocalPilot has two parts with different privacy behaviour: the **extension** you install in VS Code, and **this website**. They are answered separately below.
+LocalPilot has two parts with different privacy behaviour: the **extension** you install in VS Code, and **this website**. They are answered separately below. For what the agent can do on your machine and how it is limited, see [Security]({{ '/security/' | relative_url }}).
 
 ## The extension
 

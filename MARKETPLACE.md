@@ -21,7 +21,7 @@
 
 <table align="center">
   <tr>
-    <td align="center" width="33%"><b>$0 per month</b><br><sub>Cloud assistants cost $10–200 per developer. LocalPilot runs on hardware you already own.</sub></td>
+    <td align="center" width="33%"><b>$0 per month</b><br><sub>Cloud assistants cost $8–200 per developer. LocalPilot runs on hardware you already own.</sub></td>
     <td align="center" width="33%"><b>Private by construction</b><br><sub>Every provider address is <code>localhost</code> unless you add one. No telemetry leaves the disk.</sub></td>
     <td align="center" width="33%"><b>Works offline</b><br><sub>Unplug the network: it keeps editing, running tests and reviewing diffs.</sub></td>
   </tr>

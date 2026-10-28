@@ -85,6 +85,8 @@ nav:
     url: /docs/troubleshooting/
   - title: Privacy
     url: /privacy/
+  - title: Security
+    url: /security/
   - title: Development
     url: /docs/development/
   - title: Publishing

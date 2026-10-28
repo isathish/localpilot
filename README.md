@@ -31,10 +31,10 @@ An agent that reads your project, edits files, runs commands and tests, and show
 
 **It costs nothing per month, and you can check for yourself that it is private.**
 
-| Per developer | LocalPilot | GitHub Copilot Pro / Pro+ | Cursor Pro | Claude Pro / Max |
+| Per developer | LocalPilot | GitHub Copilot Pro / Pro+ / Max | Cursor Plus / Premium / Super | Claude Pro / Max |
 |---|---|---|---|---|
-| Per month | **$0** | $10 / $39 | $20 | $20 / $100–200 |
-| Team of 10, per year | **$0** | $1,200 / $4,680 | $2,400 | $2,400 / $12,000+ |
+| Per month | **$0** | $10 / $39 / $100 | $8 / $30 / $100 | $20 / $100–200 |
+| Team of 10, per year | **$0** | $1,200 / $4,680 / $12,000 | $960 / $3,600 / $12,000 | $2,400 / $12,000+ |
 | Works with the network unplugged | **Yes** | No | No | No |
 | Where your code is processed | **Your laptop** | Vendor cloud | Vendor cloud | Vendor cloud |
 

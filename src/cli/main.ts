@@ -473,7 +473,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log);
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
-  const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
+  const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   // Same local store as the extension, so CLI runs show up on the dashboard (events only; the CLI has its own log file).
   // With `storage.redis.enabled` in the user's settings they go to the same Redis.

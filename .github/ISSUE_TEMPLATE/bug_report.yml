@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in LocalPilot does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go to a [private advisory](https://github.com/isathish/localpilot/security/advisories/new) instead.
+        Many setup problems are covered in [Troubleshooting](https://isathish.github.io/localpilot/docs/troubleshooting/).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project with …
+        2. In Agent mode, ask "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LocalPilot version
+      description: Extensions view, or `code --list-extensions --show-versions | grep localpilot`
+      placeholder: "1.2.6"
+    validations:
+      required: true
+  - type: input
+    id: vscode
+    attributes:
+      label: VS Code version and OS
+      placeholder: "VS Code 1.105, macOS 15 (Apple M3, 36 GB)"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model server and model
+      placeholder: "Ollama 0.12, gpt-oss:20b"
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Chat in VS Code
+        - localpilot CLI
+        - Inline completions
+        - Settings / Dashboard
+        - Model setup or downloads
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run **LocalPilot: Show Logs** and paste the relevant lines. Review them first; they can contain file paths and prompt text.
+      render: text

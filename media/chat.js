@@ -1433,7 +1433,7 @@
     if (!state.models.length) { els.modelLabel.textContent = 'No models'; return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
-    els.modelLabel.textContent = m ? (explicit ? name : `Auto · ${name}`) : name;
+    els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${esc(name)}` : esc(name);
     els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)} context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}` : 'Model';
   }
   function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }

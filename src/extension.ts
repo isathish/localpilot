@@ -118,7 +118,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const memory = new MemoryStore(context.globalStorageUri, log);
   const learner = new SkillLearner(path.join(context.globalStorageUri.fsPath, 'skill-learning.json'), log);
   // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
-  const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
+  const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);

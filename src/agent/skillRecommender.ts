@@ -87,6 +87,11 @@ function inverseDocumentFrequency(skills: SkillLike[]): Map<string, number> {
   return new Map([...df].map(([t, d]) => [t, 1 + Math.log(n / d)]));
 }
 
+/** Everyday task words: they say little about which playbook applies. */
+const GENERIC = new Set(
+  tokenize('create file files folder work workspace project projects app application code exist existing make build write run add update change content contain root confirm check result output task piece answer recommend library tool tools')
+);
+
 /** True when `phrase` occurs in `text` as whole words (so "ship" does not match "relationship"). */
 export function containsPhrase(text: string, phrase: string): boolean {
   const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
@@ -108,7 +113,7 @@ export function namesTool(request: string, toolNames: Iterable<string>): boolean
  * Scores skills against a request. A skill is recommended when its name, a quoted trigger phrase or several
  * description terms occur in the request. Returns up to `max` matches, strongest first.
  */
-export function recommendSkills(request: string, skills: SkillLike[], max = 3): SkillMatch[] {
+export function recommendSkills(request: string, skills: SkillLike[], max = 3, opts: { search?: boolean } = {}): SkillMatch[] {
   const text = userText(request).toLowerCase();
   const tokens = new Set(tokenize(text));
   if (!tokens.size) {
@@ -122,17 +127,19 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
     let score = 0;
     let evidence = 0;
     let strong = false;
-    let nameHits = 0;
-    for (const t of nameTokens) {
-      if (tokens.has(t)) {
-        score += 4;
-        evidence++;
-        nameHits++;
-      }
-    }
+    // Distinct non-generic request words this skill matched; one shared word ("python") is not a topic match.
+    const concepts = new Set<string>();
+    const nameHits = nameTokens.filter((t) => tokens.has(t));
     // "compute" alone must not make "azure-compute" a strong match for "compute_total"; the whole name has to be there.
-    if (nameHits > 0 && nameHits === nameTokens.length) {
+    if (nameHits.length > 0 && nameHits.length === nameTokens.length) {
       strong = true;
+    }
+    for (const t of nameHits) {
+      score += strong ? 4 : GENERIC.has(t) ? 0.5 : 2;
+      evidence++;
+      if (!GENERIC.has(t)) {
+        concepts.add(t);
+      }
     }
     for (const trig of triggers(s.description)) {
       const tt = tokenize(trig);
@@ -144,14 +151,20 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
         // All the phrase's content words appear, just not adjacently ("tests… write" for "write tests for").
         score += 2.5;
         evidence++;
+        tt.forEach((t) => concepts.add(t));
       }
     }
     let descHits = 0;
     let descScore = 0;
     for (const t of descTokens) {
       if (tokens.has(t)) {
-        descHits++;
-        descScore += idf.get(t) ?? 1;
+        // Everyday task words ("create", "file", "workspace") appear in most requests and most skill descriptions.
+        const generic = GENERIC.has(t);
+        descScore += (idf.get(t) ?? 1) * (generic ? 0.25 : 1);
+        if (!generic) {
+          descHits++;
+          concepts.add(t);
+        }
       }
     }
     // Distinctive words ("bug", "dockerfile") count more than ones every skill uses ("code"); long "USE WHEN"
@@ -160,7 +173,7 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3): 
     if (descHits >= 2) {
       evidence++;
     }
-    if (evidence > 0 && score >= 2.5) {
+    if (evidence > 0 && score >= 2.5 && (opts.search || strong || concepts.size >= 2 || (concepts.size === 1 && !nameHits.length))) {
       out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10, strong });
     }
   }

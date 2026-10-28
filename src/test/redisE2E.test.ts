@@ -87,7 +87,11 @@ suite('Redis Stack storage (real server, end to end)', function () {
 
     const probe = await probeRedis(URL);
     if (probe.timeseries) {
-      const keys = (await client.command('KEYS', 'localpilot:ts:health:*')) as string[];
+      // Health events arrive when the provider probes finish, which can be after the first events reach the stream.
+      const keys = await until(async () => {
+        const k = (await client.command('KEYS', 'localpilot:ts:health:*')) as string[];
+        return k.length ? k : undefined;
+      }, 20_000, 'provider health became time series');
       assert.ok(keys.length > 0, 'provider health became time series');
       const info = (await client.command('TS.INFO', keys[0])) as unknown[];
       const labels = info[info.indexOf('labels') + 1] as string[][];

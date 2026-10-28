@@ -154,6 +154,58 @@ pre code { background: none; border: none; padding: 0; }
 .more:hover { text-decoration: underline; text-decoration-color: var(--accent-text); }
 @media (max-width: 880px) { .showcase { gap: 64px; } .feature-row, .feature-row:nth-child(even) { grid-template-columns: 1fr; gap: 28px; } .feature-row:nth-child(even) .fr-text { order: 0; } }
 
+/* setup advisor */
+.advisor { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 24px; align-items: start; }
+.adv-form { display: grid; gap: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+.adv-form fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.adv-form fieldset[hidden] { display: none; }
+.adv-form legend { padding: 0; margin-bottom: 8px; font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg label { position: relative; }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg span { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--bg); color: var(--fg-2); font-size: 14px; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.seg span:hover { border-color: var(--muted); color: var(--fg); }
+.seg input:checked + span { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); font-weight: 600; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.adv-check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--fg-2); cursor: pointer; }
+.adv-check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.adv-result { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; min-width: 0; }
+.adv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.adv-head b { display: block; font-size: 17px; color: var(--fg); }
+.adv-head span { display: block; color: var(--muted); font-size: 14px; }
+.adv-total { text-align: right; flex: none; }
+.adv-models { list-style: none; margin: 14px 0 6px; padding: 0; display: grid; gap: 8px; }
+.adv-models li { display: grid; grid-template-columns: 9.5em auto 1fr; align-items: center; gap: 10px; font-size: 14px; }
+.adv-models .role { color: var(--muted); }
+.adv-models code { justify-self: start; }
+.adv-models .gb { color: var(--muted); font-size: 13px; text-align: right; }
+.adv-steps { list-style: none; counter-reset: a; margin: 18px 0 0; padding: 0; display: grid; gap: 14px; }
+.adv-steps li { counter-increment: a; position: relative; padding-left: 38px; }
+.adv-steps li::before { content: counter(a); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--border-2); color: var(--fg); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.adv-steps > li > b { display: block; color: var(--fg); font-size: 15px; margin-bottom: 2px; }
+.adv-steps span b { color: var(--fg); }
+.adv-steps span { display: block; color: var(--fg-2); font-size: 14.5px; line-height: 1.55; }
+.adv-steps pre { margin: 8px 0 0; padding: 10px 12px; font-size: 13px; }
+.adv-steps a, .adv-notes a, .adv-fine a { color: var(--accent-text); }
+.adv-notes { margin: 18px 0 0; padding: 12px 14px 12px 30px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--border); color: var(--fg-2); font-size: 14px; display: grid; gap: 6px; }
+.adv-fine { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 900px) { .advisor { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .adv-models li { grid-template-columns: 1fr auto; } .adv-models .role { grid-column: 1 / -1; } .adv-models .gb { text-align: left; } .adv-form, .adv-result { padding: 18px; } }
+
+/* data-flow diagram (security page) */
+.flow { margin: 20px 0 8px; display: grid; gap: 12px; }
+.flow-zone { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel); }
+.flow-zone.local { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.flow-zone.remote { border-style: dashed; }
+.flow-zone.never p { margin: 0; font-size: 14.5px; }
+.flow-title { font-size: 13px; font-weight: 700; color: var(--fg); margin-bottom: 10px; }
+.flow-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.flow-box { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.flow-box.core { border-color: var(--accent); }
+.flow-box b { display: block; font-size: 14px; color: var(--fg); }
+.flow-box span { display: block; font-size: 13px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
+.content .flow-box code { font-size: 12px; }
+
 /* compact feature grid */
 .mini-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .mini-grid .card { padding: 22px 22px 20px; }
