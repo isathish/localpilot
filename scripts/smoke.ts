@@ -775,7 +775,8 @@ async function telemetry() {
     check('Samples: exact percentiles below the cap', percentiles(exact).p50 === 50 && percentiles(exact).p95 === 95 && percentiles(exact).avg === 51 && exact.count === 100);
     const big = new Samples(); for (let i = 1; i <= 200_000; i++) { big.add(i); }
     const bp = percentiles(big);
-    check('Samples: reservoir keeps memory flat and percentiles within ~2%', big.values.length === SAMPLE_CAP && big.count === 200_000 && Math.abs(bp.p50 - 100_000) < 4000 && Math.abs(bp.p95 - 190_000) < 4000 && bp.avg === 100_001, { len: big.values.length, ...bp });
+    // A random reservoir: the median of 4,096 samples has σ ≈ 0.8 % of the range, so allow 5σ to never flake.
+    check('Samples: reservoir keeps memory flat and percentiles within ~4%', big.values.length === SAMPLE_CAP && big.count === 200_000 && Math.abs(bp.p50 - 100_000) < 8000 && Math.abs(bp.p95 - 190_000) < 8000 && bp.avg === 100_001, { len: big.values.length, ...bp });
     // Events across three days, one of them older than the window.
     t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, promptTokens: 1000, completionTokens: 200, ttftMs: 500, durationMs: 2500, outcome: 'ok' });
     t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, durationMs: 90000, outcome: 'error', reason: 'stall' });
