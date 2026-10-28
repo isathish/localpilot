@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.2.5 — 2026-10-28
 ### Added
 - **Optional Redis Stack storage for telemetry** (`localpilot.storage.redis.enabled`, `localpilot.storage.redis.url`). Events and the log go to capped Redis streams instead of daily files, trimmed by `telemetry.retentionDays`; with Redis Stack (RedisTimeSeries) model latency, time to first token, token counts, tool and run durations and provider health also become labelled time series (`localpilot:ts:*`, `app=localpilot`) for Grafana or RedisInsight. The extension keeps only a short log tail in memory, the Dashboard reads history back in batches, and a write that Redis rejects falls back to files. **LocalPilot: Set Up Redis Storage** connects an existing server or starts Redis Stack in Docker (loopback-only, 256 MB cap, data in a volume). It starts Docker Desktop first when it is installed but not running. Without Docker it offers what the machine has: Redis Stack via Homebrew (macOS), Redis via apt or dnf (Linux), Redis in WSL or Memurai via winget (Windows; these have no time series), or installing Docker Desktop. Or you keep the local files: nothing else depends on Redis. No new dependencies: a small built-in RESP client (AUTH, db select, TLS).
 
