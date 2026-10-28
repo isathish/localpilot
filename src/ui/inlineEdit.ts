@@ -21,6 +21,7 @@ export async function quickPrompt(
     temperature: opts.temperature ?? 0.1,
     maxTokens: opts.maxTokens ?? cfg.maxOutputTokens,
     contextWindow: effectiveContextWindow(model, cfg.contextWindow),
+    keepAlive: cfg.keepAlive || undefined,
     signal: opts.signal,
   })) {
     if (ev.type === 'text') {

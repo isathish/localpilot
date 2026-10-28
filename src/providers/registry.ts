@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { Telemetry } from '../telemetry/telemetry';
-import { getConfig, onConfigChange } from '../config';
+import { forgetModel, getConfig, onConfigChange } from '../config';
 import { LLMProvider, ModelInfo, ProviderConfig } from '../types';
+import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { OllamaProvider } from './ollama';
@@ -13,6 +14,8 @@ export interface RouteRequest {
   role?: ModelRole;
   /** Explicit `provider/model` from the session or caller; wins unless routing has to override it (e.g. images). */
   modelRef?: string;
+  /** Re-read Ollama's installed list first (cheap, local) so a model pulled or removed seconds ago is routed correctly. */
+  fresh?: boolean;
   /** The turn carries images: route to a vision model when the chosen one cannot see. */
   needsVision?: boolean;
   /**
@@ -58,6 +61,8 @@ export interface Route {
 /** Builds providers from settings, discovers models, resolves `provider/model` ids and routes work to the best fitting model. */
 export class ProviderRegistry implements vscode.Disposable {
   private providers = new Map<string, LLMProvider>();
+  /** Serialized config each provider was built from, so unchanged providers (and their model-info caches) survive a settings change. */
+  private providerConfigs = new Map<string, string>();
   private modelCache: ModelInfo[] = [];
   /** Providers whose health check passed in the last discovery. */
   private reachable = new Set<string>();
@@ -68,6 +73,11 @@ export class ProviderRegistry implements vscode.Disposable {
   private lastRefresh = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
+  /** Model ids that are gone from their server (removed outside LocalPilot too); settings pointing at them were cleared. */
+  private readonly _onDidRemoveModels = new vscode.EventEmitter<string[]>();
+  readonly onDidRemoveModels = this._onDidRemoveModels.event;
+  /** Fallback notices already logged for the current model list, so every route() does not repeat them. */
+  private readonly noted = new Set<string>();
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(private readonly log: vscode.LogOutputChannel) {
@@ -77,7 +87,15 @@ export class ProviderRegistry implements vscode.Disposable {
 
   private rebuild(): void {
     const next = new Map<string, LLMProvider>();
+    const nextConfigs = new Map<string, string>();
     for (const cfg of getConfig().providers) {
+      const key = JSON.stringify(cfg);
+      nextConfigs.set(cfg.id, key);
+      const existing = this.providers.get(cfg.id);
+      if (existing && this.providerConfigs.get(cfg.id) === key) {
+        next.set(cfg.id, existing);
+        continue;
+      }
       try {
         next.set(cfg.id, createProvider(cfg));
       } catch (e) {
@@ -88,6 +106,7 @@ export class ProviderRegistry implements vscode.Disposable {
     // must not force every server to be re-probed.
     const same = next.size === this.providers.size && [...next.keys()].every((id) => this.providers.get(id)?.baseUrl === next.get(id)!.baseUrl && this.providers.get(id)?.type === next.get(id)!.type);
     this.providers = next;
+    this.providerConfigs = nextConfigs;
     if (!same) {
       this.modelCache = [];
       this.lastRefresh = 0;
@@ -101,6 +120,51 @@ export class ProviderRegistry implements vscode.Disposable {
 
   get(id: string): LLMProvider | undefined {
     return this.providers.get(id);
+  }
+
+  private autoRefreshTimer?: ReturnType<typeof setInterval>;
+
+  /**
+   * Re-discovers models in the background so models pulled, removed or served from a server started outside
+   * LocalPilot show up on their own. Only while `active()` (e.g. the window is focused); polls faster while no
+   * model is found yet, so starting Ollama/LM Studio after VS Code is picked up within seconds.
+   */
+  startAutoRefresh(active: () => boolean = () => true, intervalMs = 45_000, idleIntervalMs = 10_000): vscode.Disposable {
+    this.stopAutoRefresh();
+    const tickMs = Math.min(intervalMs, idleIntervalMs);
+    this.autoRefreshTimer = setInterval(() => {
+      if (this.discovery || !this.providers.size || !active()) {
+        return;
+      }
+      const due = this.modelCache.length ? intervalMs : idleIntervalMs;
+      if (Date.now() - this.lastRefresh >= due) {
+        void this.startDiscovery().catch((e) => this.log.debug(`auto-refresh: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    }, tickMs);
+    (this.autoRefreshTimer as { unref?: () => void }).unref?.();
+    return { dispose: () => this.stopAutoRefresh() };
+  }
+
+  private stopAutoRefresh(): void {
+    if (this.autoRefreshTimer) {
+      clearInterval(this.autoRefreshTimer);
+      this.autoRefreshTimer = undefined;
+    }
+  }
+
+  /** How old the model list may be before a `fresh` route re-reads Ollama's installed models. */
+  freshnessMs = 3_000;
+
+  /** True when a reachable Ollama server now lists different models than the cache (pulled/removed outside LocalPilot). */
+  private async installedChanged(): Promise<boolean> {
+    if (this.discovery || !this.lastRefresh || Date.now() - this.lastRefresh < this.freshnessMs) {
+      return false;
+    }
+    const ids = (list: ModelInfo[]) => list.map((m) => m.id).sort().join('\n');
+    const checks = await Promise.allSettled(
+      this.all.filter((p) => p.type === 'ollama' && this.reachable.has(p.id)).map(async (p) => ids(await p.listModels()) !== ids(this.modelCache.filter((m) => m.providerId === p.id)))
+    );
+    return checks.some((r) => r.status === 'fulfilled' && r.value);
   }
 
   /** Forget cached discovery so the next `listModels` hits the servers (after a pull/remove). */
@@ -151,8 +215,10 @@ export class ProviderRegistry implements vscode.Disposable {
 
   private async discover(): Promise<void> {
     const reachable = new Set<string>();
+    const listed = new Map<string, ModelInfo[]>();
+    const probed = this.all;
     const results = await Promise.allSettled(
-      this.all.map(async (p) => {
+      probed.map(async (p) => {
         const started = Date.now();
         if (!(await p.healthCheck())) {
           this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: 'unreachable' });
@@ -161,6 +227,7 @@ export class ProviderRegistry implements vscode.Disposable {
         reachable.add(p.id);
         try {
           const list = await p.listModels();
+          listed.set(p.id, list);
           this.telemetry?.record({ type: 'health', provider: p.id, ok: true, durationMs: Date.now() - started, models: list.length });
           return list;
         } catch (e) {
@@ -174,17 +241,58 @@ export class ProviderRegistry implements vscode.Disposable {
       if (r.status === 'fulfilled') {
         models.push(...r.value);
       } else {
-        this.log.warn(`listModels failed for ${this.all[i].id}: ${String(r.reason)}`);
+        this.log.warn(`listModels failed for ${probed[i].id}: ${String(r.reason)}`);
       }
     });
-    const changed = models.length !== this.modelCache.length || models.some((m, i) => m.id !== this.modelCache[i]?.id);
+    const sig = (m: ModelInfo) => `${m.id}|${m.supportsTools}|${m.supportsVision}|${m.contextWindow}|${m.sizeBytes ?? ''}`;
+    const changed = models.length !== this.modelCache.length || models.some((m, i) => !this.modelCache[i] || sig(m) !== sig(this.modelCache[i]));
+    const gone = this.vanished(listed, this.modelCache);
     this.modelCache = models;
     this.reachable = reachable;
     this.lastRefresh = Date.now();
     if (changed) {
+      this.noted.clear();
+      this.residentAt = 0;
       // Pulled/removed/started models show up everywhere (chat picker, status bar, settings) without a manual refresh.
       this._onDidChange.fire();
     }
+    if (gone.length) {
+      void this.forget(gone);
+    }
+  }
+
+  /**
+   * Models no longer on their server: ones that dropped out of an Ollama listing, plus settings that name a model the
+   * Ollama server does not have (e.g. `ollama rm` while VS Code was closed). OpenAI-style servers may list only loaded
+   * models, so absence there proves nothing.
+   */
+  private vanished(listed: Map<string, ModelInfo[]>, previous: ModelInfo[]): string[] {
+    const authoritative = (pid: string) => (this.providers.get(pid)?.type === 'ollama' ? listed.get(pid) : undefined);
+    const has = (list: ModelInfo[], ref: string) => list.some((m) => m.id === ref || m.id === `${ref}:latest`);
+    const out = new Set<string>();
+    for (const m of previous) {
+      const now = authoritative(m.providerId);
+      if (now && !has(now, m.id)) {
+        out.add(m.id);
+      }
+    }
+    const cfg = getConfig();
+    for (const ref of [cfg.defaultModel, cfg.inlineCompletion.model, cfg.routing.vision, cfg.routing.reasoning]) {
+      const slash = ref ? ref.indexOf('/') : -1;
+      const now = ref && slash > 0 ? authoritative(ref.slice(0, slash)) : undefined;
+      if (ref && now?.length && !has(now, ref)) {
+        out.add(ref);
+      }
+    }
+    return [...out];
+  }
+
+  private async forget(ids: string[]): Promise<void> {
+    for (const id of ids) {
+      const cleared = await forgetModel(id).catch(() => [] as string[]);
+      this.log.info(`models: ${id} is no longer installed${cleared.length ? ` — cleared ${cleared.join(', ')} (back to automatic)` : ''}`);
+    }
+    this._onDidRemoveModels.fire(ids);
   }
 
   /** Resolves a `provider/model` id (or bare model name) to a provider + model info. */
@@ -194,6 +302,42 @@ export class ProviderRegistry implements vscode.Disposable {
 
   /** Models warmed recently, so focusing the composer repeatedly does not hammer the server. */
   private readonly warmed = new Map<string, number>();
+
+  private resident: ReadonlySet<string> = new Set();
+  private residentAt = 0;
+  private residentProbe?: Promise<ReadonlySet<string>>;
+
+  /**
+   * Model ids loaded in memory right now on servers that report it (Ollama `/api/ps`), cached for a few seconds.
+   * A resident model answers without a weight load, so automatic picks prefer it among comparable ones.
+   */
+  async residentModels(maxAgeMs = 5_000): Promise<ReadonlySet<string>> {
+    if (Date.now() - this.residentAt < maxAgeMs) {
+      return this.resident;
+    }
+    this.residentProbe ??= (async () => {
+      const out = new Set<string>();
+      await Promise.all(
+        this.all
+          .filter((p) => p.loadedModels && (this.reachable.has(p.id) || !this.lastRefresh))
+          .map(async (p) => {
+            try {
+              for (const id of await p.loadedModels!()) {
+                out.add(`${p.id}/${id}`);
+              }
+            } catch {
+              /* unknown — treat as nothing loaded */
+            }
+          })
+      );
+      this.resident = out;
+      this.residentAt = Date.now();
+      return out;
+    })().finally(() => {
+      this.residentProbe = undefined;
+    });
+    return this.residentProbe;
+  }
 
   /**
    * Loads the model a request is about to use so the first token is not preceded by a weight load (often 5–30 s for a
@@ -211,13 +355,16 @@ export class ProviderRegistry implements vscode.Disposable {
       return;
     }
     const last = this.warmed.get(model.id) ?? 0;
-    if (Date.now() - last < 4 * 60_000) {
+    // Throttled per model — unless the server says it is no longer loaded (evicted by another model, or keep_alive ran out).
+    if (Date.now() - last < 4 * 60_000 && (!provider.loadedModels || (await this.residentModels(0)).has(model.id))) {
       return;
     }
     this.warmed.set(model.id, Date.now());
     const startedAt = Date.now();
+    const cfg = getConfig();
     try {
-      await provider.warm(model.modelId, getConfig().keepAlive || undefined, signal);
+      await provider.warm(model.modelId, { keepAlive: cfg.keepAlive || undefined, contextWindow: effectiveContextWindow(model, cfg.contextWindow) }, signal);
+      this.residentAt = 0;
       this.log.debug(`warm: ${model.id} ready in ${Date.now() - startedAt} ms`);
     } catch (e) {
       this.warmed.delete(model.id);
@@ -252,10 +399,12 @@ export class ProviderRegistry implements vscode.Disposable {
   async route(req: RouteRequest): Promise<Route> {
     const cfg = getConfig();
     const role = req.role ?? 'agent';
-    const models = await this.listModels();
+    const models = await this.listModels(req.fresh && (await this.installedChanged()));
     const healthy = this.responsive(models);
-    const profile = await getSystemProfile().catch(() => undefined);
-    const bonus = cfg.routing.enabled ? this.usageBonus : undefined;
+    const [profile, resident] = await Promise.all([getSystemProfile().catch(() => undefined), cfg.routing.enabled ? this.residentModels() : Promise.resolve(new Set<string>() as ReadonlySet<string>)]);
+    const usage = cfg.routing.enabled ? this.usageBonus : undefined;
+    // Among comparable models an automatic pick takes one already in memory: no weight load before the first token.
+    const bonus: UsageBonus | undefined = cfg.routing.enabled ? (m, r) => (usage ? clampBonus(usage(m, r)) : 0) + (resident.has(m.id) ? RESIDENT_BONUS : 0) : undefined;
     const find = (ref?: string) => (ref ? models.find((m) => m.id === ref || m.modelId === ref) : undefined);
 
     const roleOverride =
@@ -320,7 +469,7 @@ export class ProviderRegistry implements vscode.Disposable {
     // explicit choice for a chat is never second-guessed — callers pass `spread` only when it was not one).
     let spread = false;
     if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
-      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus);
+      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident);
       if (alt) {
         const n = req.load.assigned.get(model.id) ?? 0;
         reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
@@ -333,8 +482,12 @@ export class ProviderRegistry implements vscode.Disposable {
       throw new Error(`Provider ${model.providerId} not configured`);
     }
     req.load?.reserve?.(model.id);
-    if (reason) {
+    const key = `${role}|${reason}`;
+    if (reason && !(fallback && this.noted.has(key))) {
       this.log.info(`route(${role}): ${reason}`);
+      if (fallback) {
+        this.noted.add(key);
+      }
     }
     return { provider, model, reason, fallback, spread };
   }
@@ -350,8 +503,10 @@ export class ProviderRegistry implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.stopAutoRefresh();
     this.disposables.forEach((d) => d.dispose());
     this._onDidChange.dispose();
+    this._onDidRemoveModels.dispose();
   }
 }
 
@@ -373,6 +528,11 @@ export function scoreForRole(m: ModelInfo, role: ModelRole, profile?: SystemProf
 
 /** Learned usage never outweighs a hard capability (tools, vision, FIM): those terms are 20–60 points. */
 const MAX_USAGE_BONUS = 12;
+/**
+ * Score points for a model already loaded in memory: enough to break ties between comparable models, too little to
+ * keep Auto on a small resident model when a clearly better one fits (a 7B vs 32B differs by ~3 points on size alone).
+ */
+const RESIDENT_BONUS = 1.5;
 function clampBonus(b: number): number {
   return Number.isFinite(b) ? Math.max(-MAX_USAGE_BONUS, Math.min(MAX_USAGE_BONUS, b)) : 0;
 }
@@ -457,7 +617,7 @@ function paramsB(m: ModelInfo): number | undefined {
  * footprints are known — small enough to sit in memory next to the models already in use, so a second model does
  * not evict the first and make both slower. Undefined when nothing qualifies: the caller then queues as before.
  */
-export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus): ModelInfo | undefined {
+export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus, resident: ReadonlySet<string> = new Set()): ModelInfo | undefined {
   if (!isSaturated(chosen, load)) {
     return undefined;
   }
@@ -476,11 +636,13 @@ export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: Mo
       return chosenB === undefined || b === undefined || b >= chosenB * COMPARABLE_SIZE_RATIO;
     })
     .filter((m) => {
-      if (!profile || (load.assigned.get(m.id) ?? 0) > 0) {
+      if (!profile || (load.assigned.get(m.id) ?? 0) > 0 || resident.has(m.id)) {
         return true; // already loaded, or no machine profile to judge by
       }
       const gb = modelFootprintGb(m);
       return gb === undefined || committedGb + gb <= profile.modelBudgetGb * 1.1;
     });
-  return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || scoreOf(b) - scoreOf(a))[0];
+  // Fewest runs first; then a model already in memory (starts answering at once), then the better score.
+  const loaded = (m: ModelInfo) => (resident.has(m.id) ? 1 : 0);
+  return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || loaded(b) - loaded(a) || scoreOf(b) - scoreOf(a))[0];
 }

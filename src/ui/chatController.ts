@@ -258,6 +258,7 @@ export class ChatController implements vscode.Disposable {
     this.disposables.push(
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       providers.onDidChange(() => void this.pushModels()),
+      providers.onDidRemoveModels((ids) => this.dropRemovedModels(ids)),
       // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
       skills.onDidChange(() => this.broadcast(this.skillsMsg())),
       tracker.onDidChange(() => {
@@ -847,8 +848,15 @@ export class ChatController implements vscode.Disposable {
 
   async handle(msg: FromWebview): Promise<void> {
     switch (msg.type) {
-      case 'ready':
-        return this.sendInit();
+      case 'ready': {
+        await this.sendInit();
+        // Opening the chat is the earliest sign a request is coming: start loading its model now.
+        const s = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
+        if (s && !this.runs.has(s.id)) {
+          void this.warm(s).catch(() => undefined);
+        }
+        return;
+      }
       case 'booted':
         return;
       case 'newSession': {
@@ -1126,7 +1134,7 @@ export class ChatController implements vscode.Disposable {
         }
         const { provider, model: picked } = await this.providers.resolve(s.model);
         const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
-        const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars });
+        const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined });
         const res = await cm.compact(s.messages, provider, model, undefined, 4);
         s.messages = res.messages;
         if (res.removed > 0) {
@@ -1384,6 +1392,25 @@ export class ChatController implements vscode.Disposable {
 
   private async pushModels(): Promise<void> {
     this.broadcast(await this.modelsMsg());
+  }
+
+  /** Chats pinned to a model that was uninstalled go back to Auto instead of falling back on every turn. */
+  private dropRemovedModels(ids: string[]): void {
+    const gone = new Set(ids);
+    for (const summary of this.store.list()) {
+      if (!summary.model || !gone.has(summary.model) || this.runs.has(summary.id)) {
+        continue;
+      }
+      const s = this.store.get(summary.id);
+      if (s) {
+        s.model = '';
+        this.store.save(s);
+        if (s.id === this.activeSessionId) {
+          this.broadcast(this.sessionMsg(s));
+        }
+      }
+    }
+    void this.pushModels();
   }
 
   /** The model list plus what "Auto" resolves to right now, so the picker never shows a model the router would not pick. */

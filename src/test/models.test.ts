@@ -6,11 +6,20 @@ import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFo
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
 import { isSaturated, pickAlternative, pickForRole, ProviderRegistry, scoreForRole } from '../providers/registry';
 import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB } from '../providers/system';
+import type { LocalPilotApi } from '../extension';
 import { ModelInfo } from '../types';
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
-function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; deleted: string[] }> {
-  const models = [
+interface FakeModel {
+  name: string;
+  caps: string[];
+  ctx: number;
+  size: number;
+  params: string;
+}
+
+function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; deleted: string[]; models: FakeModel[]; chats: Record<string, unknown>[]; loaded: string[] }> {
+  const models: FakeModel[] = [
     { name: 'qwen2.5-coder:14b', caps: ['completion', 'tools'], ctx: 32768, size: 9.0e9, params: '14.8B' },
     { name: 'qwen2.5-coder:1.5b-base', caps: ['completion', 'insert'], ctx: 32768, size: 1.0e9, params: '1.5B' },
     { name: 'qwen2.5vl:7b', caps: ['completion', 'vision'], ctx: 32768, size: 6.0e9, params: '8.3B' },
@@ -18,6 +27,10 @@ function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; d
   ];
   const pulled: string[] = [];
   const deleted: string[] = [];
+  /** Bodies of /api/chat requests (warm-ups have no messages). */
+  const chats: Record<string, unknown>[] = [];
+  /** What /api/ps reports as loaded in memory. */
+  const loaded: string[] = [];
   const srv = http.createServer((req, res) => {
     const json = (body: unknown) => {
       res.setHeader('content-type', 'application/json');
@@ -70,6 +83,27 @@ function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; d
         tick();
       });
     }
+    if (req.url === '/api/ps') {
+      return json({ models: loaded.map((name) => ({ name, model: name })) });
+    }
+    if (req.url === '/api/chat') {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        const b = JSON.parse(body || '{}') as { model: string; messages?: unknown[] };
+        chats.push(b);
+        if (!loaded.includes(b.model)) {
+          loaded.push(b.model);
+        }
+        if (!b.messages?.length) {
+          return json({ model: b.model, done: true, done_reason: 'load' });
+        }
+        res.setHeader('content-type', 'application/x-ndjson');
+        res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'OK' }, done: false })}\n`);
+        res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 10, eval_count: 1 })}\n`);
+      });
+      return;
+    }
     if (req.url === '/api/delete' && req.method === 'DELETE') {
       return readBody((b) => {
         deleted.push(b.model);
@@ -79,7 +113,7 @@ function fakeOllama(): Promise<{ url: string; close(): void; pulled: string[]; d
     res.statusCode = 404;
     res.end();
   });
-  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, close: () => srv.close(), pulled, deleted })));
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, close: () => srv.close(), pulled, deleted, models, chats, loaded })));
 }
 
 const log = vscode.window.createOutputChannel('LocalPilot tests', { log: true });
@@ -237,6 +271,29 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(pickAlternative([big, weak], big, 'agent', load({ 'qwen2.5-coder:32b': 1 }, ['qwen2.5-coder:32b']), profile), undefined);
     // The least loaded comparable model wins; ties go to the better score.
     assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 4, 'gemma4:12b': 2, 'qwen2.5-coder:32b': 1 }), profile)?.modelId, 'qwen2.5-coder:32b');
+    // A model already resident in memory (idle, but loaded per the server) costs no extra memory and no load time:
+    // fine as a neighbour on the laptop, and preferred over an equally idle model that would have to load first.
+    const resident = new Set(['ollama/gemma4:12b']);
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), laptop, false, undefined, resident)?.modelId, 'gemma4:12b');
+    const coder2 = m('qwen3:14b', { sizeBytes: 9e9 });
+    const pool = [coder, coder2, gemma];
+    const busy = load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']);
+    const unloaded = pickAlternative(pool, coder, 'agent', busy, profile)!.modelId;
+    const other = unloaded === 'gemma4:12b' ? 'ollama/qwen3:14b' : 'ollama/gemma4:12b';
+    assert.strictEqual(pickAlternative(pool, coder, 'agent', busy, profile, false, undefined, new Set([other]))?.id, other, 'the resident one wins among idle comparable models');
+  });
+
+  test('a model already in memory wins ties for Auto, but never beats a clearly better one', () => {
+    const profile = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 64, vramGb: 0 });
+    const a = m('alpha-coder:14b', { sizeBytes: 9e9 });
+    const b = m('beta-coder:14b', { sizeBytes: 9e9 });
+    const small = m('qwen2.5-coder:3b', { sizeBytes: 2e9 });
+    const big = m('qwen2.5-coder:32b', { sizeBytes: 20e9 });
+    const residentBonus = (ids: string[]) => (x: ModelInfo) => (ids.includes(x.id) ? 1.5 : 0);
+    assert.strictEqual(scoreForRole(a, 'agent', profile), scoreForRole(b, 'agent', profile));
+    assert.strictEqual(pickForRole([a, b], 'agent', profile, false, residentBonus([b.id]))?.id, b.id);
+    assert.strictEqual(pickForRole([b, a], 'agent', profile, false, residentBonus([a.id]))?.id, a.id);
+    assert.strictEqual(pickForRole([small, big], 'agent', profile, false, residentBonus([small.id]))?.id, big.id);
   });
 
   test('registry lists, hides disabled models and routes per role against a real Ollama-style server', async function () {
@@ -304,6 +361,12 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       assert.strictEqual(fb.model.modelId, 'qwen2.5-coder:14b');
       assert.ok(fb.fallback && /not available/.test(fb.reason!));
 
+      // A default the Ollama server does not have (uninstalled outside LocalPilot) is cleared on the next discovery.
+      const removed = new Promise<string[]>((r) => reg.onDidRemoveModels((ids) => ids.includes('fake/gone:70b') && r(ids)));
+      await reg.listModels(true);
+      assert.deepStrictEqual(await removed, ['fake/gone:70b']);
+      assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('defaultModel'), '');
+
       // Disabling a model hides it from listModels and from routing, but listAllModels still shows it flagged.
       await cfg.update('models.disabled', ['fake/qwen2.5-coder:14b'], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
@@ -329,6 +392,175 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
       await cfg.update('routing.vision', prev.vision, vscode.ConfigurationTarget.Global);
       await cfg.update('inlineCompletion.model', prev.fim, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('registry keeps models loaded: warm matches num_ctx/keep_alive, follows residency, reuses providers and picks up new models', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, ctx: cfg.inspect('contextWindow')?.globalValue, keep: cfg.inspect('keepAlive')?.globalValue, disabled: cfg.inspect('models.disabled')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    overrideSystemProfile(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 64, vramGb: 0 }));
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
+      await cfg.update('contextWindow', 16384, vscode.ConfigurationTarget.Global);
+      await cfg.update('keepAlive', '45m', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      await reg.listModels(true);
+      const provider = reg.get('fake');
+
+      // Warm-up loads with the num_ctx real requests use (a different one makes Ollama reload) and the keep_alive.
+      await reg.warm('fake/qwen2.5-coder:14b');
+      const warmBody = srv.chats.find((c) => c.model === 'qwen2.5-coder:14b' && !(c.messages as unknown[]).length) as { options?: { num_ctx?: number }; keep_alive?: string } | undefined;
+      assert.ok(warmBody, 'warm request sent');
+      assert.strictEqual(warmBody.options?.num_ctx, 16384);
+      assert.strictEqual(warmBody.keep_alive, '45m');
+      assert.ok((await reg.residentModels(0)).has('fake/qwen2.5-coder:14b'));
+
+      // Still loaded: a second warm within the throttle window is skipped. Evicted: it loads again right away.
+      const before = srv.chats.length;
+      await reg.warm('fake/qwen2.5-coder:14b');
+      assert.strictEqual(srv.chats.length, before, 'resident model not re-warmed');
+      srv.loaded.length = 0;
+      await reg.warm('fake/qwen2.5-coder:14b');
+      assert.strictEqual(srv.chats.length, before + 1, 'evicted model warmed again');
+
+      // A settings change that does not touch the provider keeps the same instance (and its model-info cache).
+      await cfg.update('models.disabled', ['fake/qwen2.5vl:7b'], vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.strictEqual(reg.get('fake'), provider);
+
+      // Background refresh: a model pulled outside LocalPilot shows up without anyone asking.
+      const sub = reg.startAutoRefresh(() => true, 50, 50);
+      try {
+        const appeared = new Promise<void>((resolve) => {
+          const d = reg.onDidChange(() => {
+            if (reg.cachedModels().some((x) => x.modelId === 'devstral:24b')) {
+              d.dispose();
+              resolve();
+            }
+          });
+        });
+        srv.models.push({ name: 'devstral:24b', caps: ['completion', 'tools'], ctx: 131072, size: 14e9, params: '23.6B' });
+        await appeared;
+      } finally {
+        sub.dispose();
+      }
+    } finally {
+      reg.dispose();
+      srv.close();
+      overrideSystemProfile(undefined);
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
+      await cfg.update('contextWindow', prev.ctx, vscode.ConfigurationTarget.Global);
+      await cfg.update('keepAlive', prev.keep, vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', prev.disabled, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('Auto routes to what is installed now: a better model pulled or a model removed outside LocalPilot is picked up on the next turn', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, disabled: cfg.inspect('models.disabled')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    reg.freshnessMs = 0;
+    overrideSystemProfile(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 64, vramGb: 0 }));
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      await reg.listModels(true);
+      assert.strictEqual((await reg.route({ fresh: true })).model.modelId, 'qwen2.5-coder:14b');
+
+      // `ollama pull` in a terminal: the next turn sees it without a manual refresh or waiting for the 30 s cache.
+      srv.models.push({ name: 'gemma4:12b', caps: ['completion', 'tools', 'vision'], ctx: 131072, size: 8e9, params: '12B' });
+      assert.strictEqual((await reg.route({})).model.modelId, 'qwen2.5-coder:14b', 'without `fresh` the cached list is used');
+      const better = await reg.route({ fresh: true });
+      assert.strictEqual(better.model.modelId, 'gemma4:12b');
+      assert.strictEqual(better.reason, undefined, 'Auto switching to a better installed model is not a fallback');
+
+      // `ollama rm`: Auto goes back to the best remaining model, silently.
+      srv.deleted.push('gemma4:12b');
+      const back = await reg.route({ fresh: true });
+      assert.strictEqual(back.model.modelId, 'qwen2.5-coder:14b');
+      assert.ok(!back.fallback && !back.reason);
+
+      // A default that gets removed: this turn falls back, and the setting is cleared so later turns are plain Auto.
+      srv.deleted.splice(srv.deleted.indexOf('gemma4:12b'), 1);
+      await reg.listModels(true);
+      await cfg.update('defaultModel', 'fake/gemma4:12b', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.strictEqual((await reg.route({ fresh: true })).model.modelId, 'gemma4:12b');
+      const removed = new Promise<string[]>((r) => reg.onDidRemoveModels((ids) => ids.includes('fake/gemma4:12b') && r(ids)));
+      srv.deleted.push('gemma4:12b');
+      const fb = await reg.route({ fresh: true });
+      assert.strictEqual(fb.model.modelId, 'qwen2.5-coder:14b');
+      assert.ok(fb.fallback);
+      await removed;
+      assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('defaultModel'), '');
+      const after = await reg.route({ fresh: true });
+      assert.ok(!after.fallback && !after.reason, after.reason);
+    } finally {
+      reg.dispose();
+      srv.close();
+      overrideSystemProfile(undefined);
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', prev.disabled, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('an Auto chat stays on Auto across turns (each turn is routed again) instead of pinning the first model', async function () {
+    this.timeout(60_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, disabled: cfg.inspect('models.disabled')?.globalValue };
+    const api = (await vscode.extensions.getExtension('localpilot.localpilot-agent')!.activate()) as LocalPilotApi;
+    const idle = (id: string) =>
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (!api.runningSessionIds.includes(id)) {
+            sub.dispose();
+            resolve();
+          }
+        };
+        const sub = api.onDidChangeRuns(check);
+        check();
+      });
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 200));
+      await api.listModels();
+      const id = await api.runPrompt('Reply OK', 'ask');
+      await idle(id);
+      assert.strictEqual(api.getSession(id)!.model, '', 'first turn leaves the chat on Auto');
+      assert.ok(srv.chats.some((c) => (c.messages as unknown[]).length), 'the model was asked');
+      await api.send(id, 'Again');
+      assert.strictEqual(api.getSession(id)!.model, '', 'still Auto after the second turn');
+
+      // The model that answered is removed and another one installed outside LocalPilot: the next turn uses the new one.
+      const asked = () => srv.chats.filter((c) => (c.messages as unknown[]).length).map((c) => c.model as string);
+      const answered = asked().pop()!;
+      srv.deleted.push(answered);
+      srv.models.push({ name: 'devstral:24b', caps: ['completion', 'tools'], ctx: 131072, size: 14e9, params: '23.6B' });
+      // Past the registry's short freshness window, so the turn re-reads the installed list.
+      await new Promise((r) => setTimeout(r, 3_200));
+      await api.send(id, 'Once more');
+      await idle(id);
+      assert.strictEqual(asked().pop(), 'devstral:24b', `answered by ${asked().pop()} after ${answered} was removed`);
+      assert.strictEqual(api.getSession(id)!.model, '', 'still Auto after the installed models changed');
+    } finally {
+      srv.close();
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
+      await cfg.update('models.disabled', prev.disabled, vscode.ConfigurationTarget.Global);
     }
   });
 

@@ -3,6 +3,15 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Fixed
+- **Auto now stays Auto.** An Auto chat was silently pinned to whichever model answered its first turn, so later turns no longer followed the default model, image routing or busy-model spreading. Every turn of an Auto chat is now routed again; the tab shows which model answered. A command's one-off `model:` no longer changes the chat's model either.
+- **Parallel Auto chats use several models again.** Because of the pinning above, a second turn in a busy Auto chat queued behind the first model instead of moving to a comparable idle one.
+- **Faster first token.** Warm-ups now load the model with the same context size (`num_ctx`) the chat sends. Before, Ollama loaded the weights twice. Compaction, inline edits, completions and the VS Code language-model provider now send the configured `keepAlive` and the same window too, so they no longer cut the model's stay in memory short or force a reload.
+
+### Changed
+- **Models are picked up automatically.** While the window is focused, LocalPilot re-checks your servers in the background. Every 45 s it looks for models pulled or removed in a terminal. Every 10 s while none are found, a server started after VS Code shows up within seconds. Models uninstalled outside LocalPilot are cleared from settings and chats, which go back to Auto.
+- **Auto prefers models already in memory.** Ollama's loaded models (`/api/ps`) break ties between comparable models for Auto picks, and busy-model spreading prefers an idle model that is already loaded (no load time, no extra memory). A clearly better model still wins.
+- Opening the chat view starts loading its model. A model evicted from memory is warmed again right away instead of after the throttle. Changing unrelated settings no longer rebuilds providers or re-reads every model's metadata.
 
 ## 1.2.8 — 2026-10-28
 ### Changed

@@ -1159,7 +1159,7 @@
         "localpilot.prewarm": {
           "type": "boolean",
           "default": true,
-          "description": "Load the chat's model into memory as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; throttled to once every few minutes per model."
+          "description": "Load the chat's model into memory as soon as you open the chat, focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; throttled per model unless the server reports it was unloaded."
         },
         "localpilot.memory.enabled": {
           "type": "boolean",

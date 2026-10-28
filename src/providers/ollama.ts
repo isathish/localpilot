@@ -6,6 +6,7 @@ import {
   ModelInfo,
   ProviderConfig,
   StreamEvent,
+  WarmOptions,
 } from '../types';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 
@@ -13,6 +14,7 @@ interface OllamaTag {
   name: string;
   model: string;
   size?: number;
+  digest?: string;
   details?: { family?: string; families?: string[]; parameter_size?: string };
 }
 interface OllamaShow {
@@ -79,7 +81,9 @@ export class OllamaProvider implements LLMProvider {
     // Fetch capabilities for models not seen before, a few at a time: /api/show loads model metadata
     // from disk, and a user with twenty tags should not see Ollama freeze on every discovery.
     const infos = await mapLimit(models, 4, async (m) => {
-        const cached = this.infoCache.get(m.name);
+        // Keyed by digest too: a re-pulled tag (new weights, maybe new capabilities) is inspected again.
+        const key = `${m.name}@${m.digest ?? ''}`;
+        const cached = this.infoCache.get(key);
         if (cached) {
           return cached;
         }
@@ -106,7 +110,7 @@ export class OllamaProvider implements LLMProvider {
           sizeBytes: typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
           parameterSize: show?.details?.parameter_size ?? m.details?.parameter_size,
         };
-        this.infoCache.set(m.name, info);
+        this.infoCache.set(key, info);
         return info;
       });
     return infos.filter((i) => !/embed/i.test(i.modelId));
@@ -177,6 +181,7 @@ export class OllamaProvider implements LLMProvider {
           num_predict: opts.maxTokens ?? 128,
           stop: opts.stop,
         },
+        ...(opts.keepAlive ? { keep_alive: opts.keepAlive } : {}),
       },
       this.headers,
       opts.signal
@@ -189,9 +194,22 @@ export class OllamaProvider implements LLMProvider {
     return res.embeddings;
   }
 
-  /** An empty `messages` array makes Ollama load the weights (and keep them for `keep_alive`) without generating anything. */
-  async warm(model: string, keepAlive: string | undefined, signal?: AbortSignal): Promise<void> {
-    await postJson(`${this.baseUrl}/api/chat`, { model, messages: [], stream: false, ...(keepAlive ? { keep_alive: keepAlive } : {}) }, this.headers, signal);
+  /**
+   * An empty `messages` array makes Ollama load the weights (and keep them for `keep_alive`) without generating
+   * anything. `num_ctx` must be the one the chat will send: a different value makes Ollama reload the model.
+   */
+  async warm(model: string, opts: WarmOptions, signal?: AbortSignal): Promise<void> {
+    const body: Record<string, unknown> = { model, messages: [], stream: false };
+    if (opts.keepAlive) {
+      body.keep_alive = opts.keepAlive;
+    }
+    body.options = { num_ctx: opts.contextWindow ?? this.defaultCtx };
+    await postJson(`${this.baseUrl}/api/chat`, body, this.headers, signal);
+  }
+
+  async loadedModels(signal?: AbortSignal): Promise<string[]> {
+    const res = await getJson<{ models?: { name?: string; model?: string }[] }>(`${this.baseUrl}/api/ps`, this.headers, withTimeout(1500, signal));
+    return (res.models ?? []).map((m) => m.name ?? m.model ?? '').filter(Boolean);
   }
 }
 

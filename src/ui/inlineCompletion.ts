@@ -108,6 +108,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
           maxTokens: lineSuffix.trim() ? Math.min(cfg.maxTokens, 48) : cfg.maxTokens,
           temperature: 0.1,
           stop: ['\n\n\n', '<|endoftext|>', '<|fim_pad|>', '<|file_sep|>', '</s>'],
+          keepAlive: getConfig().keepAlive || undefined,
           signal: abort.signal,
         });
         completion = postProcess(raw, lineSuffix);

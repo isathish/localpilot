@@ -118,7 +118,15 @@ export interface CompletionRequestOptions {
   maxTokens?: number;
   temperature?: number;
   stop?: string[];
+  /** Keep the model loaded between requests (Ollama keep_alive). */
+  keepAlive?: string;
   signal?: AbortSignal;
+}
+
+export interface WarmOptions {
+  keepAlive?: string;
+  /** Must match the `contextWindow` later requests send: Ollama reloads the weights when `num_ctx` changes. */
+  contextWindow?: number;
 }
 
 export interface LLMProvider {
@@ -133,7 +141,9 @@ export interface LLMProvider {
   embed?(model: string, input: string[]): Promise<number[][]>;
   healthCheck(signal?: AbortSignal): Promise<boolean>;
   /** Load the model into memory ahead of the first request so the first token arrives sooner (optional, best effort). */
-  warm?(model: string, keepAlive: string | undefined, signal?: AbortSignal): Promise<void>;
+  warm?(model: string, opts: WarmOptions, signal?: AbortSignal): Promise<void>;
+  /** Provider-local ids of the models currently loaded in memory (Ollama `/api/ps`); absent = unknown. */
+  loadedModels?(signal?: AbortSignal): Promise<string[]>;
 }
 
 export interface ProviderConfig {

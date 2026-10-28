@@ -306,6 +306,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   };
   void refreshStatus();
   context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()), modelManager.onDidChange(() => void refreshStatus()), controller.onDidChangeRuns(() => void refreshStatus()));
+  // Models pulled or removed in a terminal (`ollama pull/rm`) show up when the user comes back to the window.
+  context.subscriptions.push(vscode.window.onDidChangeWindowState((s) => s.focused && void providers.listModels().catch(() => undefined)));
+  // …and while the window is focused, without any action: new models within a minute, a server started later within seconds.
+  context.subscriptions.push(providers.startAutoRefresh(() => vscode.window.state.focused));
 
   // Auto-detect running model servers (settings, well-known ports, Docker containers, Docker Model Runner)
   // and merge new ones into the provider list. Runs at startup and on every "Refresh models".
@@ -343,7 +347,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const cfg = getConfig();
     const available = report.results.filter((r) => r.ok && r.enabled).flatMap((r) => r.models);
     const quietDefaults = context.globalState.get<string[]>(DEFAULT_HINT_KEY, []);
-    if (cfg.defaultModel && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended && !quietDefaults.includes(cfg.defaultModel)) {
+    // A default missing from an Ollama server is uninstalled, not offline: the registry clears it back to Auto.
+    const defaultPid = cfg.defaultModel.split('/')[0];
+    const ollamaDefault = providers.get(defaultPid)?.type === 'ollama' && report.results.some((r) => r.ok && r.id === defaultPid);
+    if (cfg.defaultModel && !ollamaDefault && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended && !quietDefaults.includes(cfg.defaultModel)) {
       const missing = cfg.defaultModel;
       void vscode.window
         .showWarningMessage(`Default model "${missing}" is not available right now; LocalPilot will use ${report.recommended.split('/').pop()} meanwhile.`, 'Make it the default', "Don't ask again")

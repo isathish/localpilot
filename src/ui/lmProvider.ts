@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { getConfig } from '../config';
+import { effectiveContextWindow } from '../context/contextManager';
 import { estimateTokens } from '../context/tokenizer';
 import { ProviderRegistry } from '../providers/registry';
 import { ChatMessage, ModelInfo, ToolDefinition } from '../types';
@@ -59,7 +61,9 @@ export class LocalModelChatProvider implements vscode.LanguageModelChatProvider,
         model: info.modelId,
         messages: messages.map(convertMessage),
         tools: info.supportsTools ? tools : undefined,
-        contextWindow: info.contextWindow,
+        // Same window (num_ctx) as LocalPilot's own requests, so a model loaded for chat is not reloaded for this one.
+        contextWindow: effectiveContextWindow(info, getConfig().contextWindow),
+        keepAlive: getConfig().keepAlive || undefined,
         temperature: (options.modelOptions?.temperature as number | undefined) ?? 0.2,
         maxTokens: (options.modelOptions?.max_tokens as number | undefined) ?? info.maxOutputTokens,
         signal: abort.signal,

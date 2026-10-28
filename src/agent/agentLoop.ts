@@ -189,6 +189,7 @@ export class AgentRunner {
     const route = await this.providers.route({
       role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
       modelRef: o.modelRef ?? session.model,
+      fresh: true,
       needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
       spread: o.spreadModels ?? (depth > 0 || !(o.modelRef ?? session.model)),
       load: this.loadFor(session.id),
@@ -206,13 +207,17 @@ export class AgentRunner {
     }
     // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
     // unavailable model is replaced for good so the picker reflects what is actually answering. A model chosen only
-    // because the intended one was busy is not kept either: the next turn routes afresh.
+    // because the intended one was busy is not kept either: the next turn routes afresh. An Auto chat stays Auto:
+    // every turn is routed again (to the default, a vision model for images, or an idle model when this one is busy),
+    // and the UI shows what answered from the `model_request` event. A one-off model (a command's `model:`) does not
+    // change the chat's model either.
     // Subagent sessions are ephemeral: record what actually answered so the parent can report or quarantine it.
-    if ((!route.reason || route.fallback || depth > 0) && !(route.spread && depth === 0)) {
+    const ownChoice = !!session.model && (!o.modelRef || o.modelRef === session.model);
+    if (depth > 0 || (ownChoice && (!route.reason || route.fallback) && !route.spread)) {
       session.model = model.id;
     }
 
-    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars });
+    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined });
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools

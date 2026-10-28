@@ -59,6 +59,8 @@ export class ContextManager {
       maxToolOutputChars: number;
       /** Keep at least this many recent messages verbatim. */
       keepRecent?: number;
+      /** Ollama keep_alive for the summarisation request, so compaction does not shorten how long the model stays loaded. */
+      keepAlive?: string;
     }
   ) {}
 
@@ -243,7 +245,7 @@ Preserve exact file paths, identifiers, commands, error messages and numbers. Do
       },
     ];
     let out = '';
-    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, maxTokens: 1500, contextWindow: model.contextWindow, signal })) {
+    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, maxTokens: 1500, contextWindow: model.contextWindow, keepAlive: this.opts.keepAlive, signal })) {
       if (ev.type === 'text') {
         out += ev.text;
       }
