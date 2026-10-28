@@ -124,7 +124,7 @@ The same actions exist as commands: *Install Model from Catalog…*, *Remove Loc
 
 The gallery needs internet access to the registry sites. Listings are cached for ten minutes, and Docker Hub rate-limits anonymous bursts. Installing needs a running runtime; if there is none, the page offers **Start Ollama** or **Install Ollama**.
 
-![Settings → Model gallery: Ollama library and Hugging Face tabs, the running runtime with this machine's model budget, search, capability filters, and models with download counts, badges and a Choose size menu]({{ '/assets/screenshots/settings-gallery.png' | relative_url }})
+![Settings → Model gallery: Ollama library, Docker Hub and Hugging Face tabs, the running runtime with this machine's model budget, search, capability filters, and models with download counts, badges and a Choose size menu]({{ '/assets/screenshots/settings-gallery.png' | relative_url }})
 
 ## Automatic routing
 
@@ -162,7 +162,7 @@ The status bar shows the model that will actually answer.
 
 <p><img src="{{ '/assets/screenshots/colibri-picker.png' | relative_url }}" alt="Model picker with a colibri group listing glm-5.2 below the Ollama models" width="370"></p>
 
-![Settings → Models: glm-5.2 served by colibri on port 8000, listed with 16 GB (its RAM-resident size, not the 429 GB download), 744B parameters and a fits badge]({{ '/assets/screenshots/colibri-models.png' | relative_url }})
+![Settings → Models: glm-5.2 served by colibri, listed with 16 GB (its RAM-resident size, not the 429 GB download), 744B parameters and a fits badge]({{ '/assets/screenshots/colibri-models.png' | relative_url }})
 
 <small>These two captures used a local stand-in that answers like `coli serve` (same `/v1/models` and `/health` responses), because a real GLM-5.2 needs a 429 GB download. What LocalPilot shows comes from those responses either way.</small>
 
@@ -263,7 +263,7 @@ In `auto` mode, LocalPilot may update `localpilot.defaultModel`, `localpilot.rou
 - To stop automatic changes, set `localpilot.models.autoTune` to `suggest` or `off`.
 
 
-![Dashboard → Model tuning: for each role, installed models ranked by the share of runs that finished and their speed, with the learned bonus or penalty, and an Analyse now button]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
+![Dashboard → Model tuning: a suggestion to use gemma4:12b for read-only subagents, and for each role the installed models ranked by the share of runs that finished and their speed, with the learned bonus or penalty]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
 
 ## Docker-based models
 

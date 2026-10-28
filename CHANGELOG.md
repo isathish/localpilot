@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+### Changed
+- **Marketplace listing redesigned as a product page.** Centered headline with badges, the hero session capture, three value pillars ($0 per month, private by construction, works offline), an eight-step illustrated "How it works" (setup, approval presets, mode and model pickers, approvals and steering, diff review, parallel agents and Best-of-N, the CLI, the Providers page), and a compact feature grid in place of the long bullet list.
 
 ## 1.2.6 — 2026-10-28
 ### Fixed

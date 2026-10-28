@@ -48,7 +48,7 @@ Click the LocalPilot icon in the Activity Bar, or press <kbd>⌘⇧L</kbd> (<kbd
 
 On first launch the **Welcome / Setup** screen opens. It looks for running model servers on their default ports.
 
-![Setup step 1 inside VS Code: LocalPilot found a running Ollama with 4 models]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
+![Setup step 1: LocalPilot found Ollama with 5 models and Docker Model Runner with 1; LM Studio is not running]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
 
 ## 3. Get a model
 

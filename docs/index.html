@@ -6,33 +6,21 @@ permalink: /
 ---
 <section class="hero">
   <div class="wrap">
-    <img class="logo" src="{{ '/assets/logo.svg' | relative_url }}" alt="LocalPilot logo" width="88" height="88">
-    <div class="pill"><span class="dot"></span>Free and open source · works offline · your code goes only to the model servers you choose</div>
+    <a class="pill" href="{{ site.repo }}/blob/main/CHANGELOG.md"><span class="dot"></span>v{{ site.version }} · free and open source</a>
     <h1>A coding agent for VS Code<br><span>that runs on your own machine.</span></h1>
-    <p class="sub">LocalPilot reads your project, makes the edit, runs your tests and shows you the diff before anything is kept. It uses models you run yourself with Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner or colibri. No subscription, no account, and the extension sends no telemetry.</p>
+    <p class="sub">LocalPilot reads your project, edits files, runs your tests and shows you the diff before anything is kept. It uses the models you run with Ollama, LM Studio, llama.cpp, vLLM or colibri. No subscription, no account, no telemetry.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="{{ site.marketplace }}">
-        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-        Install from VS Code Marketplace
+      <a class="btn btn-primary btn-lg" href="{{ site.marketplace }}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        Install for VS Code
       </a>
-      <a class="btn" href="{{ '/docs/getting-started/' | relative_url }}">Get started</a>
-      <a class="btn" href="{{ site.repo }}">
-        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7 3.6 3.6 0 0 1 .1-2.7s.9-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1a3.6 3.6 0 0 1 .1 2.7 3.9 3.9 0 0 1 1 2.7c0 3.9-2.4 4.7-4.6 5 .4.3.7 1 .7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
-        Star on GitHub
-      </a>
-      <div class="note">v{{ site.version }} · <code>code --install-extension {{ site.extension_id }}</code> · or <a href="{{ site.download }}">download the VSIX</a> · VS Code 1.104+ · macOS, Linux, Windows</div>
+      <a class="btn btn-lg" href="{{ '/docs/getting-started/' | relative_url }}">Get started</a>
     </div>
-
-    <ul class="proof" aria-label="Facts you can check">
-      <li><a href="{{ site.repo }}/blob/main/LICENSE"><b>MIT licensed</b><span>all source on GitHub</span></a></li>
-      <li><a href="{{ site.repo }}/actions/workflows/ci.yml"><b>~190 tests on every push</b><span>on macOS, Linux and Windows</span></a></li>
-      <li><a href="{{ site.releases }}"><b>Checksummed releases</b><span>VSIX + SHA256SUMS.txt</span></a></li>
-      <li><a href="{{ '/privacy/' | relative_url }}"><b>No telemetry upload</b><span>metrics stay in local files</span></a></li>
-    </ul>
+    <p class="hero-note"><code>code --install-extension {{ site.extension_id }}</code><span>·</span><a href="{{ site.download }}">Download VSIX</a><span>·</span><a href="{{ site.repo }}">Source on GitHub</a></p>
 
     <figure class="shot hero-shot">
       <img src="{{ '/assets/screenshots/hero-agent.png' | relative_url }}" width="1800" height="1125" alt="LocalPilot inside VS Code: the agent read cart.js and its test, fixed applyDiscount with a +1/−1 edit, ran npm test (2 passing) in the LocalPilot Agent terminal, and offers Apply to workspace or Discard" loading="eager" fetchpriority="high">
-      <figcaption>A real session: <code>gpt-oss:20b</code> in Ollama fixed a failing test in 37 seconds, ran the suite and asked for review.</figcaption>
+      <figcaption>A real session: <code>gpt-oss:20b</code> in Ollama fixed a failing test, ran the suite and asked for review.</figcaption>
     </figure>
   </div>
 </section>
@@ -40,117 +28,114 @@ permalink: /
 <div class="strip">
   <div class="wrap">
     <span class="strip-label">Works with</span>
-    <span><i class="dot"></i>Ollama</span>
-    <span><i class="dot"></i>LM Studio</span>
-    <span><i class="dot"></i>llama.cpp</span>
-    <span><i class="dot"></i>vLLM</span>
-    <span><i class="dot"></i>SGLang</span>
-    <span><i class="dot"></i>Docker Model Runner</span>
-    <span><i class="dot"></i>colibri</span>
-    <span><i class="dot"></i>LocalAI · Jan</span>
-    <span><i class="dot"></i>any OpenAI-compatible API</span>
+    <span>Ollama</span>
+    <span>LM Studio</span>
+    <span>llama.cpp</span>
+    <span>vLLM</span>
+    <span>SGLang</span>
+    <span>Docker Model Runner</span>
+    <span>colibri</span>
+    <span>any OpenAI-compatible API</span>
   </div>
 </div>
-
-<section id="tour" class="alt">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="eyebrow">See it work</span>
-      <h2>What it looks like in practice</h2>
-      <p>Captured from LocalPilot v{{ site.version }} in VS Code on a 36 GB Apple M3 Pro, with <code>gpt-oss:20b</code> served by Ollama. Every run, diff and test result is real; nothing is mocked up.</p>
-    </div>
-    <div class="tour-grid">
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/review-diff.png' | relative_url }}" width="1800" height="1125" alt="Side-by-side diff of the agent's one-line fix to applyDiscount in cart.js, next to the chat that made it, with Discard and Apply to workspace" loading="lazy"></figure>
-        <div class="tour-body"><h3>You see every change before it lands</h3><p>The agent works on a copy of your project in its own git worktree. Click a changed file for a side-by-side diff, then <b>Apply to workspace</b> or <b>Discard</b>. Outside git, every edit is snapshotted and can be undone per file.</p></div>
-      </article>
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/parallel-agents.png' | relative_url }}" width="1800" height="1125" alt="Three agents running at once: a tab per task, a strip with pause and stop for each, the Agents panel listing all three, and one waiting while gpt-oss:20b is busy" loading="lazy"></figure>
-        <div class="tour-body"><h3>Three tasks, three agents, one window</h3><p>Split the work into tasks and LocalPilot starts an agent for each, in its own tab and worktree. The <b>Agents</b> panel shows what each is doing; pause or stop any of them. When they finish, apply or discard each one's changes.</p></div>
-      </article>
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/terminal-agent.png' | relative_url }}" width="1800" height="673" alt="The chat shows Edited cart.js and Ran npm test, exit 0; next to it the LocalPilot Agent terminal shows both tests passing" loading="lazy"></figure>
-        <div class="tour-body"><h3>Commands run where you can watch them</h3><p>When the agent runs <code>npm test</code> or <code>git log</code>, it does so in a <b>LocalPilot Agent</b> terminal inside VS Code. You see the output live and the agent gets the real exit code. Right-click any terminal to have its output explained or a failed command fixed.</p></div>
-      </article>
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/terminal-cli.png' | relative_url }}" width="1800" height="793" alt="The localpilot CLI in a terminal: reads cart.js and the tests, edits test/cart.test.js, runs npm test (3 passing) and lists the changed file" loading="lazy"></figure>
-        <div class="tour-body"><h3>The same agent from the command line</h3><p><code>localpilot "add a test…"</code> runs the same agent in your shell, with the same tools, skills, memory and approvals. Answer <code>y</code>, <code>n</code> or <code>always</code> at each prompt, or pass <code>--yes</code> in scripts and CI.</p></div>
-      </article>
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/settings-models-manager.png' | relative_url }}" width="1800" height="1217" alt="Settings → Models: hardware profile (36 GB RAM, Apple M3 Pro, 25 GB model budget), runtimes Ollama / Docker Model Runner / LM Studio, installed models with fits badges, the default and the roles Auto routing gives each" loading="lazy"></figure>
-        <div class="tour-body"><h3>It knows what your machine can run</h3><p>LocalPilot reads your RAM, CPU and GPU memory and turns that into a model budget. Installed models are marked <i>fits</i>, <i>tight</i> or <i>too big</i>, and tagged with the jobs Auto routing gives them. New ones install from a catalog straight into Ollama, Docker Model Runner or LM Studio.</p></div>
-      </article>
-      <article class="tour-card">
-        <figure class="shot"><img src="{{ '/assets/screenshots/dashboard-tuning.png' | relative_url }}" width="1800" height="1217" alt="Dashboard → Model tuning: for each role, installed models ranked by measured run success and speed, with the learned bonus or penalty" loading="lazy"></figure>
-        <div class="tour-body"><h3>It learns which models work for you</h3><p>The Dashboard ranks your installed models per job from how they actually did on your machine: runs finished, tokens per second, errors. Auto routing prefers the ones that perform. Everything is computed from local files.</p></div>
-      </article>
-    </div>
-    <h3 class="sub-head"><span>Close-ups</span></h3>
-    <div class="tour-small">
-      <figure class="shot"><img src="{{ '/assets/screenshots/approval.png' | relative_url }}" width="942" height="1672" alt="An approval card in the chat: Run command git log --oneline -5, with Deny, Allow for session and Allow once" loading="lazy"><figcaption><b>You approve risky steps.</b> Commands, deletes and network calls can ask first. Answer with one key.</figcaption></figure>
-      <figure class="shot"><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" width="942" height="1672" alt="A paused agent with a queued steering message, Also list the files each commit touched, and a Resume button" loading="lazy"><figcaption><b>Pause and steer.</b> Pause after the current step, type new instructions, resume.</figcaption></figure>
-      <figure class="shot"><img src="{{ '/assets/screenshots/model-picker.png' | relative_url }}" width="740" height="1592" alt="Model picker: Auto plus every Ollama model with its context window, tool support and vision badge" loading="lazy"><figcaption><b>Model picker.</b> Every model LocalPilot found, with context size and capabilities, selectable per chat.</figcaption></figure>
-      <figure class="shot"><img src="{{ '/assets/screenshots/mode-picker.png' | relative_url }}" width="740" height="1592" alt="Mode picker: Agent, Multitask, Debug, Plan and Ask, each with a one-line description" loading="lazy"><figcaption><b>Five modes.</b> Agent, Multitask and Debug change files; Plan and Ask only read.</figcaption></figure>
-      <figure class="shot"><img src="{{ '/assets/screenshots/context-menu.png' | relative_url }}" width="740" height="1592" alt="The @ menu: @workspace, @selection, @problems, @git, @editors and @terminal" loading="lazy"><figcaption><b>@ context.</b> Attach the selection, problems, the git diff, open editors or the last terminal output.</figcaption></figure>
-      <figure class="shot"><img src="{{ '/assets/screenshots/best-of-n-launcher.png' | relative_url }}" width="942" height="1672" alt="Multitask launcher on Try several models: one task with gpt-oss:20b and qwen3:14b selected" loading="lazy"><figcaption><b>Best of N.</b> One task on several models; compare and keep the best result.</figcaption></figure>
-    </div>
-  </div>
-</section>
 
 <section id="features">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Features</span>
-      <h2>What's in the box</h2>
-      <p>LocalPilot is built for local models, which are smaller than cloud models. When a model cannot call tools, it falls back to a text protocol. It trims old context so an 8k window still finishes long tasks. And it asks before anything you have marked as risky.</p>
+      <h2>An agent you can watch, steer and undo</h2>
+      <p>Built for local models, which have smaller context windows and sometimes no tool calling. You approve the risky steps and keep only the changes you want.</p>
     </div>
-    <div class="feature-groups">
-      <div class="feature-group">
-        <div class="fg-head"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z"/><path d="M5 15l.9 2.1L8 18l-2.1.9L5 21l-.9-2.1L2 18l2.1-.9z"/></svg></span><h3>Agent</h3></div>
-        <ul class="feature-list">
-          <li><b>Agent mode</b><span>Reads and searches your project, edits files, runs commands, checks diagnostics and retries when something fails. Asks first for risky actions.</span></li>
-          <li><b>Parallel agents</b><span>Run several tasks at once, each in its own tab and (in a git repo) its own worktree, so their edits never collide. Pause, steer or stop any of them. Run one task on several models and keep the best result.</span></li>
-          <li><b>Review, keep or undo</b><span>Every edit is saved first. Diff, keep or revert per file or per session; changed lines are highlighted in the editor.</span></li>
-          <li><b>Skills &amp; subagents</b><span>14 built-in <code>SKILL.md</code> playbooks load when a request needs them. Install more from GitHub in one step. Nine built-in subagents (explore, coder, reviewer, researcher, clarifier, planner, tester, debugger, docs), or write your own.</span></li>
-        </ul>
-      </div>
-      <div class="feature-group">
-        <div class="fg-head"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><path d="M13 14h4M13 17h2"/></svg></span><h3>Models &amp; setup</h3></div>
-        <ul class="feature-list">
-          <li><b>One-click model setup</b><span>If no model is found, LocalPilot installs or starts Ollama and pulls a small starter set that fits your RAM and GPU.</span></li>
-          <li><b>Model manager &amp; catalog</b><span>See what fits your machine, enable or disable models, set a default, remove them, or install from a curated list with a progress bar.</span></li>
-          <li><b>Automatic routing</b><span>Images go to a vision model, completions to the smallest fill-in-the-middle model, Plan mode to a reasoning model. If the chosen model is offline, the next best one answers.</span></li>
-          <li><b>Learns which models work for you</b><span>Tracks, on your machine, how often each installed model finishes its runs, how fast it writes and how many completions you accept. Routing prefers the ones that perform, and better picks are applied with an Undo.</span></li>
-          <li><b>Huge models with colibri</b><span>Detects a running <a href="{{ '/guides/colibri-vscode/' | relative_url }}">colibri</a> server, which streams the experts of models like GLM-5.2 from disk. Memory fit is judged by the part that stays in RAM, and slow disk-streamed models are kept for Plan mode.</span></li>
-          <li><b>Finds your servers</b><span>Detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, colibri and model servers inside Docker containers, without any settings.</span></li>
-        </ul>
-      </div>
-      <div class="feature-group">
-        <div class="fg-head"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg></span><h3>Context &amp; tools</h3></div>
-        <ul class="feature-list">
-          <li><b>Large-context management</b><span>Each model gets a token budget. Old tool output goes first, then older turns are summarised, so an 8k-context model still finishes long tasks.</span></li>
-          <li><b>Screenshots, images &amp; browser view</b><span>Capture a selection, window, screen or web page and let a vision model fix what it sees. A built-in browser view checks your dev server through DevTools.</span></li>
-          <li><b>Terminal &amp; CLI</b><span>Commands run in a visible terminal with real exit codes. The <code>localpilot</code> CLI brings the full agent to any shell.</span></li>
-          <li><b>Web search &amp; MCP</b><span>DuckDuckGo, SearXNG, Brave or Tavily search, plus page fetching. Add an MCP server and its tools show up on their own.</span></li>
-        </ul>
-      </div>
-      <div class="feature-group">
-        <div class="fg-head"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><h3>Editor &amp; privacy</h3></div>
-        <ul class="feature-list">
-          <li><b>Inline completions</b><span>Ghost text from fill-in-the-middle models such as qwen2.5-coder, codestral or starcoder2. Works offline.</span></li>
-          <li><b>Deep VS Code integration</b><span>Chat in the sidebar or an editor tab, <code>@localpilot</code> in the built-in Chat view, local models in Copilot's model picker, light-bulb fixes and commit messages.</span></li>
-          <li><b>Follows your rules</b><span>Reads <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursorrules</code> and <code>copilot-instructions.md</code> as they are. Nothing to convert.</span></li>
-          <li><b>Private by default</b><span>No account and no telemetry upload. The extension talks to the model servers you list (all <code>localhost</code> by default), the skill index on GitHub and the web tools. You can switch off the last two. <a href="{{ '/privacy/' | relative_url }}">Full list</a>.</span></li>
-        </ul>
-      </div>
+
+    <div class="showcase">
+      <article class="feature-row">
+        <div class="fr-text">
+          <span class="fr-kicker">Review</span>
+          <h3>See every change before it lands</h3>
+          <p>The agent works on a copy of your project in its own git worktree. Open any changed file as a side-by-side diff, then apply it to your workspace or discard it.</p>
+          <ul class="checks">
+            <li>Keep or undo per file, inside or outside git</li>
+            <li>Commands, deletes and network calls can ask first</li>
+            <li>Restore any earlier checkpoint of the chat</li>
+          </ul>
+          <a class="more" href="{{ '/docs/features/' | relative_url }}">How review works</a>
+        </div>
+        <figure class="shot"><img class="crop" src="{{ '/assets/screenshots/review-diff.png' | relative_url }}" width="1800" height="1125" alt="Side-by-side diff of the agent's one-line fix to applyDiscount in cart.js, next to the chat that made it, with Discard and Apply to workspace" loading="lazy"></figure>
+      </article>
+
+      <article class="feature-row">
+        <div class="fr-text">
+          <span class="fr-kicker">Parallel agents</span>
+          <h3>Several tasks, several agents, one window</h3>
+          <p>Split the work and LocalPilot starts an agent per task, each in its own tab and worktree, so their edits never collide. The Agents panel shows what each one is doing.</p>
+          <ul class="checks">
+            <li>Pause, steer or stop any agent</li>
+            <li>Run one task on several models and keep the best result</li>
+            <li>Apply or discard each agent's changes separately</li>
+          </ul>
+          <a class="more" href="{{ '/docs/parallel-agents/' | relative_url }}">Parallel agents</a>
+        </div>
+        <figure class="shot"><img class="crop" src="{{ '/assets/screenshots/multitask-launcher.png' | relative_url }}" width="1800" height="1125" alt="The Multitask launcher on Split the work: three tasks, one per row, each started as its own agent in its own worktree" loading="lazy"></figure>
+      </article>
+
+      <article class="feature-row">
+        <div class="fr-text">
+          <span class="fr-kicker">Models</span>
+          <h3>Picks models that fit your machine</h3>
+          <p>LocalPilot reads your RAM and GPU and turns them into a model budget. With no model installed, one click sets up Ollama and a starter model sized for you.</p>
+          <ul class="checks">
+            <li>Install, enable or remove models from a catalog</li>
+            <li>Images, completions and planning each go to the right model</li>
+            <li>Learns from local usage which models work best for you</li>
+          </ul>
+          <a class="more" href="{{ '/docs/models/' | relative_url }}">Models and routing</a>
+        </div>
+        <figure class="shot"><img src="{{ '/assets/screenshots/landing-models.png' | relative_url }}" width="1555" height="1559" alt="Settings → Models: 36 GB Apple M3 Pro with a 25 GB model budget, Ollama and Docker Model Runner running, an install in progress, and installed models with fits badges and the roles Auto routing gives them" loading="lazy"></figure>
+      </article>
+
+      <article class="feature-row">
+        <div class="fr-text">
+          <span class="fr-kicker">Terminal &amp; CLI</span>
+          <h3>Commands run where you can see them</h3>
+          <p>When the agent runs <code>npm test</code>, it runs in a LocalPilot terminal inside VS Code. You see the output live and the agent gets the real exit code.</p>
+          <ul class="checks">
+            <li>The <code>localpilot</code> CLI runs the same agent in any shell or CI job</li>
+            <li>Right-click a terminal to explain output or fix a failed command</li>
+            <li>Same tools, skills, memory and approvals everywhere</li>
+          </ul>
+          <a class="more" href="{{ '/docs/terminal-and-cli/' | relative_url }}">Terminal and CLI</a>
+        </div>
+        <figure class="shot"><img class="crop" src="{{ '/assets/screenshots/terminal-cli.png' | relative_url }}" width="1800" height="793" alt="The localpilot CLI in a terminal: reads cart.js and the tests, edits test/cart.test.js, runs npm test (3 passing) and lists the changed file" loading="lazy"></figure>
+      </article>
     </div>
   </div>
 </section>
 
-<section id="how" class="alt">
+<section id="more" class="alt">
   <div class="wrap">
     <div class="section-head">
-      <span class="eyebrow">How it works</span>
+      <span class="eyebrow">Also included</span>
+      <h2>Everything else you'd expect</h2>
+    </div>
+    <div class="mini-grid">
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><h3>Five modes</h3><p>Agent, Multitask and Debug change files. Plan and Ask only read.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v13a1.5 1.5 0 0 0-1.5-1.5H4zM20 5h-6a2 2 0 0 0-2 2v13a1.5 1.5 0 0 1 1.5-1.5H20z"/></svg></span><h3>Skills &amp; subagents</h3><p>14 built-in playbooks and nine subagents. Write your own or install skills from GitHub.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg></span><h3>Your rules, as they are</h3><p>Reads <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>, Claude Code skills, hooks and commands.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/></svg></span><h3>MCP &amp; web search</h3><p>Add an MCP server and its tools show up. Search with DuckDuckGo, SearXNG, Brave or Tavily.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M5 7h9M5 12h6M5 17h11"/><path d="M15 12h4" stroke-dasharray="1.5 2"/></svg></span><h3>Inline completions</h3><p>Ghost text from fill-in-the-middle models such as qwen2.5-coder or codestral.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-7 7"/></svg></span><h3>Screenshots &amp; vision</h3><p>Capture a region, window or web page and let a vision model fix what it sees.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/></svg></span><h3>Long tasks, small contexts</h3><p>Old tool output goes first, then older turns are summarised, so an 8k model still finishes.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></span><h3>No tool calling? Still works</h3><p>Models without native tools fall back to a text protocol for agent mode.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><h3>Private by default</h3><p>No account, no telemetry upload. Model servers are <code>localhost</code> unless you add one. <a href="{{ '/privacy/' | relative_url }}">Details</a></p></div>
+    </div>
+    <p class="section-foot"><a class="more" href="{{ '/docs/features/' | relative_url }}">See every feature</a></p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Get started</span>
       <h2>Up and running in three steps</h2>
     </div>
     <div class="steps">
@@ -162,118 +147,54 @@ permalink: /
   </div>
 </section>
 
-<section id="cost">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="eyebrow">Cost</span>
-      <h2>What you stop paying for</h2>
-      <p>Cloud assistants bill per developer per month, and many meter requests on top. LocalPilot runs on hardware you already own. Once the model is downloaded, prompts cost nothing and work without an internet connection.</p>
-    </div>
-    <div class="compare">
-      <table>
-        <thead><tr><th>Per developer</th><th>LocalPilot</th><th>GitHub Copilot Pro / Pro+</th><th>Cursor Pro</th><th>Claude Pro / Max</th></tr></thead>
-        <tbody>
-          <tr><td>Per month</td><td class="y">$0</td><td>$10 / $39</td><td>$20</td><td>$20 / $100–200</td></tr>
-          <tr><td>Per year</td><td class="y">$0</td><td>$120 / $468</td><td>$240</td><td>$240 / $1,200–2,400</td></tr>
-          <tr><td>Team of 10, per year</td><td class="y">$0</td><td>$1,200 / $4,680</td><td>$2,400</td><td>$2,400 / $12,000–24,000</td></tr>
-          <tr><td>Usage limits, premium-request metering</td><td class="y">None. Your hardware is the limit</td><td class="p">Yes</td><td class="p">Yes</td><td class="p">Yes</td></tr>
-          <tr><td>Needs internet to work</td><td class="y">No</td><td class="n">Yes</td><td class="n">Yes</td><td class="n">Yes</td></tr>
-          <tr><td>Where your code is processed</td><td class="y">Your laptop</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <ul class="facts">
-      <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Nothing to cancel. Models are files on your disk.</li>
-      <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>No seat licences, trials or request quotas.</li>
-      <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>No vendor account, so there is nothing to leak.</li>
-    </ul>
-    <p class="muted small fine">List prices for individual plans in USD at the time of writing. Vendors change plans often, so check their pricing pages, and <a href="{{ site.repo }}/issues">tell us</a> if a number here is out of date. Your cost with LocalPilot is hardware you already have and electricity. A 7B model needs about 8 GB of RAM; 14B to 32B models want 16 to 32 GB.</p>
-  </div>
-</section>
-
 <section id="compare" class="alt">
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Compare</span>
-      <h2>How it compares</h2>
-      <p>The same kind of agent workflow as the paid tools, without the subscription or sending your code to a vendor. The trade-off is model quality: cloud tools run frontier models, and LocalPilot runs what your hardware can.</p>
+      <h2>The agent workflow, without the subscription</h2>
+      <p>Cloud tools run frontier models and bill per seat. LocalPilot runs what your hardware can, costs nothing per prompt and keeps your code on your machine.</p>
     </div>
     <div class="compare">
       <table>
         <thead><tr><th></th><th>LocalPilot</th><th>GitHub Copilot</th><th>Cursor</th><th>Claude Code</th></tr></thead>
         <tbody>
-          <tr><td>Runs fully offline / on-prem</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td></tr>
-          <tr><td>Bring any local model (Ollama, LM Studio, vLLM…)</td><td class="y">Yes</td><td class="p">Limited</td><td class="p">Limited</td><td class="p">Limited</td></tr>
-          <tr><td>Agent mode with tools &amp; approvals</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
-          <tr><td>Parallel agents with per-agent change review</td><td class="y">Yes</td><td class="p">Partial</td><td class="y">Yes</td><td class="y">Yes</td></tr>
-          <tr><td>Skills &amp; custom subagents</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">Rules only</td><td class="y">Yes</td></tr>
-          <tr><td>Screenshots / vision input</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
-          <tr><td>MCP servers</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
-          <tr><td>Works inside VS Code</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">Own IDE</td><td class="y">Yes</td></tr>
-          <tr><td>Model quality</td><td class="p">What your hardware runs</td><td class="y">Frontier cloud models</td><td class="y">Frontier cloud models</td><td class="y">Frontier cloud models</td></tr>
-          <tr><td>Price</td><td class="y">Free · MIT</td><td class="p">Subscription</td><td class="p">Subscription</td><td class="p">Subscription or usage-based</td></tr>
-          <tr><td>Telemetry / account required</td><td class="y">None</td><td class="n">Yes</td><td class="n">Yes</td><td class="n">Yes</td></tr>
+          <tr><td>Price per developer</td><td class="y">Free · MIT</td><td>$10–39 / month</td><td>$20 / month</td><td>$20–200 / month</td></tr>
+          <tr><td>Usage limits</td><td class="y">Your hardware</td><td class="p">Request metering</td><td class="p">Request metering</td><td class="p">Usage limits</td></tr>
+          <tr><td>Works offline</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td></tr>
+          <tr><td>Where your code is processed</td><td class="y">Your machine</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td></tr>
+          <tr><td>Bring any local model</td><td class="y">Yes</td><td class="p">Limited</td><td class="p">Limited</td><td class="p">Limited</td></tr>
+          <tr><td>Agent mode, approvals, MCP</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><td>Parallel agents with change review</td><td class="y">Yes</td><td class="p">Partial</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><td>Works inside VS Code</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">Own editor</td><td class="y">Yes</td></tr>
+          <tr><td>Model quality</td><td class="p">What your hardware runs</td><td class="y">Frontier models</td><td class="y">Frontier models</td><td class="y">Frontier models</td></tr>
+          <tr><td>Account required</td><td class="y">No</td><td class="n">Yes</td><td class="n">Yes</td><td class="n">Yes</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="muted small fine">Based on each product's public documentation at the time of writing. These products change often; if a cell is wrong, <a href="{{ site.repo }}/issues">open an issue</a> and it gets fixed.</p>
-  </div>
-</section>
+    <p class="muted small fine">List prices for individual plans in USD, from each vendor's public pages at the time of writing. They change often; if a cell is wrong, <a href="{{ site.repo }}/issues">open an issue</a>. A 7B model needs about 8 GB of RAM; 14B to 32B models want 16 to 32 GB.</p>
 
-<section id="guides">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="eyebrow">Guides</span>
-      <h2>Guides for your setup</h2>
-    </div>
-    <div class="grid">
-      {% for g in site.guides %}
-      <a class="card card-link" href="{{ g.url | relative_url }}"><h3>{{ g.title }}</h3><p>{% assign gp = site.pages | where: "url", g.url | first %}{{ gp.description | default: '' | truncate: 140 }}</p></a>
-      {% endfor %}
-    </div>
-  </div>
-</section>
-
-<section id="trust" class="alt">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="eyebrow">Trust</span>
-      <h2>Don't take our word for it</h2>
-      <p>Every claim on this page can be checked in a few minutes. Start with these three:</p>
-    </div>
-    <ol class="check-strip">
-      <li><span class="num">1</span><div><b>Turn off Wi‑Fi.</b> Chat, edits, test runs and completions keep working against a local model.</div></li>
-      <li><span class="num">2</span><div><b>Open Settings → Providers.</b> Every address is <code>localhost</code> unless you added one.</div></li>
-      <li><span class="num">3</span><div><b>Verify the download.</b> Each release has a <code>SHA256SUMS.txt</code>: run <code>shasum -a 256 -c SHA256SUMS.txt</code>.</div></li>
-    </ol>
-    <div class="grid trust-grid">
-      <div class="card"><h3>Open source, one codebase</h3><p>The extension and the <code>localpilot</code> CLI are built from the same <a href="{{ site.repo }}">MIT-licensed code</a>. Releases are built and checksummed by a public GitHub Actions workflow, not on a laptop. Maintained by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a>.</p></div>
-      <div class="card"><h3>Tested on three operating systems</h3><p>About 190 automated tests run inside a real VS Code on macOS, Linux and Windows on every push. A further set of end-to-end tests drives a live Ollama model: editing and fixing files, parallel sessions and subagents, isolated worktrees, stopping a run. They run wherever Ollama is available; CI skips them because it has no model server.</p></div>
-      <div class="card"><h3>The extension only talks to servers you list</h3><p>No analytics SDK, no account, no update check. Usage metrics for the Dashboard are files in <code>~/.localpilot/telemetry</code>. This website does use Google Analytics; the <a href="{{ '/privacy/' | relative_url }}">privacy page</a> lists exactly what goes where.</p></div>
-      <div class="card"><h3>You set the approvals</h3><p>Terminal, file edits, deletes and network access each have an <i>Ask</i>, <i>Allow</i> or <i>Block</i> policy, with <i>Careful</i>, <i>Balanced</i> and <i>Autonomous</i> presets. Every edit is snapshotted first and can be undone.</p></div>
-      <div class="card"><h3>Every change is written down</h3><p>The <a href="{{ site.repo }}/blob/main/CHANGELOG.md">changelog</a> lists what each release added, changed and fixed, including bugs in earlier releases. Problems and questions go to <a href="{{ site.repo }}/issues">GitHub issues</a>.</p></div>
-      <div class="card"><h3>Honest about limits</h3><p>A 7B local model is not as capable as a frontier cloud model, and it will get some multi-step tasks wrong. LocalPilot compensates with retries, a text fallback for tool calls and diagnostics loops. It shows every step, so you can steer or stop it.</p></div>
-    </div>
+    <ul class="proof" aria-label="Facts you can check">
+      <li><a href="{{ site.repo }}/blob/main/LICENSE"><b>MIT licensed</b><span>all source on GitHub</span></a></li>
+      <li><a href="{{ site.repo }}/actions/workflows/ci.yml"><b>Tested on every push</b><span>macOS, Linux and Windows</span></a></li>
+      <li><a href="{{ site.releases }}"><b>Checksummed releases</b><span>VSIX + SHA256SUMS.txt</span></a></li>
+      <li><a href="{{ '/privacy/' | relative_url }}"><b>No telemetry upload</b><span>metrics stay in local files</span></a></li>
+    </ul>
   </div>
 </section>
 
 <section id="faq" class="faq">
-  <div class="wrap" style="max-width:820px">
+  <div class="wrap narrow">
     <div class="section-head">
       <span class="eyebrow">FAQ</span>
       <h2>Common questions</h2>
     </div>
-    <details><summary>Which models work best?</summary><p>Automatic setup installs <code>gemma4:e4b</code> (or <code>gemma4:e2b</code> on machines with less memory). It calls tools and reads screenshots, so one model covers agent work and images. With more memory, <code>qwen2.5-coder</code> 14B or 32B, <code>qwen3</code>, <code>devstral</code>, <code>gpt-oss</code> and <code>mistral-small</code> are stronger agent models. For inline completions use <code>qwen2.5-coder:1.5b</code>, <code>starcoder2</code> or <code>codestral</code>. Settings → Models marks each size <em>fits</em>, <em>tight</em> or <em>too big</em> for your hardware. After you have used a few models, the Dashboard's <em>Model tuning</em> card ranks them by how they actually performed for you.</p></details>
-    <details><summary>What hardware do I need?</summary><p>A 7B model needs about 8 GB of RAM and runs on most recent laptops; 14B to 32B models want 16 to 32 GB. A GPU or Apple Silicon makes responses much faster but is not required. To run very large mixture-of-experts models on modest RAM, use <a href="{{ '/guides/colibri-vscode/' | relative_url }}">colibri</a>: it streams the model's experts from disk. Expect minutes before the first token and about one token per second, which suits one careful answer rather than a long agent loop.</p></details>
-    <details><summary>I have never run a local model. How hard is the setup?</summary><p>One click. When LocalPilot finds no model, it offers <strong>Set up automatically</strong>. That installs Ollama (no admin rights needed), downloads a model that fits your RAM and GPU, and configures itself. It starts with a small model so you can begin within minutes; bigger ones are a deliberate upgrade from the catalog.</p></details>
-    <details><summary>Does it use one model for everything?</summary><p>No. It picks per task: a vision model when the turn has images, the smallest fill-in-the-middle model for ghost text, an optional reasoning model in Plan mode, and a small fast model for read-only subagents. If your default is offline, the best available model answers instead. You can pin any of these in Settings → Models → Routing.</p></details>
-    <details><summary>Will it change my model settings on its own?</summary><p>Only within limits, and you can turn it off. With <code>localpilot.models.autoTune</code> on <code>auto</code> (the default), LocalPilot switches a role to another installed model only when several runs show it is measurably better. It never overrides a model you picked by hand unless that model keeps failing, and every change comes with an Undo. Set it to <code>suggest</code> to be asked first, or <code>off</code>.</p></details>
+    <details><summary>Is LocalPilot free?</summary><p>Yes. It is free and open source under the MIT license, with no paid tier, account or usage limit. Your only cost is the hardware you already own. It is an independent project by <a href="{{ site.author.url }}">{{ site.author.name }}</a>, not affiliated with any model or editor vendor.</p></details>
+    <details><summary>Which models work best?</summary><p>Automatic setup installs <code>gemma4:e4b</code> (or <code>gemma4:e2b</code> on machines with less memory). It calls tools and reads screenshots, so one model covers agent work and images. With more memory, <code>qwen2.5-coder</code> 14B or 32B, <code>qwen3</code>, <code>devstral</code>, <code>gpt-oss</code> and <code>mistral-small</code> are stronger agent models. For inline completions use <code>qwen2.5-coder:1.5b</code>, <code>starcoder2</code> or <code>codestral</code>. After a few days, the Dashboard ranks your installed models by how they actually performed for you.</p></details>
+    <details><summary>What hardware do I need?</summary><p>A 7B model needs about 8 GB of RAM and runs on most recent laptops; 14B to 32B models want 16 to 32 GB. A GPU or Apple Silicon makes responses much faster but is not required. For very large mixture-of-experts models on modest RAM, use <a href="{{ '/guides/colibri-vscode/' | relative_url }}">colibri</a>, which streams the experts from disk.</p></details>
+    <details><summary>Does any data leave my machine?</summary><p>Your code and prompts go only to the model servers you configure, which are all <code>localhost</code> by default. Two optional features make other requests: the skill registry fetches an index from GitHub at most once a day, and the web search and fetch tools follow <code>localpilot.approvals.network</code>. Both can be switched off. Dashboard metrics stay in <code>~/.localpilot/telemetry</code>. See the <a href="{{ '/privacy/' | relative_url }}">privacy page</a>.</p></details>
     <details><summary>My model doesn't support tool calling. Does agent mode still work?</summary><p>Yes. When a model has no native tool support, LocalPilot switches to a text protocol and reads the tool calls out of the model's reply. Results depend on the model, but 7B coder models handle it well.</p></details>
-    <details><summary>Does any data leave my machine?</summary><p>Your code and prompts go only to the model servers you configure, which are all <code>localhost</code> by default. Two optional features make other requests. The skill registry fetches a names-and-descriptions index from GitHub at most once a day (<code>localpilot.skills.autoInstall: off</code> disables it). The web search and fetch tools follow <code>localpilot.approvals.network</code>; set it to <code>ask</code> to approve each request. Dashboard metrics are written to <code>~/.localpilot/telemetry</code> and never uploaded. See the <a href="{{ '/privacy/' | relative_url }}">privacy page</a> for the full list.</p></details>
-    <details><summary>How is this different from Copilot's "bring your own key" option?</summary><p>Bring-your-own-key swaps the model behind Copilot. LocalPilot is a complete agent: the loop, the tools, parallel agents, change review, skills, subagents, screenshots and MCP. It also registers your local models with VS Code's Language Model API, so other extensions can use them too.</p></details>
-    <details><summary>Can I use my existing Claude Code or Cursor rules and skills?</summary><p>Yes. <code>CLAUDE.md</code> (user, parent and project folders, with <code>@imports</code>), <code>AGENTS.md</code>, <code>.cursorrules</code>, <code>.cursor/rules/*.mdc</code>, <code>.claude/skills</code>, <code>.claude/agents</code> and <code>.github/copilot-instructions.md</code> are all read without any changes — and so are <code>.claude/settings.json</code> permission rules and hooks, <code>.claude/commands</code> slash commands and Claude Code plugins. See the <a href="{{ '/docs/claude-code-compatibility/' | relative_url }}">Claude Code compatibility</a> guide.</p></details>
-    <details><summary>Is it on the Marketplace?</summary><p>Yes. Search for <a href="{{ site.marketplace }}">LocalPilot Agent</a> in VS Code or install <code>{{ site.extension_id }}</code>. For VSCodium and other editors, install the VSIX from GitHub Releases. Each release is published as a VSIX on <a href="{{ site.releases }}">GitHub Releases</a> with SHA-256 checksums.</p></details>
-    <details><summary>Who maintains it, and what if something breaks?</summary><p>LocalPilot is an independent open-source project by <a href="{{ site.author.url }}">{{ site.author.name }}</a>, not affiliated with any model or editor vendor. Report bugs on <a href="{{ site.repo }}/issues">GitHub issues</a>; the changelog shows how quickly fixes ship. Because it is MIT-licensed, you can fork it, audit it or pin a release.</p></details>
+    <details><summary>Can I use my existing Claude Code or Cursor rules and skills?</summary><p>Yes. <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>, <code>.cursor/rules</code>, <code>.claude/skills</code>, <code>.claude/agents</code>, <code>.claude/settings.json</code> permissions and hooks, <code>.claude/commands</code> and <code>.github/copilot-instructions.md</code> are all read without changes. See <a href="{{ '/docs/claude-code-compatibility/' | relative_url }}">Claude Code compatibility</a>.</p></details>
+    <details><summary>How is this different from Copilot's "bring your own key"?</summary><p>Bring-your-own-key swaps the model behind Copilot. LocalPilot is a complete agent: the loop, the tools, parallel agents, change review, skills, subagents, screenshots and MCP. It also registers your local models with VS Code's Language Model API, so other extensions can use them too.</p></details>
   </div>
 </section>
 
@@ -282,8 +203,8 @@ permalink: /
     <h2>Try it on your next bug fix.</h2>
     <p>Free, MIT-licensed, no account. Install it, point it at Ollama, and keep your code at home.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="{{ site.marketplace }}">Install LocalPilot</a>
-      <a class="btn" href="{{ '/docs/getting-started/' | relative_url }}">Read the docs</a>
+      <a class="btn btn-primary btn-lg" href="{{ site.marketplace }}">Install LocalPilot</a>
+      <a class="btn btn-lg" href="{{ '/docs/getting-started/' | relative_url }}">Read the docs</a>
     </div>
   </div>
 </section>
