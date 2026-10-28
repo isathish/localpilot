@@ -109,11 +109,30 @@ export class SkillManager implements vscode.Disposable {
     return this.agents.get(name);
   }
 
-  async refresh(): Promise<void> {
-    this.skills.clear();
-    this.agents.clear();
+  /**
+   * Re-reads skills and subagents. Calls are serialised and coalesced: the returned refresh starts after every
+   * earlier one, so it always sees the settings and files as of the call (file watchers fire refreshes too).
+   */
+  refresh(): Promise<void> {
+    if (this.queued) {
+      return this.queued;
+    }
+    const next = this.chain.then(() => {
+      this.queued = undefined;
+      return this.load();
+    });
+    this.queued = next;
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+  private chain: Promise<void> = Promise.resolve();
+  private queued?: Promise<void>;
+
+  private async load(): Promise<void> {
+    const skills = new Map<string, Skill>();
+    const agents = new Map<string, SubagentDefinition>();
     for (const a of builtinAgents()) {
-      this.agents.set(a.name, a);
+      agents.set(a.name, a);
     }
     const home = os.homedir();
     const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
@@ -147,20 +166,22 @@ export class SkillManager implements vscode.Disposable {
     }
 
     for (const { dir, source } of skillDirs) {
-      await this.loadSkillsFrom(dir, source);
+      await this.loadSkillsFrom(dir, source, skills);
     }
-    const disabled = new Set(cfg.skillsDisabled);
-    for (const s of this.skills.values()) {
+    const disabled = new Set(getConfig().skillsDisabled);
+    for (const s of skills.values()) {
       s.disabled = disabled.has(s.name) || undefined;
     }
     for (const { dir, source } of agentDirs) {
-      await this.loadAgentsFrom(dir, source);
+      await this.loadAgentsFrom(dir, source, agents);
     }
+    this.skills = skills;
+    this.agents = agents;
     this.log.info(`Skills: ${this.skills.size}${disabled.size ? ` (${this.allSkills.filter((s) => s.disabled).length} disabled)` : ''}, subagents: ${this.agents.size}`);
     this._onDidChange.fire();
   }
 
-  private async loadSkillsFrom(dir: string, source: Skill['source']): Promise<void> {
+  private async loadSkillsFrom(dir: string, source: Skill['source'], into: Map<string, Skill>): Promise<void> {
     let entries: [string, vscode.FileType][];
     try {
       entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));
@@ -176,10 +197,10 @@ export class SkillManager implements vscode.Disposable {
         const raw = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(skillPath))).toString('utf8');
         const { meta, body } = parseFrontMatter(raw);
         const skillName = (meta.name as string) || name;
-        if (this.skills.has(skillName)) {
+        if (into.has(skillName)) {
           continue; // earlier (higher priority) wins
         }
-        this.skills.set(skillName, {
+        into.set(skillName, {
           name: skillName,
           description: (meta.description as string) || body.split('\n').find((l) => l.trim())?.slice(0, 200) || '',
           path: skillPath,
@@ -193,7 +214,7 @@ export class SkillManager implements vscode.Disposable {
     }
   }
 
-  private async loadAgentsFrom(dir: string, source: Skill['source']): Promise<void> {
+  private async loadAgentsFrom(dir: string, source: Skill['source'], into: Map<string, SubagentDefinition>): Promise<void> {
     let entries: [string, vscode.FileType][];
     try {
       entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));
@@ -209,7 +230,7 @@ export class SkillManager implements vscode.Disposable {
         const { meta, body } = parseFrontMatter(raw);
         const name = (meta.name as string) || file.replace(/\.md$/, '');
         const list = (v: unknown): string[] | undefined => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : Array.isArray(v) ? (v as unknown[]).map(String).filter(Boolean) : undefined);
-        this.agents.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools: list(meta.tools), skills: list(meta.skills), model: meta.model as string | undefined, source });
+        into.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools: list(meta.tools), skills: list(meta.skills), model: meta.model as string | undefined, source });
       } catch (e) {
         this.log.warn(`Failed to load agent ${file}: ${String(e)}`);
       }
