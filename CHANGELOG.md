@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.2.9 — 2026-10-28
 ### Fixed
 - **Auto now stays Auto.** An Auto chat was silently pinned to whichever model answered its first turn, so later turns no longer followed the default model, image routing or busy-model spreading. Every turn of an Auto chat is now routed again; the tab shows which model answered. A command's one-off `model:` no longer changes the chat's model either.
 - **Parallel Auto chats use several models again.** Because of the pinning above, a second turn in a busy Auto chat queued behind the first model instead of moving to a comparable idle one.
