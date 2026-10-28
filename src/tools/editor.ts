@@ -6,20 +6,27 @@ import { resolveWorkspacePath } from './fs';
 function waitForDiagnostics(uri: vscode.Uri, maxMs: number): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
+    let sub: vscode.Disposable | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (): void => {
       if (!done) {
         done = true;
         clearTimeout(timer);
-        sub.dispose();
+        sub?.dispose();
         resolve();
       }
     };
-    const timer = setTimeout(finish, maxMs);
-    const sub = vscode.languages.onDidChangeDiagnostics((e) => {
+    // Subscribe before arming the timeout: a host without the event (the CLI) must not leave a timer that later
+    // touches an unassigned `sub` and takes the process down.
+    if (typeof vscode.languages.onDidChangeDiagnostics !== 'function') {
+      return resolve();
+    }
+    sub = vscode.languages.onDidChangeDiagnostics((e) => {
       if (e.uris.some((u) => u.toString() === uri.toString())) {
         setTimeout(finish, 120);
       }
     });
+    timer = setTimeout(finish, maxMs);
   });
 }
 

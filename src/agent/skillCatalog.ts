@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import { ParallelPool } from './parallel';
 import { userText } from './clarify';
@@ -36,6 +37,8 @@ interface CatalogState {
   repos: Record<string, { fetched: number; entries: Omit<CatalogEntry, 'repo'>[]; error?: string }>;
   /** Skills installed automatically: name → repo. A skill that later disappears from disk was removed on purpose. */
   autoInstalled: Record<string, string>;
+  /** Folders each automatic install went to; a missing one means the user deleted it (other workspaces may still get it). */
+  autoDirs?: Record<string, string[]>;
   /** Skill names the user declined. */
   dismissed: string[];
 }
@@ -58,6 +61,14 @@ const BEAT_INSTALLED_BY = 1.25;
 /** A request word found in at most this many catalog skills is specific enough to qualify the skill on its own. */
 const RARE_TOKEN_MAX_DF = 3;
 const MAX_ENTRIES_PER_REPO = 600;
+/** Everyday names for the file formats document skills are named after ("an Excel sheet" → the `xlsx` skill). */
+const FORMAT_ALIASES: [RegExp, string][] = [
+  [/\b(excel|spreadsheets?)\b/, 'xlsx'],
+  [/\b(power ?points?|slide ?decks?|slides? presentation)\b/, 'pptx'],
+  [/\b(word|ms ?word) (docs?|documents?|files?)\b/, 'docx'],
+];
+/** A skill named after an action ("convert-excel-to-md") only fits requests that ask for that action. */
+const ACTION_VERBS = new Set(['convert', 'migrate', 'upgrade', 'remove', 'delete', 'uninstall', 'rename', 'translate', 'export', 'import']);
 const EMPTY: CatalogState = { version: 1, repos: {}, autoInstalled: {}, dismissed: [] };
 
 export class SkillCatalog {
@@ -77,7 +88,7 @@ export class SkillCatalog {
       try {
         const parsed = JSON.parse(await fs.readFile(this.opts.cacheFile, 'utf8')) as Partial<CatalogState>;
         if (parsed?.version === 1) {
-          this.state = { version: 1, repos: parsed.repos ?? {}, autoInstalled: parsed.autoInstalled ?? {}, dismissed: parsed.dismissed ?? [] };
+          this.state = { version: 1, repos: parsed.repos ?? {}, autoInstalled: parsed.autoInstalled ?? {}, autoDirs: parsed.autoDirs ?? {}, dismissed: parsed.dismissed ?? [] };
         }
       } catch {
         /* first run */
@@ -101,12 +112,21 @@ export class SkillCatalog {
     return repos.filter((r) => (this.state.repos[r]?.fetched ?? 0) < cutoff);
   }
 
-  /** The cached entries of the configured repositories; kicks off a background refresh when any is stale. */
-  async entries(): Promise<CatalogEntry[]> {
+  /**
+   * The cached entries of the configured repositories; kicks off a background refresh when any is stale. A
+   * repository that was never indexed (first run, just added) is waited for briefly, so the request that comes in
+   * right after start-up or a settings change is matched against it instead of an empty list.
+   */
+  async entries(firstIndexWaitMs = 5_000): Promise<CatalogEntry[]> {
     await this.load();
     const repos = this.opts.repositories();
     if (this.stale(repos).length) {
-      void this.refresh().catch(() => undefined);
+      const pending = this.refresh().catch(() => undefined);
+      if (firstIndexWaitMs > 0 && repos.some((r) => !this.state.repos[r])) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([pending, new Promise((r) => (timer = setTimeout(r, firstIndexWaitMs)))]);
+        clearTimeout(timer);
+      }
     }
     return this.collect(repos);
   }
@@ -173,10 +193,11 @@ export class SkillCatalog {
   /**
    * The catalog skill to install for `request`, if one matches better than anything installed: it must score at
    * least `AUTO_INSTALL_MIN_SCORE`, beat the best installed skill clearly, and not have been removed or declined.
+   * `present` names skills on disk that are not offered to the agent (disabled) — never re-downloaded.
    */
-  async match(request: string, installed: SkillLike[]): Promise<CatalogMatch | undefined> {
+  async match(request: string, installed: SkillLike[], present: string[] = []): Promise<CatalogMatch | undefined> {
     const entries = await this.entries();
-    return this.pick(request, installed, entries);
+    return this.pick(request, installed, entries, present);
   }
 
   /**
@@ -186,14 +207,19 @@ export class SkillCatalog {
    * rare across the whole catalog and this skill is about them. The best such tier is ranked together with the
    * installed skills by the normal recommender.
    */
-  pick(request: string, installed: SkillLike[], entries: CatalogEntry[]): CatalogMatch | undefined {
+  pick(request: string, installed: SkillLike[], entries: CatalogEntry[], present: string[] = []): CatalogMatch | undefined {
     const text = userText(request).toLowerCase();
-    const tokens = [...new Set(tokenize(text))];
+    const aliases = FORMAT_ALIASES.filter(([re]) => re.test(text)).map(([, a]) => a);
+    const tokens = [...new Set([...tokenize(text), ...aliases])];
     if (!tokens.length) {
       return undefined;
     }
-    const have = new Set(installed.map((s) => s.name));
-    const blocked = new Set([...this.state.dismissed, ...Object.keys(this.state.autoInstalled).filter((n) => !have.has(n))]);
+    const have = new Set([...installed.map((s) => s.name), ...present]);
+    const removed = (n: string) => {
+      const dirs = this.state.autoDirs?.[n];
+      return !dirs?.length || dirs.some((d) => !existsSync(d));
+    };
+    const blocked = new Set([...this.state.dismissed, ...Object.keys(this.state.autoInstalled).filter((n) => !have.has(n) && removed(n))]);
     const all = dedupe(entries);
     const candidates = all.filter((e) => !have.has(e.name) && !blocked.has(e.name));
     if (!candidates.length) {
@@ -218,6 +244,9 @@ export class SkillCatalog {
     const tiers: CatalogEntry[][] = [[], [], []];
     for (const e of candidates) {
       const nt = nameTokensOf.get(e.name) ?? [];
+      if (nt.length > 1 && ACTION_VERBS.has(nt[0]) && !tokens.some((t) => similar(t, nt[0]))) {
+        continue;
+      }
       const hits = nt.filter((n) => tokens.some((t) => similar(t, n)));
       const coverage = nt.length ? hits.length / nt.length : 0;
       const specific = hits.some((h) => (nameDf.get(h) ?? 0) < genericMin);
@@ -243,7 +272,7 @@ export class SkillCatalog {
     }
     const byName = new Map(strong.map((e) => [e.name, e]));
     // Rank installed and catalog skills together so their scores share one vocabulary weighting.
-    const ranked = recommendSkills(request, [...installed, ...strong], 10);
+    const ranked = recommendSkills(aliases.length ? `${request} ${aliases.join(' ')}` : request, [...installed, ...strong], 10);
     const bestInstalled = ranked.find((m) => have.has(m.name))?.score ?? 0;
     const top = ranked.find((m) => byName.has(m.name));
     if (!top || top.score < AUTO_INSTALL_MIN_SCORE || top.score < bestInstalled * BEAT_INSTALLED_BY) {
@@ -280,6 +309,10 @@ export class SkillCatalog {
       if (one && opts.auto) {
         await this.load();
         this.state.autoInstalled[one.name] = entry.repo;
+        const dirs = ((this.state.autoDirs ??= {})[one.name] ??= []);
+        if (!dirs.includes(one.dir)) {
+          dirs.push(one.dir);
+        }
         await this.save();
       }
       return one;

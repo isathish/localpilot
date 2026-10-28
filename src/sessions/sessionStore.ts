@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { Session, SessionSummary } from '../types';
 import { userText } from '../agent/clarify';
@@ -5,6 +7,12 @@ import { userText } from '../agent/clarify';
 /** A chat with nothing in it yet: no messages, no plan, not pinned — nothing would be lost by removing it. */
 export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>): boolean {
   return !s.messages.length && !s.pinned && !s.plan;
+}
+
+/** The list row of a session: everything but the transcript and other per-turn state. */
+function summaryOf(s: Session): SessionSummary {
+  const { id, title, createdAt, updatedAt, model, mode, plan, pinned, worktree, isolated, group, skills } = s;
+  return { id, title, createdAt, updatedAt, model, mode, plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills };
 }
 
 export interface SessionSearchHit {
@@ -19,14 +27,28 @@ export interface SessionSearchHit {
  * Persists chat sessions as individual JSON files under the extension's workspace storage
  * (so sessions are scoped to the workspace, like Copilot/Claude Code). Multiple sessions can be
  * active and streaming at the same time; the store only cares about persistence.
+ *
+ * Memory: every chat's list row stays in memory, but full transcripts only for the most recently used ones
+ * (`maxInMemory`); the rest are read back from disk when something asks for them. Chats that are `inUse` (running,
+ * on screen) or have a write pending are never dropped, so callers holding a session object keep the live one.
  */
 export class SessionStore implements vscode.Disposable {
+  /** Full sessions, least recently used first. */
   private sessions = new Map<string, Session>();
+  /** List rows for every session on disk or in memory. */
+  private index = new Map<string, SessionSummary>();
   private readonly dir: vscode.Uri;
   private saveTimers = new Map<string, NodeJS.Timeout>();
+  private writing = new Set<string>();
+  /** Deleted ids: a late save from a run that was still finishing must not bring the chat back. */
+  private deleted = new Set<string>();
   private changeTimer?: NodeJS.Timeout;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
+  /** How many full transcripts to keep in memory; read on every eviction so the setting applies live. */
+  maxInMemory: () => number = () => 16;
+  /** Sessions that must stay in memory (running, active). */
+  inUse: (id: string) => boolean = () => false;
 
   constructor(ctx: vscode.ExtensionContext, private readonly log: vscode.LogOutputChannel) {
     const base = ctx.storageUri ?? ctx.globalStorageUri;
@@ -34,6 +56,10 @@ export class SessionStore implements vscode.Disposable {
   }
 
   async load(): Promise<void> {
+    // Only the newest transcripts are kept while reading, so start-up never holds the whole history at once.
+    const cap = this.dir.scheme === 'file' ? Math.max(2, Math.floor(this.maxInMemory())) : Infinity;
+    const keep: Session[] = [];
+    const empty: string[] = [];
     try {
       await vscode.workspace.fs.createDirectory(this.dir);
       const entries = await vscode.workspace.fs.readDirectory(this.dir);
@@ -44,18 +70,29 @@ export class SessionStore implements vscode.Disposable {
         try {
           const raw = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.dir, name));
           const s = JSON.parse(Buffer.from(raw).toString('utf8')) as Session;
-          if (s?.id) {
-            this.sessions.set(s.id, s);
+          if (!s?.id) {
+            continue;
+          }
+          // Every window reload used to leave another untouched "New chat" behind; they only clutter the history.
+          if (isEmptySession(s)) {
+            empty.push(s.id);
+            continue;
+          }
+          this.index.set(s.id, summaryOf(s));
+          keep.push(s);
+          if (keep.length > cap) {
+            keep.sort((a, b) => b.updatedAt - a.updatedAt).length = cap;
           }
         } catch (e) {
           this.log.warn(`Skipping corrupt session file ${name}: ${String(e)}`);
         }
       }
-      // Every window reload used to leave another untouched "New chat" behind; they only clutter the history.
-      for (const s of [...this.sessions.values()]) {
-        if (isEmptySession(s)) {
-          await this.delete(s.id, false);
-        }
+      // Oldest first, so the newest chats end up as the most recently used.
+      for (const s of keep.sort((a, b) => a.updatedAt - b.updatedAt)) {
+        this.sessions.set(s.id, s);
+      }
+      for (const id of empty) {
+        await this.delete(id, false);
       }
     } catch (e) {
       this.log.error(`Failed to load sessions: ${String(e)}`);
@@ -64,13 +101,69 @@ export class SessionStore implements vscode.Disposable {
   }
 
   list(): SessionSummary[] {
-    return [...this.sessions.values()]
-      .map(({ messages: _m, ...rest }) => ({ ...rest, messageCount: _m.length }))
-      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt);
+    return [...this.index.values()].map((s) => ({ ...s })).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt);
   }
 
+  /** The full session, read back from disk if it was dropped from memory. */
   get(id: string): Session | undefined {
-    return this.sessions.get(id);
+    const hot = this.sessions.get(id);
+    if (hot) {
+      this.sessions.delete(id);
+      this.sessions.set(id, hot);
+      return hot;
+    }
+    const cold = this.index.has(id) ? this.readSync(id) : undefined;
+    if (cold) {
+      this.sessions.set(id, cold);
+      this.evict(id);
+    }
+    return cold;
+  }
+
+  /** Full transcripts currently held in memory (for the Memory page and tests). */
+  get loadedCount(): number {
+    return this.sessions.size;
+  }
+
+  /** Reads a session without keeping it in memory (search, scans over every chat). */
+  peek(id: string): Session | undefined {
+    return this.sessions.get(id) ?? this.readSync(id);
+  }
+
+  private readSync(id: string): Session | undefined {
+    if (this.dir.scheme !== 'file') {
+      return undefined;
+    }
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(this.dir.fsPath, `${id}.json`), 'utf8')) as Session;
+      return s?.id === id ? s : undefined;
+    } catch (e) {
+      this.log.warn(`Cannot read session ${id}: ${String(e)}`);
+      return undefined;
+    }
+  }
+
+  /** Drops the least recently used transcripts beyond the limit (never `keep`, in-use or unsaved ones). */
+  private evict(keep?: string): void {
+    // Without a local file to read back from, everything stays in memory.
+    const max = this.dir.scheme === 'file' ? Math.max(2, Math.floor(this.maxInMemory())) : Infinity;
+    if (this.sessions.size <= max) {
+      return;
+    }
+    for (const id of [...this.sessions.keys()]) {
+      if (this.sessions.size <= max) {
+        break;
+      }
+      if (id === keep || this.saveTimers.has(id) || this.writing.has(id) || this.inUse(id)) {
+        continue;
+      }
+      this.sessions.delete(id);
+    }
+  }
+
+  /** Re-applies the memory limit (after the setting changed or a run ended). */
+  trim(): void {
+    this.evict();
   }
 
   /**
@@ -83,12 +176,13 @@ export class SessionStore implements vscode.Disposable {
       return [];
     }
     const hits: SessionSearchHit[] = [];
-    for (const s of [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    for (const row of [...this.index.values()].sort((a, b) => b.updatedAt - a.updatedAt)) {
       let hit: SessionSearchHit | undefined;
-      if (s.title.toLowerCase().includes(q)) {
-        hit = { id: s.id, snippet: '', role: 'user' };
+      if (row.title.toLowerCase().includes(q)) {
+        hit = { id: row.id, snippet: '', role: 'user' };
       }
-      for (const m of s.messages) {
+      const s = this.peek(row.id);
+      for (const m of s?.messages ?? []) {
         if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages) {
           continue;
         }
@@ -101,7 +195,7 @@ export class SessionStore implements vscode.Disposable {
         const lineEnd = (text.indexOf('\n', at) + 1 || text.length + 1) - 1;
         const from = Math.max(lineStart, at - 40);
         const snippet = `${from > lineStart ? '…' : ''}${text.slice(from, Math.min(lineEnd, at + q.length + 80)).replace(/\s+/g, ' ').trim()}${Math.min(lineEnd, at + q.length + 80) < lineEnd ? '…' : ''}`;
-        hit = { id: s.id, snippet, role: m.role };
+        hit = { id: row.id, snippet, role: m.role };
         break;
       }
       if (hit) {
@@ -136,7 +230,7 @@ export class SessionStore implements vscode.Disposable {
 
   /** Branch a session: copy messages up to (and including) index into a new session. */
   fork(id: string, uptoIndex?: number): Session | undefined {
-    const src = this.sessions.get(id);
+    const src = this.get(id);
     if (!src) {
       return undefined;
     }
@@ -149,7 +243,7 @@ export class SessionStore implements vscode.Disposable {
   }
 
   rename(id: string, title: string): void {
-    const s = this.sessions.get(id);
+    const s = this.get(id);
     if (s) {
       s.title = title.slice(0, 120);
       this.save(s, true);
@@ -157,7 +251,7 @@ export class SessionStore implements vscode.Disposable {
   }
 
   togglePin(id: string): void {
-    const s = this.sessions.get(id);
+    const s = this.get(id);
     if (s) {
       s.pinned = !s.pinned;
       this.save(s, true);
@@ -165,7 +259,9 @@ export class SessionStore implements vscode.Disposable {
   }
 
   async delete(id: string, notify = true): Promise<void> {
+    this.deleted.add(id);
     this.sessions.delete(id);
+    this.index.delete(id);
     clearTimeout(this.saveTimers.get(id));
     this.saveTimers.delete(id);
     try {
@@ -179,7 +275,7 @@ export class SessionStore implements vscode.Disposable {
   }
 
   async clearAll(): Promise<void> {
-    for (const id of [...this.sessions.keys()]) {
+    for (const id of [...this.index.keys()]) {
       await this.delete(id);
     }
   }
@@ -188,7 +284,7 @@ export class SessionStore implements vscode.Disposable {
   async clearExcept(keep: Iterable<string>): Promise<number> {
     const keepSet = new Set(keep);
     let n = 0;
-    for (const id of [...this.sessions.keys()]) {
+    for (const id of [...this.index.keys()]) {
       if (!keepSet.has(id)) {
         await this.delete(id);
         n++;
@@ -206,7 +302,7 @@ export class SessionStore implements vscode.Disposable {
       return 0;
     }
     const safe = new Set(protect);
-    const candidates = [...this.sessions.values()].filter((s) => !s.pinned && !safe.has(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const candidates = [...this.index.values()].filter((s) => !s.pinned && !safe.has(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
     const extra = candidates.slice(max);
     for (const s of extra) {
       await this.delete(s.id);
@@ -215,24 +311,27 @@ export class SessionStore implements vscode.Disposable {
   }
 
   /** Storage footprint of the session files (for the Settings → Memory page). */
-  async stats(): Promise<{ count: number; bytes: number; messages: number; oldest?: number }> {
+  async stats(): Promise<{ count: number; bytes: number; messages: number; oldest?: number; inMemory: number }> {
     let bytes = 0;
     let messages = 0;
     let oldest: number | undefined;
-    for (const s of this.sessions.values()) {
-      messages += s.messages.length;
+    for (const s of this.index.values()) {
+      messages += s.messageCount;
       oldest = oldest === undefined ? s.createdAt : Math.min(oldest, s.createdAt);
       try {
         bytes += (await vscode.workspace.fs.stat(vscode.Uri.joinPath(this.dir, `${s.id}.json`))).size;
       } catch {
-        bytes += JSON.stringify(s).length;
+        bytes += JSON.stringify(this.sessions.get(s.id) ?? s).length;
       }
     }
-    return { count: this.sessions.size, bytes, messages, oldest };
+    return { count: this.index.size, bytes, messages, oldest, inMemory: this.sessions.size };
   }
 
   /** Debounced write so streaming turns do not hammer the disk. `immediate` notifies listeners right away (new / renamed / pinned chat). */
   save(s: Session, immediate = false): void {
+    if (this.deleted.has(s.id)) {
+      return;
+    }
     s.updatedAt = Date.now();
     s.messageCount = s.messages.length;
     if (s.title === 'New chat') {
@@ -243,9 +342,16 @@ export class SessionStore implements vscode.Disposable {
       }
     }
     clearTimeout(this.saveTimers.get(s.id));
+    // The caller's object is the live one: make sure it is the one the store hands out (and lists) from now on.
+    this.sessions.delete(s.id);
+    this.sessions.set(s.id, s);
+    this.index.set(s.id, summaryOf(s));
     this.saveTimers.set(
       s.id,
-      setTimeout(() => void this.flush(s), 400)
+      setTimeout(() => {
+        this.saveTimers.delete(s.id);
+        void this.flush(s);
+      }, 400)
     );
     // Listeners rebuild session lists / tree views; while agents stream, save() runs after every tool result,
     // so coalesce the notification to a few times per second.
@@ -264,16 +370,23 @@ export class SessionStore implements vscode.Disposable {
   }
 
   async flush(s: Session): Promise<void> {
+    // This write carries the latest state, so a debounced one still pending is redundant.
+    clearTimeout(this.saveTimers.get(s.id));
+    this.saveTimers.delete(s.id);
+    this.writing.add(s.id);
     try {
       await vscode.workspace.fs.createDirectory(this.dir);
       await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(this.dir, `${s.id}.json`), Buffer.from(JSON.stringify(s), 'utf8'));
     } catch (e) {
       this.log.error(`Failed to save session ${s.id}: ${String(e)}`);
+    } finally {
+      this.writing.delete(s.id);
     }
+    this.evict();
   }
 
   async exportMarkdown(id: string): Promise<string> {
-    const s = this.sessions.get(id);
+    const s = this.get(id);
     if (!s) {
       return '';
     }

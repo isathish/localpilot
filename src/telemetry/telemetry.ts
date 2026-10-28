@@ -108,7 +108,7 @@ export interface TelemetrySummary {
   health: { provider: string; checks: number; ok: number; uptime: number; up: boolean; lastAt: number; latency: Percentiles; lastError?: string; models?: number }[];
   worktrees: { created: number; applied: number; discarded: number; conflicts: number; files: number };
   errors: { t: number; kind: 'model' | 'tool' | 'run' | 'health'; what: string; detail: string }[];
-  storage: { events: number; bytes: number; files: number; oldest?: number; dir: string };
+  storage: { events: number; bytes: number; files: number; oldest?: number; dir: string; /** Where new data goes right now. */ backend?: 'files' | 'redis' | 'fallback'; remoteError?: string };
 }
 
 export interface TelemetryOptions {
@@ -120,7 +120,27 @@ export interface TelemetryOptions {
   /** Lines of log kept in memory for the dashboard. */
   logBuffer?: number;
   now?: () => number;
+  /** Optional external store (Redis Stack); when it is set and reachable, events and log lines go there instead of files. */
+  remote?: () => TelemetryRemote | undefined;
+  /** A remote write failed and the batch went to files instead. */
+  onRemoteError?: (e: unknown) => void;
 }
+
+/** An external event/log store. Must throw from `write` when the batch was not stored, so it can go to files instead. */
+export interface TelemetryRemote {
+  readonly label: string;
+  write(eventLines: string[], logLines: string[], retentionDays: number): Promise<void>;
+  /** Streams events recorded at or after `fromMs` (0 = all), oldest first, in batches. */
+  events(fromMs: number, onBatch: (events: TelemetryEvent[]) => void): Promise<void>;
+  /** The newest `limit` stored log lines, oldest first. */
+  recentLogs(limit: number): Promise<string[]>;
+  stats(): Promise<{ events: number; bytes: number; oldest?: number }>;
+  prune(cutoffMs: number): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/** After a failed remote write, files take over for this long before the remote is tried again. */
+const REMOTE_RETRY_MS = 60_000;
 
 const FLUSH_MS = 400;
 const MAX_SUMMARY_DAYS = 365;
@@ -145,13 +165,53 @@ const startOfDay = (t: number): number => {
   return d.getTime();
 };
 
-export function percentiles(values: number[]): Percentiles {
-  if (!values.length) {
+export function percentiles(values: number[] | Samples): Percentiles {
+  const list = values instanceof Samples ? values.values : values;
+  if (!list.length) {
     return { p50: 0, p95: 0, avg: 0 };
   }
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = [...list].sort((a, b) => a - b);
   const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))];
-  return { p50: at(0.5), p95: at(0.95), avg: Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length) };
+  const avg = values instanceof Samples ? values.mean : sorted.reduce((a, b) => a + b, 0) / sorted.length;
+  return { p50: at(0.5), p95: at(0.95), avg: Math.round(avg) };
+}
+
+/** One stored log line (`ISO [level] msg`, newlines escaped) back into an entry. */
+export function parseLogLine(line: string): LogEntry | undefined {
+  const m = /^(\S+) \[(trace|debug|info|warn|error)\] (.*)$/.exec(line);
+  return m ? { t: Date.parse(m[1]) || Date.now(), level: m[2] as LogLevel, msg: m[3].replace(/\\n/g, '\n') } : undefined;
+}
+
+/** Samples kept per percentile series; beyond this a uniform reservoir stands in for the full list. */
+export const SAMPLE_CAP = 4096;
+
+/**
+ * A bounded sample of a value series: exact until `SAMPLE_CAP` values, a uniform random reservoir after that, so
+ * p50/p95 stay accurate to within a percent or so while memory stays flat however long the history is. The mean
+ * is always exact.
+ */
+export class Samples {
+  readonly values: number[] = [];
+  private n = 0;
+  private sum = 0;
+  add(x: number): void {
+    this.n++;
+    this.sum += x;
+    if (this.values.length < SAMPLE_CAP) {
+      this.values.push(x);
+      return;
+    }
+    const j = Math.floor(Math.random() * this.n);
+    if (j < SAMPLE_CAP) {
+      this.values[j] = x;
+    }
+  }
+  get count(): number {
+    return this.n;
+  }
+  get mean(): number {
+    return this.n ? this.sum / this.n : 0;
+  }
 }
 
 /**
@@ -168,6 +228,8 @@ export class Telemetry {
   private readonly logListeners = new Set<(e: LogEntry) => void>();
   private readonly eventListeners = new Set<(e: TelemetryEvent) => void>();
   private lastPrune = 0;
+  private remoteDownUntil = 0;
+  private lastRemoteError: string | undefined;
   readonly dir: string;
 
   constructor(private readonly opts: TelemetryOptions) {
@@ -208,7 +270,8 @@ export class Telemetry {
   log(level: LogLevel, msg: string): void {
     const entry: LogEntry = { t: this.now, level, msg: String(msg) };
     this.ring.push(entry);
-    const max = this.opts.logBuffer ?? 3000;
+    // With an external store the history lives there; keep only a short tail in the extension host.
+    const max = this.opts.logBuffer ?? (this.activeRemote() ? 500 : 3000);
     if (this.ring.length > max) {
       this.ring.splice(0, this.ring.length - max);
     }
@@ -255,20 +318,25 @@ export class Telemetry {
     return path.join(this.dir, `${LOG_PREFIX}${dayKey(t)}.log`);
   }
 
-  /** Seeds the in-memory log with the tail of today's file so the dashboard shows lines from before this start. */
+  /** Seeds the in-memory log with the tail of today's log (file, or the external store when that is where it lives). */
   async loadRecentLogs(limit = 400): Promise<void> {
+    const remote = this.activeRemote();
+    if (remote) {
+      try {
+        const lines = await remote.recentLogs(limit);
+        if (lines.length) {
+          this.ring.unshift(...lines.map(parseLogLine).filter((e): e is LogEntry => !!e));
+          return;
+        }
+      } catch (e) {
+        this.remoteFailed(e);
+      }
+    }
     try {
       const text = await fs.promises.readFile(this.logFile(), 'utf8');
       const lines = text.split('\n').filter(Boolean);
       const tail = lines.slice(Math.max(0, lines.length - limit));
-      const parsed: LogEntry[] = [];
-      for (const line of tail) {
-        const m = /^(\S+) \[(trace|debug|info|warn|error)\] (.*)$/.exec(line);
-        if (m) {
-          parsed.push({ t: Date.parse(m[1]) || this.now, level: m[2] as LogLevel, msg: m[3].replace(/\\n/g, '\n') });
-        }
-      }
-      this.ring.unshift(...parsed);
+      this.ring.unshift(...tail.map(parseLogLine).filter((e): e is LogEntry => !!e));
     } catch {
       /* no file yet */
     }
@@ -293,6 +361,16 @@ export class Telemetry {
     if (!events.size && !logs.size) {
       return;
     }
+    const remote = this.activeRemote();
+    if (remote) {
+      try {
+        await remote.write([...events.values()].flat(), [...logs.values()].flat(), this.opts.retentionDays());
+        await this.maybePrune();
+        return;
+      } catch (e) {
+        this.remoteFailed(e);
+      }
+    }
     await fs.promises.mkdir(this.dir, { recursive: true });
     for (const [day, lines] of events) {
       await fs.promises.appendFile(path.join(this.dir, `${EVENT_PREFIX}${day}.jsonl`), `${lines.join('\n')}\n`, 'utf8');
@@ -300,6 +378,28 @@ export class Telemetry {
     for (const [day, lines] of logs) {
       await fs.promises.appendFile(path.join(this.dir, `${LOG_PREFIX}${day}.log`), `${lines.join('\n')}\n`, 'utf8');
     }
+    await this.maybePrune();
+  }
+
+  /** The external store, unless none is configured or it failed within the last minute. */
+  activeRemote(): TelemetryRemote | undefined {
+    return this.now < this.remoteDownUntil ? undefined : this.opts.remote?.();
+  }
+
+  /** Reads and writes share one back-off, so a dead server is not retried (and logged) on every dashboard refresh. */
+  private remoteFailed(e: unknown): void {
+    this.remoteDownUntil = this.now + REMOTE_RETRY_MS;
+    this.lastRemoteError = e instanceof Error ? e.message : String(e);
+    this.opts.onRemoteError?.(e);
+  }
+
+  /** Forget an earlier failure (the store's target changed). */
+  resetRemote(): void {
+    this.remoteDownUntil = 0;
+    this.lastRemoteError = undefined;
+  }
+
+  private async maybePrune(): Promise<void> {
     if (this.now - this.lastPrune > 6 * 3600_000) {
       this.lastPrune = this.now;
       await this.prune();
@@ -334,6 +434,7 @@ export class Telemetry {
         removed++;
       }
     }
+    await this.opts.remote?.()?.prune(startOfDay(this.now) - (days - 1) * 86400_000).catch(() => undefined);
     return removed;
   }
 
@@ -344,6 +445,7 @@ export class Telemetry {
     for (const f of await this.files()) {
       await fs.promises.rm(path.join(this.dir, f.name), { force: true });
     }
+    await this.opts.remote?.()?.clear().catch(() => undefined);
   }
 
   private async files(): Promise<{ name: string; day: string; kind: 'events' | 'log'; size: number }[]> {
@@ -372,10 +474,23 @@ export class Telemetry {
 
   /** Reads events from the last `days` days (0 = everything on disk), oldest first. */
   async events(days: number): Promise<TelemetryEvent[]> {
+    const out: TelemetryEvent[] = [];
+    await this.eachEvent(days, (batch) => {
+      for (const e of batch) {
+        out.push(e);
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Streams the last `days` days of events (files first, then the external store) in batches, so aggregation never
+   * needs the whole history in memory at once.
+   */
+  async eachEvent(days: number, onBatch: (events: TelemetryEvent[]) => void): Promise<void> {
     await this.flush();
     const span = days > 0 ? Math.min(days, MAX_SUMMARY_DAYS) : MAX_SUMMARY_DAYS;
     const cutoff = days > 0 ? dayKey(startOfDay(this.now) - (span - 1) * 86400_000) : '';
-    const out: TelemetryEvent[] = [];
     for (const f of await this.files()) {
       if (f.kind !== 'events' || f.day < cutoff) {
         continue;
@@ -386,6 +501,7 @@ export class Telemetry {
       } catch {
         continue;
       }
+      const batch: TelemetryEvent[] = [];
       for (const line of text.split('\n')) {
         if (!line) {
           continue;
@@ -393,14 +509,18 @@ export class Telemetry {
         try {
           const ev = JSON.parse(line) as TelemetryEvent;
           if (ev && typeof ev.t === 'number' && typeof ev.type === 'string') {
-            out.push(ev);
+            batch.push(ev);
           }
         } catch {
           /* a torn line from a crash mid-write */
         }
       }
+      onBatch(batch);
     }
-    return out;
+    const remote = this.activeRemote();
+    if (remote) {
+      await remote.events(days > 0 ? startOfDay(this.now) - (span - 1) * 86400_000 : 0, onBatch).catch((e) => this.remoteFailed(e));
+    }
   }
 
   /** Everything on disk as one JSON document (for Export). */
@@ -410,23 +530,56 @@ export class Telemetry {
     return JSON.stringify({ exportedAt: new Date(this.now).toISOString(), dir: this.dir, events, logs }, null, 1);
   }
 
+  /** The same document as `exportJson`, written to `file` batch by batch so a long history never sits in memory as one string. */
+  async exportTo(file: string): Promise<number> {
+    const out = fs.createWriteStream(file, 'utf8');
+    const done = new Promise<void>((resolve, reject) => {
+      out.on('finish', resolve);
+      out.on('error', reject);
+    });
+    let n = 0;
+    out.write(`{\n "exportedAt": ${JSON.stringify(new Date(this.now).toISOString())},\n "dir": ${JSON.stringify(this.dir)},\n "events": [`);
+    await this.eachEvent(0, (batch) => {
+      for (const e of batch) {
+        out.write(`${n++ ? ',' : ''}\n  ${JSON.stringify(e)}`);
+      }
+    });
+    out.write(`\n ],\n "logs": ${JSON.stringify(this.ring)}\n}\n`);
+    out.end();
+    await done;
+    return n;
+  }
+
   // ------------------------------------------------------------------ aggregation
   /**
    * Aggregates the last `days` days. `filter.providers` restricts model and health rows (and the totals they feed) to
    * those provider ids, so the dashboard shows only providers that are configured and enabled right now.
    */
   async summary(days: number, filter?: SummaryFilter): Promise<TelemetrySummary> {
-    const events = await this.events(days);
     const files = await this.files();
     const now = this.now;
-    const from = days > 0 ? startOfDay(now) - (days - 1) * 86400_000 : events[0]?.t ?? now;
-    const s = summarize(events, { days, from, to: now }, filter);
+    let first: number | undefined;
+    const agg = aggregator({ days, from: days > 0 ? startOfDay(now) - (days - 1) * 86400_000 : now, to: now }, filter);
+    await this.eachEvent(days, (batch) => {
+      for (const e of batch) {
+        first = first === undefined ? e.t : Math.min(first, e.t);
+        agg.add(e);
+      }
+    });
+    const s = agg.finish(days > 0 ? undefined : first ?? now);
+    const configured = this.opts.remote?.();
+    const remote = this.activeRemote();
+    const rs = remote ? await remote.stats().catch((e) => void this.remoteFailed(e)) : undefined;
+    const fileOldest = files.length ? Date.parse(`${files[0].day}T00:00:00`) || undefined : undefined;
+    const backend = !configured ? 'files' : rs ? 'redis' : 'fallback';
     s.storage = {
-      events: events.length,
-      bytes: files.reduce((a, f) => a + f.size, 0),
+      events: s.storage.events,
+      bytes: files.reduce((a, f) => a + f.size, 0) + (rs?.bytes ?? 0),
       files: files.length,
-      oldest: files.length ? Date.parse(`${files[0].day}T00:00:00`) || undefined : undefined,
-      dir: this.dir,
+      oldest: [fileOldest, rs?.oldest].filter((x): x is number => !!x).sort((a, b) => a - b)[0],
+      dir: backend === 'redis' ? `${this.dir} + ${configured!.label}` : backend === 'fallback' ? `${this.dir} (${configured!.label} unreachable — writing to files)` : this.dir,
+      backend,
+      remoteError: backend === 'fallback' ? this.lastRemoteError : undefined,
     };
     return s;
   }
@@ -438,7 +591,16 @@ export interface SummaryFilter {
 }
 
 /** Pure aggregation over a list of events (exported for tests and the preview). */
-export function summarize(events: TelemetryEvent[], range: { days: number; from: number; to: number }, filter?: SummaryFilter): TelemetrySummary {
+export function summarize(events: Iterable<TelemetryEvent>, range: { days: number; from: number; to: number }, filter?: SummaryFilter): TelemetrySummary {
+  const agg = aggregator(range, filter);
+  for (const e of events) {
+    agg.add(e);
+  }
+  return agg.finish();
+}
+
+/** Incremental form of `summarize`: feed events in any number of batches, then `finish()` (optionally with the real start). */
+export function aggregator(range: { days: number; from: number; to: number }, filter?: SummaryFilter): { add(e: TelemetryEvent): void; finish(from?: number): TelemetrySummary } {
   const onlyProviders = filter?.providers ? new Set(filter.providers) : undefined;
   const byDay = new Map<string, DayPoint>();
   const dayOf = (t: number) => {
@@ -457,30 +619,39 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
     }
   }
 
-  type ModelAgg = { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; genMs: number; ttft: number[]; dur: number[]; errors: number; last: number };
+  type ModelAgg = { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; genMs: number; ttft: Samples; dur: Samples; errors: number; last: number };
   const models = new Map<string, ModelAgg>();
-  type ToolAgg = { name: string; calls: number; errors: number; cached: number; dur: number[]; last: number };
+  type ToolAgg = { name: string; calls: number; errors: number; cached: number; dur: Samples; last: number };
   const tools = new Map<string, ToolAgg>();
-  type ModeAgg = { mode: string; runs: number; done: number; stopped: number; failed: number; dur: number[]; steps: number[]; toolCalls: number };
+  type ModeAgg = { mode: string; runs: number; done: number; stopped: number; failed: number; dur: Samples; steps: Samples; toolCalls: number };
   const modes = new Map<string, ModeAgg>();
-  type HealthAgg = { provider: string; checks: number; ok: number; up: boolean; lastAt: number; dur: number[]; lastError?: string; models?: number };
+  type HealthAgg = { provider: string; checks: number; ok: number; up: boolean; lastAt: number; dur: Samples; lastError?: string; models?: number };
   const health = new Map<string, HealthAgg>();
-  const completions = { requested: 0, shown: 0, accepted: 0, cached: 0, empty: 0, error: 0, latency: [] as number[] };
+  const completions = { requested: 0, shown: 0, accepted: 0, cached: 0, empty: 0, error: 0, latency: new Samples() };
   const langs = new Map<string, { language: string; shown: number; accepted: number }>();
   const worktrees = { created: 0, applied: 0, discarded: 0, conflicts: 0, files: 0 };
   const errors: TelemetrySummary['errors'] = [];
+  // Only the newest 25 are reported; trim as we go so a year of failures does not pile up before the final slice.
+  const noteError = (e: TelemetrySummary['errors'][number]): void => {
+    errors.push(e);
+    if (errors.length > 200) {
+      errors.sort((a, b) => b.t - a.t).length = 25;
+    }
+  };
   const totals = { runs: 0, done: 0, stopped: 0, failed: 0, subagentRuns: 0, modelCalls: 0, modelErrors: 0, retries: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, isolatedRuns: 0 };
-  const runTimes: number[] = [];
-  const runSteps: number[] = [];
+  const runTimes = new Samples();
+  const runSteps = new Samples();
   const hourly = new Array<number>(24).fill(0);
   const dayGenMs = new Map<string, number>();
   let genMsTotal = 0;
-  type AgentAgg = { agent: string; runs: number; done: number; stopped: number; failed: number; dur: number[]; toolCalls: number };
+  type AgentAgg = { agent: string; runs: number; done: number; stopped: number; failed: number; dur: Samples; toolCalls: number };
   const agents = new Map<string, AgentAgg>();
+  let count = 0;
 
-  for (const e of events) {
+  const add = (e: TelemetryEvent): void => {
+    count++;
     if (onlyProviders && (e.type === 'model' || e.type === 'health') && !onlyProviders.has(e.provider)) {
-      continue;
+      return;
     }
     const day = dayOf(e.t);
     switch (e.type) {
@@ -488,7 +659,7 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
         const key = `${e.provider}/${e.model}`;
         let m = models.get(key);
         if (!m) {
-          m = { model: e.model, provider: e.provider, calls: 0, promptTokens: 0, completionTokens: 0, genMs: 0, ttft: [], dur: [], errors: 0, last: 0 };
+          m = { model: e.model, provider: e.provider, calls: 0, promptTokens: 0, completionTokens: 0, genMs: 0, ttft: new Samples(), dur: new Samples(), errors: 0, last: 0 };
           models.set(key, m);
         }
         m.calls++;
@@ -504,10 +675,10 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           day.tokens += (e.promptTokens ?? 0) + (e.completionTokens ?? 0);
           day.promptTokens += e.promptTokens ?? 0;
           day.completionTokens += e.completionTokens ?? 0;
-          m.dur.push(e.durationMs);
+          m.dur.add(e.durationMs);
           let gen = 0;
           if (e.ttftMs !== undefined) {
-            m.ttft.push(e.ttftMs);
+            m.ttft.add(e.ttftMs);
             if (e.completionTokens) {
               gen = Math.max(1, e.durationMs - e.ttftMs);
             }
@@ -526,14 +697,14 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           totals.modelErrors++;
           day.modelErrors++;
           day.errors++;
-          errors.push({ t: e.t, kind: 'model', what: e.model, detail: e.reason ?? 'error' });
+          noteError({ t: e.t, kind: 'model', what: e.model, detail: e.reason ?? 'error' });
         }
         break;
       }
       case 'tool': {
         let t = tools.get(e.name);
         if (!t) {
-          t = { name: e.name, calls: 0, errors: 0, cached: 0, dur: [], last: 0 };
+          t = { name: e.name, calls: 0, errors: 0, cached: 0, dur: new Samples(), last: 0 };
           tools.set(e.name, t);
         }
         t.calls++;
@@ -546,7 +717,7 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           totals.cachedTools++;
           day.cachedTools++;
         } else {
-          t.dur.push(e.durationMs);
+          t.dur.add(e.durationMs);
         }
         if (e.error) {
           t.errors++;
@@ -562,12 +733,12 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           const name = e.agent || 'subagent';
           let a = agents.get(name);
           if (!a) {
-            a = { agent: name, runs: 0, done: 0, stopped: 0, failed: 0, dur: [], toolCalls: 0 };
+            a = { agent: name, runs: 0, done: 0, stopped: 0, failed: 0, dur: new Samples(), toolCalls: 0 };
             agents.set(name, a);
           }
           a.runs++;
           a[e.outcome]++;
-          a.dur.push(e.durationMs);
+          a.dur.add(e.durationMs);
           a.toolCalls += e.toolCalls;
         }
         if (e.isolated) {
@@ -579,20 +750,20 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
         if (e.outcome === 'failed') {
           day.failedRuns++;
         }
-        runTimes.push(e.durationMs);
-        runSteps.push(e.steps);
+        runTimes.add(e.durationMs);
+        runSteps.add(e.steps);
         let m = modes.get(e.mode);
         if (!m) {
-          m = { mode: e.mode, runs: 0, done: 0, stopped: 0, failed: 0, dur: [], steps: [], toolCalls: 0 };
+          m = { mode: e.mode, runs: 0, done: 0, stopped: 0, failed: 0, dur: new Samples(), steps: new Samples(), toolCalls: 0 };
           modes.set(e.mode, m);
         }
         m.runs++;
         m[e.outcome]++;
-        m.dur.push(e.durationMs);
-        m.steps.push(e.steps);
+        m.dur.add(e.durationMs);
+        m.steps.add(e.steps);
         m.toolCalls += e.toolCalls;
         if (e.outcome === 'failed') {
-          errors.push({ t: e.t, kind: 'run', what: `${e.mode} run`, detail: `${e.model} · failed after ${e.steps} step${e.steps === 1 ? '' : 's'}` });
+          noteError({ t: e.t, kind: 'run', what: `${e.mode} run`, detail: `${e.model} · failed after ${e.steps} step${e.steps === 1 ? '' : 's'}` });
         }
         break;
       }
@@ -605,7 +776,7 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           day.completionsAccepted++;
         }
         if (e.action === 'shown' && e.durationMs !== undefined) {
-          completions.latency.push(e.durationMs);
+          completions.latency.add(e.durationMs);
         }
         if (e.language && (e.action === 'shown' || e.action === 'cached' || e.action === 'accepted')) {
           let l = langs.get(e.language);
@@ -624,13 +795,13 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
       case 'health': {
         let h = health.get(e.provider);
         if (!h) {
-          h = { provider: e.provider, checks: 0, ok: 0, up: false, lastAt: 0, dur: [] };
+          h = { provider: e.provider, checks: 0, ok: 0, up: false, lastAt: 0, dur: new Samples() };
           health.set(e.provider, h);
         }
         h.checks++;
         if (e.ok) {
           h.ok++;
-          h.dur.push(e.durationMs);
+          h.dur.add(e.durationMs);
         }
         if (e.t >= h.lastAt) {
           h.lastAt = e.t;
@@ -639,7 +810,7 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
           h.models = e.models ?? h.models;
         }
         if (!e.ok) {
-          errors.push({ t: e.t, kind: 'health', what: e.provider, detail: e.error ?? 'unreachable' });
+          noteError({ t: e.t, kind: 'health', what: e.provider, detail: e.error ?? 'unreachable' });
         }
         break;
       }
@@ -655,45 +826,48 @@ export function summarize(events: TelemetryEvent[], range: { days: number; from:
         }
         break;
     }
-  }
-
-  const shownTotal = completions.shown + completions.cached;
-  errors.sort((a, b) => b.t - a.t);
-  const series = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
-  for (const d of series) {
-    const gen = dayGenMs.get(d.day);
-    d.tokPerSec = gen ? Math.round((d.completionTokens / gen) * 1000 * 10) / 10 : 0;
-  }
-  const activeDays = series.filter((d) => d.runs || d.modelCalls || d.toolCalls || d.completionsShown).length;
-  return {
-    days: range.days,
-    from: range.from,
-    to: range.to,
-    totals: { ...totals, activeDays, tokPerSec: genMsTotal ? Math.round((totals.completionTokens / genMsTotal) * 1000 * 10) / 10 : 0, runTime: percentiles(runTimes), steps: percentiles(runSteps) },
-    series,
-    hourly,
-    agents: [...agents.values()].map((a) => ({ agent: a.agent, runs: a.runs, done: a.done, stopped: a.stopped, failed: a.failed, duration: percentiles(a.dur), toolCalls: a.toolCalls })).sort((a, b) => b.runs - a.runs),
-    models: [...models.values()]
-      .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
-      .sort((a, b) => b.calls - a.calls),
-    tools: [...tools.values()].map((t) => ({ name: t.name, calls: t.calls, errors: t.errors, cached: t.cached, duration: percentiles(t.dur), last: t.last })).sort((a, b) => b.calls - a.calls),
-    modes: [...modes.values()].map((m) => ({ mode: m.mode, runs: m.runs, done: m.done, stopped: m.stopped, failed: m.failed, duration: percentiles(m.dur), steps: percentiles(m.steps), toolCalls: m.toolCalls })).sort((a, b) => b.runs - a.runs),
-    completions: {
-      requested: completions.requested,
-      shown: completions.shown,
-      accepted: completions.accepted,
-      cached: completions.cached,
-      empty: completions.empty,
-      error: completions.error,
-      acceptanceRate: shownTotal ? Math.round((completions.accepted / shownTotal) * 1000) / 10 : 0,
-      latency: percentiles(completions.latency),
-      byLanguage: [...langs.values()].sort((a, b) => b.shown - a.shown).slice(0, 8),
-    },
-    health: [...health.values()].map((h) => ({ provider: h.provider, checks: h.checks, ok: h.ok, uptime: h.checks ? Math.round((h.ok / h.checks) * 1000) / 10 : 0, up: h.up, lastAt: h.lastAt, latency: percentiles(h.dur), lastError: h.lastError, models: h.models })).sort((a, b) => a.provider.localeCompare(b.provider)),
-    worktrees,
-    errors: errors.slice(0, 25),
-    storage: { events: events.length, bytes: 0, files: 0, dir: '' },
   };
+
+  const finish = (from = range.from): TelemetrySummary => {
+    const shownTotal = completions.shown + completions.cached;
+    errors.sort((a, b) => b.t - a.t);
+    const series = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+    for (const d of series) {
+      const gen = dayGenMs.get(d.day);
+      d.tokPerSec = gen ? Math.round((d.completionTokens / gen) * 1000 * 10) / 10 : 0;
+    }
+    const activeDays = series.filter((d) => d.runs || d.modelCalls || d.toolCalls || d.completionsShown).length;
+    return {
+      days: range.days,
+      from,
+      to: range.to,
+      totals: { ...totals, activeDays, tokPerSec: genMsTotal ? Math.round((totals.completionTokens / genMsTotal) * 1000 * 10) / 10 : 0, runTime: percentiles(runTimes), steps: percentiles(runSteps) },
+      series,
+      hourly,
+      agents: [...agents.values()].map((a) => ({ agent: a.agent, runs: a.runs, done: a.done, stopped: a.stopped, failed: a.failed, duration: percentiles(a.dur), toolCalls: a.toolCalls })).sort((a, b) => b.runs - a.runs),
+      models: [...models.values()]
+        .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
+        .sort((a, b) => b.calls - a.calls),
+      tools: [...tools.values()].map((t) => ({ name: t.name, calls: t.calls, errors: t.errors, cached: t.cached, duration: percentiles(t.dur), last: t.last })).sort((a, b) => b.calls - a.calls),
+      modes: [...modes.values()].map((m) => ({ mode: m.mode, runs: m.runs, done: m.done, stopped: m.stopped, failed: m.failed, duration: percentiles(m.dur), steps: percentiles(m.steps), toolCalls: m.toolCalls })).sort((a, b) => b.runs - a.runs),
+      completions: {
+        requested: completions.requested,
+        shown: completions.shown,
+        accepted: completions.accepted,
+        cached: completions.cached,
+        empty: completions.empty,
+        error: completions.error,
+        acceptanceRate: shownTotal ? Math.round((completions.accepted / shownTotal) * 1000) / 10 : 0,
+        latency: percentiles(completions.latency),
+        byLanguage: [...langs.values()].sort((a, b) => b.shown - a.shown).slice(0, 8),
+      },
+      health: [...health.values()].map((h) => ({ provider: h.provider, checks: h.checks, ok: h.ok, uptime: h.checks ? Math.round((h.ok / h.checks) * 1000) / 10 : 0, up: h.up, lastAt: h.lastAt, latency: percentiles(h.dur), lastError: h.lastError, models: h.models })).sort((a, b) => a.provider.localeCompare(b.provider)),
+      worktrees,
+      errors: errors.slice(0, 25),
+      storage: { events: count, bytes: 0, files: 0, dir: '' },
+    };
+  };
+  return { add, finish };
 }
 
 /** Collects the numbers for one agent turn; the runner records a `run` event from it when the turn ends. */

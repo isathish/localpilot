@@ -43,6 +43,18 @@
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
     ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['advanced', 'Advanced', I.wrench],
   ];
+  /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
+  const NAV_HOME = ['dashboard'];
+  const NAV_GROUPS = [
+    { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
+    { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'completions'] },
+    { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web'] },
+    { id: 'data', label: 'Data & system', items: ['memory', 'advanced'] },
+  ];
+  /** Remembered across reloads: collapsed groups and whether the sidebar is folded to icons. */
+  const viewState = () => (typeof vscode.getState === 'function' && vscode.getState()) || {};
+  const navPrefs = Object.assign({ collapsed: [], rail: false }, viewState().nav);
+  const saveNavPrefs = () => { if (typeof vscode.setState === 'function') { vscode.setState({ ...viewState(), nav: navPrefs }); } };
   const PRESET_PROVIDERS = [
     { key: 'ollama', label: 'Ollama', sub: 'localhost:11434', cfg: { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' } },
     { key: 'lmstudio', label: 'LM Studio', sub: 'localhost:1234', cfg: { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' } },
@@ -210,7 +222,7 @@
   /** Marks any element as a self-rebuilding component bound to the given setting keys. */
   const component = (node, deps, rebuild) => { node.dataset.deps = deps.join(','); node._rebuild = rebuild; return node; };
   /** Settings whose change restructures a page (lists, visibility) rather than one control — these re-render the section. */
-  const STRUCTURAL_KEYS = new Set(['providers', 'mcpServers', 'skillsPaths', 'models.disabled', 'webSearch.provider']);
+  const STRUCTURAL_KEYS = new Set(['providers', 'mcpServers', 'skillsPaths', 'pluginPaths', 'models.disabled', 'webSearch.provider']);
   /** Rebuilds only the components that depend on the changed keys. Keeps a focused control intact (just refreshes its label). */
   function refreshComponents(keys) {
     const want = new Set(keys);
@@ -265,20 +277,52 @@
     top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled) { return; } state.scope = b.dataset.s; render(); }));
     app.appendChild(top);
     const layout = el('div', 'layout');
-    const side = el('nav', 'side'); side.setAttribute('aria-label', 'Settings sections');
-    side.innerHTML = `<div class="grp">Settings</div><div class="tabs" role="tablist">${SECTIONS.map(([id, label, icon]) => `<a data-sec="${id}" role="tab" tabindex="-1">${icon}${esc(label)}</a>`).join('')}</div><div class="grp">Help</div><a data-cmd="localpilot.openWelcome" role="button" tabindex="0">${I.rocket}Run setup again</a><a data-url="https://isathish.github.io/localpilot/docs/configuration/" role="link" tabindex="0">${I.book}Documentation</a>`;
-    const tabs = [...side.querySelectorAll('[data-sec]')];
+    const side = el('nav', `side${navPrefs.rail ? ' rail' : ''}`); side.setAttribute('aria-label', 'Settings sections');
+    const byId = Object.fromEntries(SECTIONS.map((s) => [s[0], s]));
+    const group = (id, label, body) => {
+      const open = !navPrefs.collapsed.includes(id);
+      return `<div class="navgrp${open ? '' : ' closed'}" data-grp="${id}"><button class="grp" aria-expanded="${open}" aria-controls="navgrp-${id}" title="${open ? 'Collapse' : 'Expand'} ${esc(label)}"><span class="chev">${I.chev}</span><span class="lbl">${esc(label)}</span></button><div class="items" id="navgrp-${id}">${body}</div></div>`;
+    };
+    const tabLinks = (ids) => ids.map((id) => byId[id]).filter(Boolean).map(([id, label, icon]) => `<a data-sec="${id}" role="tab" tabindex="-1" title="${esc(label)}">${icon}<span class="lbl">${esc(label)}</span></a>`).join('');
+    const tabsHtml = `<div class="navhome">${tabLinks(NAV_HOME)}</div>` + NAV_GROUPS.map((g) => group(g.id, g.label, tabLinks(g.items))).join('');
+    const helpHtml = `<a data-cmd="localpilot.openWelcome" role="button" tabindex="0" title="Run setup again">${I.rocket}<span class="lbl">Run setup again</span></a><a data-url="https://isathish.github.io/localpilot/docs/configuration/" role="link" tabindex="0" title="Documentation">${I.book}<span class="lbl">Documentation</span></a>`;
+    side.innerHTML = `<div class="navbar"><button class="navtog" title="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-pressed="${navPrefs.rail}"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6.5 3v10"/></svg></button><button class="navall" title="Expand all groups" aria-label="Expand or collapse all groups">${I.chev}</button></div><div class="tabs" role="tablist" aria-orientation="vertical">${tabsHtml}</div>${group('help', 'Help', helpHtml)}`;
+    // Arrow keys move between the sections that are visible right now (a collapsed group keeps only its active entry).
+    const visibleTabs = () => [...side.querySelectorAll('[data-sec]')].filter((a) => a.offsetParent !== null);
     const go = (a) => { state.section = a.dataset.sec; state.expanded = null; render(); a.focus({ preventScroll: true }); };
-    tabs.forEach((a, i) => {
+    side.querySelectorAll('[data-sec]').forEach((a) => {
       a.onclick = () => go(a);
       // Keyboard: Enter/Space activates; arrows move between sections like a native tab strip.
       a.onkeydown = (e) => {
+        const tabs = visibleTabs(); const i = tabs.indexOf(a);
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(a); }
         else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); go(tabs[(i + 1) % tabs.length]); }
         else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); go(tabs[(i - 1 + tabs.length) % tabs.length]); }
         else if (e.key === 'Home') { e.preventDefault(); go(tabs[0]); } else if (e.key === 'End') { e.preventDefault(); go(tabs[tabs.length - 1]); }
       };
     });
+    const setGroup = (g, open) => {
+      const id = g.dataset.grp; const b = g.querySelector(':scope > .grp');
+      g.classList.toggle('closed', !open); b.setAttribute('aria-expanded', String(open));
+      b.title = `${open ? 'Collapse' : 'Expand'} ${b.textContent.trim()}`;
+      navPrefs.collapsed = navPrefs.collapsed.filter((x) => x !== id).concat(open ? [] : [id]);
+    };
+    const syncAllBtn = () => { const any = side.querySelector('.navgrp.closed'); const b = side.querySelector('.navall'); b.classList.toggle('open', !any); b.title = any ? 'Expand all groups' : 'Collapse all groups'; };
+    side.querySelectorAll('.navgrp > .grp').forEach((b) => {
+      b.onclick = () => { const g = b.parentElement; setGroup(g, g.classList.contains('closed')); saveNavPrefs(); syncAllBtn(); };
+    });
+    side.querySelector('.navall').onclick = () => {
+      const open = !!side.querySelector('.navgrp.closed');
+      side.querySelectorAll('.navgrp').forEach((g) => setGroup(g, open));
+      saveNavPrefs(); syncAllBtn();
+    };
+    side.querySelector('.navtog').onclick = (e) => {
+      navPrefs.rail = !navPrefs.rail; saveNavPrefs();
+      side.classList.toggle('rail', navPrefs.rail);
+      const t = e.currentTarget; const label = navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar';
+      t.title = label; t.setAttribute('aria-label', label); t.setAttribute('aria-pressed', String(navPrefs.rail));
+    };
+    syncAllBtn();
     side.querySelectorAll('[data-cmd],[data-url]').forEach((a) => { a.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); } }; });
     // Narrow layout turns the nav into a scrolling pill strip: show fades where more pills are hidden.
     side.onscroll = () => updateNavFades(side);
@@ -358,6 +402,18 @@
     tip.style.marginTop = '14px';
     tip.innerHTML = 'Tip: <code>ollama</code> uses the native Ollama API (tools, thinking, vision, FIM). Every other server uses the OpenAI-compatible <code>/v1</code> API — LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenRouter, Azure OpenAI…';
     sec.appendChild(tip);
+    sec.appendChild(el('h2', 'sub', 'Huge MoE models (colibri)'));
+    const coli = el('div', 'btnrow');
+    coli.innerHTML = `<span class="muted small">A running <code>coli serve</code> is detected automatically; this starts one in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.startColibri">${I.bolt}Start colibri</button>`;
+    sec.appendChild(card(
+      el('div', 'field wide', '<div><div class="desc"><a data-url="https://github.com/JustVugg/colibri">colibri</a> runs very large mixture-of-experts models (GLM-5.2, DeepSeek V4 Flash, Qwen3-Coder-30B…) by keeping the dense part in RAM and streaming experts from disk.</div></div>'),
+      field('colibri.path', 'colibri folder', 'The checkout that has <code>c/coli</code>. Empty = <code>coli</code> on PATH.', 'text', { placeholder: '~/colibri', wide: true }),
+      field('colibri.model', 'Model', 'A colibri model name (<code>qwen3-coder-30b</code>, <code>glm-5.2</code>) or a model folder. Empty = the one colibri\'s setup installed.', 'text', { placeholder: 'installed model' }),
+      field('colibri.port', 'Port', 'Where <code>coli serve</code> listens; auto-detect probes it too.', 'number', { min: 1, max: 65535 }),
+      field('colibri.kvSlots', 'Parallel conversations', 'KV slots, so parallel agents keep their own cached context. A few hundred MB each; capped by <a data-sec="agent">max concurrent tools / subagents</a>.', 'number', { min: 1, max: 16 }),
+      coli
+    ));
+    sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
     // Reachability is shown without being asked for: probe when the page opens, when the provider list changes
     // (a server was added or its URL edited) and when the last check is older than a minute. The button stays for an
     // immediate re-check. Results arrive as a `probe` message and re-render the cards with ok / unreachable.
@@ -964,6 +1020,10 @@
     sec.appendChild(card(
       field('autoClarify', 'Interpret vague requests automatically', 'When a prompt is short or says “fix this” / “make it faster” without naming a target, the agent is handed the active file, selection, open editors, recent edits, errors and git changes, states <i>Understood as: …</i> and proceeds. It only asks when two readings would lead to materially different work.', 'toggle')
     ));
+    sec.appendChild(el('h2', 'sub', 'Hooks'));
+    sec.appendChild(card(
+      field('hooks.enabled', 'Run hooks', 'Shell commands from <code>.localpilot/settings.json</code>, <code>.claude/settings.json</code> and <code>~/.claude/settings.json</code> on <code>PreToolUse</code>, <code>PostToolUse</code>, <code>UserPromptSubmit</code>, <code>Stop</code>, <code>SessionStart</code>… with the Claude Code protocol (exit 2 blocks). Turn off for a repository you do not trust.', 'toggle')
+    ));
     sec.appendChild(el('h2', 'sub', 'Isolated worktrees'));
     sec.appendChild(card(
       field('worktrees.mode', 'Where agents work', 'Each agent can work in its own copy of the repository (a git worktree seeded with your uncommitted changes), so several agents never clobber each other or your open files. You review the result in the Changes panel and <b>Apply to workspace</b> or <b>Discard</b>. Outside a git repository agents edit directly.', 'select', { options: [['always', 'Always isolate', 'every agent chat gets its own copy (recommended)'], ['parallel', 'Only agents started together', 'Multitask batches and Best of N are isolated; a single chat edits the workspace'], ['off', 'Never', 'agents edit the workspace directly']] }),
@@ -1002,6 +1062,10 @@
       prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', '', 'password') : null,
       field('webSearch.maxResults', 'Max results', '', 'number', { min: 1, max: 20 })
     ));
+    sec.appendChild(el('h2', 'sub', 'Browser'));
+    sec.appendChild(card(
+      field('browser.chromePath', 'Browser for screenshots', 'A Chromium-based browser run headless by <code>browser_screenshot</code> and <i>Screenshot a Web Page…</i>. Empty = auto-detect Chrome, Chromium, Edge, Brave or Arc.', 'text', { placeholder: 'auto-detect', wide: true })
+    ));
   }
 
   // ------------------------------------------------------------------ memory & skills
@@ -1015,10 +1079,11 @@
     sec.appendChild(el('h2', 'sub', 'Chat history'));
     const hist = el('div', 'card');
     const kv = el('div', 'field wide');
-    kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes)}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd><dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
+    kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes)}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd>${ss.inMemory !== undefined ? `<dt>In memory</dt><dd>${ss.inMemory} of ${ss.count} transcript${ss.count === 1 ? '' : 's'} — the rest are read from disk when opened</dd>` : ''}<dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
     hist.appendChild(kv);
     const retention = field('sessions.retention', 'Keep at most', 'Oldest idle chats are removed automatically when a new chat starts. Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
     hist.appendChild(retention);
+    hist.appendChild(field('storage.sessionsInMemory', 'Transcripts in memory', 'Full chat transcripts kept in RAM (running chats and the one on screen always are). Older chats stay in the list and load from disk when you open or search them — lower this to save memory with long histories.', 'number', { min: 2, max: 500, step: 1 }));
     const acts = el('div', 'btnrow');
     acts.innerHTML = `<span class="muted small">Clearing removes idle chats only; running agents keep going and pinned chats can be kept.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.showSessions">${I.chat}Browse chats</button><button class="btn sm danger" data-cmd="localpilot.clearHistory" ${ss.count ? '' : 'disabled'}>${I.trash}Clear chat history…</button>`;
     hist.appendChild(acts);
@@ -1168,18 +1233,24 @@
     rcard.appendChild(rbar);
     sec.appendChild(rcard);
 
-    // ---- skill folders
-    sec.appendChild(el('h2', 'sub', 'Skill folders'));
-    const paths = Array.isArray(val('skillsPaths')) ? val('skillsPaths') : [];
-    const sp = el('div', 'card');
-    const f = el('div', 'field wide');
-    f.innerHTML = `<div><div class="lbl">Extra skill folders${scopeBadge('skillsPaths')}${resetBtn('skillsPaths')}</div><div class="desc"><code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).</div></div>`;
-    const ctl = el('div', 'ctl');
-    const ul = el('ul', 'list');
-    paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set('skillsPaths', paths.filter((_, j) => j !== i)); ul.appendChild(li); });
-    const addRow = el('div', 'row', `<input type="text" placeholder="/path/to/skills or ~/skills" aria-label="Skills folder to add"><button class="btn sm">${I.plus}Add</button>`);
-    addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set('skillsPaths', [...paths, v]); } };
-    ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl); sp.appendChild(f); sec.appendChild(sp);
+    // ---- skill and plugin folders
+    sec.appendChild(el('h2', 'sub', 'Skill & plugin folders'));
+    const pathList = (key, label, desc, placeholder) => {
+      const paths = Array.isArray(val(key)) ? val(key) : [];
+      const f = el('div', 'field wide');
+      f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">${desc}</div></div>`;
+      const ctl = el('div', 'ctl');
+      const ul = el('ul', 'list');
+      paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set(key, paths.filter((_, j) => j !== i)); ul.appendChild(li); });
+      const addRow = el('div', 'row', `<input type="text" placeholder="${esc(placeholder)}" aria-label="${esc(label)}: folder to add"><button class="btn sm">${I.plus}Add</button>`);
+      addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set(key, [...paths, v]); } };
+      ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl);
+      return f;
+    };
+    sec.appendChild(card(
+      pathList('skillsPaths', 'Extra skill folders', '<code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).', '/path/to/skills or ~/skills'),
+      pathList('pluginPaths', 'Extra plugin folders', 'Claude Code-style plugins (<code>.claude-plugin/plugin.json</code> bundling commands, agents, skills, hooks and <code>.mcp.json</code>). <code>.localpilot/plugins</code>, <code>.claude/plugins</code> and the same folders in your home are scanned automatically.', '/path/to/plugins')
+    ));
 
     // ---- subagents
     const agents = d.agents || [];
@@ -1436,8 +1507,15 @@
     // Settings
     sec.appendChild(el('h2', 'sub', 'Telemetry'));
     sec.appendChild(card(
-      field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine so this page can show them. Turning it off stops recording; the log is still mirrored for the viewer above. <b>Nothing is ever sent to a third party.</b>', 'toggle'),
+      field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine (or to the Redis server below, when you turn that on) so this page can show them. Turning it off stops recording; the log is still mirrored for the viewer above. <b>Nothing is sent anywhere you did not configure.</b>', 'toggle'),
       field('telemetry.retentionDays', 'Keep for', 'Days of metrics and log files to keep; older files are deleted automatically. <code>0</code> keeps everything.', 'number', { min: 0, max: 3650, step: 1 })
+    ));
+    sec.appendChild(el('h2', 'sub', 'Redis storage (optional)'));
+    const redisActs = el('div', 'btnrow');
+    redisActs.innerHTML = `<span class="muted small">Installs or connects Redis: Docker if you have it (started for you if it is not running), otherwise Homebrew, apt/dnf, WSL or Memurai — or an existing server.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.setupRedis">${I.cpu}Set up Redis…</button>`;
+    sec.appendChild(card(
+      field('storage.redis.enabled', 'Store telemetry in Redis', 'Events and the log go to capped Redis streams instead of daily files, and — with <b>Redis Stack</b> — metrics become labelled time series (<code>localpilot:ts:*</code>) for Grafana or RedisInsight. VS Code then keeps only a short log tail in memory. Falls back to files whenever Redis is unreachable. <b>Telemetry goes to the server in the URL</b> — keep it on this machine unless you trust that server.', 'toggle', { after: redisActs }),
+      field('storage.redis.url', 'Redis URL', '<code>redis://[user:password@]host:port[/db]</code>, <code>rediss://</code> for TLS. Hidden because it can contain a password. Keep it on <code>127.0.0.1</code> unless the server is protected.', 'password', { placeholder: 'redis://127.0.0.1:6379', validate: validRedisUrl, invalidHint: 'Use redis://[user:password@]host[:port][/db] or rediss://… — not saved yet' })
     ));
     const danger = el('div', 'btnrow');
     danger.innerHTML = `<span class="muted small" id="dashStorage"></span><span class="spacer"></span><button class="btn sm danger" id="dashClear">${I.trash}Delete all recorded data…</button>`;
@@ -1453,7 +1531,18 @@
   function renderStorage() {
     const n = document.getElementById('dashStorage'); const s = state.dash.summary;
     if (!n || !s) { return; }
-    n.innerHTML = `${fmtN(s.storage.events)} events · ${fmtBytes(s.storage.bytes)} in ${plural(s.storage.files, 'file')}${s.storage.oldest ? ` · since ${new Date(s.storage.oldest).toLocaleDateString()}` : ''} · <code>${esc(s.storage.dir)}</code>`;
+    const st = s.storage;
+    const where = st.backend === 'redis' ? '<span class="badge ok">Redis</span> ' : st.backend === 'fallback' ? `<span class="badge warn" title="${esc(st.remoteError || '')}">Redis unreachable — using files</span> ` : '';
+    n.innerHTML = `${where}${fmtN(st.events)} events · ${fmtBytes(st.bytes)} in ${plural(st.files, 'file')}${st.oldest ? ` · since ${new Date(st.oldest).toLocaleDateString()}` : ''} · <code>${esc(st.dir)}</code>`;
+  }
+  /** Same rules as the extension's parser: redis:// or rediss://, a host, an optional numeric port and db. */
+  function validRedisUrl(v) {
+    try {
+      const u = new URL(v);
+      return (u.protocol === 'redis:' || u.protocol === 'rediss:') && !!u.hostname && (!u.port || Number(u.port) > 0) && /^\/?\d*$/.test(u.pathname);
+    } catch {
+      return false;
+    }
   }
   /** Provider display name for a recorded provider id (the id itself when the provider is no longer configured). */
   function provName(id) { const p = providersList().find((x) => x.id === id); return p ? p.displayName || p.id : id; }

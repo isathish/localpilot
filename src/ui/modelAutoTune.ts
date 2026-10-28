@@ -208,13 +208,16 @@ export class ModelTuner implements vscode.Disposable {
     const previous = this.settingValue(s.setting).global;
     await vscode.workspace.getConfiguration('localpilot').update(s.setting, s.suggested, vscode.ConfigurationTarget.Global);
     applied[s.setting] = { value: s.suggested, previous, at: Date.now() };
+    // Recorded per write, so a later failing write in the same batch cannot leave this one without its Undo record.
+    await this.state.update(APPLIED_KEY, applied);
     this.log.info(`auto-tune: ${s.setting} ${previous ?? '(auto)'} → ${s.suggested} (${s.reason})`);
   }
 
-  private notifyApplied(list: TuneSuggestion[]): void {
+  private notifyApplied(list: TuneSuggestion[], manual = false): void {
     const what = list.map((s) => `${TUNE_LABELS[s.role]} → ${short(s.suggested)}`).join(', ');
     const why = list.length === 1 ? ` ${list[0].reason}.` : '';
-    void vscode.window.showInformationMessage(`LocalPilot tuned models from your usage: ${what}.${why}`, 'Undo', 'Details').then(async (pick) => {
+    const text = manual ? `LocalPilot applied: ${what}.` : `LocalPilot tuned models from your usage: ${what}.${why}`;
+    void vscode.window.showInformationMessage(text, 'Undo', 'Details').then(async (pick) => {
       if (pick === 'Undo') {
         await this.undo(list);
       } else if (pick === 'Details') {
@@ -223,18 +226,29 @@ export class ModelTuner implements vscode.Disposable {
     });
   }
 
-  /** Restores the previous values and remembers the declined picks so they are not applied again. */
+  /**
+   * Restores the previous values and remembers the declined picks so they are not applied again. A setting changed
+   * since (by hand or a newer tune) is left alone — Undo must never overwrite a later choice.
+   */
   async undo(list: TuneSuggestion[]): Promise<void> {
     const applied = { ...this.state.get<Record<string, AppliedEntry>>(APPLIED_KEY, {}) };
     const declined = new Set(this.state.get<string[]>(DECLINED_KEY, []));
+    const kept: string[] = [];
     for (const s of list) {
       const a = applied[s.setting];
-      await vscode.workspace.getConfiguration('localpilot').update(s.setting, a?.previous || undefined, vscode.ConfigurationTarget.Global);
-      delete applied[s.setting];
       declined.add(pairKey(s));
+      if (!a || a.value !== s.suggested || this.settingValue(s.setting).global !== a.value) {
+        kept.push(TUNE_LABELS[s.role]);
+        continue;
+      }
+      await vscode.workspace.getConfiguration('localpilot').update(s.setting, a.previous || undefined, vscode.ConfigurationTarget.Global);
+      delete applied[s.setting];
     }
     await this.state.update(APPLIED_KEY, applied);
     await this.state.update(DECLINED_KEY, [...declined].slice(-200));
+    if (kept.length) {
+      void vscode.window.showInformationMessage(`Not undone: ${kept.join(', ')} — changed again since. LocalPilot will not suggest that pick again.`);
+    }
   }
 
   private async offer(list: TuneSuggestion[]): Promise<void> {
@@ -243,14 +257,19 @@ export class ModelTuner implements vscode.Disposable {
     if (!fresh.length) {
       return;
     }
-    fresh.forEach((s) => notified.add(pairKey(s)));
-    await this.state.update(NOTIFIED_KEY, [...notified].slice(-200));
+    // Only what is in the notification counts as seen; the rest are offered on a later check.
+    const markSeen = async (seen: TuneSuggestion[]) => {
+      seen.forEach((x) => notified.add(pairKey(x)));
+      await this.state.update(NOTIFIED_KEY, [...notified].slice(-200));
+    };
     const s = fresh[0];
+    await markSeen([s]);
     const more = fresh.length > 1 ? ` (+${fresh.length - 1} more suggestion${fresh.length === 2 ? '' : 's'})` : '';
     const pick = await vscode.window.showInformationMessage(`LocalPilot suggests ${short(s.suggested)} for ${TUNE_LABELS[s.role]} instead of ${short(s.current)} — ${s.reason}.${more}`, 'Apply', fresh.length > 1 ? 'Review all' : 'Details', "Don't suggest");
     if (pick === 'Apply') {
       await this.applyNow([s]);
     } else if (pick === 'Review all') {
+      await markSeen(fresh);
       await this.pick(fresh);
     } else if (pick === 'Details') {
       void vscode.commands.executeCommand('localpilot.openSettings', 'dashboard');
@@ -261,16 +280,30 @@ export class ModelTuner implements vscode.Disposable {
     }
   }
 
-  /** Applies the given suggestions now (user-initiated: Apply buttons, the command, the dashboard). */
-  async applyNow(list: TuneSuggestion[]): Promise<void> {
+  /** Applies the given suggestions now (user-initiated: Apply buttons, the command, the dashboard), with Undo. */
+  async applyNow(list: TuneSuggestion[]): Promise<TuneSuggestion[]> {
     const applied = { ...this.state.get<Record<string, AppliedEntry>>(APPLIED_KEY, {}) };
+    const done: TuneSuggestion[] = [];
+    const pinned: string[] = [];
     for (const s of list) {
+      if (this.settingValue(s.setting).workspace) {
+        pinned.push(TUNE_LABELS[s.role]);
+        continue;
+      }
       await this.write(s, applied);
+      done.push(s);
     }
-    await this.state.update(APPLIED_KEY, applied);
-    if (list.length) {
-      vscode.window.setStatusBarMessage(`LocalPilot: ${list.map((s) => `${TUNE_LABELS[s.role]} → ${short(s.suggested)}`).join(', ')}`, 5000);
+    if (done.length) {
+      this.notifyApplied(done, true);
     }
+    if (pinned.length) {
+      void vscode.window.showWarningMessage(`${pinned.join(', ')}: this workspace sets its own model in .vscode/settings.json, so a change to your user settings would not apply. Edit the workspace setting instead.`, 'Open workspace settings').then((p) => {
+        if (p) {
+          void vscode.commands.executeCommand('workbench.action.openWorkspaceSettingsFile');
+        }
+      });
+    }
+    return done;
   }
 
   /** Applies a suggestion the dashboard identified by role + model. */
@@ -279,8 +312,7 @@ export class ModelTuner implements vscode.Disposable {
     if (!s) {
       return false;
     }
-    await this.applyNow([{ ...s, kind: 'setting' }]);
-    return true;
+    return (await this.applyNow([{ ...s, kind: 'setting' }])).length > 0;
   }
 
   /** The `LocalPilot: Tune Models From Usage` command: analyse now and let the user pick what to apply. */

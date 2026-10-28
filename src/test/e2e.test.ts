@@ -339,5 +339,33 @@ suite('LocalPilot end-to-end (real local model)', () => {
     assert.ok(pre && /is loaded below because it matches this request/.test(pre.content), `banner skill preloaded: ${transcript(id)}`);
     assert.match(await fs.readFile(path.join(root, 'BANNER.txt'), 'utf8').catch(() => ''), /banner skill/i, transcript(id));
   });
+
+  test('registry auto-install: a matching skill from GitHub is installed into the workspace and loaded into the request', async function () {
+    // Needs github.com; opt in so offline runs stay green.
+    if (!process.env.LOCALPILOT_E2E_NETWORK) {
+      this.skip();
+    }
+    this.timeout(300_000);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    await cfg.update('skills.repositories', ['anthropics/skills/skills'], vscode.ConfigurationTarget.Global);
+    await cfg.update('skills.autoInstallScope', 'workspace', vscode.ConfigurationTarget.Global);
+    await cfg.update('skills.autoInstall', 'auto', vscode.ConfigurationTarget.Global);
+    const dir = path.join(root, '.localpilot', 'skills', 'pdf');
+    try {
+      const id = await api.runPrompt('Which Python library do you recommend to fill in the fields of a PDF form? Answer in one sentence, no tools.', 'ask');
+      await waitForRun(id, 280_000);
+      const session = api.getSession(id)!;
+      assert.ok(await fs.stat(path.join(dir, 'SKILL.md')).catch(() => undefined), `pdf skill installed into the workspace: ${transcript(id)}`);
+      const pre = session.messages.find((m) => m.role === 'user' && m.meta?.hidden && /<skill name="pdf"/.test(m.content));
+      assert.ok(pre, `installed skill loaded into the request: ${transcript(id)}`);
+      const answer = session.messages.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n');
+      assert.match(answer, /py(pdf|pdf2|mupdf)|fitz|pdfrw|reportlab|pdftk/i, transcript(id));
+    } finally {
+      await cfg.update('skills.autoInstall', 'off', vscode.ConfigurationTarget.Global);
+      await cfg.update('skills.autoInstallScope', undefined, vscode.ConfigurationTarget.Global);
+      await cfg.update('skills.repositories', undefined, vscode.ConfigurationTarget.Global);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 

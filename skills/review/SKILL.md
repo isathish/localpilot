@@ -27,11 +27,11 @@ Run what you can: `get_diagnostics`, the lint/typecheck/test commands. Real fail
 One paragraph: what the change does and overall verdict (approve / approve with nits / request changes).
 
 ## Findings
-### 🔴 Must fix
+### Must fix
 - `src/x.ts:42` — <problem>. <why it matters>. Fix: <concrete change or snippet>.
-### 🟠 Should fix
-### 🟡 Consider
-### ✅ Good
+### Should fix
+### Consider
+### Done well
 Call out things done well (1–3 bullets) so they are kept.
 
 ## Tests & verification

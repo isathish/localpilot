@@ -1,139 +1,227 @@
 ---
 title: Parallel agents & change review
-description: Run many agents at once, watch them in the Agents panel, and keep or undo what each one did.
+description: Run several agents at once in isolated git worktrees, compare models with Best of N, pause and steer agents, and review every change.
 permalink: /docs/parallel-agents/
 ---
 
 ## Every chat is an agent
 
-Each LocalPilot session runs independently with its own context window, model and mode. Start another chat while one is still working — both stream at the same time.
+Each chat runs independently, with its own context window, model and mode. Start another chat while one is working, and both stream at the same time.
+
+How many requests really run at once depends on your model server. See [Parallel requests](#parallel-requests).
 
 ## Chat tabs
 
-The bar at the top of the chat is a browser-style tab strip — **one tab per agent**, in a stable order (pinned first, then creation order) so nothing jumps around while agents start and finish. The state of every agent is visible in the tab itself:
+The bar at the top of the chat has one tab per agent. Tabs keep a stable order (pinned first, then creation order), so nothing jumps while agents start and finish.
 
 | Indicator | Meaning |
 |---|---|
 | Underlined, highlighted tab | The chat you are looking at |
-| Shimmering title | You clicked the tab and its chat is loading |
-| Breathing orange dot · ■ | Agent running — ■ (shown on the active or hovered tab) stops it without leaving the current tab |
-| Green dot · bold title | Finished while you were in another tab — new results to read |
-| Pulsing ⚠ | Waiting for your approval (the prompt is also shown in the current tab with a link) |
-| Pin | Pinned: always first, never closed by "Close other tabs" or retention |
+| Shimmering title | The chat is loading after you clicked it |
+| Breathing orange dot, ■ | Agent running. ■ (on the active or hovered tab) stops it |
+| Green dot, bold title | Finished while you were in another tab |
+| Pulsing warning icon | Waiting for your approval. The prompt also shows in the current tab |
+| ⏸ | Paused |
+| Pin | Pinned: always first, never closed by bulk actions or retention |
 
-- **✕** closes a tab (the chat stays in **All chats**); middle-click or <kbd>Delete</kbd> on a focused tab does the same. Closing the active tab moves to the neighbour.
-- **Double-click** (or <kbd>F2</kbd>) renames inline. **Right-click** for Rename · Pin · Fork · Export · Pause / Resume · Stop / Clear messages · Close · Delete.
-- Agents working in *other* tabs appear in a strip under the tab bar with their current step; click to switch, ⏸ to pause / resume, ■ to stop.
-- Keyboard: <kbd>Alt↑</kbd>/<kbd>Alt↓</kbd> cycle tabs, <kbd>Alt1…9</kbd> jump, <kbd>←</kbd>/<kbd>→</kbd> move between focused tabs.
-- **Several at once:** ⌘/Ctrl-click or Shift-click to select tabs, then ✕ / <kbd>Delete</kbd> / right-click → *Close N selected*, *Stop and close all* or *Delete selected chats*. Right-click any tab for *Close other tabs*, *Close tabs to the right*, *Close finished tabs*, *Stop and close* and *Stop all agents*.
-- **Isolation:** every tab keeps its own draft, attachments, scroll position and status line; every agent has its own context window, abort switch, tool cache and model. The model is shown in the tab tooltip and the background strip. Two chats using the same local model are served one at a time by the server — the waiting chat shows *Waiting for <model> — busy with N other chats…* instead of a silent stall.
-- Open tabs persist when the view is hidden and restored; at most 12 are shown — the rest live under **+N** / **All chats**.
+Working with tabs:
 
-## Multitask: several agents at once
+- **Close:** ✕, middle-click or <kbd>Delete</kbd> on a focused tab. The chat stays in **All chats**.
+- **Rename:** double-click or <kbd>F2</kbd>.
+- **Right-click:** Rename, Pin, Fork, Export, Pause / Resume, Stop, Clear messages, Close, Delete, and bulk actions (*Close other tabs*, *Close tabs to the right*, *Close finished tabs*, *Stop all agents*).
+- **Select several:** ⌘/Ctrl-click or Shift-click, then close, stop or delete them together.
+- **Keyboard:** <kbd>Alt↑</kbd> / <kbd>Alt↓</kbd> cycle tabs, <kbd>Alt1…9</kbd> jump, <kbd>←</kbd> / <kbd>→</kbd> move between focused tabs.
+- **Background strip:** agents running in other tabs appear under the tab bar with their current step. Click to switch, ⏸ to pause or resume, ■ to stop.
 
-The simplest way is the **Multitask mode** in the composer: describe what you want and the agent splits it across background workers itself — see [Agent modes → Multitask](/docs/agent-modes/#multitask). The launcher below is for when *you* want to decide the split or try one task on several models.
+Each tab keeps its own draft, attachments, scroll position and status line. Up to 12 tabs are shown; the rest are under **+N** / **All chats**.
 
-Press the clock icon → **Multitask…** (or **Command Palette → LocalPilot: Run Tasks in Parallel…**, <kbd>⌘⇧⌥P</kbd>). The launcher is built so you do not have to think in prompts:
+## Starting several agents
 
-- **Split the work** — one row per task; each becomes its own agent in its own tab, all running at once. Press <kbd>Enter</kbd> for another row, paste a list to fill several, <kbd>⌘Enter</kbd> to start.
-- **Try several models** — the same task runs on every model you tick (2–8), each agent isolated; when they finish you **Compare results** and keep the one you like.
-- **Ideas for this project** — ready-made tasks worked out from your workspace right now: the errors VS Code shows, your uncommitted changes, missing README or tests, TODO notes, dependencies, plus your recent prompts. Click one to add it. **More ideas** asks the model for suggestions tailored to this codebase.
-- **Autocomplete** — start typing and matching ideas and recent prompts appear; <kbd>Tab</kbd> accepts.
-- The footer says in plain words what will happen ("3 agents will start, each in its own copy of your project").
+There are three ways:
 
-From the CLI: `localpilot --ide --parallel "a | b | c"`. When the last agent of a batch finishes, a notification offers **Review results** (or **Compare results** for Best of N), which lists each agent with its file counts and lets you apply its changes.
+- **Multitask mode.** Describe the outcome and the agent splits it across background workers. See [Agent modes → Multitask]({{ '/docs/agent-modes/#multitask' | relative_url }}).
+- **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>, or the clock icon → **Multitask…**). You decide the split: one row per task, each becomes its own agent and tab.
+- **Best of N.** One task on several models. See [Best of N](#best-of-n).
+
+In the launcher:
+
+1. Choose **Split the work** or **Try several models**.
+2. Type a task per row. <kbd>Enter</kbd> adds a row, pasting a list fills several rows, <kbd>Tab</kbd> accepts an autocomplete suggestion.
+3. Optionally click an idea from **Ideas for this project**. These come from your workspace: current errors, uncommitted changes, missing README or tests, TODO notes, dependencies and recent prompts. **More ideas** asks the model for suggestions.
+4. Check the footer, which says what will happen (for example *3 agents will start, each in its own copy of your project*).
+5. Press <kbd>⌘Enter</kbd> to start.
+
+From the CLI: `localpilot --ide --parallel "a | b | c"`.
+
+When the last agent of a batch finishes, a notification offers **Review results**. It lists each agent with its changed files and lets you apply its changes.
+
+![The Multitask launcher on Split the work: three tasks, one per row, with Add another task and ideas for this project]({{ '/assets/screenshots/multitask-launcher.png' | relative_url }})
+
+## Best of N
+
+Best of N runs the same task on 2 to 8 models at once, so you can keep the best result.
+
+1. Open the launcher and choose **Try several models**, or run *LocalPilot: Best of N: Run One Task on Several Models…*.
+2. Enter the task and tick at least two models. The command lists only models with tool calling.
+3. Wait for the agents to finish. Each runs in its own tab.
+4. Click **Compare results** in the notification, or run *LocalPilot: Compare Best-of-N Results…*.
+5. Pick a result and choose **Apply this result** or **Apply and discard the others**.
+
+Each Best-of-N agent works in its own worktree when `localpilot.worktrees.mode` is `always` or `parallel`. With `off`, or outside a git repository, all agents would edit the same files. Use Best of N in a git repository with worktrees on.
+
+<p><img src="{{ '/assets/screenshots/best-of-n-launcher.png' | relative_url }}" alt="Try several models: one task, with gpt-oss:20b and qwen3:14b selected" width="420"></p>
+
+![Compare Best-of-N Results: gpt-oss:20b changed 1 file (+3) and passed the tests; qwen3:14b produced nothing and timed out. Pick one to apply it]({{ '/assets/screenshots/best-of-n-compare.png' | relative_url }})
+
+The comparison above is a real run on one laptop: with both models loaded at once, qwen3:14b never got its first token and was stopped after 180 s. Best of N is most useful when the models fit in memory together.
 
 ## Isolated worktrees
 
-By default every agent chat works in its **own copy of the repository** — a git worktree under `~/.localpilot/worktrees/`, started from your checkout *including uncommitted work*. Several agents can therefore edit the same files at once without clobbering each other or the files you have open. While an agent works, the changes panel reads **N files changed in isolated copy**: click a file for a before/after diff, **Apply to workspace** to bring everything over as ordinary uncommitted edits (3-way merged if you changed the same lines meanwhile; conflicts are marked and listed), or **Discard** to throw the copy away. The **Agents** panel offers the same actions, plus *Open Agent's Worktree in New Window*.
+In a git repository each agent chat works in its own copy of the repository by default. The copy is a git worktree under `~/.localpilot/worktrees/` (change with `localpilot.worktrees.location`). It starts from your checkout, including uncommitted and untracked files. Several agents can edit the same files without overwriting each other or the files you have open.
 
-Setup commands for new worktrees (installing dependencies, generating code) go in `.localpilot/worktrees.json`:
+While an agent works, the changes bar reads *N files changed in isolated copy*. From there:
+
+- Click a file for a before/after diff.
+- **Apply to workspace** brings the changes into your folder as ordinary uncommitted edits. If you changed the same lines meanwhile, they are 3-way merged; conflicts are marked in the files and listed.
+- **Discard** deletes the copy and its changes.
+
+The **Agents** panel has the same actions, plus *Open Agent's Worktree in New Window*.
+
+`localpilot.worktrees.mode` decides when to isolate:
+
+| Value | Behaviour |
+|---|---|
+| `always` (default) | Every agent chat gets its own worktree |
+| `parallel` | Only agents started together (Run Tasks in Parallel, Best of N) are isolated |
+| `off` | Agents edit the workspace directly |
+
+Outside a git repository agents always edit directly. Worktrees of deleted chats are removed automatically.
+
+To run setup commands in each new worktree (install dependencies, generate code), add `.localpilot/worktrees.json`:
 
 ```json
 { "setup": ["npm ci"], "setup-unix": [], "setup-windows": [] }
 ```
 
-`localpilot.worktrees.mode` chooses when to isolate: `always` (default), `parallel` (only agents started together) or `off` (edit the workspace directly). Outside a git repository agents always edit directly. Worktrees of deleted chats are removed automatically.
-
-While an agent is busy you can still type: <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl⇧Enter</kbd>) **sends the draft in a new tab**, and pressing <kbd>Enter</kbd> offers *Add to this agent* (queued and read at its next step), *Send in a new tab* or *Stop this agent first* instead of blocking.
-
 ## Pause, steer and stop
 
-Every running agent has two buttons next to the composer: **Pause** (<kbd>⌥Esc</kbd>) and **Stop** (<kbd>Esc</kbd>).
+A running agent has two buttons next to the composer:
 
-- **Pause** is cooperative: the agent finishes the step it is in — the current model call or tool batch — then holds before the next one. The status line shows *Pausing after this step…* and then *Paused*; the tab shows a ⏸ glyph and the progress bar freezes. Press the button again (now **Resume**) to continue exactly where it left off.
-- **While paused, type.** Anything you send is queued inline in the transcript (a *queued* row) and appended to the conversation when the agent resumes, so you can correct course — "use the existing helper instead", "skip the README" — without losing the work done so far. The same works while the agent is running: pick *Add to this agent* and the message is taken into account at the next step.
-- **Stop** cancels the run; files already changed stay in the **changes** panel to keep or undo.
-- **Subagents.** Pausing or stopping the main agent pauses or stops every subagent it spawned. Each lane of a parallel fan-out also has its own ⏸ / ■ on the right of its pill: pausing holds just that subagent; stopping ends it and the main agent carries on, receiving a *stopped by the user* report for that task instead of a failure.
-- The same controls live in the tab's right-click menu, the background-agents strip, the **Agents** panel (running sessions and their subagents have inline Pause / Resume / Stop) and the Command Palette (*LocalPilot: Pause Agent*, *Resume Agent*, *Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents*, *Stop Agent*, *Stop All Agents*).
+| Button | Key | Effect |
+|---|---|---|
+| **Pause** / **Resume** | <kbd>⌥Esc</kbd> | Hold the agent after its current step, then continue |
+| **Stop** | <kbd>Esc</kbd> | Cancel the run |
+
+**Pause** waits for the current model call or tool batch to finish. The status line shows *Pausing after this step…*, then *Paused*. The tab shows ⏸. **Resume** continues where it stopped.
+
+**Steering.** You can type while an agent is paused or running:
+
+- While paused, a message you send appears as a *queued* row. It is added to the conversation when the agent resumes. Use it to correct course, for example "use the existing helper instead".
+- While running, pressing <kbd>Enter</kbd> offers *Add to this agent* (read at its next step), *Send in a new tab* or *Stop this agent first*.
+- <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl+Shift+Enter</kbd>) sends the draft in a new tab.
+
+**Stop** cancels the run. Files already changed stay in the changes bar for you to accept or reject.
+
+**Subagents.** Pausing or stopping the main agent also pauses or stops every subagent it started. Each lane of a parallel fan-out has its own ⏸ and ■:
+
+- Pausing a lane holds only that subagent.
+- Stopping a lane ends that subagent. The main agent continues and gets a *stopped by the user* report for that task, not a failure.
+
+The same controls are in the tab's right-click menu, the background strip, the **Agents** panel and the Command Palette: *LocalPilot: Pause Agent*, *Resume Agent*, *Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents*, *Stop Agent*, *Stop All Agents*.
+
+<p><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" alt="A paused agent: status Paused, message waiting, a queued steering message and the Resume button" width="420"></p>
 
 ## The Agents panel
 
-Below the chat view (collapsed by default) — and still under the LocalPilot activity bar icon when the chat has been moved to the Secondary Side Bar or the Panel; its title bar has **Open Chat**:
+The **Agents** view sits below the chat view (collapsed by default). It stays in the Primary Side Bar when you move the chat elsewhere, and its title bar has **Open Chat**.
 
-- **Running** — live status line (`Running grep_search…`), inline **Stop**, badge with the count.
-- **Idle** — recent sessions with mode, message count and changed-file count.
-- Expand a session to see the **files it changed**; click a file for a side-by-side diff.
-- Inline **Keep** / **Undo** on sessions and files; **Keep All / Undo All Agent Changes** in the title menu.
+- **Running:** live status line (for example `Running grep_search…`), Pause / Resume / Stop, and a count badge.
+- **Idle:** recent sessions with mode, message count and changed-file count.
+- Expand a session to see the files it changed. Click a file for a side-by-side diff.
+- Inline **Keep** / **Undo** on sessions and files, and **Keep All** / **Undo All Agent Changes** in the title menu.
 
 ## Change review
 
-Before an agent modifies a file, LocalPilot stores the original content. From then on:
+Before an agent changes a file, LocalPilot stores the original content. Then:
 
-- The **files changed** bar appears above the composer: expand it, click a file for a diff, hover for per-file Keep/Undo, or use **Undo all / Keep all**.
+- The changes bar appears above the composer. Click a file for a diff.
+- Without a worktree, accept or reject per file, or use **Accept all** / **Reject all**. With a worktree, use **Apply to workspace** / **Discard**.
 - Changed lines are highlighted in open editors.
-- Undo restores the exact pre-agent content (new files are moved to the trash).
-- Keeping simply forgets the snapshot — your normal Git workflow takes over.
+- Rejecting restores the exact original content. New files are moved to the trash.
+- Accepting drops the snapshot. Your normal git workflow takes over.
 
-Changes are tracked **per session**, so reverting one agent's work never touches another's.
+Changes are tracked per session, so rejecting one agent's work never touches another's.
+
+![Diff of a README section written by one of three parallel agents, opened from its worktree, with Discard and Apply to workspace]({{ '/assets/screenshots/parallel-review.png' | relative_url }})
 
 ## Reading the transcript
 
-The agent's work is shown as a timeline of concise rows, one per step: **Read** `file`, lines a to b · **Searched** for `query` · **Edited** `file`, 2 other steps `+4 −2` · **Ran** `command` (with the exit code) · **Opened** `url`. Rows read in the present tense while in flight (*Reading…*, *Editing…*) and settle to the past tense. File chips are language-tagged and open the file on click; expanding a row shows the file excerpt, diff or terminal output. Reasoning is summarised to a one-line **Thought …** row. Subagents appear as `agent · task · model` pills with their own nested rows, folding into **Finished with N steps** and a collapsible report.
+Each step is one row: **Read** `file` (lines a to b), **Searched** for `query`, **Edited** `file` `+4 −2`, **Ran** `command` (with exit code), **Opened** `url`. Rows use the present tense while running and the past tense when done. Expand a row for the file excerpt, diff or terminal output. Reasoning shows as a one-line **Thought …** row.
+
+Subagents show as `agent · task · model` pills with their own rows. They fold into *Finished with N steps* and a collapsible report.
 
 ## Subagents inside a session
 
-A single agent can also fan out: `run_subagent` runs one child, `run_parallel_subagents` runs several concurrently (bounded by `localpilot.parallel.maxConcurrency`). Children have fresh context windows and report back only their final message, keeping the parent's context small.
+One agent can also fan out:
+
+- `run_subagent` runs one child.
+- `run_parallel_subagents` runs several at once, up to `localpilot.parallel.maxConcurrency`.
+
+Children start with a fresh context window and return only their final message, which keeps the parent's context small.
+
+Read-only subagents (`explore`, `clarifier`, `researcher`) go to a small, fast tool-capable model by default (`localpilot.routing.fast`). Coding subagents can go to a stronger model (`localpilot.routing.coding`). See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 ### Plans that execute themselves
 
-For large tasks the agent **splits the work into checklist items first** (`manage_todos`). Every item can carry an `agent` (coder, tester, docs, explore…), a self-contained `prompt`, and `dependsOn` — the ids it needs finished first. One call to `run_todos_parallel` then executes the whole checklist in **dependency waves**:
+For large tasks the agent first writes a checklist with `manage_todos`. Each item can have an `agent` (coder, tester, docs, explore and so on), a self-contained `prompt`, and `dependsOn` (ids that must finish first). One `run_todos_parallel` call then runs the checklist in waves:
 
-1. every pending item whose prerequisites are done runs now, concurrently (up to `maxConcurrency`);
-2. when a wave finishes, the items that were waiting on it start, with the prerequisites' reports attached to their brief;
-3. an item whose prerequisite failed is skipped (and says why); a circular `dependsOn` is reported instead of deadlocking; items without an agent are left for the main agent.
+1. Every pending item whose prerequisites are done runs now, up to `maxConcurrency` at once.
+2. When a wave finishes, items waiting on it start. Their brief includes the prerequisites' reports.
+3. An item whose prerequisite failed is skipped, with the reason. A circular `dependsOn` is reported instead of hanging. Items without an agent are left for the main agent.
 
-Each item flips to *in progress* and then *done* in the Tasks panel, with the delegated agent and its `after 1, 2` dependencies shown on the item. The main agent only keeps the final integration (combined diagnostics/tests, summary).
+Items move to *in progress* and then *done* in the Tasks panel, which shows each item's agent and dependencies (*after 1, 2*). The main agent keeps the final integration: combined diagnostics, tests and summary.
 
-**Plan mode → Agent mode.** A plan produced in Plan mode is already in this shape — each step has an agent, a complete brief and its dependencies. Switch to Agent mode and say *implement the plan* (or *go ahead*, *run the checklist*): LocalPilot makes `run_todos_parallel` the first step of that turn instead of relying on the model to remember it.
+A plan from Plan mode already has this shape. Click **Build**, or switch to Agent and say *implement the plan* (or *go ahead*, *run the checklist*). LocalPilot then makes `run_todos_parallel` the first step of that turn.
 
 ### Whole-workspace analysis
 
-Repository-wide questions ("review the whole codebase", "where is the auth logic", "audit error handling") no longer read files one by one. The agent calls **`analyze_workspace`** first — a fast scan with no model call that returns languages and test locations per folder, manifest summaries (name, scripts, dependency counts) and a **balanced split of the repository into shards** sized for `maxConcurrency` — then fans out one `explore` or `reviewer` subagent per shard with `run_parallel_subagents` and merges the reports. Plan and Ask mode can do the same with read-only subagents.
-
-Read-only subagents (`explore`, `clarifier`, `researcher`) are routed to a small, fast tool-capable model by default (`localpilot.routing.fast`), and implementing ones can be sent to a stronger coding model (`localpilot.routing.coding`). See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
+For repository-wide questions ("review the whole codebase", "where is the auth logic"), the agent calls `analyze_workspace` first. It is a scan with no model call. It returns languages and test locations per folder, manifest summaries, and a split of the repository into shards sized for `maxConcurrency`. The agent then runs one `explore` or `reviewer` subagent per shard and merges the reports. Plan and Ask modes can do the same with read-only subagents.
 
 ## Parallel requests
 
-Parallel subagents are only as parallel as the model server. **Ollama serves one request per model at a time by default** (`OLLAMA_NUM_PARALLEL` unset), so four subagents on one model would queue behind each other — the status line shows *Waiting for <model> — queued behind N other requests…* and the first-token timeout grows with the queue so queued requests are not mistaken for stalls.
+Parallel agents are only as parallel as the model server. Ollama serves one request per model at a time unless `OLLAMA_NUM_PARALLEL` is set. Four subagents on one model then queue. The status line shows *Waiting for <model> — queued behind N other requests…*, and the first-token timeout grows with the queue so a queued request is not treated as a stall.
 
 ### Several models at once
 
-LocalPilot's answer to a one-slot server is to **use more than one model**. Every run holds a slot on the model it was routed to, and the router sees those counts live. When a worker (or an *Auto* chat) would land on a model that is already serving as many runs as it can — one, once the model is known to answer serially; otherwise the slot count LocalPilot asks Ollama for — the router picks a **comparable idle model** instead and says so on the worker's lane (*qwen2.5-coder:14b is busy with 1 other request — running this on gemma4:12b alongside*). Comparable means: the same hard capabilities (tool calling; vision when the turn has images), a role score within a few points of the intended model, at least a third of its parameters, and — when sizes are known — small enough to sit in memory **next to** the models already in use, so a second model never evicts the first and makes both slower. When nothing qualifies the run queues as before. Two workers routed in the same instant cannot both grab the last slot: the pick is reserved the moment it is made.
+LocalPilot can spread parallel work across models. Each run holds a slot on its model, and the router tracks those counts. If a worker or an *Auto* chat would land on a model that is full, the router picks a comparable idle model and says so on the worker's lane, for example *qwen2.5-coder:14b is busy with 1 other request — running this on gemma4:12b alongside*.
 
-What is never swapped: a model you chose explicitly for a chat, a model named in a `run_subagent` call or an agent file. Workers that merely **inherit** the parent's model are spreadable; so are Auto chats, which stay on *Auto* after a spread turn instead of being pinned to the stand-in. A spread worker whose stand-in stalls is retried on the parent's model. A parent waiting for its workers gives its slot up, so the parent's own model is the first one its workers fill. The whole behaviour is `localpilot.routing.parallelModels` (default on) and needs `routing.enabled`.
+A model counts as comparable when it has:
 
-The *Auto* entry in the model picker names the model the router would answer with right now, so what you see is what runs.
+- the same required capabilities (tool calling, and vision when the turn has images),
+- a role score within a few points of the intended model,
+- at least a third of its parameters,
+- and, when sizes are known, enough free memory to load next to the models already in use.
+
+If nothing qualifies, the run queues. Two workers routed at the same moment cannot take the same last slot.
+
+What never gets swapped: a model you chose for a chat, and a model named in a `run_subagent` call or an agent file. Workers that inherit the parent's model can be spread, and so can *Auto* chats. If a spread worker's stand-in stalls, it is retried on the parent's model.
+
+This behaviour is `localpilot.routing.parallelModels` (default `true`) and needs `localpilot.routing.enabled`. The *Auto* entry in the model picker names the model the router would use right now.
 
 ### More slots on one model
 
-- When LocalPilot **starts Ollama itself** (automatic setup, *Start* in Settings → Models, the installer scripts) it sets `OLLAMA_NUM_PARALLEL` to `localpilot.parallel.maxConcurrency` (capped at 4).
-- When LocalPilot notices requests queuing at a server, it starts spreading (above), says so once and offers **Restart Ollama with parallel slots** (also *LocalPilot: Restart Ollama with Parallel Request Slots* in the Command Palette) for true parallelism on that one model. A systemd-managed Ollama on Linux needs `sudo systemctl edit ollama` → `Environment="OLLAMA_NUM_PARALLEL=4"` → `sudo systemctl restart ollama`; a remote server needs the variable set where it runs.
-- Each slot keeps its own KV cache, so memory use grows with slots × `localpilot.contextWindow`. If a model becomes slow or spills to CPU after enabling slots, lower `maxConcurrency` (fewer slots) or the context window. Gemma 4's sliding-window attention keeps per-slot memory small, which is one reason it is the recommended local model.
-- LM Studio, llama.cpp (`--parallel N`), vLLM and Docker Model Runner have their own concurrency settings; LocalPilot's detection and status messages work the same way with them.
+- When LocalPilot starts Ollama itself (automatic setup, *Start* in **Settings → Models**, the installer scripts), it sets `OLLAMA_NUM_PARALLEL` to `localpilot.parallel.maxConcurrency`, capped at 4.
+- When LocalPilot sees requests queuing, it offers **Restart Ollama with parallel slots** (also *LocalPilot: Restart Ollama with Parallel Request Slots*).
+- A systemd-managed Ollama on Linux needs `sudo systemctl edit ollama`, then `Environment="OLLAMA_NUM_PARALLEL=4"`, then `sudo systemctl restart ollama`. A remote server needs the variable set where it runs.
+- Each slot keeps its own KV cache, so memory grows with slots × `localpilot.contextWindow`. If a model slows down or spills to CPU, lower `maxConcurrency` or the context window.
+- LM Studio, llama.cpp (`--parallel N`), vLLM and Docker Model Runner have their own concurrency settings.
+- colibri reports its KV-slot count, and LocalPilot uses it for parallel work. *LocalPilot: Start colibri* passes `localpilot.colibri.kvSlots` (default 2). See [Models & providers]({{ '/docs/models/' | relative_url }}).
 
 ## Limits
 
-- `localpilot.parallel.maxConcurrency` (default 4) bounds concurrent tool calls and subagents per session, and is the number of Ollama slots LocalPilot asks for.
-- `localpilot.parallel.maxSubagentDepth` (default 2) prevents runaway nesting.
-- Your model server's own concurrency ultimately decides how many requests run truly simultaneously — see [Parallel requests](#parallel-requests).
+| Setting | Default | Effect |
+|---|---|---|
+| `localpilot.parallel.maxConcurrency` | 4 (max 16) | Concurrent tool calls and subagents per session; also the Ollama slot count LocalPilot requests (capped at 4) |
+| `localpilot.parallel.maxSubagentDepth` | 2 (max 4) | How deep subagents may nest |
+
+Your model server's own concurrency decides how many requests truly run at the same time.

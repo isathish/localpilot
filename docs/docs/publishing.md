@@ -1,6 +1,6 @@
 ---
 title: Publishing to the Marketplace
-description: One-time publisher setup and the two supported publish paths (CI or local).
+description: One-time publisher setup, then publish LocalPilot to the VS Code Marketplace and Open VSX from CI or from your own machine.
 permalink: /docs/publishing/
 ---
 
@@ -22,10 +22,10 @@ gh secret set VSCE_PAT --repo isathish/localpilot     # paste the Azure DevOps t
 gh secret set OVSX_PAT --repo isathish/localpilot     # optional
 ```
 
-Then either:
+Then use either route:
 
-- run the **Publish to Marketplace** workflow (*Actions → Publish to Marketplace → Run workflow*, choose the release tag), which downloads the already-released VSIX, verifies its checksum and publishes it, or
-- cut a new release: just push to `main` — the **Release** workflow bumps the version, tags, builds and publishes automatically whenever the push contains releasable commits and the secrets exist. *Actions → Prepare release → Run workflow* (or `npm run release -- minor` locally) picks a specific version. See [Development → Releases]({{ '/docs/development/#releases' | relative_url }}).
+- **Publish an existing release.** Run *Actions → Publish to Marketplace → Run workflow*. Enter the release tag (empty means the latest release) and pick `marketplace`, `openvsx` or `both`. The workflow downloads that release's `localpilot-X.Y.Z.vsix`, checks it against `SHA256SUMS.txt`, confirms the `localpilot` publisher exists, and publishes. It does not rebuild anything.
+- **Cut a new release.** Push releasable commits to `main`. The **Release** workflow bumps the version, tests, tags, creates the GitHub Release and publishes to both stores. A store whose secret is missing is skipped with a warning; add the secret and run **Publish to Marketplace** for that tag. To choose the version yourself, use *Actions → Prepare release → Run workflow* or `npm run release -- minor` locally. See [Development → Releases]({{ '/docs/development/#releases' | relative_url }}).
 
 ## Path B — publish from your machine
 
@@ -34,19 +34,26 @@ npx @vscode/vsce login localpilot      # paste the token once; stored in the OS 
 npx @vscode/vsce publish --no-dependencies --packagePath localpilot-X.Y.Z.vsix
 ```
 
-`vsce publish` without `--packagePath` builds and publishes the current working tree instead.
+`vsce publish` without `--packagePath` builds and publishes the current working tree instead. CI packages with `--readme-path MARKETPLACE.md`, so add that flag if you build locally and want the same listing text.
+
+For Open VSX:
+
+```bash
+npx ovsx publish localpilot-X.Y.Z.vsix -p <your Open VSX token>
+```
 
 ## Verify
 
 - Marketplace listing: <https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent>
 - `code --install-extension localpilot.localpilot-agent`
-- The listing uses `README.md`, `CHANGELOG.md`, `media/logo.png` and the `galleryBanner` colour from `package.json`.
+- Open VSX listing, after the first Open VSX publish: <https://open-vsx.org/extension/localpilot/localpilot-agent> (LocalPilot is not on Open VSX yet)
+- The listing text comes from `MARKETPLACE.md` (packaged as the README with `--readme-path`), plus `CHANGELOG.md`, the `media/logo.png` icon and the `galleryBanner` colour from `package.json`.
 
 ## Troubleshooting
 
 | Error | Fix |
 |---|---|
 | `Access Denied` / 401 | Token lacks *Marketplace → Manage* or is scoped to one organization |
-| `Publisher 'localpilot' not found` | Create the publisher first, or change `publisher` in `package.json` |
+| `Publisher 'localpilot' not found`, or the workflow's *Publisher missing* error | Create the publisher first, or change `publisher` in `package.json` |
 | `Extension 'localpilot' already exists` with a different owner | The ID is taken; pick a new `name`/`publisher` |
 | README images rejected | Only HTTPS images from trusted hosts; relative paths are rewritten to the GitHub repository automatically |

@@ -154,6 +154,8 @@ const SETTING_KEYS = [
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
   'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'telemetry.enabled', 'telemetry.retentionDays',
+  'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
+  'pluginPaths', 'hooks.enabled', 'browser.chromePath',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -162,6 +164,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
+  'localpilot.setupRedis', 'localpilot.startColibri',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
@@ -478,7 +481,11 @@ export class SettingsPanel implements vscode.Disposable {
         if (!target) {
           return;
         }
-        await vscode.workspace.fs.writeFile(target, Buffer.from(await this.telemetry.exportJson(), 'utf8'));
+        if (target.scheme === 'file') {
+          await this.telemetry.exportTo(target.fsPath);
+        } else {
+          await vscode.workspace.fs.writeFile(target, Buffer.from(await this.telemetry.exportJson(), 'utf8'));
+        }
         this.post({ type: 'toast', level: 'info', text: `Exported to ${target.fsPath}` });
         return;
       }
@@ -765,7 +772,7 @@ export class SettingsPanel implements vscode.Disposable {
     }
     const models = await this.providers.listAllModels().catch(() => []);
     const notes = await this.memory.list().catch(() => []);
-    const learning = await this.learner?.usage().catch(() => undefined);
+    const learning = await this.learner?.usage(this.skills.enabledSkills).catch(() => undefined);
     const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
     this.post({
       type: 'state',

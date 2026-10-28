@@ -16,6 +16,7 @@
 
   const I = {
     check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
+    plus: '<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>',
     x: '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
     spin: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.2 3"/></svg>',
     refresh: '<svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.5h-2.5"/></svg>',
@@ -954,6 +955,8 @@
     if (!state.running.has(s.id) && !state.live.has(s.id)) { settleReplay(); }
     // Plan mode finished with a checklist: the "Prepared plan" card — title, summary, todos and one-click Build.
     if (s.mode === 'plan' && s.plan && (s.todos || []).length && !state.running.has(s.id)) { els.messages.appendChild(planCard(s)); }
+    // Install / Create / Use offers from the last request outlive its live turn.
+    if (s.offers && !inFlight) { const n = skillSuggestionNote(s.offers); if (n) { n.classList.add('offer'); els.messages.appendChild(n); } }
     const live = state.live.get(s.id);
     if (live) { els.messages.appendChild(live.root); if (live.dirty) { scheduleRender(live); } }
     setRunning(state.running.has(s.id) || state.pendingSend.has(s.id));
@@ -1339,9 +1342,18 @@
 
   /** Chips for skills matching the request (click → prefill `/skill name`), a catalog skill installed/offered for it, and a recurring request type worth saving as a skill. */
   function skillSuggestionNote(p) {
-    const skills = p.skills || []; const preloaded = p.preloaded || []; const create = p.create; const installed = p.installed; const available = p.available;
-    if (!skills.length && !preloaded.length && !create && !installed && !available) { return null; }
+    const skills = p.skills || []; const preloaded = p.preloaded || []; const create = p.create; const installed = p.installed; const available = p.available; const ready = p.ready;
+    if (!skills.length && !preloaded.length && !create && !installed && !available && !ready) { return null; }
     const n = el('div', 'note skills');
+    const sid = state.session && state.session.id;
+    const prune = (wrap) => { wrap.remove(); if (!n.querySelector('.learn, .chip')) { n.remove(); } };
+    if (ready) {
+      const row = el('div', 'learn');
+      row.appendChild(el('span', 'lbl', `${I.check || ''}“${esc(ready.name)}” is installed. Run the request again with it:`));
+      const use = el('button', 'chip brand', `${I.play || ''}Use “${esc(ready.name)}”`); use.title = `Prefills /skill ${ready.name} with your last request — press Enter to send`;
+      use.onclick = () => { els.input.value = `/skill ${ready.name} ${ready.prompt || ''}`.trim(); autoGrow(); updateSendEnabled(); els.input.focus(); };
+      row.appendChild(use); n.appendChild(row);
+    }
     if (installed) {
       const row = el('div', 'learn');
       row.appendChild(el('span', 'lbl', `${I.download || ''}Installed “${esc(installed.name)}” from ${esc(installed.repo)} for this request.`));
@@ -1368,8 +1380,9 @@
       const wrap = el('div', 'learn');
       wrap.appendChild(el('span', 'lbl', `The “${esc(available.name)}” skill from ${esc(available.repo)} matches this request but is not installed.`));
       const get = el('button', 'chip brand', `${I.download || ''}Install “${esc(available.name)}”`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Switch this chat to “Auto” in the Skills menu to skip this step.`;
-      get.onclick = () => { post({ type: 'installCatalogSkill', name: available.name, repo: available.repo }); get.disabled = true; get.textContent = 'Installing…'; };
-      const no = el('button', 'chip', 'Not now'); no.title = 'Do not offer this skill again'; no.onclick = () => { post({ type: 'dismissCatalogSkill', name: available.name }); wrap.remove(); if (!skills.length && !create && !installed) { n.remove(); } };
+      get.dataset.install = available.name;
+      get.onclick = () => { post({ type: 'installCatalogSkill', name: available.name, repo: available.repo, sessionId: sid }); get.disabled = true; get.innerHTML = `${I.spin || ''}Installing…`; };
+      const no = el('button', 'chip', 'Not now'); no.title = 'Do not offer this skill again'; no.onclick = () => { post({ type: 'dismissCatalogSkill', name: available.name, sessionId: sid }); prune(wrap); };
       wrap.appendChild(get); wrap.appendChild(no); n.appendChild(wrap);
     }
     if (create) {
@@ -1377,7 +1390,7 @@
       wrap.appendChild(el('span', 'lbl', `Requests like this have come up ${create.count}× with no skill covering them.`));
       const mk = el('button', 'chip brand', `${I.plus || ''}Create “${esc(create.slug)}” skill`); mk.title = 'Prefills a prompt asking the agent to write .localpilot/skills/' + create.slug + '/SKILL.md from what worked here';
       mk.onclick = () => { els.input.value = `Create a reusable skill at .localpilot/skills/${create.slug}/SKILL.md for requests like: ${(create.samples || []).map((x) => `"${x}"`).join(', ')}. Use front-matter (name, description with quoted trigger phrases) and a step-by-step body based on how we handled it in this project, then reload skills.`; autoGrow(); updateSendEnabled(); els.input.focus(); };
-      const no = el('button', 'chip', 'Not now'); no.onclick = () => { post({ type: 'dismissSkillTopic', topic: create.topic }); wrap.remove(); if (!skills.length) { n.remove(); } };
+      const no = el('button', 'chip', 'Not now'); no.onclick = () => { post({ type: 'dismissSkillTopic', topic: create.topic }); prune(wrap); };
       wrap.appendChild(mk); wrap.appendChild(no); n.appendChild(wrap);
     }
     return n;
@@ -2095,7 +2108,7 @@
     const s = state.session; const cur = (s && s.model) || '';
     const autoName = modelName(autoModelId());
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
-    for (const m of state.models) { items.push({ group: m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
+    for (const m of state.models) { items.push({ group: (state.providerNames && state.providerNames[m.providerId]) || m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
     items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
@@ -2403,7 +2416,7 @@
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
         if (switching && prev) { saveDraft(prev); }
-        state.session = m.session; state.session.liveFrom = m.liveFrom; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
+        state.session = m.session; state.session.liveFrom = m.liveFrom; state.session.offers = m.offers; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
         renderSession(); renderChanges(); renderTasks(); renderTabs(); dismissBoot();
         if (switching) { closeMenu(); restoreDraft(m.session.id); const y = state.scroll.get(m.session.id); if (y !== undefined && !state.running.has(m.session.id)) { els.messages.scrollTop = y; } }
         // Don't yank focus away from a rename box, popover search or anything else the user is typing in.
@@ -2412,8 +2425,16 @@
       }
       case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
+      case 'skillInstall': {
+        // The session redraw replaces a settled offer; this settles chips still inside a live turn.
+        for (const b of document.querySelectorAll('[data-install]')) {
+          if (b.dataset.install !== m.name) { continue; }
+          if (m.ok) { b.innerHTML = `${I.check || ''}Installed`; b.disabled = true; } else { b.disabled = false; b.innerHTML = `${I.refresh || ''}Retry install`; b.title = m.error || 'Install failed'; }
+        }
+        break;
+      }
       case 'paused': {
         if (m.childId) { laneSetPaused(m.sessionId, m.childId, m.paused, m.holding); break; }
         state.paused.set(m.sessionId, { paused: m.paused, holding: m.holding });

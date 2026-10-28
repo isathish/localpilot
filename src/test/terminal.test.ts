@@ -130,6 +130,42 @@ function mockOpenAI(reply: string): Promise<{ url: string; close(): void; reques
   return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), requests })));
 }
 
+/** OpenAI-compatible mock that streams one scripted turn per chat request: a tool call, or final text. */
+function mockScripted(turns: ({ tool: string; args: Record<string, unknown> } | { text: string })[]): Promise<{ url: string; close(): void; chats: number }> {
+  const state = { chats: 0 };
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ data: [{ id: 'mock-coder', object: 'model' }] }));
+        return;
+      }
+      if (req.url !== '/v1/chat/completions') {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      const turn = turns[Math.min(state.chats++, turns.length - 1)];
+      const sse = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      res.setHeader('content-type', 'text/event-stream');
+      if ('tool' in turn) {
+        sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `call_${state.chats}`, type: 'function', function: { name: turn.tool, arguments: JSON.stringify(turn.args) } }] } }] });
+        sse({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+      } else {
+        sse({ choices: [{ index: 0, delta: { content: turn.text } }] });
+        sse({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+      }
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  return new Promise((resolve) =>
+    srv.listen(0, '127.0.0.1', () =>
+      resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), get chats() { return state.chats; } })
+    )
+  );
+}
+
 suite('LocalPilot CLI (dist/cli.js)', () => {
   const cli = path.join(EXT_ROOT, 'dist', 'cli.js');
   let home: string;
@@ -199,6 +235,25 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
       const piped = await run(['--ask', '--no-mcp'], { cwd: ws, input: 'again?' });
       assert.strictEqual(piped.code, 0, piped.err);
       assert.strictEqual(piped.out.trim(), 'The answer is **42**.');
+    } finally {
+      srv.close();
+    }
+  });
+
+  test('get_diagnostics works in the CLI (no language servers) and does not crash the process', async function () {
+    this.timeout(60_000);
+    const srv = await mockScripted([{ tool: 'get_diagnostics', args: { path: 'a.js' } }, { text: 'No problems found.' }]);
+    try {
+      await fs.mkdir(path.join(home, '.localpilot'), { recursive: true });
+      await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'mock', type: 'openai', baseUrl: srv.url }], defaultModel: 'mock/mock-coder' }));
+      const ws = path.join(home, 'ws-diag');
+      await fs.mkdir(ws, { recursive: true });
+      await fs.writeFile(path.join(ws, 'a.js'), 'export const a = 1;\n');
+      const r = await run(['--ask', '--print', '--no-mcp', 'any errors in a.js?'], { cwd: ws });
+      assert.strictEqual(r.code, 0, `exit ${r.code}\n${r.err}`);
+      assert.doesNotMatch(r.err, /ReferenceError|is not a function/);
+      assert.strictEqual(r.out.trim(), 'No problems found.');
+      assert.ok(srv.chats >= 2, 'the tool result went back to the model');
     } finally {
       srv.close();
     }

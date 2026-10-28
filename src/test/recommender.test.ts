@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { clampSkillBody, createSkillPrompt, namesTool, recommendSkills, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { clampSkillBody, createSkillPrompt, namesTool, recommendSkills, SkillLearner, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
 import { normalizeSkillName, SkillManager } from '../agent/skills';
 import { setSkillEnabled } from '../config';
 import * as vscode from 'vscode';
@@ -194,6 +194,32 @@ suite('Subagent routing', () => {
   });
 });
 
+suite('Skill learning', () => {
+  test('recurring requests become suggestions until a skill covers them, and a pending save survives dispose', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-learn-'));
+    const file = path.join(tmp, 'learning.json');
+    const learner = new SkillLearner(file);
+    for (const req of ['deploy the billing service to staging', 'deploy billing service to staging again', 'please deploy the billing service to staging']) {
+      await learner.observeRequest(req, []);
+    }
+    const before = await learner.usage([]);
+    assert.strictEqual(before.recurring.length, 1, JSON.stringify(before.recurring));
+    const topic = before.recurring[0].topic;
+    const skill = { name: 'staging-deploy', description: 'Deploy a service to staging. Use for "deploy to staging", "staging".' };
+    assert.strictEqual((await learner.usage([skill])).recurring.length, 0, 'a skill installed since covers it at once');
+    await learner.recordSkillUsed('staging-deploy');
+    learner.dispose();
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.strictEqual(saved.skillUse['staging-deploy'].count, 1, 'dispose writes the pending change');
+    assert.ok(saved.topics[topic], 'topics are persisted');
+    const reread = new SkillLearner(file);
+    await reread.dismiss(topic);
+    assert.strictEqual((await reread.usage([])).recurring.length, 0, 'dismissed topics stay quiet');
+    reread.dispose();
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+});
+
 suite('Skill installation', () => {
   test('parseSkillSource understands GitHub shorthands, URLs, SKILL.md links and local paths', () => {
     assert.deepStrictEqual(parseSkillSource('owner/repo'), { kind: 'github', owner: 'owner', repo: 'repo', ref: undefined, path: '' });
@@ -259,6 +285,20 @@ suite('Skill installation', () => {
     assert.deepStrictEqual(again, []);
     const replaced = await installSkills(src, { dest, only: ['pdf'], fetchImpl, onExists: async () => true });
     assert.strictEqual(replaced[0]?.name, 'pdf');
+    // A replacement that fails half-way keeps the installed copy and leaves no staging folders behind.
+    const broken = (async (input: string | URL | Request, init?: RequestInit) => (String(input).endsWith('fill.py') ? new Response('gone', { status: 500 }) : fetchImpl(input, init))) as typeof fetch;
+    await assert.rejects(installSkills(src, { dest, only: ['pdf'], fetchImpl: broken, onExists: async () => true }), /HTTP 500/);
+    assert.strictEqual(await fs.readFile(path.join(dest, 'pdf', 'scripts', 'fill.py'), 'utf8'), 'print(1)', 'old copy survives');
+    assert.deepStrictEqual((await fs.readdir(tmp)).filter((n) => n.startsWith('.skill-staging')), []);
+    // Raw downloads carry the GitHub token (private repositories) — and only to GitHub.
+    const prevToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = 'tok-123';
+    const auth: string[] = [];
+    const spy = (async (input: string | URL | Request, init?: RequestInit) => { auth.push(`${new URL(String(input)).hostname}:${(init?.headers as Record<string, string>)?.authorization ?? ''}`); return fetchImpl(input, init); }) as typeof fetch;
+    await installSkills(src, { dest: path.join(tmp, 'dest3'), only: ['pdf'], fetchImpl: spy });
+    process.env.GITHUB_TOKEN = prevToken;
+    if (prevToken === undefined) { delete process.env.GITHUB_TOKEN; }
+    assert.ok(auth.filter((a) => a.startsWith('raw.githubusercontent.com')).every((a) => a.endsWith('Bearer tok-123')), 'raw files are fetched with the token');
     assert.ok(calls.every((c) => c.startsWith('https://api.github.com/') || c.startsWith('https://raw.githubusercontent.com/')), 'only GitHub endpoints are contacted');
     // Local folder → user/workspace folder copy.
     const local = await installSkills({ kind: 'local', path: path.join(dest, 'pdf') }, { dest: path.join(tmp, 'dest2') });
@@ -279,6 +319,22 @@ suite('Skill catalog', () => {
     { name: 'add-educational-comments', description: 'Add explanatory comments to code for learners.', repo: 'acme/more/skills', dir: 'skills/add-educational-comments' },
   ];
   const catalog = () => new SkillCatalog({ cacheFile: path.join(os.tmpdir(), `lp-catalog-${Math.random().toString(36).slice(2)}.json`), repositories: () => ['acme/superskills/skills', 'acme/skills/skills', 'acme/more/skills'] });
+
+  test('everyday format names reach the format skill; action-named skills need the action', () => {
+    const c = catalog();
+    const docs: CatalogEntry[] = [
+      ...CATALOG,
+      { name: 'xlsx', description: 'Use this skill any time a spreadsheet file is the primary input or output: create, read, edit .xlsx or .csv files, formulas, charts.', repo: 'acme/skills/skills', dir: 'skills/xlsx' },
+      { name: 'pptx', description: 'Use this skill any time a .pptx file is involved: creating slide decks, pitch decks or presentations.', repo: 'acme/skills/skills', dir: 'skills/pptx' },
+      { name: 'docx', description: 'Create, read and edit Word documents (.docx).', repo: 'acme/skills/skills', dir: 'skills/docx' },
+      { name: 'convert-excel-to-md', description: 'Converts Excel (.xlsx) workbooks into Markdown so their contents can be analysed. Use whenever the user shares a .xlsx file.', repo: 'acme/more/skills', dir: 'skills/convert-excel-to-md' },
+    ];
+    assert.strictEqual(c.pick('create an excel spreadsheet with monthly totals', SKILLS, docs)?.name, 'xlsx');
+    assert.strictEqual(c.pick('make a powerpoint deck for the quarterly review', SKILLS, docs)?.name, 'pptx');
+    assert.strictEqual(c.pick('write a word document summarising the release', SKILLS, docs)?.name, 'docx');
+    assert.strictEqual(c.pick('convert this excel file to markdown', SKILLS, docs)?.name, 'convert-excel-to-md', 'asked for the action → the action skill');
+    assert.notStrictEqual(c.pick('rename the word foo to bar in utils.ts', SKILLS, docs)?.name, 'docx', 'a plain "word" is not a Word document');
+  });
 
   test('picks a catalog skill only when it beats what is installed and clears the threshold', () => {
     const c = catalog();
@@ -340,6 +396,9 @@ suite('Skill catalog', () => {
     const local = [...SKILLS, { name: 'writing-plans', description: 'Write a step-by-step implementation plan. Use for "write a plan".' }];
     assert.strictEqual(await c2.match('write a plan for splitting the monolith', local), undefined);
     const c3 = new SkillCatalog({ cacheFile, repositories: repos, fetchImpl, ttlMs: 60_000 });
+    assert.strictEqual(await c3.match('write a plan for splitting the monolith', SKILLS, ['writing-plans']), undefined, 'on disk but disabled → never re-downloaded');
+    assert.strictEqual((await c3.match('write a plan for splitting the monolith', SKILLS))?.name, 'writing-plans', 'installed into another workspace\'s folder → still offered here');
+    await fs.rm(path.join(dest, 'writing-plans'), { recursive: true, force: true });
     assert.strictEqual(await c3.match('write a plan for splitting the monolith', SKILLS), undefined, 'auto-installed then deleted → left alone');
     assert.strictEqual((await c3.match('debug why the login page crashes, find the root cause', SKILLS))?.name, 'systematic-debugging');
     await c3.dismiss('systematic-debugging');

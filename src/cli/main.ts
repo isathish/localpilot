@@ -37,6 +37,7 @@ import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
 import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
+import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
 import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
@@ -454,6 +455,8 @@ interface Core {
   /** Live sessions, so gather_context can see the working set and recent turns. */
   sessions: Map<string, Session>;
   telemetry: Telemetry;
+  /** Optional Redis store behind `telemetry`; its socket must be closed for the process to exit. */
+  telemetryRemote?: RedisTelemetry;
   /** Merged settings.json (permission rules, hooks) for the working folder. */
   settings: ProjectSettings;
   plugins: PluginInfo[];
@@ -473,7 +476,15 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const catalog = new SkillCatalog({ cacheFile: path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   // Same local store as the extension, so CLI runs show up on the dashboard (events only; the CLI has its own log file).
-  const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  // With `storage.redis.enabled` in the user's settings they go to the same Redis.
+  const redisCfg = getConfig().storage.redis;
+  let redis: RedisTelemetry | undefined;
+  try {
+    redis = redisCfg.enabled ? new RedisTelemetry(redisCfg.url) : undefined;
+  } catch (e) {
+    log.warn(`telemetry: invalid localpilot.storage.redis.url (${e instanceof Error ? e.message : String(e)}); writing to files`);
+  }
+  const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled, remote: () => redis });
   runner.telemetry = telemetry;
   providers.telemetry = telemetry;
   // Claude Code-compatible project configuration: settings.json, plugins, custom commands (both .claude and .localpilot).
@@ -500,7 +511,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp.extraServers = () => pluginMcp;
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, settings, plugins, commands };
+  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, telemetryRemote: redis, settings, plugins, commands };
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -513,12 +524,12 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
     return true;
   }
   if (!process.stdin.isTTY) {
-    process.stdout.write(`${yellow('⚠')} ${title} — denied (no TTY; pass --yes to auto-approve)\n`);
+    process.stdout.write(`${yellow('!')} ${title} — denied (no TTY; pass --yes to auto-approve)\n`);
     return false;
   }
   const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network' };
   const body = detail.split('\n').slice(0, 24).map((l) => `  ${dim('│')} ${l}`).join('\n');
-  process.stdout.write(`\n${yellow('⚠')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
+  process.stdout.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
   setReadline(rl);
   const a = (await ask(`  ${amber('Allow?')} ${dim('[y]es · [n]o · [a]lways this session')} `))?.trim().toLowerCase() ?? 'n';
   if (a === 'a' || a === 'always') {
@@ -705,7 +716,7 @@ async function cmdSkillSearch(core: Core, args: Args, renderer: Renderer): Promi
   const hits = await core.catalog.search(args.prompt, 10);
   for (const s of await core.catalog.status()) {
     if (s.error) {
-      console.log(`  ${yellow('⚠')} ${s.repo}: ${s.error}`);
+      console.log(`  ${yellow('!')} ${s.repo}: ${s.error}`);
     }
   }
   if (!hits.length) {
@@ -750,7 +761,7 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
         return true;
       }
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((r) => rl.question(`${yellow('⚠')} "${name}" is already installed there. Replace it? [y/N] `, r));
+      const answer = await new Promise<string>((r) => rl.question(`${yellow('!')} "${name}" is already installed there. Replace it? [y/N] `, r));
       rl.close();
       return /^y(es)?$/i.test(answer.trim());
     },
@@ -835,7 +846,7 @@ async function main(): Promise<void> {
       return { text, opts: {} };
     }
     const { prompt, notes } = await expandCommand(custom, m![2], { root: session.worktree?.path ?? args.cwd });
-    notes.forEach((n) => process.stderr.write(`${yellow('⚠')} ${n}\n`));
+    notes.forEach((n) => process.stderr.write(`${yellow('!')} ${n}\n`));
     return { text: prompt, opts: { modelRef: custom.model, permissionAllow: custom.allowedTools, display: text.trim() } };
   };
 
@@ -866,6 +877,7 @@ async function main(): Promise<void> {
     // After finishIsolated the worktree may be gone, so hooks run in the real workspace.
     await core.runner.hooks?.sessionEnd(session.id, 'other', args.cwd, { signal: ctl.signal });
     await core.telemetry.flush();
+    core.telemetryRemote?.dispose();
     process.exit(ctl.signal.aborted ? 130 : 0);
   }
 
@@ -881,6 +893,8 @@ async function main(): Promise<void> {
     const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, new RunControl(session.id), prepared.opts);
     process.stdout.write(answer.trimEnd() + '\n');
     core.mcp?.dispose();
+    await core.telemetry.flush();
+    core.telemetryRemote?.dispose();
     return;
   }
 
@@ -913,7 +927,10 @@ async function main(): Promise<void> {
     process.stdout.write(dim('bye\n'));
     void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', isolated?.info.path ?? args.cwd) : Promise.resolve())
       ?.then(() => core.telemetry.flush())
-      .finally(() => process.exit(0));
+      .finally(() => {
+        core.telemetryRemote?.dispose();
+        process.exit(0);
+      });
   });
 
   const slash = async (line: string): Promise<boolean> => {

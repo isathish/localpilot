@@ -612,8 +612,8 @@ export const window = {
     process.stdout.write(`\x1b[2m(open ${workspace.asRelativePath(doc.uri)} in your editor)\x1b[0m\n`);
     return { document: doc, selection: new Selection(0, 0, 0, 0), revealRange() {}, edit: async () => true };
   },
-  showInformationMessage: (msg: string, ...items: unknown[]) => pick('ℹ', msg, items),
-  showWarningMessage: (msg: string, ...items: unknown[]) => pick('⚠', msg, items),
+  showInformationMessage: (msg: string, ...items: unknown[]) => pick('›', msg, items),
+  showWarningMessage: (msg: string, ...items: unknown[]) => pick('!', msg, items),
   showErrorMessage: (msg: string, ...items: unknown[]) => pick('✖', msg, items),
   async showInputBox(opts?: { prompt?: string; title?: string; value?: string }): Promise<string | undefined> {
     const a = await ask(`\x1b[33m?\x1b[0m ${opts?.title ? `${opts.title}: ` : ''}${opts?.prompt ?? ''} `);
@@ -652,6 +652,8 @@ export const window = {
 
 export const languages = {
   getDiagnostics: (): [] => [],
+  // No language servers outside VS Code: diagnostics never change.
+  onDidChangeDiagnostics: () => new Disposable(),
   registerInlineCompletionItemProvider: () => new Disposable(),
   registerCodeActionsProvider: () => new Disposable(),
 };

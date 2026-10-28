@@ -1,103 +1,135 @@
 ---
 title: Features
-description: A tour of everything LocalPilot can do.
+description: Overview of what LocalPilot does in VS Code, with links to the detailed page for each area.
 permalink: /docs/features/
 ---
 
-![LocalPilot agent session in VS Code: read, edit with +1/−1 card, npm test in the LocalPilot Agent terminal, Changes panel with Accept / Reject]({{ '/assets/screenshots/hero-agent.png' | relative_url }})
+![LocalPilot agent session in VS Code: read cart.js and its test, a +1/−1 edit, npm test passing in the LocalPilot Agent terminal, and Apply to workspace / Discard]({{ '/assets/screenshots/hero-agent.png' | relative_url }})
 
-## Chat & agent
+This page lists what LocalPilot can do. Each section links to the page with the details.
 
-- **Agent mode** — autonomous loop: read → search → edit → run → verify, with approval gates for terminal, delete and network actions.
-- **Ask mode** — read-only Q&A about your code.
-- **Plan mode** — investigates and produces a numbered implementation plan without editing.
-- **Streaming** responses with live tool steps, thinking (for reasoning models) and status.
-- **Work strip** — every turn starts with one line that says what the agent is doing right now (*Reading the code*, *Researching on the web*, *Editing files*, *Coordinating workers*, *Waiting for your approval*…), how much it has done (steps, files read, searches, files edited, commands, workers) and for how long. When the turn ends it becomes **Worked for 1m 12s · 9 steps · …** and folds the steps away on click; reopened chats show the same summary.
-- **Folded exploration** — a burst of reads and searches is one row (*Read a.ts, b.ts +2 more · Searched 3 times*) that expands to the individual steps, instead of a stack of near-identical lines. Edits are grouped the same way; **web searches** render as link cards (title · domain · snippet).
-- **Narrated phases** — the agent is asked to say in one line what it is about to check or change before each batch of tool calls, and to batch independent lookups so they run in parallel; the harness still verifies that announced actions actually happened.
-- **Multiple sessions** persisted per workspace; several can run concurrently in an always-visible **tab bar** (running chats first, History popover with search). Fork, pin, rename, export to Markdown.
-- **Planning & memory** — the agent keeps a live **Tasks** checklist for multi-step work and saves durable notes to `.localpilot/memory/` (project) or user storage (global) that are recalled in later sessions. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
-- **Slash commands** — `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/skill`, `/agent`, `/context`.
-- **Lives where you want it** — Primary Side Bar, Secondary Side Bar (like Copilot Chat), bottom Panel or an editor tab. **Move Chat To…** in the chat toolbar, the status bar menu or the Command Palette moves it the way VS Code moves any view (`localpilot.chat.location`), so dragging the Chat view, **Move View** and **Reset Location** all keep working and VS Code remembers the position. The picker spells out which side each bar is on for your layout (`workbench.sideBar.location`), and the chat stays up after the move even when the destination part was closed (VS Code briefly tears the new pane down in that case; LocalPilot brings it back, and never fights you if you close the part yourself). The Agents view and the LocalPilot activity bar icon stay in the Primary Side Bar, so there is always a way back. The LocalPilot icon in every editor's title bar and in the status bar opens the chat wherever it is, and the status bar menu also reaches New Chat, model selection, inline completions and Settings.
+## Chat and agent
 
-## Parallel agents & change review
+- **Five modes.** Agent edits and runs commands. Multitask splits work across background workers. Debug reproduces a bug before fixing it. Plan writes a plan without editing. Ask answers read-only. See [Agent modes]({{ '/docs/agent-modes/' | relative_url }}).
+- **Approvals.** Shell commands and deletes ask first by default; file edits and web access are allowed. Each action can be set to `always`, `ask` or `never`.
+- **Streaming transcript.** Tool steps, reasoning ("thinking") and status stream as they happen. The turn header shows the model's output speed (for example `~38 tok/s · 12s`).
+- **Work strip.** Each turn opens with one line that says what the agent is doing, how many steps, files and commands so far, and for how long. When the turn ends it becomes *Worked for 1m 12s · 9 steps · …*.
+- **Folded steps.** A burst of reads and searches collapses into one row (*Read a.ts, b.ts +2 more · Searched 3 times*). Edits group the same way. Web search results show as link cards.
+- **Sessions.** Chats are saved per workspace. Several can run at once in the tab bar. You can fork, pin, rename and export a chat to Markdown.
+- **Edit and restore.** **Edit** on one of your messages removes it and later turns and puts the text back in the composer. **Restore checkpoint** also rewinds the files changed since that turn.
+- **Slash commands.** `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/commands`, `/skill`, `/agent`, `/memory`, `/permissions`, `/hooks`, `/context`.
+- **Chat location.** Put the chat in the Primary Side Bar, Secondary Side Bar, bottom Panel or an editor tab with **Move Chat To…** (`localpilot.chat.location`). The Agents view and the activity bar icon stay in the Primary Side Bar, so you can always get back.
 
-![Three agents running in parallel with the Agents panel and status bar count]({{ '/assets/screenshots/parallel-agents.png' | relative_url }})
+## Parallel agents
 
-![Side-by-side diff of an agent edit opened from the Changes panel]({{ '/assets/screenshots/review-diff.png' | relative_url }})
+![Three agents running in parallel: a tab per task, pause and stop for each, the Agents panel and the status bar count]({{ '/assets/screenshots/parallel-agents.png' | relative_url }})
 
-- **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task; each streams into its own tab.
-- **Agents panel** lists running/idle sessions with live status, badge counts and inline Stop.
-- **Change tracker** snapshots files before edits — Diff / Accept / Reject per file or per session, highlighted lines in editors.
-- **Edit** on any of your messages removes it and the turns after it (files are kept) and puts the text back in the composer to rephrase and resend.
-- **Restore checkpoint** on any of your messages rewinds the files changed since that turn and puts the prompt back in the composer.
+- **Run Tasks in Parallel** (<kbd>⌘⇧⌥P</kbd>) starts one agent per task, each in its own tab.
+- **Isolated worktrees.** In a git repository each agent chat works in its own git worktree by default (`localpilot.worktrees.mode`: `always`, `parallel` or `off`). You review its changes and **Apply to workspace** or **Discard**.
+- **Best of N.** Run one task on 2 to 8 models at once, compare the results and apply the one you prefer.
+- **Pause, steer, stop.** Pause an agent after its current step, type a correction, then resume. Each subagent lane has its own pause and stop.
+- **Model spreading.** When a model is busy, parallel workers can run on a comparable idle model (`localpilot.routing.parallelModels`, default on).
+- **Agents panel.** Running and idle sessions, the files each one changed, and inline Stop, Keep and Undo.
+
+See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url }}).
+
+## Change review
+
+![Side-by-side diff of the agent's edit, opened from the changed-file list in the chat]({{ '/assets/screenshots/review-diff.png' | relative_url }})
+
+- LocalPilot snapshots each file before the agent edits it.
+- The changes bar above the composer lists every changed file. Click one for a diff, or accept or reject per file or all at once.
+- Changed lines are highlighted in open editors.
+- Changes are tracked per session, so rejecting one agent's work does not touch another's.
+
+## Models
+
+- **Auto-detection.** At startup LocalPilot probes the default local ports (Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp) and running Docker containers of known model servers.
+- **Automatic setup.** With no model anywhere, LocalPilot can install or start Ollama and download a starter model sized for your RAM and GPU. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
+- **Model manager and catalog.** **Settings → Models** shows your hardware budget and marks each catalog size as fits, tight or too big. Install to Ollama, Docker Model Runner or LM Studio.
+- **Automatic routing.** Image turns go to a vision model, completions to a small fill-in-the-middle model, and Plan mode optionally to a reasoning model. If the chosen model is offline, LocalPilot falls back to another.
+- **colibri support.** LocalPilot detects a running `coli serve` from [colibri](https://github.com/JustVugg/colibri), which runs very large mixture-of-experts models by streaming experts from disk. Models that stream from disk are slow (about 1 token per second or less). See [Models & providers]({{ '/docs/models/' | relative_url }}) and the [colibri guide]({{ '/guides/colibri-vscode/' | relative_url }}).
+- **Usage-based model tuning.** LocalPilot learns from your local run history which installed model works best for each role, and adjusts routing (`localpilot.models.autoTune`: `auto`, `suggest` or `off`). Manual picks are respected, and every automatic change has Undo. See [Models & providers]({{ '/docs/models/' | relative_url }}).
+
+Small local models are weaker than frontier cloud models. Expect to give more precise instructions and to review more.
 
 ## Context
 
-- Per-model **token budgeting**; prunes old tool outputs, then **summarises** history (compaction), then truncates as a last resort.
-- `@` mentions: `@workspace`, `@selection`, `@problems`, `@git`, `@editors`, any file or `file#L10-L20`, folders.
-- Attach via buttons, drag-and-drop, or the Explorer context menu.
-- Project rules auto-loaded from `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/*.mdc`, `.github/copilot-instructions.md`, `.localpilot/rules.md`.
+- Per-model token budget. Old tool output is pruned first, then history is summarised, then truncated as a last resort.
+- `@` mentions: `@workspace`, `@selection`, `@problems`, `@git`, `@editors`, `@terminal`, files, `file#L10-L20` ranges and folders.
+- Project rules load from `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/*.mdc`, `.github/copilot-instructions.md` and `.localpilot/rules.md`.
+- Memory notes in `.localpilot/memory/` (project) or user storage (global) are recalled in later sessions. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
+
+See [Context]({{ '/docs/context/' | relative_url }}).
 
 ## Tools
 
-File read/edit/write/list/delete · ripgrep search · symbol & reference lookup · shell with destructive-command detection · diagnostics · open file · editor state · ask user · `gather_context` (what you are looking at and working on) · `analyze_workspace` (model-free repository map and shards) · `manage_todos` · memory save/read/list/delete · web search (DuckDuckGo, SearXNG, Brave, Tavily) · web fetch (HTML → readable text) · `open_browser` · `browser_screenshot` · `browser_inspect` · `show_markdown` · `load_skill` · `run_subagent` · `run_parallel_subagents` · `run_todos_parallel` · any MCP server's tools.
+The agent can use:
 
-## Skills & subagents
+- Files: read, edit, write, list, delete.
+- Search: ripgrep search, symbol and reference lookup, `analyze_workspace` (a repository map that needs no model call).
+- Shell: commands with destructive-command detection, diagnostics.
+- Planning: `manage_todos`, memory save/read/list/delete.
+- Web: search (DuckDuckGo, SearXNG, Brave, Tavily) and fetch.
+- Browser: `open_browser`, `browser_screenshot`, `browser_inspect`.
+- Delegation: `load_skill`, `run_subagent`, `run_parallel_subagents`, `run_todos_parallel`.
+- Any tool from an MCP server you add. See [MCP]({{ '/docs/mcp/' | relative_url }}).
 
-- Skills (`SKILL.md`) are loaded on demand via progressive disclosure; 14 ship built in (`requirements`, `design`, `new-project`, `implement`, `test`, `debug`, `review`, `refactor`, `ui-design`, `claude-ui-ux`, `docs`, `deploy`, `ship`, `explore-codebase`) and a workspace or user skill with the same name overrides one.
-- **Recommendations** — each request is matched against the installed skills (name, quoted trigger phrases, distinctive description terms); matches are hinted to the model and shown as chips under the turn. Force one with `/skill <name> <task>`.
-- **Install from anywhere** — *LocalPilot: Install Skill…*, `/skill install <source>` or `localpilot skill install <source>` fetch a skill (or a whole collection to pick from) from `owner/repo[/path][@ref]`, a GitHub `tree`/`blob` link, any `SKILL.md` URL or a local folder, with its companion files.
-- **Skill registry & management** — requests are also matched against the repositories in `localpilot.skills.repositories` (`anthropics/skills`, `obra/superpowers`, `github/awesome-copilot` by default); a clearly better registry match is installed and loaded as the request starts. **Settings → Skills & subagents** searches the registry with one-click install, and enables / disables / opens / deletes installed skills; the chat's **Skills** button sets the mode per chat (auto / ask / off) and pins skills to every request. Strong matches, pinned and `/skill` skills are preloaded into the request; `load_skill` only accepts installed names and resolves typos. CLI: `localpilot skill search <words> [--install]`.
-- **Learning** — when the same kind of request keeps coming up with no skill covering it, the chat offers **Create "<name>" skill** and drafts the `SKILL.md` for you.
-- Built-in subagents: `explore`, `coder`, `reviewer`, `researcher`, `clarifier`, `planner`, `tester`, `debugger` and `docs`; define your own in `.localpilot/agents/*.md`. Checklist items can name an agent and depend on each other; `run_todos_parallel` runs the plan in dependency waves.
+## Skills and subagents
 
-Full guide: [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
+- 14 built-in skills (`SKILL.md` files) load on demand. A workspace or user skill with the same name overrides a built-in one.
+- Requests are matched against installed skills, and matches show as chips under the turn. Force one with `/skill <name> <task>`.
+- Install skills from GitHub, a URL or a local folder with *LocalPilot: Install Skill…* or `/skill install <source>`.
+- 9 built-in subagents: `clarifier`, `explore`, `planner`, `coder`, `tester`, `debugger`, `reviewer`, `docs`, `researcher`. Define your own in `.localpilot/agents/*.md`.
 
-## Images
+See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
-- Screenshot modes (<kbd>⌘⌥⇧S</kbd> or the attach menu): **Selection area**, **This VS Code window**, **Pick a window**, **Full screen**, **Full screen in 5 s**. Paste, drag-drop, pick a file, or right-click an image in the Explorer.
-- Client-side downscaling; thumbnails in chat; warns if the model lacks vision.
+## Claude Code compatibility
+
+LocalPilot reads Claude Code `settings.json` permissions, hooks (including `SessionEnd`), custom commands and plugins. See [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }}).
+
+## Images and browser
+
+- Screenshot modes (<kbd>⌘⌥⇧S</kbd>): selection area, this VS Code window, pick a window, full screen, full screen after 5 s. You can also paste, drag and drop, or pick a file.
+- Images are downscaled before sending. LocalPilot warns if the model has no vision support.
+- The agent can screenshot web pages and local dev servers with headless Chromium and run a DevTools inspection (console, network, performance, layout).
+
+See [Screenshots & images]({{ '/docs/images/' | relative_url }}).
 
 ## Editor integration
 
-- **Inline edit** <kbd>⌘⌥K</kbd> — Cursor-style in-place rewrite with Keep/Undo.
-- **Terminal command generation** <kbd>⌘⌥K</kbd> in a terminal.
-- **Light-bulb** actions: Fix / Explain with LocalPilot on diagnostics; Edit with LocalPilot on selections.
-- Context menu: Explain, Fix, Refactor, Generate Tests, Add Documentation, Fix Errors in File.
+- **Inline edit** (<kbd>⌘⌥K</kbd>): rewrite in place with Keep / Undo. In a terminal, the same key generates a command.
+- **Light bulb**: Fix or Explain diagnostics; Edit a selection.
+- **Context menu**: Explain, Fix, Refactor, Generate Tests, Add Documentation, Fix Errors in File.
 - **Commit message** generator in the Source Control view.
-- **Inline completions** from FIM models.
-- **Browser view, web screenshots & DevTools inspection** — the agent opens URLs in VS Code's Simple Browser (`open_browser`), screenshots rendered pages or local dev servers with a headless Chromium (`browser_screenshot`, desktop / phone / full-page), and runs a full DevTools inspection (`browser_inspect`): console logs and exceptions with locations, network trace with failed requests and timings, performance metrics, layout checks, optional click/type/scroll actions before capture — rendered as a DevTools panel in the chat and attached to vision models. You can do the same from the camera menu. See [Screenshots & images]({{ '/docs/images/' | relative_url }}).
-- **Clean transcript rendering** — syntax-highlighted code blocks (theme colours, copy / insert / apply, file-name links), Markdown with nested and task lists, tables and images, file reads as numbered listings, terminal output with ANSI colours and exit codes, inline diffs for every edit, clickable `path:line` references and an image lightbox.
+- **Inline completions** from fill-in-the-middle models.
+- **Markdown reader**: a reading panel for long answers and documents the agent writes (plans, reports, notes).
 
-![Chat transcript: a user turn with an attached image and inline code, the model's thought, and a read_file step rendered as a numbered, syntax-highlighted listing with a clickable file header]({{ '/assets/screenshots/chat-rendering.png' | relative_url }})
+![An Ask-mode answer: numbered steps, inline code, and a syntax-highlighted code block with Copy, Insert and Save actions]({{ '/assets/screenshots/chat-rendering.png' | relative_url }})
 
-## Terminal & CLI
+## Terminal and CLI
 
-- Agent commands run in a visible, branded **LocalPilot Agent** terminal via shell integration (fallback: hidden process).
-- Right-click a terminal → **Explain Terminal Output**, **Fix Failed Command**, **Add Terminal Output to Chat**; `@terminal` in chat.
-- **`localpilot` CLI**: the full agent in any shell — streaming, tool steps, approvals, REPL, `models`, `doctor`, `skill install`, `skill search`. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
+- Agent commands run in a visible **LocalPilot Agent** terminal.
+- Right-click a terminal for **Explain Terminal Output**, **Fix Failed Command** and **Add Terminal Output to Chat**.
+- The `localpilot` CLI runs the agent in any shell, with approvals, a REPL, `models`, `doctor` and skill commands.
 
-## Settings & setup
+See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
 
-- **Zero-config auto-detection** — at startup and on *Refresh models*, LocalPilot probes configured providers, the well-known local ports and running **Docker containers** (plus Docker Model Runner), adds every reachable server to your providers and picks the best tool-capable model when no default is set. See [Models & providers]({{ '/docs/models/' | relative_url }}).
-- **One-click model setup** — with no local model anywhere, LocalPilot starts or installs Ollama and downloads a smallest-first starter set sized to your RAM / GPU (agent + completion + optional vision model), then sets the defaults. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
-- **Model manager & catalog** — hardware profile and model budget, installed models with enable / disable, set-default and remove (after a confirmation dialog; Ollama and Docker Model Runner models), and a curated catalog where every size is marked fits / tight / too big; install to Ollama, Docker Model Runner or LM Studio with live progress.
-- **Automatic routing** — a vision model for image turns, the smallest FIM model for completions, an optional reasoning model for Plan mode, and a graceful fallback when the chosen model is offline or disabled.
-- **Markdown reader** — a dedicated, distraction-free panel for long answers and the documents the agent writes (specs, plans, reports, memory notes, skills). Rendered by VS Code's own Markdown engine in a clean reading column with an outline, reading time, copy buttons on code blocks, adjustable text size, links that open files or the browser, and live reload while a file changes. Open it from **Open as document** under a chat answer, the preview icon in a Markdown editor's title bar, the Explorer context menu, or *LocalPilot: Open in Markdown Reader*; the agent can present a document itself with the `show_markdown` tool.
-- **Settings screen** (gear icon in the chat toolbar, or *LocalPilot: Settings*) with a page per area: Providers, Models, Agent & approvals, Inline completions, Web search, Memory & history, MCP servers and Advanced. Every value shows whether it comes from User or Workspace settings and can be reset individually.
-- **Provider manager** — add Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, LocalAI, SGLang or any OpenAI-compatible endpoint from a preset, edit URL / key / context window / model list, enable or disable, and **Test connection** to see latency and the live model list.
-- **Approval presets** — *Careful*, *Balanced*, *Autonomous* — or fine-grained Ask / Allow / Block per action.
-- **MCP server manager** — add, edit, disable and remove servers with their connection status and tool counts.
-- **Welcome / Setup wizard** on first run: detects running servers, recommends a model, sets an approval preset.
-- **Getting Started walkthrough** in VS Code's Welcome page.
+## Dashboard
 
-![Memory & history page listing project and global notes, skill folders, discovered skills and subagents]({{ '/assets/screenshots/settings-memory.png' | relative_url }})
+*LocalPilot: Open Dashboard* shows what LocalPilot did on this machine: runs, tokens, speed per model, tool failures, completion acceptance and provider health. It also has a **Model tuning** card and a log viewer. The data is local JSONL in `~/.localpilot/telemetry`. See [Dashboard]({{ '/docs/dashboard/' | relative_url }}) and [Privacy]({{ '/privacy/' | relative_url }}).
+
+## Settings and setup
+
+- **Welcome / Setup** wizard on first run: detects servers, recommends a model, sets an approval preset.
+- **Settings screen** (gear icon in the chat toolbar): the Dashboard on top, then collapsible groups for models (providers, models, model gallery), the agent (approvals, skills and subagents, inline completions), tools (MCP servers, web search) and data (memory and history, advanced). The sidebar folds to an icon rail. Each value shows whether it comes from User or Workspace settings.
+- **Approval presets**: *Careful*, *Balanced*, *Autonomous*, or per-action Ask / Allow / Block.
+- **Provider manager**: add a server from a preset, edit it, and **Test connection** to see latency and models.
+
+![Memory & history page: chat count, messages and size on disk, how many chats to keep and how many transcripts stay in memory]({{ '/assets/screenshots/settings-memory.png' | relative_url }})
 
 ## VS Code platform
 
 - `@localpilot` participant in the built-in Chat view (`/agent`, `/ask`, `/plan`).
-- Local models registered through the **Language Model Chat Provider API** — they appear in Copilot's model picker.
-- Status bar model switcher.
-- **`localpilot` CLI** (*Install 'localpilot' CLI in PATH*): `localpilot "fix the tests"`, `--plan`, `--ask`, `--file`, `--parallel`, `--settings`, `--setup` open LocalPilot in the current folder via `vscode://` deep links.
-- **Extension API** — `activate()` exports `runPrompt`, `runParallel`, `send`, `stop`, `getSession`, `runningSessionIds`, `onDidChangeRuns`, `listModels` and `version` for other extensions and scripts. See [Development]({{ '/docs/development/' | relative_url }}).
+- Local models are registered through the Language Model Chat Provider API, so they appear in Copilot's model picker.
+- Extension API: `activate()` exports functions such as `runPrompt`, `runParallel`, `runBestOfN`, `send`, `stop`, `applyWorktree` and `listModels`. See [Development]({{ '/docs/development/' | relative_url }}).

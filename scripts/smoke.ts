@@ -18,7 +18,7 @@ import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/type
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
 import { WorktreeManager } from '../src/agent/worktrees';
-import { percentiles, summarize, Telemetry, TelemetryEvent } from '../src/telemetry/telemetry';
+import { percentiles, Samples, SAMPLE_CAP, summarize, Telemetry, TelemetryEvent } from '../src/telemetry/telemetry';
 import { completeTask, parseModelSuggestions, quickSuggestions } from '../src/agent/taskSuggestions';
 import { ProviderRegistry } from '../src/providers/registry';
 import { ToolRegistry } from '../src/tools/registry';
@@ -33,6 +33,8 @@ import { HttpError } from '../src/providers/http';
 import { StreamEvent } from '../src/types';
 import { manageTodosTool } from '../src/agent/memory';
 import { parseDockerPorts, providersFromContainers } from '../src/providers/discovery';
+import { parseRedisUrl, parseReply, redactRedisUrl, RedisClient, RedisError } from '../src/storage/redis';
+import { RedisTelemetry, samplesOf } from '../src/storage/redisTelemetry';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -768,6 +770,12 @@ async function telemetry() {
   const t = new Telemetry({ dir: tmp, retentionDays: () => retention, now: () => now, logBuffer: 5 });
   try {
     check('percentiles: p50/p95/avg', JSON.stringify(percentiles([10, 20, 30, 40, 100])) === JSON.stringify({ p50: 30, p95: 100, avg: 40 }) && percentiles([]).p95 === 0);
+    // Bounded samples: exact below the cap, a close estimate above it, memory flat either way.
+    const exact = new Samples(); for (let i = 1; i <= 100; i++) { exact.add(i); }
+    check('Samples: exact percentiles below the cap', percentiles(exact).p50 === 50 && percentiles(exact).p95 === 95 && percentiles(exact).avg === 51 && exact.count === 100);
+    const big = new Samples(); for (let i = 1; i <= 200_000; i++) { big.add(i); }
+    const bp = percentiles(big);
+    check('Samples: reservoir keeps memory flat and percentiles within ~2%', big.values.length === SAMPLE_CAP && big.count === 200_000 && Math.abs(bp.p50 - 100_000) < 4000 && Math.abs(bp.p95 - 190_000) < 4000 && bp.avg === 100_001, { len: big.values.length, ...bp });
     // Events across three days, one of them older than the window.
     t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, promptTokens: 1000, completionTokens: 200, ttftMs: 500, durationMs: 2500, outcome: 'ok' });
     t.record({ type: 'model', sid: 's1', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, durationMs: 90000, outcome: 'error', reason: 'stall' });
@@ -807,6 +815,11 @@ async function telemetry() {
     check('logs(): bounded by logBuffer', t.logs().length === 5 && t.logs()[4].msg === 'line 9');
     const exported = JSON.parse(await t.exportJson());
     check('export bundles events and the log buffer', Array.isArray(exported.events) && exported.events.length === 17 && exported.logs.length === 5, { e: exported.events?.length, l: exported.logs?.length });
+    const exportFile = path.join(os.tmpdir(), `lp-export-${process.pid}.json`);
+    const written = await t.exportTo(exportFile);
+    const streamed = JSON.parse(fs.readFileSync(exportFile, 'utf8'));
+    fs.rmSync(exportFile, { force: true });
+    check('streaming export writes the same document', written === 17 && streamed.events.length === 17 && streamed.logs.length === 5 && JSON.stringify(streamed.events) === JSON.stringify(exported.events));
     check('retention 0 keeps everything', (await t.prune()) === 0);
     retention = 7;
     const removed = await t.prune();
@@ -1141,8 +1154,153 @@ async function parallelModels() {
   }
 }
 
+/** A tiny in-process Redis: just the commands the telemetry backend uses, with real RESP framing on a TCP socket. */
+async function fakeRedis(opts: { timeseries: boolean; password?: string }): Promise<{ url: string; close(): void; streams: Map<string, [string, string[]][]>; ts: Map<string, number[][]>; commands: string[][] }> {
+  const net = await import('net');
+  const streams = new Map<string, [string, string[]][]>();
+  const ts = new Map<string, number[][]>();
+  const commands: string[][] = [];
+  let seq = 0;
+  const bulk = (s: string | null) => (s === null ? '$-1\r\n' : `$${Buffer.byteLength(s)}\r\n${s}\r\n`);
+  const arr = (items: string[]) => `*${items.length}\r\n${items.join('')}`;
+  const idMs = (id: string) => Number(id.split('-')[0]);
+  const answer = (a: string[], authed: { ok: boolean }): string => {
+    const cmd = a[0].toUpperCase();
+    if (opts.password && !authed.ok && cmd !== 'AUTH') { return '-NOAUTH Authentication required.\r\n'; }
+    switch (cmd) {
+      case 'AUTH': authed.ok = a[a.length - 1] === opts.password; return authed.ok ? '+OK\r\n' : '-WRONGPASS invalid password\r\n';
+      case 'PING': return '+PONG\r\n';
+      case 'INFO': return bulk(a[1] === 'memory' ? 'used_memory_human:1.2M\r\n' : 'redis_version:7.4.0\r\n');
+      case 'XADD': {
+        const key = a[1]; const list = streams.get(key) ?? []; streams.set(key, list);
+        let i = 2;
+        if (a[i] === 'MINID') { const min = Number(a[i + 2]); i += 3; for (let k = list.length - 1; k >= 0; k--) { if (idMs(list[k][0]) < min) { list.splice(k, 1); } } }
+        else if (a[i] === 'MAXLEN') { const max = Number(a[i + 2]); i += 3; while (list.length >= max) { list.shift(); } }
+        const id = `${Date.now()}-${seq++}`; list.push([id, a.slice(i + 1)]); return bulk(id);
+      }
+      case 'XRANGE': {
+        const list = streams.get(a[1]) ?? []; const start = a[2]; const count = Number(a[5] ?? Infinity);
+        const excl = start.startsWith('('); const s = excl ? start.slice(1) : start;
+        const cmp = (id: string) => { const [m1, q1] = id.split('-').map(Number); const [m2, q2] = (s.includes('-') ? s : `${s}-0`).split('-').map(Number); return m1 - m2 || q1 - q2; };
+        const rows = list.filter(([id]) => start === '-' || (excl ? cmp(id) > 0 : cmp(id) >= 0)).slice(0, count);
+        return arr(rows.map(([id, f]) => arr([bulk(id), arr(f.map(bulk))])));
+      }
+      case 'XREVRANGE': { const list = streams.get(a[1]) ?? []; const count = Number(a[5] ?? Infinity); const rows = list.slice().reverse().slice(0, count); return arr(rows.map(([id, f]) => arr([bulk(id), arr(f.map(bulk))]))); }
+      case 'XLEN': return `:${(streams.get(a[1]) ?? []).length}\r\n`;
+      case 'MEMORY': return `:${JSON.stringify(streams.get(a[2]) ?? []).length}\r\n`;
+      case 'XTRIM': { const list = streams.get(a[1]) ?? []; const min = Number(a[4]); const before = list.length; streams.set(a[1], list.filter(([id]) => idMs(id) >= min)); return `:${before - (streams.get(a[1]) ?? []).length}\r\n`; }
+      case 'DEL': { let n = 0; for (const k of a.slice(1)) { n += Number(streams.delete(k)) + Number(ts.delete(k)); } return `:${n}\r\n`; }
+      case 'SCAN': return arr([bulk('0'), arr([...ts.keys()].map(bulk))]);
+      case 'TS.INFO': return opts.timeseries ? '-ERR TSDB: the key does not exist\r\n' : `-ERR unknown command 'TS.INFO'\r\n`;
+      case 'TS.ALTER': return ts.has(a[1]) ? '+OK\r\n' : '-ERR TSDB: the key does not exist\r\n';
+      case 'TS.ADD': { if (!opts.timeseries) { return `-ERR unknown command 'TS.ADD'\r\n`; } const pts = ts.get(a[1]) ?? []; ts.set(a[1], pts); pts.push([Number(a[2]), Number(a[3])]); return `:${a[2]}\r\n`; }
+      default: return `-ERR unknown command '${a[0]}'\r\n`;
+    }
+  };
+  const srv = net.createServer((sock) => {
+    let buf = Buffer.alloc(0); const authed = { ok: false };
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]); let at = 0; let out = '';
+      for (;;) { const r = parseReply(buf, at); if (!r) { break; } at = r.next; const a = (r.value as string[]).map(String); commands.push(a); out += answer(a, authed); }
+      buf = buf.subarray(at);
+      if (out) { sock.write(out); }
+    });
+    sock.on('error', () => undefined);
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  const port = (srv.address() as import('net').AddressInfo).port;
+  return { url: `redis://${opts.password ? `:${opts.password}@` : ''}127.0.0.1:${port}`, close: () => srv.close(), streams, ts, commands };
+}
+
+async function redisStorage() {
+  console.log('\n--- optional Redis Stack storage');
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  // RESP framing: partial buffers wait, nested arrays and errors parse.
+  const whole = Buffer.from('*2\r\n$5\r\nhello\r\n*2\r\n:42\r\n-ERR bad\r\n');
+  const parsed = parseReply(whole)?.value as unknown[];
+  check('RESP: nested arrays, integers and error replies', parsed?.[0] === 'hello' && (parsed?.[1] as unknown[])[0] === 42 && (parsed?.[1] as unknown[])[1] instanceof RedisError);
+  check('RESP: an incomplete reply waits for more bytes', parseReply(whole.subarray(0, 12)) === undefined && parseReply(Buffer.from('$-1\r\n'))?.value === null);
+  check('Redis URL: auth, db, TLS and redaction', JSON.stringify(parseRedisUrl('rediss://u:p%40ss@h:6380/2')) === JSON.stringify({ host: 'h', port: 6380, tls: true, username: 'u', password: 'p@ss', db: 2 }) && redactRedisUrl('redis://:secret@h:1') === 'redis://:***@h:1' && (() => { try { parseRedisUrl('http://x'); return false; } catch { return true; } })());
+  const ev = { t: 1, type: 'model', sid: 's', model: 'qwen', provider: 'ollama', mode: 'agent', depth: 0, promptTokens: 10, completionTokens: 5, ttftMs: 100, durationMs: 900, outcome: 'ok' } as TelemetryEvent;
+  check('time series samples: model latency, ttft and token counts with labels', samplesOf(ev).map((s) => s.key.replace('localpilot:ts:', '')).join(',') === 'model:ollama/qwen:duration_ms,model:ollama/qwen:ttft_ms,model:ollama/qwen:completion_tokens,model:ollama/qwen:prompt_tokens' && samplesOf(ev)[0].labels.metric === 'duration_ms');
+
+  const red = await fakeRedis({ timeseries: true, password: 'pw' });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-redis-'));
+  const remote = new RedisTelemetry(red.url);
+  let remoteErrors = 0;
+  let up = true;
+  const now = Date.now();
+  const t = new Telemetry({ dir: tmp, retentionDays: () => 30, now: () => now, remote: () => (up ? remote : undefined), onRemoteError: () => remoteErrors++ });
+  try {
+    const client = new RedisClient(red.url);
+    // Several callers racing on a cold connection must all wait for AUTH; none may reach the server unauthenticated.
+    const raced = await Promise.all([client.command('PING'), client.command('PING'), client.command('INFO', 'server')]);
+    const firstCmds = red.commands.slice(0, 2).map((c) => c[0]);
+    check('RedisClient: concurrent first commands share one authenticated connection', raced[0] === 'PONG' && raced[1] === 'PONG' && firstCmds[0] === 'AUTH' && red.commands.filter((c) => c[0] === 'AUTH').length === 1 && !red.commands.some((c, i) => i > 0 && c[0] !== 'AUTH' && red.commands.slice(0, i).every((p) => p[0] !== 'AUTH')), { firstCmds, auths: red.commands.filter((c) => c[0] === 'AUTH').length });
+    check('RedisClient: AUTH then commands in order over one connection', (await client.command('PING')) === 'PONG' && red.commands[0][0] === 'AUTH');
+    const bad = new RedisClient(red.url.replace(':pw@', ':nope@'));
+    let authError = '';
+    await bad.command('PING').catch((e) => (authError = String(e)));
+    check('RedisClient: a wrong password fails clearly', /WRONGPASS/.test(authError), authError);
+    client.close(); bad.close();
+    const probe = await remote.probe();
+    check('probe: reachable Redis Stack with RedisTimeSeries', probe.ok && probe.timeseries && probe.version === '7.4.0' && probe.usedMemory === '1.2M', probe);
+
+    t.record(ev);
+    t.record({ type: 'tool', sid: 's', name: 'read_file', mode: 'agent', durationMs: 12, error: false });
+    t.record({ type: 'run', sid: 's', mode: 'agent', model: 'ollama/qwen', depth: 0, outcome: 'done', durationMs: 4000, steps: 3, toolCalls: 1, promptTokens: 10, completionTokens: 5 });
+    t.log('info', 'hello redis');
+    await t.flush();
+    check('events and log lines go to Redis streams, not files', red.streams.get('localpilot:events')?.length === 3 && red.streams.get('localpilot:logs')?.length === 1 && !fs.readdirSync(tmp).length, { files: fs.readdirSync(tmp), n: red.streams.get('localpilot:events')?.length });
+    check('stream writes are trimmed by retention (MINID)', red.commands.some((c) => c[0] === 'XADD' && c[2] === 'MINID'));
+    check('metrics become labelled time series', red.ts.has('localpilot:ts:model:ollama/qwen:ttft_ms') && red.ts.has('localpilot:ts:tool:read_file:duration_ms') && red.commands.some((c) => c[0] === 'TS.ADD' && c.includes('LABELS') && c.includes('localpilot')));
+    const s = await t.summary(7);
+    check('dashboard summary reads the history back from Redis', s.totals.runs === 1 && s.totals.modelCalls === 1 && s.models[0]?.ttft.p50 === 100 && s.storage.events === 3 && /Redis/.test(s.storage.dir) && s.storage.backend === 'redis', { runs: s.totals.runs, ev: s.storage.events, dir: s.storage.dir, backend: s.storage.backend });
+    const beforePrune = red.commands.length;
+    await remote.prune(Date.now() - 7 * 86400_000);
+    const alters = red.commands.slice(beforePrune).filter((c) => c[0] === 'TS.ALTER' && c[2] === 'RETENTION');
+    check('prune re-applies the retention to every time series (TS.ALTER)', alters.length === red.ts.size && alters.every((c) => Math.abs(Number(c[3]) - 7 * 86400_000) < 5000), { alters: alters.length, series: red.ts.size });
+    t.log('info', 'tail line from redis');
+    await t.flush();
+    const t3 = new Telemetry({ dir: tmp, retentionDays: () => 30, now: () => now, remote: () => remote });
+    await t3.loadRecentLogs(10);
+    check('the log viewer seeds from the Redis log stream', t3.logs().some((l) => l.msg === 'tail line from redis') && t3.logs().some((l) => l.msg === 'hello redis'));
+
+    // Redis goes away: the batch lands in files and nothing is lost; the summary merges both.
+    red.close();
+    remote.dispose();
+    t.record({ type: 'worktree', action: 'create' });
+    await t.flush();
+    check('Redis down: the batch falls back to files', remoteErrors >= 1 && fs.readdirSync(tmp).some((f) => f.startsWith('events-')), { remoteErrors, files: fs.readdirSync(tmp) });
+    const errorsBefore = remoteErrors;
+    const down = await t.summary(7);
+    check('Redis down: the summary says so, with the reason, and does not retry on every refresh', down.storage.backend === 'fallback' && !!down.storage.remoteError && /unreachable/.test(down.storage.dir) && remoteErrors === errorsBefore, { backend: down.storage.backend, err: down.storage.remoteError, retries: remoteErrors - errorsBefore });
+    up = false;
+    check('files-only summary still works after a fallback', (await t.summary(7)).worktrees.created === 1);
+
+    // Plain Redis without the TimeSeries module: streams only, no TS.ADD.
+    const plain = await fakeRedis({ timeseries: false });
+    const plainRemote = new RedisTelemetry(plain.url);
+    const t2 = new Telemetry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'lp-redis2-')), retentionDays: () => 0, now: () => now, remote: () => plainRemote });
+    t2.record(ev);
+    await t2.flush();
+    check('plain Redis: events stored, no time-series commands sent', plain.streams.get('localpilot:events')?.length === 1 && !plain.commands.some((c) => c[0] === 'TS.ADD') && !(await plainRemote.probe()).timeseries);
+    await t2.clear();
+    check('clear() empties the Redis streams too', !plain.streams.get('localpilot:events')?.length);
+    plainRemote.dispose();
+    plain.close();
+  } finally {
+    remote.dispose();
+    red.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await telemetry();
+  await redisStorage();
   await worktrees();
   await mockOllama();
   await mockOpenAI();

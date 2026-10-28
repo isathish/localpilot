@@ -24,8 +24,8 @@ An agent that reads your project, edits files, runs commands and tests, and show
 ---
 
 
-<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/hero-agent.png" alt="LocalPilot in VS Code: the agent fixed applyDiscount in cart.js, ran npm test (2 passing) in the LocalPilot Agent terminal and offers Accept / Reject" width="900"></p>
-<p align="center"><sub>Captured from a normal session: <code>qwen2.5-coder:7b</code> in Ollama fixed a failing test, ran the suite and asked for review.</sub></p>
+<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/hero-agent.png" alt="LocalPilot in VS Code: the agent read cart.js and its test, fixed applyDiscount with a one-line edit, ran npm test (2 passing) in the LocalPilot Agent terminal and offers Apply to workspace / Discard" width="900"></p>
+<p align="center"><sub>Captured from a real session: <code>gpt-oss:20b</code> in Ollama fixed a failing test in 37 s, ran the suite and asked for review.</sub></p>
 
 ## Why LocalPilot?
 
@@ -76,6 +76,7 @@ ollama pull gemma4:e4b && ollama serve               # Ollama  → :11434
 # llama-server -m model.gguf --port 8080               → :8080
 # vllm serve google/gemma-4-12B-it                     → :8000
 # docker model pull ai/gemma4:e4b                      → Docker Model Runner :12434
+# ./start-here.sh   (github.com/JustVugg/colibri)      → colibri :8000, huge MoE models from disk
 # docker run -p 11434:11434 ollama/ollama              → any model-server container
 ```
 
@@ -89,9 +90,11 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 | **Parallel agents & multitasking** | Chat tabs run independently; `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
 | **Pause / steer / stop** | **Pause** (<kbd>⌥Esc</kbd>) holds an agent after its current step; anything you type while it is paused or running is queued and read at its next step; **Stop** (<kbd>Esc</kbd>) cancels. Each parallel subagent lane has its own pause and stop; pausing or stopping the parent reaches all of them. Also in the tab menu, background strip, Agents panel, Command Palette and the CLI (Ctrl+Z / Ctrl+C). |
 | **Change review & checkpoints** | Every agent edit is snapshotted — Diff / Accept / Reject per file or per session, and **Restore checkpoint** on any message rewinds files and conversation. |
-| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, [colibri](https://github.com/JustVugg/colibri), Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Huge MoE models with colibri** | A running `coli serve` is recognised even on vLLM's port :8000. LocalPilot reads its capabilities (vision, chat vs decision-only models) and KV slots, and judges memory fit by the part that stays in RAM, not the 20–1,500 GB download, so GLM-5.2, DeepSeek V4 Flash or Qwen3-Coder-30B route like any other model. Models whose experts stream from disk get patient stall timeouts and are kept for Plan mode rather than chatty subagents or ghost text. *LocalPilot: Start colibri* launches the server from your checkout (`localpilot.colibri.*`). |
+| **Learns which models work for you** | From local telemetry (runs finished, tok/s, time to first token, errors, completion acceptance), LocalPilot ranks your **installed** models per role. Auto routing prefers the ones that perform, and with `localpilot.models.autoTune: auto` (the default) it updates the default, Plan-mode, subagent, completion and image models itself, with Undo. A model you chose by hand is only replaced when it keeps failing. *Dashboard → Model tuning* shows the evidence; *LocalPilot: Tune Models From Usage* reviews it on demand. |
 | **Model manager & auto-setup** | One-click setup installs Ollama and a smallest-first starter set sized to your RAM / GPU. **Settings → Models** shows what fits this machine, lets you enable / disable, set default or remove installed models, and installs from a curated catalog to Ollama, Docker Model Runner or LM Studio with live progress. **Settings → Model gallery** searches the whole [Ollama library](https://ollama.com/library), Docker Hub's `ai/` models (Docker Model Runner) and Hugging Face GGUF repositories (LM Studio, or `hf.co/…` on Ollama) — filter by capability, see every tag's size marked fits / tight / too big for your machine, install any of them to the runtime you pick, or pull anything by name. |
-| **Automatic routing** | Image turns go to a vision model, completions to the smallest FIM model, Plan mode to an optional reasoning model; an offline or disabled model falls back to the best available one. |
+| **Automatic routing** | Image turns go to a vision model, completions to the smallest FIM model, Plan mode to an optional reasoning model; an offline or disabled model falls back to the best available one. Measured usage nudges every automatic pick. |
 | **Large-context management** | Per-model token budget → prune old tool outputs → LLM compaction → truncation. Live context meter; `/compact` on demand. |
 | **Memory** | Durable project and global notes (`.localpilot/memory/`) the agent saves and recalls across sessions. |
 | **Skills & subagents** | `SKILL.md` playbooks loaded on demand and recommended as you chat; built-in `clarifier`, `explore`, `planner`, `coder`, `tester`, `debugger`, `reviewer`, `docs`, `researcher`; define your own with a model and tool allow-list. Recurring requests with no skill get a one-click *Create skill*. |

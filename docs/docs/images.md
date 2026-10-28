@@ -1,55 +1,94 @@
 ---
 title: Screenshots & images
-description: Show the model what you see — capture a region, paste or drop an image, screenshot a web page or local dev server headlessly, open URLs in a browser view inside VS Code, and let a vision model work on it.
+description: Capture a screen region, paste or drop an image, screenshot or inspect a web page headlessly, and let a vision model work from what you see.
 permalink: /docs/images/
 ---
 
 ## Ways to attach an image
 
-- **Capture screenshot** — camera button in the composer, <kbd>⌘⌥⇧S</kbd>, or *LocalPilot: Capture Screenshot to Chat (Area / Window / Screen)*. Pick what to capture:
-  - **Selection area** — drag a rectangle (Esc cancels).
-  - **This VS Code window** — captured immediately, no interaction.
-  - **Pick a window** — click another window (macOS/Linux) or switch to it within 3 s (Windows).
-  - **Full screen** — now, or **in 5 s** to leave time to switch apps or open a menu.
-- **Paste** from the clipboard into the input box.
-- **Drag and drop** an image file onto the composer.
-- **Image button** to pick files, or right-click a PNG/JPEG in the Explorer → *Attach Image to Chat*.
-- **Screenshot a URL…** (camera menu → *Web page*, or *LocalPilot: Screenshot a Web Page…*) — renders any page or local dev server (`localhost:3000`) with a headless browser and attaches the result; a *phone size* variant uses a 390×844 viewport with a mobile user agent.
+| Method | How |
+|---|---|
+| Capture a screenshot | Camera button in the composer, <kbd>⌘⌥⇧S</kbd> (<kbd>Ctrl+Alt+Shift+S</kbd>), or *LocalPilot: Capture Screenshot to Chat (Area / Window / Screen)* |
+| Paste | Paste from the clipboard into the input box |
+| Drag and drop | Drop an image file onto the composer |
+| Pick a file | Image button, *LocalPilot: Attach Image to Chat…*, or right-click a PNG, JPEG, GIF or WebP file in the Explorer → *Attach Image to Chat* |
+| Screenshot a web page | Camera menu → **Screenshot a URL…**, or *LocalPilot: Screenshot a Web Page…*. See [below](#web-pages-and-the-browser-view) |
 
-Up to four images per message. Images are downscaled client-side to 1568px on the long edge so they fit typical vision budgets, shown as thumbnails on your message, and click-to-zoom in the transcript.
+Screenshot capture offers these targets:
 
-## Browser view & web-page screenshots for the agent
+- **Selection area**: drag a rectangle. <kbd>Esc</kbd> cancels.
+- **This VS Code window**: captured at once.
+- **Pick a window**: click another window (macOS, Linux), or switch to it within 3 seconds (Windows).
+- **Full screen**: now, or **in 5 s** so you can switch apps or open a menu first.
 
-The agent has two browser tools, available in every mode:
+Limits:
+
+- Up to four images per message.
+- Images you paste or drop are scaled down to at most 1568 px on the long edge before sending.
+- Your message shows thumbnails; click an image in the transcript to zoom.
+
+## Web pages and the browser view
+
+The agent has three browser tools, available in every mode.
 
 | Tool | What it does |
 |---|---|
-| `open_browser` | Opens a URL in VS Code's built-in **Simple Browser** beside the editor (or the system browser with `external: true`). Use it to show you a dev server or a result. |
-| `browser_screenshot` | Renders a URL with a **headless Chromium** already on your machine (Chrome, Chromium, Edge, Brave, Arc — or `localpilot.browser.chromePath`) and returns the PNG. Options: `width`/`height` (default 1280×800), `full_page`, `mobile` (390×844 + mobile UA), `wait_ms` for scripts to settle. The result line also says how many console errors / failed requests the page produced. |
-| `browser_inspect` | The DevTools version: attaches to the headless browser over the **Chrome DevTools Protocol** and returns, in one call, the **screenshot**, the **console** (logs, warnings, errors and uncaught exceptions with `file:line:col`), the **network trace** (every request with status, type, size and timing; failed ones listed first), **performance** (DOMContentLoaded, load, FCP, LCP, DOM nodes, JS heap) and **layout checks** (horizontal overflow with the culprit elements, images without alt text, tiny text, controls without an accessible name). Optional `actions` run before capture — `{"click": "#save"}`, `{"type": {"selector": "#email", "text": "a@b.c"}}`, `{"scroll": "bottom"}`, `{"eval": "localStorage.clear()"}`, each with an optional `wait` — so the agent can reproduce a flow and see exactly what breaks. `include_text` adds the visible page text for text-only models. |
+| `open_browser` | Opens a URL in VS Code's **Simple Browser** beside the editor, or in the system browser with `external: true`. Use it to show you a dev server or a result |
+| `browser_screenshot` | Renders a URL in a headless Chromium-based browser already on your machine (Chrome, Chromium, Edge, Brave, Arc, or `localpilot.browser.chromePath`) and returns the PNG. Options: `width` / `height` (default 1280×800), `full_page`, `mobile` (390×844 with a mobile user agent), `wait_ms` (default 1500). The result also reports how many console errors and failed requests the page produced |
+| `browser_inspect` | Attaches to the headless browser over the Chrome DevTools Protocol and returns, in one call: a screenshot, the console, the network trace, performance metrics and layout checks (details below) |
 
-The agent is instructed to use `browser_inspect` after web UI changes: start or reuse the dev server, inspect, fix what the report shows, re-inspect. In the chat the result is a **DevTools panel** — screenshot, status chips (console errors, failed requests, layout issues), a colour-coded console with clickable locations, failed requests with timings, performance metrics and layout findings — and the same report is what the model reads, so you can follow its reasoning line by line.
+`browser_inspect` returns:
 
-With a vision model the screenshot is attached to the conversation, so the agent can *look* at the page it just changed — the system prompt tells it to verify web UI work this way. With a text-only model the image is still shown to you in the transcript (click to enlarge) and the tool result says so; the agent falls back to `web_fetch` for the page text. Screenshots are governed by the **Network** approval policy; opening the browser view needs no approval.
+- **Console**: logs, warnings, errors and uncaught exceptions with `file:line:col`.
+- **Network**: every request with status, type, size and timing; failed requests listed first.
+- **Performance**: DOMContentLoaded, load, FCP, LCP, DOM node count, JS heap.
+- **Layout checks**: horizontal overflow with the elements causing it, images without alt text, tiny text, controls without an accessible name.
 
-You can drive this yourself too: the camera menu has **Screenshot a URL…**, **Inspect a URL (screenshot + console + network)…** — which attaches the screenshot and drafts a message with the DevTools report for the model to analyse — and **Open URL in browser view…**; the same actions exist as *LocalPilot: Screenshot a Web Page…*, *Inspect a Web Page…* and *Open URL in Browser View…* commands. Everything runs locally; nothing is sent to a cloud browser service.
+Optional `actions` run before capture, each with an optional `wait`:
+
+```json
+[{"click": "#save"}, {"type": {"selector": "#email", "text": "a@b.c"}}, {"scroll": "bottom"}, {"eval": "localStorage.clear()"}]
+```
+
+This lets the agent reproduce a flow and see what breaks. `include_text` adds the visible page text, for text-only models.
+
+### How the agent uses them
+
+The agent is told to use `browser_inspect` after web UI changes: start or reuse the dev server, inspect, fix what the report shows, inspect again. In the chat the result appears as a **DevTools panel**: screenshot, status chips (console errors, failed requests, layout issues), a colour-coded console with clickable locations, failed requests with timings, performance metrics and layout findings. The model reads the same report.
+
+With a vision model, the screenshot is added to the conversation so the agent can look at the page it changed. With a text-only model, you still see the image in the transcript and the tool result says the model cannot; the agent uses `web_fetch` for the page text instead.
+
+Approvals: screenshots and inspections follow the **Network** approval policy (`localpilot.approvals.network`). Opening the browser view needs no approval.
+
+### Doing it yourself
+
+The camera menu has a **Web page** group:
+
+| Menu item | Command | Result |
+|---|---|---|
+| **Screenshot a URL…** | *LocalPilot: Screenshot a Web Page…* | Attaches a screenshot |
+| **Screenshot a URL (phone size)…** | | Same, at 390×844 with a mobile user agent |
+| **Inspect a URL (screenshot + console + network)…** | *LocalPilot: Inspect a Web Page (Screenshot, Console, Network)…* | Attaches the screenshot and drafts a message with the DevTools report |
+| **Open URL in browser view…** | *LocalPilot: Open URL in Browser View…* | Opens the page beside the editor |
+
+The browser runs locally. No cloud browser service is used.
 
 ## Requirements
 
-The selected model must support vision (`qwen2.5vl`, `llava`, `gemma3`, `pixtral`, …). LocalPilot checks the model's capabilities and warns you before sending if it cannot read images.
+To read images, the selected model must support vision (for example `gemma4`, `qwen2.5vl`, `llava`). LocalPilot checks the model's capabilities. If it cannot read images, the message is not sent and you are asked to pick a vision model.
 
-## Screenshot tooling by platform
+## Screenshot tools by platform
 
 | Platform | Tool used |
 |---|---|
-| macOS | `screencapture` — `-i` area, `-iW` pick window, `-l <id>` VS Code window, full screen — built in |
-| Linux | first available of `gnome-screenshot`, `spectacle`, `scrot`, `grim`+`slurp`, ImageMagick `import`+`xdotool` |
-| Windows | PowerShell: translucent drag-to-select overlay for areas, `GetForegroundWindow` for windows, virtual-screen capture for full screen |
-| Web pages | any Chromium-based browser (`--headless=new --screenshot`), auto-detected or `localpilot.browser.chromePath` |
+| macOS | Built-in `screencapture`: `-i` for an area, `-i -W` to pick a window, `-l <id>` for the VS Code window, no flag for full screen |
+| Linux | The first one that works of `gnome-screenshot`, `spectacle`, `scrot`, `grim` (+ `slurp` for areas), ImageMagick `import` + `xdotool` |
+| Windows | PowerShell: a translucent drag-to-select overlay for areas, the foreground window for windows, the virtual screen for full screen |
+| Web pages | Any Chromium-based browser in headless mode, found automatically or set with `localpilot.browser.chromePath` |
 
-## Good prompts
+## Example prompts
 
-- *"Start the dev server, open it in the browser view and screenshot the dashboard at phone size — fix anything that overflows."*
-- *"This dialog is misaligned — find the CSS causing it and fix it."*
+- *"Start the dev server, open it in the browser view and screenshot the dashboard at phone size. Fix anything that overflows."*
+- *"This dialog is misaligned. Find the CSS causing it and fix it."*
 - *"Here's the failing test output. Fix the bug."*
-- *"Reproduce this UI from the mock-up in React."*
+- *"Rebuild this mock-up in React."*

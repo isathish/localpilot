@@ -217,19 +217,19 @@ export async function installSkills(src: SkillSource, opts: InstallOptions): Pro
   for (const skill of wanted) {
     const target = path.join(opts.dest, skill.name);
     const exists = await fs.stat(target).then(() => true, () => false);
-    if (exists) {
-      const replace = (await opts.onExists?.(skill.name, target)) ?? false;
-      if (!replace) {
-        continue;
-      }
-      await fs.rm(target, { recursive: true, force: true });
+    if (exists && !((await opts.onExists?.(skill.name, target)) ?? false)) {
+      continue;
     }
-    await fs.mkdir(target, { recursive: true });
+    // Download beside the skills folder (not scanned, same disk for the rename) and swap at the end, so a failed
+    // replacement leaves the installed copy intact.
+    const scratch = path.join(path.dirname(opts.dest), `.skill-staging-${process.pid}-${Date.now().toString(36)}`);
+    const staging = path.join(scratch, 'new');
+    await fs.mkdir(staging, { recursive: true });
     // Remote file lists are untrusted: `..\` and drive/absolute paths would escape the target on Windows.
     const safe = skill.files.filter((rel) => !path.isAbsolute(rel) && !/^[a-z]:/i.test(rel) && !rel.includes('\\') && !rel.split('/').includes('..'));
     const results = await new ParallelPool(6).map(safe, async (rel) => {
       opts.progress?.(`${skill.name}: ${rel}`);
-      const out = path.join(target, ...rel.split('/'));
+      const out = path.join(staging, ...rel.split('/'));
       await fs.mkdir(path.dirname(out), { recursive: true });
       if (src.kind === 'github') {
         const url = `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${encodeURIComponent(ref)}/${skill.dir ? `${skill.dir}/` : ''}${rel}`;
@@ -242,9 +242,24 @@ export async function installSkills(src: SkillSource, opts: InstallOptions): Pro
     });
     const firstError = results.find((r) => r.status === 'rejected');
     if (firstError && firstError.status === 'rejected') {
-      await fs.rm(target, { recursive: true, force: true });
+      await fs.rm(scratch, { recursive: true, force: true });
       throw new Error(`${skill.name}: ${firstError.reason instanceof Error ? firstError.reason.message : String(firstError.reason)}`);
     }
+    await fs.mkdir(opts.dest, { recursive: true });
+    if (exists) {
+      const old = path.join(scratch, 'old');
+      await fs.rename(target, old);
+      try {
+        await fs.rename(staging, target);
+      } catch (e) {
+        await fs.rename(old, target).catch(() => undefined);
+        await fs.rm(scratch, { recursive: true, force: true });
+        throw e;
+      }
+    } else {
+      await fs.rename(staging, target);
+    }
+    await fs.rm(scratch, { recursive: true, force: true });
     installed.push({ name: skill.name, dir: target, files: results.length });
   }
   return installed;
@@ -255,7 +270,13 @@ async function fetchText(url: string, fetchImpl: typeof fetch, signal?: AbortSig
 }
 
 async function fetchBytes(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Buffer> {
-  const res = await fetchImpl(url, { headers: { 'user-agent': 'LocalPilot' }, signal });
+  const headers: Record<string, string> = { 'user-agent': 'LocalPilot' };
+  // Private repositories: the token that listed the tree must also fetch the files — but only ever sent to GitHub.
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (token && new URL(url).hostname === 'raw.githubusercontent.com') {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const res = await fetchImpl(url, { headers, signal });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} for ${url}`);
   }

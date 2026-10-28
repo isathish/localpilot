@@ -335,7 +335,7 @@ export class AgentRunner {
         let installed: { name: string; repo: string; dir: string } | undefined;
         let available: { name: string; description: string; repo: string } | undefined;
         if (this.catalog && mode !== 'off' && !forced && !prescribed) {
-          const remote = await this.catalog.match(request, enabled);
+          const remote = await this.catalog.match(request, enabled, this.skills.allSkills.map((s) => s.name));
           if (remote && mode === 'ask') {
             available = { name: remote.name, description: remote.description, repo: remote.repo };
           } else if (remote) {
@@ -823,11 +823,9 @@ export class AgentRunner {
             activeSkills.add(loadedName);
             toolCtx.skills = [...activeSkills];
           }
-        }
-        if (c.name === 'load_skill' && depth === 0) {
-          const name = parseArgs(c.arguments).name;
-          if (typeof name === 'string') {
-            void this.learner?.recordSkillUsed(name);
+          // Count what actually loaded (resolved name), not a misspelt, disabled or invented request.
+          if (loadedName && depth === 0) {
+            void this.learner?.recordSkillUsed(loadedName);
           }
         }
       }

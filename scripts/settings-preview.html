@@ -53,10 +53,12 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
   mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
   skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
-  'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '' };
+  'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '',
+  pluginPaths: [], 'hooks.enabled': true, 'browser.chromePath': '', 'colibri.path': '', 'colibri.model': '', 'colibri.port': 8000, 'colibri.kvSlots': 2,
+  'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': true, 'telemetry.retentionDays': 30 };
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
-window.acquireVsCodeApi = () => ({ postMessage(m) {
+window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getItem('lp-settings-state') || 'null'), setState: (s) => localStorage.setItem('lp-settings-state', JSON.stringify(s)), postMessage(m) {
   const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
   if (m.type === 'ready') {
     send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models,

@@ -1,51 +1,81 @@
 ---
 layout: docs
 title: Use Ollama in VS Code as a full coding agent
-description: Turn Ollama into a Copilot-style agent inside VS Code with LocalPilot — tool calling, file edits, terminal commands, parallel agents and screenshots, all offline.
+description: Connect Ollama to VS Code with LocalPilot for an agent that edits files, runs commands and reads screenshots. Setup steps, model picks and tips.
 permalink: /guides/ollama-vscode/
 keywords: Ollama VS Code, Ollama VS Code extension, Ollama coding assistant, Ollama agent VS Code, qwen2.5-coder VS Code, local copilot ollama
 ---
 
-[Ollama](https://ollama.com) makes running models like `qwen2.5-coder`, `llama3.3` or `devstral` a one-liner — but on its own it is just a chat endpoint. **LocalPilot** turns it into a complete coding agent inside VS Code: it reads your project, edits files, runs your tests, and fixes what breaks.
+To use Ollama in VS Code as a coding agent, install the LocalPilot extension and keep Ollama running on `localhost:11434`. LocalPilot finds it automatically and lists your Ollama models in its model picker. Pick a model with tool support, such as `qwen2.5-coder:7b`, and start an **Agent** chat. The agent reads your project, edits files, runs commands and checks the results, all against the model on your machine.
 
-## Setup in two minutes
+Set your expectations first. A 7B or 14B local model is weaker than frontier cloud models on hard, multi-file tasks. It works well for focused edits, tests and explanations. Bigger models help, but they need more memory.
 
-**Zero-setup path:** install LocalPilot, open the sidebar and click **Set up automatically**. LocalPilot installs Ollama if needed (Homebrew / winget / official script), starts it, and pulls `qwen2.5-coder` in the size that fits your machine (7b on 16 GB+, 3b or 1.5b below that) plus `qwen2.5-coder:1.5b` for inline completions.
+## Set it up
 
-**Manual path:**
+### Option 1: automatic setup
 
-```bash
-ollama pull qwen2.5-coder:7b       # 14b / 32b from Settings → Models once you know it fits
-ollama serve                        # usually already running as a service
-```
+1. Install LocalPilot from the [Marketplace]({{ site.marketplace }}) or as a [VSIX]({{ site.download }}).
+2. Open the LocalPilot sidebar and click **Set up automatically**.
 
-Install LocalPilot ([download VSIX]({{ site.download }}) → `code --install-extension localpilot.vsix`), open the sidebar, and pick `ollama/qwen2.5-coder:7b` from the model dropdown. Ollama on `localhost:11434` is detected automatically. **Settings → Models** lists every Ollama model with its size and lets you pull more from the catalog, delete models and switch them on or off without leaving VS Code.
+LocalPilot installs Ollama if it is missing (Homebrew, winget or the official script), starts it, and downloads a starter set sized to your machine's *model budget*:
 
-## What you get beyond the Ollama CLI
+| Model budget | Agent model | Completions |
+|---|---|---|
+| 9 GB or more | `gemma4:e4b` | `starcoder2:3b`, if it fits alongside |
+| 4–9 GB | `gemma4:e2b` | none |
+| 2.5–4 GB | `llama3.2:3b` | none |
+| below 2.5 GB | `llama3.2:1b` or `smollm2:360m` | none |
 
-| Capability | How LocalPilot uses Ollama |
+The model budget is the share of RAM or GPU memory LocalPilot plans to give a model. **Settings → Models** shows it for your machine. Gemma 4 reads images itself, so the starter set needs no separate vision model. The starter set is deliberately small. Upgrade from the catalog once you know what your machine handles.
+
+### Option 2: manual setup
+
+1. Pull a model and make sure Ollama is running:
+
+   ```bash
+   ollama pull qwen2.5-coder:7b
+   ollama serve        # skip if Ollama already runs as a service
+   ```
+
+2. Install LocalPilot: [download the VSIX]({{ site.download }}), then run `code --install-extension localpilot.vsix`.
+3. Open the LocalPilot sidebar and pick `ollama/qwen2.5-coder:7b` in the model dropdown.
+
+To check that Ollama is reachable, run `curl http://localhost:11434/api/version`. It should return a version number.
+
+## What LocalPilot adds on top of Ollama
+
+| Capability | How it works with Ollama |
 |---|---|
-| **Tool calling** | Native `/api/chat` tools for models that support them (qwen2.5-coder, qwen3, llama3.x, mistral); prompt-based fallback for the rest |
-| **Large context** | Sets `num_ctx` per request (default 32k) so the model actually sees your files, then prunes/compacts history automatically |
-| **Thinking models** | `localpilot.thinking` enables Ollama's `think` for qwen3 / deepseek-r1 and shows the reasoning collapsed |
-| **Vision** | Screenshots and pasted images go to `qwen2.5vl`, `llava`, `gemma3` |
-| **Inline completions** | Ollama's FIM `suffix` support; routing picks the smallest FIM model (`qwen2.5-coder:1.5b`) automatically |
-| **Model management** | `ollama pull` / `ollama rm` from the Settings UI with progress, hardware-aware size recommendations, per-model enable/disable |
-| **Model gallery** | Search the whole [ollama.com library](https://ollama.com/library) and Hugging Face GGUF repositories inside VS Code — filter by tools / vision / thinking / embedding, see each tag's size marked fits / tight / too big for your machine, install any of them (`ollama pull`, including `hf.co/…`), or pull by name |
-| **Parallel agents** | Several sessions at once; set `OLLAMA_NUM_PARALLEL=4` so Ollama serves them concurrently |
+| Tool calling | Native `/api/chat` tools for models that report tool support. Other models get a text-based tool protocol. |
+| Context size | Sends `num_ctx` with every request (`localpilot.contextWindow`, default `32768`), then prunes and compacts history as the chat grows. |
+| Thinking models | `localpilot.thinking` (default `off`) turns on Ollama's `think` option. The reasoning shows as a collapsed step. |
+| Images | Screenshots and pasted images go to a vision model such as `gemma4`, `qwen2.5vl` or `gemma3`. |
+| Inline completions | Off by default. Turn on `localpilot.inlineCompletion.enabled`. LocalPilot then uses Ollama's FIM `suffix` support with the smallest FIM-capable model that fits, unless you set `localpilot.inlineCompletion.model`. |
+| Model management | **Settings → Models** pulls and removes models with progress, marks each size *fits*, *tight* or *too big*, and lets you switch models on or off. |
+| Model gallery | **Settings → Model gallery** searches the [ollama.com library](https://ollama.com/library) and Hugging Face GGUF repositories, with the same fit badges. It installs with `ollama pull`, including `hf.co/…` names. |
+| Parallel agents | Several sessions or subagents at once. See the tip on parallel slots below. |
 
-## Recommended Ollama models
+## Which Ollama models to use
 
-- **Agent work:** `qwen2.5-coder:7b` (8 GB+), `qwen2.5-coder:14b` (16 GB), `qwen2.5-coder:32b` (24 GB+), `devstral`, `qwen3:14b`, `gpt-oss:20b`
-- **Fast completions:** `qwen2.5-coder:1.5b`, `starcoder2:3b`
-- **Screenshots:** `gemma3:4b`, `qwen2.5vl:7b`, `gemma3:12b`
+Sizes below are the download sizes in LocalPilot's catalog. Leave headroom for the context cache and your other apps.
 
-The catalog in **Settings → Models** marks each size *fits / tight / too big* for your machine and stars the recommended one, so you don't have to guess. Anything not in the catalog is one search away in **Settings → Model gallery**, which browses the entire Ollama library with the same fit badges.
+- **Agent work:** `qwen2.5-coder:7b` (4.7 GB), `qwen2.5-coder:14b` (9.0 GB), `qwen2.5-coder:32b` (20 GB), `devstral` (14 GB), `qwen3:14b` (9.3 GB), `gpt-oss:20b` (14 GB).
+- **Inline completions:** `qwen2.5-coder:1.5b` (1.0 GB), `starcoder2:3b` (1.7 GB).
+- **Screenshots:** `gemma4:e4b` (6.6 GB), `gemma3:4b` (3.3 GB), `qwen2.5vl:7b` (6.0 GB).
+
+Small models (under about 7B) often stop early or call tools wrongly on long agent tasks. If edits never happen, try a larger coder model before changing anything else.
 
 ## Tips
 
-- Raise `localpilot.contextWindow` to 65536 on 32B models with enough memory; Ollama's own default is only 2–4k.
-- Keep the model loaded between turns: `OLLAMA_KEEP_ALIVE=30m`.
-- Remote Ollama box? Add `{ "id": "gpu-box", "type": "ollama", "baseUrl": "http://10.0.0.5:11434" }` to `localpilot.providers`.
+- **Larger context:** with a 32B model and enough memory, raise `localpilot.contextWindow` to `65536`. Ollama's own default context is much smaller, which is why LocalPilot always sends `num_ctx`.
+- **Keep the model loaded:** `localpilot.keepAlive` (default `30m`) tells Ollama how long to keep the model in memory between turns. Use `-1` to keep it loaded.
+- **Parallel slots:** Ollama answers one request per model at a time by default. Run **LocalPilot: Restart Ollama with Parallel Request Slots** from the Command Palette, or set `OLLAMA_NUM_PARALLEL` yourself, so subagents really run at the same time. Each slot uses extra memory.
+- **Ollama on another machine:** add it to `localpilot.providers`:
+
+  ```json
+  { "id": "gpu-box", "type": "ollama", "baseUrl": "http://10.0.0.5:11434" }
+  ```
+
+  Your prompts and code then travel to that machine. Use a trusted network.
 
 Next: [Getting started]({{ '/docs/getting-started/' | relative_url }}) · [Models & providers]({{ '/docs/models/' | relative_url }}) · [Parallel agents]({{ '/docs/parallel-agents/' | relative_url }})

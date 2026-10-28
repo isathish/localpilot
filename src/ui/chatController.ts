@@ -6,7 +6,7 @@ import { SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
 import { ChangeTracker } from '../agent/changeTracker';
 import { SkillManager } from '../agent/skills';
-import { getConfig, setDefaultModel } from '../config';
+import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
@@ -26,6 +26,16 @@ import * as path from 'path';
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
 
+/**
+ * Actionable skill suggestions from a session's last request (install a registry skill, create one for a recurring
+ * request, use one just installed). Kept until the next request so they outlive the live turn they arrived with.
+ */
+export type SkillOffer = {
+  available?: { name: string; description: string; repo: string };
+  create?: { topic: string; slug: string; count: number; samples: string[] };
+  ready?: { name: string; prompt: string };
+};
+
 export type ToWebview =
   | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; contextWindow: number; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off'; running: string[]; paused: string[]; platform: NodeJS.Platform }
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
@@ -34,7 +44,7 @@ export type ToWebview =
    * drawn from the live event stream (see `replay`), not from the transcript — otherwise a tab switch or reopen
    * mid-run would show every step twice.
    */
-  | { type: 'session'; session: Session; liveFrom?: number }
+  | { type: 'session'; session: Session; liveFrom?: number; offers?: SkillOffer }
   /**
    * Everything a freshly created webview missed about a run in flight, in the order it happened: events (text
    * deltas coalesced), queued steering messages and the approvals still waiting for an answer. `startedAt` keeps the
@@ -43,9 +53,11 @@ export type ToWebview =
   | { type: 'replay'; sessionId: string; items: ToWebview[]; startedAt: number; status?: string; truncated: boolean }
   /** `contextWindow` is the `localpilot.contextWindow` setting (0 = model maximum) so the meter shows the window a model is actually given. */
   /** `autoModel`: the id the router would answer an Auto chat with right now (the default model if set and reachable, else the best fit). */
-  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number }
+  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string> }
   | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off' }
   | { type: 'event'; event: AgentEvent }
+  /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
+  | { type: 'skillInstall'; sessionId: string; name: string; ok: boolean; error?: string }
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
   | { type: 'approvalResolved'; id: string }
   | { type: 'running'; sessionId: string; running: boolean }
@@ -142,8 +154,8 @@ export type FromWebview =
   | { type: 'runParallelPrompt' }
   | { type: 'dismissSkillTopic'; topic: string }
   /** Install a catalog skill offered under a request (`skills.autoInstall: ask`). */
-  | { type: 'installCatalogSkill'; name: string; repo: string }
-  | { type: 'dismissCatalogSkill'; name: string }
+  | { type: 'installCatalogSkill'; name: string; repo: string; sessionId?: string }
+  | { type: 'dismissCatalogSkill'; name: string; sessionId?: string }
   | { type: 'openMarkdown'; text: string; title?: string }
   | { type: 'copyText'; text: string };
 
@@ -189,6 +201,7 @@ export class ChatController implements vscode.Disposable {
   private sinks = new Set<Sink>();
   private runs = new Map<string, RunControl>();
   private replays = new Map<string, RunReplay>();
+  private offers = new Map<string, SkillOffer>();
   private approvals = new Map<string, PendingApproval>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
   private activeSessionId?: string;
@@ -240,6 +253,8 @@ export class ChatController implements vscode.Disposable {
     private readonly log: vscode.LogOutputChannel,
     readonly worktrees?: WorktreeManager
   ) {
+    // Running chats and the one on screen keep their transcript in memory; the rest can be read back on demand.
+    store.inUse = (id) => this.runs.has(id) || id === this.activeSessionId;
     this.disposables.push(
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       providers.onDidChange(() => void this.pushModels()),
@@ -280,8 +295,11 @@ export class ChatController implements vscode.Disposable {
 
   /** Prefills the composer (used by Settings → "Create skill" and other entry points). */
   draft(text: string): void {
+    // A view revealed just now may still be loading; it picks the draft up when it boots.
+    this.pendingDraft = { text, at: Date.now() };
     this.broadcast({ type: 'draft', text });
   }
+  private pendingDraft?: { text: string; at: number };
 
   private broadcast(msg: ToWebview): void {
     this.record(msg);
@@ -440,15 +458,29 @@ export class ChatController implements vscode.Disposable {
 
   /** `session` message for the UI; while the session runs, the turn in flight is drawn from the replay stream instead of the transcript. */
   private sessionMsg(session: Session): ToWebview {
+    const offers = this.offers.get(session.id);
     const r = this.replays.get(session.id);
     if (!r) {
-      return { type: 'session', session };
+      return { type: 'session', session, offers };
     }
     const base = Math.min(this.runBase(session, r), session.messages.length);
     // The user's own message of the turn is shown from the transcript; everything the loop appended after it is live.
     const first = session.messages[base];
     const liveFrom = first && first === r.anchor ? base + 1 : base;
-    return { type: 'session', session, liveFrom };
+    return { type: 'session', session, liveFrom, offers };
+  }
+
+  /** Updates a session's skill offers and redraws it where it is shown. */
+  private setOffers(sessionId: string, next: SkillOffer | undefined): void {
+    if (next && (next.available || next.create || next.ready)) {
+      this.offers.set(sessionId, next);
+    } else {
+      this.offers.delete(sessionId);
+    }
+    const s = this.store.peek(sessionId);
+    if (s && !this.runs.has(sessionId)) {
+      this.broadcast(this.sessionMsg(s));
+    }
   }
 
   /** What a newly attached webview needs to show a run in flight as if it had been watching all along. */
@@ -706,7 +738,21 @@ export class ChatController implements vscode.Disposable {
         todos = undefined;
       }
     }
-    const recent = [...new Set(this.store.list().flatMap((s) => (this.store.get(s.id)?.messages ?? []).filter((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.steer).map((m) => m.content.replace(/<[a-z_]+[^>]*>[\s\S]*?<\/[a-z_]+>\s*/g, '').trim()).filter((t) => t && !t.startsWith('/'))).reverse())].slice(0, 20);
+    // Newest chats first, stopping at 20 prompts, so this never reads the whole history back from disk.
+    const recentSet = new Set<string>();
+    for (const row of this.store.list().sort((a, b) => b.updatedAt - a.updatedAt)) {
+      if (recentSet.size >= 20) {
+        break;
+      }
+      const msgs = (this.store.peek(row.id)?.messages ?? []).filter((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.steer);
+      for (const m of msgs.reverse()) {
+        const t = m.content.replace(/<[a-z_]+[^>]*>[\s\S]*?<\/[a-z_]+>\s*/g, '').trim();
+        if (t && !t.startsWith('/') && recentSet.size < 20) {
+          recentSet.add(t);
+        }
+      }
+    }
+    const recent = [...recentSet];
     return { projectMap, gitSummary, errors: { count, files, sample }, todos, recent };
   }
 
@@ -717,16 +763,29 @@ export class ChatController implements vscode.Disposable {
     if (!more) {
       return;
     }
+    // A stalled stream must not leave the launcher saying "Asking the model for more…" forever.
+    const ac = new AbortController();
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => ac.abort(new Error('the model stopped responding')), 90_000);
+    };
+    const total = setTimeout(() => ac.abort(new Error('timed out after 3 minutes')), 180_000);
     try {
-      const text = await quickPrompt(this.providers, suggestionPrompt(facts), { maxTokens: 700, temperature: 0.4 });
+      arm();
+      const text = await quickPrompt(this.providers, suggestionPrompt(facts), { maxTokens: 700, temperature: 0.4, signal: ac.signal, onDelta: arm });
       const items = parseModelSuggestions(text);
       this.broadcast({ type: 'taskSuggestions', source: 'model', items, recent: facts.recent });
       if (!items.length) {
         this.broadcast({ type: 'toast', level: 'info', text: 'The model did not return usable ideas — try again or type your own task.' });
       }
     } catch (e) {
+      const why = ac.signal.aborted && ac.signal.reason instanceof Error ? ac.signal.reason : e;
       this.broadcast({ type: 'taskSuggestions', source: 'model', items: [], recent: facts.recent });
-      this.broadcast({ type: 'toast', level: 'error', text: `Could not get ideas from the model: ${e instanceof Error ? e.message : String(e)}` });
+      this.broadcast({ type: 'toast', level: 'error', text: `Could not get ideas from the model: ${why instanceof Error ? why.message : String(why)}` });
+    } finally {
+      clearTimeout(idle);
+      clearTimeout(total);
     }
   }
 
@@ -885,32 +944,60 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'dismissSkillTopic':
         await this.learner?.dismiss(msg.topic);
+        for (const [sid, o] of [...this.offers]) {
+          if (o.create?.topic === msg.topic) {
+            this.setOffers(sid, { ...o, create: undefined });
+          }
+        }
         return;
       case 'installCatalogSkill': {
         if (!this.catalog) {
           return;
         }
+        const sid = msg.sessionId;
+        const report = (ok: boolean, error?: string) => sid && this.broadcast({ type: 'skillInstall', sessionId: sid, name: msg.name, ok, error });
         const entries = await this.catalog.entries();
         const entry = entries.find((e) => e.name === msg.name && e.repo === msg.repo) ?? entries.find((e) => e.name === msg.name);
         if (!entry) {
+          report(false, 'no longer in the skill catalog');
           void vscode.window.showWarningMessage(`"${msg.name}" is no longer in the skill catalog.`);
           return;
         }
         const cfg = getConfig();
         const dest = skillsDestination(cfg.skillAutoInstallScope, this.workspace.root);
         try {
-          const one = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing skill "${entry.name}" from ${entry.repo}…` }, () => this.catalog!.install(entry, dest, { replace: true }));
-          await this.skills.refresh();
-          if (one) {
-            void vscode.window.showInformationMessage(`Installed "${one.name}" into ${dest}. Send your request again or force it with /skill ${one.name} <task>.`);
+          // Already on disk (installed meanwhile, or disabled): keep that copy and just make it usable.
+          const existing = this.skills.getSkill(entry.name);
+          const one = existing
+            ? { name: existing.name, dir: path.dirname(existing.path) }
+            : await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing skill "${entry.name}" from ${entry.repo}…` }, () => this.catalog!.install(entry, dest, { replace: false }));
+          if (!one) {
+            throw new Error('the repository has no such skill folder');
           }
+          if (this.skills.getSkill(one.name)?.disabled || cfg.skillsDisabled.includes(one.name)) {
+            await setSkillEnabled(one.name, true);
+          }
+          await this.skills.refresh();
+          report(true);
+          if (sid) {
+            const s = this.store.peek(sid);
+            const last = s?.messages.slice().reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages);
+            const prompt = String(last?.meta?.display ?? last?.content ?? '').replace(/^\/skill \S+\s*/, '').trim();
+            this.setOffers(sid, { ...this.offers.get(sid), available: undefined, ready: { name: one.name, prompt } });
+          }
+          void vscode.window.showInformationMessage(existing ? `"${one.name}" is ready to use.` : `Installed "${one.name}" into ${dest}.`);
         } catch (e) {
-          void vscode.window.showErrorMessage(`Could not install "${entry.name}": ${e instanceof Error ? e.message : String(e)}`);
+          const err = e instanceof Error ? e.message : String(e);
+          report(false, err);
+          void vscode.window.showErrorMessage(`Could not install "${entry.name}": ${err}`);
         }
         return;
       }
       case 'dismissCatalogSkill':
         await this.catalog?.dismiss(msg.name);
+        if (msg.sessionId && this.offers.get(msg.sessionId)?.available?.name === msg.name) {
+          this.setOffers(msg.sessionId, { ...this.offers.get(msg.sessionId), available: undefined });
+        }
         return;
       case 'openMarkdown': {
         const title = msg.title?.trim() || this.store.get(this.activeSessionId ?? '')?.title || 'Answer';
@@ -1275,6 +1362,10 @@ export class ChatController implements vscode.Disposable {
       this.pushChanges(s.id);
       this._onDidChangeActive.fire(s);
     }
+    if (this.pendingDraft && Date.now() - this.pendingDraft.at < 15_000) {
+      post({ type: 'draft', text: this.pendingDraft.text });
+    }
+    this.pendingDraft = undefined;
     // Runs in flight: the active one first so the visible transcript fills in before background tabs are rebuilt.
     // Only for a specific surface — webviews that were attached all along already have these turns.
     const active = this.activeSessionId;
@@ -1299,7 +1390,9 @@ export class ChatController implements vscode.Disposable {
   private async modelsMsg(): Promise<ToWebview> {
     const models = await this.providers.listModels().catch(() => []);
     const autoModel = models.length ? await this.providers.route({ role: 'agent' }).then((r) => r.model.id, () => undefined) : undefined;
-    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow };
+    // Group headings in the picker use the provider's name ("LM Studio", "colibri"), not its settings id.
+    const providerNames = Object.fromEntries(this.providers.all.map((p) => [p.id, p.displayName]));
+    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames };
   }
 
   /** Entry point used by webviews and commands. Runs are per-session, so several sessions can stream at once. */
@@ -1382,6 +1475,7 @@ export class ChatController implements vscode.Disposable {
     const control = new RunControl(sessionId);
     this.runs.set(sessionId, control);
     this.replays.set(sessionId, { base: session.messages.length, startedAt: Date.now(), items: [], bytes: 0, truncated: false });
+    this.offers.delete(sessionId);
     control.onDidChange((c) => this.onControlChange(sessionId, c));
     this.tracker.beginTurn(sessionId, session.messages.length);
     this.runStatus.set(sessionId, 'Starting…');
@@ -1422,6 +1516,12 @@ export class ChatController implements vscode.Disposable {
         workspaceRoot: session.worktree?.path,
         emit: (e) => {
           this.broadcast({ type: 'event', event: e });
+          if (e.type === 'skill_suggestions') {
+            const p = e.payload as SkillOffer | undefined;
+            if (p?.available || p?.create) {
+              this.offers.set(sessionId, { available: p.available, create: p.create });
+            }
+          }
           if (e.type === 'status' && typeof e.payload === 'string') {
             this.runStatus.set(sessionId, e.payload);
             this._onDidChangeRuns.fire();

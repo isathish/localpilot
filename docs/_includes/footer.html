@@ -10,7 +10,7 @@
           <img src="{{ '/assets/logo.svg' | relative_url }}" alt="" width="28" height="28">
           <span>LocalPilot</span>
         </a>
-        <p class="footer-tagline">A coding agent for VS Code that runs on the models you host yourself with Ollama, LM Studio, llama.cpp or vLLM. Free and open source.</p>
+        <p class="footer-tagline">A coding agent for VS Code that runs on models you host yourself: Ollama, LM Studio, llama.cpp, vLLM or colibri. Free and open source.</p>
         <p class="footer-meta muted small">v{{ site.version }} · MIT License · VS Code 1.104+ · macOS, Linux, Windows</p>
         <div class="footer-cta">
           <a class="btn btn-primary btn-sm" href="{{ site.marketplace }}">Install from Marketplace</a>
@@ -26,9 +26,9 @@
         <a href="{{ '/#compare' | relative_url }}">Compare with Copilot, Cursor &amp; Claude Code</a>
         <a href="{{ '/#faq' | relative_url }}">FAQ</a>
         <a href="{{ site.marketplace }}">VS Code Marketplace</a>
-        <a href="{{ site.openvsx }}">Open VSX Registry</a>
         <a href="{{ site.releases }}">Releases &amp; VSIX downloads</a>
         <a href="{{ site.repo }}/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="{{ '/privacy/' | relative_url }}">Privacy</a>
       </nav>
 
       <nav class="footer-col" aria-label="Documentation">
@@ -69,7 +69,7 @@
 
     <div class="footer-bottom">
       <p class="muted small">© {{ site.time | date: '%Y' }} LocalPilot · Built by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a> (<a href="{{ site.author.url }}">GitHub @{{ site.author.github }}</a>) · Released under the <a href="{{ site.repo }}/blob/main/LICENSE">MIT License</a>.</p>
-      <p class="muted small">Privacy: your code never leaves your machine. LocalPilot talks only to the model servers you configure and collects no telemetry. This website uses Google Analytics for anonymous traffic statistics.</p>
+      <p class="muted small">Privacy: the LocalPilot extension sends your code only to the model servers you configure (localhost by default) and uploads no telemetry. This website is different: it uses Google Analytics for page views and link clicks, and loads fonts from Google. <a href="{{ '/privacy/' | relative_url }}">Details</a>.</p>
       <p class="muted small">GitHub Copilot, Cursor, Claude, ChatGPT, Perplexity, Gemini, Ollama, LM Studio and VS Code are trademarks of their respective owners. LocalPilot is an independent open-source project and is not affiliated with or endorsed by them.</p>
     </div>
   </div>

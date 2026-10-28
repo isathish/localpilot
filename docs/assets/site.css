@@ -124,12 +124,18 @@ pre code { background: none; border: none; padding: 0; }
 .shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--border-2); box-shadow: var(--shadow); background: #1f1f1f; }
 .shot figcaption { margin-top: 10px; color: var(--muted); font-size: 13.5px; text-align: center; }
 .hero-shot { max-width: 1120px; margin: 48px auto 0; text-align: left; }
+.proof { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-width: 900px; margin: 28px auto 0; padding: 0; }
+.proof li { display: flex; }
+.proof a { flex: 1; justify-content: center; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--fg); text-decoration: none; text-align: center; font-size: 13px; transition: border-color .15s; }
+.proof a:hover { border-color: var(--accent); }
+.proof span { color: var(--muted); font-size: 12px; }
+@media (max-width: 760px) { .proof { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* tour: uniform screenshot cards */
 .tour-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .tour-card { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; transition: border-color .15s, transform .15s; }
 .tour-card:hover { border-color: var(--border-2); }
-.tour-card .shot img { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none; }
+.tour-card .shot img { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none; aspect-ratio: 16 / 10; object-fit: cover; object-position: left top; }
 .tour-body { padding: 18px 22px 22px; }
 .tour-body h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -0.01em; }
 .tour-body p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.6; }

@@ -431,6 +431,12 @@
         "icon": "$(dashboard)"
       },
       {
+        "command": "localpilot.setupRedis",
+        "title": "Set Up Redis Storage (optional, saves memory)",
+        "category": "LocalPilot",
+        "icon": "$(database)"
+      },
+      {
         "command": "localpilot.tuneModels",
         "title": "Tune Models From Usage",
         "category": "LocalPilot",
@@ -1253,13 +1259,30 @@
         "localpilot.telemetry.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Record local usage metrics — model calls, tokens and latency, tool runs, agent turns, inline completions, provider health — to daily JSONL files in `~/.localpilot/telemetry` for the **LocalPilot: Open Dashboard** page. Everything stays on this machine; nothing is ever sent to a third party."
+          "markdownDescription": "Record local usage metrics — model calls, tokens and latency, tool runs, agent turns, inline completions, provider health — to daily JSONL files in `~/.localpilot/telemetry` for the **LocalPilot: Open Dashboard** page. Everything stays on this machine — unless you turn on `#localpilot.storage.redis.enabled#`, which sends it to the Redis server you configure; nothing is ever sent to a third party."
         },
         "localpilot.telemetry.retentionDays": {
           "type": "number",
           "default": 30,
           "minimum": 0,
           "markdownDescription": "Days of metrics and log files to keep on disk; older files are deleted automatically. `0` keeps everything."
+        },
+        "localpilot.storage.sessionsInMemory": {
+          "type": "number",
+          "default": 16,
+          "minimum": 2,
+          "maximum": 500,
+          "markdownDescription": "Chat transcripts kept in memory. Every chat stays in the history list, but only the most recently used transcripts (plus running chats and the one on screen) are held in RAM; the others are read back from disk when you open or search them. Lower it to save memory with long histories."
+        },
+        "localpilot.storage.redis.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Optional: store telemetry events and the log in **Redis** (capped streams) instead of daily files, and — with **Redis Stack** (RedisTimeSeries) — as labelled time series you can chart in Grafana or RedisInsight. The extension then keeps only a short log tail in memory and the dashboard reads history in batches. Falls back to files whenever Redis is unreachable. Telemetry (model and tool names, timings, log lines — never prompts or file contents) then goes to the server in `#localpilot.storage.redis.url#`, so keep that on this machine unless you trust the server. Run **LocalPilot: Set Up Redis Storage** to install or connect one."
+        },
+        "localpilot.storage.redis.url": {
+          "type": "string",
+          "default": "redis://127.0.0.1:6379",
+          "markdownDescription": "Redis connection for `#localpilot.storage.redis.enabled#`: `redis://[user:password@]host:port[/db]`, or `rediss://` for TLS. Keep it on `127.0.0.1` unless the server is protected — telemetry includes model names, tool names and log lines."
         },
         "localpilot.autoClarify": {
           "type": "boolean",

@@ -46,6 +46,8 @@ export interface LocalPilotConfig {
   worktrees: { mode: 'always' | 'parallel' | 'off'; location?: string };
   /** Local-only usage metrics and log mirror shown on the dashboard. Nothing is sent anywhere. */
   telemetry: { enabled: boolean; retentionDays: number };
+  /** Memory footprint: chat transcripts kept in RAM, and the optional Redis Stack store for telemetry. */
+  storage: { sessionsInMemory: number; redis: { enabled: boolean; url: string } };
   webSearch: WebSearchConfig;
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
@@ -119,6 +121,13 @@ export function getConfig(): LocalPilotConfig {
     telemetry: {
       enabled: c.get<boolean>('telemetry.enabled', true),
       retentionDays: Math.max(0, Math.floor(c.get<number>('telemetry.retentionDays', 30))),
+    },
+    storage: {
+      sessionsInMemory: Math.max(2, Math.min(500, Math.floor(c.get<number>('storage.sessionsInMemory', 16)))),
+      redis: {
+        enabled: c.get<boolean>('storage.redis.enabled', false),
+        url: c.get<string>('storage.redis.url', 'redis://127.0.0.1:6379') || 'redis://127.0.0.1:6379',
+      },
     },
     parallel: {
       maxConcurrency: c.get<number>('parallel.maxConcurrency', 4),

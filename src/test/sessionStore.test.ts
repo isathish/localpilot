@@ -81,4 +81,57 @@ suite('session store (chat history)', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  test('only recently used transcripts stay in memory; the rest load from disk when asked for', async () => {
+    const { store, dir } = await freshStore();
+    try {
+      store.maxInMemory = () => 3;
+      const ids: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const s = store.create('m');
+        s.messages.push({ role: 'user', content: `topic ${i} zebra${i}` });
+        store.save(s, true);
+        await store.flush(s);
+        ids.push(s.id);
+      }
+      assert.strictEqual(store.loadedCount, 3, 'older transcripts were dropped from memory');
+      assert.strictEqual(store.list().length, 6, 'every chat stays in the list');
+      assert.strictEqual(store.list().find((s) => s.id === ids[0])?.messageCount, 1, 'list rows keep their counts');
+      const cold = store.get(ids[0]);
+      assert.strictEqual(cold?.messages[0].content, 'topic 0 zebra0', 'a dropped chat is read back from disk');
+      assert.strictEqual(store.loadedCount, 3, 'reading one back drops another');
+      assert.strictEqual(store.search('zebra1')[0]?.id, ids[1], 'search covers chats that are not in memory');
+      assert.strictEqual(store.loadedCount, 3, 'search does not pull every chat into memory');
+
+      store.inUse = (id) => id === ids[1];
+      const live = store.get(ids[1]);
+      for (const id of ids.slice(2)) {
+        store.get(id);
+      }
+      assert.strictEqual(store.get(ids[1]), live, 'a chat in use keeps its live object');
+      assert.strictEqual((await store.stats()).inMemory, 3);
+
+      const doomed = store.get(ids[5])!;
+      await store.delete(ids[5]);
+      doomed.messages.push({ role: 'assistant', content: 'late' });
+      store.save(doomed);
+      assert.ok(!store.list().some((s) => s.id === ids[5]), 'a late save cannot bring a deleted chat back');
+      await assert.rejects(fs.stat(path.join(dir, 'sessions', `${ids[5]}.json`)));
+
+      // A fresh start reads every chat for the list but keeps only the newest transcripts.
+      const again = new SessionStore({ storageUri: vscode.Uri.file(dir) } as vscode.ExtensionContext, log);
+      again.maxInMemory = () => 2;
+      await again.load();
+      try {
+        assert.strictEqual(again.list().length, 5, 'every chat is listed after a restart');
+        assert.strictEqual(again.loadedCount, 2, 'start-up holds only the newest transcripts');
+        assert.strictEqual(again.get(ids[0])?.messages[0].content, 'topic 0 zebra0', 'older ones still open');
+      } finally {
+        again.dispose();
+      }
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

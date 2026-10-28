@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import { mkdirSync, writeFileSync } from 'fs';
 import * as path from 'path';
 import { userText } from './clarify';
 
@@ -241,7 +242,10 @@ export class SkillLearner {
 
   private scheduleSave(): void {
     clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => void this.save(), 500);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      void this.save();
+    }, 500);
   }
 
   async save(): Promise<void> {
@@ -292,18 +296,32 @@ export class SkillLearner {
     }
   }
 
-  /** Usage counts for the settings page. */
-  async usage(): Promise<{ skillUse: Record<string, { count: number; last: number }>; recurring: SkillCreateSuggestion[] }> {
+  /**
+   * Usage counts and recurring request types for the settings page. With `skills`, coverage is re-checked against
+   * what is installed now, so a skill created or installed since stops the suggestion immediately.
+   */
+  async usage(skills?: SkillLike[]): Promise<{ skillUse: Record<string, { count: number; last: number }>; recurring: SkillCreateSuggestion[] }> {
     await this.load();
+    const covered = (v: LearningState['topics'][string]) => (skills ? v.samples.some((s) => recommendSkills(s, skills).length > 0) : !!v.coveredBy);
     const recurring = Object.entries(this.state.topics)
-      .filter(([k, v]) => v.count >= RECUR_THRESHOLD && !v.coveredBy && !this.state.dismissed.includes(k))
+      .filter(([k, v]) => v.count >= RECUR_THRESHOLD && !this.state.dismissed.includes(k) && !covered(v))
       .map(([k, v]) => ({ topic: k, slug: slugFor(k), count: v.count, samples: v.samples }))
       .sort((a, b) => b.count - a.count);
     return { skillUse: this.state.skillUse, recurring };
   }
 
   dispose(): void {
-    clearTimeout(this.saveTimer);
+    // Deactivation does not wait for promises: write a pending change synchronously so it is not lost.
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+      try {
+        mkdirSync(path.dirname(this.file), { recursive: true });
+        writeFileSync(this.file, JSON.stringify(this.state, null, 2), 'utf8');
+      } catch (e) {
+        this.log?.warn(`skill learning: could not save ${this.file}: ${String(e)}`);
+      }
+    }
   }
 }
 

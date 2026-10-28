@@ -51,6 +51,8 @@ import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
+import { RedisTelemetry } from './storage/redisTelemetry';
+import { setupRedis } from './storage/redisSetup';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -58,9 +60,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(channel);
   // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
-  const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled });
+  // With `storage.redis.enabled` they go to Redis (Stack) instead, so the history never sits in this process.
+  let redisTelemetry: RedisTelemetry | undefined;
+  /** Re-reads the Redis settings; true when the store changed. */
+  const syncRedis = (): boolean => {
+    const r = getConfig().storage.redis;
+    if (r.enabled && redisTelemetry?.url === r.url) {
+      return false;
+    }
+    const had = !!redisTelemetry;
+    redisTelemetry?.dispose();
+    redisTelemetry = undefined;
+    if (r.enabled) {
+      try {
+        redisTelemetry = new RedisTelemetry(r.url);
+      } catch (e) {
+        channel.warn(`Telemetry: invalid localpilot.storage.redis.url (${e instanceof Error ? e.message : String(e)}); writing to files`);
+      }
+    }
+    return had || !!redisTelemetry;
+  };
+  syncRedis();
+  const telemetry = new Telemetry({
+    dir: defaultTelemetryDir(),
+    retentionDays: () => getConfig().telemetry.retentionDays,
+    enabled: () => getConfig().telemetry.enabled,
+    remote: () => redisTelemetry,
+    // Straight to the channel: a mirrored log line about a failing write would only queue another write.
+    onRemoteError: (e) => channel.warn(`Telemetry: ${redisTelemetry?.label ?? 'Redis'} unavailable, writing to files for a minute (${e instanceof Error ? e.message : String(e)})`),
+  });
+  context.subscriptions.push(new vscode.Disposable(() => redisTelemetry?.dispose()));
   const log = mirrorLog(channel, telemetry);
   context.subscriptions.push(telemetry);
+  context.subscriptions.push(
+    onConfigChange(() => {
+      if (syncRedis()) {
+        // A new target deserves a fresh try, not the old one's back-off.
+        telemetry.resetRemote();
+        log.info(redisTelemetry ? `Telemetry: storing events and the log in ${redisTelemetry.label}` : `Telemetry: storing events and the log in ${telemetry.dir}`);
+      }
+    })
+  );
   void telemetry.loadRecentLogs();
   setTimeout(() => void telemetry.prune().then((n) => n && log.info(`removed ${n} expired telemetry file(s)`)), 8000);
   log.info('LocalPilot activating');
@@ -72,6 +112,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const skills = new SkillManager(log, path.join(context.extensionPath, 'skills'));
   const workspace = new WorkspaceContext(log);
   const store = new SessionStore(context, log);
+  store.maxInMemory = () => getConfig().storage.sessionsInMemory;
+  context.subscriptions.push(onConfigChange(() => store.trim()));
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(context.globalStorageUri, log);
   const learner = new SkillLearner(path.join(context.globalStorageUri.fsPath, 'skill-learning.json'), log);
@@ -91,8 +133,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const commands = new CommandManager(log, plugins);
   skills.plugins = plugins;
   runner.projectSettings = () => projectSettings.current;
+  // A hook that prints on every tool call would bury the chat in toasts: repeats within 30 s and bursts are log-only.
+  const hookToasts = new Map<string, number>();
+  let lastHookToast = 0;
   runner.hooks = new HookRunner(() => (getConfig().hooksEnabled ? projectSettings.current : { ...projectSettings.current, hooks: {} }), log, (text, event) => {
     log.info(`[hook:${event}] ${text}`);
+    const now = Date.now();
+    if (now - (hookToasts.get(text) ?? 0) < 30_000 || now - lastHookToast < 3_000) {
+      return;
+    }
+    hookToasts.set(text, now);
+    lastHookToast = now;
+    if (hookToasts.size > 100) {
+      hookToasts.delete(hookToasts.keys().next().value!);
+    }
     controller.toast(text.length > 160 ? `${text.slice(0, 160)}…` : text);
   });
   controller.commands = commands;
@@ -256,6 +310,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // Auto-detect running model servers (settings, well-known ports, Docker containers, Docker Model Runner)
   // and merge new ones into the provider list. Runs at startup and on every "Refresh models".
   const DMR_HINT_KEY = 'localpilot.dmrHintDismissed';
+  const DEFAULT_HINT_KEY = 'localpilot.defaultUnavailableDismissed';
   const autoDetect = async (): Promise<void> => {
     const report = await autoDetectProviders(log).catch((e) => {
       log.warn(`auto-detect failed: ${String(e)}`);
@@ -287,10 +342,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     const cfg = getConfig();
     const available = report.results.filter((r) => r.ok && r.enabled).flatMap((r) => r.models);
-    if (cfg.defaultModel && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended) {
+    const quietDefaults = context.globalState.get<string[]>(DEFAULT_HINT_KEY, []);
+    if (cfg.defaultModel && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended && !quietDefaults.includes(cfg.defaultModel)) {
+      const missing = cfg.defaultModel;
       void vscode.window
-        .showWarningMessage(`Default model "${cfg.defaultModel}" is not available right now; LocalPilot will use ${report.recommended.split('/').pop()} meanwhile.`, 'Make it the default')
-        .then((pick) => pick && setDefaultModel(report.recommended!));
+        .showWarningMessage(`Default model "${missing}" is not available right now; LocalPilot will use ${report.recommended.split('/').pop()} meanwhile.`, 'Make it the default', "Don't ask again")
+        .then(async (pick) => {
+          if (pick === 'Make it the default') {
+            await setDefaultModel(report.recommended!);
+          } else if (pick === "Don't ask again") {
+            await context.globalState.update(DEFAULT_HINT_KEY, [...quietDefaults, missing].slice(-50));
+          }
+        });
     }
     if (report.added.length) {
       await providers.listModels(true);
@@ -757,6 +820,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.browseModelGallery', () => settingsPanel.show('settings', 'gallery'));
   cmd('localpilot.manageSkills', () => settingsPanel.show('settings', 'skills'));
   cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
+  cmd('localpilot.setupRedis', () => setupRedis(log));
   cmd('localpilot.tuneModels', () => tuner.runCommand());
   cmd('localpilot.startColibri', async () => {
     const cfg = getConfig().colibri;
@@ -837,14 +901,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   // The runner noticed concurrent requests queuing at the server (Ollama's default is one slot per model).
   runner.onSerialServer = (model) => {
+    const SERIAL_HINT_KEY = 'localpilot.serialHintDismissed';
+    const quiet = context.globalState.get<string[]>(SERIAL_HINT_KEY, []);
+    if (quiet.includes(model.id)) {
+      return;
+    }
     const provider = getConfig().providers.find((p) => p.id === model.providerId);
     const isOllama = provider?.type === 'ollama';
     const msg = `${model.name} is answering one request at a time. LocalPilot now spreads extra workers to comparable idle models that fit in memory alongside; for several workers on ${model.name} itself,${isOllama ? ` it can restart Ollama with ${ModelManager.ollamaParallelSlots()} parallel slots.` : ' enable parallel requests on the server (e.g. OLLAMA_NUM_PARALLEL, or more replicas).'}`;
-    void vscode.window.showWarningMessage(msg, ...(isOllama ? ['Restart Ollama with parallel slots'] : []), 'Learn more').then((p) => {
+    void vscode.window.showWarningMessage(msg, ...(isOllama ? ['Restart Ollama with parallel slots'] : []), 'Learn more', "Don't ask again").then(async (p) => {
       if (p === 'Restart Ollama with parallel slots') {
         void vscode.commands.executeCommand('localpilot.enableOllamaParallel');
       } else if (p === 'Learn more') {
         void vscode.env.openExternal(vscode.Uri.parse('https://isathish.github.io/localpilot/docs/parallel-agents/#parallel-requests'));
+      } else if (p === "Don't ask again") {
+        await context.globalState.update(SERIAL_HINT_KEY, [...quiet, model.id].slice(-50));
       }
     });
   };
@@ -986,7 +1057,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return;
     }
     view.reveal();
-    await new Promise((r) => setTimeout(r, 300));
     controller.draft(createSkillPrompt({ slug: s.slug, topic: s.topic ?? s.slug, count: s.count ?? 1, samples: s.samples ?? [] }));
   });
   cmd('localpilot.dismissSkillTopic', async (topic?: unknown) => {
@@ -1093,7 +1163,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       const items: Item[] = [];
       for (const s of status) {
         const own = entries.filter((e) => e.repo === s.repo);
-        items.push({ label: s.repo, kind: vscode.QuickPickItemKind.Separator, description: s.error ? `⚠ ${s.error}` : `${own.length} skills` });
+        items.push({ label: s.repo, kind: vscode.QuickPickItemKind.Separator, description: s.error ? `$(warning) ${s.error}` : `${own.length} skills` });
         for (const e of own) {
           items.push({ label: `${have.has(e.name) ? '$(check) ' : '$(book) '}${e.name}`, description: e.description.replace(/\s+/g, ' ').slice(0, 120), detail: have.has(e.name) ? 'Installed' : undefined, entry: e });
         }

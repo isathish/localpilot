@@ -1,18 +1,20 @@
 ---
 title: MCP servers
-description: Extend the agent with any Model Context Protocol server.
+description: Add Model Context Protocol servers to give the agent more tools. Configure them in Settings or localpilot.mcpServers.
 permalink: /docs/mcp/
 ---
 
-LocalPilot includes a stdio [MCP](https://modelcontextprotocol.io) client. Every tool a server exposes becomes available to the agent as `mcp_<server>_<tool>`.
+LocalPilot includes an [MCP](https://modelcontextprotocol.io) client for servers that use the **stdio** transport (a local process). Every tool a server exposes becomes an agent tool named `mcp_<server>_<tool>`. Characters other than letters, digits, `_` and `-` are replaced with `_`, and the name is cut at 64 characters.
+
+Remote servers (HTTP or SSE, configured with a `url`) are not supported.
 
 ## Configuration
 
-The **Settings → MCP servers** page (gear icon in the chat toolbar) lets you add, edit, disable and remove servers and shows each one's live state — connected with its tool count, disabled, or *failed to start* with the exact error:
+Open **Settings → MCP servers** (gear icon in the chat toolbar). There you can add, edit, disable and remove servers. Each server shows its live state: connected with its tool count, disabled, or *failed to start* with the exact error.
 
-![MCP servers page inside VS Code — a connected server with 1 tool, a disabled one, and one that failed to start with the spawn error shown]({{ '/assets/screenshots/settings-mcp.png' | relative_url }})
+![MCP servers page: a connected server with 11 tools, a disabled one, and the form to add a server]({{ '/assets/screenshots/settings-mcp.png' | relative_url }})
 
-The same configuration lives under `localpilot.mcpServers`:
+The same configuration is stored in the `localpilot.mcpServers` setting:
 
 ```jsonc
 "localpilot.mcpServers": {
@@ -33,19 +35,30 @@ The same configuration lives under `localpilot.mcpServers`:
 }
 ```
 
-| Field | Purpose |
-|---|---|
-| `command`, `args` | Process to launch (stdio transport) |
-| `env` | Extra environment variables (merged with your shell's) |
-| `cwd` | Working directory (defaults to the workspace root) |
-| `enabled` | Set `false` to keep the config but not start the server |
+| Field | Required | Purpose |
+|---|---|---|
+| `command` | yes | Program to launch |
+| `args` | no | Arguments |
+| `env` | no | Extra environment variables, added to the environment VS Code was started with |
+| `cwd` | no | Working directory. Default: the first workspace folder |
+| `enabled` | no | Set `false` to keep the entry without starting the server |
 
-Servers start on activation and restart when settings change. Use **LocalPilot: Reload Skills, Subagents & MCP Servers** to restart manually; the notification shows how many MCP tools were registered.
+Avoid committing tokens in `env` to a shared workspace `settings.json`; put such servers in your user settings.
+
+[Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can add servers through their `.mcp.json`. Those appear as `plugin:server`.
+
+## Starting and reloading
+
+- Servers start when the extension activates, and restart when `localpilot.mcpServers` changes.
+- To restart them yourself, run **LocalPilot: Reload Skills, Subagents & MCP Servers**. The notification shows how many MCP tools were registered.
+- The [CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) starts the same servers. Pass `--no-mcp` to skip them.
 
 ## Approvals
 
-MCP tool calls follow the `localpilot.approvals.network` policy (default `always`). Set it to `ask` to confirm every call.
+MCP tool calls follow the `localpilot.approvals.network` policy (default `always`). Set it to `ask` to confirm each call. In a `settings.json` file you can also allow, prompt for or deny specific servers and tools with `mcp__server` or `mcp__server__tool` [permission rules]({{ '/docs/claude-code-compatibility/' | relative_url }}#permission-rules).
+
+An MCP server is a program you choose to run, and it can contact any service it is built for. See [Privacy]({{ '/privacy/' | relative_url }}).
 
 ## Troubleshooting
 
-Open **LocalPilot: Show Logs** — server stderr is logged under `[mcp:<name>]`, along with initialisation errors and the tool count.
+Run **LocalPilot: Show Logs**. Server stderr is logged under `[mcp:<name>]`, along with start-up errors, exit codes and the tool count.

@@ -1,6 +1,6 @@
 title: LocalPilot
 tagline: Local-first AI coding agent for VS Code
-description: LocalPilot is a free, open-source coding agent for VS Code that runs on local models from Ollama, LM Studio, llama.cpp or vLLM, and can install a model for you in one click. Agent mode, parallel agents, skills, subagents, screenshots, MCP and hardware-aware model management, with no subscription, account or telemetry. A private, offline alternative to GitHub Copilot, Cursor and Claude Code.
+description: LocalPilot is a free, open-source coding agent for VS Code that runs on local models from Ollama, LM Studio, llama.cpp, vLLM or colibri, and can install a model for you in one click. Agent mode, parallel agents, skills, subagents, screenshots and MCP, with no subscription or account, and no telemetry sent from the extension. A private, offline alternative to GitHub Copilot, Cursor and Claude Code.
 url: https://isathish.github.io
 baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
@@ -83,6 +83,8 @@ nav:
     url: /docs/dashboard/
   - title: Troubleshooting
     url: /docs/troubleshooting/
+  - title: Privacy
+    url: /privacy/
   - title: Development
     url: /docs/development/
   - title: Publishing
@@ -96,6 +98,8 @@ guides:
     url: /guides/github-copilot-alternative/
   - title: Offline AI coding assistant
     url: /guides/offline-ai-coding-assistant/
+  - title: Huge MoE models with colibri
+    url: /guides/colibri-vscode/
 # "Ask AI" buttons rendered by _includes/ask-ai.html. Each product opens with the prompt pre-filled via its public query parameter.
 # Gemini has no public prefill parameter in the Gemini app, so it uses Google AI Mode (udm=50), which is powered by Gemini.
 ask_ai:
@@ -170,6 +174,8 @@ works_with:
     url: /docs/models/
   - title: vLLM
     url: /docs/models/
+  - title: colibri
+    url: /guides/colibri-vscode/
   - title: Unsloth exports
     url: /docs/models/
   - title: OpenAI-compatible servers
