@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.3.0 — 2026-10-31
 ### Added
 - **Task queue.** **LocalPilot: Queue Agent Task…** (or **+** on the new **Queue** section of the Agents view) lines up agent tasks. Each task has its own mode and model, and can wait for other tasks to succeed first. Tasks run one after another by default. Set `localpilot.queue.concurrency` to run several side by side, each in its own worktree. When a task fails, the tasks that depend on it are blocked rather than run, and **Retry** puts them all back in line. The queue is saved per workspace and resumes after a reload. You can pause and resume it.
 - **Auto mode.** With **LocalPilot: Toggle Auto Mode** on (⚡ in the status bar), an action that would ask for approval is first reviewed by a small local model. The reviewer approves actions that clearly serve your request and stay inside the project. Everything else still asks you. Pushes, `sudo`, recursive deletes, piping a download into a shell, publishing, infrastructure changes and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking. Settings: `localpilot.autoMode.enabled`, `localpilot.autoMode.model`.
