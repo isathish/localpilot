@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.3.1 — 2026-10-31
 ### Fixed
 - **A reply that is all thinking no longer stalls the agent.** A reasoning model could spend its whole reply budget thinking and never answer. LocalPilot then repeated the identical request, which did the same again, costing minutes. It now asks again with thinking turned off and keeps it off for the rest of that turn.
 - **Thinking levels follow what Ollama supports.** Ollama takes `low` / `medium` / `high` only for gpt-oss. For other thinking models, Auto's light thinking (Ask, subagents) now means no reasoning pass, and medium or high means the model's normal thinking.
