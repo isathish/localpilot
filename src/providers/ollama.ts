@@ -139,7 +139,7 @@ export class OllamaProvider implements LLMProvider {
     }
     // A model without thinking support rejects any `think` value; it is dropped once Ollama has said so.
     if (opts.think !== undefined && !this.noThink.has(opts.model)) {
-      body.think = opts.think;
+      body.think = ollamaThink(opts.model, opts.think);
     }
     if (opts.keepAlive) {
       body.keep_alive = opts.keepAlive;
@@ -275,3 +275,15 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
 }
+
+/**
+ * Ollama documents effort levels for gpt-oss only; other thinking models take true/false. A level becomes a switch
+ * there: "low" (light work: Ask, subagents) skips the reasoning pass, "medium"/"high" turn it on.
+ */
+export function ollamaThink(model: string, think: boolean | 'low' | 'medium' | 'high'): boolean | 'low' | 'medium' | 'high' {
+  if (typeof think === 'boolean' || /gpt-oss/i.test(model)) {
+    return think;
+  }
+  return think !== 'low';
+}
+

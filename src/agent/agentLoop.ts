@@ -511,7 +511,8 @@ export class AgentRunner {
     // parallel requests run once); any mutating tool clears the cache.
     const toolCache = new Map<string, Promise<ChatMessage>>();
     // A model that cannot think gets no `think` at all (Ollama rejects any value but false for it).
-    const think = model.supportsThinking === false ? undefined : thinkFor(cfg.thinking, { mode: session.mode, depth });
+    // Reassigned to false when the model spends a whole reply thinking (see the empty-completion retry below).
+    let think = model.supportsThinking === false ? undefined : thinkFor(cfg.thinking, { mode: session.mode, depth });
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
@@ -731,10 +732,16 @@ export class AgentRunner {
         o.signal.removeEventListener('abort', onAbort);
         // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
         if (!text.trim() && !calls.length && attempt < maxModelRetries && !o.signal.aborted) {
-          modelEvent('retry', 'empty');
+          // Only reasoning came back: the model thought until the output limit. The same request would do the same,
+          // so ask again without thinking — and keep it off for the rest of this turn.
+          const overthought = !!thinking.trim() && think !== false && think !== undefined;
+          if (overthought) {
+            think = false;
+          }
+          modelEvent('retry', overthought ? 'overthought' : 'empty');
           attempt++;
-          this.log.warn(`empty completion from ${model.id}; retry ${attempt}/${maxModelRetries}`);
-          status(`The model returned nothing — asking again (${attempt}/${maxModelRetries})…`);
+          this.log.warn(`${overthought ? 'reasoning-only' : 'empty'} completion from ${model.id}; retry ${attempt}/${maxModelRetries}${overthought ? ' without thinking' : ''}`);
+          status(overthought ? `The model used its whole reply for thinking — asking again without thinking (${attempt}/${maxModelRetries})…` : `The model returned nothing — asking again (${attempt}/${maxModelRetries})…`);
           emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: 'empty', message: 'empty completion' } });
           await sleep(RETRY_BACKOFF_MS[0], o.signal);
           continue;

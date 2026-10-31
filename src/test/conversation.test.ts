@@ -3,7 +3,7 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import { questionPolicy } from '../agent/prompts';
 import { thinkFor } from '../agent/thinking';
-import { OllamaProvider } from '../providers/ollama';
+import { ollamaThink, OllamaProvider } from '../providers/ollama';
 import { askUserTool, formatAnswers, parseQuestions } from '../tools/editor';
 import { ToolContext } from '../types';
 
@@ -20,6 +20,12 @@ suite('Conversation: questions before work and thinking per task', () => {
     assert.strictEqual(thinkFor('on', { mode: 'ask', depth: 0 }), true);
     assert.strictEqual(thinkFor('high', { mode: 'agent', depth: 2 }), 'high');
     assert.strictEqual(thinkFor('high', 'helper'), false, 'helpers never think');
+    // Ollama takes effort levels from gpt-oss only; elsewhere a level becomes on/off.
+    assert.strictEqual(ollamaThink('gpt-oss:20b', 'low'), 'low');
+    assert.strictEqual(ollamaThink('gemma4:12b', 'high'), true);
+    assert.strictEqual(ollamaThink('qwen3.8:27b', 'medium'), true);
+    assert.strictEqual(ollamaThink('qwen3.8:27b', 'low'), false);
+    assert.strictEqual(ollamaThink('qwen3.8:27b', false), false);
   });
 
   test('ask_user reads several explained questions, and the older single-question form', () => {

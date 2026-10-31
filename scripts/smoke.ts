@@ -367,9 +367,10 @@ async function agentLoopE2E() {
   let calls = 0;
   let flakyHits = 0;
   let emptyHits = 0;
+  const overthinkerEfforts: (string | undefined)[] = [];
   const srv = await listen(async (req, res) => {
     if (req.url === '/v1/models') {
-      return res.end(JSON.stringify({ data: [{ id: 'native', capabilities: ['tool_use'] }, { id: 'textonly', capabilities: [] }, { id: 'flaky', capabilities: ['tool_use'] }, { id: 'empty', capabilities: ['tool_use'] }, { id: 'looper', capabilities: ['tool_use'] }] }));
+      return res.end(JSON.stringify({ data: [{ id: 'native', capabilities: ['tool_use'] }, { id: 'textonly', capabilities: [] }, { id: 'flaky', capabilities: ['tool_use'] }, { id: 'empty', capabilities: ['tool_use'] }, { id: 'looper', capabilities: ['tool_use'] }, { id: 'overthinker', capabilities: ['tool_use'] }] }));
     }
     if (req.url === '/v1/chat/completions') {
       const body = JSON.parse(await readBody(req));
@@ -385,6 +386,16 @@ async function agentLoopE2E() {
       if (body.model === 'flaky') {
         send({ choices: [{ delta: { content: 'Recovered after a retry.' } }] });
         send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+      } else if (body.model === 'overthinker') {
+        // Asked to reason, it reasons until the output limit and never answers; asked not to, it answers at once.
+        overthinkerEfforts.push(body.reasoning_effort);
+        if (body.reasoning_effort) {
+          send({ choices: [{ delta: { reasoning_content: 'Hmm, let me weigh every option again… '.repeat(20) } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'length' }] });
+        } else {
+          send({ choices: [{ delta: { content: 'Answered without thinking.' } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        }
       } else if (body.model === 'empty') {
         if (emptyHits++ === 0) {
           send({ choices: [{ delta: {}, finish_reason: 'stop' }] }); // nothing at all
@@ -486,6 +497,11 @@ async function agentLoopE2E() {
     const evEmpty: AgentEvent[] = [];
     const outEmpty = await runner.run({ session: sEmpty, userMessage: { role: 'user', content: 'go' }, emit: (e) => evEmpty.push(e), signal: new AbortController().signal, requestApproval: async () => true });
     check('resilience: empty completion is retried', outEmpty === 'Second time lucky.' && emptyHits === 2 && evEmpty.some((e) => e.type === 'retry' && (e.payload as { reason: string }).reason === 'empty'), { outEmpty, emptyHits });
+    // A reply that is all reasoning (thinking ran to the output limit) is asked again with thinking off, not repeated.
+    const sOver = mkSession('mock/overthinker');
+    const evOver: AgentEvent[] = [];
+    const outOver = await runner.run({ session: sOver, userMessage: { role: 'user', content: 'go' }, emit: (e) => evOver.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+    check('resilience: reasoning-only reply is retried without thinking', outOver === 'Answered without thinking.' && overthinkerEfforts.length === 2 && !!overthinkerEfforts[0] && overthinkerEfforts[1] === undefined, { outOver, overthinkerEfforts });
     // The same tool call over and over is refused after MAX_IDENTICAL_CALLS, which breaks the loop.
     const sLoop = mkSession('mock/looper');
     const beforeLoop = executions;
@@ -499,8 +515,8 @@ async function agentLoopE2E() {
     ac.abort();
     const out3 = await runner.run({ session: s3, userMessage: { role: 'user', content: 'go' }, emit: () => {}, signal: ac.signal, requestApproval: async () => true }).catch((e) => `ERR:${e.message}`);
     check('aborted signal exits loop quickly', out3 === '' || String(out3).startsWith('ERR:'), out3);
-    // native 2 + textonly 2 + flaky 2 (503 then ok) + empty 2 + looper 5 (3 served calls, 1 refused, final answer); the aborted run makes none.
-    check('total model calls as expected', calls === 13, calls);
+    // native 2 + textonly 2 + flaky 2 (503 then ok) + empty 2 + looper 5 (3 served calls, 1 refused, final answer) + overthinker 2 (reasoning only, then without thinking); the aborted run makes none.
+    check('total model calls as expected', calls === 15, calls);
 
     // manage_todos writes to the session via the tool context
     const s4 = mkSession('mock/native');
