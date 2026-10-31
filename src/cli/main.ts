@@ -38,7 +38,7 @@ import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
 import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
 import { RedisTelemetry } from '../storage/redisTelemetry';
-import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem } from '../types';
+import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
 import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
@@ -471,7 +471,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const skills = new SkillManager(log, path.join(__dirname, '..', 'skills'));
   const workspace = new WorkspaceContext(log);
   const tracker = new ChangeTracker(log);
-  const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log);
+  const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log, () => getConfig().memoryLimits);
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
   const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
@@ -539,6 +539,35 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
   return a === 'y' || a === 'yes';
 }
 
+/**
+ * ask_user in the terminal: numbered options with their explanations; answer with numbers ("2", "1,3" for multi-select)
+ * or your own words, Enter takes the recommended option. Ctrl+D skips (the agent goes with its recommendations).
+ */
+async function askQuestions(questions: UserQuestion[], rl?: readline.Interface): Promise<UserAnswer[] | null> {
+  setReadline(rl);
+  const answers: UserAnswer[] = [];
+  for (const [i, q] of questions.entries()) {
+    const n = questions.length > 1 ? dim(` (${i + 1}/${questions.length})`) : '';
+    const opts = q.options.map((o, k) => `  ${amber(String(k + 1))}. ${bold(o.label)}${o.label === q.recommended ? ` ${amber('(recommended)')}` : ''}${o.description ? `\n     ${dim(o.description)}` : ''}`).join('\n');
+    const hint = q.options.length ? dim(`${q.multiSelect ? 'numbers separated by commas' : 'a number'}, or your own words${q.recommended ? ' · Enter = recommended' : ''}`) : dim('your answer');
+    process.stdout.write(`\n${yellow('?')}${n} ${q.header ? `${dim(`[${q.header}]`)} ` : ''}${bold(q.question)}\n${opts}${opts ? '\n' : ''}  ${hint}\n`);
+    const a = await ask('  > ');
+    if (a === undefined) {
+      return null;
+    }
+    const t = a.trim();
+    const nums = /^\d+(?:\s*,\s*\d+)*$/.test(t) ? t.split(',').map((x) => Number(x) - 1).filter((k) => k >= 0 && k < q.options.length) : [];
+    if (!t) {
+      answers.push({ question: q.question, selected: q.recommended ? [q.recommended] : [] });
+    } else if (nums.length) {
+      answers.push({ question: q.question, selected: (q.multiSelect ? nums : nums.slice(0, 1)).map((k) => q.options[k].label) });
+    } else {
+      answers.push({ question: q.question, selected: [], other: t });
+    }
+  }
+  return answers;
+}
+
 async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string } = {}): Promise<string> {
   let content = text;
   const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f)));
@@ -600,6 +629,8 @@ async function runTurn(core: Core, session: Session, text: string, files: string
       }
     },
     requestApproval: (title, detail, kind) => approval(title, detail, kind, rl),
+    // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
+    askUser: process.stdin.isTTY && !isAutoApprove() ? (questions) => askQuestions(questions, rl) : undefined,
   }).finally(offControl);
   r.end();
   return final || result;

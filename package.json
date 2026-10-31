@@ -589,6 +589,60 @@
         "title": "Generate Commit Message",
         "category": "LocalPilot",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "localpilot.queue.add",
+        "title": "Queue Agent Task…",
+        "category": "LocalPilot",
+        "icon": "$(list-ordered)"
+      },
+      {
+        "command": "localpilot.queue.pause",
+        "title": "Pause Task Queue",
+        "category": "LocalPilot",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "localpilot.queue.resume",
+        "title": "Resume Task Queue",
+        "category": "LocalPilot",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "localpilot.queue.cancel",
+        "title": "Cancel Queued Task",
+        "category": "LocalPilot",
+        "icon": "$(close)"
+      },
+      {
+        "command": "localpilot.queue.retry",
+        "title": "Retry Queued Task",
+        "category": "LocalPilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localpilot.queue.remove",
+        "title": "Remove Queued Task",
+        "category": "LocalPilot",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "localpilot.queue.clearFinished",
+        "title": "Clear Finished Queue Tasks",
+        "category": "LocalPilot",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "localpilot.toggleAutoMode",
+        "title": "Toggle Auto Mode",
+        "category": "LocalPilot",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "localpilot.showBackgroundServices",
+        "title": "Show Background Services",
+        "category": "LocalPilot",
+        "icon": "$(server-process)"
       }
     ],
     "submenus": [
@@ -690,6 +744,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "localpilot.queue.add",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "navigation@2"
+        },
+        {
           "command": "localpilot.runBestOfN",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "2_batch@1"
@@ -743,6 +802,16 @@
           "command": "localpilot.openTerminal",
           "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage@1"
+        },
+        {
+          "command": "localpilot.showBackgroundServices",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "3_services"
+        },
+        {
+          "command": "localpilot.toggleAutoMode",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "3_services"
         }
       ],
       "view/item/context": [
@@ -825,6 +894,41 @@
           "command": "localpilot.undoChanges",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
           "group": "inline@2"
+        },
+        {
+          "command": "localpilot.queue.pause",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == group-queue",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.queue.resume",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == group-queue-paused",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.queue.add",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^group-queue/",
+          "group": "inline@2"
+        },
+        {
+          "command": "localpilot.queue.clearFinished",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^group-queue/",
+          "group": "inline@3"
+        },
+        {
+          "command": "localpilot.queue.cancel",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^queue-(queued|running)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.queue.retry",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^queue-(failed|cancelled|blocked)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.queue.remove",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^queue-(queued|done|failed|cancelled|blocked)$/",
+          "group": "inline@2"
         }
       ],
       "commandPalette": [
@@ -886,6 +990,18 @@
         },
         {
           "command": "localpilot.explainDiagnosticAt",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.queue.cancel",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.queue.retry",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.queue.remove",
           "when": "false"
         }
       ],
@@ -1142,14 +1258,23 @@
         "localpilot.thinking": {
           "type": "string",
           "enum": [
+            "auto",
             "off",
             "on",
             "low",
             "medium",
             "high"
           ],
-          "default": "off",
-          "description": "Extended thinking for reasoning models (Ollama `think`, OpenAI-compatible `reasoning_effort`). Reasoning is shown as a collapsible step."
+          "enumDescriptions": [
+            "Per task: high for Plan and Debug, medium for the agent and Multitask, low for Ask and subagents, none for quick helpers (auto-mode reviewer, inline edits, compaction summaries).",
+            "Never think: answers start immediately (sent explicitly; thinking models otherwise reason by default).",
+            "The model's default amount of thinking for every agent run.",
+            "Low effort for every agent run.",
+            "Medium effort for every agent run.",
+            "High effort for every agent run."
+          ],
+          "default": "auto",
+          "markdownDescription": "Extended thinking for reasoning models (Ollama `think`, OpenAI-compatible `reasoning_effort`). Models that cannot think are never sent it. Quick helpers never think. Reasoning is shown as a collapsible step."
         },
         "localpilot.keepAlive": {
           "type": "string",
@@ -1161,10 +1286,47 @@
           "default": true,
           "description": "Load the chat's model into memory as soon as you open the chat, focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; throttled per model unless the server reports it was unloaded."
         },
+        "localpilot.prompts.autoCorrect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Correct misspelled file names and code identifiers in your requests against the names in the workspace (\"dicee.py\" → \"dice.py\", \"rollDise\" → \"rollDice\") before the agent starts. Plain words are never changed; corrections are shown under your message."
+        },
+        "localpilot.ollama.flashAttention": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start Ollama with flash attention (OLLAMA_FLASH_ATTENTION). Faster prompt processing and a smaller KV cache on supported models. Applies when LocalPilot starts or restarts Ollama."
+        },
+        "localpilot.ollama.kvCacheType": {
+          "type": "string",
+          "enum": [
+            "f16",
+            "q8_0",
+            "q4_0"
+          ],
+          "enumDescriptions": [
+            "Full precision KV cache — most memory.",
+            "8-bit KV cache — about half the memory of f16, negligible quality loss (recommended).",
+            "4-bit KV cache — about a quarter of the memory; small quality loss on long contexts."
+          ],
+          "default": "q8_0",
+          "description": "KV cache quantisation for Ollama (OLLAMA_KV_CACHE_TYPE). A smaller cache loads faster and lets large context windows stay on the GPU. Needs flash attention; applies when LocalPilot starts or restarts Ollama."
+        },
         "localpilot.memory.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Let the agent read and save durable notes in .localpilot/memory (project) and global storage (user)."
+        },
+        "localpilot.memory.maxNoteChars": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 500,
+          "markdownDescription": "Largest size of one memory note. When a note grows past it, its oldest paragraphs are dropped (a leading heading is kept). Appending lines a note already has does nothing."
+        },
+        "localpilot.memory.maxNotes": {
+          "type": "number",
+          "default": 200,
+          "minimum": 5,
+          "markdownDescription": "Most memory notes kept per scope (project / global). Past it, the least recently updated notes are deleted (`README` is kept)."
         },
         "localpilot.sessions.retention": {
           "type": "number",
@@ -1223,6 +1385,16 @@
           "default": "always",
           "description": "Approval policy for web search / fetch and MCP tools."
         },
+        "localpilot.autoMode.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**Auto mode**: an action that would ask for approval (see `#localpilot.approvals.terminal#` and the other approval settings, or an `ask` permission rule) is first reviewed by a small local model. The reviewer approves actions that clearly serve your request and stay inside the project. Everything else still asks you. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking. Toggle with **LocalPilot: Toggle Auto Mode**."
+        },
+        "localpilot.autoMode.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model that reviews actions in auto mode (`provider/model`). Empty = the fastest suitable installed model."
+        },
         "localpilot.parallel.maxConcurrency": {
           "type": "number",
           "default": 4,
@@ -1235,6 +1407,13 @@
           "default": 2,
           "minimum": 1,
           "maximum": 4
+        },
+        "localpilot.queue.concurrency": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 8,
+          "markdownDescription": "How many tasks from the **task queue** (Agents view → Queue, or **LocalPilot: Queue Agent Task…**) run at once. `1` runs them one after another; higher values run them side by side, each in its own isolated worktree when `#localpilot.worktrees.mode#` is `parallel` or `always`. Tasks can also wait for other tasks to succeed first. The queue is saved per workspace and resumes after a reload."
         },
         "localpilot.worktrees.mode": {
           "type": "string",
@@ -1284,10 +1463,41 @@
           "default": "redis://127.0.0.1:6379",
           "markdownDescription": "Redis connection for `#localpilot.storage.redis.enabled#`: `redis://[user:password@]host:port[/db]`, or `rediss://` for TLS. Keep it on `127.0.0.1` unless the server is protected — telemetry includes model names, tool names and log lines."
         },
+        "localpilot.supervisor.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep local support services running while VS Code is open. **Ollama** (local only) is restarted if it stops after having run this session, or if it serves `#localpilot.defaultModel#`. **Redis** is restarted when `#localpilot.storage.redis.enabled#` is on, using its Docker container or a native `redis-server`. After 4 failed restarts in a row LocalPilot stops trying and tells you. See **LocalPilot: Show Background Services**."
+        },
+        "localpilot.supervisor.intervalSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 15,
+          "markdownDescription": "How often the background services are checked."
+        },
+        "localpilot.supervisor.autoInstall": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When no local model server is found at startup, install **Ollama** and a starter model that fits this machine without asking first (a cancellable progress notification shows the download — usually several GB). Off: LocalPilot offers the one-click setup instead."
+        },
         "localpilot.autoClarify": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "When a request is short, vague or refers to \"this\"/\"it\" without naming a target, give the agent a snapshot of the active editor, open files, recent edits, errors and git changes so it can state its interpretation (`Understood as: …`) and proceed, asking only when two readings would lead to materially different work."
+        },
+        "localpilot.clarify.questions": {
+          "type": "string",
+          "enum": [
+            "smart",
+            "interview",
+            "minimal"
+          ],
+          "enumDescriptions": [
+            "New features and open-ended or large requests: ask up to 4 questions (explained options, a recommended pick) in one card, state a short plan, then start. Clear requests start right away.",
+            "Every change: ask first, then show the plan and wait for your OK before editing.",
+            "Only when two readings would lead to materially different work."
+          ],
+          "default": "smart",
+          "markdownDescription": "When the agent asks you questions before it starts. Questions appear as a card in the chat: each option explains what choosing it means, one is marked recommended, some allow several picks, and you can always answer in your own words or **Skip** (the agent then goes with its recommendations)."
         },
         "localpilot.webSearch.provider": {
           "type": "string",

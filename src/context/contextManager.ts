@@ -245,7 +245,7 @@ Preserve exact file paths, identifiers, commands, error messages and numbers. Do
       },
     ];
     let out = '';
-    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, maxTokens: 1500, contextWindow: model.contextWindow, keepAlive: this.opts.keepAlive, signal })) {
+    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, think: false, maxTokens: 1500, contextWindow: model.contextWindow, keepAlive: this.opts.keepAlive, signal })) {
       if (ev.type === 'text') {
         out += ev.text;
       }

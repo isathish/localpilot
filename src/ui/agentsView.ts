@@ -2,9 +2,12 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { ChatController } from './chatController';
 import { SessionSummary } from '../types';
+import { QueueTask, TaskQueue } from '../agent/taskQueue';
 
 type Node =
-  | { kind: 'group'; id: 'running' | 'recent'; label: string }
+  | { kind: 'group'; id: 'running' | 'recent' | 'queue'; label: string }
+  /** A task-queue entry; once started it opens the chat it runs in. */
+  | { kind: 'task'; task: QueueTask; position: number }
   | { kind: 'session'; session: SessionSummary; running: boolean }
   | { kind: 'status'; sessionId: string; text: string }
   /** A running subagent of a session, with its own pause/stop controls. */
@@ -22,9 +25,12 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
   private readonly disposables: vscode.Disposable[] = [];
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly controller: ChatController) {
+  constructor(private readonly controller: ChatController, private readonly queue?: TaskQueue) {
     const refresh = () => this.scheduleRefresh();
     this.disposables.push(controller.store.onDidChange(refresh), controller.onDidChangeRuns(refresh), controller.tracker.onDidChange(refresh), controller.onDidChangeActive(refresh));
+    if (queue) {
+      this.disposables.push(queue.onDidChange(refresh));
+    }
   }
 
   private scheduleRefresh(): void {
@@ -36,7 +42,31 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
     switch (n.kind) {
       case 'group': {
         const item = new vscode.TreeItem(n.label, vscode.TreeItemCollapsibleState.Expanded);
-        item.contextValue = `group-${n.id}`;
+        item.contextValue = n.id === 'queue' ? (this.queue?.paused ? 'group-queue-paused' : 'group-queue') : `group-${n.id}`;
+        return item;
+      }
+      case 'task': {
+        const t = n.task;
+        const item = new vscode.TreeItem(t.prompt.split('\n')[0].slice(0, 80), vscode.TreeItemCollapsibleState.None);
+        item.id = t.id;
+        const model = (t.model || '').split('/').pop();
+        const after = t.dependsOn?.length ? ` · after ${t.dependsOn.map((d) => `#${this.queue!.list.findIndex((x) => x.id === d) + 1}`).join(', ')}` : '';
+        item.description = `#${n.position} · ${t.status}${t.status === 'running' && t.sessionId ? ` · ${this.controller.runStatus.get(t.sessionId) ?? 'Working…'}` : ''} · ${t.mode}${model ? ` · ${model}` : ''}${after}`;
+        item.tooltip = `${t.prompt}\n\n${t.status}${t.error ? `: ${t.error}` : ''}${t.model ? `\nModel: ${t.model}` : ''}`;
+        const icons: Record<QueueTask['status'], [string, string?]> = {
+          queued: ['clock'],
+          running: ['loading~spin'],
+          done: ['pass', 'testing.iconPassed'],
+          failed: ['error', 'testing.iconFailed'],
+          cancelled: ['circle-slash'],
+          blocked: ['debug-step-over', 'list.warningForeground'],
+        };
+        const [icon, color] = icons[t.status];
+        item.iconPath = new vscode.ThemeIcon(icon, color ? new vscode.ThemeColor(color) : undefined);
+        item.contextValue = `queue-${t.status}`;
+        if (t.sessionId) {
+          item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [t.sessionId] };
+        }
         return item;
       }
       case 'session': {
@@ -103,7 +133,14 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
         groups.push({ kind: 'group', id: 'running', label: `Running (${running.size})` });
       }
       groups.push({ kind: 'group', id: 'recent', label: running.size ? 'Idle' : 'Sessions' });
+      if (this.queue?.list.length) {
+        const q = this.queue;
+        groups.unshift({ kind: 'group', id: 'queue', label: `Queue (${q.activeCount} running, ${q.pendingCount} waiting${q.paused ? ', paused' : ''})` });
+      }
       return groups;
+    }
+    if (n.kind === 'group' && n.id === 'queue') {
+      return (this.queue?.list ?? []).map((task, i) => ({ kind: 'task', task, position: i + 1 }));
     }
     if (n.kind === 'group') {
       const list = sessions.filter((s) => running.has(s.id) === (n.id === 'running')).slice(0, n.id === 'running' ? 50 : 25);

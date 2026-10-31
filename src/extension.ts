@@ -20,7 +20,8 @@ import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
 import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
 import { autoDetectProviders } from './providers/discovery';
-import { AutoSetupResult, ModelManager } from './providers/modelManager';
+import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaUp } from './providers/modelManager';
+import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
 import { coliLauncher, colibriServeCommand, COLIBRI_REPO_URL } from './providers/colibri';
 import { ModelTuner } from './ui/modelAutoTune';
@@ -52,7 +53,9 @@ import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 import { RedisTelemetry } from './storage/redisTelemetry';
-import { setupRedis } from './storage/redisSetup';
+import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
+import { TaskQueue } from './agent/taskQueue';
+import { AutoReviewer } from './agent/autoReviewer';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -115,7 +118,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   store.maxInMemory = () => getConfig().storage.sessionsInMemory;
   context.subscriptions.push(onConfigChange(() => store.trim()));
   const tracker = new ChangeTracker(log);
-  const memory = new MemoryStore(context.globalStorageUri, log);
+  const memory = new MemoryStore(context.globalStorageUri, log, () => getConfig().memoryLimits);
   const learner = new SkillLearner(path.join(context.globalStorageUri.fsPath, 'skill-learning.json'), log);
   // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
   const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
@@ -123,6 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
   runner.telemetry = telemetry;
+  runner.autoReviewer = new AutoReviewer(providers, log);
   controller.telemetry = telemetry;
   // Claude Code-compatible project configuration: settings.json (permission rules, hooks), plugins and custom
   // slash commands from both `.claude/` and `.localpilot/`.
@@ -170,6 +174,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   mcp.extraServers = () => plugins.mcpServers();
   const modelManager = new ModelManager(providers, log);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
+
+  // --- Background services -------------------------------------------------------------------
+  // Keeps the local model server and (when enabled) Redis running while VS Code is open; see ServiceSupervisor.
+  const isLocalUrl = (u: string) => /^\w+:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(u);
+  const ollamaCfg = () => getConfig().providers.find((p) => p.type === 'ollama');
+  const supervisor = new ServiceSupervisor(
+    [
+      {
+        id: 'ollama',
+        label: 'Ollama',
+        wanted: (seenUp) => {
+          const cfg = getConfig();
+          const o = ollamaCfg();
+          // Only a local Ollama LocalPilot actually uses: seen running this session, or serving the default model.
+          return cfg.supervisor.enabled && !!o && isLocalUrl(o.baseUrl) && (seenUp || cfg.defaultModel.startsWith(`${o.id}/`));
+        },
+        isUp: async () => {
+          const o = ollamaCfg();
+          return !!o && ollamaUp(o.baseUrl.replace(/\/+$/, ''));
+        },
+        start: async () => {
+          if (!(await findOllamaBinary())) {
+            throw new Error('Ollama is not installed');
+          }
+          const job = await modelManager.startOllama();
+          if (job.status !== 'done') {
+            throw new Error(job.error ?? 'did not start');
+          }
+          void providers.listModels(true).catch(() => undefined);
+          return true;
+        },
+      },
+      {
+        id: 'redis',
+        label: 'Redis',
+        wanted: () => getConfig().supervisor.enabled && getConfig().storage.redis.enabled,
+        isUp: async () => (await probeRedis(getConfig().storage.redis.url)).ok,
+        start: () => restartRedis(getConfig().storage.redis.url, log),
+      },
+    ],
+    () => getConfig().supervisor.intervalSeconds * 1000,
+    log,
+    (st, retry) => {
+      void vscode.window
+        .showWarningMessage(`LocalPilot could not restart ${st.label} after ${st.failures} tries${st.lastError ? `: ${st.lastError}` : ''}. It will stop trying until you retry.`, 'Retry', 'Show Logs')
+        .then((pick) => (pick === 'Retry' ? retry() : pick === 'Show Logs' ? log.show() : undefined));
+    }
+  );
+  context.subscriptions.push(supervisor);
+  supervisor.start();
 
   // Register the chat hosts before anything is awaited: VS Code shows a bare progress bar in the view until the
   // provider exists, so this must not queue behind session/skill loading or model discovery.
@@ -249,7 +303,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
   // --- UI ----------------------------------------------------------------------------------
-  const agentsTree = new AgentsTreeProvider(controller);
+  // Persistent task queue: tasks run as chats one after another (or `queue.concurrency` at a time).
+  const taskQueue = new TaskQueue(
+    path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'task-queue.json'),
+    (task, started) => controller.runQueuedTask(task, started, getConfig().queue.concurrency > 1),
+    () => getConfig().queue.concurrency,
+    log
+  );
+  context.subscriptions.push(taskQueue);
+  void controller.loaded.then(() => taskQueue.load());
+  const agentsTree = new AgentsTreeProvider(controller, taskQueue);
   const agentsView = vscode.window.createTreeView(AGENTS_VIEW_ID, { treeDataProvider: agentsTree, showCollapseAll: true });
   context.subscriptions.push(agentsTree, agentsView);
   const updateAgentsBadge = () => {
@@ -298,10 +361,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       : running
         ? `$(loading~spin) ${running} agent${running === 1 ? '' : 's'} · ${name}`
         : `$(localpilot-logo) ${name}`;
+    if (cfg.autoMode.enabled) {
+      status.text += ' $(zap)';
+    }
     status.backgroundColor = models.length || pulling ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
     status.tooltip = pulling
       ? `LocalPilot · downloading ${pulling.model} — ${pulling.detail}`
-      : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}\nClick for chat, models, layout and settings`;
+      : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}${cfg.autoMode.enabled ? '\nAuto mode on: a local reviewer approves safe actions' : ''}\nClick for chat, models, layout and settings`;
     status.show();
   };
   void refreshStatus();
@@ -370,6 +436,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   };
   const detection = autoDetect();
   void detection.then(() => tuner.start());
+  // Inline completions: load the completion model up front, otherwise the first suggestions pay the weight load
+  // (and the next keystroke usually aborts them). Throttled per model in the registry.
+  const warmCompletion = () => {
+    const cfg = getConfig();
+    if (cfg.inlineCompletion.enabled && cfg.prewarm) {
+      void providers.warm(undefined, 'completion').catch(() => undefined);
+    }
+  };
+  void detection.then(warmCompletion);
+  context.subscriptions.push(vscode.window.onDidChangeWindowState((s) => s.focused && warmCompletion()));
 
   // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
   if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
@@ -386,7 +462,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   } else {
     // Returning user with no model anywhere (server stopped, models deleted): offer the one-click fix once per session.
     void detection.then(() => providers.listModels().catch(() => [])).then((models) => {
-      if (!models.length && getConfig().autoSetupModels && !settingsPanel.isOpen) {
+      if (!models.length && getConfig().supervisor.autoInstall) {
+        // Opted in: install Ollama and a starter model in the background, with a cancellable progress notification.
+        log.info('supervisor: no local models found — installing Ollama and a starter model (localpilot.supervisor.autoInstall)');
+        void vscode.commands.executeCommand('localpilot.autoSetupModels', { installRuntime: true });
+      } else if (!models.length && getConfig().autoSetupModels && !settingsPanel.isOpen) {
         void vscode.window
           .showWarningMessage('LocalPilot found no local models. Set up Ollama and a starter model that fits this machine automatically?', 'Set up automatically', 'Open Models')
           .then((pick) => {
@@ -498,6 +578,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       { label: '$(library) Manage Models', run: () => vscode.commands.executeCommand('localpilot.manageModels') },
       { label: '$(search) Browse Ollama Model Gallery…', run: () => vscode.commands.executeCommand('localpilot.browseModelGallery') },
       { label: '$(book) Manage Skills', run: () => vscode.commands.executeCommand('localpilot.manageSkills') },
+      { label: `$(${cfg.autoMode.enabled ? 'check' : 'circle-large-outline'}) Auto Mode`, description: cfg.autoMode.enabled ? 'on — safe actions approved by a local reviewer' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleAutoMode') },
+      { label: '$(list-ordered) Queue Agent Task…', description: taskQueue.list.length ? `${taskQueue.activeCount} running, ${taskQueue.pendingCount} waiting` : undefined, run: () => vscode.commands.executeCommand('localpilot.queue.add') },
       { label: `$(${cfg.inlineCompletion.enabled ? 'check' : 'circle-large-outline'}) Inline Completions`, description: cfg.inlineCompletion.enabled ? 'on' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleInlineCompletions') },
       { label: '', kind: vscode.QuickPickItemKind.Separator },
       { label: '$(layout) Move Chat To…', description: where?.label, run: () => view.pickLocation() },
@@ -751,6 +833,92 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const n = arg as { sessionId?: string; childId?: string } | undefined;
     return n?.sessionId && n?.childId ? { sessionId: n.sessionId, childId: n.childId } : undefined;
   };
+  // --- Task queue ----------------------------------------------------------------------------
+  const queueTaskArg = (arg: unknown): string | undefined => (typeof arg === 'string' ? arg : (arg as { task?: { id: string } } | undefined)?.task?.id);
+  cmd('localpilot.queue.add', async () => {
+    const prompt = await vscode.window.showInputBox({
+      title: 'Queue an agent task (1/3)',
+      prompt: 'What should the agent do? Queued tasks run in order, each as its own chat. Separate several tasks with " | ".',
+      placeHolder: 'Write tests for utils/date.ts | Fix all TypeScript errors in src/api',
+      ignoreFocusOut: true,
+    });
+    const prompts = (prompt ?? '').split('|').map((t) => t.trim()).filter(Boolean);
+    if (!prompts.length) {
+      return;
+    }
+    const modes = [
+      { label: 'Agent', description: 'edit files and run commands', mode: 'agent' as const },
+      { label: 'Debug', description: 'reproduce, fix and verify', mode: 'debug' as const },
+      { label: 'Plan', description: 'read-only plan', mode: 'plan' as const },
+      { label: 'Ask', description: 'read-only answer', mode: 'ask' as const },
+      { label: 'Multitask', description: 'split across parallel workers', mode: 'multitask' as const },
+    ];
+    const mode = await vscode.window.showQuickPick(modes, { title: 'Queue an agent task (2/3): mode', ignoreFocusOut: true });
+    if (!mode) {
+      return;
+    }
+    const models = await providers.listModels().catch(() => []);
+    const model = await vscode.window.showQuickPick(
+      [{ label: '$(sparkle) Auto', description: 'the router picks per task', id: '' }, ...models.map((m) => ({ label: m.name, description: m.providerId, id: m.id }))],
+      { title: 'Queue an agent task (3/3): model', ignoreFocusOut: true, matchOnDescription: true }
+    );
+    if (!model) {
+      return;
+    }
+    // Dependencies: chain the new tasks after each other, and optionally after tasks already waiting.
+    const open = taskQueue.list.filter((t) => t.status === 'queued' || t.status === 'running');
+    let after: string[] = [];
+    if (open.length) {
+      const picks = await vscode.window.showQuickPick(
+        open.map((t) => ({ label: t.prompt.slice(0, 80), description: t.status, id: t.id })),
+        { title: 'Start only after these tasks succeed (optional)', canPickMany: true, ignoreFocusOut: true, placeHolder: 'Press Enter with nothing selected to run as soon as a slot is free' }
+      );
+      if (!picks) {
+        return;
+      }
+      after = picks.map((p) => p.id);
+    }
+    for (const p of prompts) {
+      taskQueue.add({ prompt: p, mode: mode.mode, model: model.id, dependsOn: after });
+    }
+    void vscode.commands.executeCommand(`${AGENTS_VIEW_ID}.focus`);
+    if (taskQueue.paused) {
+      void vscode.window.showInformationMessage('Task queued. The queue is paused — resume it to start.', 'Resume').then((r) => r && taskQueue.setPaused(false));
+    }
+  });
+  cmd('localpilot.toggleAutoMode', async () => {
+    const on = !getConfig().autoMode.enabled;
+    await vscode.workspace.getConfiguration('localpilot').update('autoMode.enabled', on, vscode.ConfigurationTarget.Global);
+    void vscode.window.showInformationMessage(
+      on
+        ? 'Auto mode on: a local reviewer model approves safe actions; risky ones (pushes, sudo, rm -rf, secrets…) still ask you.'
+        : 'Auto mode off: actions set to "ask" prompt you again.'
+    );
+  });
+  cmd('localpilot.showBackgroundServices', async () => {
+    await supervisor.tick();
+    const items = supervisor.status.map((st) => ({
+      label: `$(${st.up ? 'pass-filled' : st.gaveUp ? 'error' : st.wanted ? 'sync~spin' : 'circle-large-outline'}) ${st.label}`,
+      description: st.up ? 'running' : st.gaveUp ? 'stopped — gave up restarting' : st.wanted ? `down — restarting (attempt ${st.failures + 1})` : 'not supervised',
+      detail: `${st.restarts ? `restarted ${st.restarts}× this session · ` : ''}${st.lastError ?? (st.wanted || st.up ? 'kept running while VS Code is open' : st.id === 'redis' ? 'turn on localpilot.storage.redis.enabled to supervise it' : 'supervised once it has run this session or serves the default model')}`,
+      id: st.id,
+    }));
+    const pick = await vscode.window.showQuickPick(items, { title: 'LocalPilot: background services', placeHolder: getConfig().supervisor.enabled ? 'Pick a service to retry it now' : 'Supervision is off (localpilot.supervisor.enabled)' });
+    if (pick) {
+      void supervisor.retry(pick.id);
+    }
+  });
+  cmd('localpilot.queue.pause', () => taskQueue.setPaused(true));
+  cmd('localpilot.queue.resume', () => taskQueue.setPaused(false));
+  cmd('localpilot.queue.cancel', (arg?: unknown) => {
+    const t = taskQueue.cancel(queueTaskArg(arg) ?? '');
+    if (t?.sessionId) {
+      controller.stop(t.sessionId);
+    }
+  });
+  cmd('localpilot.queue.retry', (arg?: unknown) => taskQueue.retry(queueTaskArg(arg) ?? ''));
+  cmd('localpilot.queue.remove', (arg?: unknown) => taskQueue.remove(queueTaskArg(arg) ?? ''));
+  cmd('localpilot.queue.clearFinished', () => taskQueue.clearFinished());
   cmd('localpilot.stopSession', (arg?: unknown) => controller.stop(sessionIdArg(arg) ?? ''));
   cmd('localpilot.stopAll', () => controller.runningSessionIds.forEach((id) => controller.stop(id)));
   cmd('localpilot.pauseSession', (arg?: unknown) => controller.pause(sessionIdArg(arg) ?? ''));

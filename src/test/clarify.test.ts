@@ -3,6 +3,10 @@ import { assessRequest, clarificationSteer, hasContextBlocks, userText } from '.
 import { builtinAgents, resolveAgentName } from '../agent/builtinAgents';
 
 suite('Request clarification heuristics', () => {
+  test('a literal "OK" is not a vague goal', () => {
+    assert.deepStrictEqual(assessRequest('Reply with the single word OK.').reasons.filter((r) => r.includes('not measurable')), []);
+    assert.ok(assessRequest('make it work').reasons.some((r) => r.includes('not measurable')), 'real vague goals are still caught');
+  });
   const unclear = (text: string, opts?: Parameters<typeof assessRequest>[1]) => {
     const r = assessRequest(text, opts);
     assert.strictEqual(r.clear, false, `expected "${text}" to be flagged, got clear`);

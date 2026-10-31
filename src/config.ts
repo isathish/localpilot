@@ -43,6 +43,12 @@ export interface LocalPilotConfig {
   maxToolOutputChars: number;
   approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
+  /** Task queue: how many queued tasks run at once (1 = one after another). */
+  queue: { concurrency: number };
+  /** Auto mode: approvals set to "ask" go to a local reviewer model; it approves safe actions and sends the rest to the user. */
+  autoMode: { enabled: boolean; model: string };
+  /** Keep local services (Ollama, Redis) running; optionally install Ollama unattended when no model server exists. */
+  supervisor: { enabled: boolean; intervalSeconds: number; autoInstall: boolean };
   worktrees: { mode: 'always' | 'parallel' | 'off'; location?: string };
   /** Local-only usage metrics and log mirror shown on the dashboard. Nothing is sent anywhere. */
   telemetry: { enabled: boolean; retentionDays: number };
@@ -66,12 +72,20 @@ export interface LocalPilotConfig {
   /** Skill names hidden from the agent (not in the prompt, not loadable, not suggested) while staying on disk. */
   skillsDisabled: string[];
   thinking: ThinkingLevel;
+  /** When the agent asks questions first: new/vague/large work (smart), every build task with a plan to confirm (interview), or only when stuck (minimal). */
+  clarify: 'smart' | 'interview' | 'minimal';
   memoryEnabled: boolean;
+  /** Caps that keep memory from growing without bound: characters per note and notes per scope. */
+  memoryLimits: { maxNoteChars: number; maxNotes: number };
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
   sessionRetention: number;
   keepAlive: string;
   /** Load the chat's model when the composer is focused so the first token is not preceded by a weight load. */
   prewarm: boolean;
+  /** Server settings applied when LocalPilot starts or restarts Ollama (it cannot change a server started elsewhere). */
+  ollama: { flashAttention: boolean; kvCacheType: 'f16' | 'q8_0' | 'q4_0' };
+  /** Correct misspelled file names and identifiers in requests against the workspace before the agent sees them. */
+  autoCorrectPrompts: boolean;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
   terminal: { runInIntegratedTerminal: boolean; reveal: boolean };
@@ -133,6 +147,13 @@ export function getConfig(): LocalPilotConfig {
       maxConcurrency: c.get<number>('parallel.maxConcurrency', 4),
       maxSubagentDepth: c.get<number>('parallel.maxSubagentDepth', 2),
     },
+    queue: { concurrency: Math.max(1, Math.min(8, Math.floor(c.get<number>('queue.concurrency', 1)))) },
+    autoMode: { enabled: c.get<boolean>('autoMode.enabled', false), model: c.get<string>('autoMode.model', '') },
+    supervisor: {
+      enabled: c.get<boolean>('supervisor.enabled', true),
+      intervalSeconds: Math.max(15, Math.floor(c.get<number>('supervisor.intervalSeconds', 60))),
+      autoInstall: c.get<boolean>('supervisor.autoInstall', false),
+    },
     webSearch: {
       provider: c.get<WebSearchConfig['provider']>('webSearch.provider', 'duckduckgo'),
       searxngUrl: c.get<string>('webSearch.searxngUrl', 'http://localhost:8888'),
@@ -154,11 +175,21 @@ export function getConfig(): LocalPilotConfig {
     skillAutoInstall: normalizeAutoInstall(c.get<unknown>('skills.autoInstall', 'auto')),
     skillAutoInstallScope: c.get<string>('skills.autoInstallScope', 'user') === 'workspace' ? 'workspace' : 'user',
     skillsDisabled: (c.get<string[]>('skills.disabled', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
-    thinking: normalizeThinking(c.get<unknown>('thinking', 'off')),
+    thinking: normalizeThinking(c.get<unknown>('thinking', 'auto')),
+    clarify: (['smart', 'interview', 'minimal'] as const).find((m) => m === c.get<string>('clarify.questions', 'smart')) ?? 'smart',
     memoryEnabled: c.get<boolean>('memory.enabled', true),
+    memoryLimits: {
+      maxNoteChars: Math.max(500, Math.floor(c.get<number>('memory.maxNoteChars', 8000))),
+      maxNotes: Math.max(5, Math.floor(c.get<number>('memory.maxNotes', 200))),
+    },
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
     keepAlive: c.get<string>('keepAlive', '30m'),
     prewarm: c.get<boolean>('prewarm', true),
+    ollama: {
+      flashAttention: c.get<boolean>('ollama.flashAttention', true),
+      kvCacheType: (['f16', 'q8_0', 'q4_0'] as const).find((t) => t === c.get<string>('ollama.kvCacheType', 'q8_0')) ?? 'q8_0',
+    },
+    autoCorrectPrompts: c.get<boolean>('prompts.autoCorrect', true),
     systemPromptAppend: c.get<string>('systemPromptAppend', ''),
     showWelcomeOnStartup: c.get<boolean>('showWelcomeOnStartup', true),
     terminal: {
@@ -197,10 +228,10 @@ function normalizeThinking(v: unknown): ThinkingLevel {
   if (v === true) {
     return 'on';
   }
-  if (v === 'on' || v === 'low' || v === 'medium' || v === 'high') {
+  if (v === 'on' || v === 'low' || v === 'medium' || v === 'high' || v === 'off') {
     return v;
   }
-  return 'off';
+  return 'auto';
 }
 
 export function onConfigChange(cb: () => void): vscode.Disposable {

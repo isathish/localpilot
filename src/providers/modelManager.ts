@@ -176,7 +176,7 @@ async function findOllamaTrayApp(): Promise<string | undefined> {
  * `localhost` resolves to `::1` first on many Windows machines while Ollama listens on 127.0.0.1 only; a health
  * check that fails on the configured URL is retried on the IPv4 loopback so a running server is not reported down.
  */
-async function ollamaUp(baseUrl: string): Promise<boolean> {
+export async function ollamaUp(baseUrl: string): Promise<boolean> {
   const probe = (url: string) => createProvider({ id: 'probe', type: 'ollama', baseUrl: url }).healthCheck().catch(() => false);
   if (await probe(baseUrl)) {
     return true;
@@ -519,9 +519,17 @@ export class ModelManager implements vscode.Disposable {
   /**
    * Environment for an Ollama server started by LocalPilot. Ollama answers one request per model at a time
    * unless `OLLAMA_NUM_PARALLEL` says otherwise, which would make parallel subagents queue behind each other.
+   * Flash attention and a quantised KV cache (`localpilot.ollama.*`) shrink the cache, so the large windows agent
+   * work needs load faster and stay on the GPU instead of spilling to the CPU. Ollama only quantises the cache with
+   * flash attention on, so without it the cache type is left to the server.
    */
   static ollamaServerEnv(): Record<string, string> {
-    return { OLLAMA_NUM_PARALLEL: String(ModelManager.ollamaParallelSlots()) };
+    const { flashAttention, kvCacheType } = getConfig().ollama;
+    return {
+      OLLAMA_NUM_PARALLEL: String(ModelManager.ollamaParallelSlots()),
+      OLLAMA_FLASH_ATTENTION: flashAttention ? '1' : '0',
+      ...(flashAttention ? { OLLAMA_KV_CACHE_TYPE: kvCacheType } : {}),
+    };
   }
 
   /** Parallel slots to ask Ollama for: the configured subagent concurrency, clamped to what a local machine can hold. */

@@ -19,6 +19,8 @@ export async function quickPrompt(
     model: model.modelId,
     messages,
     temperature: opts.temperature ?? 0.1,
+    // A quick helper the user is waiting on: no reasoning pass (see thinkFor).
+    think: false,
     maxTokens: opts.maxTokens ?? cfg.maxOutputTokens,
     contextWindow: effectiveContextWindow(model, cfg.contextWindow),
     keepAlive: cfg.keepAlive || undefined,

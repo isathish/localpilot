@@ -69,7 +69,7 @@ export interface WatchdogOptions {
   firstTokenMs: number;
   /** Max silence between events once streaming has started. */
   idleMs: number;
-  /** Called every ~5s while waiting for the first event, with the seconds elapsed. */
+  /** Called every second while waiting for the first event, with the seconds elapsed. */
   onWaiting?: (seconds: number) => void;
   /** Cancels the underlying request when a stall is detected. */
   abort: () => void;
@@ -94,7 +94,7 @@ export async function* withWatchdog(stream: AsyncIterable<StreamEvent>, opts: Wa
           reject(new ModelStallError(seen ? 'mid-stream' : 'first-token', Math.round(limit / 1000)));
         }, limit);
         if (!seen && opts.onWaiting) {
-          ticker = setInterval(() => opts.onWaiting?.(Math.round((Date.now() - started) / 1000)), 5000);
+          ticker = setInterval(() => opts.onWaiting?.(Math.round((Date.now() - started) / 1000)), 1000);
         }
       });
       let next: IteratorResult<StreamEvent>;

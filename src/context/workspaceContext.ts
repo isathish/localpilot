@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { runProcess } from '../tools/search';
 import { buildInstructions, InstructionFile } from './instructions';
+import { identifiersIn, NameVocabulary } from '../agent/promptCorrector';
 
 const TREE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/.next/**,**/target/**,**/coverage/**,**/.vscode-test/**}';
 
@@ -27,6 +28,7 @@ const STACK_MARKERS: [RegExp, string][] = [
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
   private mapCache?: { text: string; at: number };
+  private namesCache?: { files: Set<string>; stems: Set<string>; at: number };
   private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[] };
   private readonly watcher: vscode.FileSystemWatcher;
   private readonly rulesWatcher: vscode.FileSystemWatcher;
@@ -36,6 +38,7 @@ export class WorkspaceContext implements vscode.Disposable {
     const invalidate = () => {
       this.treeCache = undefined;
       this.mapCache = undefined;
+      this.namesCache = undefined;
     };
     this.watcher.onDidCreate(invalidate);
     this.watcher.onDidDelete(invalidate);
@@ -199,6 +202,37 @@ export class WorkspaceContext implements vscode.Disposable {
     }
     this.mapCache = { text, at: Date.now() };
     return text;
+  }
+
+  /**
+   * The names a request may refer to, for correcting misspelled ones (see promptCorrector): file base names in the
+   * workspace (cached until files are created or deleted, at most five minutes) and the identifiers in open editors.
+   */
+  async nameVocabulary(maxFiles = 5000): Promise<NameVocabulary> {
+    if (!this.root) {
+      return { files: new Set(), identifiers: new Set() };
+    }
+    if (!this.namesCache || Date.now() - this.namesCache.at > 5 * 60_000) {
+      const files = new Set<string>();
+      const stems = new Set<string>();
+      try {
+        for (const f of await vscode.workspace.findFiles('**/*', TREE_EXCLUDE, maxFiles)) {
+          const base = path.basename(f.fsPath);
+          files.add(base);
+          identifiersIn(base.replace(/\.[^.]+$/, ''), stems);
+        }
+      } catch (e) {
+        this.log.warn(`nameVocabulary failed: ${String(e)}`);
+      }
+      this.namesCache = { files, stems, at: Date.now() };
+    }
+    const identifiers = new Set(this.namesCache.stems);
+    for (const doc of vscode.workspace.textDocuments) {
+      if (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') {
+        identifiersIn(doc.getText(), identifiers);
+      }
+    }
+    return { files: this.namesCache.files, identifiers };
   }
 
   activeEditorContext(): string {

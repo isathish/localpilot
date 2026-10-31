@@ -33,6 +33,7 @@ body{margin:0}
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
+        <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent."><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg></button>
         <button id="btnImage" class="ib" title="Attach image or take a screenshot (area, window, screen)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/></svg></button>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send" title="Send (Enter)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
@@ -82,17 +83,37 @@ window.acquireVsCodeApi=()=>({postMessage(m){
       setTimeout(()=>{ ev('tool_start',{childId:'c1',agent:'docs',inner:'tool_start',data:{id:'t1',name:'read_file',args:{path:'README.md'}}}); ev('tool_start',{childId:'c2',agent:'tester',inner:'tool_start',data:{id:'t2',name:'grep_search',args:{query:'roll_dice'}}}); },2400);
       if (/plan=1/.test(location.search)) { setTimeout(()=>{ send({type:'running',sessionId:'s1',running:false}); const ps={...session, mode:'plan', plan:{file:'.localpilot/plans/add-github-oauth-84bfc06a.plan.md', title:'Add GitHub OAuth Authentication', summary:'Implement GitHub OAuth 2.0 authorization code flow.'}, todos:[{id:'1',title:'Install express-session, @types/express-session, and cookie-parser packages',status:'pending',agent:'coder'},{id:'2',title:'Create src/oauth.ts with GitHub OAuth configuration and token exchange logic',status:'pending',agent:'coder'},{id:'3',title:'Create .env.example with GitHub OAuth and session configuration variables',status:'pending',agent:'docs'}]}; send({type:'session',session:ps}); },300); }
     } else {
+      if (/question=1/.test(location.search)) {
+        // ask_user card: the agent asks before building a new feature (single choice, multi-select, free text).
+        setTimeout(()=>send({type:'question',id:'q1',sessionId:'s1',questions:[
+          {header:'Storage',question:'Where should saved dice rolls be kept?',recommended:'SQLite file',options:[{label:'SQLite file',description:'One local file, survives restarts, easy to query history'},{label:'JSON file',description:'Simplest, but the whole file is rewritten on every roll'},{label:'In memory only',description:'Fastest; history is lost when the app closes'}]},
+          {header:'Features',question:'Which extras should the history view include?',multiSelect:true,options:[{label:'Filter by notation',description:'e.g. only 3d6 rolls'},{label:'Statistics',description:'Average, min and max per notation'},{label:'Export CSV',description:'Download the history as a spreadsheet'}]},
+          {question:'Anything else I should know?',options:[]}]}),50);
+      } else {
       setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal'}),50);
+      }
     }
   }
   // Echo the host's side of the pause / steer protocol so the controls can be exercised without VS Code.
   if(m.type==='pause'){ paused[m.sessionId]=true; send({type:'paused',sessionId:m.sessionId,paused:true,holding:false}); setTimeout(()=>send({type:'paused',sessionId:m.sessionId,paused:true,holding:true}),700); }
   if(m.type==='resume'){ paused[m.sessionId]=false; send({type:'paused',sessionId:m.sessionId,paused:false,holding:false}); setTimeout(()=>send({type:'event',event:{sessionId:m.sessionId,type:'status',payload:'Continuing (3)…'}}),400); }
   if(m.type==='steer'){ const id='st'+Date.now(); send({type:'steerQueued',sessionId:m.sessionId,id,content:m.text,images:m.images}); if(!paused[m.sessionId]){ setTimeout(()=>{ send({type:'event',event:{sessionId:m.sessionId,type:'steer',payload:{ids:[id],count:1}}}); send({type:'event',event:{sessionId:m.sessionId,type:'assistant_delta',payload:'Noted — switching to that.'}}); },900); } }
+  if(m.type==='answer'){ console.log('answer', JSON.stringify(m.answers)); send({type:'questionResolved',id:m.id}); }
   if(m.type==='stop'){ send({type:'running',sessionId:m.sessionId,running:false}); }
   if(m.type==='suggestTasks'){ const recent=['Make the dice notation parser more user friendly','Write tests for utils']; const quick=[{kind:'fix',title:'Fix the 3 errors VS Code is showing',detail:'2 files · e.g. src/dice.py'},{kind:'review',title:'Review my uncommitted changes and tidy them up',detail:'4 changed files · finds mistakes, dead code and missing tests'},{kind:'docs',title:'Write a README that explains how to set up and run this project',detail:'Install steps, how to start it, how to run tests'},{kind:'test',title:'Run the test suite and fix anything that fails',detail:'Reports what was broken and how it was fixed'},{kind:'cleanup',title:'Resolve the 7 TODO / FIXME notes left in the code',detail:'Finishes or removes each one'},{kind:'explore',title:'Explain how this project is organised and where to start reading',detail:'A short guided tour, no changes made'}]; send({type:'taskSuggestions',source:'quick',items:quick,recent}); if(m.more){ setTimeout(()=>send({type:'taskSuggestions',source:'model',items:[{kind:'feature',title:'Let players save and reload a game',detail:'Adds a small save file and two menu options'},{kind:'fix',title:'Stop the game crashing when a dice string is empty',detail:'parser.py and the CLI entry point'}],recent}),900); } }
   if(m.type==='pauseChild'){ send({type:'paused',sessionId:m.sessionId,childId:m.childId,agent:'docs',paused:true,holding:false}); setTimeout(()=>send({type:'paused',sessionId:m.sessionId,childId:m.childId,paused:true,holding:true}),600); }
   if(m.type==='resumeChild'){ send({type:'paused',sessionId:m.sessionId,childId:m.childId,paused:false,holding:false}); }
+  if(m.type==='improvePrompt'){
+    // Streams a rewrite like the host does (the real one comes from the chat's model).
+    if(m.cancel){ clearInterval(window.__improve); send({type:'improvedPrompt',sessionId:m.sessionId,done:true,error:'cancelled'}); return; }
+    const out='Update the `roll_dice` function in `src/dice.py` to accept "d6" (one die when the count is omitted) and spaces inside the notation, and add tests for both in `tests/test_dice.py`.';
+    let i=0; clearInterval(window.__improve);
+    window.__improve=setInterval(()=>{ if(i>=out.length){ clearInterval(window.__improve); send({type:'improvedPrompt',sessionId:m.sessionId,done:true,text:out}); return; } send({type:'improvedPrompt',sessionId:m.sessionId,delta:out.slice(i,i+6)}); i+=6; },40);
+  }
+  if(m.type==='send' && /dicee|rollDise/.test(m.text)){
+    const fixes=[]; let text=m.text.replace(/dicee\.py/g,()=>{fixes.push({from:'dicee.py',to:'dice.py'});return 'dice.py';}).replace(/rollDise/g,()=>{fixes.push({from:'rollDise',to:'rollDice'});return 'rollDice';});
+    setTimeout(()=>send({type:'promptCorrected',sessionId:m.sessionId,text,fixes}),150);
+  }
   if(m.type==='stopChild'){ send({type:'event',event:{sessionId:m.sessionId,type:'subagent_end',payload:{childId:m.childId,agent:'docs',error:'Stopped by user'}}}); }
 }});
 </script>

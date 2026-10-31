@@ -5,7 +5,7 @@
   const els = {
     messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
     modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), skillsBtn: $('skillsBtn'), skillsLabel: $('skillsLabel'), ctx: $('ctxMeter'),
-    approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'),
+    approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'), improve: $('btnImprove'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
     popover: $('popover'), newTab: $('btnNewTab'), history: $('btnHistory'), bgruns: $('bgruns'),
@@ -105,6 +105,9 @@
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function el(tag, cls, html) { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; }
   function post(m) { vscode.postMessage(m); }
+  // Toasts float just above the composer, however tall the draft, approvals and task panels make it.
+  const composerEl = document.getElementById('composer');
+  if (composerEl && window.ResizeObserver) { new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', `${composerEl.offsetHeight}px`)).observe(composerEl); }
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); els.toasts.appendChild(t); setTimeout(() => t.remove(), 3200); }
   // "Stick to bottom" is decided from scroll events (layout is already clean there) instead of forcing a layout on every
   // call — followLive runs once per frame while streaming and that read was the single biggest CPU cost of a long reply.
@@ -869,7 +872,14 @@
     if (atts.length) { d.appendChild(el('div', 'att', atts.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join(''))); }
     if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" title="Click to enlarge">`).join(''))); }
     d.appendChild(el('div', 'utext', inline(text)));
+    if (m.meta && m.meta.corrections && m.meta.corrections.length) { d.appendChild(correctionNote(m.meta.corrections)); }
     return d;
+  }
+  /** "Corrected dicee.py → dice.py": names in the request that were matched to the real ones in the workspace. */
+  function correctionNote(fixes) {
+    const n = el('div', 'corrected', `${I.check}<span>Corrected ${fixes.map((f) => `<code>${esc(f.from)}</code> → <code>${esc(f.to)}</code>`).join(', ')}</span>`);
+    n.title = 'Misspelled names were matched to files and identifiers in your workspace before the agent started (localpilot.prompts.autoCorrect)';
+    return n;
   }
   function assistantTurn(m, results) {
     const d = el('div', 'turn assistant');
@@ -1123,9 +1133,26 @@
       live.text = ''; live.settled = null; live.dirty = false;
     }
   }
+  /** Reasoning streams into its row once per frame (long chains of thought arrive at 100+ tokens/s), following the tail. */
+  function scheduleThinking(live) {
+    if (live.thinkPending) { return; }
+    live.thinkPending = true;
+    requestAnimationFrame(() => {
+      live.thinkPending = false;
+      const row = live.thinkingEl; if (!row) { return; }
+      const c = row.querySelector(':scope > .content');
+      const atEnd = c.scrollHeight - c.scrollTop - c.clientHeight < 24;
+      c.textContent = live.thinking;
+      if (atEnd) { c.scrollTop = c.scrollHeight; }
+      row.querySelector(':scope > summary .meta').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
+      followLive(live);
+    });
+  }
   function finishThinking(live) {
     if (!live.thinkingEl) { return; }
     const secs = Math.max(1, Math.round((Date.now() - live.thinkStart) / 1000));
+    live.thinkingEl.querySelector(':scope > .content').textContent = live.thinking;
+    if (!live.thinkingEl.dataset.user) { live.thinkingEl.open = false; }
     setState(live.thinkingEl, 'ok');
     live.thinkingEl.querySelector(':scope > summary .label').innerHTML = `<b>Thought</b> ${thinkSummary(live.thinking)}`;
     live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
@@ -1240,9 +1267,12 @@
       }
       case 'thinking_delta':
         live.thinking += e.payload; noteStream(live, String(e.payload).length); clearTyping(live); setPhase(live, 'Thinking');
-        if (!live.thinkingEl) { live.thinkStart = Date.now(); live.thinkingEl = thinkingRow('', 0, true); live.steps.appendChild(live.thinkingEl); }
-        live.thinkingEl.querySelector(':scope > .content').textContent = live.thinking;
-        live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${Math.round((Date.now() - live.thinkStart) / 1000)}s`;
+        if (!live.thinkingEl) {
+          // Open while the model reasons so the user reads along; it folds back to "Thought …" once the answer starts.
+          live.thinkStart = Date.now(); live.thinkingEl = thinkingRow('', 0, true); live.thinkingEl.open = true; live.steps.appendChild(live.thinkingEl);
+          const row = live.thinkingEl; row.querySelector(':scope > summary').addEventListener('click', () => { row.dataset.user = '1'; });
+        }
+        scheduleThinking(live);
         break;
       case 'status':
         if (e.payload && typeof e.payload === 'object' && e.payload.childId) {
@@ -1983,11 +2013,20 @@
     els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? 'Type to steer this agent (used at its next step), ⌘⇧↵ for a new tab…' : 'Steer this agent…') : mode && state.session.mode !== 'agent' && els.box.clientWidth >= 300 ? mode.placeholder : basePlaceholder();
   }
   let tasksSig = '';
+  /** Per-session open/closed choice for the Tasks panel, once the user has toggled it. */
+  const tasksUserOpen = new Map();
   function renderTasks() {
     const todos = (state.session && state.session.todos) || [];
     els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { tasksSig = ''; return; }
     const done = todos.filter((t) => t.status === 'done').length;
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
+    // Open while the agent works; folded to one line (the current step) when idle — unless the user chose otherwise.
+    const open = tasksUserOpen.has(state.session.id) ? tasksUserOpen.get(state.session.id) : state.running.has(state.session.id);
+    els.tasks.classList.toggle('open', open); els.tasksList.classList.toggle('hidden', !open);
+    const now = todos.find((t) => t.status === 'in_progress') || todos.find((t) => t.status === 'pending');
+    let nowEl = els.tasksToggle.querySelector('.now-task');
+    if (!nowEl) { nowEl = el('span', 'now-task', ''); els.tasksLabel.after(nowEl); }
+    nowEl.textContent = !open && now ? `· ${now.title}` : '';
     els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
     const sig = `${state.session.id}|${todos.map((t) => `${t.id}:${t.status}:${t.title}:${t.agent || ''}:${(t.dependsOn || []).join(',')}`).join('|')}`;
     if (sig === tasksSig) { return; }
@@ -2183,6 +2222,36 @@
       { group: 'Web page', label: 'Open URL in browser view…', desc: 'Opens beside the editor, inside VS Code', icon: I.open, onPick: () => post({ type: 'openBrowser' }) },
     ];
   }
+  // Improve prompt: the model rewrites the draft in place (streamed), the user reviews it and sends; ⌘Z brings the original back.
+  let improving = null; let improveUndo = null;
+  function improvePrompt() {
+    if (!state.session) { return; }
+    if (improving) { post({ type: 'improvePrompt', sessionId: improving.sid, text: '', cancel: true }); return; }
+    const text = els.input.value.trim();
+    if (!text) { toast('Type a request first, then improve it'); els.input.focus(); return; }
+    improving = { sid: state.session.id, original: els.input.value, text: '' }; improveUndo = null;
+    els.improve.classList.add('busy'); els.improve.title = 'Improving… click to cancel'; els.input.readOnly = true; els.box.classList.add('improving');
+    post({ type: 'improvePrompt', sessionId: improving.sid, text });
+  }
+  function improvedPrompt(m) {
+    if (!improving || m.sessionId !== improving.sid) { return; }
+    const onTab = state.session && state.session.id === improving.sid;
+    if (m.delta) { improving.text += m.delta; if (onTab) { els.input.value = improving.text.replace(/^\s+/, ''); autoGrow(); els.input.scrollTop = els.input.scrollHeight; } return; }
+    if (!m.done) { return; }
+    const { original } = improving; improving = null;
+    els.improve.classList.remove('busy'); els.improve.title = 'Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent.';
+    els.input.readOnly = false; els.box.classList.remove('improving');
+    if (!onTab) { return; }
+    if (m.error || !m.text) {
+      els.input.value = original;
+      if (m.error && m.error !== 'cancelled') { toast(m.error, 'error'); }
+    } else {
+      els.input.value = m.text; improveUndo = { original, improved: m.text };
+      toast(`Prompt improved — review it, then send. ${/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+'}Z restores yours.`);
+    }
+    autoGrow(); updateSendEnabled(); els.input.focus();
+  }
+  if (els.improve) { els.improve.onclick = improvePrompt; }
   els.image.onclick = () => openMenu(els.image, [
     { label: 'Image file…', desc: 'PNG, JPEG, GIF or WebP · or paste / drop onto the composer', icon: I.image, onPick: () => post({ type: 'pickImage' }) },
     { hr: true },
@@ -2248,6 +2317,7 @@
     return d;
   }
   function sendCurrent(fromSuggestion) {
+    if (improving) { toast('Still improving the prompt — wait for it, or click the sparkle to cancel'); return; }
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
     if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) {
@@ -2294,6 +2364,9 @@
       if (e.key === 'Enter') { const x = menuState.items[menuState.sel]; if (x && x.it.label !== els.input.value.trim()) { e.preventDefault(); closeMenu(); x.it.onPick && x.it.onPick(); return; } closeMenu(); }
       else { els.popover.onkeydown(e); return; }
     }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); improvePrompt(); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && improveUndo && els.input.value === improveUndo.improved) { e.preventDefault(); els.input.value = improveUndo.original; improveUndo = null; autoGrow(); updateSendEnabled(); return; }
+    if (improving && e.key === 'Enter') { e.preventDefault(); return; }
     if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
     // Shift+Tab rotates the mode (Agent → Multitask → Debug → Plan → Ask), like Cursor.
     if (e.key === 'Tab' && e.shiftKey && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; setMode(next); toast(`${MODES[next].label} mode`); return; }
@@ -2308,7 +2381,7 @@
   els.send.onclick = () => sendCurrent();
   els.stop.onclick = () => state.session && post({ type: 'stop', sessionId: state.session.id });
   els.pause.onclick = togglePause;
-  els.tasksToggle.onclick = () => { els.tasks.classList.toggle('open'); els.tasksList.classList.toggle('hidden'); };
+  els.tasksToggle.onclick = () => { if (state.session) { tasksUserOpen.set(state.session.id, !els.tasks.classList.contains('open')); } renderTasks(); };
   els.tasks.classList.add('open');
   els.changesToggle.onclick = () => { els.changes.classList.toggle('open'); els.changesList.classList.toggle('hidden'); };
   els.changes.querySelector('.panel-head').onclick = (e) => {
@@ -2457,13 +2530,25 @@
         state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
         else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
-        if (isActive) { setRunning(m.running); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
+        if (isActive) { setRunning(m.running); renderTasks(); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
         break;
       }
       case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your approval'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
       case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
+      case 'question': state.approvalSid.set(m.id, m.sessionId); renderQuestion(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your answer'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Question waiting in “${(s && s.title) || 'another chat'}”`); } break;
+      case 'questionResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
       case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level); } break;
+      case 'improvedPrompt': improvedPrompt(m); break;
+      case 'promptCorrected': {
+        if (!state.session || state.session.id !== m.sessionId) { break; }
+        // The bubble was drawn as typed when Send was pressed; show what the agent actually received.
+        const u = [...els.messages.querySelectorAll('.turn.user')].pop(); if (!u) { break; }
+        const t = u.querySelector('.utext'); if (t) { t.innerHTML = inline(m.text); }
+        const old = u.querySelector('.corrected'); if (old) { old.remove(); }
+        u.appendChild(correctionNote(m.fixes || []));
+        break;
+      }
       case 'draft': els.input.value = m.text || ''; autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
@@ -2509,6 +2594,56 @@
     d._dispose = () => document.removeEventListener('keydown', key, true);
     els.approvals.appendChild(d);
     // The footer scrolls on short hosts (bottom Panel); prompts sit at its top.
+    els.approvals.parentElement.scrollTop = 0;
+    if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
+  }
+
+  // ask_user: up to 4 questions with explained options, a recommended pick, multi-select and an own-words answer.
+  // Shares the approvals slot (and its removal/attention bookkeeping); 1–9 pick in the first unanswered question,
+  // Enter submits once every question has an answer, Esc skips (the agent then goes with its recommendations).
+  function renderQuestion(a) {
+    if (els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) { return; }
+    const qs = a.questions || [];
+    const sel = qs.map(() => new Set()); const other = qs.map(() => '');
+    const d = el('div', 'approval question'); d.dataset.id = a.id;
+    const other_ = !state.session || state.session.id !== a.sessionId; const sess = other_ ? state.sessions.find((s) => s.id === a.sessionId) : null;
+    d.innerHTML = `<div class="head">${I.ask}<span>${qs.length > 1 ? `${qs.length} questions before I start` : 'A question before I start'}</span></div>${other_ ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}` +
+      qs.map((q, qi) => `<div class="q" data-q="${qi}"><div class="q-head">${q.header ? `<span class="q-chip">${esc(q.header)}</span>` : ''}<span class="q-text">${esc(q.question)}</span>${q.multiSelect ? '<span class="q-hint">choose any</span>' : ''}</div><div class="opts" role="${q.multiSelect ? 'group' : 'radiogroup'}">` +
+        (q.options || []).map((o, oi) => `<button class="opt${q.multiSelect ? ' multi' : ''}" data-q="${qi}" data-o="${oi}" role="${q.multiSelect ? 'checkbox' : 'radio'}" aria-checked="false"><span class="mark"></span><span class="ol"><span class="ot"><b>${esc(o.label)}</b>${o.label === q.recommended ? '<span class="rec">Recommended</span>' : ''}</span>${o.description ? `<span class="od">${esc(o.description)}</span>` : ''}</span></button>`).join('') +
+        `<label class="opt own"><span class="mark"></span><input data-q="${qi}" type="text" placeholder="${(q.options || []).length ? 'Something else…' : 'Your answer…'}" aria-label="Your own answer"></label></div></div>`).join('') +
+      `<div class="actions"><button class="btn ghost" data-a="skip" title="Skip — the agent uses its recommendations (Esc)">Skip</button><button class="btn primary" data-a="submit" disabled>Submit <kbd>↵</kbd></button></div>`;
+    const submitBtn = d.querySelector('[data-a="submit"]');
+    const answered = (qi) => sel[qi].size > 0 || other[qi].trim().length > 0;
+    const sync = () => {
+      d.querySelectorAll('.opt[data-o]').forEach((b) => { const on = sel[+b.dataset.q].has(+b.dataset.o); b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      d.querySelectorAll('.opt.own').forEach((l) => { const qi = +l.querySelector('input').dataset.q; l.classList.toggle('on', other[qi].trim().length > 0); });
+      d.querySelectorAll('.q').forEach((q) => q.classList.toggle('done', answered(+q.dataset.q)));
+      submitBtn.disabled = !qs.every((_, qi) => answered(qi));
+    };
+    const pick = (qi, oi) => {
+      const q = qs[qi];
+      if (q.multiSelect) { if (sel[qi].has(oi)) { sel[qi].delete(oi); } else { sel[qi].add(oi); } }
+      else { sel[qi] = new Set([oi]); other[qi] = ''; d.querySelector(`input[data-q="${qi}"]`).value = ''; }
+      sync();
+    };
+    const finish = (answers) => { post({ type: 'answer', id: a.id, answers }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
+    const submit = () => { if (submitBtn.disabled) { return; } finish(qs.map((q, qi) => ({ question: q.question, selected: [...sel[qi]].sort((x, y) => x - y).map((oi) => q.options[oi].label), other: other[qi].trim() || undefined }))); };
+    d.onclick = (ev) => { const b = ev.target.closest('[data-a], .opt[data-o]'); if (!b) { return; } if (b.dataset.o !== undefined) { pick(+b.dataset.q, +b.dataset.o); return; } if (b.dataset.a === 'open') { selectTab(a.sessionId); } else if (b.dataset.a === 'skip') { finish(null); } else if (b.dataset.a === 'submit') { submit(); } };
+    d.querySelectorAll('input[data-q]').forEach((inp) => {
+      inp.oninput = () => { const qi = +inp.dataset.q; other[qi] = inp.value; if (!qs[qi].multiSelect && inp.value.trim()) { sel[qi].clear(); } sync(); };
+      inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); inp.blur(); } };
+    });
+    const key = (e) => {
+      if (e.defaultPrevented || els.approvals.firstElementChild !== d) { return; }
+      if (e.target === els.input && els.input.value) { return; }
+      if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; }
+      if (/^[1-9]$/.test(e.key)) { const qi = qs.findIndex((_, i) => !answered(i)); const at = qi < 0 ? qs.length - 1 : qi; const oi = +e.key - 1; if (qs[at] && qs[at].options && oi < qs[at].options.length) { pick(at, oi); e.preventDefault(); } return; }
+      if (e.key === 'Enter' && !submitBtn.disabled) { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+    };
+    document.addEventListener('keydown', key, true);
+    d._dispose = () => document.removeEventListener('keydown', key, true);
+    els.approvals.appendChild(d);
+    sync();
     els.approvals.parentElement.scrollTop = 0;
     if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
   }

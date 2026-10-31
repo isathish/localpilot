@@ -29,7 +29,7 @@ const ACTION_VERBS =
   /\b(fix|repair|refactor|clean(?:\s*up)?|improve|optimi[sz]e|speed(?:\s*up)?|simplify|rewrite|update|change|modify|rename|move|remove|delete|add|implement|create|write|build|make|generate|convert|migrate|port|test|document|explain|describe|summari[sz]e|review|check|verify|validate|debug|handle|finish|complete|do|redo|undo|revert|format|lint|tidy|polish|enhance|extend|upgrade|bump|run|execute|start|stop|restart|show|list|find|search|look|open|read|deploy|release|commit|push|pull|merge|rebase|install|uninstall|compile|analy[sz]e|compare|translate|extract|inline|split|sort|ensure|help|print|log|wrap|replace|insert|apply|continue|retry|try|use|set(?:\s*up)?|configure|enable|disable|turn|switch|toggle|design|plan|outline|propose|suggest|recommend|investigate|look into|figure out)\b/i;
 /** Pointing words that need something in view to make sense. */
 const DEICTIC = /\b(this|these|those|it|them|here|above|below|the (?:error|bug|issue|problem|failure|crash|warning|function|method|class|file|component|code|thing|stuff|rest|same|other one))\b/i;
-const VAGUE_GOAL = /\b(better|nicer|cleaner|faster|quicker|prettier|simpler|smarter|modern(?:i[sz]e)?|robust|readable|efficient|proper(?:ly)?|right|correct(?:ly)?|good|great|nice|ok|okay|work(?:s|ing)?)\b/i;
+const VAGUE_GOAL = /\b(better|nicer|cleaner|faster|quicker|prettier|simpler|smarter|modern(?:i[sz]e)?|robust|readable|efficient|proper(?:ly)?|right|correct(?:ly)?|good|great|nice|work(?:s|ing)?)\b/i;
 const GREETING = /^(hi|hello|hey|yo|thanks|thank you|ty|thx|ok|okay|cool|great|nice|good|sure|yes|no|yep|nope|done|bye|lol|k)(\s+(there|all|everyone|again|a lot|so much))?[\s!.]*$/i;
 /** Words that do not name a target on their own; what remains after removing them and the verb is the "object". */
 const FILLER = /\b(please|pls|can|could|would|you|u|just|also|now|then|and|or|to|for|in|on|of|with|at|by|from|into|the|a|an|this|that|these|those|it|its|them|my|our|your|all|some|any|everything|something|anything|here|there|up|out|more|less|bit|little|again|properly|quickly|really|very|so|too|as|well|is|are|be|should|like|want|need|make|sure|code|stuff|thing|things|whole|entire|current|existing)\b/gi;
@@ -135,7 +135,7 @@ export function clarificationSteer(assessment: RequestAssessment, context: strin
     'Procedure:',
     '1. Infer the most plausible target and goal from the active file / selection, open editors, recent files, errors, uncommitted changes and the conversation so far. Read the relevant code if needed. Treat typos and shorthand charitably.',
     '2. Begin your reply with one line "Understood as: <precise restatement>" followed by any assumptions, then carry the task out.',
-    '3. Only if two interpretations would lead to materially different work, and the context does not settle it, call ask_user once with 2–4 concrete options instead.',
+    '3. Only if two interpretations would lead to materially different work, and the context does not settle it, call ask_user instead — once, with all your questions, each with 2–4 explained options and a recommended one.',
   ].join('\n');
 }
 
@@ -156,3 +156,35 @@ export function createGatherContextTool(workspace: WorkspaceContext, sessions?: 
     },
   };
 }
+
+const BUILD_VERB = /^(?:please\s+|can you\s+|could you\s+|i want (?:you )?to\s+|let'?s\s+|we need to\s+)?(?:add|build|create|implement|make|design|develop|introduce|set up|setup|support|write)\b/i;
+const BUILD_OBJECT = /\b(?:feature|page|screen|view|panel|dialog|form|flow|system|history|api|endpoint|dashboard|login|auth\w*|sign[- ]?(?:in|up)|integration|mode|option|setting|command|component|app|service|module|plugin|cache|queue|export|import|search|filter|notification|report|cli|ui|game|bot|tool)s?\b/i;
+
+/**
+ * Whether this turn should start with questions under `localpilot.clarify.questions`: a first request to build
+ * something (smart), or any first request to change code (interview). Follow-ups, questions and long, detailed
+ * specs (they already answer what would be asked) go straight to work.
+ */
+export function needsQuestions(content: string, clarify: 'smart' | 'interview' | 'minimal', opts: { hasHistory?: boolean; mode?: string } = {}): boolean {
+  const text = userText(content);
+  if (clarify === 'minimal' || opts.hasHistory || !text || text.length > 400 || opts.mode === 'ask' || /\?\s*$/.test(text) || STACK_TRACE.test(text)) {
+    return false;
+  }
+  if (clarify === 'interview') {
+    return ACTION_VERBS.test(text);
+  }
+  return BUILD_VERB.test(text) && BUILD_OBJECT.test(text) && !/\b(?:fix|bug|error|crash|fail\w*|broken|typo|rename)\b/i.test(text);
+}
+
+/** Hidden note sent with such a turn: ask the open questions in one card, then plan, then build. */
+export function questionSteer(clarify: 'smart' | 'interview' | 'minimal'): string {
+  return [
+    '[LocalPilot] This request leaves real choices open. Before editing anything:',
+    '1. Look at the relevant code briefly (read_file / grep_search) so you only ask what the code cannot tell you.',
+    '2. Call ask_user ONCE with the 2–4 questions whose answers change what you build — e.g. where data lives, how it is shown or triggered, limits and edge cases, interfaces it must fit. Each question: 2–4 options, each with a description of what choosing it means, and "recommended" set to the option you would pick.',
+    clarify === 'interview'
+      ? '3. Then show the plan in 3–6 numbered steps and confirm it with ask_user ("Go ahead" recommended / "Change the plan") before the first edit.'
+      : '3. Then state the plan in 3–6 numbered steps and build it.',
+  ].join('\n');
+}
+

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Tool } from '../types';
+import { Tool, UserAnswer, UserQuestion } from '../types';
 import { resolveWorkspacePath } from './fs';
 
 /** Resolves when the language server next publishes diagnostics for `uri` (plus a short settle), or after `maxMs`. */
@@ -115,45 +115,110 @@ export const openFileTool: Tool = {
   },
 };
 
+/** Reads ask_user arguments: `questions` (current form) or a single `question` / `options` / `recommended` (older form). */
+export function parseQuestions(args: Record<string, unknown>): UserQuestion[] {
+  const one = (q: Record<string, unknown>): UserQuestion | undefined => {
+    const question = String(q.question ?? '').trim();
+    if (!question) {
+      return undefined;
+    }
+    const options = (Array.isArray(q.options) ? q.options : [])
+      .map((o) => (typeof o === 'string' ? { label: o } : o && typeof o === 'object' ? { label: String((o as { label?: unknown }).label ?? ''), description: (o as { description?: unknown }).description ? String((o as { description?: unknown }).description) : undefined } : undefined))
+      .filter((o): o is { label: string; description?: string } => !!o && !!o.label.trim())
+      .slice(0, 6);
+    const recommended = typeof q.recommended === 'string' && options.some((o) => o.label === q.recommended) ? q.recommended : undefined;
+    const header = typeof q.header === 'string' && q.header.trim() ? q.header.trim().slice(0, 24) : undefined;
+    return { header, question, options, multiSelect: q.multiSelect === true, recommended };
+  };
+  const list = Array.isArray(args.questions) ? (args.questions as Record<string, unknown>[]) : [args];
+  return list.map((q) => (q && typeof q === 'object' ? one(q) : undefined)).filter((q): q is UserQuestion => !!q).slice(0, 4);
+}
+
+/** The tool result the model reads: one "question → answer" line per question. */
+export function formatAnswers(answers: UserAnswer[]): string {
+  return `The user answered:\n${answers.map((a) => `- ${a.question}\n  → ${[...a.selected, ...(a.other ? [`(in their words) ${a.other}`] : [])].join('; ') || '(no answer)'}`).join('\n')}\nUse these answers; do not ask about the same points again.`;
+}
+
+/** Native fallback when no chat surface is attached (CLI, chat participant): one picker per question. */
+async function askNatively(questions: UserQuestion[]): Promise<UserAnswer[] | undefined> {
+  const answers: UserAnswer[] = [];
+  for (const [i, q] of questions.entries()) {
+    const title = `LocalPilot asks${questions.length > 1 ? ` (${i + 1}/${questions.length})` : ''}${q.header ? ` · ${q.header}` : ''}`;
+    if (!q.options.length) {
+      const text = await vscode.window.showInputBox({ title, prompt: q.question, ignoreFocusOut: true });
+      if (text === undefined) {
+        return undefined;
+      }
+      answers.push({ question: q.question, selected: [], other: text });
+      continue;
+    }
+    const other = '$(edit) Something else…';
+    const items: vscode.QuickPickItem[] = [...q.options.map((o) => ({ label: o.label, description: o.label === q.recommended ? 'recommended' : undefined, detail: o.description, picked: q.multiSelect && o.label === q.recommended })), { label: other, alwaysShow: true }];
+    const picked = q.multiSelect
+      ? await vscode.window.showQuickPick(items, { title, placeHolder: q.question, ignoreFocusOut: true, canPickMany: true })
+      : await vscode.window.showQuickPick(items, { title, placeHolder: q.question, ignoreFocusOut: true }).then((p) => (p ? [p] : undefined));
+    if (!picked) {
+      return undefined;
+    }
+    const wantsOther = picked.some((p) => p.label === other);
+    const text = wantsOther ? await vscode.window.showInputBox({ title, prompt: q.question, ignoreFocusOut: true }) : undefined;
+    answers.push({ question: q.question, selected: picked.filter((p) => p.label !== other).map((p) => p.label), other: text || undefined });
+  }
+  return answers;
+}
+
 export const askUserTool: Tool = {
   definition: {
     name: 'ask_user',
     description:
-      'Ask the user one clarifying question and wait for the answer. Last resort: first try to resolve the ambiguity from gather_context, the editor state and the code. Use only when two plausible interpretations would lead to materially different work; offer 2–4 concrete options when possible.',
+      'Ask the user up to 4 questions at once and wait for the answers. Each question gets 2–4 concrete options with a one-line description of what choosing it means (trade-offs, consequences), and "recommended" naming the option you would pick. The user can always answer in their own words. Ask all the questions you need in ONE call — never one per turn. Do not ask what the code, the editor or gather_context can tell you.',
     parameters: {
       type: 'object',
       properties: {
-        question: { type: 'string', description: 'One specific question, phrased so a short answer settles it' },
-        options: { type: 'array', items: { type: 'string' }, description: 'Optional fixed choices (2–4). The user may still type a free-form answer.' },
-        recommended: { type: 'string', description: 'Which option you would pick if the user has no preference' },
+        questions: {
+          type: 'array',
+          description: '1–4 questions, most important first',
+          items: {
+            type: 'object',
+            properties: {
+              header: { type: 'string', description: 'Very short topic label (max 12 chars), e.g. "Storage", "Auth"' },
+              question: { type: 'string', description: 'One specific question ending with "?"' },
+              options: {
+                type: 'array',
+                description: '2–4 choices',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string', description: '1–5 words' },
+                    description: { type: 'string', description: 'What picking this means: effect, trade-off, effort' },
+                  },
+                  required: ['label'],
+                },
+              },
+              multiSelect: { type: 'boolean', description: 'true when several options can apply together' },
+              recommended: { type: 'string', description: 'The label of the option you would choose' },
+            },
+            required: ['question', 'options'],
+          },
+        },
       },
-      required: ['question'],
+      required: ['questions'],
     },
   },
-  async execute(args) {
-    const q = String(args.question ?? '').trim();
-    if (!q) {
-      return { content: 'ask_user needs a question.', isError: true };
+  async execute(args, ctx) {
+    const questions = parseQuestions(args);
+    if (!questions.length) {
+      return { content: 'ask_user needs at least one question in "questions".', isError: true };
     }
-    const options = Array.isArray(args.options) ? (args.options as unknown[]).map(String).filter(Boolean) : [];
-    const recommended = typeof args.recommended === 'string' ? args.recommended.trim() : '';
-    let answer: string | undefined;
-    if (options.length) {
-      const other = '$(edit) Something else…';
-      const items: vscode.QuickPickItem[] = options.map((o) => ({ label: o, description: o === recommended ? 'recommended' : undefined }));
-      const picked = await vscode.window.showQuickPick([...items, { label: other, alwaysShow: true }], { title: 'LocalPilot asks', placeHolder: q, ignoreFocusOut: true });
-      if (picked?.label === other) {
-        answer = await vscode.window.showInputBox({ title: 'LocalPilot asks', prompt: q, ignoreFocusOut: true });
-      } else {
-        answer = picked?.label;
-      }
-    } else {
-      answer = await vscode.window.showInputBox({ title: 'LocalPilot asks', prompt: q, ignoreFocusOut: true });
+    let answers = ctx.askUser ? await ctx.askUser(questions) : undefined;
+    if (answers === undefined) {
+      answers = (await askNatively(questions)) ?? null;
     }
-    if (answer === undefined) {
-      return { content: `User dismissed the question without answering.${recommended ? ` Proceed with the recommended option ("${recommended}") and state that assumption.` : ' Proceed with the most plausible interpretation and state that assumption.'}` };
+    if (answers === null) {
+      const picks = questions.filter((q) => q.recommended).map((q) => `"${q.recommended}" for "${q.question}"`);
+      return { content: `The user skipped the questions. Proceed with ${picks.length ? `the recommended options (${picks.join(', ')})` : 'the most plausible interpretation'} and state those assumptions in one line.` };
     }
-    return { content: `User answered: ${answer}` };
+    return { content: formatAnswers(answers), data: { questions, answers } };
   },
 };
 

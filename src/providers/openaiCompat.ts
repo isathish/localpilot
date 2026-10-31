@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, newId, postJson, streamSse, withTimeout } from './http';
+import { ThinkTagSplitter } from './thinkTags';
 
 /** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
 const STOCK_NAMES = /^(vllm( \/ unsloth)?|vllm-\d+)$/i;
@@ -171,6 +172,7 @@ export class OpenAICompatProvider implements LLMProvider {
     // Accumulate streamed tool-call fragments by index.
     const pending = new Map<number, { id: string; name: string; args: string }>();
     let finish: string | undefined;
+    const split = new ThinkTagSplitter();
 
     for await (const chunk of streamSse<OpenAIChunk>(`${this.baseUrl}/chat/completions`, body, this.headers, opts.signal)) {
       if (chunk.error) {
@@ -186,7 +188,7 @@ export class OpenAICompatProvider implements LLMProvider {
           yield { type: 'thinking', text: reasoning };
         }
         if (d?.content) {
-          yield { type: 'text', text: d.content };
+          yield* split.push(d.content);
         }
         for (const tc of d?.tool_calls ?? []) {
           const idx = tc.index ?? 0;
@@ -207,6 +209,7 @@ export class OpenAICompatProvider implements LLMProvider {
         }
       }
     }
+    yield* split.flush();
     for (const [, tc] of [...pending.entries()].sort((a, b) => a[0] - b[0])) {
       yield { type: 'tool_call', call: { id: tc.id, name: tc.name, arguments: tc.args || '{}' } };
     }

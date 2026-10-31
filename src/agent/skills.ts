@@ -243,7 +243,12 @@ export class SkillManager implements vscode.Disposable {
     if (!enabled.length) {
       return '';
     }
-    return enabled.map((s) => `- ${s.name}: ${s.description.replace(/\s+/g, ' ').trim()}`).join('\n');
+    // Sorted and shortened: this list rides in every system prompt, so it must be byte-stable across sessions (the
+    // server's prompt cache) and small (it was half of every request with ~50 skills). Matching uses the full text.
+    return [...enabled]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((s) => `- ${s.name}: ${briefDescription(s.description)}`)
+      .join('\n');
   }
 
   agentsIndex(): string {
@@ -303,4 +308,19 @@ function editDistance(a: string, b: string): number {
     }
   }
   return rows[a.length][b.length];
+}
+
+/**
+ * A skill description cut to its first sentence (and at most `max` characters), dropping trigger keyword lists such
+ * as "USE FOR: …" / "USE WHEN …" that only matter for matching, which runs on the full description.
+ */
+export function briefDescription(description: string, max = 150): string {
+  const flat = description.replace(/\s+/g, ' ').trim();
+  const head = flat.split(/\s+(?:USE (?:FOR|WHEN)\b|TRIGGERS?\b|Triggers? on\b|DO NOT USE\b|SKIP\b)/)[0].trim();
+  const sentence = /^.+?(?<!\b(?:e\.g|i\.e|etc|vs|cf|incl|approx))[.!?](?=\s+[A-Z("'`]|$)/.exec(head)?.[0] ?? head;
+  if (sentence.length <= max) {
+    return sentence;
+  }
+  const cut = sentence.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max * 0.6)).replace(/[\s,;:—-]+$/, '')}…`;
 }

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Telemetry } from '../telemetry/telemetry';
 import { getConfig } from '../config';
 import { ProviderRegistry } from '../providers/registry';
+import { effectiveContextWindow } from '../context/contextManager';
 
 const CACHE_TTL_MS = 5 * 60_000;
 const CACHE_MAX = 200;
@@ -109,6 +110,8 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
           temperature: 0.1,
           stop: ['\n\n\n', '<|endoftext|>', '<|fim_pad|>', '<|file_sep|>', '</s>'],
           keepAlive: getConfig().keepAlive || undefined,
+          // Same window (num_ctx) as chat and prewarm, so switching between chat and completions never reloads the model.
+          contextWindow: effectiveContextWindow(model, getConfig().contextWindow),
           signal: abort.signal,
         });
         completion = postProcess(raw, lineSuffix);

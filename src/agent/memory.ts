@@ -13,6 +13,58 @@ export interface MemoryNote {
   chars: number;
 }
 
+export interface MemoryWriteResult {
+  path: string;
+  /** An append that added nothing new; the file was not touched. */
+  unchanged: boolean;
+  duplicateLines: number;
+  /** Old paragraphs dropped to stay under `memory.maxNoteChars`. */
+  droppedBlocks: number;
+  /** Notes removed from the scope to stay under `memory.maxNotes`. */
+  pruned: string[];
+}
+
+const lineKey = (l: string) => l.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, '').replace(/\s+/g, ' ').toLowerCase();
+
+/**
+ * The lines of `addition` that `existing` does not already contain (ignoring bullets, case and spacing), so repeated
+ * appends of the same facts do not grow a note. Blank lines, short lines and code fences are always kept.
+ */
+export function newLines(existing: string, addition: string): { text: string; duplicates: number } {
+  const seen = new Set(existing.split('\n').map(lineKey).filter((k) => k.length >= 8));
+  let duplicates = 0;
+  const kept = addition.split('\n').filter((l) => {
+    const k = lineKey(l);
+    if (k.length < 8 || k.startsWith('```')) {
+      return true;
+    }
+    if (seen.has(k)) {
+      duplicates++;
+      return false;
+    }
+    seen.add(k);
+    return true;
+  });
+  return { text: kept.join('\n').replace(/\n{3,}/g, '\n\n'), duplicates };
+}
+
+/** Fits a note into `max` characters by dropping its oldest paragraphs (keeping a leading heading); cuts as a last resort. */
+export function fitNote(text: string, max: number): { text: string; dropped: number } {
+  if (text.length <= max) {
+    return { text, dropped: 0 };
+  }
+  const blocks = text.trim().split(/\n{2,}/);
+  const head = /^#/.test(blocks[0]) && blocks.length > 1 ? [blocks.shift()!] : [];
+  let dropped = 0;
+  const size = () => [...head, ...blocks].join('\n\n').length + 1;
+  while (blocks.length > 1 && size() > max) {
+    blocks.shift();
+    dropped++;
+  }
+  const out = `${[...head, ...blocks].join('\n\n')}\n`;
+  return { text: out.length > max ? `${out.slice(0, max - 1).trimEnd()}\n` : out, dropped };
+}
+
 /**
  * Persistent agent memory as plain Markdown files the user can read and edit:
  *   project: <workspace>/.localpilot/memory/<name>.md   (commit it to share with the team)
@@ -23,7 +75,12 @@ export interface MemoryNote {
 export class MemoryStore {
   private cache = new Map<string, { text: string; mtime: number }>();
 
-  constructor(private readonly globalDir: vscode.Uri, private readonly log: vscode.LogOutputChannel) {}
+  constructor(
+    private readonly globalDir: vscode.Uri,
+    private readonly log: vscode.LogOutputChannel,
+    /** Size caps applied on every write; absent = unlimited. */
+    private readonly limits?: () => { maxNoteChars: number; maxNotes: number }
+  ) {}
 
   private dir(scope: MemoryScope): vscode.Uri | undefined {
     if (scope === 'global') {
@@ -84,7 +141,11 @@ export class MemoryStore {
     return undefined;
   }
 
-  async write(name: string, content: string, scope: MemoryScope, mode: 'replace' | 'append' = 'replace'): Promise<string> {
+  /**
+   * Saves a note. Appends skip lines the note already has, notes over `maxNoteChars` lose their oldest paragraphs,
+   * and when a scope holds more than `maxNotes` the least recently updated ones are removed (README is kept).
+   */
+  async write(name: string, content: string, scope: MemoryScope, mode: 'replace' | 'append' = 'replace'): Promise<MemoryWriteResult> {
     const dir = this.dir(scope);
     if (!dir) {
       throw new Error('No workspace folder open; use scope "global".');
@@ -92,14 +153,43 @@ export class MemoryStore {
     await vscode.workspace.fs.createDirectory(dir);
     const uri = vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
     let text = content.trim() + '\n';
+    let duplicateLines = 0;
     if (mode === 'append') {
       const existing = (await this.read(name, scope)) ?? '';
-      text = `${existing.trimEnd()}\n\n${content.trim()}\n`;
+      const fresh = newLines(existing, content);
+      duplicateLines = fresh.duplicates;
+      if (existing.trim() && !fresh.text.trim()) {
+        return { path: uri.fsPath, unchanged: true, duplicateLines, droppedBlocks: 0, pruned: [] };
+      }
+      text = existing.trim() ? `${existing.trimEnd()}\n\n${fresh.text.trim()}\n` : text;
     }
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+    const lim = this.limits?.();
+    const fit = lim ? fitNote(text, lim.maxNoteChars) : { text, dropped: 0 };
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(fit.text, 'utf8'));
     this.cache.delete(uri.toString());
-    this.log.info(`memory: wrote ${scope}/${this.safeName(name)} (${text.length} chars)`);
-    return uri.fsPath;
+    this.log.info(`memory: wrote ${scope}/${this.safeName(name)} (${fit.text.length} chars${fit.dropped ? `, dropped ${fit.dropped} old paragraph(s)` : ''}${duplicateLines ? `, skipped ${duplicateLines} duplicate line(s)` : ''})`);
+    const pruned = lim ? await this.prune(scope, lim.maxNotes, this.safeName(name)) : [];
+    return { path: uri.fsPath, unchanged: false, duplicateLines, droppedBlocks: fit.dropped, pruned };
+  }
+
+  /** Removes the least recently updated notes beyond `max` in a scope; never README or `keep`. */
+  private async prune(scope: MemoryScope, max: number, keep: string): Promise<string[]> {
+    const notes = (await this.list()).filter((n) => n.scope === scope);
+    if (notes.length <= max) {
+      return [];
+    }
+    // `list()` is newest first, so the tail of the candidates is the least recently updated.
+    const candidates = notes.filter((n) => n.name !== keep && n.name.toLowerCase() !== 'readme');
+    const removed: string[] = [];
+    for (const n of candidates.slice(-(notes.length - max))) {
+      if (await this.delete(n.name, scope)) {
+        removed.push(n.name);
+      }
+    }
+    if (removed.length) {
+      this.log.info(`memory: ${scope} holds more than ${max} notes — removed the oldest: ${removed.join(', ')}`);
+    }
+    return removed;
   }
 
   async delete(name: string, scope: MemoryScope): Promise<boolean> {
@@ -176,8 +266,16 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
     },
     async execute(args) {
       const scope = args.scope === 'global' ? 'global' : 'project';
-      const p = await memory.write(String(args.name), String(args.content ?? ''), scope, args.mode === 'append' ? 'append' : 'replace');
-      return { content: `Saved memory "${args.name}" (${scope}) → ${vscode.workspace.asRelativePath(p)}` };
+      const r = await memory.write(String(args.name), String(args.content ?? ''), scope, args.mode === 'append' ? 'append' : 'replace');
+      if (r.unchanged) {
+        return { content: `Memory "${args.name}" (${scope}) already has all of this; nothing was added.` };
+      }
+      const notes = [
+        r.duplicateLines ? `skipped ${r.duplicateLines} line(s) it already had` : '',
+        r.droppedBlocks ? `dropped its ${r.droppedBlocks} oldest paragraph(s) to stay under the size limit — keep notes short` : '',
+        r.pruned.length ? `removed the oldest notes to stay under the note limit: ${r.pruned.join(', ')}` : '',
+      ].filter(Boolean);
+      return { content: `Saved memory "${args.name}" (${scope}) → ${vscode.workspace.asRelativePath(r.path)}${notes.length ? ` (${notes.join('; ')})` : ''}` };
     },
   };
   const read: Tool = {

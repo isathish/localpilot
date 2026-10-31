@@ -641,9 +641,11 @@
       field('contextWindow', 'Context window', 'Requested context size in tokens (<code>num_ctx</code> for Ollama), capped by the model. <b>Model maximum</b> asks for the largest window the model supports. Larger = more memory and slower prompts; the conversation is compacted before it fills up.', 'select', { options: [[0, 'Model maximum', 'largest the model supports'], [8192, '8k'], [16384, '16k'], [32768, '32k'], [65536, '64k'], [131072, '128k'], [262144, '256k']], cast: Number }),
       field('maxOutputTokens', 'Max output tokens', 'Upper bound per response.', 'number', { min: 256, max: 65536, step: 256 }),
       field('temperature', 'Temperature', 'Lower is more deterministic. 0.2 is a good default for code.', 'range', { min: 0, max: 1.5, step: 0.05, fmt: (v) => Number(v).toFixed(2) }),
-      field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>). Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] }),
+      field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>). <b>Auto</b> thinks hard for Plan and Debug, medium for the agent, lightly for subagents and not at all for quick helpers (reviewer, inline edits, summaries). Models without thinking are left alone. Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['auto', 'Auto'], ['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] }),
       field('keepAlive', 'Keep model loaded', 'How long Ollama keeps the model in memory after a request (e.g. <code>5m</code>, <code>30m</code>, <code>-1</code> = forever).', 'text', { placeholder: '30m', validate: (v) => /^(-1|0|\d+(ms|s|m|h))$/.test(v) }),
-      field('prewarm', 'Pre-load the model while you type', 'Loads the chat’s model as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; at most once every few minutes per model.', 'toggle')
+      field('prewarm', 'Pre-load the model while you type', 'Loads the chat’s model as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; at most once every few minutes per model.', 'toggle'),
+      field('ollama.flashAttention', 'Ollama flash attention', 'Starts Ollama with <code>OLLAMA_FLASH_ATTENTION</code>: faster prompt processing and a smaller KV cache. Applies when LocalPilot starts or restarts Ollama.', 'toggle'),
+      field('ollama.kvCacheType', 'Ollama KV cache', 'Cache precision (<code>OLLAMA_KV_CACHE_TYPE</code>). A smaller cache loads faster and keeps large context windows on the GPU. Needs flash attention.', 'seg', { options: [['f16', 'f16'], ['q8_0', 'q8_0'], ['q4_0', 'q4_0']] })
     ));
 
     // --- catalog
@@ -1018,7 +1020,9 @@
     ));
     sec.appendChild(el('h2', 'sub', 'Understanding requests'));
     sec.appendChild(card(
-      field('autoClarify', 'Interpret vague requests automatically', 'When a prompt is short or says “fix this” / “make it faster” without naming a target, the agent is handed the active file, selection, open editors, recent edits, errors and git changes, states <i>Understood as: …</i> and proceeds. It only asks when two readings would lead to materially different work.', 'toggle')
+      field('autoClarify', 'Interpret vague requests automatically', 'When a prompt is short or says “fix this” / “make it faster” without naming a target, the agent is handed the active file, selection, open editors, recent edits, errors and git changes, states <i>Understood as: …</i> and proceeds. It only asks when two readings would lead to materially different work.', 'toggle'),
+      field('prompts.autoCorrect', 'Correct misspelled names in requests', 'Fixes file names and code identifiers you mistyped (<code>dicee.py</code> → <code>dice.py</code>, <code>rollDise</code> → <code>rollDice</code>) against the names in the workspace before the agent starts, so it reads and searches the right thing. Plain words are never changed; corrections are shown under your message.', 'toggle'),
+      field('clarify.questions', 'Questions before starting', 'When the agent asks you first, in a card in the chat with explained options and a recommended pick. <b>Smart</b>: for new features and open-ended or large requests, then it states a short plan and starts. <b>Interview</b>: for every change, and it waits for your OK on the plan. <b>Minimal</b>: only when it cannot tell which of two very different things you mean.', 'seg', { options: [['smart', 'Smart'], ['interview', 'Interview'], ['minimal', 'Minimal']] })
     ));
     sec.appendChild(el('h2', 'sub', 'Hooks'));
     sec.appendChild(card(

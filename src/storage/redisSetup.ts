@@ -272,3 +272,41 @@ export async function setupRedis(log: Logger): Promise<void> {
       return;
   }
 }
+
+/**
+ * Background restart for the supervisor: brings back a local Redis that was set up before — the LocalPilot Docker
+ * container, or a native `redis-stack-server` / `redis-server` as a daemon. Never installs anything; returns whether
+ * Redis answers afterwards. Remote URLs are left alone.
+ */
+export async function restartRedis(url: string, log: Logger): Promise<boolean> {
+  let port: number;
+  try {
+    const t = parseRedisUrl(url);
+    if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(t.host)) {
+      return false;
+    }
+    port = t.port;
+  } catch {
+    return false;
+  }
+  let started = false;
+  if ((await dockerState()) === 'running' && (await docker(['ps', '-a', '--filter', `name=^/${CONTAINER}$`, '--format', '{{.State}}']).catch(() => ''))) {
+    started = await docker(['start', CONTAINER]).then(() => true, (e) => (log.warn(`supervisor: docker start ${CONTAINER}: ${String(e)}`), false));
+  }
+  for (const bin of started || process.platform === 'win32' ? [] : ['redis-stack-server', 'redis-server']) {
+    if (await has(bin)) {
+      started = await run(bin, ['--daemonize', 'yes', '--port', String(port)]).then(() => true, (e) => (log.warn(`supervisor: ${bin}: ${String(e)}`), false));
+      break;
+    }
+  }
+  if (!started) {
+    return false;
+  }
+  for (let i = 0; i < 30; i++) {
+    if ((await probeRedis(url)).ok) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}

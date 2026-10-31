@@ -4,7 +4,8 @@ import { AddressInfo } from 'net';
 import * as vscode from 'vscode';
 import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
-import { isSaturated, pickAlternative, pickForRole, ProviderRegistry, scoreForRole } from '../providers/registry';
+import { isSaturated, pickAlternative, pickForRole, preferResident, ProviderRegistry, scoreForRole } from '../providers/registry';
+import { briefDescription } from '../agent/skills';
 import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB } from '../providers/system';
 import type { LocalPilotApi } from '../extension';
 import { ModelInfo } from '../types';
@@ -239,6 +240,38 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(pickForRole(withGemma, 'agent', profile)?.modelId, 'gemma4:e4b', 'a small Gemma 4 beats a same-size Qwen coder');
     assert.strictEqual(pickForRole(withGemma, 'vision', profile)?.modelId, 'gemma4:e4b');
     assert.strictEqual(pickForRole(withGemma, 'reasoning', profile)?.modelId, 'gemma4:e4b');
+  });
+
+  test('Auto prefers the bigger of two frontier-class models when it fits, and the smaller one when it does not', () => {
+    // Both call tools and see images; only Gemma is recognised by name. The 27B must not lose on the name bonus.
+    const gemma = m('gemma4:12b', { supportsVision: true, sizeBytes: 7.7e9 });
+    const qwen = m('qwen3.8:27b', { supportsVision: true, sizeBytes: 18.2e9 });
+    const mac36 = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 0 });
+    assert.strictEqual(pickForRole([gemma, qwen], 'agent', mac36)?.modelId, 'qwen3.8:27b');
+    assert.strictEqual(pickForRole([gemma, qwen], 'reasoning', mac36)?.modelId, 'qwen3.8:27b');
+    assert.strictEqual(pickForRole([gemma, qwen], 'fast', mac36)?.modelId, 'gemma4:12b', 'read-only helpers still take the small one');
+    const mac16 = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 8, ramGb: 16, vramGb: 0 });
+    assert.strictEqual(pickForRole([gemma, qwen], 'agent', mac16)?.modelId, 'gemma4:12b', 'the 27B does not fit in 16 GB');
+  });
+
+  test('helper roles use the model already in memory when loading another would not fit beside it', () => {
+    const gemma = m('gemma4:12b', { supportsVision: true, sizeBytes: 7.7e9 });
+    const qwen = m('qwen3.8:27b', { supportsVision: true, sizeBytes: 18.2e9 });
+    const tiny = m('qwen2.5-coder:1.5b', { sizeBytes: 1.0e9 });
+    const mac36 = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 0 });
+    const resident = new Set([qwen.id]);
+    assert.strictEqual(preferResident(gemma, [gemma, qwen], 'fast', resident, mac36).modelId, 'qwen3.8:27b', 'no room for the 12B next to the 27B: reuse the 27B');
+    assert.strictEqual(preferResident(tiny, [tiny, qwen], 'fast', resident, mac36).modelId, 'qwen2.5-coder:1.5b', 'a small model that fits is still loaded');
+    assert.strictEqual(preferResident(gemma, [gemma, qwen], 'fast', new Set(), mac36).modelId, 'gemma4:12b', 'nothing loaded: nothing to reuse');
+    assert.strictEqual(preferResident(gemma, [gemma, qwen], 'fast', new Set([gemma.id]), mac36).modelId, 'gemma4:12b');
+  });
+
+  test('the skill index shows a short first sentence, not the trigger lists', () => {
+    assert.strictEqual(briefDescription('Build Azure apps end to end. USE FOR: foundry, azd, deploy, many more words here.'), 'Build Azure apps end to end.');
+    assert.strictEqual(briefDescription('Use for docs, e.g. README files. Covers more.'), 'Use for docs, e.g. README files.');
+    assert.strictEqual(briefDescription('Short one'), 'Short one');
+    const long = briefDescription(`Design ${'very '.repeat(60)}calm interfaces`);
+    assert.ok(long.length <= 150 && long.endsWith('…'), long);
   });
 
   test('parallel work spreads to a comparable idle model only when the intended one is saturated and the pair fits in memory', () => {

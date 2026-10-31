@@ -10,9 +10,9 @@ import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
 import { ParallelPool } from './parallel';
-import { buildSystemPrompt } from './prompts';
+import { buildSystemPrompt, buildTurnContext } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
-import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, userText } from './clarify';
+import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
 import { clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
@@ -22,6 +22,8 @@ import { ChangeTracker } from './changeTracker';
 import { MemoryStore } from './memory';
 import { RunStats, Telemetry } from '../telemetry/telemetry';
 import { HookRunner } from './hooks';
+import { AutoReviewer } from './autoReviewer';
+import { thinkFor } from './thinking';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
 import { emptySettings, ProjectSettings } from './settings';
 
@@ -59,6 +61,10 @@ export interface AgentRunOptions {
   emit: (e: AgentEvent) => void;
   signal: AbortSignal;
   requestApproval: ApprovalHandler;
+  /** Shows ask_user questions in the chat; absent = native pickers. Only the main agent gets it. */
+  askUser?: ToolContext['askUser'];
+  /** Nobody is watching this run (task queue): no question round before work starts. */
+  unattended?: boolean;
   maxIterations?: number;
   /** Pause/resume/steer handle. When given, `signal` should be `control.signal`. */
   control?: RunControl;
@@ -146,6 +152,8 @@ export class AgentRunner {
   projectSettings?: () => ProjectSettings;
   /** Runs the settings' hooks; absent = hooks disabled. */
   hooks?: HookRunner;
+  /** Reviews prompts when `localpilot.autoMode.enabled` is on; absent = always ask. */
+  autoReviewer?: AutoReviewer;
 
   async run(o: AgentRunOptions): Promise<string> {
     const stats = new RunStats();
@@ -236,10 +244,10 @@ export class AgentRunner {
       workspace: this.workspace,
       append: cfg.systemPromptAppend,
       roleOverride: o.roleOverride,
+      clarify: cfg.clarify,
       memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection() : undefined,
-      workingSet: session.workingSet,
-      todos: session.todos,
     });
+    const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = o.workspaceRoot && this.workspace.root && o.workspaceRoot !== this.workspace.root;
     const systemIsolated = isolated
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
@@ -247,7 +255,8 @@ export class AgentRunner {
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
 
     const wasEmpty = session.messages.length === 0;
-    session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
+    const turnMessage: ChatMessage = { ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } };
+    session.messages.push(turnMessage);
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
     const hookRoot = o.workspaceRoot ?? this.workspace.root;
@@ -291,6 +300,12 @@ export class AgentRunner {
         session.messages.push({ role: 'user', content: clarificationSteer(assessment, snapshot), meta: { timestamp: Date.now(), hidden: true } });
         emit({ sessionId: session.id, type: 'clarify', payload: { reasons: assessment.reasons } });
       }
+    }
+
+    // A first request to build something: ask the open questions in one card before work starts (clarify.questions).
+    // Only when the chat can show questions — queued and API runs have nobody to answer.
+    if (depth === 0 && !o.roleOverride && o.askUser && !o.unattended && needsQuestions(o.userMessage.content, cfg.clarify, { mode: session.mode, hasHistory: session.messages.some((m) => m.role === 'assistant' && !!m.content.trim()) })) {
+      session.messages.push({ role: 'user', content: questionSteer(cfg.clarify), meta: { timestamp: Date.now(), hidden: true } });
     }
 
     // "Implement the plan": the checklist already holds delegable items, so make the fan-out the first step
@@ -474,7 +489,8 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'todos', payload: items });
         },
       },
-      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot }),
+      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot, request: o.userMessage.content, signal: o.signal }),
+      askUser: depth === 0 ? o.askUser : undefined,
     };
     const policy: ToolPolicy = {
       settings: this.projectSettings?.() ?? emptySettings(),
@@ -482,10 +498,8 @@ export class AgentRunner {
       hooks: this.hooks,
       root: hookRoot,
       sessionId: session.id,
-      ask: (title, detail, kind) => {
-        emit({ sessionId: session.id, type: 'approval_request', payload: { kind } });
-        return o.requestApproval(title, detail, kind);
-      },
+      // An `ask` rule still goes through auto mode's reviewer; only an explicit `deny` skips the model.
+      ask: (title, detail, kind) => this.gateApproval(kind, 'ask', () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot, request: o.userMessage.content, signal: o.signal }),
       signal: o.signal,
     };
     /** Times a Stop / SubagentStop hook sent the agent back to work this turn. */
@@ -496,7 +510,8 @@ export class AgentRunner {
     // Read-only tool results are memoised for the turn (including in-flight calls, so identical
     // parallel requests run once); any mutating tool clears the cache.
     const toolCache = new Map<string, Promise<ChatMessage>>();
-    const think = cfg.thinking === 'off' ? undefined : cfg.thinking === 'on' ? true : cfg.thinking;
+    // A model that cannot think gets no `think` at all (Ollama rejects any value but false for it).
+    const think = model.supportsThinking === false ? undefined : thinkFor(cfg.thinking, { mode: session.mode, depth });
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
@@ -545,7 +560,7 @@ export class AgentRunner {
       // --- Context management ---------------------------------------------------------------
       // Keep splitting until it fits: prune old tool outputs, summarise the older part, and tighten the verbatim
       // window if a few huge recent results still do not leave room for the answer.
-      const budgetOf = (h: ChatMessage[]) => ctxMgr.budget(model, systemWithTextTools, nativeTools ? toolDefs : [], h, cfg.maxOutputTokens);
+      const budgetOf = (h: ChatMessage[]) => ctxMgr.budget(model, turnContext ? `${systemWithTextTools}\n\n${turnContext}` : systemWithTextTools, nativeTools ? toolDefs : [], h, cfg.maxOutputTokens);
       let budget = budgetOf(session.messages);
       if (ctxMgr.needsCompaction(budget)) {
         if (this.hooks?.has('PreCompact')) {
@@ -566,7 +581,14 @@ export class AgentRunner {
       this.assign(model.id, session.id);
       const busy = this.inflight.get(model.id) ?? new Set<string>();
       const others = [...busy].filter((id) => id !== session.id).length;
-      status(others ? `Waiting for ${model.name} — busy with ${others} other chat${others === 1 ? '' : 's'}…` : iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
+      // Say what the wait before the first token is: a weight load (seconds to minutes) or reading the prompt.
+      const loaded = provider.loadedModels ? (await this.providers.residentModels().catch(() => undefined))?.has(model.id) : undefined;
+      const promptTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
+      const waitingFor =
+        others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}`
+        : loaded === false ? `Loading ${model.name} into memory`
+        : `${model.name} is reading the prompt (~${promptTokens.toLocaleString()} tokens)`;
+      status(others ? `Waiting for ${model.name} — busy with ${others} other chat${others === 1 ? '' : 's'}…` : loaded === false ? `${waitingFor}…` : iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
       emit({ sessionId: session.id, type: 'model_request', payload: { model: model.id, name: model.name, queued: others } });
       busy.add(session.id);
       this.inflight.set(model.id, busy);
@@ -596,7 +618,7 @@ export class AgentRunner {
         try {
           const stream = provider.chat({
             model: model.modelId,
-            messages: [{ role: 'system', content: systemWithTextTools }, ...session.messages.map(stripMeta)],
+            messages: withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext),
             tools: nativeTools && toolDefs.length ? toolDefs : undefined,
             temperature: cfg.temperature,
             maxTokens: cfg.maxOutputTokens,
@@ -612,7 +634,7 @@ export class AgentRunner {
             firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
             idleMs: IDLE_TIMEOUT_MS * patience.idle,
             abort: () => ac.abort(),
-            onWaiting: (s) => status(`${others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}` : `Waiting for ${model.name}`} · ${s}s${s >= 30 && !others ? ' (loading the model or a long prompt)' : ''}…`),
+            onWaiting: (s) => status(`${waitingFor} · ${s}s…`),
           });
           for await (const ev of guarded) {
             if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
@@ -623,6 +645,10 @@ export class AgentRunner {
             }
             switch (ev.type) {
               case 'text':
+                if (!text && thinking) {
+                  // Reasoning is over and the answer starts: the status line must not keep saying "Thinking…".
+                  emit({ sessionId: session.id, type: 'status', payload: 'Responding…' });
+                }
                 text += ev.text;
                 emit({ sessionId: session.id, type: 'assistant_delta', payload: ev.text });
                 break;
@@ -1158,12 +1184,29 @@ export class AgentRunner {
     return imageMsg ? [...ordered, imageMsg] : ordered;
   }
 
-  private async gateApproval(kind: NonNullable<Tool['approvalKind']>, mode: ApprovalMode, ask: () => Promise<boolean>, emit: (e: AgentEvent) => void, sessionId: string, info?: { title: string; detail: string; root?: string }): Promise<boolean> {
+  private async gateApproval(
+    kind: NonNullable<Tool['approvalKind']>,
+    mode: ApprovalMode,
+    ask: () => Promise<boolean>,
+    emit: (e: AgentEvent) => void,
+    sessionId: string,
+    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal }
+  ): Promise<boolean> {
     if (mode === 'always') {
       return true;
     }
     if (mode === 'never') {
       return false;
+    }
+    const auto = getConfig().autoMode;
+    if (auto.enabled && info && this.autoReviewer) {
+      emit({ sessionId, type: 'status', payload: `Auto mode: reviewing "${info.title.slice(0, 60)}"…` });
+      const v = await this.autoReviewer.review({ kind, title: info.title, detail: info.detail, request: info.request ?? '', signal: info.signal }, auto.model);
+      if (v.decision === 'allow') {
+        emit({ sessionId, type: 'status', payload: `Auto mode approved: ${info.title.slice(0, 60)}${v.reason ? ` (${v.reason})` : ''}` });
+        return true;
+      }
+      emit({ sessionId, type: 'status', payload: `Auto mode needs you: ${v.reason || info.title.slice(0, 60)}` });
     }
     emit({ sessionId, type: 'approval_request', payload: { kind } });
     if (info && this.hooks?.has('Notification')) {
@@ -1177,6 +1220,17 @@ export class AgentRunner {
 /** True when the user is asking to execute the plan/checklist that is already in the session. */
 export function isImplementPlanRequest(text: string): boolean {
   return IMPLEMENT_PLAN.test(text.trim());
+}
+
+/**
+ * The request's messages: the stable system prompt, then the history with this turn's context in front of the turn's
+ * user message. Earlier turns go out exactly as they did before, so the server reuses its KV cache for all of them.
+ * When compaction has folded the turn's message into a summary, the context rides on the system prompt instead.
+ */
+export function withTurnContext(system: string, history: ChatMessage[], turnMessage: ChatMessage, turnContext: string): ChatMessage[] {
+  const at = turnContext ? history.indexOf(turnMessage) : -1;
+  const head: ChatMessage = { role: 'system', content: turnContext && at < 0 ? `${system}\n\n${turnContext}` : system };
+  return [head, ...history.map((m, i) => (i === at ? { ...stripMeta(m), content: `${turnContext}\n\n${m.content}` } : stripMeta(m)))];
 }
 
 function stripMeta(m: ChatMessage): ChatMessage {

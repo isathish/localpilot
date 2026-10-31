@@ -11,7 +11,7 @@ import { ContextManager, effectiveContextWindow } from '../context/contextManage
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
-import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session } from '../types';
+import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, UserAnswer, UserQuestion } from '../types';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
 import { captureScreenshot, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
@@ -19,6 +19,7 @@ import { RunControl } from '../agent/runControl';
 import { WorktreeChange, WorktreeManager } from '../agent/worktrees';
 import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPrompt, TaskSuggestion } from '../agent/taskSuggestions';
 import { quickPrompt } from './inlineEdit';
+import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { findRipgrep, runProcess } from '../tools/search';
 import { CommandManager, CustomCommand, expandCommand } from '../agent/commands';
 import * as path from 'path';
@@ -59,6 +60,9 @@ export type ToWebview =
   /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
   | { type: 'skillInstall'; sessionId: string; name: string; ok: boolean; error?: string }
   | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
+  /** The agent asks the user questions (ask_user); answered with `answer`. */
+  | { type: 'question'; id: string; sessionId: string; questions: UserQuestion[] }
+  | { type: 'questionResolved'; id: string }
   | { type: 'approvalResolved'; id: string }
   | { type: 'running'; sessionId: string; running: boolean }
   /** Pause state of a run or of one of its subagents (`childId`). `paused` = requested; `holding` = the loop has actually stopped at a step boundary. */
@@ -76,6 +80,8 @@ export type ToWebview =
   | { type: 'image'; image: ImageAttachment }
   | { type: 'openFiles'; files: string[] }
   | { type: 'draft'; text: string }
+  /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
+  | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
   | { type: 'focusInput' }
   | { type: 'historyCleared'; removed: number }
   /** Answer to `searchSessions`: chats whose messages contain the query, with the matching line. */
@@ -84,10 +90,14 @@ export type ToWebview =
   | { type: 'taskSuggestions'; source: 'quick' | 'model'; items: TaskSuggestion[]; recent: string[] }
   /** Open the multitask launcher (from the Command Palette / Agents view). */
   | { type: 'openLauncher'; kind?: 'tasks' | 'bestof' }
-  | { type: 'toast'; level: 'info' | 'warn' | 'error'; text: string };
+  | { type: 'toast'; level: 'info' | 'warn' | 'error'; text: string }
+  /** "Improve prompt" progress: the rewritten draft streams in (`delta`), then `done` or `error`. */
+  | { type: 'improvedPrompt'; sessionId: string; delta?: string; done?: boolean; text?: string; error?: string };
 
 export type FromWebview =
   | { type: 'ready' }
+  /** Rewrite the composer draft into a precise request (or cancel the rewrite in progress when `cancel`). */
+  | { type: 'improvePrompt'; sessionId: string; text: string; cancel?: boolean }
   | { type: 'booted' }
   | { type: 'newSession'; mode?: Session['mode']; text?: string; attachments?: string[]; images?: string[] }
   | { type: 'runParallel'; tasks: string[]; mode?: Session['mode'] }
@@ -118,6 +128,8 @@ export type FromWebview =
   | { type: 'pauseChild'; sessionId: string; childId: string }
   | { type: 'resumeChild'; sessionId: string; childId: string }
   | { type: 'approval'; id: string; approved: boolean; remember?: boolean }
+  /** Answers to a `question` prompt; `answers: null` = skipped. */
+  | { type: 'answer'; id: string; answers: UserAnswer[] | null }
   | { type: 'setModel'; sessionId: string; model: string; makeDefault?: boolean }
   /** The user is about to send (composer focused / typing): load the session's model so the first token comes sooner. */
   | { type: 'warm'; sessionId: string }
@@ -203,6 +215,8 @@ export class ChatController implements vscode.Disposable {
   private replays = new Map<string, RunReplay>();
   private offers = new Map<string, SkillOffer>();
   private approvals = new Map<string, PendingApproval>();
+  /** ask_user prompts waiting for the user, by id. */
+  private questions = new Map<string, { sessionId: string; questions: UserQuestion[]; resolve: (a: UserAnswer[] | null | undefined) => void; mirrored: boolean }>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
   private activeSessionId?: string;
   private readonly disposables: vscode.Disposable[] = [];
@@ -210,6 +224,9 @@ export class ChatController implements vscode.Disposable {
   readonly onDidChangeActive = this._onDidChangeActive.event;
   private readonly _onDidChangeRuns = new vscode.EventEmitter<void>();
   readonly onDidChangeRuns = this._onDidChangeRuns.event;
+  private readonly _onAgentEvent = new vscode.EventEmitter<AgentEvent>();
+  /** Every agent event broadcast to the chat surfaces (the task queue watches its chats' errors). */
+  readonly onAgentEvent = this._onAgentEvent.event;
   /** Latest status line per running session (for the Agents view). */
   readonly runStatus = new Map<string, string>();
 
@@ -304,6 +321,9 @@ export class ChatController implements vscode.Disposable {
 
   private broadcast(msg: ToWebview): void {
     this.record(msg);
+    if (msg.type === 'event') {
+      this._onAgentEvent.fire(msg.event);
+    }
     // Fast models emit 100+ tokens/s; one webview message per token per host adds up. Text deltas are coalesced
     // for a few ms and flushed before anything else so event order is preserved.
     if (msg.type === 'event' && (msg.event.type === 'assistant_delta' || msg.event.type === 'thinking_delta') && typeof msg.event.payload === 'string') {
@@ -357,6 +377,7 @@ export class ChatController implements vscode.Disposable {
         return msg.event.sessionId;
       case 'steerQueued':
       case 'approval':
+      case 'question':
       case 'paused':
         return msg.sessionId;
       default:
@@ -408,7 +429,7 @@ export class ChatController implements vscode.Disposable {
       const session = this.store.get(sid!);
       r.base = session ? session.messages.length : r.base;
       r.anchor = undefined;
-      r.items = r.items.filter((m) => m.type === 'approval' || m.type === 'steerQueued');
+      r.items = r.items.filter((m) => m.type === 'approval' || m.type === 'question' || m.type === 'steerQueued');
       r.bytes = 0;
       r.truncated = true;
     }
@@ -417,7 +438,7 @@ export class ChatController implements vscode.Disposable {
   /** An approval has been answered (or the agent moved on): it must not be shown again on reopen. */
   private forgetApproval(id: string): void {
     for (const r of this.replays.values()) {
-      const i = r.items.findIndex((m) => m.type === 'approval' && m.id === id);
+      const i = r.items.findIndex((m) => (m.type === 'approval' || m.type === 'question') && m.id === id);
       if (i >= 0) {
         r.items.splice(i, 1);
       }
@@ -944,6 +965,13 @@ export class ChatController implements vscode.Disposable {
         await vscode.window.showTextDocument(doc);
         return;
       }
+      case 'improvePrompt':
+        if (msg.cancel) {
+          this.improving.get(msg.sessionId)?.abort();
+        } else {
+          await this.improvePrompt(msg.sessionId, msg.text);
+        }
+        return;
       case 'send':
         await this.send(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
         return;
@@ -1039,6 +1067,9 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       }
+      case 'answer':
+        this.settleQuestion(msg.id, msg.answers);
+        return;
       case 'setModel': {
         const s = this.store.get(msg.sessionId);
         if (s) {
@@ -1473,7 +1504,79 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string } = {}): Promise<string> {
+  private readonly improving = new Map<string, AbortController>();
+
+  /**
+   * "Improve prompt": the chat's model rewrites the draft into a precise, self-contained request, using what the user
+   * is looking at to resolve "this"/"it", and streams it back into the composer for review — nothing is sent.
+   */
+  private async improvePrompt(sessionId: string, draft: string): Promise<void> {
+    const session = this.store.get(sessionId);
+    if (!session || !draft.trim()) {
+      this.broadcast({ type: 'improvedPrompt', sessionId, done: true, error: 'Type a request first.' });
+      return;
+    }
+    this.improving.get(sessionId)?.abort();
+    const abort = new AbortController();
+    this.improving.set(sessionId, abort);
+    const lastOf = (role: 'user' | 'assistant') => [...session.messages].reverse().find((m) => m.role === role && !m.meta?.hidden && m.content.trim())?.content;
+    const clip = (t: string | undefined, n: number) => (t && t.length > n ? `${t.slice(0, n)}…` : t ?? '');
+    const editor = this.workspace.activeEditorContext();
+    const open = this.workspace.openEditors().slice(0, 12);
+    const map = await this.workspace.projectMap().catch(() => '');
+    const previous = lastOf('user') ? `User: ${clip(lastOf('user'), 600)}\nAssistant: ${clip(lastOf('assistant'), 900)}` : '';
+    const context = [
+      `Mode: ${session.mode}`,
+      editor ? `# Editor\n${editor}` : '',
+      open.length ? `# Open editors\n${open.join(', ')}` : '',
+      map ? `# Project\n${map}` : '',
+      previous ? `# Previous exchange in this chat\n${previous}` : '',
+    ].filter(Boolean).join('\n\n');
+    const messages: ChatMessage[] = [
+      { role: 'system', content: IMPROVE_PROMPT_SYSTEM },
+      { role: 'user', content: `<context>\n${context}\n</context>\n\n<request>\n${draft.trim()}\n</request>` },
+    ];
+    try {
+      const raw = await quickPrompt(this.providers, messages, {
+        modelRef: session.model || undefined,
+        signal: abort.signal,
+        maxTokens: 700,
+        temperature: 0.2,
+        onDelta: (delta) => this.broadcast({ type: 'improvedPrompt', sessionId, delta }),
+      });
+      const text = cleanImprovedPrompt(raw);
+      this.broadcast({ type: 'improvedPrompt', sessionId, done: true, ...(text ? { text } : { error: 'The model returned nothing — your draft is unchanged.' }) });
+    } catch (e) {
+      this.broadcast({ type: 'improvedPrompt', sessionId, done: true, error: abort.signal.aborted ? 'cancelled' : `Could not improve the prompt: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      if (this.improving.get(sessionId) === abort) {
+        this.improving.delete(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Fixes misspelled file names and identifiers in a request against the workspace (`localpilot.prompts.autoCorrect`)
+   * and tells the chat, which already shows the message as typed, what was changed.
+   */
+  private async correctNames(sessionId: string, text: string): Promise<{ text: string; fixes: PromptFix[] }> {
+    if (!getConfig().autoCorrectPrompts || text.trimStart().startsWith('/')) {
+      return { text, fixes: [] };
+    }
+    try {
+      const result = correctPromptNames(text, await this.workspace.nameVocabulary());
+      if (result.fixes.length) {
+        this.log.info(`prompt: corrected ${result.fixes.map((f) => `${f.from} → ${f.to}`).join(', ')}`);
+        this.broadcast({ type: 'promptCorrected', sessionId, text: result.text, fixes: result.fixes });
+      }
+      return result;
+    } catch (e) {
+      this.log.debug(`prompt correction skipped: ${e instanceof Error ? e.message : String(e)}`);
+      return { text, fixes: [] };
+    }
+  }
+
+  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean } = {}): Promise<string> {
     const session = this.store.get(sessionId);
     if (!session) {
       throw new Error('Session not found');
@@ -1522,6 +1625,8 @@ export class ChatController implements vscode.Disposable {
       return '';
     }
 
+    const corrected = opts.display ? { text, fixes: [] } : await this.correctNames(sessionId, text);
+    text = corrected.text;
     let content = text;
     const attachedBlocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
     if (attachedBlocks.some(Boolean)) {
@@ -1530,7 +1635,8 @@ export class ChatController implements vscode.Disposable {
     if (images?.length) {
       content = `${content}\n\n[${images.length} image${images.length === 1 ? '' : 's'} attached]`;
     }
-    const userMessage: ChatMessage = { role: 'user', content, images, meta: opts.display ? { display: opts.display } : undefined };
+    const meta: ChatMessage['meta'] = opts.display || corrected.fixes.length ? { ...(opts.display ? { display: opts.display } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) } : undefined;
+    const userMessage: ChatMessage = { role: 'user', content, images, meta };
 
     try {
       const result = await this.runner.run({
@@ -1569,6 +1675,9 @@ export class ChatController implements vscode.Disposable {
           }
         },
         requestApproval: (title, detail, kind) => this.requestApproval(sessionId, title, detail, kind),
+        // Unattended runs (task queue) have nobody to answer: ask_user falls back to the agent's recommendations.
+        askUser: opts.unattended ? async () => null : (questions) => this.requestQuestions(sessionId, questions),
+        unattended: opts.unattended,
       });
       return result;
     } catch (e) {
@@ -1655,6 +1764,33 @@ export class ChatController implements vscode.Disposable {
     return ids;
   }
 
+  /**
+   * Runs one task-queue entry as its own chat and resolves when the agent finishes. `isolated` puts it in a
+   * worktree (under `worktrees.mode: parallel`) so tasks running side by side do not edit the same checkout.
+   */
+  async runQueuedTask(task: { prompt: string; mode: Session['mode']; model?: string }, started: (sessionId: string) => void, isolated: boolean): Promise<{ ok: boolean; error?: string }> {
+    const s = this.createSession(task.mode);
+    s.title = task.prompt.slice(0, 60);
+    s.isolated = isolated;
+    if (task.model) {
+      s.model = task.model;
+    }
+    this.store.save(s);
+    started(s.id);
+    let error: string | undefined;
+    const off = this.onAgentEvent((e) => {
+      if (e.sessionId === s.id && e.type === 'error') {
+        error = String(e.payload ?? '').slice(0, 300);
+      }
+    });
+    try {
+      const text = await this.send(s.id, task.prompt, [], undefined, { modelRef: task.model, unattended: true });
+      return text.trim() && !error ? { ok: true } : { ok: false, error: error ?? 'The agent stopped without an answer.' };
+    } finally {
+      off.dispose();
+    }
+  }
+
   /** Creates a chat and applies the retention limit so history cannot grow without bound. */
   private createSession(mode: Session['mode']): Session {
     const cfg = getConfig();
@@ -1707,6 +1843,11 @@ export class ChatController implements vscode.Disposable {
         this.settleApproval(id, false);
       }
     }
+    for (const [id, pending] of this.questions) {
+      if (pending.sessionId === sessionId) {
+        this.settleQuestion(id, null);
+      }
+    }
   }
 
   /** Hold the agent after its current step; `resume` continues. Returns the new paused state (undefined when not running). */
@@ -1739,6 +1880,7 @@ export class ChatController implements vscode.Disposable {
     if (!c || !text.trim()) {
       return false;
     }
+    text = (await this.correctNames(sessionId, text)).text;
     let content = text;
     const attachedBlocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
     if (attachedBlocks.some(Boolean)) {
@@ -1812,13 +1954,49 @@ export class ChatController implements vscode.Disposable {
   }
 
   /**
+   * Shows the agent's questions as a card in the chat and waits for the answers (`null` = skipped). Resolves
+   * undefined at once when no chat surface is attached, so ask_user falls back to native pickers.
+   */
+  requestQuestions(sessionId: string, questions: UserQuestion[]): Promise<UserAnswer[] | null | undefined> {
+    if (this.sinks.size === 0) {
+      return Promise.resolve(undefined);
+    }
+    const id = `${sessionId}:q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    return new Promise((resolve) => {
+      this.questions.set(id, { sessionId, questions, resolve, mirrored: false });
+      this.broadcast({ type: 'question', id, sessionId, questions });
+      this.mirrorPendingApprovals();
+    });
+  }
+
+  private settleQuestion(id: string, answers: UserAnswer[] | null): void {
+    const pending = this.questions.get(id);
+    if (!pending) {
+      return;
+    }
+    this.questions.delete(id);
+    this.forgetApproval(id);
+    pending.resolve(answers);
+    this.broadcast({ type: 'questionResolved', id });
+  }
+
+  /**
    * While no chat surface is visible, every prompt still waiting gets a native notification (once), so an agent that
    * raised it just before the chat was hidden, closed or moved never stalls unnoticed. Chosen in the notification, the
    * answer also closes the prompt in the webview; dismissed, the prompt simply stays in the chat.
    */
   private mirrorPendingApprovals(): void {
-    if (!this.approvals.size || this.anySurfaceVisible()) {
+    if ((!this.approvals.size && !this.questions.size) || this.anySurfaceVisible()) {
       return;
+    }
+    for (const pending of this.questions.values()) {
+      if (pending.mirrored) {
+        continue;
+      }
+      pending.mirrored = true;
+      const session = this.store.get(pending.sessionId);
+      const n = pending.questions.length;
+      void vscode.window.showInformationMessage(`LocalPilot${session ? ` · ${session.title}` : ''} has ${n === 1 ? 'a question' : `${n} questions`} for you`, 'Show chat').then((choice) => choice && vscode.commands.executeCommand('localpilot.openChat'));
     }
     for (const [id, pending] of this.approvals) {
       if (pending.mirrored) {
@@ -2043,6 +2221,32 @@ export class ChatController implements vscode.Disposable {
     this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
     this._onDidChangeRuns.dispose();
+    this._onAgentEvent.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
+}
+
+/** Instructions for "Improve prompt": sharpen the request, never change what is asked or start doing it. */
+export const IMPROVE_PROMPT_SYSTEM = `You rewrite a developer's request to LocalPilot — a coding agent working inside VS Code on the project described in <context> — so the agent can act on it without guessing.
+Rules:
+- Keep the intent, scope and language of the request. Never add features, requirements, constraints or technologies the user did not ask for.
+- Fix spelling and grammar and expand shorthand ("fn" → function, "tests?" → a full request).
+- Resolve vague references ("this", "it", "the file", "here") with the editor context: name the actual file, symbol, selection or error.
+- If the expected result or how to check it is implied (tests pass, an error disappears, a page renders), say so in one short clause; otherwise leave it out.
+- A question stays a question ("why does X crash?" asks for the cause, not a fix) unless it plainly asks for a change. Otherwise match the mode: Ask → a question; Plan → a request for a plan; Agent, Debug and Multitask → a direct instruction.
+- Be concise: one to four sentences, or a short bullet list for several distinct parts. Write it as the user, addressed to the agent.
+- Do not answer the request, solve the task or explain your changes. Output only the rewritten request — no preamble, quotes, headings or code fences.`;
+
+/** The model's rewrite without the wrappers small models add anyway ("Rewritten request:", quotes, a code fence). */
+export function cleanImprovedPrompt(raw: string): string {
+  let t = raw.trim();
+  const fence = /^```[\w-]*\n([\s\S]*?)\n?```$/.exec(t);
+  if (fence) {
+    t = fence[1].trim();
+  }
+  t = t.replace(/^(?:\*\*)?(?:rewritten|improved|revised)?\s*(?:request|prompt)\s*:(?:\*\*)?\s*/i, '').replace(/^<request>\s*|\s*<\/request>$/g, '');
+  if (/^(["'“])[\s\S]*(["'”])$/.test(t) && !t.slice(1, -1).includes(t[0])) {
+    t = t.slice(1, -1).trim();
+  }
+  return t;
 }

@@ -43,6 +43,8 @@ export interface ChatMessage {
     durationMs?: number;
     /** What the transcript shows instead of the content (a slash command whose expanded prompt is the content). */
     display?: string;
+    /** Misspelled names in the request that were corrected to real workspace names before it was sent. */
+    corrections?: { from: string; to: string }[];
   };
 }
 
@@ -71,6 +73,8 @@ export interface ModelInfo {
   supportsTools: boolean;
   supportsVision: boolean;
   supportsFim?: boolean;
+  /** The server reports a reasoning ("thinking") capability; false = it rejects `think`. Undefined = unknown. */
+  supportsThinking?: boolean;
   /** On-disk size when the server reports it (Ollama). */
   sizeBytes?: number;
   /** Parameter count label when reported, e.g. `7.6B`. */
@@ -120,6 +124,8 @@ export interface CompletionRequestOptions {
   stop?: string[];
   /** Keep the model loaded between requests (Ollama keep_alive). */
   keepAlive?: string;
+  /** Ollama num_ctx; must match what chat/warm send for the same model, or Ollama reloads the weights. */
+  contextWindow?: number;
   signal?: AbortSignal;
 }
 
@@ -161,6 +167,26 @@ export interface ProviderConfig {
 
 export type ApprovalMode = 'always' | 'never' | 'ask';
 
+/** One question the agent asks the user (ask_user), shown as a card in the chat. */
+export interface UserQuestion {
+  /** Very short topic chip, e.g. "Auth method". */
+  header?: string;
+  question: string;
+  /** 2–4 choices, each with a one-line explanation of what picking it means. Empty = free-text answer only. */
+  options: { label: string; description?: string }[];
+  /** Several options may be picked together. */
+  multiSelect?: boolean;
+  /** The option the agent would choose if the user has no preference. */
+  recommended?: string;
+}
+
+/** The user's answer to one question: picked option labels and/or their own words. */
+export interface UserAnswer {
+  question: string;
+  selected: string[];
+  other?: string;
+}
+
 export interface ToolContext {
   sessionId: string;
   workspaceRoot?: string;
@@ -183,6 +209,11 @@ export interface ToolContext {
   control?: import('./agent/runControl').RunControl;
   /** Skills in force for this run (preloaded, pinned or loaded with load_skill); subagents spawned from here inherit them. */
   skills?: string[];
+  /**
+   * Shows questions in the chat and waits. Resolves the answers, `null` when the user skipped them, or `undefined`
+   * when no chat surface can show them (the tool then falls back to native pickers). Absent for subagents.
+   */
+  askUser?(questions: UserQuestion[]): Promise<UserAnswer[] | null | undefined>;
 }
 
 export interface ToolResult {
@@ -299,7 +330,8 @@ export interface TodoItem {
   result?: string;
 }
 
-export type ThinkingLevel = 'off' | 'on' | 'low' | 'medium' | 'high';
+/** `auto` picks per task: deeper for Plan/Debug, medium for the main agent, light for subagents, none for helpers. */
+export type ThinkingLevel = 'off' | 'auto' | 'on' | 'low' | 'medium' | 'high';
 
 export interface AgentEvent {
   sessionId: string;

@@ -115,6 +115,8 @@ See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 Values: `always`, `ask`, `never`.
 
+**Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Toggle Auto Mode**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
+
 ## Terminal
 
 | Setting | Default | Description |
@@ -128,6 +130,7 @@ Values: `always`, `ask`, `never`.
 |---|---|---|
 | `localpilot.parallel.maxConcurrency` | `4` | Concurrent tool calls and subagents (1–16). When LocalPilot starts Ollama, it also requests this many parallel slots (`OLLAMA_NUM_PARALLEL`, capped at 4) |
 | `localpilot.parallel.maxSubagentDepth` | `2` | How deep subagents may nest (1–4) |
+| `localpilot.queue.concurrency` | `1` | Tasks from the task queue (**LocalPilot: Queue Agent Task…**) that run at once. `1` runs them one after another; higher values run them side by side, each in its own worktree |
 | `localpilot.worktrees.mode` | `always` | Isolate agents in git worktrees: `always`, `parallel` (only agents started together) or `off`. See [Parallel agents → Isolated worktrees]({{ '/docs/parallel-agents/#isolated-worktrees' | relative_url }}) |
 | `localpilot.worktrees.location` | `""` (= `~/.localpilot/worktrees`) | Where the worktrees live, one sub-folder per repository |
 | `localpilot.autoClarify` | `true` | Detect vague requests and give the agent a workspace snapshot (editor, open files, errors, git), so it states its interpretation before acting |
@@ -143,6 +146,9 @@ These settings control the local metrics behind the [Dashboard]({{ '/docs/dashbo
 | `localpilot.storage.sessionsInMemory` | `16` | Chat transcripts held in memory (2–500). Every chat stays in the history; older transcripts are read from disk when you open or search them. Running chats and the one on screen always stay loaded |
 | `localpilot.storage.redis.enabled` | `false` | Optional. Store telemetry events and the log in Redis streams instead of daily files; with Redis Stack, metrics also become time series (`localpilot:ts:*`, label `app=localpilot`) for Grafana or RedisInsight. Writes fall back to files while Redis is unreachable. Telemetry then goes to the server in `storage.redis.url`. **LocalPilot: Set Up Redis Storage** connects one or starts it (Docker, or without Docker: Homebrew, apt/dnf, WSL, Memurai) |
 | `localpilot.storage.redis.url` | `redis://127.0.0.1:6379` | `redis://[user:password@]host:port[/db]`, or `rediss://` for TLS. Keep it on `127.0.0.1` unless the server is protected |
+| `localpilot.supervisor.enabled` | `true` | Keep local services running: restart a local Ollama that stopped (once it has run this session or serves the default model) and Redis when `storage.redis.enabled` is on. Stops after 4 failed restarts in a row. **LocalPilot: Show Background Services** |
+| `localpilot.supervisor.intervalSeconds` | `60` | How often background services are checked (≥ 15) |
+| `localpilot.supervisor.autoInstall` | `false` | When no model server is found at startup, install Ollama and a starter model without asking (several GB) |
 
 None of the memory savings need Redis: transcripts are capped by `storage.sessionsInMemory`, and the Dashboard aggregates one day of telemetry at a time with a bounded sample per latency series.
 
@@ -153,6 +159,8 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). The Chat view moves the same way as with drag-and-drop, so **Move View** and **Reset Location** in the view's context menu keep working. The Agents view and the activity bar icon stay in the Primary Side Bar. Also available as **LocalPilot: Move Chat To…** |
 | `localpilot.sessions.retention` | `50` | Maximum chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats do not count. `0` keeps everything |
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
+| `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
+| `localpilot.memory.maxNotes` | `200` | Notes kept per scope; past it the least recently updated are removed (`README` is kept) |
 | `localpilot.showWelcomeOnStartup` | `true` | Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model |
 
 ## Web search

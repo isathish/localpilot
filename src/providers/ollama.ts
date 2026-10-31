@@ -9,6 +9,7 @@ import {
   WarmOptions,
 } from '../types';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
+import { ThinkTagSplitter } from './thinkTags';
 
 interface OllamaTag {
   name: string;
@@ -106,6 +107,8 @@ export class OllamaProvider implements LLMProvider {
           maxOutputTokens: 8192,
           supportsTools: caps.includes('tools'),
           supportsVision: caps.includes('vision'),
+          // Older Ollama versions list no capabilities at all: unknown, not "cannot think".
+          supportsThinking: caps.length ? caps.includes('thinking') : undefined,
           supportsFim: caps.includes('insert') || /coder|code|starcoder|deepseek/i.test(m.name),
           sizeBytes: typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
           parameterSize: show?.details?.parameter_size ?? m.details?.parameter_size,
@@ -134,13 +137,31 @@ export class OllamaProvider implements LLMProvider {
     if (opts.jsonSchema) {
       body.format = opts.jsonSchema;
     }
-    if (opts.think !== undefined) {
+    // A model without thinking support rejects any `think` value; it is dropped once Ollama has said so.
+    if (opts.think !== undefined && !this.noThink.has(opts.model)) {
       body.think = opts.think;
     }
     if (opts.keepAlive) {
       body.keep_alive = opts.keepAlive;
     }
-    for await (const line of streamLines(`${this.baseUrl}/api/chat`, body, this.headers, opts.signal)) {
+    try {
+      yield* this.streamChat(body, opts.signal);
+    } catch (e) {
+      if (!('think' in body) || !/does not support thinking/i.test(e instanceof Error ? e.message : String(e))) {
+        throw e;
+      }
+      this.noThink.add(opts.model);
+      delete body.think;
+      yield* this.streamChat(body, opts.signal);
+    }
+  }
+
+  /** Models this server said cannot think: `think` is no longer sent for them. */
+  private readonly noThink = new Set<string>();
+
+  private async *streamChat(body: Record<string, unknown>, signal?: AbortSignal): AsyncIterable<StreamEvent> {
+    const split = new ThinkTagSplitter();
+    for await (const line of streamLines(`${this.baseUrl}/api/chat`, body, this.headers, signal)) {
       let chunk: OllamaChatChunk;
       try {
         chunk = JSON.parse(line);
@@ -155,13 +176,14 @@ export class OllamaProvider implements LLMProvider {
         yield { type: 'thinking', text: msg.thinking };
       }
       if (msg?.content) {
-        yield { type: 'text', text: msg.content };
+        yield* split.push(msg.content);
       }
       for (const tc of msg?.tool_calls ?? []) {
         const args = typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments ?? {});
         yield { type: 'tool_call', call: { id: tc.id ?? newId(), name: tc.function.name, arguments: args } };
       }
       if (chunk.done) {
+        yield* split.flush();
         yield { type: 'usage', promptTokens: chunk.prompt_eval_count, completionTokens: chunk.eval_count };
         yield { type: 'done', finishReason: chunk.done_reason };
       }
@@ -180,6 +202,8 @@ export class OllamaProvider implements LLMProvider {
           temperature: opts.temperature ?? 0.1,
           num_predict: opts.maxTokens ?? 128,
           stop: opts.stop,
+          // Without it Ollama uses its own default window; a model already loaded for chat would be reloaded for every completion.
+          num_ctx: opts.contextWindow ?? this.defaultCtx,
         },
         ...(opts.keepAlive ? { keep_alive: opts.keepAlive } : {}),
       },

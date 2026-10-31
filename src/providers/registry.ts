@@ -448,13 +448,19 @@ export class ProviderRegistry implements vscode.Disposable {
           model = r;
         }
       } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
-        // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model.
-        const fast = pickForRole(healthy, 'fast', profile, false, bonus);
+        // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model —
+        // unless it is not loaded and would not fit next to what is, then the model in memory does the job.
+        const small = pickForRole(healthy, 'fast', profile, false, bonus);
+        const fast = small && preferResident(small, healthy, 'fast', resident, profile, bonus);
         if (fast && fast.id !== model.id && fast.supportsTools) {
-          reason = `Read-only subagent — using ${fast.name}`;
+          reason = fast === small ? `Read-only subagent — using ${fast.name}` : `Read-only subagent — using ${fast.name}, already in memory (${small.name} would not fit alongside)`;
           model = fast;
         }
       }
+    }
+    if (!model && role === 'fast') {
+      const small = pickForRole(healthy, 'fast', profile, false, bonus);
+      model = small && preferResident(small, healthy, 'fast', resident, profile, bonus);
     }
     if (!model) {
       model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(models, 'agent', profile, false, bonus);
@@ -571,8 +577,9 @@ function baseScore(m: ModelInfo, n: string, role: ModelRole, profile?: SystemPro
   if (role === 'agent' || role === 'reasoning') {
     s += m.supportsTools ? 10 : 0;
     s += /coder|devstral|codestral|gpt-oss|qwen3|mistral-small/.test(n) ? 4 : 0;
-    // Frontier-class small models (tools + vision + thinking) beat older coder tunes of the same size.
-    s += /gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) ? 7 : 0;
+    // Frontier-class models (tools + vision + thinking) beat older coder tunes of the same size. Recognised by
+    // capability as well as by name, so a newer family (qwen3.x with vision, …) is not outranked by a smaller one.
+    s += /gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) || (m.supportsTools && m.supportsVision) ? 7 : 0;
     s += /qwen|llama|mistral|gemma|deepseek|phi|gpt-oss|nemotron/.test(n) ? 2 : 0;
     s -= /base$|-base\b|:.*base/.test(n) ? 8 : 0;
     s -= /vl|llava|vision/.test(n) ? 4 : 0;
@@ -593,6 +600,24 @@ export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: Syst
   const ranked = [...pool].sort((a, b) => score.get(b)! - score.get(a)!);
   const best = ranked[0];
   return best && score.get(best)! > -50 ? best : undefined;
+}
+
+/**
+ * Helper roles (read-only subagents, the auto-mode reviewer): when `pick` is not in memory and loading it next to the
+ * models that are would exceed this machine's model budget, use the best resident model that can do the job. Loading
+ * a second model there means swapping, which costs far more time than the smaller model saves.
+ */
+export function preferResident(pick: ModelInfo, models: ModelInfo[], role: ModelRole, resident: ReadonlySet<string>, profile?: SystemProfile, bonus?: UsageBonus): ModelInfo {
+  if (!profile || !resident.size || resident.has(pick.id)) {
+    return pick;
+  }
+  const loaded = models.filter((m) => resident.has(m.id));
+  const loadedGb = loaded.reduce((sum, m) => sum + (modelFootprintGb(m) ?? 0), 0);
+  const gb = modelFootprintGb(pick);
+  if (gb === undefined || loadedGb + gb <= profile.modelBudgetGb) {
+    return pick;
+  }
+  return pickForRole(loaded.filter((m) => !pick.supportsTools || m.supportsTools), role, profile, false, bonus) ?? pick;
 }
 
 /** A model is saturated when as many runs are assigned to it as it can serve at once (one, if it is known to be serial). */
