@@ -1267,3 +1267,40 @@ html.lg-icons body.vscode-light :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-lo
 
 @media (prefers-reduced-motion: reduce) { :is(.ib, .btn, .pick, button) > svg { animation: none !important; } .lg-ripple { display: none; } }
 body.vscode-high-contrast :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open), body.vscode-high-contrast-light :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open) { background-image: none; box-shadow: none; }
+
+/* ════ Liquid expand / collapse ═════════════════════════════════════════════════════════════════════════════════
+   Content grows and shrinks to its natural height (interpolate-size lets height animate to and from auto) instead of
+   popping, and every chevron turns on a spring. Where the engine is older, the same rules still open and close —
+   just without the motion. */
+:root { interpolate-size: allow-keywords; }
+.chev, .chev svg, summary .chev { transition: transform .5s var(--ease-spring), opacity .2s; }
+/* Native <details> (tool steps, thinking, workers, reports): the content box itself animates. */
+details::details-content { block-size: 0; opacity: 0; overflow-y: clip; transition: block-size .38s var(--ease-glass), opacity .26s var(--ease-glass), content-visibility .38s allow-discrete; }
+details[open]::details-content { block-size: auto; opacity: 1; }
+/* "Worked for …" folds the turn's steps away. */
+.turn > .steps, .turn > .note { overflow: clip; overflow-clip-margin: 14px; transition: height .38s var(--ease-glass), opacity .26s var(--ease-glass), margin .38s var(--ease-glass), visibility .38s; }
+.turn.folded > .steps { display: flex; height: 0; opacity: 0; margin-block: 0; visibility: hidden; }
+.turn.folded > .note { display: block; height: 0; opacity: 0; margin-block: 0; padding-block: 0; border-width: 0; visibility: hidden; }
+/* Edit diffs and terminal output inside cards. */
+.card .diff, .card .term { transition: height .36s var(--ease-glass), opacity .24s, padding .36s var(--ease-glass), visibility .36s; }
+.card .diff.collapsed { display: block; height: 0; opacity: 0; overflow: hidden; visibility: hidden; }
+.card .term.collapsed { display: block; height: 0; opacity: 0; overflow: hidden; padding-block: 0; visibility: hidden; }
+/* Tasks / Changes panels. */
+.panel-body { transition: height .36s var(--ease-glass), opacity .24s, padding .36s var(--ease-glass), border-color .36s, visibility .36s; }
+.panel-body.hidden { display: block !important; height: 0; opacity: 0; padding-block: 0; border-top-color: transparent; overflow: hidden; visibility: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  details::details-content, .turn > .steps, .turn > .note, .card .diff, .card .term, .panel-body, .chev, .chev svg { transition: none; }
+}
+
+/* ════ Composer, fixed ════════════════════════════════════════════════════════════════════════════════════════════ */
+/* No model: an amber glass pill that reads in light and dark themes and invites a click (the picker offers setup). */
+.pick.model.warn { color: color-mix(in srgb, var(--warn) 62%, var(--fg)); background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent); font-weight: 500; }
+.pick.model.warn:hover { background: color-mix(in srgb, var(--warn) 22%, transparent); }
+.pick.model.warn .chev { color: inherit; }
+.pick.model.finding { color: var(--muted); }
+.pick.model .spinner { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; border-radius: 50%; border: 1.6px solid color-mix(in srgb, var(--fg) 14%, transparent); border-top-color: var(--brand); animation: spin .75s linear infinite; }
+/* Send while there is nothing to send: a quiet glass circle, not a faded accent button that still looks pressable. */
+.send:disabled { opacity: 1; background-color: var(--tint-2); background-image: none; color: var(--muted); box-shadow: inset 0 0 0 1px var(--glass-edge); }
+.send:disabled svg { opacity: .55; }
+/* "@ Add context" keeps its label until there are chips sharing the row. */
+@container (max-width: 340px) { .ctx-row:not(:has(.chip)) .ctxbtn .lbl { display: inline; } }

@@ -17,7 +17,7 @@ The first time LocalPilot starts without a reachable model server or default mod
 
 All settings are also in **Settings → Extensions → LocalPilot** and in `settings.json`. The keys are listed below.
 
-![LocalPilot Settings: Providers page with live connection status (Ollama and Docker Model Runner reachable, LM Studio not running) and one-click presets to add more]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
+![LocalPilot Settings: Providers page with providers grouped under Local and Cloud, each card showing where it runs, its API and its status (models and latency, unreachable, or a missing key)]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
 
 Expand a provider to edit it and press **Test connection**. LocalPilot checks the server, measures latency and lists every model it exposes:
 

@@ -23,6 +23,11 @@ social:
   links:
     - https://github.com/isathish/localpilot
 google_analytics: G-HS3RSBRPYC
+# Live page view counter (assets/pageviews.js): Abacus, a free counter API with no account and no cookies.
+# Counters are keyed by page under this namespace; renaming it starts every count from zero.
+pageviews:
+  api: https://abacus.jasoncameron.dev
+  namespace: isathish-localpilot
 # Add verification tokens from Google Search Console / Bing Webmaster Tools when available.
 webmaster_verifications:
   google: ""

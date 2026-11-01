@@ -38,7 +38,11 @@ The webviews can be opened in a plain browser with mock data for quick visual ch
 |---|---|
 | `scripts/ui-preview.html` | Chat view with a full sample transcript (steps, diff and terminal cards, approvals, tasks, changes). |
 | `scripts/ui-preview-parallel.html` | Chat view with a stateful mock controller; `window.sim.start/tool/text/end(sessionId, …)` drives several sessions streaming at once to check tabs and background runs. `sim.reopen()` reloads the page the way a re-created webview boots (init + `session` with `liveFrom` + `replay`) to check that runs in flight are rebuilt. |
-| `scripts/settings-preview.html?section=models&light=1` | Settings / setup wizard (`?page=setup`) with mocked providers, probe results, hardware profile, installed models, catalog and jobs. |
+| `scripts/settings-preview.html?section=models&light=1` | Settings / setup wizard (`?page=setup`) with mocked local and cloud providers, key states, probe results, hardware profile, installed models, catalog and jobs. `?local=1` keeps only local servers (a first run); `?expand=<id>` opens a provider card. |
+
+### Documentation screenshots
+
+`npm run docs:screenshots` retakes the Settings, setup-wizard and model-picker screenshots in `docs/assets/screenshots/` from these harnesses, so the docs show the current UI. It drives headless Chrome over the DevTools Protocol (no dependencies): opens the page, clicks what the shot needs (expand a provider, run *Test connection*, switch the *Add a provider* tab, step through setup), crops to the element and saves at 2×. Pass part of a file name to retake one (`npm run docs:screenshots -- providers`), and `SHOTS_OUT=/tmp/shots` to write elsewhere and compare first. Shots that need a real VS Code window and model (the hero, terminal, parallel agents, diffs, Dashboard → Model tuning) are taken by hand. Add new shots to `SHOTS` in `scripts/docs-screenshots.mjs`.
 
 ## Extension API
 
@@ -149,7 +153,8 @@ The site in `docs/` is plain Jekyll (GitHub Pages). The version shown on the sit
 | `ask_ai` | The **Ask AI** buttons (`_includes/ask-ai.html`) shown under every docs title and in the footer. Each entry is an assistant whose public `?q=` parameter receives a pre-filled, page-aware prompt — ChatGPT, Claude, Perplexity and Gemini (via Google AI Mode, since the Gemini app has no prefill parameter). |
 | `topics`, `works_with` | Footer link columns and the keyword *Topics* strip (`_includes/footer.html`). Add a target keyword here so it becomes a crawlable link. |
 | `nav`, `guides` | Sidebar, footer columns, pager and `/llms.txt`. A new guide page needs an entry under `guides`. |
-| `_data/pageviews.json` | Generated, not committed. The Docs workflow runs `scripts/ga-pageviews.mjs`, which reads views per page from the Google Analytics Data API, before Jekyll builds. `_includes/pageviews.html` shows the count under each docs title and the site total on the home page. Without the `GA_PROPERTY_ID` / `GA_CREDENTIALS` secrets the counts are simply not shown. A daily scheduled build keeps them current. Setup: [Publishing]({{ '/docs/publishing/#page-view-counts-on-the-website' | relative_url }}). |
+| `pageviews` | The live counter: `assets/pageviews.js` (loaded in `_includes/head.html`) counts each load on [Abacus](https://abacus.jasoncameron.dev) under `namespace` (page key `p.<path>`, plus `site.views` and `site.visitors`) and updates every `[data-pv]` element over Server-Sent Events while the tab is visible, polling every 30 s if streaming fails. `_includes/pageviews.html` renders the markup. Test: `npm run test:site` (also run by the Docs workflow). Renaming `namespace` restarts every count. |
+| `_data/pageviews.json` | Optional build-time floor for the live counts. Generated, not committed. The Docs workflow runs `scripts/ga-pageviews.mjs`, which reads views per page from the Google Analytics Data API, before Jekyll builds. `_includes/pageviews.html` shows the count under each docs title and the site total on the home page. Without the `GA_PROPERTY_ID` / `GA_CREDENTIALS` secrets the counts are simply not shown. A daily scheduled build keeps them current. Setup: [Publishing]({{ '/docs/publishing/#page-view-counts-on-the-website' | relative_url }}). |
 
 The site's Google Analytics is the only tracking on the site; the extension has none. The [privacy page]({{ '/privacy/' | relative_url }}) explains both.
 

@@ -32,6 +32,9 @@
   }, true);
 </script>
 {% endif %}
+{% if site.pageviews.api %}
+<script defer src="{{ '/assets/pageviews.js' | relative_url }}" data-api="{{ site.pageviews.api }}" data-ns="{{ site.pageviews.namespace }}" data-base="{{ site.baseurl }}"></script>
+{% endif %}
 {% if page.layout == 'landing' %}
 <script type="application/ld+json">
 {

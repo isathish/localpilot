@@ -121,6 +121,16 @@ pre code { background: none; border: none; padding: 0; }
 .pageviews .sep { opacity: .6; }
 .pageviews-total { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 8px; margin: 10px 0 0; }
 .page-meta { margin: -6px 0 14px; }
+.page-meta:not(:has(.pageviews:not([hidden]))) { display: none; }
+.pageviews[hidden] { display: none; }
+.pageviews b { font-variant-numeric: tabular-nums; }
+/* A count that moved while the page is open: a brief accent flash, no layout shift. */
+.pageviews b.pv-bump { animation: pv-bump .9s ease-out; }
+@keyframes pv-bump { 0% { color: var(--accent-text, currentColor); } 100% { color: var(--fg-2); } }
+.pv-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.pv-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok, #22c55e); animation: pv-pulse 2s ease-in-out infinite; }
+@keyframes pv-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .pageviews b.pv-bump, .pv-live::before { animation: none; } }
 .hero-note a:hover { color: var(--fg); }
 @media (max-width: 600px) { .hero-note code, .hero-note code + span { display: none; } }
 .cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }

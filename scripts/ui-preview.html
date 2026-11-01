@@ -65,7 +65,9 @@ const listeners=[]; const paused={};
 window.acquireVsCodeApi=()=>({postMessage(m){
   const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
   if(m.type==='ready'){
-    const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true}];
+    const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'ollama/gemma4:12b',providerId:'ollama',name:'gemma4:12b',contextWindow:262144,supportsTools:true,supportsVision:true},{id:'ollama/gpt-oss:20b',providerId:'ollama',name:'gpt-oss:20b',contextWindow:131072,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true},
+      // Cloud models (?cloud=0 hides them): shown in the picker with a "cloud" tag.
+      ...(/cloud=0/.test(location.search)?[]:[{id:'anthropic/claude-sonnet-4-6',providerId:'anthropic',name:'Claude Sonnet 4.6',contextWindow:1000000,supportsTools:true,supportsVision:true,remote:true},{id:'openai/gpt-5',providerId:'openai',name:'gpt-5',contextWindow:400000,supportsTools:true,supportsVision:true,remote:true}])];
     send({type:'init',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[{name:'pdf',description:'Read, create and edit PDF files'},{name:'release',description:'Cut a release end to end'},{name:'debug',description:'Reproduce, localise and fix a bug'}],agents:[],skillsMode:'auto',running:['s2']});
     const oldT="def roll_dice(notation):\n    m = re.match(r'(\\d+)d(\\d+)', notation)\n    if not m:\n        raise ValueError('bad')\n    count, sides = int(m[1]), int(m[2])";
     const newT="def roll_dice(notation: str) -> int:\n    \"\"\"Roll dice such as '3d6+2', 'd20' or '2d10 - 1'.\"\"\"\n    m = re.fullmatch(r'\\s*(\\d*)\\s*d\\s*(\\d+)\\s*([+-]\\s*\\d+)?\\s*', notation, re.I)\n    if not m:\n        raise ValueError(f'Invalid dice notation: {notation!r}')\n    count = int(m.group(1) or 1)\n    sides = int(m.group(2))";
@@ -84,6 +86,7 @@ window.acquireVsCodeApi=()=>({postMessage(m){
       ]};
     // ?empty=1: a fresh chat with dice.py open in the editor — the empty state (suggestions, recent chats, hints).
     if (/empty=1/.test(location.search)) { send({type:'session',session:{id:'s3',title:'New chat',mode:'agent',model:'',contextTokens:0,compactions:0,todos:[],messages:[]}}); send({type:'openFiles',files:['dice.py'],active:'src/dice.py',selection:/sel=1/.test(location.search)}); return; }
+    send({type:'models',models,defaultModel:'ollama/qwen2.5-coder:14b',contextWindow:32768,providerNames:{ollama:'Ollama',lmstudio:'LM Studio',anthropic:'Anthropic (Claude)',openai:'OpenAI'}});
     send({type:'session',session});
     send({type:'changes',sessionId:'s1',files:[{path:'dice.py',fsPath:'/x/dice.py',kind:'modify'}],checkpoints:[0]});
     if (!/live=0/.test(location.search)) {

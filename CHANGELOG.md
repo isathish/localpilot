@@ -34,9 +34,13 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
   - Each card says where it runs and which API it uses, and shows a badge only when something needs attention: unreachable, or a key that is missing (**OPENAI_API_KEY not set**).
   - **Add a provider** shows one category at a time (**On this machine**, **Cloud APIs**, **Gateways**) with a search box, instead of thirty tiles.
   - Adding a cloud provider opens its card with the key field focused and a **Get an API key** link.
-  - The first-run setup offers **Use a cloud API…** when you'd rather not run a local model.
+  - The first-run setup offers a cloud API when you'd rather not run a local model: "No server running? Add a custom endpoint or use a cloud API" sits above the buttons, so the footer keeps to Check again · Skip setup · Continue and no longer squeezes the Continue button.
 - **Documentation for cloud providers.** New guides: *Cloud models (bring your own key)* and *OmniRoute & LiteLLM gateways*. Getting started, Models & providers, Features, Configuration, Privacy, Security, Troubleshooting, the CLI page and the Getting Started walkthrough cover cloud providers, key storage and how automatic picks treat cloud models.
-- **The website shows how often each page is read.** Each docs page shows its view count, and the home page shows total page views and visitors. The numbers come from the site's existing Google Analytics, read at build time and refreshed daily. Nothing extra loads in your browser.
+- **The website shows live view counts.**
+  - Each docs page shows its own views, and the home page shows the site's total page views and visitors ("people explored LocalPilot").
+  - A small script counts every page load and keeps the numbers updating while you read, so you see them move as others visit.
+  - No cookies are set, and Global Privacy Control or Do Not Track means you are not counted.
+  - Totals from the site's Google Analytics, read at build time, are shown first and act as a floor.
 - **New glass look for the chat, settings and Markdown reader.**
   - Cards, panels and popovers are translucent, with a soft edge highlight. Buttons, tabs and toggles are rounded pills.
   - The message box floats over the bottom of the conversation, so replies scroll under frosted glass. The last reply always stays clear of it.
@@ -49,9 +53,11 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
   - Icons react: send lifts off, new tab spins, history turns back, copy draws a check. Settings sections cross-fade.
   - Icons are drawn as lit glass: a highlight along their top edges, a soft glow in their own colour and a little depth, in their usual colours. Icon tiles (suggestions, search results, provider logos) are glossy glass bubbles.
   - Icon buttons wobble like a drop of liquid on hover, and every press sends a liquid ring out from the pointer.
+  - Everything that expands and collapses now grows and shrinks smoothly instead of popping: tool steps, thinking, workers, the "Worked for …" summary, edit diffs, terminal output, the Tasks and Changes panels, settings nav groups, provider and MCP server cards, and **Choose size** in the model gallery. Chevrons turn on a spring.
   - All of this is off with **Reduce motion**, **Reduce transparency** or a high-contrast theme.
 - **Answers show which model replied and how fast.** Under each answer: the model, its speed in tokens per second, and Copy, **Regenerate** and Open as document, visible without hovering. **Regenerate** sends your last message again for a new answer. Copy buttons confirm on the button itself.
 - **A better empty chat.** Suggestions name the file you're on (**Explain dice.py**, **Write tests for my selection**). Your three most recent chats are one click away, with the shortcuts worth knowing underneath.
+- **A clearer chat box when no model is available.** The model picker says **Finding models…** while LocalPilot looks, then **Set up a model**. Clicking it offers to set up a local model, look for model servers again, or add a cloud model. The context meter hides until there's a model to measure against. A disabled Send button no longer looks clickable, and **@ Add context** keeps its label on narrow panels.
 - **Failed answers stay actionable.** When a model call fails, the chat keeps the error box with **Retry** and **Change model**, including after the run ends or the chat is reopened. Before, it turned into plain "(error: …)" text.
 - **Search settings.** A search box in the settings header finds any setting by name or key (`temperature`, `api key`, `redis`). Press **⌘F** / **Ctrl+F** or **/** to open it, then use the arrow keys and Enter to jump. The page opens the right section, scrolls to the setting and highlights it. On narrow panels the box folds into an icon.
 - **Clearer loading and refresh.**

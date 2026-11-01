@@ -1,18 +1,17 @@
 {%- comment -%}
-  View count for the current page, from Google Analytics via scripts/ga-pageviews.mjs (written to _data/pageviews.json at
-  build time). Renders nothing until that data exists. `total=true` shows the whole site instead (home page).
+  Page view counts. assets/pageviews.js fills and live-updates every [data-pv] element (counter service in
+  site.pageviews). Numbers read from Google Analytics at build time (_data/pageviews.json, scripts/ga-pageviews.mjs)
+  are rendered right away and act as the floor; without them the line stays hidden until the live count arrives.
+  `total=true` shows the whole site (home page); otherwise the current page.
 {%- endcomment -%}
 {%- assign pv_data = site.data.pageviews -%}
-{%- if pv_data -%}
-  {%- assign pv_updated = pv_data.updated | date: "%b %-d, %Y" -%}
-  {%- if include.total -%}
-    {%- if pv_data.total.views > 0 -%}
-<p class="pageviews pageviews-total" title="From Google Analytics, updated {{ pv_updated }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span><b>{{ pv_data.total.views_label }}</b> page views</span>{% if pv_data.total.users > 0 %}<span class="sep">·</span><span><b>{{ pv_data.total.users_label }}</b> people explored LocalPilot</span>{% endif %}</p>
-    {%- endif -%}
-  {%- else -%}
-    {%- assign pv = pv_data.pages[page.url] -%}
-    {%- if pv and pv.views > 0 -%}
-<span class="pageviews" title="{{ pv.views }} views of this page, from Google Analytics (updated {{ pv_updated }})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>{{ pv.label }} views</span>
-    {%- endif -%}
-  {%- endif -%}
+{%- assign pv_eye = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>' -%}
+{%- if include.total -%}
+  {%- assign base_views = pv_data.total.views | default: 0 -%}
+  {%- assign base_users = pv_data.total.users | default: 0 -%}
+<p class="pageviews pageviews-total" data-pv-wrap {% if base_views == 0 %}hidden{% endif %} aria-live="polite">{{ pv_eye }}<span><b data-pv="total" data-pv-base="{{ base_views }}">{{ pv_data.total.views_label }}</b> page views</span><span class="sep">·</span><span><b data-pv="visitors" data-pv-base="{{ base_users }}">{{ pv_data.total.users_label }}</b> people explored LocalPilot</span><span class="pv-live" title="Updates live as people read the site">live</span></p>
+{%- else -%}
+  {%- assign pv = pv_data.pages[page.url] -%}
+  {%- assign base_views = pv.views | default: 0 -%}
+<span class="pageviews" data-pv-wrap {% if base_views == 0 %}hidden{% endif %}>{{ pv_eye }}<b data-pv="page" data-pv-base="{{ base_views }}">{{ pv.label }}</b>&nbsp;views</span>
 {%- endif -%}

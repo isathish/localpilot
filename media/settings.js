@@ -254,11 +254,36 @@
 
   // ------------------------------------------------------------------ helpers
   /** Makes a clickable card header a real disclosure control: focusable, announced, toggled with Enter/Space. */
+  /** Expand / collapse with liquid motion. Cards are rebuilt by render(), so collapsing animates the card down to its
+   *  head first and then rebuilds; expanding marks the label, and the rebuilt card grows from its head the next frame.
+   *  The chevron turns on a spring either way. */
+  let revealLabel = '';
+  const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SPRING = 'cubic-bezier(.34,1.56,.64,1)'; const GLIDE = 'cubic-bezier(.2,.8,.2,1)';
   function disclosure(head, open, label, toggle) {
     if (!head) { return; }
     head.setAttribute('role', 'button'); head.tabIndex = 0; head.setAttribute('aria-expanded', String(!!open)); head.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label}`);
-    head.onclick = (e) => { if (e.target.closest('button, a, input, select')) { return; } toggle(); };
-    head.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); toggle(); } };
+    const card = head.parentElement; const chev = head.querySelector('.chev');
+    if (open && revealLabel === label && !calm()) {
+      revealLabel = '';
+      requestAnimationFrame(() => {
+        if (!card || !card.isConnected || !card.animate) { return; }
+        const from = head.offsetHeight + (card.offsetHeight - card.clientHeight); const to = card.offsetHeight;
+        card.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 380, easing: GLIDE });
+        const body = head.nextElementSibling; if (body) { body.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: 60, easing: GLIDE, fill: 'backwards' }); }
+        if (chev) { chev.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(90deg)' }], { duration: 480, easing: SPRING }); }
+      });
+    }
+    const run = () => {
+      if (!open) { revealLabel = label; toggle(); return; }
+      if (calm() || !card || !card.animate) { toggle(); return; }
+      const from = card.offsetHeight; const to = head.offsetHeight + (card.offsetHeight - card.clientHeight);
+      if (chev) { chev.animate([{ transform: 'rotate(90deg)' }, { transform: 'rotate(0deg)' }], { duration: 300, easing: GLIDE, fill: 'forwards' }); }
+      const body = head.nextElementSibling; if (body) { body.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' }); }
+      card.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 260, easing: GLIDE, fill: 'forwards' }).onfinish = toggle;
+    };
+    head.onclick = (e) => { if (e.target.closest('button, a, input, select')) { return; } run(); };
+    head.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); run(); } };
   }
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
   const S = (key) => (state.data && state.data.settings[key]) || { value: undefined, default: undefined, scope: 'default' };
@@ -1174,11 +1199,36 @@
       act.appendChild(link);
       if (!m.cloud) {
         const b = el('button', `btn sm ${open ? 'on' : ''}`, `${open ? 'Hide sizes' : 'Choose size'}${I.chev}`);
-        b.onclick = () => { g.open[m.name] = !open; if (!open && !g.tags[m.name]) { g.tags[m.name] = { loading: true }; post({ type: 'galleryTags', source, name: m.name }); } renderGalleryResults(); };
+        // Liquid open / close, like disclosure(): the card shrinks to its head before the list is rebuilt closed, and
+        // grows from its head after it is rebuilt open.
+        b.onclick = () => {
+          const go = () => { g.open[m.name] = !open; if (!open && !g.tags[m.name]) { g.tags[m.name] = { loading: true }; post({ type: 'galleryTags', source, name: m.name }); } renderGalleryResults(); };
+          if (!open) { g.reveal = m.name; go(); return; }
+          if (calm() || !c.animate) { go(); return; }
+          const chev = b.querySelector('svg:last-child'); if (chev) { chev.animate([{ transform: 'rotate(90deg)' }, { transform: 'rotate(0deg)' }], { duration: 280, easing: GLIDE, fill: 'forwards' }); }
+          c.animate([{ height: `${c.offsetHeight}px` }, { height: `${headEl.offsetHeight + (c.offsetHeight - c.clientHeight)}px` }], { duration: 260, easing: GLIDE, fill: 'forwards' }).onfinish = go;
+        };
         act.appendChild(b);
       }
       headEl.appendChild(act);
       c.appendChild(headEl);
+      if (open && g.reveal === m.name && !calm()) {
+        g.reveal = '';
+        requestAnimationFrame(() => {
+          if (!c.isConnected || !c.animate) { return; }
+          c.animate([{ height: `${headEl.offsetHeight + (c.offsetHeight - c.clientHeight)}px` }, { height: `${c.offsetHeight}px` }], { duration: 380, easing: GLIDE });
+          const chev = headEl.querySelector('.btn.on > svg:last-child'); if (chev) { chev.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(90deg)' }], { duration: 480, easing: SPRING }); }
+          // Sizes still loading: remember this height so the card grows on from here when they arrive.
+          if (c.querySelector('.cat-var .spinner')) { g.growFrom = { name: m.name, h: c.offsetHeight }; }
+        });
+      } else if (open && g.growFrom && g.growFrom.name === m.name && !calm()) {
+        const from = g.growFrom.h;
+        requestAnimationFrame(() => {
+          if (!c.isConnected || !c.animate || c.querySelector('.cat-var .spinner')) { return; }
+          g.growFrom = null;
+          c.animate([{ height: `${from}px` }, { height: `${c.offsetHeight}px` }], { duration: 380, easing: GLIDE });
+        });
+      }
       if (open) {
         const t = g.tags[m.name] || { loading: true };
         if (t.loading) {
@@ -1985,7 +2035,7 @@
     const d = state.data;
     const su = state.setup;
     const wrap = el('div', 'setup');
-    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs entirely on your machine. Let's connect a model server — it takes about a minute.</p></div><div class="steps">${[0, 1, 2].map((i) => `<i class="${i <= su.step ? 'on' : ''}"></i>`).join('')}</div>`;
+    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs on your machine. Let's connect a model server — it takes about a minute.</p></div><div class="steps">${[0, 1, 2].map((i) => `<i class="${i <= su.step ? 'on' : ''}"></i>`).join('')}</div>`;
     const c = el('div', 'card');
     if (su.step === 0) {
       c.innerHTML = `<h3>1 · Find your model server</h3><p class="hint">LocalPilot is checking the usual local ports. Start a server if nothing shows up, then check again.</p>`;
@@ -2018,10 +2068,13 @@
         help.querySelector('#autoSetup').onclick = () => { state.setup.pendingAuto = true; const ol2 = (state.runtimes || []).find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol2 && !ol2.installed), target: 'ollama' }); render(); };
       }
       const foot = el('div', 'foot');
-      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><button class="btn link" id="manual">Add a custom endpoint…</button><button class="btn link" id="cloud" title="OpenAI, Claude, Gemini, OpenRouter… with an API key">Use a cloud API…</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
+      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
       foot.querySelector('#again').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
-      foot.querySelector('#manual').onclick = () => { state.page = 'settings'; state.section = 'providers'; render(); };
-      foot.querySelector('#cloud').onclick = () => { state.page = 'settings'; state.section = 'providers'; state.addTab = 'cloud'; render(); };
+      // The alternatives read as one sentence above the buttons, so the footer keeps to Check again · Skip · Continue.
+      const alt = el('p', 'setup-alt muted small', 'No server running? <button class="inline-link" id="manual" title="Add any OpenAI-compatible server by URL">Add a custom endpoint</button> or <button class="inline-link" id="cloud" title="Settings → Providers → Cloud APIs">use a cloud API</button> (OpenAI, Claude, Gemini…).');
+      alt.querySelector('#manual').onclick = () => { state.page = 'settings'; state.section = 'providers'; render(); };
+      alt.querySelector('#cloud').onclick = () => { state.page = 'settings'; state.section = 'providers'; state.addTab = 'cloud'; render(); };
+      c.appendChild(alt);
       foot.querySelector('#skip').onclick = () => post({ type: 'finishSetup' });
       foot.querySelector('#next').onclick = () => { su.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); if (!su.model) { su.model = recommend(found); } su.step = 1; render(); };
       c.appendChild(foot);
@@ -2070,7 +2123,7 @@
     wrap.appendChild(c);
     const foot = el('p', 'muted small');
     foot.style.textAlign = 'center'; foot.style.marginTop = '18px';
-    foot.innerHTML = `Your code never leaves your machine. <a data-url="https://isathish.github.io/localpilot/docs/getting-started/">Getting started guide</a> · <a id="toSettings">All settings</a>`;
+    foot.innerHTML = `Local servers keep your code on your machine. <a data-url="https://isathish.github.io/localpilot/docs/getting-started/">Getting started guide</a> · <a id="toSettings">All settings</a>`;
     foot.querySelector('#toSettings').onclick = () => { state.page = 'settings'; render(); };
     wrap.appendChild(foot);
     app.appendChild(wrap);

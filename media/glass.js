@@ -148,7 +148,15 @@
     return { x: r.left - b.left + box.scrollLeft - box.clientLeft, y: r.top - b.top + box.scrollTop - box.clientTop, w: r.width, h: r.height };
   }
   function place(ind, g) { ind.style.transform = `translate(${g.x}px, ${g.y}px)`; ind.style.width = `${g.w}px`; ind.style.height = `${g.h}px`; }
-  function update() {
+  // While a layout transition runs inside a container (a nav group folding), the selected item slides; the pill
+  // follows it frame by frame instead of flowing from a stale position afterwards.
+  let trackUntil = 0;
+  function follow(ms) {
+    const start = !trackUntil || performance.now() > trackUntil;
+    trackUntil = Math.max(trackUntil, performance.now() + ms);
+    if (start) { const tick = () => { update(true); if (performance.now() < trackUntil) { requestAnimationFrame(tick); } else { trackUntil = 0; } }; requestAnimationFrame(tick); }
+  }
+  function update(tracking) {
     queued = false;
     for (const grp of GROUPS) {
       for (const box of doc.querySelectorAll(grp.box)) {
@@ -174,6 +182,7 @@
         const moved = from && (Math.abs(from.x - to.x) > 1 || Math.abs(from.y - to.y) > 1);
         // Nothing moved: leave a move in flight alone (unrelated changes elsewhere also land here) and keep the size current.
         if (!moved) { place(ind, to); continue; }
+        if (tracking === true && !(ind._anim && ind._anim.playState === 'running')) { place(ind, to); continue; }
         if (reduceMotion.matches || !ind.animate) { if (ind._anim) { ind._anim.cancel(); } place(ind, to); continue; }
         // The liquid move: the pill first stretches to cover both items, then lets go of the old one and settles
         // with a small overshoot, like a drop of liquid flowing to the new spot.
@@ -210,6 +219,7 @@
     new MutationObserver(() => { watch(); syncLens(); schedule(); }).observe(doc.body, { childList: true, attributes: true, attributeFilter: ['class'] });
     // No scroll listener: indicators live inside their scrolling containers and move with them, and listening to
     // scroll would run layout reads on every frame of the chat's auto-scroll while a reply streams.
+    doc.addEventListener('transitionrun', (e) => { const t = e.target; if (e.propertyName === 'height' && t.closest && t.closest('.side, #tabs')) { follow(420); } }, true);
     window.addEventListener('resize', schedule);
     schedule();
   }

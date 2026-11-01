@@ -1518,7 +1518,8 @@
     els.ctx.style.setProperty('--pct', pct); els.ctx.querySelector('.txt').textContent = `${pct}%`;
     const native = model && model.contextWindow > win ? ` (model supports ${model.contextWindow.toLocaleString()} — raise the Context window setting)` : '';
     els.ctx.title = `Context: ${used.toLocaleString()} / ${win.toLocaleString()} tokens${native}${s.compactions ? ` · compacted ${s.compactions}×` : ''}\nClick to compact now`;
-    els.ctx.className = `ctx ${pct > 85 ? 'danger' : pct > 65 ? 'warn' : ''}`;
+    // No model, no window to measure against: the ring would only ever say 0%, so it hides.
+    els.ctx.className = `ctx ${pct > 85 ? 'danger' : pct > 65 ? 'warn' : ''}${model ? '' : ' hidden'}`;
   }
   // The window a model is actually given: the Context window setting capped by the model (0 = the model's maximum).
   function effectiveWindow(m) { const native = m.contextWindow > 0 ? m.contextWindow : 32768; const want = state.contextWindow > 0 ? state.contextWindow : native; return Math.max(4096, Math.min(native, want)); }
@@ -1529,8 +1530,10 @@
   function autoModelId() { return state.autoModel || state.defaultModel || ''; }
   function currentModel() { const s = state.session; const want = (s && s.model) || autoModelId(); return state.models.find((m) => m.id === want) || null; }
   function syncModel() {
-    els.modelBtn.classList.toggle('warn', !state.models.length);
-    if (!state.models.length) { els.modelLabel.textContent = 'No models'; return; }
+    els.modelBtn.classList.toggle('warn', !state.models.length && !state.modelsLoading);
+    els.modelBtn.classList.toggle('finding', !state.models.length && !!state.modelsLoading);
+    // No models yet: say what is happening (still looking) or what to do (set one up) — the picker offers the actions.
+    if (!state.models.length) { els.modelLabel.innerHTML = state.modelsLoading ? '<span class="spinner"></span>Finding models…' : 'Set up a model'; els.modelBtn.title = state.modelsLoading ? 'Looking for local model servers…' : 'No models found — click to set one up, look again, or add a cloud provider'; return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
     els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${esc(name)}` : esc(name);
@@ -2216,6 +2219,16 @@
 
   els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
   els.modelBtn.onclick = () => {
+    // Nothing to pick from: offer the three ways to get a model instead of an empty list.
+    if (!state.models.length) {
+      const look = () => { state.modelsRequested = true; state.modelsLoading = true; syncModel(); post({ type: 'refreshModels' }); };
+      openMenu(els.modelBtn, [
+        { label: 'Set up a local model', desc: 'Start or install Ollama and download a starter coder model sized for this machine', icon: I.download, onPick: () => { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } },
+        { label: 'Look for model servers again', desc: 'Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner', icon: I.refresh, onPick: look },
+        { label: 'Use a cloud model…', desc: 'Add OpenAI, Claude, Gemini and others in Settings → Providers', icon: I.globe, onPick: () => post({ type: 'openSettings', section: 'providers' }) },
+      ]);
+      return;
+    }
     const s = state.session; const cur = (s && s.model) || '';
     const autoName = modelName(autoModelId());
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];

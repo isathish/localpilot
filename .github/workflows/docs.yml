@@ -7,7 +7,7 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'CHANGELOG.md', '.github/workflows/docs.yml', 'scripts/ga-pageviews.mjs']
+    paths: ['docs/**', 'CHANGELOG.md', '.github/workflows/docs.yml', 'scripts/ga-pageviews.mjs', 'scripts/pageviews-test.mjs']
   workflow_dispatch:
   # Daily rebuild so the page view counts stay current without a push.
   schedule:
@@ -28,12 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Sync site version from package.json
         run: |
           V=$(node -p "require('./package.json').version")
           sed -i -E "s/^version:.*$/version: $V/" docs/_config.yml
           grep -q "^version: $V$" docs/_config.yml || { echo "::error::could not set version in docs/_config.yml"; exit 1; }
           echo "Building site as v$V"
+      - name: Test the live page view counter
+        run: node --experimental-eventsource --no-warnings scripts/pageviews-test.mjs
       - name: Page views from Google Analytics
         # Optional: without the GA_PROPERTY_ID / GA_CREDENTIALS secrets (or if the API fails) the site builds without counts.
         continue-on-error: true

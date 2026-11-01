@@ -244,7 +244,14 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .mdl .brand-mark { width: 26px; height: 26px; border-radius: 7px; font-size: 10px; }
 .mdl .brand-mark svg { width: 13px; height: 13px; }
 .mdl .brand-mark svg.logo { width: 15px; height: 15px; }
-.setup .foot { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+.setup .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
+/* Buttons keep their size; when the row runs out of room it wraps and the primary action stays on the right. */
+.setup .foot .btn { flex: none; white-space: nowrap; }
+.setup .foot .btn.brand { margin-left: auto; }
+.setup-alt { margin: 14px 0 0; }
+.inline-link { background: none; border: 0; padding: 0; font: inherit; color: var(--link); cursor: pointer; }
+.inline-link:hover { text-decoration: underline; }
+.inline-link:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
 .setup .foot .btn.link { border: none; color: var(--muted); }
 .help-list { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
 .help-list li { margin: 4px 0; } .help-list code { color: var(--fg); }
@@ -913,7 +920,8 @@ body.vscode-high-contrast .toggle, body.vscode-high-contrast-light .toggle { box
 
 /* Every search field gets a lens and room for the native clear button. */
 input[type=search] { padding-left: 30px !important; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239d9d9d' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>") !important; background-repeat: no-repeat !important; background-position: 10px center !important; background-size: 13px !important; }
-body.vscode-light input[type=search], html.light body input[type=search] { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23717171' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>") !important; }
+/* The header search box draws its own icon, so it is left out here (this rule outranks the opt-out below). */
+body.vscode-light input[type=search]:not(.find-box input), html.light body input[type=search]:not(.find-box input) { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23717171' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>") !important; }
 .find-box input[type=search] { padding-left: 0 !important; background-image: none !important; }
 .chips input[type=search] { border-radius: var(--r-pill); height: 30px; }
 
@@ -1047,3 +1055,17 @@ html.lg-icons body.vscode-light :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-lo
 
 @media (prefers-reduced-motion: reduce) { :is(.ib, .btn, .pick, button) > svg { animation: none !important; } .lg-ripple { display: none; } }
 body.vscode-high-contrast :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open), body.vscode-high-contrast-light :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open) { background-image: none; box-shadow: none; }
+
+/* ════ Liquid expand / collapse ═════════════════════════════════════════════════════════════════════════════════
+   Folded nav groups close smoothly instead of popping; chevrons turn on a spring; provider / MCP cards are animated
+   by disclosure() in settings.js. */
+:root { interpolate-size: allow-keywords; }
+.chev, .chev svg { transition: transform .5s var(--ease-spring), opacity .2s; }
+@media (min-width: 761px) {
+  .side:not(.rail) .navgrp .items > a { transition: height .34s var(--ease-glass), opacity .24s var(--ease-glass), margin .34s var(--ease-glass), visibility .34s, background .2s var(--ease-glass), color .2s; }
+  .side:not(.rail) .navgrp.closed .items > a:not(.on) { display: flex; height: 0; opacity: 0; margin-block: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+}
+@media (prefers-reduced-motion: reduce) { .chev, .chev svg, .side .navgrp .items > a { transition: none; } }
+/* "Choose size" / "Hide sizes": the chevron points down while the sizes are open. */
+.gal-head-act .btn > svg:last-child { transition: transform .5s var(--ease-spring); }
+.gal-head-act .btn.on > svg:last-child { transform: rotate(90deg); }

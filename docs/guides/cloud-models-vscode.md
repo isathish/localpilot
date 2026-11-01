@@ -17,6 +17,10 @@ A common setup is a local model for everyday work and a cloud model you pick for
 3. The new card opens with the **API key** field focused. Paste your key. The card's **Get an API key ↗** link opens the provider's key page.
 4. Press **Test connection**. The models the key can use are listed, and they appear in the chat's model picker marked **cloud**.
 
+![Add a provider → Cloud APIs: Google Gemini, OpenRouter, Groq, Mistral AI, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Ollama Cloud and Azure OpenAI]({{ '/assets/screenshots/settings-add-provider.png' | relative_url }})
+
+![The OpenAI card: the header warns OPENAI_API_KEY not set; the API key field comes first, with a Get an API key link]({{ '/assets/screenshots/settings-provider-cloud.png' | relative_url }})
+
 Prefer the keyboard? Run **LocalPilot: Set Provider API Key…** from the Command Palette.
 
 ## Where your key is kept

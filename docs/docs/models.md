@@ -4,7 +4,7 @@ description: Set up local models sized to your hardware, install from the catalo
 permalink: /docs/models/
 ---
 
-<p><img src="{{ '/assets/screenshots/model-picker.png' | relative_url }}" alt="Model picker grouped by provider (Ollama), each model with its context window, tool support and vision badge" width="370"></p>
+<p><img src="{{ '/assets/screenshots/model-picker.png' | relative_url }}" alt="Model picker grouped by provider (Ollama, LM Studio, Anthropic, OpenAI), each model with its context window, tool support, a vision badge, and a cloud badge on Claude Sonnet 4.6 and gpt-5" width="370"></p>
 
 LocalPilot talks to model servers that run on your machine or your network, and to cloud model APIs you add. This page covers which servers it supports, how it finds them, how to install and remove models, and how it picks a model for each task.
 
@@ -92,7 +92,7 @@ Models you already have are skipped, so you can re-run setup safely. To stop the
 
 Open **Settings → Models** (*LocalPilot: Manage Models*) to manage models.
 
-![Settings → Models: machine profile with model budget, runtime status, install progress and the installed-model list with enable switches, roles and fit badges]({{ '/assets/screenshots/settings-models-manager.png' | relative_url }})
+![Settings → Models: machine profile with model budget, runtime status, install progress and the installed-model list with enable switches, roles and fit badges; the cloud model Claude Sonnet 4.6 shows a cloud badge instead of a size]({{ '/assets/screenshots/settings-models-manager.png' | relative_url }})
 
 - **This machine:** detected RAM, GPU and cores, the resulting model budget and tier, and each runtime's state (Ollama, Docker Model Runner, LM Studio: running, installed or not found). Ollama has *Start* and *Install* buttons.
 - **Installed models:** every model from every reachable provider, with size, context, capabilities and the role the router would give it. Each row has:
@@ -295,7 +295,11 @@ The quickest way is **Settings → Providers** (gear icon in the chat toolbar):
 2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). If you paste the key itself instead, LocalPilot stores it in VS Code secret storage (your OS keychain) and writes only `${secret:<id>}` to settings.json. **LocalPilot: Set Provider API Key…** does the same from the Command Palette.
 3. Press **Test connection** to confirm the server answers and see which models it exposes.
 
-Configured providers are listed under **Local** and **Cloud**. A card's header shows what needs attention: a server that is unreachable, or a key that is missing (**OPENAI_API_KEY not set**, **key missing**). When everything works it shows the model count and latency instead. For a cloud provider the **API key** field comes first, with a link to the provider's key page.
+Configured providers are listed under **Local** and **Cloud**.
+
+![A cloud provider's card: OpenAI with the warning OPENAI_API_KEY not set, the API key field first with a Get an API key link, then ID, API type, base URL and context window]({{ '/assets/screenshots/settings-provider-cloud.png' | relative_url }}) A card's header shows what needs attention: a server that is unreachable, or a key that is missing (**OPENAI_API_KEY not set**, **key missing**). When everything works it shows the model count and latency instead. For a cloud provider the **API key** field comes first, with a link to the provider's key page.
+
+![Add a provider: the Cloud APIs tab with presets for Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI and more, a search box, and a Custom endpoint button]({{ '/assets/screenshots/settings-add-provider.png' | relative_url }})
 
 ![Provider editor with a successful connection test]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
 

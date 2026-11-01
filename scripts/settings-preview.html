@@ -43,6 +43,8 @@ const providers = [
   { id: 'openai', type: 'openai', baseUrl: 'https://api.openai.com/v1', displayName: 'OpenAI', apiKey: '${env:OPENAI_API_KEY}' },
   { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true },
 ];
+// ?local=1: a first-run machine with only local servers (no cloud providers, nothing disabled), e.g. for the setup wizard.
+if (q.get('local')) { providers.splice(0, providers.length, ...providers.filter((p) => !/^https:/.test(p.baseUrl) && !p.cloud && p.enabled !== false)); }
 // Key status as the extension reports it (never the key): keychain ok, env var missing, gateway without a key.
 const keys = { anthropic: { source: 'keychain', ok: true }, openai: { source: 'env', ok: false, env: 'OPENAI_API_KEY' }, omniroute: { source: 'none', ok: false } };
 const models = [
@@ -65,9 +67,12 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
 window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getItem('lp-settings-state') || 'null'), setState: (s) => localStorage.setItem('lp-settings-state', JSON.stringify(s)), postMessage(m) {
-  const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
+  const send = (d) => {
+    if (d.type === 'probe' && q.get('local')) { d = { ...d, results: d.results.filter((r) => providers.some((p) => p.id === r.id)) }; }
+    window.dispatchEvent(new MessageEvent('message', { data: d }));
+  };
   if (m.type === 'ready') {
-    send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models, keys,
+    send({ type: 'state', page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings, models, keys,
       skills: [{ name: 'release', description: 'Cut a release end to end: bump, changelog, tag, publish', source: 'workspace', used: 4, dir: '/repo/.localpilot/skills/release', removable: true }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: 'user', dir: '/Users/me/.claude/skills/pr-review', removable: true }, { name: 'pdf', description: 'Read, create, merge and fill PDF files with pypdf and reportlab', source: 'user', used: 2, dir: '/Users/me/.localpilot/skills/pdf', removable: true }, { name: 'debug', description: 'Reproduce, localise and fix a bug with a regression test', source: 'builtin', used: 11, dir: '/ext/skills/debug', removable: false }, { name: 'deploy', description: 'Deploy to the configured target and verify health', source: 'builtin', disabled: true, dir: '/ext/skills/deploy', removable: false }],
       learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
@@ -77,7 +82,7 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     // Host round-trip: the setting is written, then the whole state is pushed again without navigating.
     const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
     if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
-    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
+    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
   }
   if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
     { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },

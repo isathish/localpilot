@@ -53,7 +53,7 @@ There is no account, no analytics SDK and no update check in the extension. Exte
 This site ({{ site.url }}{{ site.baseurl }}) is hosted on GitHub Pages and **does use tracking**:
 
 - **Google Analytics** records page views. It also records clicks on the Install, Download VSIX and GitHub links, and the "Ask AI" buttons, so we can tell which pages help people get started.
-- **View counts shown on pages** ("1.2K views", and the totals on the home page) are aggregate numbers read from Google Analytics when the site is built, at most once a day. Showing them adds no tracking and no extra request from your browser.
+- **Live view counts** ("1.2K views" under each page title, and the totals on the home page). Each page load sends one request to [Abacus](https://abacus.jasoncameron.dev), a free counter service. The request adds one to an anonymous counter for that page and one to the site total, and keeps a stream open so the numbers update while you read. Abacus stores only the counts, but like any web server it sees your IP address. No cookies are set. A flag in your browser's local storage (`lp-visited`) makes your first visit count once towards "people explored". **If your browser sends Global Privacy Control or Do Not Track, you are shown the numbers but not counted.** Before the live numbers arrive, the page shows totals read from Google Analytics when the site was built.
 - **Google Fonts** serves the site's fonts, so your browser requests them from Google.
 - **GitHub Pages** keeps standard server logs, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 

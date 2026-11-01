@@ -1919,6 +1919,8 @@
     "lint": "eslint src",
     "smoke": "node scripts/run-smoke.js",
     "e2e:cli": "node esbuild.js && node scripts/cli-e2e.mjs",
+    "test:site": "node --experimental-eventsource --no-warnings scripts/pageviews-test.mjs",
+    "docs:screenshots": "node scripts/docs-screenshots.mjs",
     "release": "node scripts/release.js",
     "check:version": "node scripts/check-version.js",
     "test": "vscode-test",

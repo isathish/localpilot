@@ -48,7 +48,7 @@ Click the LocalPilot icon in the Activity Bar, or press <kbd>⌘⇧L</kbd> (<kbd
 
 On first launch the **Welcome / Setup** screen opens. It looks for running model servers on their default ports.
 
-![Setup step 1: LocalPilot found Ollama with 5 models and Docker Model Runner with 1; LM Studio is not running]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
+![Setup step 1: LocalPilot found Ollama with 3 models and Docker Model Runner with 1; LM Studio is not running. Below the list: add a custom endpoint or use a cloud API]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
 
 ## 3. Get a model
 
@@ -86,7 +86,7 @@ Auto-detection also probes Docker Model Runner, Jan, SGLang, KoboldCpp and Docke
 2. Choose how much the agent may do without asking: *Careful*, *Balanced* or *Autonomous*. You can change this later.
 3. Click **Finish & open chat**.
 
-![Setup step 2: choosing a default model; gemma4:12b is recommended because it calls tools and reads images]({{ '/assets/screenshots/setup-model.png' | relative_url }})
+![Setup step 2: choosing a default model from the servers that were found, with the recommended one marked]({{ '/assets/screenshots/setup-model.png' | relative_url }})
 
 ![Setup step 3: Careful, Balanced (the default) or Autonomous, and an optional switch for inline completions]({{ '/assets/screenshots/setup-approvals.png' | relative_url }})
 

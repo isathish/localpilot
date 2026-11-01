@@ -35,7 +35,7 @@
 
 Open the **LocalPilot** icon in the Activity Bar (<kbd>Ctrl/⌘ ⇧ L</kbd>). A one-minute setup checks the usual local ports and lists every server it finds. Nothing running? **Set up automatically** installs Ollama and pulls a coder model sized for your machine.
 
-<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/setup-detect.png" alt="Setup step 1: LocalPilot found a running Ollama at localhost:11434 with 4 models" width="880"></p>
+<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/setup-detect.png" alt="Setup step 1: LocalPilot found Ollama and Docker Model Runner running; below, add a custom endpoint or use a cloud API" width="880"></p>
 
 ### 2 · Pick a model and how careful the agent should be
 
@@ -50,7 +50,7 @@ Type what you want — <i>"The discount test fails. Fix it."</i> **Agent** edits
 <table align="center">
   <tr>
     <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/mode-picker.png" alt="Mode picker: Agent, Multitask, Debug, Plan and Ask, each with a one-line description" width="340"></td>
-    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/model-picker.png" alt="Model picker: Auto plus every Ollama model with its context window, tool support and vision badge" width="340"></td>
+    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/model-picker.png" alt="Model picker: Auto plus models grouped by provider with context window, tool support and vision badges; Claude and GPT models marked cloud" width="340"></td>
   </tr>
   <tr>
     <td align="center"><sub>Five modes</sub></td>
@@ -106,7 +106,7 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 
 **Settings → Providers** lists every server LocalPilot talks to, with live status. Every address is `localhost` unless you added one yourself.
 
-<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/settings-providers.png" alt="LocalPilot Settings: Providers page with live connection status (Ollama and Docker Model Runner reachable, LM Studio not running) and one-click presets to add more" width="880"></p>
+<p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/settings-providers.png" alt="LocalPilot Settings: Providers grouped under Local and Cloud with live status, and presets for local servers, cloud APIs and gateways" width="880"></p>
 
 <br>
 
