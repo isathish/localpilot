@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.4 — 2026-11-01
+### Added
+- Implement liquid glass icon effects and enhance button interactions
+
 ## 1.3.3 — 2026-11-01
 ### Added
 - Enhance HTTP error handling with retry logic and improve provider configuration management
