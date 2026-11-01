@@ -6,6 +6,7 @@ import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
+import { onSecretsChanged, resolveApiKey } from './cloud';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
@@ -83,14 +84,22 @@ export class ProviderRegistry implements vscode.Disposable {
 
   constructor(private readonly log: vscode.LogOutputChannel) {
     this.rebuild();
-    this.disposables.push(onConfigChange(() => this.rebuild()));
+    this.disposables.push(
+      onConfigChange(() => this.rebuild()),
+      // A key entered or loaded from secret storage: rebuild the affected providers and list their models again.
+      onSecretsChanged(() => {
+        this.rebuild();
+        this.invalidate();
+      })
+    );
   }
 
   private rebuild(): void {
     const next = new Map<string, LLMProvider>();
     const nextConfigs = new Map<string, string>();
     for (const cfg of getConfig().providers) {
-      const key = JSON.stringify(cfg);
+      // The resolved key is part of the identity, so a changed environment variable or stored secret takes effect.
+      const key = `${JSON.stringify(cfg)}\0${resolveApiKey(cfg) ?? ''}`;
       nextConfigs.set(cfg.id, key);
       const existing = this.providers.get(cfg.id);
       if (existing && this.providerConfigs.get(cfg.id) === key) {
@@ -352,7 +361,8 @@ export class ProviderRegistry implements vscode.Disposable {
       return;
     }
     const { provider, model } = route;
-    if (!provider.warm) {
+    // Cloud models have nothing to load locally; a warm-up request would only cost tokens.
+    if (!provider.warm || model.remote) {
       return;
     }
     const last = this.warmed.get(model.id) ?? 0;

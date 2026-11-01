@@ -13,8 +13,8 @@ LocalPilot talks to model servers that run on your machine or your network, and 
 | `type` | Protocol | Use for |
 |---|---|---|
 | `ollama` | Ollama native API (`/api/chat`, `/api/generate`, `/api/tags`, `/api/show`) | Ollama, local or [Ollama Cloud](https://ollama.com) (`https://ollama.com`). Full support for tools, thinking, FIM `suffix`, vision and `num_ctx`. |
-| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, LiteLLM, colibri. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI… |
-| `anthropic` | Anthropic Messages API (`/v1/messages`, `/v1/models`) | Claude models. Tools, images and streaming. |
+| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, colibri. Gateways to cloud models: OmniRoute, LiteLLM. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI… |
+| `anthropic` | Anthropic Messages API (`/v1/messages`, `/v1/models`) | Claude models: tools, images, streaming, thinking and prompt caching. |
 
 You refer to a model as **`<providerId>/<modelId>`**, for example `ollama/qwen2.5-coder:14b` or `lmstudio/qwen2.5-coder-14b-instruct`.
 
@@ -291,9 +291,11 @@ Containers appear as providers named `docker-<container>`, for example *vLLM (Do
 
 The quickest way is **Settings → Providers** (gear icon in the chat toolbar):
 
-1. Pick a preset: *Local servers* or *Cloud APIs*, or *Custom endpoint*.
-2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). Replace it with the key itself if you prefer; that stores it in your settings file.
+1. Under **Add a provider**, choose **On this machine**, **Cloud APIs** or **Gateways** and click a preset. **Find a provider…** searches all three. For anything else, use **Custom endpoint**.
+2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). If you paste the key itself instead, LocalPilot stores it in VS Code secret storage (your OS keychain) and writes only `${secret:<id>}` to settings.json. **LocalPilot: Set Provider API Key…** does the same from the Command Palette.
 3. Press **Test connection** to confirm the server answers and see which models it exposes.
+
+Configured providers are listed under **Local** and **Cloud**. A card's header shows what needs attention: a server that is unreachable, or a key that is missing (**OPENAI_API_KEY not set**, **key missing**). When everything works it shows the model count and latency instead. For a cloud provider the **API key** field comes first, with a link to the provider's key page.
 
 ![Provider editor with a successful connection test]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
 
@@ -319,7 +321,34 @@ Cloud providers look like this:
 { "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${env:GEMINI_API_KEY}" }
 ```
 
-`${env:NAME}` is read from VS Code's environment. Launch VS Code from a shell that exports the variable, or set it in your shell profile. Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`.
+Ways to give a key:
+
+| `apiKey` | Where the key lives |
+|---|---|
+| `${secret:<id>}` | VS Code secret storage (OS keychain). Written for you when you paste a key in Settings or run **Set Provider API Key…**. The `localpilot` CLI has no keychain access and reads `LOCALPILOT_KEY_<ID>` instead, for example `LOCALPILOT_KEY_OPENAI`. |
+| `${env:NAME}` | An environment variable in VS Code's environment. Launch VS Code from a shell that exports it, or set it in your shell profile. |
+| the key itself | settings.json, in plain text. Avoid this if you sync settings. |
+
+Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`.
+
+### Claude
+
+The `anthropic` type talks to the Messages API directly:
+
+- **Thinking** follows `localpilot.thinking`. Current models (Claude 4.6 and later) use adaptive thinking with the matching effort level. Older thinking models use a token budget. Models that always think (Opus 5.5, Fable) get a low effort when thinking is off.
+- **Reasoning is kept within a tool loop.** Thinking blocks are sent back with their signatures in the tool loop that produced them. If LocalPilot has since pruned or compacted the conversation, the API rejects the old blocks. LocalPilot then resends the request once without them and stops replaying them.
+- **Prompt caching** is on, so the system prompt, tools and earlier turns are billed at cache rates on the next request.
+- No `temperature` is sent, because current Claude models reject sampling parameters.
+
+### Gateways (OmniRoute, LiteLLM)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) and LiteLLM run on your machine but forward prompts to cloud models. Their presets set `"cloud": true`, so automatic picks treat their models as cloud models:
+
+```jsonc
+{ "id": "omniroute", "type": "openai", "baseUrl": "http://localhost:20128/v1", "cloud": true }
+```
+
+Pick a model as `omniroute/<model>`, for example `omniroute/auto/coding` or `omniroute/cc/claude-sonnet-4-6`. OmniRoute needs a key only when its `REQUIRE_API_KEY` is on. For any other local proxy to cloud models, turn on **Sends prompts to cloud models** in its provider card. Auto-detect finds OmniRoute on `:20128` and LiteLLM on `:4000`.
 
 When a cloud model rejects a parameter (OpenAI reasoning models do not take `temperature` or `max_tokens`, and some APIs do not take `reasoning_effort`), LocalPilot drops or renames it, asks again and remembers this for that model. Speech, image, embedding and moderation models in cloud listings are hidden.
 

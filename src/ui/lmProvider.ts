@@ -6,7 +6,7 @@ import { ProviderRegistry } from '../providers/registry';
 import { ChatMessage, ModelInfo, ToolDefinition } from '../types';
 
 /**
- * Exposes every discovered local model to VS Code's Language Model API, so they show up in the
+ * Exposes every discovered model (local, and cloud ones labelled as such) to VS Code's Language Model API, so they show up in the
  * model picker of Copilot Chat / other extensions ("bring your own model").
  */
 export class LocalModelChatProvider implements vscode.LanguageModelChatProvider, vscode.Disposable {
@@ -30,13 +30,14 @@ export class LocalModelChatProvider implements vscode.LanguageModelChatProvider,
     }
     return models.map((m) => ({
       id: m.id,
-      name: `${m.name} (${m.providerId})`,
+      name: `${m.name} (${m.providerId}${m.remote ? ', cloud' : ''})`,
       family: m.family ?? m.providerId,
       version: '1.0.0',
       maxInputTokens: Math.max(1024, m.contextWindow - m.maxOutputTokens),
       maxOutputTokens: m.maxOutputTokens,
-      tooltip: `Local model served by ${m.providerId}`,
-      detail: m.providerId,
+      // Other extensions see which models send prompts off the machine (and bill the user's key).
+      tooltip: m.remote ? `Cloud model from ${m.providerId}: prompts are sent to that provider and billed to your key` : `Local model served by ${m.providerId}`,
+      detail: m.remote ? `${m.providerId} · cloud` : m.providerId,
       capabilities: { imageInput: m.supportsVision, toolCalling: m.supportsTools },
     }));
   }

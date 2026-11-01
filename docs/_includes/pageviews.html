@@ -1,0 +1,18 @@
+{%- comment -%}
+  View count for the current page, from Google Analytics via scripts/ga-pageviews.mjs (written to _data/pageviews.json at
+  build time). Renders nothing until that data exists. `total=true` shows the whole site instead (home page).
+{%- endcomment -%}
+{%- assign pv_data = site.data.pageviews -%}
+{%- if pv_data -%}
+  {%- assign pv_updated = pv_data.updated | date: "%b %-d, %Y" -%}
+  {%- if include.total -%}
+    {%- if pv_data.total.views > 0 -%}
+<p class="pageviews pageviews-total" title="From Google Analytics, updated {{ pv_updated }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span><b>{{ pv_data.total.views_label }}</b> page views</span>{% if pv_data.total.users > 0 %}<span class="sep">·</span><span><b>{{ pv_data.total.users_label }}</b> people explored LocalPilot</span>{% endif %}</p>
+    {%- endif -%}
+  {%- else -%}
+    {%- assign pv = pv_data.pages[page.url] -%}
+    {%- if pv and pv.views > 0 -%}
+<span class="pageviews" title="{{ pv.views }} views of this page, from Google Analytics (updated {{ pv_updated }})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>{{ pv.label }} views</span>
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}

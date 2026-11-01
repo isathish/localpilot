@@ -893,3 +893,347 @@ pre.numbered .t { padding-right: 14px; }
 #btnImprove.busy svg { animation: spin 1.2s linear infinite; color: var(--brand, var(--fg)); }
 .box.improving textarea { color: var(--muted); }
 .box.improving { border-color: var(--brand, var(--focus)); }
+
+/* ── Liquid glass ─────────────────────────────────────────────────────────────
+   One material for every surface: tinted translucent fill, hairline edge, a specular highlight along the top, a soft
+   drop shadow. The composer floats over the transcript, so replies scroll under real frosted glass. backdrop-filter is
+   only paid by layers that sit over moving content (bars, composer, popovers, toasts, hover toolbars) to keep streaming
+   cheap. Light themes get a brighter sheen; high contrast and "reduce transparency" fall back to solid fills. */
+:root {
+  --glass: color-mix(in srgb, var(--card) 58%, transparent);
+  --glass-2: color-mix(in srgb, var(--card) 74%, transparent);
+  --glass-float: color-mix(in srgb, var(--vscode-editorWidget-background, var(--bg)) 70%, transparent);
+  --glass-bar: color-mix(in srgb, var(--bg) 58%, transparent);
+  --glass-edge: color-mix(in srgb, var(--fg) 13%, transparent);
+  --glass-edge-hi: color-mix(in srgb, var(--fg) 22%, transparent);
+  --glass-hi: rgba(255,255,255,.08);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 42%);
+  --glass-blur: saturate(180%) blur(20px);
+  --glass-shadow: 0 10px 30px -14px rgba(0,0,0,.5), 0 1px 0 var(--glass-hi) inset;
+  --glass-lift: 0 18px 44px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
+  --ease-glass: cubic-bezier(.2,.8,.2,1);
+  --ease-spring: cubic-bezier(.34,1.56,.64,1);
+  --r-pill: 999px;
+  --r-card: 14px;
+}
+body.vscode-light {
+  --glass: color-mix(in srgb, var(--card) 66%, transparent); --glass-2: color-mix(in srgb, var(--card) 80%, transparent);
+  --glass-hi: rgba(255,255,255,.85); --glass-edge: color-mix(in srgb, var(--fg) 11%, transparent); --glass-edge-hi: color-mix(in srgb, var(--fg) 18%, transparent);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 50%);
+  --glass-shadow: 0 10px 28px -16px rgba(20,20,40,.28), 0 1px 0 var(--glass-hi) inset;
+  --glass-lift: 0 18px 40px -18px rgba(20,20,40,.35), 0 1px 0 var(--glass-hi) inset;
+  --tint: color-mix(in srgb, var(--fg) 4%, transparent); --tint-2: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+body { background:
+  radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--brand) 8%, transparent), transparent 60%),
+  radial-gradient(100% 55% at 0% 100%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 65%),
+  var(--bg); background-attachment: fixed; }
+.boot { background: var(--glass-bar); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+.boot-logo { background: var(--brand); color: var(--brand-ink); border-radius: 14px; box-shadow: 0 1px 0 rgba(255,255,255,.45) inset, 0 12px 28px -8px color-mix(in srgb, var(--brand) 70%, transparent); }
+.progress { height: 2px; } .progress::after { background: linear-gradient(90deg, transparent, var(--brand), transparent); box-shadow: 0 0 10px var(--brand); }
+
+/* ── Tab bar: a frosted strip of pill tabs; the active tab is a raised glass lozenge. */
+.tabbar { height: 38px; gap: 4px; padding: 0 8px; background: var(--glass-bar); border-bottom-color: var(--glass-edge); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); position: relative; z-index: 4; }
+.tabs { gap: 3px; padding: 2px 0; }
+.tab { height: 28px; border-radius: var(--r-pill); padding: 0 6px 0 10px; transition: background .25s var(--ease-glass), color .2s, border-color .2s, box-shadow .25s var(--ease-glass); }
+.tab.active { background: var(--glass-2); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: 0 1px 0 var(--glass-hi) inset, 0 4px 12px -6px rgba(0,0,0,.45); }
+.tabbar > .ib { width: 28px; height: 28px; }
+.bgruns { gap: 2px; padding: 4px 8px; background: color-mix(in srgb, var(--brand) 6%, var(--glass-bar)); border-bottom-color: var(--glass-edge); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); position: relative; z-index: 3; }
+.bgrun { border-radius: var(--r-pill); padding: 0 4px 0 8px; transition: background .2s; }
+.bgrun .mdl { border-radius: var(--r-pill); background: var(--glass-2); box-shadow: 0 0 0 1px var(--glass-edge) inset; }
+
+/* ── The glass material, applied to every card-like surface. */
+.turn.user, .card, .code, .panel, .approval, .plan, .step.subhost.workers, .par-card, .idea, .suggestion, .notice, .question, .pill {
+  background-color: var(--glass); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: var(--glass-shadow);
+}
+.card, .code, .panel, .approval, .plan, .step.subhost.workers, .question, .notice { border-radius: var(--r-card); }
+.card-head { background: transparent; } .card-head:hover { background: var(--tint); }
+.code { background-color: color-mix(in srgb, var(--editor-bg) 72%, transparent); }
+.code-head { background: var(--tint); border-bottom: 1px solid var(--glass-edge); }
+.approval pre, .step.term > .content.termout { background: color-mix(in srgb, var(--editor-bg) 60%, transparent); }
+.pill { border-radius: var(--r-pill); }
+
+/* User turns: an accent-tinted glass bubble anchored to the right. */
+.turn.user { border-radius: 18px; border-top-right-radius: 6px; margin-left: max(12px, 12%); background-color: color-mix(in srgb, var(--accent) 12%, var(--glass)); border-color: color-mix(in srgb, var(--accent) 24%, var(--glass-edge)); }
+.turn .actions { border-radius: var(--r-pill); padding: 2px; }
+.turn .actions button { border-radius: var(--r-pill); }
+
+/* Approvals: amber-lit glass with a glowing edge so they read as "needs you" without a heavy fill. */
+.approval { border-color: color-mix(in srgb, var(--warn) 50%, var(--glass-edge)); background-color: color-mix(in srgb, var(--warn) 7%, var(--glass)); box-shadow: var(--glass-shadow), 0 0 0 3px color-mix(in srgb, var(--warn) 10%, transparent), 0 10px 30px -14px color-mix(in srgb, var(--warn) 45%, transparent); }
+.approval .actions { gap: 6px; }
+
+/* Questions: options are glass rows; the chosen one glows in the accent. */
+.question .opt { border-radius: 10px; transition: background .2s var(--ease-glass), border-color .2s, box-shadow .2s; }
+.question .opt.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: 0 1px 0 var(--glass-hi) inset, 0 4px 14px -8px color-mix(in srgb, var(--accent) 70%, transparent); }
+.question .q-chip { border-radius: var(--r-pill); background: var(--tint); }
+
+/* Tasks + changes: one glass stack; the meter is a liquid bar with a highlight. */
+#tasks:not(.hidden):has(+ #changes:not(.hidden)) { border-bottom-color: transparent; box-shadow: 0 1px 0 var(--glass-hi) inset; }
+#tasks:not(.hidden) + #changes:not(.hidden) { border-top-color: var(--glass-edge); }
+.panel-body { border-top-color: var(--glass-edge); }
+.panel-toggle, button.panel-head, .change, .todo { border-radius: 8px; }
+.meter { height: 6px; border-radius: var(--r-pill); background: var(--tint-2); box-shadow: 0 1px 1px rgba(0,0,0,.18) inset; }
+.meter i { border-radius: inherit; background: linear-gradient(180deg, color-mix(in srgb, var(--ok) 70%, #fff), var(--ok)); box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent); transition: width .5s var(--ease-glass); }
+.todo .box { border-radius: 5px; background: var(--tint); }
+.todo.done .box { box-shadow: 0 0 8px -1px color-mix(in srgb, var(--ok) 60%, transparent); }
+.todo.in_progress .box { box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent); }
+
+/* Empty state: a lit brand orb over glass suggestion tiles. */
+.empty .logo { width: 52px; height: 52px; border-radius: 16px; background: linear-gradient(160deg, color-mix(in srgb, var(--brand) 80%, #fff), var(--brand)); box-shadow: 0 1px 0 rgba(255,255,255,.55) inset, 0 -2px 6px rgba(0,0,0,.12) inset, 0 14px 32px -10px color-mix(in srgb, var(--brand) 75%, transparent); }
+.empty .logo svg { width: 28px; height: 28px; }
+.empty h2 { font-size: 1.35em; letter-spacing: -.02em; }
+.suggestions { gap: 8px; }
+.suggestion { border-radius: 12px; padding: 10px 12px; }
+.idea, .par-card, .suggestion { transition: transform .25s var(--ease-spring), background-color .2s, border-color .2s, box-shadow .25s var(--ease-glass); }
+.idea:hover, .par-card:hover, .suggestion:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--glass-edge)); box-shadow: var(--glass-lift), 0 8px 22px -12px color-mix(in srgb, var(--accent) 65%, transparent); }
+.idea, .par-card { border-radius: 12px; }
+.notice { background-color: color-mix(in srgb, var(--warn) 8%, var(--glass)); border-color: color-mix(in srgb, var(--warn) 45%, var(--glass-edge)); }
+
+/* ── Composer: floats over the bottom of the transcript as a glass capsule. A spacer at the end of #messages keeps the
+   last reply clear of it (its height follows --composer-h, which chat.js keeps in sync with a ResizeObserver). */
+#app { --composer-h: 108px; }
+#composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding-top: 18px; gap: 8px;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 70%, transparent) 18px, color-mix(in srgb, var(--bg) 82%, transparent)); }
+#messages { padding-bottom: 0; }
+#messages::after { content: ''; flex: none; height: calc(var(--composer-h) + 4px); }
+#composer > #box { position: sticky; bottom: 0; }
+#box { background-color: var(--glass-2); background-image: var(--glass-sheen); border-color: var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-lift); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); transition: border-color .2s, box-shadow .3s var(--ease-glass); }
+#box:focus-within { border-color: color-mix(in srgb, var(--focus) 65%, transparent); box-shadow: var(--glass-lift), 0 0 0 4px color-mix(in srgb, var(--focus) 16%, transparent); }
+#box.drop { border-color: var(--accent); box-shadow: var(--glass-lift), 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+#box.improving { border-color: var(--brand); box-shadow: var(--glass-lift), 0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent); }
+#composer > .panel, #approvals > .approval { backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); background-color: var(--glass-2); }
+.status { padding: 0 8px; }
+.ctxbtn { border-radius: var(--r-pill); border-color: var(--glass-edge); background: var(--tint); height: 24px; padding: 0 9px 0 7px; }
+.chips .chip, .ctx-row .chip { border-radius: var(--r-pill); }
+.pick, .ctx { border-radius: var(--r-pill); padding-inline: 8px; transition: background .2s, color .2s; }
+.pick.mode { background: var(--tint); box-shadow: 0 0 0 1px var(--glass-edge) inset; }
+.ctx .ring::after { background: var(--card); }
+.ib { border-radius: var(--r-pill); transition: background .2s, color .2s, transform .2s var(--ease-spring); }
+.send { width: 30px; height: 30px; border-radius: var(--r-pill); background-image: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.28) inset, 0 6px 14px -5px color-mix(in srgb, var(--accent) 75%, transparent); transition: transform .2s var(--ease-spring), opacity .15s, background-color .15s, box-shadow .2s; }
+.send:not(:disabled):hover { transform: translateY(-1px); }
+.send:disabled { box-shadow: none; }
+.send.stop { box-shadow: 0 1px 0 rgba(255,255,255,.3) inset, 0 6px 14px -6px rgba(0,0,0,.5); }
+.send.pause { background-color: var(--glass-2); border-color: var(--glass-edge); }
+.send:not(:disabled):active, .btn:not(:disabled):active, .ib:active, .pick:active { transform: scale(.94); }
+
+/* ── Buttons: glass pills; primary is lit accent glass. */
+.btn { border-radius: var(--r-pill); border-color: var(--glass-edge); background-color: var(--tint); background-image: var(--glass-sheen); box-shadow: 0 1px 0 var(--glass-hi) inset; transition: background-color .2s, border-color .2s, transform .2s var(--ease-spring), box-shadow .2s; }
+.btn:hover { background-color: var(--tint-2); border-color: var(--glass-edge-hi); }
+.btn.primary { background-color: var(--accent); background-image: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 6px 14px -6px color-mix(in srgb, var(--accent) 80%, transparent); }
+.btn.primary:hover { background-color: var(--accent-hover); }
+.btn.ghost { background: transparent; box-shadow: none; border-color: transparent; }
+.btn kbd { border-radius: 4px; }
+
+/* ── Floating layers: true frosted glass over whatever scrolls beneath. */
+.popover, .toast, .jump, .turn .actions, .task-row .ac {
+  background-color: var(--glass-float); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: 0 22px 48px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+}
+.popover { border-radius: 16px; padding: 5px; animation: glassIn .22s var(--ease-glass); }
+.popover .item { border-radius: 10px; transition: background .15s; }
+.popover .item.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset; }
+.popover .item.sel .tag { background: var(--tint-2); }
+.popover .search { border-radius: 10px; background: var(--tint); border-color: var(--glass-edge); }
+.popover .item .tag { border-radius: var(--r-pill); }
+.toast { border-radius: var(--r-pill); padding: 8px 16px; animation: glassIn .25s var(--ease-spring); }
+.jump { padding: 6px 13px; transition: transform .2s var(--ease-spring); } .jump:hover { transform: translateX(-50%) translateY(-1px); }
+.lightbox { background: rgba(0,0,0,.5); backdrop-filter: saturate(140%) blur(16px); -webkit-backdrop-filter: saturate(140%) blur(16px); }
+.lightbox img { border-radius: 12px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); }
+@keyframes glassIn { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
+::-webkit-scrollbar-thumb { border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+
+/* ── Responsive: lighter blur, tighter radii and padding as the sidebar narrows; short hosts shrink the fade. */
+@container messages (max-width: 360px) { .turn.user { margin-left: 8%; margin-right: 8px; } .card, .code, .plan, .panel, .approval, .question { border-radius: 12px; } }
+@media (max-width: 320px) { :root { --glass-blur: saturate(160%) blur(14px); --r-card: 12px; } #box { border-radius: 16px; } #composer { padding-left: 8px; padding-right: 8px; } .tabbar { padding: 0 4px; } }
+@media (max-height: 420px) { #composer { padding-top: 10px; } .tabbar { height: 32px; } .tab { height: 24px; } }
+
+/* ── Fallbacks: no backdrop-filter, reduced transparency, high contrast, reduced motion. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass-float: var(--vscode-editorWidget-background, var(--bg)); --glass-2: var(--card); --glass-bar: var(--bg); }
+  #composer { background: var(--bg); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass: var(--card); --glass-2: var(--card); --glass-float: var(--vscode-editorWidget-background, var(--bg)); --glass-bar: var(--bg); --glass-blur: none; --glass-sheen: none; }
+  body { background: var(--bg); } #composer { background: var(--bg); }
+}
+body.vscode-high-contrast, body.vscode-high-contrast-light {
+  --glass: var(--bg); --glass-2: var(--bg); --glass-float: var(--bg); --glass-bar: var(--bg); --glass-edge: var(--vscode-contrastBorder, var(--border)); --glass-edge-hi: var(--glass-edge);
+  --glass-hi: transparent; --glass-sheen: none; --glass-shadow: none; --glass-lift: none; --glass-blur: none; background: var(--bg);
+}
+body.vscode-high-contrast #composer, body.vscode-high-contrast-light #composer { background: var(--bg); border-top: 1px solid var(--glass-edge); }
+body.vscode-high-contrast .meter i, body.vscode-high-contrast-light .meter i { background: var(--ok); box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  .idea:hover, .par-card:hover, .suggestion:hover, .send:not(:disabled):hover, .jump:hover { transform: none; }
+  .jump:hover { transform: translateX(-50%); }
+  .popover, .toast { animation: none; }
+}
+/* Narrow composers: pickers give their padding back so the model name survives next to Pause / Stop. */
+@container (max-width: 340px) { .pick, .ctx { padding-inline: 5px; } .send { width: 28px; height: 28px; } }
+
+/* ── Loading & progress, redrawn in the glass language. */
+/* Boot: the brand tile with a sweeping halo, dots that ripple in brand colour. */
+.boot-logo { position: relative; animation: none; }
+.boot-logo::after { content: ''; position: absolute; inset: -6px; border-radius: 18px; padding: 2px; background: conic-gradient(from 0deg, transparent 0 68%, var(--brand)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: spin 1.4s linear infinite; }
+.boot-dots i { background: var(--brand); opacity: .8; }
+/* One spinner shape everywhere: a brand arc on a faint track. */
+.status .spinner, .empty-i.searching .spinner, .tab .spin, .bgrun .spin { border: 2px solid color-mix(in srgb, var(--fg) 14%, transparent); border-top-color: var(--brand); border-right-color: color-mix(in srgb, var(--brand) 45%, transparent); animation: spin .75s cubic-bezier(.5,.15,.5,.85) infinite; }
+.status .spinner, .empty-i.searching .spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.tab .spin, .bgrun .spin { border-width: 1.6px; }
+/* Waiting for the first token: three brand dots in a small glass pill, rising in a wave. */
+.typing { gap: 5px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: 0 1px 0 var(--glass-hi) inset; }
+.typing i { width: 6px; height: 6px; background: var(--brand); animation: wave 1.2s infinite ease-in-out; }
+@keyframes wave { 0%, 70%, 100% { transform: translateY(0) scale(.85); opacity: .35; } 35% { transform: translateY(-3px) scale(1); opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--brand) 60%, transparent); } }
+.caret { width: 2px; border-radius: 2px; background: var(--brand); box-shadow: 0 0 6px color-mix(in srgb, var(--brand) 70%, transparent); }
+.status { min-height: 20px; }
+.status .text { background: linear-gradient(90deg, var(--muted) 30%, var(--fg) 50%, var(--muted) 70%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite; }
+
+/* ── Search fields (history, context and model menus): a lens, a pill, and a focus glow. */
+.popover .search { height: 32px; padding: 0 10px 0 30px; border-radius: var(--r-pill); background-color: var(--tint); background-repeat: no-repeat; background-position: 10px center; background-size: 13px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239d9d9d' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>");
+  transition: border-color .2s, box-shadow .25s var(--ease-glass), background-color .2s; }
+body.vscode-light .popover .search { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23717171' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>"); }
+.popover .search:focus { background-color: var(--glass-2); border-color: color-mix(in srgb, var(--focus) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent); }
+.hist-row { border-radius: 10px; transition: background .15s; }
+.hist-row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.hist-row mark { background: color-mix(in srgb, var(--brand) 30%, transparent); border-radius: 4px; padding: 0 2px; }
+.hist-row .tag { border-radius: var(--r-pill); }
+.hist-row .acts button, .hist-foot button { border-radius: var(--r-pill); }
+.hist-foot { border-top-color: var(--glass-edge); }
+.empty-i.searching { display: flex; align-items: center; gap: 8px; }
+.hist-list.pending { position: relative; }
+.hist-list.pending::before { content: ''; position: sticky; top: 0; display: block; height: 2px; margin-bottom: -2px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--brand), transparent); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; z-index: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-logo::after, .status .text, .hist-list.pending::before { animation: none !important; }
+  .status .text { color: var(--muted); background: none; }
+  .typing i { animation: none !important; opacity: .7; }
+}
+body.vscode-high-contrast .typing, body.vscode-high-contrast-light .typing { background: transparent; }
+body.vscode-high-contrast .status .text, body.vscode-high-contrast-light .status .text { color: var(--fg); background: none; animation: none; }
+
+/* ── Answer footer: model · speed on the left, actions on the right. Quiet until hovered or focused. */
+.afoot { display: flex; align-items: center; gap: 8px; min-height: 26px; margin: 4px 0 2px; font-size: var(--fs-xs); color: var(--muted); }
+.afoot .info { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.afoot .info i { font-style: normal; opacity: .6; }
+.afoot .info span { overflow: hidden; text-overflow: ellipsis; }
+.afoot .mdl { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: var(--r-pill); background: var(--tint); box-shadow: 0 0 0 1px var(--glass-edge) inset; color: var(--fg); opacity: .85; max-width: 180px; }
+.afoot .acts { display: inline-flex; gap: 2px; margin-left: auto; flex: none; opacity: .55; transition: opacity .2s; }
+.turn:hover .afoot .acts, .afoot .acts:focus-within { opacity: 1; }
+.afoot .acts button { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--r-pill); color: var(--muted); transition: background .15s, color .15s, transform .2s var(--ease-spring); }
+.afoot .acts button:hover { background: var(--tint-2); color: var(--fg); }
+.afoot .acts button:active { transform: scale(.9); }
+.afoot .acts button:disabled { opacity: .4; pointer-events: none; }
+.afoot .acts svg { width: 14px; height: 14px; }
+.afoot .acts button[data-act="regen"]:hover svg { transform: rotate(-60deg); transition: transform .3s var(--ease-glass); }
+/* Copied: the button itself confirms. */
+button.copied, button.copied:hover { color: var(--ok) !important; }
+button.copied svg { animation: pop .3s var(--ease-spring); }
+@keyframes pop { from { transform: scale(.6); } to { transform: none; } }
+@container messages (max-width: 340px) { .afoot .mdl { max-width: 120px; } }
+@media (hover: none) { .afoot .acts { opacity: 1; } }
+
+/* ── Empty chat: contextual suggestions, recent chats, and the three shortcuts worth knowing. */
+.empty { max-width: 460px; }
+.suggestion { gap: 10px; min-width: 0; }
+.suggestion .ico { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 9px; background: var(--tint-2); color: var(--muted); box-shadow: 0 1px 0 var(--glass-hi) inset; transition: color .2s, background .2s; }
+.suggestion .ico svg { width: 14px; height: 14px; }
+.suggestion:hover .ico { color: var(--brand); background: color-mix(in srgb, var(--brand) 14%, transparent); }
+.suggestion .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggestion .mode { flex: none; font-size: 10px; line-height: 16px; padding: 0 7px; border-radius: var(--r-pill); color: var(--muted); background: var(--tint); }
+.recent { margin-top: 18px; text-align: left; }
+.recent-h { display: flex; align-items: center; padding: 0 4px 6px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.recent-h button { margin-left: auto; font-size: var(--fs-xs); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--link); padding: 2px 6px; border-radius: var(--r-pill); }
+.recent-h button:hover { background: var(--tint); }
+.recent-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 0 8px; border-radius: 10px; color: var(--fg); font-size: var(--fs-sm); text-align: left; transition: background .15s; }
+.recent-row:hover { background: var(--tint); }
+.recent-row .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); } .recent-row .ico svg { width: 13px; height: 13px; }
+.recent-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-row .when { flex: none; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.hints { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; margin-top: 18px; font-size: var(--fs-xs); color: var(--muted); }
+.hints kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; margin-right: 4px; border-radius: 5px; font-family: var(--mono); font-size: 10.5px; background: var(--tint-2); box-shadow: 0 1px 0 var(--glass-edge); color: var(--fg); }
+@container messages (max-width: 340px) { .suggestion .mode { display: none; } .hints { gap: 4px 10px; } }
+
+/* ── Failed turn: message, then Change model / Retry on their own row. */
+.error-box { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-radius: var(--r-card); background-color: color-mix(in srgb, var(--error) 8%, var(--glass)); background-image: var(--glass-sheen); border-color: color-mix(in srgb, var(--error) 45%, var(--glass-edge)); box-shadow: var(--glass-shadow); }
+.error-box .msg { flex: 1 1 200px; }
+.err-acts { display: inline-flex; gap: 6px; margin-left: auto; flex: none; color: var(--fg); }
+.err-acts .btn svg { width: 12px; height: 12px; }
+
+/* ════ Liquid glass: motion, light and refraction (driven by media/glass.js) ════════════════════════════════════
+   Registered properties so the light position and strength animate instead of jumping. */
+@property --mx { syntax: '<percentage>'; inherits: false; initial-value: 50%; }
+@property --my { syntax: '<percentage>'; inherits: false; initial-value: -40%; }
+:root { --spec: rgba(255,255,255,.15); --spec-rim: rgba(255,255,255,.2); }
+body.vscode-light { --spec: rgba(255,255,255,.75); --spec-rim: rgba(255,255,255,.9); }
+
+/* ── Pointer light: a soft highlight that follows the pointer across glass, painted between the surface and its
+   content (isolation + z-index -1), so text is never washed out. glass.js sets --mx/--my and .lg-on. */
+:is(.btn, .card, .panel, .approval, .plan, .suggestion, .idea, .par-card, .recent-row, .afoot .acts button, .tab, .ib:not(.badge), .send) { position: relative; isolation: isolate; }
+#box, .popover { isolation: isolate; }
+:is(.btn, .card, .panel, .approval, .plan, .suggestion, .idea, .par-card, .recent-row, .afoot .acts button, .tab, .ib:not(.badge), .send, #box, .popover)::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0;
+  background: radial-gradient(220px circle at var(--mx) var(--my), var(--spec), transparent 62%);
+  transition: opacity .45s var(--ease-glass), --mx .18s linear, --my .18s linear;
+}
+.lg-on::after { opacity: 1; }
+/* Small controls: a tighter, brighter glint. */
+:is(.ib, .send, .afoot .acts button, .tab)::after { background: radial-gradient(40px circle at var(--mx) var(--my), var(--spec-rim), transparent 70%); }
+.btn.primary::after, .send:not(.pause)::after { background: radial-gradient(90px circle at var(--mx) var(--my), rgba(255,255,255,.28), transparent 65%); }
+
+/* ── Lens: floating layers bend what scrolls beneath them (SVG displacement, Chromium only; html.lg-lens).
+   Less blur than before so the bending is visible; fills drop a little so the light can come through. */
+.lg-lens #box { backdrop-filter: url(#lp-lens) saturate(170%) blur(6px); -webkit-backdrop-filter: none; background-color: color-mix(in srgb, var(--card) 58%, transparent); }
+.lg-lens :is(.popover, .toast, .jump, .turn .actions) { backdrop-filter: url(#lp-lens-sm) saturate(180%) blur(10px); -webkit-backdrop-filter: none; }
+.lg-lens .tabbar, .lg-lens .bgruns { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(12px); -webkit-backdrop-filter: none; }
+.lg-lens #composer > .panel, .lg-lens #approvals > .approval { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(8px); -webkit-backdrop-filter: none; }
+/* A lit rim on lensed glass: bright where light enters (top-left), darker where it leaves. */
+.lg-lens #box { box-shadow: var(--glass-lift), inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.18); }
+.lg-lens #box:focus-within { box-shadow: var(--glass-lift), inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.18), 0 0 0 4px color-mix(in srgb, var(--focus) 16%, transparent); }
+
+/* ── Liquid tab selection: one glass pill behind the active tab that flows to the next one (glass.js animates it). */
+.tabs { position: relative; }
+.lg-ind { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; border-radius: var(--r-pill); will-change: transform, width;
+  background-color: var(--glass-2); background-image: var(--glass-sheen); border: 1px solid var(--glass-edge);
+  box-shadow: inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.14), 0 4px 14px -6px rgba(0,0,0,.45); transition: opacity .25s; }
+.tabs.lg-has-ind > .tab { z-index: 1; }
+.tabs.lg-has-ind > .tab.active { background: transparent; border-color: transparent; box-shadow: none; }
+
+/* ── Icons that respond: every icon eases on a spring; each control has its own small gesture. */
+button svg { transition: transform .4s var(--ease-spring), color .2s, opacity .2s; }
+#btnNewTab:hover svg { transform: rotate(90deg) scale(1.08); }
+#btnHistory:hover svg { transform: rotate(-40deg); }
+#btnImprove:hover svg { animation: twinkle .9s var(--ease-glass); }
+#btnImage:hover svg { transform: rotate(-8deg) scale(1.12); }
+.tab .close:hover svg { transform: rotate(90deg); }
+.pick:hover .chev svg { transform: translateY(1.5px); }
+.ctxbtn .at { display: inline-block; transition: transform .4s var(--ease-spring); } .ctxbtn:hover .at { transform: rotate(-18deg) scale(1.2); }
+.suggestion:hover .ico svg, .recent-row:hover .ico svg { transform: scale(1.15) rotate(-8deg); }
+.btn:not(.busy):hover svg { transform: translateY(-1px) scale(1.06); }
+.code-head button:hover svg { transform: translateY(-1px); }
+.panel .chev svg, .work .chev svg { transition: transform .35s var(--ease-spring); }
+/* Send: the arrow lifts on hover and launches on press. */
+.send:not(:disabled):not(.stop):not(.pause):hover svg { transform: translateY(-2px); }
+.send:not(:disabled):not(.stop):not(.pause):active svg { transform: translateY(-9px); opacity: 0; transition-duration: .18s; }
+.send.stop:hover svg { transform: scale(.85); }
+/* Copied: the check draws itself. */
+button.copied svg path { stroke-dasharray: 18; stroke-dashoffset: 18; animation: draw .45s var(--ease-glass) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes twinkle { 0% { transform: none; } 30% { transform: rotate(-18deg) scale(1.25); } 60% { transform: rotate(10deg) scale(.95); } 100% { transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  button svg, .ctxbtn .at { transition: none; }
+  #btnImprove:hover svg, button.copied svg path { animation: none; }
+  button.copied svg path { stroke-dashoffset: 0; }
+}
+body.vscode-high-contrast, body.vscode-high-contrast-light { --spec: transparent; --spec-rim: transparent; }
+body.vscode-high-contrast .lg-ind, body.vscode-high-contrast-light .lg-ind { background: transparent; border: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); box-shadow: none; }
+
+/* ── Floating composer, refined: a light veil only, so the message box has something to refract; the status line
+   becomes its own small glass pill instead of text drawn over the transcript. */
+#composer { background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 30%, transparent) 30%, color-mix(in srgb, var(--bg) 55%, transparent)); }
+#composer > .status:not(.hidden) { align-self: flex-start; max-width: 100%; height: 26px; padding: 0 12px 0 9px; border-radius: var(--r-pill);
+  background-color: var(--glass-2); background-image: var(--glass-sheen); border: 1px solid var(--glass-edge); box-shadow: 0 6px 16px -10px rgba(0,0,0,.5), inset 1px 1px 0 var(--spec-rim);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+.lg-lens #composer > .status { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(10px); }
+body.vscode-high-contrast #composer, body.vscode-high-contrast-light #composer { background: var(--bg); }
+@media (prefers-reduced-transparency: reduce) { #composer { background: var(--bg); } }

@@ -38,6 +38,8 @@ module.exports = {
   window: {
     activeTextEditor: undefined,
     tabGroups: { all: [] },
+    onDidChangeActiveTextEditor: () => ({ dispose() {} }),
+    onDidChangeTextEditorSelection: () => ({ dispose() {} }),
     // Notifications are recorded so tests can assert that a hidden chat mirrored a prompt; nobody "answers" them.
     notifications: [],
     showWarningMessage(message) { module.exports.window.notifications.push(message); return Promise.resolve(undefined); },

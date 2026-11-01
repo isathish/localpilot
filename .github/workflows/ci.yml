@@ -38,6 +38,8 @@ jobs:
         run: npm run compile
       - name: Offline smoke tests
         run: npm run smoke
+      - name: CLI end-to-end (providers, keys, Claude tool loop, gateway, Auto stays local)
+        run: node scripts/cli-e2e.mjs
       - name: Extension Host tests (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm test

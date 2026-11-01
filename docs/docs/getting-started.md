@@ -52,6 +52,8 @@ On first launch the **Welcome / Setup** screen opens. It looks for running model
 
 ## 3. Get a model
 
+**Prefer a cloud model?** In the setup screen, click **Use a cloud API…**, pick OpenAI, Claude, Gemini, OpenRouter, Groq or another provider, and paste your API key. The key goes to your OS keychain. See [Cloud models]({{ '/guides/cloud-models-vscode/' | relative_url }}). You can add a local model later; automatic picks then prefer it.
+
 If you have no model server, let LocalPilot set one up:
 
 1. In the setup screen, click the button it offers: **Install Ollama & starter model**, **Start Ollama & download starter model** or **Download starter model**. It shows which models it will download and their size.

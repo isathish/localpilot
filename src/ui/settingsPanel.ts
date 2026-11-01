@@ -7,7 +7,9 @@ import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
 import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
-import { isRemoteUrl } from '../providers/cloud';
+import { isRemoteUrl, keyStatus, KeyStatus } from '../providers/cloud';
+import { sanitizeProviderConfig } from '../providers/sanitize';
+import { ProviderSecrets } from '../providers/secrets';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
@@ -94,7 +96,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -218,7 +220,9 @@ export class SettingsPanel implements vscode.Disposable {
     /** Ids of chats currently streaming (they are never deleted by "Clear chat history"). */
     private readonly running: () => string[] = () => [],
     /** Local metrics + log mirror behind the Dashboard page. */
-    private readonly telemetry?: Telemetry
+    private readonly telemetry?: Telemetry,
+    /** Moves API keys typed into a provider card into VS Code secret storage. */
+    private readonly secrets?: ProviderSecrets
   ) {
     if (telemetry) {
       const off = telemetry.onLog((entry) => {
@@ -542,9 +546,16 @@ export class SettingsPanel implements vscode.Disposable {
     if (scope === 'workspace' && !vscode.workspace.workspaceFolders?.length) {
       throw new Error('Open a folder to use workspace settings');
     }
-    const clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
+    let clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
+    if (key === 'providers' && Array.isArray(clean) && this.secrets) {
+      // A pasted key goes to the OS keychain; settings.json keeps a `${secret:<id>}` reference.
+      clean = await this.secrets.protect(clean as ProviderConfig[]);
+    }
     await vscode.workspace.getConfiguration('localpilot').update(key, clean, scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace);
     this.log.info(`settings: ${key} ${clean === undefined ? 'reset' : 'updated'} (${scope})`);
+    if (key === 'providers') {
+      await this.secrets?.prune();
+    }
   }
 
   /** Searches a registry for the gallery. A newer search on the same source cancels the one in flight so a fast typist never sees stale pages land. */
@@ -715,7 +726,8 @@ export class SettingsPanel implements vscode.Disposable {
     // Plan mode keeps the session model unless `routing.reasoning` is set, so there is no "auto" reasoning pick to show.
     const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled, 'vision', system)?.id, fast: pickForRole(enabled, 'fast', system)?.id };
     const installed: ManagedModel[] = all.map((m) => {
-      const gb = modelFootprintGb(m);
+      // A cloud model takes no memory here: no size and no "fits" badge, which would only mislead.
+      const gb = m.remote ? undefined : modelFootprintGb(m);
       const cat = lookupCatalog(m);
       const rt = runtimes.find((r) => r.providerId === m.providerId && r.canRemove && r.running);
       return {
@@ -785,6 +797,8 @@ export class SettingsPanel implements vscode.Disposable {
       hasWorkspace: !!vscode.workspace.workspaceFolders?.length,
       settings,
       models,
+      // Key source and presence per provider, so cards can say "key in keychain" or "OPENAI_API_KEY not set".
+      keys: Object.fromEntries((cfg.get<ProviderConfig[]>('providers', []) ?? []).map((p) => [p.id, keyStatus(p)])),
       skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, dir: s.dir, removable: s.source !== 'builtin' })),
       learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
@@ -813,6 +827,7 @@ export class SettingsPanel implements vscode.Disposable {
 <body data-logo="${media('logo.svg')}">
 <div id="app" aria-busy="true"><div class="loading" role="status"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span><span class="sr">Loading LocalPilot Settings…</span></div></div>
 <div id="toasts"></div>
+<script nonce="${nonce}" src="${media('glass.js')}"></script>
 <script nonce="${nonce}" src="${media('settings.js')}"></script>
 </body>
 </html>`;
@@ -870,29 +885,5 @@ function galleryError(e: unknown, source: GallerySource): string {
   return msg;
 }
 
-/** Keep only known fields and normalise URLs/ids so a malformed form can't produce a broken provider. */
-export function sanitizeProvider(p: ProviderConfig): ProviderConfig {
-  const id = String(p.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'provider';
-  const type: ProviderConfig['type'] = p.type === 'ollama' || p.type === 'anthropic' ? p.type : 'openai';
-  let baseUrl = String(p.baseUrl || '').trim().replace(/\/+$/, '');
-  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
-    baseUrl = `http://${baseUrl}`;
-  }
-  const out: ProviderConfig = { id, type, baseUrl };
-  if (p.displayName && String(p.displayName).trim()) {
-    out.displayName = String(p.displayName).trim();
-  }
-  if (p.apiKey && String(p.apiKey).trim()) {
-    out.apiKey = String(p.apiKey).trim();
-  }
-  if (Array.isArray(p.models) && p.models.length) {
-    out.models = p.models.map((m) => String(m).trim()).filter(Boolean);
-  }
-  if (typeof p.contextWindow === 'number' && p.contextWindow > 0) {
-    out.contextWindow = Math.round(p.contextWindow);
-  }
-  if (p.enabled === false) {
-    out.enabled = false;
-  }
-  return out;
-}
+/** Kept under its old name for the settings tests and callers. */
+export const sanitizeProvider = sanitizeProviderConfig;

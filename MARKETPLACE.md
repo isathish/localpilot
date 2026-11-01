@@ -1,6 +1,6 @@
 <h1 align="center">LocalPilot</h1>
 <p align="center"><strong>The AI coding agent that runs on your machine.</strong></p>
-<p align="center">Reads your project, edits files, runs tests, shows you every diff — in VS Code, on models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>.<br>No subscription. No account. Your code never leaves your laptop.</p>
+<p align="center">Reads your project, edits files, runs tests, shows you every diff — in VS Code, on models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>, or on <b>OpenAI</b>, <b>Claude</b>, <b>Gemini</b>, <b>OpenRouter</b>, <b>Groq</b> and more with your own key.<br>No subscription. No account. Local by default: your code leaves your laptop only for a cloud provider you add.</p>
 <p align="center">
   <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/isathish/localpilot/releases/latest"><img src="https://img.shields.io/github/v/release/isathish/localpilot?label=release&color=f2a33a" alt="Latest release"></a>
@@ -22,7 +22,7 @@
 <table align="center">
   <tr>
     <td align="center" width="33%"><b>$0 per month</b><br><sub>Cloud assistants cost $8–200 per developer. LocalPilot runs on hardware you already own.</sub></td>
-    <td align="center" width="33%"><b>Private by construction</b><br><sub>Every provider address is <code>localhost</code> unless you add one. No telemetry leaves the disk.</sub></td>
+    <td align="center" width="33%"><b>Private by construction</b><br><sub>Every provider address is <code>localhost</code> unless you add one. Cloud keys live in your OS keychain. No telemetry leaves the disk.</sub></td>
     <td align="center" width="33%"><b>Works offline</b><br><sub>Unplug the network: it keeps editing, running tests and reviewing diffs.</sub></td>
   </tr>
 </table>
@@ -117,7 +117,8 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 | **Agent · Plan · Ask · Debug · Multitask** | Autonomous edit-and-run loop with approval gates, a live task checklist, diagnostics checks and retries. |
 | **Parallel agents** | Independent tabs, one worktree each, Best-of-N across models, live Agents panel, per-agent pause and stop. |
 | **Change review & checkpoints** | Side-by-side diffs, accept or reject per file or session, restore any checkpoint. |
-| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp and model servers in Docker. |
+| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp, the OmniRoute and LiteLLM gateways, and model servers in Docker. |
+| **Cloud providers, your own key** | One-click presets for OpenAI, Anthropic (Claude), Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Azure OpenAI and Ollama Cloud. Keys go to your OS keychain. Automatic picks keep preferring local models. |
 | **Memory** | Durable project and personal notes the agent saves and recalls across sessions. |
 | **Skills & subagents** | 14 built-in `SKILL.md` playbooks and 9 subagents (`explore`, `coder`, `reviewer`, `tester`, `debugger`…). Install any skill from GitHub in one step; matching skills from `anthropics/skills`, `obra/superpowers` and `github/awesome-copilot` install themselves when needed. |
 | **Screenshots & images** | Capture a selection, window or screen, paste or drop an image, and let a vision model fix what it sees. |

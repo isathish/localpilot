@@ -97,7 +97,8 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
         // Routing picks the configured completion model, else the smallest FIM-capable model that fits this machine.
         const { provider, model } = await this.providers.route({ role: 'completion' });
         modelId = model.id;
-        if (abort.signal.aborted || gen !== this.generation) {
+        // Ghost text asks on every pause in typing: it goes to a cloud model only when one is chosen for it explicitly.
+        if (abort.signal.aborted || gen !== this.generation || (model.remote && !getConfig().inlineCompletion.model)) {
           return;
         }
         const header = `// File: ${vscode.workspace.asRelativePath(document.uri)} (${document.languageId})\n`;

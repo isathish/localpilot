@@ -7,6 +7,10 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; };
+  /** Placeholder shapes while a list or the dashboard loads: a status line for screen readers plus shimmering rows. */
+  const skeleton = (text, rows = 3, kind = 'rows') => el('div', `skel ${kind}`, `<div class="loading short" role="status"><span class="spinner"></span>${text}</div>${kind === 'kpis'
+    ? `<div class="kpis">${'<div class="kpi skel-card"><i class="sk sk-l"></i><i class="sk sk-v"></i><i class="sk sk-s"></i></div>'.repeat(rows)}</div>`
+    : '<div class="skel-row"><i class="sk sk-ic"></i><span><i class="sk sk-t"></i><i class="sk sk-s"></i></span></div>'.repeat(rows)}`);
   const I = {
     server: '<svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2"/><rect x="2" y="9" width="12" height="4.5" rx="1.2"/><path d="M4.5 4.8h.01M4.5 11.3h.01"/></svg>',
     cpu: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="3" height="3"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2"/></svg>',
@@ -51,50 +55,114 @@
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web'] },
     { id: 'data', label: 'Data & system', items: ['memory', 'advanced'] },
   ];
+  /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
+   *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
+  const SECTION_WORDS = {
+    providers: 'ollama lm studio llama.cpp vllm openai anthropic claude gemini api key endpoint url cloud gateway connection server colibri',
+    models: 'installed download pull routing context temperature thinking memory budget default model',
+    gallery: 'catalog library hugging face docker hub download pull install gguf',
+    skills: 'skill playbook subagent registry install',
+    agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify',
+    completions: 'ghost text fim autocomplete tab suggestion',
+    web: 'searxng brave tavily duckduckgo browser screenshot fetch',
+    memory: 'history chats notes retention transcripts',
+    mcp: 'model context protocol server tools reconnect',
+    dashboard: 'telemetry metrics usage logs redis stats throughput',
+    advanced: 'setup welcome terminal cli settings.json logs chat location about',
+  };
+  const FIELD_INDEX = [
+    ['providers', 'colibri.path', 'colibri folder'], ['providers', 'colibri.model', 'Colibri model'], ['providers', 'colibri.port', 'Colibri port'], ['providers', 'colibri.kvSlots', 'Parallel conversations'],
+    ['models', 'models.autoSetup', 'Offer automatic setup'], ['models', 'routing.enabled', 'Route automatically'], ['models', 'models.autoTune', 'Learn from usage'],
+    ['models', 'defaultModel', 'Default model for agent & chat'], ['models', 'inlineCompletion.model', 'Inline completions model'], ['models', 'routing.vision', 'Images model'],
+    ['models', 'routing.reasoning', 'Plan mode model'], ['models', 'routing.fast', 'Read-only subagents model'], ['models', 'routing.coding', 'Implementing subagents model'],
+    ['models', 'routing.parallelModels', 'Spread parallel work across models'], ['models', 'contextWindow', 'Context window'], ['models', 'maxOutputTokens', 'Max output tokens'],
+    ['models', 'temperature', 'Temperature'], ['models', 'thinking', 'Extended thinking'], ['models', 'keepAlive', 'Keep model loaded'], ['models', 'prewarm', 'Pre-load the model while you type'],
+    ['models', 'ollama.flashAttention', 'Ollama flash attention'], ['models', 'ollama.kvCacheType', 'Ollama KV cache'],
+    ['agent', 'approvals.terminal', 'Terminal commands approval'], ['agent', 'approvals.write', 'File edits approval'], ['agent', 'approvals.delete', 'Deleting files approval'],
+    ['agent', 'approvals.network', 'Network & MCP approval'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
+    ['agent', 'autoClarify', 'Interpret vague requests automatically'], ['agent', 'prompts.autoCorrect', 'Correct misspelled names in requests'], ['agent', 'clarify.questions', 'Questions before starting'],
+    ['agent', 'hooks.enabled', 'Run hooks'], ['agent', 'worktrees.mode', 'Where agents work'], ['agent', 'worktrees.location', 'Worktree folder'],
+    ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compactionThreshold', 'Compact context at'],
+    ['agent', 'maxToolOutputChars', 'Max tool output'], ['agent', 'systemPromptAppend', 'Extra instructions'],
+    ['completions', 'inlineCompletion.enabled', 'Enable inline completions'], ['completions', 'inlineCompletion.debounceMs', 'Debounce'], ['completions', 'inlineCompletion.maxTokens', 'Max tokens per suggestion'],
+    ['web', 'webSearch.provider', 'Search provider'], ['web', 'webSearch.searxngUrl', 'SearXNG URL'], ['web', 'webSearch.apiKey', 'Web search API key'], ['web', 'webSearch.maxResults', 'Max results'],
+    ['web', 'browser.chromePath', 'Browser for screenshots'],
+    ['memory', 'sessions.retention', 'Keep at most (chats)'], ['memory', 'storage.sessionsInMemory', 'Transcripts in memory'], ['memory', 'memory.enabled', 'Enable memory'],
+    ['skills', 'skills.autoInstall', 'Registry skills'], ['skills', 'skills.autoInstallScope', 'Install skills into'], ['skills', 'skills.builtin', 'Built-in skills'],
+    ['dashboard', 'telemetry.enabled', 'Record usage metrics'], ['dashboard', 'telemetry.retentionDays', 'Keep metrics for'], ['dashboard', 'storage.redis.enabled', 'Store telemetry in Redis'], ['dashboard', 'storage.redis.url', 'Redis URL'],
+    ['advanced', 'showWelcomeOnStartup', 'Show setup on first run'], ['advanced', 'chat.location', 'Chat location'],
+  ];
+  /** Every query word must hit the entry; label-prefix hits rank first, then label, key, then section words. */
+  function findSettings(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean); if (!words.length) { return []; }
+    const secName = Object.fromEntries(SECTIONS.map(([id, label]) => [id, label]));
+    const entries = [...SECTIONS.map(([id, label]) => ({ sec: id, label, hay: `${label} ${SECTION_WORDS[id] || ''}`.toLowerCase(), lbl: label.toLowerCase() })),
+      ...FIELD_INDEX.map(([sec, key, label]) => ({ sec, key, label, hay: `${label} ${key} ${secName[sec] || ''}`.toLowerCase(), lbl: label.toLowerCase() }))];
+    // Keys match only at word starts (camelCase / dots), so "temp" finds temperature but not sysTEMPromptAppend.
+    const keyWords = (k) => (k || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[\s.]+/);
+    return entries.filter((e) => words.every((w) => e.hay.replace(e.key ? e.key.toLowerCase() : '\0', '').includes(w) || keyWords(e.key).some((k) => k.startsWith(w))))
+      .map((e) => ({ ...e, score: (e.lbl.startsWith(words[0]) ? 0 : e.lbl.includes(words[0]) ? 1 : 2) + (e.key ? 0 : .5) }))
+      .sort((a, b) => a.score - b.score).slice(0, 8);
+  }
   /** Remembered across reloads: collapsed groups and whether the sidebar is folded to icons. */
   const viewState = () => (typeof vscode.getState === 'function' && vscode.getState()) || {};
   const navPrefs = Object.assign({ collapsed: [], rail: false }, viewState().nav);
   const saveNavPrefs = () => { if (typeof vscode.setState === 'function') { vscode.setState({ ...viewState(), nav: navPrefs }); } };
+  /** `group` picks the tab: servers on this machine, local gateways to cloud models, cloud APIs. `keyUrl`: where to get a key. */
   const PRESET_PROVIDERS = [
-    { key: 'ollama', label: 'Ollama', sub: 'localhost:11434', cfg: { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' } },
-    { key: 'lmstudio', label: 'LM Studio', sub: 'localhost:1234', cfg: { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' } },
-    { key: 'llamacpp', label: 'llama.cpp', sub: 'localhost:8080', cfg: { id: 'llamacpp', type: 'openai', baseUrl: 'http://localhost:8080/v1', displayName: 'llama.cpp server' } },
-    { key: 'vllm', label: 'vLLM / Unsloth', sub: 'localhost:8000', cfg: { id: 'vllm', type: 'openai', baseUrl: 'http://localhost:8000/v1', displayName: 'vLLM / Unsloth' } },
-    { key: 'docker', label: 'Docker Model Runner', sub: 'localhost:12434', cfg: { id: 'docker', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' } },
-    { key: 'jan', label: 'Jan', sub: 'localhost:1337', cfg: { id: 'jan', type: 'openai', baseUrl: 'http://localhost:1337/v1', displayName: 'Jan' } },
-    { key: 'localai', label: 'LocalAI', sub: 'localhost:8080', cfg: { id: 'localai', type: 'openai', baseUrl: 'http://localhost:8080/v1', displayName: 'LocalAI' } },
-    { key: 'sglang', label: 'SGLang', sub: 'localhost:30000', cfg: { id: 'sglang', type: 'openai', baseUrl: 'http://localhost:30000/v1', displayName: 'SGLang' } },
-    { key: 'koboldcpp', label: 'KoboldCpp', sub: 'localhost:5001', cfg: { id: 'koboldcpp', type: 'openai', baseUrl: 'http://localhost:5001/v1', displayName: 'KoboldCpp' } },
-    { key: 'textgen', label: 'text-generation-webui', sub: 'localhost:5000', cfg: { id: 'textgen', type: 'openai', baseUrl: 'http://localhost:5000/v1', displayName: 'text-generation-webui' } },
-    { key: 'gpt4all', label: 'GPT4All', sub: 'localhost:4891', cfg: { id: 'gpt4all', type: 'openai', baseUrl: 'http://localhost:4891/v1', displayName: 'GPT4All' } },
-    { key: 'litellm', label: 'LiteLLM proxy', sub: 'localhost:4000', cfg: { id: 'litellm', type: 'openai', baseUrl: 'http://localhost:4000/v1', displayName: 'LiteLLM' } },
-    { key: 'custom', label: 'Custom endpoint', sub: 'any OpenAI-compatible URL', cfg: { id: 'custom', type: 'openai', baseUrl: 'http://', displayName: 'Custom' } },
-    // Cloud APIs: the key is read from the usual environment variable unless one is pasted into the card.
     ...[
-      ['openai', 'OpenAI', 'api.openai.com', 'openai', 'https://api.openai.com/v1', 'OPENAI_API_KEY'],
-      ['anthropic', 'Anthropic (Claude)', 'api.anthropic.com', 'anthropic', 'https://api.anthropic.com/v1', 'ANTHROPIC_API_KEY'],
-      ['gemini', 'Google Gemini', 'generativelanguage.googleapis.com', 'openai', 'https://generativelanguage.googleapis.com/v1beta/openai', 'GEMINI_API_KEY'],
-      ['openrouter', 'OpenRouter', 'openrouter.ai', 'openai', 'https://openrouter.ai/api/v1', 'OPENROUTER_API_KEY'],
-      ['groq', 'Groq', 'api.groq.com', 'openai', 'https://api.groq.com/openai/v1', 'GROQ_API_KEY'],
-      ['mistral', 'Mistral AI', 'api.mistral.ai', 'openai', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY'],
-      ['deepseek', 'DeepSeek', 'api.deepseek.com', 'openai', 'https://api.deepseek.com/v1', 'DEEPSEEK_API_KEY'],
-      ['xai', 'xAI (Grok)', 'api.x.ai', 'openai', 'https://api.x.ai/v1', 'XAI_API_KEY'],
-      ['together', 'Together AI', 'api.together.xyz', 'openai', 'https://api.together.xyz/v1', 'TOGETHER_API_KEY'],
-      ['fireworks', 'Fireworks AI', 'api.fireworks.ai', 'openai', 'https://api.fireworks.ai/inference/v1', 'FIREWORKS_API_KEY'],
-      ['cerebras', 'Cerebras', 'api.cerebras.ai', 'openai', 'https://api.cerebras.ai/v1', 'CEREBRAS_API_KEY'],
-      ['huggingface', 'Hugging Face', 'router.huggingface.co', 'openai', 'https://router.huggingface.co/v1', 'HF_TOKEN'],
-      ['nvidia', 'NVIDIA NIM', 'integrate.api.nvidia.com', 'openai', 'https://integrate.api.nvidia.com/v1', 'NVIDIA_API_KEY'],
-      ['moonshot', 'Moonshot (Kimi)', 'api.moonshot.ai', 'openai', 'https://api.moonshot.ai/v1', 'MOONSHOT_API_KEY'],
-      ['dashscope', 'Alibaba Qwen', 'dashscope-intl.aliyuncs.com', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY'],
-      ['ollama-cloud', 'Ollama Cloud', 'ollama.com', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY'],
-      ['azure', 'Azure OpenAI', 'your-resource.openai.azure.com', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY'],
-    ].map(([key, label, sub, type, baseUrl, env]) => ({ key, label, sub, cloud: true, cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}` } })),
+      ['ollama', 'Ollama', 'localhost:11434', 'ollama', 'http://localhost:11434'],
+      ['lmstudio', 'LM Studio', 'localhost:1234', 'openai', 'http://localhost:1234/v1'],
+      ['llamacpp', 'llama.cpp', 'localhost:8080', 'openai', 'http://localhost:8080/v1', 'llama.cpp server'],
+      ['vllm', 'vLLM / Unsloth', 'localhost:8000', 'openai', 'http://localhost:8000/v1'],
+      ['docker', 'Docker Model Runner', 'localhost:12434', 'openai', 'http://localhost:12434/engines/v1'],
+      ['jan', 'Jan', 'localhost:1337', 'openai', 'http://localhost:1337/v1'],
+      ['localai', 'LocalAI', 'localhost:8080', 'openai', 'http://localhost:8080/v1'],
+      ['sglang', 'SGLang', 'localhost:30000', 'openai', 'http://localhost:30000/v1'],
+      ['koboldcpp', 'KoboldCpp', 'localhost:5001', 'openai', 'http://localhost:5001/v1'],
+      ['textgen', 'text-generation-webui', 'localhost:5000', 'openai', 'http://localhost:5000/v1'],
+      ['gpt4all', 'GPT4All', 'localhost:4891', 'openai', 'http://localhost:4891/v1'],
+    ].map(([key, label, sub, type, baseUrl, name]) => ({ key, label, sub, group: 'local', cfg: { id: key, type, baseUrl, displayName: name || label } })),
+    // Gateways run here but forward prompts to cloud models, so they are marked `cloud`; a key is optional.
+    { key: 'omniroute', label: 'OmniRoute', sub: 'localhost:20128', group: 'gateway', keyUrl: 'https://github.com/diegosouzapw/OmniRoute', cfg: { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true } },
+    { key: 'litellm', label: 'LiteLLM proxy', sub: 'localhost:4000', group: 'gateway', keyUrl: 'https://docs.litellm.ai/docs/simple_proxy', cfg: { id: 'litellm', type: 'openai', baseUrl: 'http://localhost:4000/v1', displayName: 'LiteLLM', cloud: true } },
+    // Cloud APIs: the key is read from the usual environment variable until one is pasted (then it goes to the keychain).
+    ...[
+      ['openai', 'OpenAI', 'api.openai.com', 'openai', 'https://api.openai.com/v1', 'OPENAI_API_KEY', 'https://platform.openai.com/api-keys'],
+      ['anthropic', 'Anthropic (Claude)', 'api.anthropic.com', 'anthropic', 'https://api.anthropic.com/v1', 'ANTHROPIC_API_KEY', 'https://console.anthropic.com/settings/keys'],
+      ['gemini', 'Google Gemini', 'generativelanguage.googleapis.com', 'openai', 'https://generativelanguage.googleapis.com/v1beta/openai', 'GEMINI_API_KEY', 'https://aistudio.google.com/apikey'],
+      ['openrouter', 'OpenRouter', 'openrouter.ai', 'openai', 'https://openrouter.ai/api/v1', 'OPENROUTER_API_KEY', 'https://openrouter.ai/keys'],
+      ['groq', 'Groq', 'api.groq.com', 'openai', 'https://api.groq.com/openai/v1', 'GROQ_API_KEY', 'https://console.groq.com/keys'],
+      ['mistral', 'Mistral AI', 'api.mistral.ai', 'openai', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY', 'https://console.mistral.ai/api-keys'],
+      ['deepseek', 'DeepSeek', 'api.deepseek.com', 'openai', 'https://api.deepseek.com/v1', 'DEEPSEEK_API_KEY', 'https://platform.deepseek.com/api_keys'],
+      ['xai', 'xAI (Grok)', 'api.x.ai', 'openai', 'https://api.x.ai/v1', 'XAI_API_KEY', 'https://console.x.ai'],
+      ['together', 'Together AI', 'api.together.xyz', 'openai', 'https://api.together.xyz/v1', 'TOGETHER_API_KEY', 'https://api.together.ai/settings/api-keys'],
+      ['fireworks', 'Fireworks AI', 'api.fireworks.ai', 'openai', 'https://api.fireworks.ai/inference/v1', 'FIREWORKS_API_KEY', 'https://fireworks.ai/account/api-keys'],
+      ['cerebras', 'Cerebras', 'api.cerebras.ai', 'openai', 'https://api.cerebras.ai/v1', 'CEREBRAS_API_KEY', 'https://cloud.cerebras.ai'],
+      ['huggingface', 'Hugging Face', 'router.huggingface.co', 'openai', 'https://router.huggingface.co/v1', 'HF_TOKEN', 'https://huggingface.co/settings/tokens'],
+      ['nvidia', 'NVIDIA NIM', 'integrate.api.nvidia.com', 'openai', 'https://integrate.api.nvidia.com/v1', 'NVIDIA_API_KEY', 'https://build.nvidia.com'],
+      ['moonshot', 'Moonshot (Kimi)', 'api.moonshot.ai', 'openai', 'https://api.moonshot.ai/v1', 'MOONSHOT_API_KEY', 'https://platform.moonshot.ai/console/api-keys'],
+      ['dashscope', 'Alibaba Qwen', 'dashscope-intl.aliyuncs.com', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
+      ['ollama-cloud', 'Ollama Cloud', 'ollama.com', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY', 'https://ollama.com/settings/keys'],
+      ['azure', 'Azure OpenAI', 'your-resource.openai.azure.com', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'],
+    ].map(([key, label, sub, type, baseUrl, env, keyUrl]) => ({ key, label, sub, group: 'cloud', keyUrl, cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true } })),
   ];
+  const CUSTOM_PRESET = { key: 'custom', label: 'Custom endpoint', cfg: { id: 'custom', type: 'openai', baseUrl: 'http://', displayName: 'Custom' } };
+  const PRESET_GROUPS = [
+    ['local', 'On this machine', 'Model servers on this computer or your network. Nothing leaves it.'],
+    ['cloud', 'Cloud APIs', 'Hosted models. Needs an API key; prompts and code are sent to the provider.'],
+    ['gateway', 'Gateways', 'Run here and forward to cloud models: one endpoint for many providers.'],
+  ];
+  /** The preset a configured provider came from (id such as "openai-2", else the same base URL), for its key link. */
+  const presetOf = (p) => PRESET_PROVIDERS.find((pr) => pr.cfg.id === String(p.id || '').replace(/-\d+$/, '')) || PRESET_PROVIDERS.find((pr) => pr.cfg.baseUrl === p.baseUrl);
   /** Mirrors isRemoteUrl in src/providers/cloud.ts: anything off this machine and the private network is a cloud API. */
   const isRemoteUrl = (u) => {
     let h; try { h = new URL(u).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return false; }
     return !(h === 'localhost' || /\.(localhost|local|internal)$/.test(h) || h === '::1' || /^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || !h.includes('.'));
   };
+  /** Mirrors isCloudProvider: a cloud URL, or a local gateway marked `cloud`. */
+  const isCloud = (p) => (typeof p.cloud === 'boolean' ? p.cloud : isRemoteUrl(p.baseUrl));
+  const isSecretRef = (v) => /^\$\{secret:[^}]+\}$/.test(String(v || '').trim());
   const API_LABEL = { ollama: 'Ollama API', openai: 'OpenAI API', anthropic: 'Anthropic API' };
   /** Vendor logos (Simple Icons, CC0 1.0 — https://simpleicons.org). Vendors without a usable vector mark keep a monogram below. */
   const LOGOS = {
@@ -115,7 +183,7 @@
     ollama: { mark: LOGOS.ollama, color: '#9ca3af' }, lmstudio: { mark: LOGOS.lmstudio, color: '#7c5cff' }, llamacpp: { mark: 'λ', color: '#f2a33a' },
     vllm: { mark: LOGOS.vllm, color: '#30a2ff' }, docker: { mark: LOGOS.docker, color: '#2496ed' }, jan: { mark: 'JA', color: '#22c55e' },
     localai: { mark: 'LA', color: '#06b6d4' }, sglang: { mark: 'SG', color: '#ef4444' }, custom: { mark: I.plug, color: '' },
-    koboldcpp: { mark: 'KC', color: '#64748b' }, textgen: { mark: 'TG', color: '#f97316' }, gpt4all: { mark: 'G4', color: '#16a34a' }, litellm: { mark: 'LL', color: '#0ea5e9' },
+    koboldcpp: { mark: 'KC', color: '#64748b' }, omniroute: { mark: 'OM', color: '#14b8a6' }, textgen: { mark: 'TG', color: '#f97316' }, gpt4all: { mark: 'G4', color: '#16a34a' }, litellm: { mark: 'LL', color: '#0ea5e9' },
     openai: { mark: 'OA', color: '#10a37f' }, anthropic: { mark: 'A\\', color: '#d97757' }, gemini: { mark: LOGOS.google, color: '#4285f4' },
     openrouter: { mark: 'OR', color: '#6467f2' }, groq: { mark: 'GQ', color: '#f55036' }, mistral: { mark: LOGOS.mistral, color: '#fa520f' },
     deepseek: { mark: LOGOS.deepseek, color: '#4d6bfe' }, xai: { mark: 'xAI', color: '#9ca3af' }, together: { mark: 'TA', color: '#0f6fff' },
@@ -146,7 +214,7 @@
     nvidia: { mark: LOGOS.nvidia, color: '#76b900' }, alibaba: { mark: LOGOS.qwen, color: '#615ced' },
     'mistral ai': { mark: LOGOS.mistral, color: '#fa520f' }, mistral: { mark: LOGOS.mistral, color: '#fa520f' }, openai: { mark: 'OA', color: '#10a37f' },
     meta: { mark: LOGOS.meta, color: '#0866ff' }, deepseek: { mark: LOGOS.deepseek, color: '#4d6bfe' },
-    microsoft: { mark: 'MS', color: '#0078d4' }, 'hugging face': { mark: LOGOS.huggingface, color: '#f59e0b' }, bigcode: { mark: 'BC', color: '#a855f7' },
+    microsoft: { mark: 'MS', color: '#0078d4' }, anthropic: { mark: 'A\\', color: '#d97757' }, xai: { mark: 'xAI', color: '#9ca3af' }, 'hugging face': { mark: LOGOS.huggingface, color: '#f59e0b' }, bigcode: { mark: 'BC', color: '#a855f7' },
   };
   /** Vendor guessed from a model id, for installed models the catalog does not know. */
   const vendorFromModelId = (id) => {
@@ -158,6 +226,9 @@
     if (/llama/.test(n)) { return 'meta'; }
     if (/deepseek/.test(n)) { return 'deepseek'; }
     if (/gpt-oss/.test(n)) { return 'openai'; }
+    if (/claude/.test(n)) { return 'anthropic'; }
+    if (/(^|\/)(gpt-|chatgpt|o[134](-|$))/.test(n)) { return 'openai'; }
+    if (/grok/.test(n)) { return 'xai'; }
     if (/phi-?\d|phi4|phi3/.test(n)) { return 'microsoft'; }
     if (/smollm/.test(n)) { return 'hugging face'; }
     if (/starcoder/.test(n)) { return 'bigcode'; }
@@ -308,11 +379,14 @@
   function renderShell() {
     const d = state.data;
     const top = el('header', 'top');
-    top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div><span class="spacer"></span>
+    top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div>
+      <div class="find" role="search"><button class="find-open" title="Search settings (⌘F)" aria-label="Search settings">${I.search}</button><label class="find-box">${I.search}<input type="search" placeholder="Search settings" aria-label="Search settings" aria-controls="find-list" aria-autocomplete="list" autocomplete="off" spellcheck="false"><kbd>⌘F</kbd></label><div class="find-list hidden" id="find-list" role="listbox" aria-label="Matching settings"></div></div>
+      <span class="spacer"></span>
       <span class="saved" role="status" aria-live="polite">${I.check}Saved</span>
       <div class="scope" role="radiogroup" aria-label="Settings scope"><button data-s="user">User</button><button data-s="workspace">Workspace</button></div>
       <button class="btn" data-cmd="localpilot.openChat" title="Open chat" aria-label="Open chat">${I.chat}Open chat</button>`;
     top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled) { return; } state.scope = b.dataset.s; render(); }));
+    wireFind(top);
     app.appendChild(top);
     const layout = el('div', 'layout');
     const side = el('nav', `side${navPrefs.rail ? ' rail' : ''}`); side.setAttribute('aria-label', 'Settings sections');
@@ -327,7 +401,13 @@
     side.innerHTML = `<div class="navbar"><button class="navtog" title="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-pressed="${navPrefs.rail}"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6.5 3v10"/></svg></button><button class="navall" title="Expand all groups" aria-label="Expand or collapse all groups">${I.chev}</button></div><div class="tabs" role="tablist" aria-orientation="vertical">${tabsHtml}</div>${group('help', 'Help', helpHtml)}`;
     // Arrow keys move between the sections that are visible right now (a collapsed group keeps only its active entry).
     const visibleTabs = () => [...side.querySelectorAll('[data-sec]')].filter((a) => a.offsetParent !== null);
-    const go = (a) => { state.section = a.dataset.sec; state.expanded = null; render(); a.focus({ preventScroll: true }); };
+    // Section changes cross-fade (View Transitions where available; settings.css styles them, reduced motion skips them).
+    const go = (a) => {
+      if (state.section === a.dataset.sec) { a.focus({ preventScroll: true }); return; }
+      const swap = () => { state.section = a.dataset.sec; state.expanded = null; render(); };
+      if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) { document.startViewTransition(swap); } else { swap(); }
+      a.focus({ preventScroll: true });
+    };
     side.querySelectorAll('[data-sec]').forEach((a) => {
       a.onclick = () => go(a);
       // Keyboard: Enter/Space activates; arrows move between sections like a native tab strip.
@@ -371,6 +451,58 @@
     app.appendChild(layout);
     wireGlobal(top); wireGlobal(side);
   }
+  /** Header search: results list under the box; ↑/↓ + Enter or click jumps to the section and flashes the setting.
+   *  On narrow panels the box folds to an icon that opens it over the header. */
+  function wireFind(top) {
+    const find = top.querySelector('.find'); const q = find.querySelector('input'); const list = find.querySelector('.find-list');
+    const secName = Object.fromEntries(SECTIONS.map(([id, label, icon]) => [id, { label, icon }]));
+    let hits = []; let sel = 0;
+    const close = () => { list.classList.add('hidden'); q.setAttribute('aria-expanded', 'false'); };
+    const fold = () => { close(); top.classList.remove('finding'); };
+    const paint = () => {
+      const v = q.value.trim(); hits = findSettings(v); sel = Math.min(sel, Math.max(0, hits.length - 1));
+      if (!v) { close(); return; }
+      list.innerHTML = hits.length ? hits.map((h, i) => `<div class="find-item${i === sel ? ' sel' : ''}" role="option" id="find-${i}" aria-selected="${i === sel}" data-i="${i}"><span class="ico">${secName[h.sec].icon}</span><span class="txt"><b>${esc(h.label)}</b><small>${h.key ? `${esc(secName[h.sec].label)} · <code>${esc(h.key)}</code>` : 'Section'}</small></span></div>`).join('')
+        : `<div class="find-none">No setting matches “${esc(v)}”</div>`;
+      list.classList.remove('hidden'); q.setAttribute('aria-expanded', 'true');
+      if (hits.length) { q.setAttribute('aria-activedescendant', `find-${sel}`); } else { q.removeAttribute('aria-activedescendant'); }
+    };
+    const pick = (h) => {
+      if (!h) { return; }
+      q.value = ''; fold(); q.blur();
+      state.section = h.sec; state.expanded = null; render();
+      if (!h.key) { window.scrollTo({ top: 0 }); return; }
+      requestAnimationFrame(() => {
+        const row = [...app.querySelectorAll('[data-deps]')].find((e) => e.dataset.deps.split(/[\s,]+/).includes(h.key));
+        if (!row) { return; }
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.classList.remove('hit'); void row.offsetWidth; row.classList.add('hit');
+        setTimeout(() => row.classList.remove('hit'), 1800);
+        const ctl = row.querySelector('.ctl input, .ctl select, .ctl textarea, .ctl button'); if (ctl) { ctl.focus({ preventScroll: true }); }
+      });
+    };
+    q.oninput = () => { sel = 0; paint(); };
+    q.onfocus = () => { if (q.value.trim()) { paint(); } };
+    q.onkeydown = (e) => {
+      if (e.key === 'ArrowDown' && hits.length) { e.preventDefault(); sel = (sel + 1) % hits.length; paint(); }
+      else if (e.key === 'ArrowUp' && hits.length) { e.preventDefault(); sel = (sel - 1 + hits.length) % hits.length; paint(); }
+      else if (e.key === 'Enter') { e.preventDefault(); pick(hits[sel]); }
+      else if (e.key === 'Escape') { e.preventDefault(); if (q.value) { q.value = ''; close(); } else { fold(); q.blur(); } }
+    };
+    // mousedown, not click: the input's blur would otherwise close the list before the click lands.
+    list.onmousedown = (e) => { const it = e.target.closest('.find-item'); if (it) { e.preventDefault(); pick(hits[Number(it.dataset.i)]); } };
+    q.onblur = () => setTimeout(() => { if (!find.contains(document.activeElement)) { close(); if (!q.value) { top.classList.remove('finding'); } } }, 0);
+    find.querySelector('.find-open').onclick = () => { top.classList.add('finding'); q.focus(); };
+    // ⌘F / Ctrl+F (the panel has no find widget) and "/" outside a text field open the search from anywhere.
+    // Registered once: renderShell runs again after the setup page, and the handler looks up the current header.
+    if (wireFind.keys) { return; }
+    wireFind.keys = true;
+    window.addEventListener('keydown', (e) => {
+      const t = app.querySelector('.top'); const box = t && t.querySelector('.find input'); if (!box) { return; }
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+      if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') || (e.key === '/' && !typing)) { e.preventDefault(); t.classList.add('finding'); box.focus(); box.select(); }
+    });
+  }
   /** Cheap per-render sync of the persistent shell: version, scope buttons, active nav entry. */
   function syncShell() {
     const d = state.data;
@@ -398,7 +530,8 @@
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
   }
   function wireGlobal(root) {
-    root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => { let args; try { args = b.dataset.args ? JSON.parse(b.dataset.args) : undefined; } catch { args = undefined; } post({ type: 'command', id: b.dataset.cmd, args }); }));
+    // Commands run in the host with no reply, so the button acknowledges the click with a short spin of its icon.
+    root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => { let args; try { args = b.dataset.args ? JSON.parse(b.dataset.args) : undefined; } catch { args = undefined; } post({ type: 'command', id: b.dataset.cmd, args }); if (b.classList.contains('btn')) { b.classList.add('busy'); setTimeout(() => b.classList.remove('busy'), 1200); } }));
     root.querySelectorAll('[data-url]').forEach((b) => (b.onclick = () => post({ type: 'openExternal', url: b.dataset.url })));
     root.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); reset(b.dataset.reset); }));
   }
@@ -414,35 +547,68 @@
     bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
     bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
-    const wrap = el('div');
-    wrap.style.marginTop = '14px';
-    if (!list.length) { wrap.appendChild(el('div', 'empty', 'No providers configured. Add one below — Ollama is the quickest way to get started.')); }
-    for (const p of list) { wrap.appendChild(providerCard(p, list)); }
+    // Configured providers, local first: the split shows at a glance which models keep code on this machine.
+    const wrap = el('div', 'prov-list');
+    if (!list.length) { wrap.appendChild(el('div', 'empty', 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
+    const mixed = list.some(isCloud) && list.some((p) => !isCloud(p));
+    for (const [cloud, label, hint] of [[false, 'Local', 'code stays on this machine'], [true, 'Cloud', 'prompts and code are sent to the provider']]) {
+      const items = list.filter((p) => isCloud(p) === cloud);
+      if (!items.length) { continue; }
+      if (mixed) { wrap.appendChild(el('div', 'prov-group', `<b>${label}</b><span class="count">${items.length}</span><span class="muted small">${hint}</span>`)); }
+      for (const p of items) { wrap.appendChild(providerCard(p, list)); }
+    }
     sec.appendChild(wrap);
-    const add = el('div');
-    add.innerHTML = `<h2 class="sub">Add a provider</h2>`;
-    for (const cloud of [false, true]) {
-      add.appendChild(el('p', 'muted small', cloud ? 'Cloud APIs — need an API key; prompts and code leave this machine.' : 'Local servers — run on this machine or your network.'));
-      const presets = el('div', 'presets');
-      for (const pr of PRESET_PROVIDERS.filter((x) => !!x.cloud === cloud)) {
-        const taken = list.some((p) => p.id === pr.cfg.id);
-        const b = el('button', 'preset', `${brandMark(pr.key, pr.label)}<div><b title="${esc(pr.label)}">${esc(pr.label)}</b><span title="${esc(pr.sub)}">${taken ? 'already added' : esc(pr.sub)}</span></div>`);
-        b.disabled = taken && pr.key !== 'custom';
-        b.onclick = () => {
-          const cfg = { ...pr.cfg };
-          if (list.some((p) => p.id === cfg.id)) { let n = 2; while (list.some((p) => p.id === `${cfg.id}-${n}`)) { n++; } cfg.id = `${cfg.id}-${n}`; }
-          state.expanded = cfg.id;
-          saveProviders([...list, cfg]);
-        };
+
+    // Adding: one kind at a time with a filter, instead of thirty tiles at once. A filter searches every kind.
+    const add = el('div', 'add-prov');
+    add.appendChild(el('h2', 'sub', 'Add a provider'));
+    const tab = state.addTab || (list.some((p) => !isCloud(p)) ? 'cloud' : 'local');
+    const chips = el('div', 'chips');
+    chips.setAttribute('role', 'tablist');
+    for (const [k, label] of PRESET_GROUPS) {
+      const b = el('button', `chip ${tab === k ? 'on' : ''}`, `${esc(label)} <i>${PRESET_PROVIDERS.filter((pr) => pr.group === k).length}</i>`);
+      b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(tab === k));
+      b.onclick = () => { state.addTab = k; state.addQuery = ''; render(); };
+      chips.appendChild(b);
+    }
+    const q = el('input'); q.type = 'search'; q.placeholder = 'Find a provider…'; q.value = state.addQuery || ''; q.setAttribute('aria-label', 'Find a provider');
+    chips.appendChild(q);
+    add.appendChild(chips);
+    const blurb = el('p', 'muted small add-blurb');
+    const presets = el('div', 'presets');
+    const addPreset = (pr) => {
+      const cfg = { ...pr.cfg };
+      if (list.some((p) => p.id === cfg.id)) { let n = 2; while (list.some((p) => p.id === `${cfg.id}-${n}`)) { n++; } cfg.id = `${cfg.id}-${n}`; }
+      state.expanded = cfg.id;
+      // A new cloud provider is useless without its key: open the card with the key field focused.
+      state.focusKey = pr.group === 'cloud' || pr.key === 'custom' ? cfg.id : null;
+      saveProviders([...list, cfg]);
+    };
+    const fill = () => {
+      presets.innerHTML = '';
+      const needle = q.value.trim().toLowerCase();
+      blurb.textContent = needle ? 'Matches in every category.' : PRESET_GROUPS.find((g) => g[0] === tab)[2];
+      const pool = PRESET_PROVIDERS.filter((pr) => (needle ? `${pr.label} ${pr.sub} ${pr.key}`.toLowerCase().includes(needle) : pr.group === tab));
+      const taken = (pr) => list.some((p) => p.id === pr.cfg.id);
+      // Already-added ones sink to the end so the grid leads with what can still be added.
+      for (const pr of [...pool.filter((x) => !taken(x)), ...pool.filter(taken)]) {
+        const added = taken(pr);
+        const b = el('button', `preset ${added ? 'added' : ''}`, `${brandMark(pr.key, pr.label)}<div><b title="${esc(pr.label)}">${esc(pr.label)}</b><span title="${esc(pr.sub)}">${added ? 'added' : esc(pr.sub)}</span></div>`);
+        b.title = added ? `${pr.label} is already configured — add it again for a second endpoint` : `Add ${pr.label}`;
+        b.onclick = () => addPreset(pr);
         presets.appendChild(b);
       }
-      add.appendChild(presets);
-    }
+      if (!pool.length) { presets.appendChild(el('div', 'empty', 'Nothing matches. Any OpenAI-compatible server works as a custom endpoint.')); }
+    };
+    q.oninput = () => { state.addQuery = q.value; fill(); };
+    fill();
+    add.appendChild(blurb);
+    add.appendChild(presets);
+    const custom = el('div', 'btnrow add-custom');
+    custom.innerHTML = `<span class="muted small">Not listed? Any server with an OpenAI-compatible <code>/v1</code> API works.</span><span class="spacer"></span><button class="btn sm" id="custom">${I.plug}Custom endpoint</button>`;
+    custom.querySelector('#custom').onclick = () => addPreset(CUSTOM_PRESET);
+    add.appendChild(custom);
     sec.appendChild(add);
-    const tip = el('p', 'muted small');
-    tip.style.marginTop = '14px';
-    tip.innerHTML = 'Tip: <code>ollama</code> uses the native Ollama API (tools, thinking, vision, FIM) and <code>anthropic</code> the Claude Messages API. Every other server uses the OpenAI-compatible <code>/v1</code> API — LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenAI, Gemini, OpenRouter, Groq, Mistral, Azure OpenAI… API keys can be written as <code>${env:NAME}</code> so they are read from the environment instead of stored in settings.';
-    sec.appendChild(tip);
     sec.appendChild(el('h2', 'sub', 'Huge MoE models (colibri)'));
     const coli = el('div', 'btnrow');
     coli.innerHTML = `<span class="muted small">A running <code>coli serve</code> is detected automatically; this starts one in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.startColibri">${I.bolt}Start colibri</button>`;
@@ -468,6 +634,13 @@
     }
   }
   const providerSig = (list) => list.map((p) => `${p.id}@${p.baseUrl}@${p.enabled === false ? 0 : 1}`).join('|');
+  /** Key state without the key: a warning badge for the header when it will not resolve, a note for the key row when it does. */
+  function keyState(p) {
+    const k = (state.data.keys || {})[p.id];
+    if (!k || (k.source === 'none' && !isRemoteUrl(p.baseUrl))) { return { warn: '', note: '' }; }
+    if (!k.ok) { return { warn: k.source === 'env' ? `${k.env} not set` : k.source === 'keychain' ? 'key missing' : 'no API key', note: '' }; }
+    return { warn: '', note: k.source === 'keychain' ? 'Saved in your OS keychain.' : k.source === 'env' ? `Read from <code>$${esc(k.env)}</code>.` : 'Stored in settings.json.' };
+  }
   function providerCard(p, list) {
     const probe = (state.probe || []).find((r) => r.id === p.id) || state.tests[p.id];
     const open = state.expanded === p.id;
@@ -475,7 +648,18 @@
     c.dataset.prov = p.id;
     const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
-    c.innerHTML = `<div class="prov-head"><span class="dot ${status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b>${esc(p.displayName || p.id)}</b><span>${esc(p.baseUrl)}</span></div><div class="prov-meta"><span class="badge">${API_LABEL[p.type] || 'OpenAI API'}</span>${isRemoteUrl(p.baseUrl) ? '<span class="badge" title="Prompts and code sent to these models leave this machine">cloud</span>' : ''}${n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${p.enabled === false ? '<span class="badge">disabled</span>' : ''}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+    // Header: name, then "where · which API"; badges only for what needs attention or tells the models apart.
+    const ks = keyState(p);
+    let where = String(p.baseUrl || '').replace(/^https?:\/\//, '');
+    if (isRemoteUrl(p.baseUrl)) { try { where = new URL(p.baseUrl).host; } catch { /* keep the URL */ } }
+    const all = providersList();
+    const grouped = all.some(isCloud) && all.some((x) => !isCloud(x));
+    const badges = [
+      isCloud(p) && !grouped ? '<span class="badge" title="Prompts and code sent to these models leave this machine">cloud</span>' : '',
+      ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : n ? `<span class="badge ${status}">${esc(n)}</span>` : '',
+      p.enabled === false ? '<span class="badge">disabled</span>' : '',
+    ].join('');
+    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn && p.enabled !== false ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(where)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
     const body = el('div', 'prov-body');
@@ -492,8 +676,27 @@
     body.appendChild(row('Display name', '', text('displayName', p.id)));
     body.appendChild(row('ID', 'Used in model ids as <code>id/model</code>. Lowercase letters, digits, - and _.', text('id', 'ollama', 'text', (v) => /^[a-z0-9_-]+$/.test(v) && !list.some((o) => o !== p && o.id === v))));
     body.appendChild(row('API type', '', typeSel));
-    body.appendChild(row('Base URL', p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v))));
-    body.appendChild(row('API key', 'Required for cloud providers, optional for local servers. Write <code>${env:NAME}</code> to read it from an environment variable; a pasted key is stored in your settings file.', text('apiKey', isRemoteUrl(p.baseUrl) ? '${env:API_KEY} or the key' : 'not required for local servers', /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password')));
+    body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v))));
+    // A pasted key is moved to VS Code secret storage by the extension; the field then stays empty and says so.
+    const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password';
+    const stored = isSecretRef(p.apiKey);
+    keyIn.value = stored ? '' : p.apiKey || '';
+    keyIn.placeholder = stored ? '•••••••• saved in secret storage — type to replace' : isCloud(p) ? 'paste the key, or ${env:API_KEY}' : 'not required for local servers';
+    const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((p.apiKey || '') !== v) { upd({ apiKey: v || undefined }); } };
+    keyIn.onchange = commitKey; keyIn.onblur = commitKey;
+    const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
+    if (p.apiKey) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
+    const pr = presetOf(p);
+    const getKey = pr && pr.keyUrl ? ` <a data-url="${esc(pr.keyUrl)}">${pr.group === 'gateway' ? 'Setup guide' : 'Get an API key'} ↗</a>` : '';
+    const keyRow = body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>\${env:NAME}</code> to read it from an environment variable.${getKey}`, keyCtl));
+    // For a cloud API the key is the one field that matters: right under the name, before ID / API type / URL.
+    if (isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
+    if (state.focusKey === p.id) { state.focusKey = null; setTimeout(() => keyIn.focus(), 0); }
+    if (!isRemoteUrl(p.baseUrl)) {
+      const cl = el('button', `toggle ${isCloud(p) ? 'on' : ''}`); cl.setAttribute('role', 'switch');
+      cl.onclick = () => upd({ cloud: isCloud(p) ? undefined : true });
+      body.appendChild(row('Sends prompts to cloud models', 'Turn on for gateways such as OmniRoute or LiteLLM that run here but forward to cloud APIs. Automatic model picks then prefer local models over this one.', cl));
+    }
     const cw = el('input'); cw.type = 'number'; cw.min = 1024; cw.step = 1024; cw.value = p.contextWindow ?? ''; cw.placeholder = 'auto';
     cw.onchange = () => upd({ contextWindow: cw.value ? Number(cw.value) : undefined });
     body.appendChild(row('Context window', 'Fallback when the server does not report one.', cw));
@@ -629,11 +832,14 @@
       row.appendChild(tg);
       row.insertAdjacentHTML('beforeend', vendorMark((m.catalog && m.catalog.vendor) || vendorFromModelId(m.modelId || m.name), m.name));
       const caps = [m.supportsTools ? 'tools' : 'prompt tools', m.supportsVision ? 'vision' : '', m.supportsFim ? 'FIM' : ''].filter(Boolean).join(' · ');
+      // Cloud models: say so where the model is listed, since picking one sends code off the machine.
+      if (m.remote) { row.classList.add('cloud'); }
       const t = el('div', 't', `<b title="${esc(m.id)}">${esc(m.name)}</b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}</span>`);
       row.appendChild(t);
       const right = el('div', 'mrow-right');
       const tags = el('div', 'tags');
       if (m.id === def) { tags.innerHTML += '<span class="badge brand">default</span>'; }
+      if (m.remote) { tags.innerHTML += '<span class="badge" title="Served by a cloud API: prompts and code sent to it leave this machine">cloud</span>'; }
       else if (!def && m.autoRoles.includes('agent')) { tags.innerHTML += '<span class="badge brand">auto default</span>'; }
       if (m.id === val('inlineCompletion.model')) { tags.innerHTML += '<span class="badge role">completions</span>'; }
       if (m.id === val('routing.vision')) { tags.innerHTML += '<span class="badge role">images</span>'; }
@@ -949,7 +1155,7 @@
       box.appendChild(e);
       return;
     }
-    if (g.loading && !g.models.length) { box.appendChild(el('div', 'loading short', `<span class="spinner"></span>Searching ${esc(src.site)}…`)); return; }
+    if (g.loading && !g.models.length) { box.appendChild(skeleton(`Searching ${esc(src.site)}…`, 4)); return; }
     if (!g.models.length) { box.appendChild(el('div', 'empty', `No models match “${esc(g.q)}”${g.capability ? ` with ${esc(g.capability)}` : ''} on ${esc(src.site)}. Try another word — or pull it by name below.`)); return; }
     box.appendChild(el('div', 'gal-count', `${g.models.length}${g.hasMore ? '+' : ''} model${g.models.length === 1 ? '' : 's'}${g.q ? ` for “${esc(g.q)}”` : ''}${g.capability ? ` · ${esc(g.capability)}` : ''} · ${esc(src.site)}`));
     for (const m of g.models) {
@@ -1323,7 +1529,7 @@
     box.innerHTML = '';
     const reg = state.skillReg;
     const scope = reg.scope || val('skills.autoInstallScope') || 'user';
-    if (reg.loading && !reg.entries.length) { box.appendChild(el('div', 'loading short', `<span class="spinner"></span>${reg.refreshing ? 'Indexing the skill repositories for the first time…' : 'Searching the registry…'}`)); return; }
+    if (reg.loading && !reg.entries.length) { box.appendChild(skeleton(reg.refreshing ? 'Indexing the skill repositories for the first time…' : 'Searching the registry…', 4)); return; }
     let rows = reg.entries;
     if (reg.filter === 'new') { rows = rows.filter((e) => !e.installed); } else if (reg.filter === 'installed') { rows = rows.filter((e) => e.installed); }
     if (!rows.length) {
@@ -1525,7 +1731,7 @@
     for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { requestDashboard(d); render(); }; seg.appendChild(b); }
     bar.appendChild(seg);
     bar.appendChild(el('span', 'spacer'));
-    const refresh = el('button', 'btn sm', `${I.refresh}Refresh`); refresh.onclick = () => requestDashboard(); bar.appendChild(refresh);
+    const refresh = el('button', `btn sm${state.dash.manual ? ' busy' : ''}`, `${I.refresh}Refresh`); refresh.id = 'dash-refresh'; refresh.onclick = () => { state.dash.manual = true; refresh.classList.add('busy'); requestDashboard(); }; bar.appendChild(refresh);
     const exp = el('button', 'btn sm', `${I.download}Export…`); exp.title = 'Save every recorded event and the current log as JSON'; exp.onclick = () => post({ type: 'exportTelemetry' }); bar.appendChild(exp);
     const folder = el('button', 'btn sm ghost', `${I.folder}Open folder`); folder.onclick = () => post({ type: 'openTelemetryFolder' }); bar.appendChild(folder);
     sec.appendChild(bar);
@@ -1619,7 +1825,7 @@
     const root = document.getElementById('dash');
     if (!root) { return; }
     const s = state.dash.summary;
-    if (!s) { root.innerHTML = `<p class="empty">${state.dash.loading ? 'Loading…' : 'No data yet.'}</p>`; return; }
+    if (!s) { root.replaceChildren(state.dash.loading ? skeleton('Loading usage metrics…', 6, 'kpis') : el('p', 'empty', 'No data yet.')); return; }
     const t = s.totals;
     const empty = !t.runs && !t.modelCalls && !s.completions.requested && !s.health.length;
     if (empty) {
@@ -1812,9 +2018,10 @@
         help.querySelector('#autoSetup').onclick = () => { state.setup.pendingAuto = true; const ol2 = (state.runtimes || []).find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol2 && !ol2.installed), target: 'ollama' }); render(); };
       }
       const foot = el('div', 'foot');
-      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><button class="btn link" id="manual">Add a custom endpoint…</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
+      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><button class="btn link" id="manual">Add a custom endpoint…</button><button class="btn link" id="cloud" title="OpenAI, Claude, Gemini, OpenRouter… with an API key">Use a cloud API…</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
       foot.querySelector('#again').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
       foot.querySelector('#manual').onclick = () => { state.page = 'settings'; state.section = 'providers'; render(); };
+      foot.querySelector('#cloud').onclick = () => { state.page = 'settings'; state.section = 'providers'; state.addTab = 'cloud'; render(); };
       foot.querySelector('#skip').onclick = () => post({ type: 'finishSetup' });
       foot.querySelector('#next').onclick = () => { su.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); if (!su.model) { su.model = recommend(found); } su.step = 1; render(); };
       c.appendChild(foot);
@@ -1983,6 +2190,7 @@
         break;
       case 'dashboard':
         state.dash.loading = false;
+        if (state.dash.manual) { state.dash.manual = false; const rb = document.getElementById('dash-refresh'); if (rb) { rb.classList.remove('busy'); } }
         state.dash.summary = m.summary; state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
         if (typeof m.days === 'number') { state.dash.days = m.days; }
         if (state.section === 'dashboard') { renderDashboard(); }

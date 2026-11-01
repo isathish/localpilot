@@ -13,6 +13,23 @@ permalink: /docs/troubleshooting/
 - Press **Refresh models** (the ↻ button in the title bar, or the button in the empty state).
 - Models you **disabled** in Settings → Models are hidden on purpose. Turn their switch back on.
 
+## A cloud provider shows "not set", "key missing" or 401
+
+- **"OPENAI_API_KEY not set"** (or another variable): VS Code was started without it. Paste the key into the provider card instead, which stores it in your OS keychain, or start VS Code from a shell that exports the variable.
+- **"key missing"**: the key in secret storage is gone, for example after moving to a new machine. Paste it again, or run *LocalPilot: Set Provider API Key…*.
+- **HTTP 401 / "invalid x-api-key"**: the key is wrong or revoked. Paste a new one.
+- **Azure OpenAI**: replace `YOUR-RESOURCE` in the Base URL with your resource name.
+
+## "rate limiting", "rejected the API key" or "out of credits"
+
+- **Rate limiting (HTTP 429).** LocalPilot waits as long as the provider asks in its `retry-after` header (5 s, then 10 s, when it does not say; at most 60 s) and retries twice. If it keeps happening, your plan's requests-per-minute limit is lower than the agent's pace. Pick a smaller *max concurrent tools / subagents* under **Agent & approvals**, or use a local model for subagents.
+- **"The provider rejected the API key"** (401/403). The key is wrong, revoked, or lacks access to that model. Set a new one in the provider card, or with `localpilot providers key <id>`. It is not retried.
+- **"Out of credits or quota"**: OpenAI's `insufficient_quota` or Anthropic's "credit balance is too low". Waiting does not help, so it is not retried. Add credits with the provider or pick another model.
+
+## A cloud model is never picked automatically
+
+That is by design. Auto, subagents, images and inline completions prefer local models, and use a cloud model only when no comparable local one is available. Pick the cloud model in the chat's picker or set it as `localpilot.defaultModel`. For inline completions, set `localpilot.inlineCompletion.model`.
+
 ## A model is missing from the picker
 
 Open **Settings → Models → Installed models**. Disabled models are listed greyed out with their switch off. Embedding models are never shown. Models you pulled by hand appear after **Refresh models**.

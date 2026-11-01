@@ -2,7 +2,7 @@ import { HttpError } from '../providers/http';
 import { StreamEvent } from '../types';
 
 /** Why a model request failed, used to decide whether and how to retry. */
-export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'other';
+export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'auth' | 'quota' | 'other';
 
 export class ModelStallError extends Error {
   constructor(public readonly phase: 'first-token' | 'mid-stream', seconds: number) {
@@ -11,6 +11,7 @@ export class ModelStallError extends Error {
 }
 
 const OVERFLOW = /context (length|window|size)|too (long|large|many tokens)|exceeds? .*(limit|maximum|context)|maximum context|prompt is too long|input length|num_ctx|token limit|reduce the length/i;
+const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits/i;
 const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
 
 export function classifyModelError(e: unknown): ModelFailure {
@@ -18,8 +19,15 @@ export function classifyModelError(e: unknown): ModelFailure {
     return 'stall';
   }
   if (e instanceof HttpError) {
+    // Out of credits or quota is also sent as 429 (OpenAI) or 400/402 (Anthropic): waiting does not help.
+    if (QUOTA.test(e.body) && (e.status === 429 || e.status === 402 || e.status === 400 || e.status === 403)) {
+      return 'quota';
+    }
     if (e.status === 429) {
       return 'ratelimit';
+    }
+    if (e.status === 401 || (e.status === 403 && /api[ _-]?key|auth|permission|forbidden|unauthori[sz]ed/i.test(e.body))) {
+      return 'auth';
     }
     if (OVERFLOW.test(e.body)) {
       return 'overflow';
@@ -45,6 +53,19 @@ export function classifyModelError(e: unknown): ModelFailure {
 
 export const isTransient = (k: ModelFailure): boolean => k === 'network' || k === 'server' || k === 'ratelimit' || k === 'stall';
 
+/**
+ * How long to wait before retry `attempt` (1-based). Rate limits wait as long as the server asks (cloud APIs usually
+ * want seconds, not milliseconds), or 5 s, 10 s… when it does not say; capped so a run never sits idle for minutes.
+ */
+export function retryDelayMs(kind: ModelFailure, e: unknown, attempt: number, backoff: readonly number[]): number {
+  const base = backoff[Math.min(attempt - 1, backoff.length - 1)];
+  if (kind !== 'ratelimit') {
+    return base;
+  }
+  const asked = e instanceof HttpError ? e.retryAfterMs : undefined;
+  return Math.min(60_000, Math.max(base, asked ?? 5_000 * attempt));
+}
+
 /** One-line, actionable wording for the chat; the raw message stays in the log. */
 export function describeModelError(kind: ModelFailure, raw: string, modelName: string): string {
   const detail = raw.replace(/^HTTP \d+ from \S+:\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -55,6 +76,10 @@ export function describeModelError(kind: ModelFailure, raw: string, modelName: s
       return `The model server returned an error for ${modelName}. It may be out of memory or restarting — try again, or pick a smaller model.${detail ? ` (${detail})` : ''}`;
     case 'ratelimit':
       return `The server is rate limiting requests for ${modelName}. Wait a moment and try again.${detail ? ` (${detail})` : ''}`;
+    case 'auth':
+      return `The provider rejected the API key for ${modelName}. Set a valid key in Settings → Providers (or \`localpilot providers key <id>\` in the terminal).${detail ? ` (${detail})` : ''}`;
+    case 'quota':
+      return `The provider says the account behind ${modelName} is out of credits or quota. Add credits or raise the limit with the provider, or pick another model.${detail ? ` (${detail})` : ''}`;
     case 'overflow':
       return `The conversation no longer fits ${modelName}'s context window even after compacting. Start a new chat, raise the context window in Settings → Models, or pick a model with a larger window.`;
     case 'stall':

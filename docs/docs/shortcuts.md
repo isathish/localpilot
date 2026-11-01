@@ -77,7 +77,7 @@ Open the Command Palette and type "LocalPilot" to see these.
 | Agents | Run Tasks in Parallel… · Stop All Agents · Pause or Resume Agent · Pause All Agents · Resume All Agents |
 | Best-of-N and worktrees | Best of N: Run One Task on Several Models… · Compare Best-of-N Results… · Apply Agent's Changes to Workspace · Discard Agent's Isolated Changes |
 | Changes | Keep All Agent Changes · Undo All Agent Changes |
-| Models | Select Model · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start colibri (stream huge MoE models from disk) |
+| Models | Select Model · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start colibri (stream huge MoE models from disk) |
 | Skills | Install Skill… · Browse Skill Registry (Quick Pick)… · Manage Skills · Reload Skills, Subagents & MCP Servers |
 | Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… |
 | Editor | Edit with LocalPilot (inline) · Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File · Toggle Inline Completions · Generate Commit Message |

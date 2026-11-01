@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">LocalPilot</h1>
 <p align="center"><strong>The AI coding agent that runs on your machine.</strong><br>
-An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered entirely by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>. No accounts, no telemetry sent anywhere, and your code never leaves your machine unless you point it at a remote endpoint.</p>
+An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>, or by the cloud model you choose with your own key: <b>OpenAI</b>, <b>Claude</b>, <b>Gemini</b>, <b>OpenRouter</b>, <b>Groq</b>, <b>Mistral</b>, <b>DeepSeek</b> and more. No accounts, no telemetry sent anywhere, and your code never leaves your machine unless you add a cloud provider.</p>
 <p align="center">
   <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/v/localpilot.localpilot-agent?label=marketplace&color=0078d4" alt="VS Code Marketplace"></a>
@@ -42,7 +42,7 @@ An agent that reads your project, edits files, runs commands and tests, and show
 
 **Three checks, under a minute.** Turn off Wi‑Fi: LocalPilot keeps editing and running tests. Open *Settings → Providers*: every address is `localhost` unless you added one. Read the source: it is MIT-licensed, and `npm test` runs against your own Ollama.
 
-- **Private and offline.** Your code only reaches the model servers you list, and the defaults are `localhost`. No account, no telemetry SDK, no update check; the Dashboard's metrics live in `~/.localpilot/telemetry` and never leave the disk (`localpilot.telemetry.enabled: false` turns them off). The only other outbound calls are ones you control: the skill registry index from GitHub (`localpilot.skills.autoInstall: off` stops it), the web tools (`localpilot.approvals.network: ask` confirms each request, `never` blocks them), and model downloads you start yourself.
+- **Private and offline.** Your code only reaches the model servers you list, and the defaults are `localhost`. Cloud providers are opt-in, marked **cloud** everywhere, and automatic picks still prefer local models. No account, no telemetry SDK, no update check; the Dashboard's metrics live in `~/.localpilot/telemetry` and never leave the disk (`localpilot.telemetry.enabled: false` turns them off). The only other outbound calls are ones you control: the skill registry index from GitHub (`localpilot.skills.autoInstall: off` stops it), the web tools (`localpilot.approvals.network: ask` confirms each request, `never` blocks them), and model downloads you start yourself.
 - **A full agent.** It reads, searches, edits, runs commands and tests, retries when something fails and asks before anything risky.
 - **Written for local models.** A text fallback for models without tool calling, and context trimming so 8k to 32k windows still finish long tasks.
 - **Parallel agents.** Run several at once, see every file each one touched, keep or undo per agent.
@@ -90,7 +90,8 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 | **Parallel agents & multitasking** | Chat tabs run independently; `Run Tasks in Parallel` (<kbd>⌘⇧⌥P</kbd>) spawns one agent per task. The **Agents** panel shows live status and changed files. |
 | **Pause / steer / stop** | **Pause** (<kbd>⌥Esc</kbd>) holds an agent after its current step; anything you type while it is paused or running is queued and read at its next step; **Stop** (<kbd>Esc</kbd>) cancels. Each parallel subagent lane has its own pause and stop; pausing or stopping the parent reaches all of them. Also in the tab menu, background strip, Agents panel, Command Palette and the CLI (Ctrl+Z / Ctrl+C). |
 | **Change review & checkpoints** | Every agent edit is snapshotted — Diff / Accept / Reject per file or per session, and **Restore checkpoint** on any message rewinds files and conversation. |
-| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, [colibri](https://github.com/JustVugg/colibri), Docker Model Runner, Jan, SGLang, KoboldCpp and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, [colibri](https://github.com/JustVugg/colibri), Docker Model Runner, Jan, SGLang, KoboldCpp, the OmniRoute and LiteLLM gateways, and model servers running in **Docker containers**; new ones are added to your settings automatically. |
+| **Cloud providers, your own key** | One-click presets for OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud. Keys go to your OS keychain (or `${env:NAME}`), never into settings.json. Claude gets native tool use, thinking and prompt caching. Cloud models are marked **cloud** and automatic picks (Auto, subagents, ghost text) keep preferring local ones. |
 | **Huge MoE models with colibri** | A running `coli serve` is recognised even on vLLM's port :8000. LocalPilot reads its capabilities (vision, chat vs decision-only models) and KV slots, and judges memory fit by the part that stays in RAM, not the 20–1,500 GB download, so GLM-5.2, DeepSeek V4 Flash or Qwen3-Coder-30B route like any other model. Models whose experts stream from disk get patient stall timeouts and are kept for Plan mode rather than chatty subagents or ghost text. *LocalPilot: Start colibri* launches the server from your checkout (`localpilot.colibri.*`). |
 | **Learns which models work for you** | From local telemetry (runs finished, tok/s, time to first token, errors, completion acceptance), LocalPilot ranks your **installed** models per role. Auto routing prefers the ones that perform, and with `localpilot.models.autoTune: auto` (the default) it updates the default, Plan-mode, subagent, completion and image models itself, with Undo. A model you chose by hand is only replaced when it keeps failing. *Dashboard → Model tuning* shows the evidence; *LocalPilot: Tune Models From Usage* reviews it on demand. |
 | **Model manager & auto-setup** | One-click setup installs Ollama and a smallest-first starter set sized to your RAM / GPU. **Settings → Models** shows what fits this machine, lets you enable / disable, set default or remove installed models, and installs from a curated catalog to Ollama, Docker Model Runner or LM Studio with live progress. **Settings → Model gallery** searches the whole [Ollama library](https://ollama.com/library), Docker Hub's `ai/` models (Docker Model Runner) and Hugging Face GGUF repositories (LM Studio, or `hf.co/…` on Ollama) — filter by capability, see every tag's size marked fits / tight / too big for your machine, install any of them to the runtime you pick, or pull anything by name. |
@@ -138,13 +139,15 @@ Skills you do not have yet install themselves: requests are matched against a re
 
 The agent runs its commands in a visible, branded **LocalPilot Agent** terminal (shell integration), so you watch `npm test` fail and pass while the agent fixes the code. Right-click any terminal for **Explain Terminal Output** / **Fix Failed Command**, or type `@terminal` in the chat.
 
-The `localpilot` CLI is the same agent for your shell — same tools, skills, memory, MCP servers, approvals and undo, against your local models:
+The `localpilot` CLI is the same agent for your shell — same tools, skills, memory, MCP servers, approvals and undo, against your local models or the cloud providers you add:
 
 ```bash
 localpilot "fix the failing tests"      # agent mode, one task
 localpilot --ask "what does main.ts do?"
 localpilot                               # interactive session
 localpilot models · localpilot doctor
+localpilot providers add anthropic       # or openai, gemini, openrouter, groq, omniroute…
+localpilot -m anthropic/claude-sonnet-4-6 "review the auth module"
 ```
 
 Open it from VS Code (*LocalPilot: Open LocalPilot Terminal* — no install) or run *Install 'localpilot' CLI in PATH* for every terminal. Docs: [Terminal & CLI](https://isathish.github.io/localpilot/docs/terminal-and-cli/).
@@ -159,7 +162,7 @@ LocalPilot has its own **Settings** screen (gear icon in the chat toolbar): a pr
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Model servers (`ollama` or any `openai`-compatible) |
+| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs: `type` is `ollama`, `openai` (any OpenAI-compatible API) or `anthropic`; `apiKey` is `${secret:id}`, `${env:NAME}` or the key |
 | `localpilot.defaultModel` | auto | `provider/model`, e.g. `ollama/qwen2.5-coder:14b` |
 | `localpilot.contextWindow` | 32768 | Requested context (Ollama `num_ctx`), capped by the model; `0` = model maximum |
 | `localpilot.approvals.*` | terminal `ask` · write `always` · delete `ask` · network `always` | Autonomy level |

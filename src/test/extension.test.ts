@@ -15,6 +15,7 @@ suite('LocalPilot activation', () => {
       'localpilot.newSession',
       'localpilot.selectModel',
       'localpilot.refreshModels',
+      'localpilot.setProviderApiKey',
       'localpilot.explainSelection',
       'localpilot.fixDiagnostics',
       'localpilot.commitMessage',

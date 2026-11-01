@@ -2,7 +2,7 @@ import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS } from '../config';
 import { ProviderConfig } from '../types';
-import { isRemoteUrl, resolveApiKey } from './cloud';
+import { isRemoteUrl, missingKeyReason, resolveApiKey } from './cloud';
 import { COLIBRI_DEFAULT_PORT } from './colibri';
 import { createProvider } from './registry';
 
@@ -13,6 +13,9 @@ export const KNOWN_ENDPOINTS: ProviderConfig[] = [
   { id: 'jan', type: 'openai', baseUrl: 'http://localhost:1337/v1', displayName: 'Jan' },
   { id: 'sglang', type: 'openai', baseUrl: 'http://localhost:30000/v1', displayName: 'SGLang' },
   { id: 'koboldcpp', type: 'openai', baseUrl: 'http://localhost:5001/v1', displayName: 'KoboldCpp' },
+  // Gateways run locally but forward prompts to cloud models: marked so automatic picks keep preferring local models.
+  { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true },
+  { id: 'litellm', type: 'openai', baseUrl: 'http://localhost:4000/v1', displayName: 'LiteLLM', cloud: true },
 ];
 
 export interface ProbeResult {
@@ -44,8 +47,9 @@ export async function probeProvider(cfg: ProviderConfig, configured: boolean, so
   try {
     const provider = createProvider(cfg);
     const remote = isRemoteUrl(cfg.baseUrl);
-    if (remote && !resolveApiKey(cfg)) {
-      return { ...base, error: /\$\{env:/.test(cfg.apiKey ?? '') ? `${cfg.apiKey} is not set in VS Code's environment` : 'API key required' };
+    // Cloud URLs and Claude's API always need a key; a local gateway may not.
+    if ((remote || cfg.type === 'anthropic') && !resolveApiKey(cfg)) {
+      return { ...base, error: missingKeyReason(cfg) };
     }
     // A cloud API is always up; skipping the bare health check surfaces its real error (invalid key, no access).
     const ok = remote || (await provider.healthCheck(ctl.signal));

@@ -78,8 +78,9 @@ The full surface (`LocalPilotApi` in `src/extension.ts`):
 
 ```
 src/
-  providers/      Ollama + OpenAI-compatible clients, registry (provider/model ids), catalog, discovery
-                  (auto-detect, Docker), modelManager, modelGallery, colibri, usageAdvisor
+  providers/      Ollama, OpenAI-compatible and Anthropic clients, registry (provider/model ids, routing),
+                  cloud (key references, cloud detection, known model limits), secrets (OS keychain), catalog,
+                  discovery (auto-detect, Docker), modelManager, modelGallery, colibri, usageAdvisor
   agent/          agentLoop (model⇄tools), subagents, skills, prompts, parallel pool, changeTracker
   context/        contextManager (budget → prune → compact), tokenizer, workspaceContext (@mentions, rules)
   tools/          fs, search (ripgrep), terminal, editor/diagnostics, web search/fetch, browser (headless Chromium), registry
@@ -104,7 +105,11 @@ docs/             this site (Jekyll, GitHub Pages)
 
 ### Adding a provider type
 
-Implement `LLMProvider` (`src/types.ts`), branch in `createProvider()` (`src/providers/registry.ts`), and extend the `type` enum in `package.json`.
+Implement `LLMProvider` (`src/types.ts`), branch in `createProvider()` (`src/providers/registry.ts`), and extend the `type` enum in `package.json` and `sanitizeProvider()` (`src/ui/settingsPanel.ts`). Resolve the key with `resolveApiKey(cfg)` so `${env:…}` and `${secret:…}` references work, and set `remote` on models with `isCloudProvider(cfg)` so routing keeps preferring local models. `src/providers/anthropic.ts` is the reference for an API that is not OpenAI-shaped. Add a preset (with `group` and `keyUrl`) to `PRESET_PROVIDERS` in `media/settings.js`, and a mock-server scenario to `scripts/smoke.ts`.
+
+### Adding a cloud preset
+
+Most clouds speak the OpenAI API: add one row to the cloud list in `PRESET_PROVIDERS` (`media/settings.js`) with the base URL, the usual key variable and the provider's key page. If its model listing omits context windows or vision, extend `knownContextWindow()` / `knownVision()` in `src/providers/cloud.ts`.
 
 ## Releases
 
@@ -144,6 +149,7 @@ The site in `docs/` is plain Jekyll (GitHub Pages). The version shown on the sit
 | `ask_ai` | The **Ask AI** buttons (`_includes/ask-ai.html`) shown under every docs title and in the footer. Each entry is an assistant whose public `?q=` parameter receives a pre-filled, page-aware prompt — ChatGPT, Claude, Perplexity and Gemini (via Google AI Mode, since the Gemini app has no prefill parameter). |
 | `topics`, `works_with` | Footer link columns and the keyword *Topics* strip (`_includes/footer.html`). Add a target keyword here so it becomes a crawlable link. |
 | `nav`, `guides` | Sidebar, footer columns, pager and `/llms.txt`. A new guide page needs an entry under `guides`. |
+| `_data/pageviews.json` | Generated, not committed. The Docs workflow runs `scripts/ga-pageviews.mjs`, which reads views per page from the Google Analytics Data API, before Jekyll builds. `_includes/pageviews.html` shows the count under each docs title and the site total on the home page. Without the `GA_PROPERTY_ID` / `GA_CREDENTIALS` secrets the counts are simply not shown. A daily scheduled build keeps them current. Setup: [Publishing]({{ '/docs/publishing/#page-view-counts-on-the-website' | relative_url }}). |
 
 The site's Google Analytics is the only tracking on the site; the extension has none. The [privacy page]({{ '/privacy/' | relative_url }}) explains both.
 

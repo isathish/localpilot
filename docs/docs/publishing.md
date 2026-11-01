@@ -49,6 +49,28 @@ npx ovsx publish localpilot-X.Y.Z.vsix -p <your Open VSX token>
 - Open VSX listing, after the first Open VSX publish: <https://open-vsx.org/extension/localpilot/localpilot-agent> (LocalPilot is not on Open VSX yet)
 - The listing text comes from `MARKETPLACE.md` (packaged as the README with `--readme-path`), plus `CHANGELOG.md`, the `media/logo.png` icon and the `galleryBanner` colour from `package.json`.
 
+## Page view counts on the website
+
+The site shows a view count under each docs page title and the site's total page views and visitors on the home page. The numbers come from the site's existing Google Analytics property. The Docs workflow reads them with `scripts/ga-pageviews.mjs` before building, and a daily scheduled run keeps them current. Until the two secrets below exist, the site builds normally without counts.
+
+1. **Find the property id.** In Google Analytics, open *Admin → Property settings* and copy the numeric **Property ID**. This is not the `G-…` measurement id in `_config.yml`.
+2. **Create a service account.** In the [Google Cloud console](https://console.cloud.google.com), pick or create a project, enable the **Google Analytics Data API**, then go to *IAM & Admin → Service accounts → Create*. Open the new account, choose *Keys → Add key → JSON*, and download the key file.
+3. **Give it read access.** In Google Analytics, open *Admin → Property access management → +* and add the service account's e-mail (`…@….iam.gserviceaccount.com`) with the **Viewer** role.
+4. **Add the repository secrets** under *Settings → Secrets and variables → Actions*:
+   - `GA_PROPERTY_ID`: the numeric property id
+   - `GA_CREDENTIALS`: the entire contents of the JSON key file
+
+   Or from a terminal:
+
+   ```bash
+   gh secret set GA_PROPERTY_ID --body 123456789
+   gh secret set GA_CREDENTIALS < service-account.json
+   ```
+
+5. **Run the Docs workflow** (*Actions → Docs → Run workflow*). The *Page views from Google Analytics* step logs how many views, visitors and pages it read. Delete the downloaded key file afterwards.
+
+The service account can only read reports. Counts are rounded for display ("10.8K"). A page with no recorded views shows no count. To check locally, run `GA_PROPERTY_ID=… GA_CREDENTIALS="$(cat key.json)" node scripts/ga-pageviews.mjs docs/_data/pageviews.json` and then `jekyll serve` in `docs/`.
+
 ## Troubleshooting
 
 | Error | Fix |
@@ -57,3 +79,4 @@ npx ovsx publish localpilot-X.Y.Z.vsix -p <your Open VSX token>
 | `Publisher 'localpilot' not found`, or the workflow's *Publisher missing* error | Create the publisher first, or change `publisher` in `package.json` |
 | `Extension 'localpilot' already exists` with a different owner | The ID is taken; pick a new `name`/`publisher` |
 | README images rejected | Only HTTPS images from trusted hosts; relative paths are rewritten to the GitHub repository automatically |
+| No view counts on the website | The `GA_PROPERTY_ID` / `GA_CREDENTIALS` secrets are missing, or the *Page views* step failed: a 403 means the service account is not a Viewer on the property or the Data API is not enabled in its project. |

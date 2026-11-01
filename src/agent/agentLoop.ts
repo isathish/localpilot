@@ -11,7 +11,7 @@ import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
-import { callKey, classifyModelError, describeModelError, isTransient, sleep, withWatchdog } from './resilience';
+import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
 import { clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
@@ -709,9 +709,9 @@ export class AgentRunner {
           }
           if (isTransient(kind) && first && attempt < maxModelRetries) {
             attempt++;
-            const wait = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+            const wait = retryDelayMs(kind, e, attempt, RETRY_BACKOFF_MS);
             this.log.warn(`model call failed (${kind}), retry ${attempt}/${maxModelRetries} in ${wait}ms: ${msg}`);
-            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? 'The server is rate limiting' : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
+            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? `The server is rate limiting — waiting ${Math.round(wait / 1000)} s` : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
             emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: kind, message: msg } });
             await sleep(wait, o.signal);
             if (o.signal.aborted) {
@@ -724,7 +724,8 @@ export class AgentRunner {
           this.log.error(`model call failed: ${msg}`);
           const friendly = describeModelError(kind, msg, model.name);
           emit({ sessionId: session.id, type: 'error', payload: friendly });
-          session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now() } });
+          // meta.error lets the transcript show the failure as an error box (with Retry) after the live turn is gone.
+          session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
           const err = e instanceof Error ? e : new Error(msg);
           (err as Error & { reported?: boolean }).reported = true;
           throw err;
@@ -747,6 +748,11 @@ export class AgentRunner {
           continue;
         }
         modelEvent(o.signal.aborted ? 'aborted' : 'ok');
+        // Generation speed for the answer footer: only steps that reported tokens, timed from their first token.
+        if (firstAt && usage?.completionTokens) {
+          stats.genMs += Date.now() - firstAt;
+          stats.genTokens += usage.completionTokens;
+        }
         break;
       }
       if (aborted) {
@@ -906,9 +912,10 @@ export class AgentRunner {
     const durationMs = Date.now() - stats.startedAt;
     const last = session.messages[session.messages.length - 1];
     if (last?.role === 'assistant') {
-      last.meta = { ...last.meta, durationMs };
+      // Which model answered and how fast, for the footer under the answer (kept with the transcript, never sent).
+      last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
-    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls } });
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model } });
     return finalText;
   }
 

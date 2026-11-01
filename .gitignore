@@ -3,3 +3,6 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+
+# Generated at deploy time from Google Analytics (scripts/ga-pageviews.mjs)
+docs/_data/pageviews.json

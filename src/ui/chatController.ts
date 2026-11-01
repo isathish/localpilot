@@ -78,7 +78,7 @@ export type ToWebview =
       worktree?: { path: string; applied: boolean; conflicts?: string[] };
     }
   | { type: 'image'; image: ImageAttachment }
-  | { type: 'openFiles'; files: string[] }
+  | { type: 'openFiles'; files: string[]; active?: string; selection?: boolean }
   | { type: 'draft'; text: string }
   /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
   | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
@@ -284,8 +284,29 @@ export class ChatController implements vscode.Disposable {
             this.pushChanges(id);
           }
         }
+      }),
+      // The empty chat offers actions on the file you are looking at ("Explain dice.py"), so it follows the editor.
+      // Selection changes fire on every caret move: only "has a selection" flipping is worth a message.
+      vscode.window.onDidChangeActiveTextEditor(() => this.pushOpenFiles()),
+      vscode.window.onDidChangeTextEditorSelection((e) => {
+        const sel = e.selections.some((x) => !x.isEmpty);
+        if (sel !== this.lastSelection) {
+          this.pushOpenFiles();
+        }
       })
     );
+  }
+  private lastSelection = false;
+  private openFilesTimer: ReturnType<typeof setTimeout> | undefined;
+  private pushOpenFiles(): void {
+    clearTimeout(this.openFilesTimer);
+    this.openFilesTimer = setTimeout(() => this.broadcast(this.openFilesMsg()), 250);
+  }
+  private openFilesMsg(): ToWebview {
+    const ed = vscode.window.activeTextEditor;
+    this.lastSelection = !!ed && ed.selections.some((x) => !x.isEmpty);
+    const active = ed && ed.document.uri.scheme === 'file' ? vscode.workspace.asRelativePath(ed.document.uri) : undefined;
+    return { type: 'openFiles', files: this.workspace.openEditors(), active, selection: this.lastSelection };
   }
 
   attach(sink: Sink): vscode.Disposable {
@@ -1255,7 +1276,7 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'requestOpenFiles':
-        this.broadcast({ type: 'openFiles', files: this.workspace.openEditors() });
+        this.broadcast(this.openFilesMsg());
         return;
       case 'clientError':
         this.log.error(`chat webview (${msg.where}): ${msg.message}${msg.stack ? `\n${msg.stack}` : ''}`);
@@ -2218,6 +2239,7 @@ export class ChatController implements vscode.Disposable {
       c.stop();
     }
     clearTimeout(this.deltaTimer);
+    clearTimeout(this.openFilesTimer);
     this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
     this._onDidChangeRuns.dispose();

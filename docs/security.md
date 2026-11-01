@@ -24,7 +24,7 @@ LocalPilot runs an AI agent that can read your project, edit files and run comma
   <div class="flow-zone remote">
     <div class="flow-title">Leaves your machine only when…</div>
     <div class="flow-grid">
-      <div class="flow-box"><b>Remote model endpoint</b><span>you add one in Settings → Providers</span></div>
+      <div class="flow-box"><b>Cloud model or remote endpoint</b><span>you add one in Settings → Providers (OpenAI, Claude, Gemini, a gateway…)</span></div>
       <div class="flow-box"><b>Web search / fetch</b><span>the agent calls them (<code>approvals.network</code>)</span></div>
       <div class="flow-box"><b>Skill index from GitHub</b><span>at most daily, if <code>skills.autoInstall</code> is on</span></div>
       <div class="flow-box"><b>Model downloads</b><span>you start one</span></div>
@@ -35,6 +35,13 @@ LocalPilot runs an AI agent that can read your project, edit files and run comma
     <p>No account, no telemetry upload, no analytics SDK and no update check in the extension.</p>
   </div>
 </figure>
+
+## API keys
+
+- A key pasted into **Settings → Providers**, or entered with *LocalPilot: Set Provider API Key…*, is stored with VS Code's `SecretStorage`, which uses the operating system's keychain. settings.json only holds `${secret:<id>}`, so settings sync, dotfile repos and screenshots of settings never contain it.
+- `${env:NAME}` keys are read from the environment at use and never written anywhere.
+- The Settings webview is told only whether a key resolves and where it comes from, never the key.
+- Removing a provider deletes its stored key. Keys go only to that provider's own endpoint: as a Bearer token, `x-api-key` for Anthropic, or `api-key` for Azure.
 
 ## What the agent can do, and what stops it
 

@@ -27,6 +27,8 @@
   <article class="content">
     {% if page.title %}<h1>{{ page.title }}</h1>{% endif %}
     {% if page.description %}<p class="lead">{{ page.description }}</p>{% endif %}
+    {% capture views %}{% include pageviews.html %}{% endcapture %}{% assign views = views | strip %}
+    {% if views != "" %}<p class="page-meta">{{ views }}</p>{% endif %}
     {% include ask-ai.html placement="page" %}
     {{ content }}
     {% assign idx = -1 %}

@@ -3,6 +3,8 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import * as vscode from 'vscode';
 import { probeProvider, recommendModel, sanitizeMcpServers, sanitizeProvider } from '../ui/settingsPanel';
+import { resolveApiKey } from '../providers/cloud';
+import { ProviderSecrets } from '../providers/secrets';
 
 /** Minimal Ollama look-alike: enough of /api/version, /api/tags and /api/show for discovery. */
 function fakeOllama(): Promise<{ url: string; close(): void }> {
@@ -225,5 +227,32 @@ suite('LocalPilot settings & setup', () => {
     assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('approvals.terminal'), 'never');
     await cfg.update('approvals.terminal', before, vscode.ConfigurationTarget.Global);
     assert.strictEqual(vscode.workspace.getConfiguration('localpilot').inspect<string>('approvals.terminal')?.globalValue, before);
+  });
+
+  test('provider keys typed into Settings move to secret storage and are deleted with their provider', async () => {
+    const vault = new Map<string, string>();
+    const changed = new vscode.EventEmitter<vscode.SecretStorageChangeEvent>();
+    const storage = { get: async (k: string) => vault.get(k), store: async (k: string, v: string) => void vault.set(k, v), delete: async (k: string) => void vault.delete(k), keys: async () => [...vault.keys()], onDidChange: changed.event } as unknown as vscode.SecretStorage;
+    const memo = new Map<string, unknown>();
+    const state = { get: (k: string, d?: unknown) => (memo.has(k) ? memo.get(k) : d), update: async (k: string, v: unknown) => void memo.set(k, v), keys: () => [...memo.keys()] } as unknown as vscode.Memento;
+    const secrets = new ProviderSecrets(storage, state);
+    try {
+      const [openai, env, local] = await secrets.protect([
+        { id: 'openai-test', type: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-typed' },
+        { id: 'gemini-test', type: 'openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKey: '${env:GEMINI_API_KEY}' },
+        { id: 'local-test', type: 'openai', baseUrl: 'http://localhost:1234/v1' },
+      ]);
+      assert.strictEqual(openai.apiKey, '${secret:openai-test}', 'a pasted key is replaced by a reference');
+      assert.strictEqual(vault.get('localpilot.provider.openai-test'), 'sk-typed');
+      assert.strictEqual(resolveApiKey(openai), 'sk-typed', 'the reference resolves to the stored key');
+      assert.strictEqual(env.apiKey, '${env:GEMINI_API_KEY}', 'environment references are left alone');
+      assert.strictEqual(local.apiKey, undefined);
+      await secrets.prune([local]);
+      assert.strictEqual(vault.has('localpilot.provider.openai-test'), false, 'the key of a removed provider is deleted');
+      assert.strictEqual(resolveApiKey(openai), undefined);
+    } finally {
+      secrets.dispose();
+      changed.dispose();
+    }
   });
 });

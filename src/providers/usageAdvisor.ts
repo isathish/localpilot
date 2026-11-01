@@ -376,7 +376,8 @@ export function suggestModels(models: ModelInfo[], usage: UsageProfile, settings
     if (role === 'fast' && setting === 'session') {
       continue; // the user pinned read-only subagents to the session model
     }
-    const pool = models.filter((m) => (role === 'vision' ? m.supportsVision : role === 'completion' ? true : m.supportsTools));
+    // Never suggests a cloud model: auto-tune may write its pick into settings, and code should not leave the machine unasked.
+    const pool = models.filter((m) => !m.remote && (role === 'vision' ? m.supportsVision : role === 'completion' ? true : m.supportsTools));
     if (!pool.length) {
       continue;
     }

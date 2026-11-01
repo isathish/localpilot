@@ -878,6 +878,9 @@ export class RunStats {
   toolCalls = 0;
   promptTokens = 0;
   completionTokens = 0;
+  /** Time spent generating (first token to end of stream) and the tokens produced then, summed over the run's steps. */
+  genMs = 0;
+  genTokens = 0;
   constructor(now = Date.now()) {
     this.startedAt = now;
   }

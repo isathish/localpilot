@@ -7,12 +7,61 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 ## 1.3.2 — 2026-11-01
 ### Added
 - **Cloud model providers.** **Settings → Providers** now lists cloud APIs next to local servers: OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud. Claude uses a new `anthropic` provider type that talks to the Messages API directly, with tools and images. The other clouds use the OpenAI-compatible API. Cloud providers are marked **cloud**. Auto and other automatic picks still prefer local models and use a cloud model only when nothing local is available. A cloud model you choose yourself is always used.
-- **API keys from the environment.** An API key can be written as `${env:NAME}`, so it stays out of `settings.json`. Cloud presets use the provider's usual variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`…). If the variable is missing, **Test connection** names it.
-- **More local presets:** KoboldCpp, text-generation-webui, GPT4All and LiteLLM proxy.
+- **API keys stay out of settings.json.** A key pasted into a provider card is stored in VS Code secret storage (your OS keychain); settings.json keeps only `${secret:<id>}`. **LocalPilot: Set Provider API Key…** does the same from the Command Palette. A key can also be read from an environment variable with `${env:NAME}`; cloud presets use the provider's usual variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`…). **Test connection** names a variable or stored key that is missing. The CLI reads `LOCALPILOT_KEY_<ID>` for keys kept in secret storage.
+- **Claude thinking, tool loops and prompt caching.** Claude models think according to `localpilot.thinking`: adaptive thinking with an effort level on Claude 4.6 and later, a token budget on older models. Reasoning is streamed to the chat and sent back with its signature during the tool loop that produced it. If a pruned or compacted history makes the API reject it, LocalPilot resends once without it. Prompt caching is on.
+- **OmniRoute and LiteLLM gateways.** Presets for [OmniRoute](https://github.com/diegosouzapw/OmniRoute) (`localhost:20128`) and LiteLLM (`localhost:4000`), and auto-detect finds both. They run locally but forward prompts to cloud models, so they are marked as cloud and automatic picks keep preferring local models. Mark any other local proxy the same way with **Sends prompts to cloud models** (`"cloud": true`).
+- **More local presets:** KoboldCpp, text-generation-webui and GPT4All.
+- **Cloud providers in the CLI.** `localpilot providers` lists local and cloud providers with reachability and key state. The other subcommands:
+  - `providers presets` lists what you can add.
+  - `providers add <preset|url>` adds one and checks the connection. It asks for a missing cloud key without echoing it, or takes `--key` / `--key-env`.
+  - `providers key <id>` sets, replaces or removes a key, given as an argument, typed or piped in.
+  - `providers test` checks one provider or all of them.
+  - `providers remove` removes a provider.
 
+  Providers added in the terminal join the ones from VS Code by id; VS Code's settings are never written. Keys the editor keeps in the OS keychain are read from `~/.localpilot/keys.json` (owner-only) or `LOCALPILOT_KEY_<ID>`. `localpilot models` and `doctor` mark cloud models, and `/providers` works in a session.
+
+### Changed
+- **Settings → Providers is easier to scan.**
+  - Configured providers are grouped under **Local** and **Cloud**.
+  - Each card says where it runs and which API it uses, and shows a badge only when something needs attention: unreachable, or a key that is missing (**OPENAI_API_KEY not set**).
+  - **Add a provider** shows one category at a time (**On this machine**, **Cloud APIs**, **Gateways**) with a search box, instead of thirty tiles.
+  - Adding a cloud provider opens its card with the key field focused and a **Get an API key** link.
+  - The first-run setup offers **Use a cloud API…** when you'd rather not run a local model.
+- **Documentation for cloud providers.** New guides: *Cloud models (bring your own key)* and *OmniRoute & LiteLLM gateways*. Getting started, Models & providers, Features, Configuration, Privacy, Security, Troubleshooting, the CLI page and the Getting Started walkthrough cover cloud providers, key storage and how automatic picks treat cloud models.
+- **The website shows how often each page is read.** Each docs page shows its view count, and the home page shows total page views and visitors. The numbers come from the site's existing Google Analytics, read at build time and refreshed daily. Nothing extra loads in your browser.
+- **New glass look for the chat, settings and Markdown reader.**
+  - Cards, panels and popovers are translucent, with a soft edge highlight. Buttons, tabs and toggles are rounded pills.
+  - The message box floats over the bottom of the conversation, so replies scroll under frosted glass. The last reply always stays clear of it.
+  - Toggles, progress bars, the task meter and the settings navigation were redrawn to match.
+  - Light themes get a lighter version of the look. High-contrast themes, the OS **Reduce transparency** setting, and machines without blur support get solid surfaces and real borders. **Reduce motion** turns off the hover and pop-in animations.
+- **Liquid glass that moves and bends light.**
+  - The message box, menus, toasts, the tab bar and the settings header bend what scrolls beneath them, like the rim of a glass lens.
+  - A soft highlight follows the pointer across cards and buttons.
+  - The selected tab, settings section, User/Workspace switch and every Ask/Allow/Block choice sit on a glass pill. When you pick another one, the pill stretches toward it and settles.
+  - Icons react: send lifts off, new tab spins, history turns back, copy draws a check. Settings sections cross-fade.
+  - All of this is off with **Reduce motion**, **Reduce transparency** or a high-contrast theme.
+- **Answers show which model replied and how fast.** Under each answer: the model, its speed in tokens per second, and Copy, **Regenerate** and Open as document, visible without hovering. **Regenerate** sends your last message again for a new answer. Copy buttons confirm on the button itself.
+- **A better empty chat.** Suggestions name the file you're on (**Explain dice.py**, **Write tests for my selection**). Your three most recent chats are one click away, with the shortcuts worth knowing underneath.
+- **Failed answers stay actionable.** When a model call fails, the chat keeps the error box with **Retry** and **Change model**, including after the run ends or the chat is reopened. Before, it turned into plain "(error: …)" text.
+- **Search settings.** A search box in the settings header finds any setting by name or key (`temperature`, `api key`, `redis`). Press **⌘F** / **Ctrl+F** or **/** to open it, then use the arrow keys and Enter to jump. The page opens the right section, scrolls to the setting and highlights it. On narrow panels the box folds into an icon.
+- **Clearer loading and refresh.**
+  - The dashboard, model gallery and skill registry show placeholder cards while they load, instead of a bare "Loading…".
+  - **Refresh** spins until new data arrives. Buttons that run a command, such as **Refresh model list** and **Reconnect servers**, spin briefly to show the click registered.
+  - In the chat, the history search shows when it's still searching messages. The "thinking" dots and the status line are animated.
 ### Fixed
+- **The first-run setup page fits narrow panels.** Long server addresses no longer push it wider than the panel at sidebar widths.
+- **Settings fit narrow panels.**
+  - Provider and MCP server names are no longer cut to a few letters; status badges move under the name instead.
+  - The **New MCP server** fields and the **Find a provider** filter each get their own row.
+  - Memory notes show as small cards instead of a clipped table.
+  - Dashboard charts no longer overflow at 300 px.
 - **Cloud models that reject a parameter now work.** OpenAI reasoning models don't accept `temperature` or `max_tokens`, and some APIs don't accept `reasoning_effort`. LocalPilot now drops or renames the parameter, asks again and remembers this for that model. Context windows and vision support are filled in for well-known cloud models whose listing omits them. Speech, image and embedding models are hidden from the pickers.
+- **Cloud rate limits are waited out properly.** On HTTP 429 the agent now waits as long as the provider asks in `retry-after`, or 5 s then 10 s when it doesn't say, at most 60 s. It used to wait 0.8 s and 2.5 s, which cloud APIs reject again.
+- **A rejected API key or an exhausted quota is reported at once.** It used to be retried. The message says what happened and where to set the key: OpenAI's `insufficient_quota` and Anthropic's "credit balance is too low" read as "out of credits or quota", a 401/403 as "rejected the API key".
+- **Ghost text works with a cloud model you choose for it.** Cloud APIs have no `suffix` completion endpoint, so LocalPilot sends the code around the cursor through chat and inserts only the reply. Claude also sees the code after the cursor now.
+- **Cloud models are labelled everywhere.** They now show "cloud" in Settings → Models and in VS Code's language-model list for other extensions, along with vendor marks for Claude, OpenAI and xAI models.
 - **Ollama `*-cloud` models are no longer counted against local memory.** Model management (pull, remove, start Ollama) uses only a local Ollama, never Ollama Cloud.
+- **Cloud models are never warmed up or auto-tuned.** Warming a cloud model would only cost tokens. Auto-tune never writes a cloud model into your settings.
 
 ## 1.3.1 — 2026-10-31
 ### Fixed

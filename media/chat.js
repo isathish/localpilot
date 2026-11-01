@@ -864,7 +864,7 @@
     const act = el('div', 'actions', `<button data-act="copy" title="Copy">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit and resend: remove this message and later turns (files are kept), put the text back in the composer">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: revert files changed since this message and edit it">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
-      if (b.dataset.act === 'copy') { navigator.clipboard.writeText(text).then(() => toast('Copied')); }
+      if (b.dataset.act === 'copy') { copyTo(b, text); }
       if (b.dataset.act === 'edit' && state.session) { post({ type: 'editMessage', sessionId: state.session.id, messageIndex: index }); }
       if (b.dataset.act === 'restore' && state.session) { post({ type: 'restoreCheckpoint', sessionId: state.session.id, messageIndex: index }); }
     };
@@ -887,15 +887,55 @@
     if (m.thinking) { steps.appendChild(thinkingRow(m.thinking, 0, false)); }
     for (const tc of m.toolCalls || []) { placeTool(steps, tc, results.get(tc.id) || { content: '(no result)', isError: false }); }
     if (steps.children.length) { d.appendChild(steps); }
+    const err = m.meta && m.meta.error;
+    if (err) {
+      // A failed turn: any partial answer, then the same error box the live turn showed (actions added on the latest turn).
+      const partial = m.content && m.content.trim() && m.content !== `(error: ${err})` ? m.content : '';
+      if (partial) { d.appendChild(el('div', 'body', renderMarkdown(partial))); }
+      d.appendChild(el('div', 'error-box', `<span class="msg">${esc(err)}</span>`));
+      return d;
+    }
     if (m.content && m.content.trim()) {
       const body = el('div', 'body', renderMarkdown(m.content)); d.appendChild(body);
       // Long or structured answers read better in the dedicated Markdown reader.
       const long = m.content.length > 600 || /^#{1,3}\s/m.test(m.content) || /^\|.*\|$/m.test(m.content);
-      const act = el('div', 'actions', `<button data-act="copy" title="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader">${I.open}<span>Open as document</span></button>` : ''}`);
-      act.onclick = (e) => { const b = e.target.closest('[data-act]'); if (!b) { return; } if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); return; } navigator.clipboard.writeText(m.content).then(() => toast('Copied')); };
-      d.appendChild(act);
+      d.appendChild(answerFoot(m, long));
     }
     return d.children.length ? d : null;
+  }
+  /** Under every answer: which model replied and how fast (from the turn's meta), then Copy / Regenerate / Open as
+   *  document — always visible, so nothing depends on hovering. Regenerate is added to the latest answer by renderSession. */
+  function answerFoot(m, long) {
+    const mt = m.meta || {};
+    const info = [];
+    if (mt.model) { info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}">${esc(modelName(mt.model))}</span>`); }
+    if (mt.outputTokens && mt.genMs > 250) { info.push(`<span title="${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
+    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}</span>`);
+    f.onclick = (e) => {
+      const b = e.target.closest('[data-act]'); if (!b) { return; }
+      if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); }
+      else if (b.dataset.act === 'copy') { copyTo(b, m.content); }
+      else if (b.dataset.act === 'regen' && state.session && !state.running.has(state.session.id)) { b.disabled = true; post({ type: 'retry', sessionId: state.session.id }); }
+    };
+    return f;
+  }
+  /** Retry (same request again) and Change model (opens the picker; Retry then uses the new model) on a failed turn. */
+  function errorActions(box, sid) {
+    const acts = el('span', 'err-acts', `<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry">${I.layers}<span>Change model</span></button><button class="btn sm primary" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`);
+    acts.onclick = (e) => {
+      const b = e.target.closest('[data-a]'); if (!b || state.running.has(sid)) { return; }
+      if (b.dataset.a === 'retry') { b.disabled = true; b.classList.add('busy'); post({ type: 'retry', sessionId: sid }); }
+      else { els.modelBtn.click(); }
+    };
+    box.appendChild(acts);
+  }
+  /** Copy with feedback on the button itself (icon → check for a moment); a toast only if the clipboard refuses. */
+  function copyTo(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      if (!btn.dataset.html) { btn.dataset.html = btn.innerHTML; }
+      btn.innerHTML = btn.dataset.html.replace(/<svg[\s\S]*?<\/svg>/, I.check).replace(/>Copy</, '>Copied<'); btn.classList.add('copied');
+      clearTimeout(btn._t); btn._t = setTimeout(() => { btn.innerHTML = btn.dataset.html; btn.classList.remove('copied'); }, 1400);
+    }, () => toast('Could not copy to the clipboard', 'error'));
   }
   function renderSession() {
     const s = state.session;
@@ -952,8 +992,8 @@
       // so settling the transcript at the end of a turn does not shift the layout.
       const prev = els.messages.lastElementChild;
       if (m.role !== 'user' && prev && prev.classList.contains('assistant')) {
-        const act = node.querySelector(':scope > .actions');
-        if (act) { for (const old of prev.querySelectorAll(':scope > .actions')) { old.remove(); } }
+        const act = node.querySelector(':scope > .actions, :scope > .afoot');
+        if (act) { for (const old of prev.querySelectorAll(':scope > .actions, :scope > .afoot')) { old.remove(); } }
         while (node.firstChild) { prev.appendChild(node.firstChild); }
         if (cur && cur.el === prev) { cur.end = ts || cur.end; if (m.meta && m.meta.durationMs) { cur.dur = m.meta.durationMs; } }
         return;
@@ -963,6 +1003,12 @@
     });
     // The turn still streaming is the live element below, not a settled one.
     if (!state.running.has(s.id) && !state.live.has(s.id)) { settleReplay(); }
+    // The latest answer can be regenerated: same request, sent again (files the turn changed are kept).
+    const lastTurn = els.messages.lastElementChild;
+    const failedBox = !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .error-box:last-child');
+    if (failedBox) { errorActions(failedBox, s.id); }
+    const foot = !failedBox && !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .afoot .acts');
+    if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept)" aria-label="Regenerate">${I.refresh}</button>`); }
     // Plan mode finished with a checklist: the "Prepared plan" card — title, summary, todos and one-click Build.
     if (s.mode === 'plan' && s.plan && (s.todos || []).length && !state.running.has(s.id)) { els.messages.appendChild(planCard(s)); }
     // Install / Create / Use offers from the last request outlive its live turn.
@@ -1003,17 +1049,39 @@
     const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
     wrap.innerHTML = `<div class="logo">${I.bot}</div><h2>${greet}. What are we building?</h2><p>Agent mode edits files and runs commands. Ask answers questions. Plan designs before coding.</p>`;
     const sug = el('div', 'suggestions');
-    for (const [icon, label, prompt, mode] of [
-      [I.file, 'Explain the active file', 'Explain what the active file does and how it fits into the codebase.', 'ask'],
-      [I.bug, 'Find and fix errors in this file', 'Run get_diagnostics for the active file and fix every error.', 'agent'],
-      [I.beaker, 'Write tests for my selection', "Write unit tests for the selected code using the project's existing test framework.", 'agent'],
+    // Suggestions name the file you are on (sent by the host as the active editor changes); without one, project-wide ones.
+    const file = state.activeFile ? base(state.activeFile) : '';
+    const picks = file ? [
+      [I.file, `Explain ${file}`, `Explain what ${state.activeFile} does and how it fits into the codebase.`, 'ask'],
+      [I.bug, `Fix problems in ${file}`, `Run get_diagnostics for ${state.activeFile} and fix every error.`, 'agent'],
+      [I.beaker, state.hasSelection ? 'Write tests for my selection' : `Write tests for ${file}`, state.hasSelection ? "Write unit tests for the selected code using the project's existing test framework." : `Write unit tests for ${state.activeFile} using the project's existing test framework.`, 'agent'],
       [I.sparkle, 'Give me an overview of this project', 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.', 'ask'],
-    ]) {
-      const b = el('button', 'suggestion', `${icon}<span>${esc(label)}</span>`);
+    ] : [
+      [I.sparkle, 'Give me an overview of this project', 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.', 'ask'],
+      [I.search, 'Where should I start reading?', 'Find the entry points of this project and the five files a newcomer should read first, with one line on each.', 'ask'],
+      [I.bug, 'Find and fix errors in the workspace', 'Run get_diagnostics for the workspace and fix every error.', 'agent'],
+    ];
+    for (const [icon, label, prompt, mode] of picks) {
+      const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span><span class="mode">${mode === 'ask' ? 'Ask' : 'Agent'}</span>`);
+      b.title = prompt;
       b.onclick = () => { setMode(mode); els.input.value = prompt; sendCurrent(true); };
       sug.appendChild(b);
     }
     wrap.appendChild(sug);
+    // Pick up where you left off: the latest chats with something in them, one click away.
+    const recent = state.sessions.filter((x) => x.messageCount > 0 && x.id !== (state.session && state.session.id)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
+    if (recent.length) {
+      const r = el('div', 'recent', `<div class="recent-h">Recent<button data-a="all">All chats</button></div>`);
+      for (const x of recent) {
+        const row = el('button', 'recent-row', `<span class="ico">${state.running.has(x.id) ? LIVE_DOT : x.pinned ? I.pin : I.reply}</span><span class="t">${esc(x.title || 'New chat')}</span><span class="when">${esc(timeAgo(x.updatedAt))}</span>`);
+        row.title = `Open “${x.title || 'New chat'}”`;
+        row.onclick = () => historyOpen(x.id);
+        r.appendChild(row);
+      }
+      r.querySelector('[data-a="all"]').onclick = () => els.history.click();
+      wrap.appendChild(r);
+    }
+    wrap.appendChild(el('div', 'hints', '<span><kbd>@</kbd> add context</span><span><kbd>/</kbd> commands</span><span><kbd>↑</kbd> last prompt</span>'));
     if (!state.models.length && !state.modelsLoading) {
       const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
       n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
@@ -1189,7 +1257,8 @@
     const busy = state.session && (state.running.has(state.session.id) || state.live.has(state.session.id));
     const show = !!(away && busy);
     jump.classList.toggle('hidden', !show);
-    if (show) { jump.style.top = `${Math.round(m.getBoundingClientRect().bottom - 40)}px`; }
+    // The composer floats over the transcript, so the button sits just above the composer, not at the transcript's edge.
+    if (show) { jump.style.top = `${Math.round((composerEl ? composerEl.getBoundingClientRect().top : m.getBoundingClientRect().bottom) - 40)}px`; }
   }
   els.messages.addEventListener('scroll', () => { noteScroll(); updateJump(); }, { passive: true });
   window.addEventListener('resize', () => { noteScroll(); updateJump(); });
@@ -1365,7 +1434,7 @@
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
-      case 'error': { rotateBody(live); live.failed = true; setPhase(live, 'Failed'); const box = el('div', 'error-box', `<span class="msg">${esc(String(e.payload))}</span>`); const b = el('button', 'btn ghost sm retry-btn', `${I.refresh}Retry`); b.title = 'Send the last message again'; b.onclick = () => { if (state.running.has(sid)) { return; } post({ type: 'retry', sessionId: sid }); }; box.appendChild(b); live.root.insertBefore(box, live.body); break; }
+      case 'error': { rotateBody(live); live.failed = true; setPhase(live, 'Failed'); const box = el('div', 'error-box', `<span class="msg">${esc(String(e.payload))}</span>`); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
       case 'turn_end': noteStatus(sid, 'Finishing…'); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
   }
@@ -1464,7 +1533,7 @@
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
     els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${esc(name)}` : esc(name);
-    els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)} context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}` : 'Model';
+    els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)} context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}${m.remote ? ' · cloud: prompts leave this machine' : ''}` : 'Model';
   }
   function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }
   // ------------------------------------------------------------------ chat tabs (multitasking)
@@ -1781,7 +1850,9 @@
       row.oncontextmenu = (e) => { e.preventDefault(); hist.sel = i; historyAction('more', s, row); };
       list.appendChild(row);
     });
-    if (!rows.length) { list.appendChild(el('div', 'empty-i', q ? (hist.pending ? 'Searching messages…' : 'No chats match') : 'No chats yet — start one below')); }
+    if (!rows.length) { list.appendChild(q && hist.pending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching messages…') : el('div', 'empty-i', q ? `No chats match “${esc(q)}”` : 'No chats yet — start one below')); }
+    // Title matches can show while message hits are still on their way: a thin shimmer says more may arrive.
+    list.classList.toggle('pending', !!(q && hist.pending && rows.length));
     const selRow = list.querySelector('.hist-row.sel'); if (selRow) { selRow.scrollIntoView({ block: 'nearest' }); } else { list.scrollTop = y; }
     const idle = state.sessions.filter((s) => !state.running.has(s.id) && (s.messageCount > 0 || s.pinned || s.plan));
     foot.innerHTML = `<button data-a="new" title="Start another chat — the current one keeps running">${I.sparkle}<span>New chat</span></button><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}<span class="spacer"></span><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close other tabs">${I.x}</button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace)" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}</button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button>`;
@@ -2147,7 +2218,7 @@
     const s = state.session; const cur = (s && s.model) || '';
     const autoName = modelName(autoModelId());
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
-    for (const m of state.models) { items.push({ group: (state.providerNames && state.providerNames[m.providerId]) || m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}`, tag: m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
+    for (const m of state.models) { items.push({ group: (state.providerNames && state.providerNames[m.providerId]) || m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.remote && m.supportsVision ? ' · vision' : ''}`, tag: m.remote ? 'cloud' : m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
     items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
@@ -2395,7 +2466,7 @@
   els.box.addEventListener('drop', (e) => { e.preventDefault(); els.box.classList.remove('drop'); const files = [...(e.dataTransfer.files || [])]; const imgs = files.filter((f) => /^image\//.test(f.type)); imgs.forEach(addImageFile); if (!imgs.length) { for (const u of (e.dataTransfer.getData('text/uri-list') || '').split(/\r?\n/).filter(Boolean)) { post({ type: 'attachUri', uri: u }); } } });
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
-    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { navigator.clipboard.writeText(text).then(() => toast('Copied')); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { post({ type: 'applyCodeToFile', code: text }); } return; }
+    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { post({ type: 'applyCodeToFile', code: text }); } return; }
     const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined }); return; }
     const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
     const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
@@ -2483,7 +2554,7 @@
   }
   function dispatch(m) {
     switch (m.type) {
-      case 'init': state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (hist.open) { renderHistory(); } break;
       case 'searchResults': if (hist.open && m.query === hist.q.trim()) { hist.hits = m; hist.pending = false; renderHistory(); } break;
       case 'session': {
@@ -2552,7 +2623,13 @@
       case 'draft': els.input.value = m.text || ''; autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
-      case 'openFiles': state.openFiles = m.files || []; break;
+      case 'openFiles': {
+        const was = `${state.activeFile}|${state.hasSelection}`;
+        state.openFiles = m.files || []; state.activeFile = m.active || ''; state.hasSelection = !!m.selection;
+        // The empty chat's suggestions name the file you are on; refresh them when that changes.
+        if (was !== `${state.activeFile}|${state.hasSelection}` && state.session && !state.session.messages.length && !state.running.has(state.session.id)) { renderSession(); }
+        break;
+      }
       case 'taskSuggestions': {
         if (m.source === 'quick') { launcher.pool = m.items || []; } else { launcher.loadingMore = false; const have = new Set(launcher.pool.map((s) => s.title.toLowerCase())); launcher.pool = [...(m.items || []).filter((s) => !have.has(s.title.toLowerCase())), ...launcher.pool]; }
         launcher.recent = m.recent || [];

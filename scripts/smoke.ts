@@ -6,9 +6,13 @@
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
-import { AnthropicProvider, toAnthropicMessages } from '../src/providers/anthropic';
-import { isRemoteUrl, resolveApiKey } from '../src/providers/cloud';
+import { AnthropicProvider, thinkingStyle, toAnthropicMessages } from '../src/providers/anthropic';
+import { completeViaChat, isCloudProvider, isRemoteUrl, resolveApiKey, setSecretValues, stripFences } from '../src/providers/cloud';
+import { retryAfter } from '../src/providers/http';
+import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
+import { PROVIDER_PRESETS } from '../src/providers/presets';
+import * as nodeFs from 'fs';
 import { ModelInfo } from '../src/types';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
@@ -269,6 +273,227 @@ async function cloudProviders() {
   const cloud = mk('openai/gpt-5', true);
   check('routing: Auto prefers a local model over a cloud one', pickForRole([cloud, local], 'agent')?.id === local.id);
   check('routing: a cloud model is used when nothing local is available', pickForRole([cloud], 'agent')?.id === cloud.id);
+}
+
+/**
+ * Cloud providers end to end through the real registry and agent loop: Claude (key from secret storage, thinking replayed
+ * in the tool loop, recovery when the API rejects a replayed block), a local cloud gateway (OmniRoute) and a local server.
+ */
+async function cloudAgentE2E() {
+  console.log('\n[Cloud providers end-to-end]');
+  const claudeBodies: Record<string, unknown>[] = [];
+  const claudeKeys: (string | undefined)[] = [];
+  let rejectedReplay = false;
+  const srv = await listen(async (req, res) => {
+    const url = req.url ?? '';
+    if (url.startsWith('/anthropic/')) {
+      claudeKeys.push(req.headers['x-api-key'] as string | undefined);
+      if (req.headers['x-api-key'] !== 'sk-from-keychain') {
+        res.statusCode = 401;
+        return res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }));
+      }
+      if (url.startsWith('/anthropic/v1/models')) {
+        return res.end(JSON.stringify({ data: [{ id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6', max_input_tokens: 1_000_000, max_tokens: 64000 }], has_more: false }));
+      }
+      const body = JSON.parse(await readBody(req));
+      claudeBodies.push(body);
+      const msgs = body.messages as { role: string; content: { type: string; signature?: string }[] }[];
+      const afterTool = msgs.some((m) => m.content.some((b) => b.type === 'tool_result'));
+      const replayed = msgs.some((m) => m.role === 'assistant' && m.content[0]?.type === 'thinking');
+      if (afterTool && replayed && !rejectedReplay) {
+        // The history was edited since the block was produced: the API rejects it before any output.
+        rejectedReplay = true;
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.' } }));
+      }
+      res.setHeader('content-type', 'text/event-stream');
+      const ev = (o: { type: string }) => res.write(`event: ${o.type}\ndata: ${JSON.stringify(o)}\n\n`);
+      ev({ type: 'message_start', message: { usage: { input_tokens: 40, cache_read_input_tokens: 2 } } } as never);
+      if (!afterTool) {
+        ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } as never);
+        ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'I should echo first.' } } as never);
+        ev({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-1' } } as never);
+        ev({ type: 'content_block_stop', index: 0 } as never);
+        ev({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_01', name: 'echo', input: {} } } as never);
+        ev({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"text":"from claude"}' } } as never);
+        ev({ type: 'content_block_stop', index: 1 } as never);
+        ev({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 9 } } as never);
+      } else {
+        ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } as never);
+        ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Claude finished after the tool.' } } as never);
+        ev({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6 } } as never);
+      }
+      ev({ type: 'message_stop' });
+      return res.end();
+    }
+    const list = url.startsWith('/omni/') ? [{ id: 'auto', owned_by: 'omniroute' }, { id: 'cc/claude-sonnet-4-5' }, { id: 'tts-1' }] : [{ id: 'qwen2.5-coder-7b', capabilities: ['tool_use'] }];
+    if (url.endsWith('/v1/models')) {
+      return res.end(JSON.stringify({ data: list }));
+    }
+    if (url.endsWith('/v1/chat/completions')) {
+      const body = JSON.parse(await readBody(req));
+      res.setHeader('content-type', 'text/event-stream');
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${url.startsWith('/omni/') ? 'Gateway' : 'Local'} answer from ${body.model}.` }, finish_reason: 'stop' }] })}\n\n`);
+      return res.end('data: [DONE]\n\n');
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  const prevConfig = process.env.LP_CONFIG;
+  process.env.LP_CONFIG = JSON.stringify({
+    providers: [
+      { id: 'local', type: 'openai', baseUrl: `${srv.url}/local/v1` },
+      { id: 'omniroute', type: 'openai', baseUrl: `${srv.url}/omni/v1`, cloud: true },
+      { id: 'claude', type: 'anthropic', baseUrl: `${srv.url}/anthropic/v1`, apiKey: '${secret:claude}' },
+    ],
+  });
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    setSecretValues({ claude: undefined });
+    const providers = new ProviderRegistry(log);
+    const before = await providers.listModels(true);
+    check('secret key missing: Claude unreachable, others listed', !before.some((m) => m.providerId === 'claude') && before.some((m) => m.providerId === 'omniroute'), before.map((m) => m.id));
+    setSecretValues({ claude: 'sk-from-keychain' });
+    const models = await providers.listModels();
+    const claude = models.find((m) => m.providerId === 'claude');
+    check('secret key loaded: providers rebuilt and Claude listed with its 1M context', claude?.contextWindow === 1_000_000 && claude.supportsThinking === true && claudeKeys.at(-1) === 'sk-from-keychain', claude);
+    check('gateway marked cloud: its models are remote, speech models hidden', models.filter((m) => m.providerId === 'omniroute').every((m) => m.remote) && !models.some((m) => m.modelId === 'tts-1'));
+    check('local server stays local', models.filter((m) => m.providerId === 'local').every((m) => !m.remote));
+    const auto = await providers.route({ role: 'agent' });
+    check('Auto routes to the local model, not Claude or the gateway', auto.model.id === 'local/qwen2.5-coder-7b', auto.model.id);
+
+    const tools = new ToolRegistry();
+    tools.register({ parallelSafe: true, definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, async execute(args) { return { content: `ECHO:${args.text}` }; } });
+    const runner = new AgentRunner(providers, tools, new SkillManager(log), new WorkspaceContext(log), log);
+    const session = (model: string): Session => ({ id: `c-${model}`, title: '', createdAt: 0, updatedAt: 0, model, messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [] });
+    const events: AgentEvent[] = [];
+    const s = session('claude/claude-sonnet-4-6');
+    const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'echo something' }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true });
+    check('Claude agent run: tool executed and final answer returned', out === 'Claude finished after the tool.' && s.messages.some((m) => m.role === 'tool' && m.content === 'ECHO:from claude'), out);
+    check('Claude: reasoning streamed to the UI', events.some((e) => e.type === 'thinking' || JSON.stringify(e).includes('I should echo first.')));
+    const replay = claudeBodies.find((b) => JSON.stringify(b).includes('sig-1') && JSON.stringify(b).includes('tool_result'));
+    check('Claude: thinking block (with signature) replayed before the tool call', !!replay, claudeBodies.length);
+    const retried = claudeBodies.at(-1)!;
+    check('Claude: rejected replay recovered by resending without thinking blocks', rejectedReplay && !JSON.stringify(retried.messages).includes('"type":"thinking"'));
+    check('Claude: no temperature sent; tools and prompt caching sent', claudeBodies.every((b) => !('temperature' in b) && b.cache_control !== undefined) && Array.isArray(claudeBodies[0].tools));
+
+    const g = session('omniroute/auto');
+    const gOut = await runner.run({ session: g, userMessage: { role: 'user', content: 'hi' }, emit: () => {}, signal: new AbortController().signal, requestApproval: async () => true });
+    check('OmniRoute chosen explicitly: answers through the gateway', gOut === 'Gateway answer from auto.', gOut);
+    providers.dispose();
+  } finally {
+    if (prevConfig === undefined) {
+      delete process.env.LP_CONFIG;
+    } else {
+      process.env.LP_CONFIG = prevConfig;
+    }
+    setSecretValues({ claude: undefined });
+    srv.close();
+  }
+
+  // The CLI's presets (src/providers/presets.ts) and the Settings page's (media/settings.js) must stay the same list.
+  const webview = nodeFs.readFileSync('media/settings.js', 'utf8');
+  const drift = PROVIDER_PRESETS.filter((p) => !webview.includes(`'${p.key}'`) || !webview.includes(`'${p.cfg.baseUrl}'`) || (p.env && !webview.includes(`'${p.env}'`)));
+  const webKeys = [...webview.matchAll(/\[\s*'([a-z0-9-]+)',\s*'[^']+',\s*'[^']*',\s*'(?:ollama|openai|anthropic)'/g)].map((m) => m[1]);
+  check('CLI and Settings provider presets are the same list', !drift.length && webKeys.every((k) => PROVIDER_PRESETS.some((p) => p.key === k)), { drift: drift.map((p) => p.key), extra: webKeys.filter((k) => !PROVIDER_PRESETS.some((p) => p.key === k)) });
+  check('thinking style per Claude model', thinkingStyle('claude-opus-5-5') === 'always' && thinkingStyle('claude-fable-5-1') === 'always' && thinkingStyle('claude-sonnet-4-6') === 'adaptive' && thinkingStyle('claude-haiku-5-5') === 'adaptive' && thinkingStyle('claude-sonnet-4-5') === 'budget' && thinkingStyle('claude-3-7-sonnet-latest') === 'budget' && thinkingStyle('claude-3-5-haiku-latest') === 'none');
+  check('local gateways marked cloud count as cloud; URLs decide otherwise', isCloudProvider({ baseUrl: 'http://localhost:20128/v1', cloud: true }) && !isCloudProvider({ baseUrl: 'http://localhost:1234/v1' }) && isCloudProvider({ baseUrl: 'https://api.openai.com/v1' }));
+  process.env.LOCALPILOT_KEY_MY_GATEWAY = 'cli-key';
+  check('${secret:NAME} falls back to LOCALPILOT_KEY_<NAME> outside VS Code', resolveApiKey({ apiKey: '${secret:my-gateway}' }) === 'cli-key');
+}
+
+/** Cloud failure handling and ghost text: retry-after, rejected keys, exhausted quota, fill-in-the-middle through chat. */
+async function cloudResilience() {
+  console.log('\n[Cloud resilience & ghost text]');
+  const h = (o: Record<string, string>) => new Headers(o);
+  check('retry-after: seconds, milliseconds and HTTP dates', retryAfter(h({ 'retry-after': '7' })) === 7000 && retryAfter(h({ 'retry-after-ms': '1500' })) === 1500 && Math.abs((retryAfter(h({ 'retry-after': new Date(Date.now() + 3000).toUTCString() })) ?? 0) - 3000) < 1500 && retryAfter(h({})) === undefined);
+  const e429 = new HttpError(429, '{"error":{"message":"Rate limit reached"}}', 'x', h({ 'retry-after': '7' }));
+  const quota = new HttpError(429, '{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}', 'x');
+  const credit = new HttpError(400, '{"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API."}}', 'x');
+  check('classified: rate limit, quota (OpenAI and Anthropic), rejected key', classifyModelError(e429) === 'ratelimit' && classifyModelError(quota) === 'quota' && classifyModelError(credit) === 'quota' && classifyModelError(new HttpError(401, 'invalid x-api-key', 'x')) === 'auth');
+  check('rate-limit wait follows retry-after, defaults to 5 s, capped at 60 s', retryDelayMs('ratelimit', e429, 1, [800, 2500]) === 7000 && retryDelayMs('ratelimit', new HttpError(429, '', 'x'), 1, [800, 2500]) === 5000 && retryDelayMs('ratelimit', new HttpError(429, '', 'x', h({ 'retry-after': '600' })), 1, [800]) === 60000 && retryDelayMs('network', e429, 1, [800, 2500]) === 800);
+  check('fences stripped from a fill-in-the-middle reply', stripFences('```ts\nreturn a + b;\n```') === 'return a + b;' && stripFences('a + b') === 'a + b');
+
+  let fimBody: { messages?: { content: string }[] } = {};
+  let antFim: { messages?: { content: { text?: string }[] }[]; system?: string } = {};
+  let rateHits = 0;
+  let rateFirstAt = 0;
+  let rateSecondAt = 0;
+  const srv = await listen(async (req, res) => {
+    const url = req.url ?? '';
+    if (url.endsWith('/models')) {
+      return res.end(JSON.stringify(url.startsWith('/ant') ? { data: [{ id: 'claude-haiku-4-5' }], has_more: false } : { data: [{ id: 'gpt-x', capabilities: ['tool_use'] }] }));
+    }
+    const b = JSON.parse(await readBody(req));
+    if (url.startsWith('/ant')) {
+      antFim = b;
+      res.setHeader('content-type', 'text/event-stream');
+      res.write(`data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x * 2' } })}\n\n`);
+      return res.end(`data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })}\n\n`);
+    }
+    if (url.startsWith('/limited')) {
+      rateHits++;
+      if (rateHits === 1) {
+        rateFirstAt = Date.now();
+        res.statusCode = 429;
+        res.setHeader('retry-after', '1');
+        return res.end('{"error":{"message":"Rate limit reached for requests"}}');
+      }
+      rateSecondAt = rateSecondAt || Date.now();
+    }
+    if (url.startsWith('/badkey')) {
+      res.statusCode = 401;
+      return res.end('{"error":{"message":"Incorrect API key provided","code":"invalid_api_key"}}');
+    }
+    if (url.startsWith('/broke')) {
+      res.statusCode = 429;
+      return res.end('{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}');
+    }
+    fimBody = b;
+    res.setHeader('content-type', 'text/event-stream');
+    const fim = JSON.stringify(b.messages).includes('<CURSOR>');
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: fim ? '```js\nreturn a + b;\n```' : 'Recovered after waiting.' }, finish_reason: 'stop' }] })}\n\n`);
+    res.end('data: [DONE]\n\n');
+  });
+  const prevConfig = process.env.LP_CONFIG;
+  try {
+    const gpt = new OpenAICompatProvider({ id: 'oai', type: 'openai', baseUrl: `${srv.url}/v1`, cloud: true });
+    const ins = await gpt.complete({ model: 'gpt-x', prompt: 'function add(a, b) {\n  ', suffix: '\n}', maxTokens: 40 });
+    const sent = fimBody.messages?.map((m) => m.content).join('\n') ?? '';
+    check('cloud ghost text: code around the cursor sent through chat, insertion returned without fences', ins === 'return a + b;' && sent.includes('function add(a, b) {\n  <CURSOR>\n}'), { ins, sent });
+    const claude = new AnthropicProvider({ id: 'ant', type: 'anthropic', baseUrl: `${srv.url}/ant/v1`, apiKey: 'k' });
+    const cIns = await completeViaChat(claude, { model: 'claude-haiku-4-5', prompt: 'const y = ', suffix: ';' });
+    check('Claude ghost text uses the suffix too', cIns === 'x * 2' && JSON.stringify(antFim.messages).includes('const y = <CURSOR>;') && !!antFim.system, antFim);
+
+    process.env.LP_CONFIG = JSON.stringify({ providers: [
+      { id: 'limited', type: 'openai', baseUrl: `${srv.url}/limited/v1`, cloud: true },
+      { id: 'badkey', type: 'openai', baseUrl: `${srv.url}/badkey/v1`, cloud: true },
+      { id: 'broke', type: 'openai', baseUrl: `${srv.url}/broke/v1`, cloud: true },
+    ] });
+    const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+    const providers = new ProviderRegistry(log);
+    const runner = new AgentRunner(providers, new ToolRegistry(), new SkillManager(log), new WorkspaceContext(log), log);
+    const run = async (model: string) => {
+      const events: AgentEvent[] = [];
+      const s: Session = { id: `r-${model}`, title: '', createdAt: 0, updatedAt: 0, model, messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'ask', attachments: [] };
+      const out = await runner.run({ session: s, userMessage: { role: 'user', content: 'hi' }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true }).catch((e) => `THREW ${e}`);
+      return { out, events, text: JSON.stringify(events) };
+    };
+    const limited = await run('limited/gpt-x');
+    check('429 with retry-after: the agent waits as asked, then succeeds', limited.out === 'Recovered after waiting.' && rateSecondAt - rateFirstAt >= 950 && limited.events.some((e) => e.type === 'retry'), { out: limited.out, waited: rateSecondAt - rateFirstAt });
+    const bad = await run('badkey/gpt-x');
+    check('rejected key: no retries, a message that says where to set the key', !bad.events.some((e) => e.type === 'retry') && /rejected the API key/.test(bad.text) && /Settings → Providers/.test(bad.text), bad.text.slice(0, 400));
+    const broke = await run('broke/gpt-x');
+    check('exhausted quota: not retried, says the account is out of credits', !broke.events.some((e) => e.type === 'retry') && /out of credits or quota/.test(broke.text), broke.text.slice(0, 400));
+    providers.dispose();
+  } finally {
+    if (prevConfig === undefined) {
+      delete process.env.LP_CONFIG;
+    } else {
+      process.env.LP_CONFIG = prevConfig;
+    }
+    srv.close();
+  }
 }
 
 async function pureLogic() {
@@ -1420,6 +1645,8 @@ async function redisStorage() {
   await mockOllama();
   await mockOpenAI();
   await cloudProviders();
+  await cloudAgentE2E();
+  await cloudResilience();
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();

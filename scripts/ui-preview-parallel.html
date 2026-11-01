@@ -11,6 +11,15 @@
 --vscode-scrollbarSlider-background:rgba(121,121,121,.4);--vscode-chat-requestBackground:#1f1f1f;--vscode-chat-requestBorder:#2b2b2b;--vscode-editorWidget-background:#202020;
 --vscode-input-placeholderForeground:#8b8b8b;--vscode-diffEditor-insertedLineBackground:rgba(46,160,67,.2);--vscode-diffEditor-removedLineBackground:rgba(248,81,73,.2);
 }
+html.light{
+--vscode-sideBar-background:#f8f8f8;--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#6a6a6a;--vscode-widget-border:#e5e5e5;
+--vscode-button-background:#005fb8;--vscode-button-hoverBackground:#0258a8;--vscode-focusBorder:#005fb8;
+--vscode-input-background:#ffffff;--vscode-input-foreground:#3b3b3b;--vscode-input-border:#cecece;--vscode-editor-background:#ffffff;
+--vscode-textCodeBlock-background:#f0f0f0;--vscode-toolbar-hoverBackground:#e8e8e8;--vscode-list-activeSelectionBackground:#e4e6f1;--vscode-list-activeSelectionForeground:#3b3b3b;
+--vscode-textLink-foreground:#005fb8;--vscode-editorWarning-foreground:#bf8803;--vscode-testing-iconPassed:#2ea043;
+--vscode-chat-requestBackground:#ffffff;--vscode-chat-requestBorder:#e5e5e5;--vscode-editorWidget-background:#f3f3f3;--vscode-notifications-background:#f3f3f3;
+--vscode-input-placeholderForeground:#767676;--vscode-scrollbarSlider-background:rgba(100,100,100,.4);
+}
 body{margin:0}
 </style>
 <link rel="stylesheet" href="../media/chat.css"></head>
@@ -41,6 +50,12 @@ body{margin:0}
     </div>
   </footer>
 <div id="popover" class="popover hidden"></div><div id="toasts"></div>
+<script>
+// ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
+(() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');
+  document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
+  if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df'); })();
+</script>
 <script>
 // Mock controller with real multi-session semantics: a session store, selectSession → 'session',
 // 'send' starts a simulated stream, and window.sim lets tests drive interleaved streams.
@@ -92,5 +107,6 @@ window.acquireVsCodeApi=()=>({getState(){return window.acquireVsCodeApi_state;},
   window.__posted=(window.__posted||[]).concat([m]);
 }});
 </script>
+<script src="../media/glass.js"></script>
 <script src="../media/chat.js"></script>
 </body></html>

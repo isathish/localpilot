@@ -39,12 +39,18 @@ const providers = [
   { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' },
   { id: 'docker', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' },
   { id: 'docker-lp-ollama', type: 'ollama', baseUrl: 'http://localhost:11435', displayName: 'Ollama (Docker · lp-ollama)', enabled: false },
+  { id: 'anthropic', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', displayName: 'Anthropic (Claude)', apiKey: '${secret:anthropic}' },
+  { id: 'openai', type: 'openai', baseUrl: 'https://api.openai.com/v1', displayName: 'OpenAI', apiKey: '${env:OPENAI_API_KEY}' },
+  { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true },
 ];
+// Key status as the extension reports it (never the key): keychain ok, env var missing, gateway without a key.
+const keys = { anthropic: { source: 'keychain', ok: true }, openai: { source: 'env', ok: false, env: 'OPENAI_API_KEY' }, omniroute: { source: 'none', ok: false } };
 const models = [
   { id: 'ollama/gemma4:e4b', providerId: 'ollama', modelId: 'gemma4:e4b', name: 'gemma4:e4b', contextWindow: 131072, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, supportsFim: false },
   { id: 'ollama/qwen2.5-coder:7b', providerId: 'ollama', modelId: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
   { id: 'ollama/qwen2.5-coder:1.5b', providerId: 'ollama', modelId: 'qwen2.5-coder:1.5b', name: 'qwen2.5-coder:1.5b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
   { id: 'docker/docker.io/ai/smollm2:latest', providerId: 'docker', modelId: 'docker.io/ai/smollm2:latest', name: 'smollm2:latest', contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false },
+  { id: 'anthropic/claude-sonnet-4-6', providerId: 'anthropic', modelId: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 1000000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, supportsFim: false, remote: true },
   { id: 'lmstudio/qwen2.5-vl-7b', providerId: 'lmstudio', modelId: 'qwen2.5-vl-7b', name: 'qwen2.5-vl-7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: true },
 ];
 const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, temperature: 0.2, thinking: 'off', keepAlive: '30m', compactionThreshold: 0.75, maxToolOutputChars: 24000,
@@ -61,7 +67,7 @@ for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default
 window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getItem('lp-settings-state') || 'null'), setState: (s) => localStorage.setItem('lp-settings-state', JSON.stringify(s)), postMessage(m) {
   const send = (d) => window.dispatchEvent(new MessageEvent('message', { data: d }));
   if (m.type === 'ready') {
-    send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models,
+    send({ type: 'state', page, section, version: '0.2.5', hasWorkspace: true, settings, models, keys,
       skills: [{ name: 'release', description: 'Cut a release end to end: bump, changelog, tag, publish', source: 'workspace', used: 4, dir: '/repo/.localpilot/skills/release', removable: true }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: 'user', dir: '/Users/me/.claude/skills/pr-review', removable: true }, { name: 'pdf', description: 'Read, create, merge and fill PDF files with pypdf and reportlab', source: 'user', used: 2, dir: '/Users/me/.localpilot/skills/pdf', removable: true }, { name: 'debug', description: 'Reproduce, localise and fix a bug with a regression test', source: 'builtin', used: 11, dir: '/ext/skills/debug', removable: false }, { name: 'deploy', description: 'Deploy to the configured target and verify health', source: 'builtin', disabled: true, dir: '/ext/skills/deploy', removable: false }],
       learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
@@ -71,17 +77,20 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     // Host round-trip: the setting is written, then the whole state is pushed again without navigating.
     const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
     if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
-    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: '0.2.5', hasWorkspace: true, settings: { ...settings }, models, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
+    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
   }
   if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
     { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },
     { id: 'lmstudio', displayName: 'LM Studio', type: 'openai', baseUrl: 'http://localhost:1234/v1', configured: true, enabled: true, ok: false, latencyMs: 3, error: 'No response — is the server running?', source: 'settings' },
     { id: 'docker', displayName: 'Docker Model Runner', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', configured: true, enabled: true, ok: true, latencyMs: 40, models: models.filter(m => m.providerId === 'docker'), source: 'settings' },
     { id: 'docker-lp-ollama', displayName: 'Ollama (Docker · lp-ollama)', type: 'ollama', baseUrl: 'http://localhost:11435', configured: false, enabled: true, ok: true, latencyMs: 9, models: [models[1]], source: 'docker' },
+    { id: 'anthropic', displayName: 'Anthropic (Claude)', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', configured: true, enabled: true, ok: true, latencyMs: 210, models: [{ id: 'anthropic/claude-opus-5-5', name: 'Claude Opus 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }, { id: 'anthropic/claude-sonnet-5-5', name: 'Claude Sonnet 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }], source: 'settings' },
+    { id: 'openai', displayName: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com/v1', configured: true, enabled: true, ok: false, latencyMs: 0, models: [], error: 'Environment variable OPENAI_API_KEY is not set in VS Code\'s environment', source: 'settings' },
+    { id: 'omniroute', displayName: 'OmniRoute', type: 'openai', baseUrl: 'http://localhost:20128/v1', configured: true, enabled: true, ok: true, latencyMs: 18, models: [{ id: 'omniroute/auto/coding', name: 'auto/coding', contextWindow: 131072, supportsTools: true, supportsVision: false }], source: 'settings' },
   ] }), 300);
   if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
   const sendModels = () => {
-    const installed = models.map(m => ({ ...m, gb: m.name.includes('gemma4') ? 6.6 : m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: 'ok', autoRoles: m.name.includes('gemma4') ? ['agent', 'vision'] : m.supportsVision ? [] : m.name.includes('7b') ? [] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('gemma4') ? { key: 'gemma4', name: 'Gemma 4', vendor: 'Google DeepMind', tag: 'e4b' } : m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', vendor: 'Alibaba', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
+    const installed = models.map(m => ({ ...m, gb: m.remote ? undefined : m.name.includes('gemma4') ? 6.6 : m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: m.remote ? 'unknown' : 'ok', autoRoles: m.name.includes('gemma4') ? ['agent', 'vision'] : m.supportsVision ? [] : m.name.includes('7b') ? [] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('gemma4') ? { key: 'gemma4', name: 'Gemma 4', vendor: 'Google DeepMind', tag: 'e4b' } : m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', vendor: 'Alibaba', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
     const cat = (key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, rec, inst, targets) => ({ key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, recommendedFor: rec, installed: inst, targets });
     send({ type: 'models', models: {
       system: { platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 36, gpu: 'Apple M3 Pro', unifiedMemory: true, modelBudgetGb: 24, tier: 'large', summary: 'Apple M3 Pro · 36 GB unified memory' },
@@ -238,5 +247,10 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
   }, 150);
 } });
 </script>
+<script src="../media/glass.js"></script>
 <script src="../media/settings.js"></script>
+<script>
+// ?expand=<provider id> opens that provider card, to check the editor without clicking.
+if (q.get('expand')) setTimeout(() => document.querySelector(`.prov[data-prov="${q.get('expand')}"] .prov-head`)?.click(), 400);
+</script>
 </body></html>

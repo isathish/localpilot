@@ -7,7 +7,7 @@ import {
   ProviderConfig,
   StreamEvent,
 } from '../types';
-import { isAzureUrl, isNonChatModel, isRemoteUrl, knownContextWindow, knownVision, resolveApiKey } from './cloud';
+import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { ThinkTagSplitter } from './thinkTags';
@@ -60,7 +60,7 @@ export class OpenAICompatProvider implements LLMProvider {
   private readonly headers: Record<string, string>;
   private readonly explicitModels?: string[];
   private readonly configuredCtx?: number;
-  /** A cloud API rather than a server on this machine or the private network. */
+  /** A cloud API (or a local gateway to one) rather than a model server on this machine or the private network. */
   readonly remote: boolean;
   /** Request parameters a model rejected once (see PARAM_FIXES), re-applied to its later requests. */
   private readonly learnedFixes = new Map<string, Set<string>>();
@@ -81,7 +81,7 @@ export class OpenAICompatProvider implements LLMProvider {
     this.headers = !key ? {} : isAzureUrl(this.baseUrl) ? { 'api-key': key } : { authorization: `Bearer ${key}` };
     this.explicitModels = cfg.models;
     this.configuredCtx = cfg.contextWindow;
-    this.remote = isRemoteUrl(this.baseUrl);
+    this.remote = isCloudProvider(cfg);
   }
 
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
@@ -269,6 +269,10 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async complete(opts: CompletionRequestOptions): Promise<string> {
+    // Cloud APIs have no `/completions` with `suffix` (it is legacy or missing): fill in the middle through chat.
+    if (this.remote) {
+      return completeViaChat(this, opts);
+    }
     const body: Record<string, unknown> = {
       model: opts.model,
       prompt: opts.prompt,

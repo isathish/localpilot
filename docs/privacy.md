@@ -22,6 +22,10 @@ Only to the model servers listed in `localpilot.providers`. Cloud APIs (OpenAI, 
 
 Auto-detection also probes a few other local ports and running Docker containers. It only adds servers that answer on your machine. If you add a remote endpoint yourself, your prompts go there.
 
+**Cloud providers** (OpenAI, Anthropic, Gemini, OpenRouter and the others under *Settings → Providers → Cloud APIs*) and **gateways** that forward to them (OmniRoute, LiteLLM) receive the prompts and code you send to their models, under that provider's terms. They are marked **cloud** in Settings and in the model picker. Automatic picks prefer local models, and two features never use a cloud model unless you choose one for them: inline completions (`localpilot.inlineCompletion.model`) and auto-tune.
+
+**API keys** you paste are stored in VS Code secret storage, which is your operating system's keychain. settings.json only holds a `${secret:<id>}` reference, so settings sync never carries the key. A key can also come from an environment variable (`${env:NAME}`). The Settings page is told only whether a key is present, never the key itself.
+
 ### Other network requests
 
 | Request | When | How to turn it off |
@@ -49,6 +53,7 @@ There is no account, no analytics SDK and no update check in the extension. Exte
 This site ({{ site.url }}{{ site.baseurl }}) is hosted on GitHub Pages and **does use tracking**:
 
 - **Google Analytics** records page views. It also records clicks on the Install, Download VSIX and GitHub links, and the "Ask AI" buttons, so we can tell which pages help people get started.
+- **View counts shown on pages** ("1.2K views", and the totals on the home page) are aggregate numbers read from Google Analytics when the site is built, at most once a day. Showing them adds no tracking and no extra request from your browser.
 - **Google Fonts** serves the site's fonts, so your browser requests them from Google.
 - **GitHub Pages** keeps standard server logs, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 

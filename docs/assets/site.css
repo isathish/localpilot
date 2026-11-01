@@ -114,6 +114,13 @@ pre code { background: none; border: none; padding: 0; }
 .hero p.sub { font-size: clamp(17px, 2.1vw, 20px); color: var(--fg-2); max-width: 660px; margin: 0 auto 34px; }
 .hero-note { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; margin: 18px 0 0; color: var(--muted); font-size: 13.5px; }
 .hero-note a { color: var(--muted); }
+/* View counts from Google Analytics, rendered at build time (scripts/ga-pageviews.mjs). Quiet: muted text, no box. */
+.pageviews { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.pageviews svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.pageviews b { color: var(--fg-2); font-weight: 600; }
+.pageviews .sep { opacity: .6; }
+.pageviews-total { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 8px; margin: 10px 0 0; }
+.page-meta { margin: -6px 0 14px; }
 .hero-note a:hover { color: var(--fg); }
 @media (max-width: 600px) { .hero-note code, .hero-note code + span { display: none; } }
 .cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
@@ -221,6 +228,10 @@ pre code { background: none; border: none; padding: 0; }
 /* works-with strip */
 .strip { padding: 22px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .strip .wrap { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 30px; color: var(--fg-2); font-size: 14.5px; font-weight: 500; }
+.strip .strip-cloud { margin-top: 12px; }
+.prov-grid .card p { margin-bottom: 12px; }
+.tag-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-list li { font-size: 12.5px; line-height: 1; padding: 6px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--fg-2); }
 .strip .strip-label { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
 
 /* sections */

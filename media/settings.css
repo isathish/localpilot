@@ -167,9 +167,9 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .dot.ok { background: var(--ok); color: var(--ok); } .dot.err { background: var(--error); color: var(--error); } .dot.busy { background: var(--warn); color: var(--warn); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .4; } }
 .prov-title { min-width: 0; flex: 1; }
-.prov-title b { display: block; font-size: 13.5px; }
+.prov-title b { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prov-title span { display: block; font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prov-meta { display: flex; align-items: center; gap: 6px; flex: none; }
+.prov-meta { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; flex: 0 1 auto; min-width: 0; }
 .prov-body { border-top: 1px solid var(--border); padding: 6px 0 12px; background: var(--bg); }
 .prov-body .field { padding: 10px 16px; }
 .prov-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; flex-wrap: wrap; }
@@ -177,6 +177,16 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .prov-result.ok { color: var(--ok); } .prov-result.err { color: var(--error); }
 .prov-result .models { color: var(--fg); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
 .prov-result .models span { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); font-family: var(--mono); }
+/* Providers: configured list split into Local / Cloud, then "Add a provider" with one kind at a time. */
+.prov-list { margin-top: 14px; }
+.prov-group { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.prov-group:first-child { margin-top: 0; }
+.prov-group .muted { text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.prov-group .count { color: var(--muted); font-weight: 400; }
+.add-prov .chips { margin-bottom: 4px; }
+.add-prov .chip i { font-style: normal; opacity: .7; margin-left: 2px; }
+.add-blurb { margin: 0 0 2px; min-height: 1.4em; }
+.add-custom { margin-top: 10px; }
 .presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
 .preset { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); text-align: left; min-width: 0; }
 .preset:hover { border-color: var(--focus); background: var(--hover); }
@@ -707,3 +717,303 @@ body.vscode-high-contrast .legend i, body.vscode-high-contrast-light .legend i, 
 @media (prefers-reduced-motion: reduce) {
   .side, .side .navall svg, .side button.grp .chev svg { transition: none; }
 }
+
+/* Setup is a flex child of #app: without these, long server URLs set its min-content width and it overflows narrow panels. */
+.setup { width: 100%; min-width: 0; }
+.srv .t span { overflow-wrap: anywhere; }
+
+/* ── Liquid glass ─────────────────────────────────────────────────────────────
+   Same material as chat.css: tinted translucent fill, hairline edge, specular top highlight, soft shadow. The sticky
+   header and the section nav are real frosted glass because the page scrolls beneath them; cards only pay for
+   translucency. Light themes get a brighter sheen; high contrast and "reduce transparency" fall back to solid fills. */
+:root {
+  --glass: color-mix(in srgb, var(--card) 58%, transparent);
+  --glass-2: color-mix(in srgb, var(--card-2) 76%, transparent);
+  --glass-bar: color-mix(in srgb, var(--bg) 60%, transparent);
+  --glass-edge: color-mix(in srgb, var(--fg) 12%, transparent);
+  --glass-edge-hi: color-mix(in srgb, var(--fg) 22%, transparent);
+  --glass-hi: rgba(255,255,255,.08);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,0) 45%);
+  --glass-blur: saturate(180%) blur(22px);
+  --glass-shadow: 0 12px 32px -18px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
+  --glass-lift: 0 20px 44px -18px rgba(0,0,0,.6), 0 1px 0 var(--glass-hi) inset;
+  --ease-glass: cubic-bezier(.2,.8,.2,1);
+  --ease-spring: cubic-bezier(.34,1.56,.64,1);
+  --r-pill: 999px;
+  --r-card: 14px;
+}
+body.vscode-light, html.light body {
+  --glass: color-mix(in srgb, var(--card) 66%, transparent); --glass-2: color-mix(in srgb, var(--card-2) 82%, transparent);
+  --glass-hi: rgba(255,255,255,.85); --glass-edge: color-mix(in srgb, var(--fg) 10%, transparent); --glass-edge-hi: color-mix(in srgb, var(--fg) 18%, transparent);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,0) 55%);
+  --glass-shadow: 0 12px 30px -20px rgba(20,20,40,.3), 0 1px 0 var(--glass-hi) inset;
+  --glass-lift: 0 20px 40px -20px rgba(20,20,40,.38), 0 1px 0 var(--glass-hi) inset;
+}
+body { background:
+  radial-gradient(70% 50% at 100% 0%, color-mix(in srgb, var(--brand) 9%, transparent), transparent 60%),
+  radial-gradient(60% 50% at 0% 100%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 65%),
+  var(--bg); background-attachment: fixed; }
+::-webkit-scrollbar-thumb { border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+.boot-logo, .setup .hero img, .brand img { box-shadow: 0 1px 0 rgba(255,255,255,.45) inset, 0 12px 28px -10px color-mix(in srgb, var(--brand) 75%, transparent); }
+.boot-logo { border-radius: 14px; }
+.setup .hero img { border-radius: 18px; }
+
+/* ── Header: frosted bar; the User/Workspace scope is a glass segmented control. */
+.top { background: var(--glass-bar); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border-bottom-color: var(--glass-edge); }
+.scope, .seg { border-radius: var(--r-pill); border-color: var(--glass-edge); background: var(--tint); padding: 2px; gap: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.15) inset; }
+.scope button, .seg button { border-radius: var(--r-pill); border-right: none; transition: background .25s var(--ease-glass), color .2s, box-shadow .25s var(--ease-glass); }
+.scope button { height: 24px; }
+.scope button.on, .seg button.on { background-image: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.22) inset, 0 3px 10px -4px rgba(0,0,0,.4); }
+.seg button.on { background-color: var(--glass-2); }
+
+/* ── Section nav: frosted rail; the current section is a raised glass lozenge with a brand glow. */
+.side { background: var(--glass-bar); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border-color: var(--glass-edge); }
+.side a { border-radius: 10px; transition: background .2s var(--ease-glass), color .2s, box-shadow .25s var(--ease-glass); }
+.side a.on { background: var(--glass-2); background-image: var(--glass-sheen); box-shadow: 0 0 0 1px var(--glass-edge) inset, 0 1px 0 var(--glass-hi) inset, 0 6px 16px -10px rgba(0,0,0,.5); }
+.side a.on svg { color: var(--brand); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--brand) 55%, transparent)); }
+
+/* ── The glass material on every card-like surface. */
+.card, .prov, .cat, .preset, .ap, .srv, .mdl, .kpi, .gal-tab, .auto-setup, .empty {
+  background-color: var(--glass); background-image: var(--glass-sheen); border-color: var(--glass-edge); border-radius: var(--r-card); box-shadow: var(--glass-shadow);
+}
+.empty { border-style: dashed; box-shadow: none; }
+.srv, .mdl { border-radius: 12px; }
+.prov-body { background: color-mix(in srgb, var(--bg) 40%, transparent); border-top-color: var(--glass-edge); }
+.field, .tbl th, .tbl td { border-bottom-color: var(--glass-edge); }
+.auto-setup { background-color: color-mix(in srgb, var(--brand) 9%, var(--glass)); border-color: color-mix(in srgb, var(--brand) 40%, var(--glass-edge)); }
+.kpi { border-radius: 16px; }
+.kpi.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--glass-edge)); box-shadow: var(--glass-shadow), 0 0 0 3px color-mix(in srgb, var(--warn) 8%, transparent); }
+.preset, .ap, .gal-tab, .prov, .mdl, .srv, .kpi { transition: transform .25s var(--ease-spring), border-color .2s, background-color .2s, box-shadow .25s var(--ease-glass); }
+.preset:not([disabled]):not(.added):hover, .ap:hover, .gal-tab:hover, .kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--glass-edge)); box-shadow: var(--glass-lift), 0 10px 24px -14px color-mix(in srgb, var(--accent) 65%, transparent); }
+.prov:hover, .mdl:hover, .srv:hover { border-color: var(--glass-edge-hi); }
+.gal-tab { border-radius: var(--r-pill); padding-right: 14px; }
+.gal-tab.on { border-color: color-mix(in srgb, var(--brand) 70%, transparent); box-shadow: var(--glass-shadow), 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent); }
+.gal-tab .brand-mark, .preset .ic, .mrow .brand-mark, .cat-head .ic { border-radius: 9px; box-shadow: 0 1px 0 var(--glass-hi) inset; }
+
+/* ── Controls. */
+input[type=text], input[type=number], input[type=password], input[type=url], select, textarea {
+  background: color-mix(in srgb, var(--input-bg) 70%, transparent); border-color: var(--glass-edge); border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.12) inset; transition: border-color .2s, box-shadow .25s var(--ease-glass), background-color .2s;
+}
+input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) { border-color: var(--glass-edge-hi); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { background-color: var(--input-bg); box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent); }
+/* Toggle: a recessed glass track with a lit knob that springs across. */
+.toggle { width: 38px; height: 22px; border-radius: var(--r-pill); background: var(--tint-2); box-shadow: 0 1px 3px rgba(0,0,0,.25) inset, 0 0 0 1px var(--glass-edge) inset; transition: background .25s var(--ease-glass), box-shadow .25s; }
+.toggle::after { top: 2px; left: 2px; width: 18px; height: 18px; background: linear-gradient(180deg, #fff, #e9e9ee); box-shadow: 0 2px 5px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.08); transition: transform .35s var(--ease-spring), width .2s var(--ease-glass); }
+.toggle:active::after { width: 22px; }
+.toggle.on { background: var(--ok); box-shadow: 0 1px 3px rgba(0,0,0,.2) inset, 0 0 12px -2px color-mix(in srgb, var(--ok) 60%, transparent); }
+.toggle.on:active::after { transform: translateX(12px); }
+/* Progress: liquid fill with a highlight; indeterminate bars shimmer. */
+.progress { height: 7px; border-radius: var(--r-pill); background: var(--tint-2); box-shadow: 0 1px 2px rgba(0,0,0,.2) inset; }
+.progress i { border-radius: inherit; background: linear-gradient(180deg, color-mix(in srgb, var(--brand) 70%, #fff), var(--brand)); box-shadow: 0 0 10px color-mix(in srgb, var(--brand) 55%, transparent); transition: width .5s var(--ease-glass); }
+.steps i { height: 5px; border-radius: var(--r-pill); background: var(--tint-2); transition: background .3s, box-shadow .3s; }
+.steps i.on { background: var(--brand); box-shadow: 0 0 10px color-mix(in srgb, var(--brand) 55%, transparent); }
+.badge { border-radius: var(--r-pill); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent) inset; }
+.badge.brand { box-shadow: 0 1px 0 rgba(255,255,255,.4) inset; }
+.chip, .chips .chip { border-radius: var(--r-pill); border-color: var(--glass-edge); background: var(--tint); transition: background .2s, border-color .2s, color .2s; }
+.chip.on, .chips .chip.on { background: var(--glass-2); background-image: var(--glass-sheen); border-color: var(--glass-edge-hi); color: var(--fg); box-shadow: 0 1px 0 var(--glass-hi) inset, 0 3px 10px -5px rgba(0,0,0,.4); }
+.dot.ok { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent), 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent); }
+
+/* ── Buttons: glass pills; primary and brand are lit glass. */
+.btn { border-radius: var(--r-pill); border-color: var(--glass-edge); background-color: var(--tint); background-image: var(--glass-sheen); box-shadow: 0 1px 0 var(--glass-hi) inset; transition: background-color .2s, border-color .2s, transform .2s var(--ease-spring), box-shadow .2s; }
+.btn:hover:not(:disabled) { background-color: var(--tint-2); border-color: var(--glass-edge-hi); }
+.btn:active:not(:disabled) { transform: scale(.96); }
+.btn.primary, .btn.on { background-color: var(--accent); background-image: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 6px 14px -6px color-mix(in srgb, var(--accent) 80%, transparent); }
+.btn.primary:hover:not(:disabled) { background-color: var(--accent-hover); }
+.btn.brand { background-color: var(--brand); background-image: linear-gradient(180deg, rgba(255,255,255,.25), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.45) inset, 0 6px 16px -6px color-mix(in srgb, var(--brand) 80%, transparent); }
+.btn.ghost, .setup .foot .btn.link { background: transparent; box-shadow: none; border-color: transparent; }
+.toast { border-radius: var(--r-pill); padding: 8px 16px; background: color-mix(in srgb, var(--vscode-notifications-background, var(--card-2)) 70%, transparent); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: 0 20px 44px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); animation: glassIn .25s var(--ease-spring); }
+@keyframes glassIn { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
+
+/* ── Responsive: the nav becomes a floating strip of glass pills; tighter radii and padding on narrow panels. */
+@media (max-width: 760px) {
+  .side::before { background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 92%, transparent), transparent); }
+  .side::after { background: linear-gradient(270deg, color-mix(in srgb, var(--bg) 92%, transparent), transparent); }
+  .side a { border-radius: var(--r-pill); }
+  .side a.on { border-color: transparent; }
+  .content { padding: 16px 14px 48px; }
+}
+@media (max-width: 480px) {
+  :root { --glass-blur: saturate(160%) blur(14px); --r-card: 12px; }
+  .top { gap: 8px; }
+  .kpi { border-radius: 14px; }
+}
+
+/* ── Fallbacks. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --glass-bar: var(--bg); } }
+@media (prefers-reduced-transparency: reduce) { :root { --glass: var(--card); --glass-2: var(--card-2); --glass-bar: var(--bg); --glass-blur: none; --glass-sheen: none; } body { background: var(--bg); } }
+body.vscode-high-contrast, body.vscode-high-contrast-light {
+  --glass: var(--bg); --glass-2: var(--bg); --glass-bar: var(--bg); --glass-edge: var(--border); --glass-edge-hi: var(--border);
+  --glass-hi: transparent; --glass-sheen: none; --glass-shadow: none; --glass-lift: none; --glass-blur: none; background: var(--bg);
+}
+body.vscode-high-contrast .progress i, body.vscode-high-contrast-light .progress i, body.vscode-high-contrast .toggle.on, body.vscode-high-contrast-light .toggle.on { background: var(--ok); box-shadow: none; }
+body.vscode-high-contrast .toggle::after, body.vscode-high-contrast-light .toggle::after { background: var(--fg); box-shadow: none; }
+body.vscode-high-contrast .toggle, body.vscode-high-contrast-light .toggle { box-shadow: 0 0 0 1px var(--border) inset; }
+@media (prefers-reduced-motion: reduce) { .preset:hover, .ap:hover, .gal-tab:hover, .kpi:hover { transform: none !important; } .toast { animation: none; } }
+
+/* ── Settings search (header). Folds to an icon on narrow panels and opens over the header. */
+.find { position: relative; flex: 0 1 300px; min-width: 0; margin-left: 8px; }
+.find-open { display: none; place-items: center; width: 30px; height: 30px; border-radius: var(--r-pill); color: var(--muted); border: 1px solid var(--glass-edge); background: var(--tint); }
+.find-open:hover { color: var(--fg); background: var(--tint-2); } .find-open svg { width: 14px; height: 14px; }
+.find-box { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 6px 0 11px; border-radius: var(--r-pill); border: 1px solid var(--glass-edge); background: var(--tint); box-shadow: 0 1px 2px rgba(0,0,0,.14) inset; color: var(--muted); cursor: text; transition: border-color .2s, box-shadow .25s var(--ease-glass), background-color .2s; }
+.find-box:hover { border-color: var(--glass-edge-hi); }
+.find-box:focus-within { border-color: color-mix(in srgb, var(--focus) 70%, transparent); background: var(--glass-2); box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 16%, transparent); color: var(--fg); }
+.find-box svg { width: 13px; height: 13px; flex: none; }
+.find-box input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0 !important; background: transparent !important; box-shadow: none !important; color: var(--fg); font: inherit; font-size: 12.5px; outline: none; }
+.find-box input::-webkit-search-cancel-button { cursor: pointer; }
+.find-box kbd { flex: none; font-family: var(--mono); font-size: 10px; line-height: 16px; padding: 0 5px; border-radius: 5px; color: var(--muted); background: var(--tint-2); }
+.find-box:focus-within kbd { display: none; }
+.find-list { position: absolute; top: calc(100% + 6px); left: 0; right: 0; min-width: 260px; z-index: 30; padding: 5px; border-radius: 16px; border: 1px solid var(--glass-edge);
+  background: color-mix(in srgb, var(--card-2) 74%, transparent); background-image: var(--glass-sheen); box-shadow: 0 22px 48px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); animation: glassIn .2s var(--ease-glass); }
+.find-item { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 10px; cursor: pointer; min-width: 0; }
+.find-item .ico { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 8px; background: var(--tint-2); color: var(--muted); }
+.find-item .ico svg { width: 13px; height: 13px; }
+.find-item .txt { display: flex; flex-direction: column; min-width: 0; }
+.find-item b { font-weight: 500; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-item small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-item small code { font-size: 10.5px; padding: 0 4px; }
+.find-item:hover { background: var(--tint); }
+.find-item.sel { background: color-mix(in srgb, var(--accent) 20%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset; }
+.find-item.sel .ico { color: var(--fg); }
+.find-none { padding: 12px; color: var(--muted); font-size: 12.5px; text-align: center; }
+/* The setting a search jumped to glows briefly. */
+.field.hit { animation: hitGlow 1.8s var(--ease-glass); border-radius: 10px; }
+@keyframes hitGlow { 0%, 35% { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent) inset; } 100% { background: transparent; box-shadow: none; } }
+@media (max-width: 760px) { .find { flex-basis: 220px; } .find-box kbd { display: none; } }
+@media (max-width: 560px) {
+  .find { flex: 0 0 auto; margin-left: auto; }
+  .find-open { display: inline-grid; }
+  .find-box, .find-list { display: none; }
+  .top.finding .find { flex: 1 1 auto; margin-left: 0; }
+  .top.finding .find-open, .top.finding .brand, .top.finding .scope, .top.finding .saved, .top.finding > .btn, .top.finding > .spacer { display: none; }
+  .top.finding .find-box { display: flex; }
+  .top.finding .find-list:not(.hidden) { display: block; }
+}
+
+/* ── Loading: a brand arc spinner, shimmering skeletons, and refresh icons that spin while work is in flight. */
+.spinner { width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--fg) 14%, transparent); border-top-color: var(--brand); border-right-color: color-mix(in srgb, var(--brand) 45%, transparent); animation: spin .75s cubic-bezier(.5,.15,.5,.85) infinite; }
+.btn .spinner { width: 12px; height: 12px; border-width: 1.6px; }
+.btn.primary .spinner, .btn.on .spinner { border-color: color-mix(in srgb, var(--accent-fg) 30%, transparent); border-top-color: var(--accent-fg); }
+.loading { gap: 16px; }
+.loading .boot-logo { position: relative; }
+.loading .boot-logo::after { content: ''; position: absolute; inset: -6px; border-radius: 18px; padding: 2px; background: conic-gradient(from 0deg, transparent 0 70%, var(--brand)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: spin 1.4s linear infinite; }
+.loading.short { flex-direction: row; gap: 9px; padding: 12px 2px; justify-content: flex-start; font-size: 12.5px; }
+.btn.busy svg { animation: spin .8s linear infinite; }
+.btn.busy { pointer-events: none; }
+.skel { display: flex; flex-direction: column; gap: 8px; }
+.skel-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--glass-edge); border-radius: var(--r-card); background: var(--glass); }
+.skel-row > span { display: flex; flex-direction: column; gap: 7px; flex: 1; min-width: 0; }
+.skel-card { min-height: 108px; gap: 10px; }
+.sk { display: block; border-radius: 6px; background: linear-gradient(90deg, var(--tint) 0%, var(--tint-2) 40%, var(--tint) 80%); background-size: 300% 100%; animation: skel 1.4s ease-in-out infinite; }
+.sk-ic { width: 32px; height: 32px; border-radius: 9px; flex: none; }
+.sk-t { width: 42%; height: 11px; } .sk-s { width: 72%; height: 9px; } .sk-l { width: 38%; height: 9px; } .sk-v { width: 30%; height: 24px; border-radius: 8px; }
+.skel-row:nth-child(3n) .sk-t { width: 30%; } .skel-row:nth-child(3n+1) .sk-s { width: 58%; }
+@keyframes skel { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+
+/* Every search field gets a lens and room for the native clear button. */
+input[type=search] { padding-left: 30px !important; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239d9d9d' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>") !important; background-repeat: no-repeat !important; background-position: 10px center !important; background-size: 13px !important; }
+body.vscode-light input[type=search], html.light body input[type=search] { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23717171' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>") !important; }
+.find-box input[type=search] { padding-left: 0 !important; background-image: none !important; }
+.chips input[type=search] { border-radius: var(--r-pill); height: 30px; }
+
+/* ── Fit on narrow panels. */
+@media (max-width: 560px) {
+  /* Provider / MCP cards: status badges drop under the name instead of squeezing it to a few letters. */
+  .prov-head { position: relative; flex-wrap: wrap; row-gap: 6px; padding-right: 34px; }
+  .prov-title { flex: 1 1 0; }
+  .prov-meta { flex: 1 0 100%; justify-content: flex-start; padding-left: 21px; }
+  .prov-head:has(.brand-mark) .prov-meta { padding-left: 61px; }
+  .prov-meta:not(:has(.badge)) { display: contents; }
+  .prov-meta .chev { position: absolute; right: 12px; top: 16px; }
+  /* Add a provider: the filter takes its own full-width row under the category pills. */
+  .add-prov .chips input { flex: 1 1 100%; margin-left: 0; order: 9; }
+  /* Forms that put several inputs on one row stack them. */
+  .field .ctl .row { flex-wrap: wrap; }
+  .field .ctl .row > input { flex: 1 1 100%; max-width: none !important; }
+  /* Memory notes: each note becomes a small card (name, summary, scope · date · actions). */
+  .tbl.notes, .tbl.notes tbody { display: block; }
+  .tbl.notes thead { display: none; }
+  .tbl.notes tr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; column-gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--glass-edge); }
+  .tbl.notes tr:last-child { border-bottom: 0; }
+  .tbl.notes td { display: block; padding: 0; border: 0; max-width: none !important; }
+  .tbl.notes td:nth-child(1) { grid-column: 1 / -1; }
+  .tbl.notes td:nth-child(2) { grid-column: 1 / -1; white-space: normal !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 6px; }
+  .tbl.notes td:nth-child(3) { grid-column: 1; } .tbl.notes td:last-child { width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } .field.hit { animation: none; outline: 2px solid var(--accent); } .loading .boot-logo::after { animation: none; } }
+/* The results sit inside the frosted header, where a second backdrop blur sees nothing, so they need a nearly solid fill. */
+.find-list { background-color: color-mix(in srgb, var(--card-2) 97%, transparent); }
+.top:has(.find-list:not(.hidden)) { z-index: 20; }
+/* Narrow headers: the brand gives way first (text, then the version line), so search, scope and chat keep their room. */
+.brand { flex: 0 1 auto; min-width: 0; } .brand > div { min-width: 0; } .brand b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 420px) { .brand > div { display: none; } .top { gap: 8px; } }
+@media (max-width: 560px) { .add-prov .chips input { width: 100%; max-width: none; } }
+/* Chart and ring grids: a column never asks for more than the panel has. */
+.dash-cols.charts { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+.dash-cols.rings { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+
+/* ════ Liquid glass: motion, light and refraction (driven by media/glass.js) ════════════════════════════════════ */
+@property --mx { syntax: '<percentage>'; inherits: false; initial-value: 50%; }
+@property --my { syntax: '<percentage>'; inherits: false; initial-value: -40%; }
+:root { --spec: rgba(255,255,255,.15); --spec-rim: rgba(255,255,255,.2); }
+body.vscode-light, html.light body { --spec: rgba(255,255,255,.8); --spec-rim: rgba(255,255,255,.95); }
+
+/* ── Pointer light, painted between each surface and its content. */
+:is(.btn, .card, .prov, .preset, .kpi, .gal-tab, .ap, .srv, .mdl, .find-box, .find-item) { position: relative; isolation: isolate; }
+:is(.btn, .card, .prov, .preset, .kpi, .gal-tab, .ap, .srv, .mdl, .find-box)::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0;
+  background: radial-gradient(260px circle at var(--mx) var(--my), var(--spec), transparent 62%);
+  transition: opacity .45s var(--ease-glass), --mx .18s linear, --my .18s linear;
+}
+.btn::after { background: radial-gradient(70px circle at var(--mx) var(--my), var(--spec-rim), transparent 70%); }
+.btn.primary::after, .btn.brand::after, .btn.on::after { background: radial-gradient(80px circle at var(--mx) var(--my), rgba(255,255,255,.3), transparent 65%); }
+.lg-on::after { opacity: 1; }
+
+/* ── Lens on the layers the page scrolls under. */
+.lg-lens .top { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(12px); -webkit-backdrop-filter: none; }
+.lg-lens .toast { backdrop-filter: url(#lp-lens-sm) saturate(180%) blur(10px); -webkit-backdrop-filter: none; }
+@media (max-width: 760px) { .lg-lens .side { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(12px); -webkit-backdrop-filter: none; } }
+
+/* ── Liquid selection: nav, scope and every segmented control share one flowing glass pill (glass.js). */
+.seg, .scope { position: relative; }
+.seg > button, .scope > button, .side a { position: relative; z-index: 1; }
+.lg-ind { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; border-radius: var(--r-pill); will-change: transform, width;
+  background-color: var(--glass-2); background-image: var(--glass-sheen); border: 1px solid var(--glass-edge);
+  box-shadow: inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.14), 0 4px 14px -6px rgba(0,0,0,.45); transition: opacity .25s; }
+.seg.lg-has-ind > button.on, .scope.lg-has-ind > button.on { background: transparent !important; box-shadow: none !important; }
+/* Scope: the pill is the accent colour, lit from above. */
+.scope > .lg-ind { background-color: var(--accent); background-image: linear-gradient(180deg, rgba(255,255,255,.2), rgba(255,255,255,0)); border-color: transparent; box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 4px 12px -4px color-mix(in srgb, var(--accent) 70%, transparent); }
+.scope.lg-has-ind > button.on { color: var(--accent-fg); }
+/* Nav: a glass lozenge with a glowing brand edge in the column layout, a plain pill in the narrow strip. */
+.side > .lg-ind { border-radius: 10px; }
+.side > .lg-ind::before { content: ''; position: absolute; left: -1px; top: 22%; bottom: 22%; width: 3px; border-radius: 3px; background: var(--brand); box-shadow: 0 0 10px var(--brand); }
+.side.lg-has-ind a.on { background: transparent !important; box-shadow: none !important; border-color: transparent !important; }
+@media (max-width: 760px) { .side > .lg-ind { border-radius: var(--r-pill); } .side > .lg-ind::before { display: none; } }
+.side.rail > .lg-ind::before { top: 28%; bottom: 28%; }
+
+/* ── Icons that respond. */
+button svg, .side a svg { transition: transform .4s var(--ease-spring), color .2s, filter .3s; }
+.side a:hover:not(.on) svg { transform: scale(1.14) rotate(-6deg); }
+.btn:not(.busy):not(:disabled):hover svg { transform: translateY(-1px) scale(1.07); }
+.find-open:hover svg { transform: rotate(-12deg) scale(1.1); }
+.find-box:focus-within > svg { transform: scale(1.1); color: var(--focus); }
+.prov-head .chev, .prov-meta .chev { transition: transform .35s var(--ease-spring); }
+.toggle::after { transition: transform .45s var(--ease-spring), width .25s var(--ease-glass), background .2s; }
+.preset .ic, .gal-tab .brand-mark, .mrow .brand-mark { transition: transform .4s var(--ease-spring); }
+.preset:not([disabled]):hover .ic, .gal-tab:hover .brand-mark { transform: scale(1.1) rotate(-4deg); }
+
+/* ── Section changes cross-fade and rise (View Transitions, started by the nav). */
+::view-transition-old(root) { animation: vtOut .16s var(--ease-glass) both; }
+::view-transition-new(root) { animation: vtIn .26s var(--ease-glass) both; }
+@keyframes vtOut { to { opacity: 0; } }
+@keyframes vtIn { from { opacity: 0; transform: translateY(6px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  button svg, .side a svg, .toggle::after { transition: none; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}
+body.vscode-high-contrast, body.vscode-high-contrast-light { --spec: transparent; --spec-rim: transparent; }
+body.vscode-high-contrast .lg-ind, body.vscode-high-contrast-light .lg-ind { background: transparent; border: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); box-shadow: none; }
+body.vscode-high-contrast .lg-ind::before, body.vscode-high-contrast-light .lg-ind::before { box-shadow: none; }

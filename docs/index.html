@@ -1,14 +1,14 @@
 ---
 layout: landing
 title: LocalPilot — Free local AI coding agent for VS Code
-description: Free, open-source coding agent for VS Code that runs on your own models (Ollama, LM Studio, llama.cpp, vLLM, colibri). No subscription, no account.
+description: Free, open-source coding agent for VS Code that runs on your own models (Ollama, LM Studio, llama.cpp, vLLM, colibri), or on OpenAI, Claude, Gemini, OpenRouter and more with your own key. No subscription, no account.
 permalink: /
 ---
 <section class="hero">
   <div class="wrap">
     <a class="pill" href="{{ site.repo }}/blob/main/CHANGELOG.md"><span class="dot"></span>v{{ site.version }} · free and open source</a>
     <h1>Your AI coding agent.<br><span>Your models. Your machine.</span></h1>
-    <p class="sub">Build, debug, test and review code with local models, right inside VS Code. LocalPilot makes the edit, runs your tests and shows you the diff before anything is kept. No subscription, no account, no telemetry.</p>
+    <p class="sub">Build, debug, test and review code with local models, or a cloud model with your own key, right inside VS Code. LocalPilot makes the edit, runs your tests and shows you the diff before anything is kept. No subscription, no account, no telemetry.</p>
     <div class="cta">
       <a class="btn btn-primary btn-lg" href="{{ site.marketplace }}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -17,6 +17,7 @@ permalink: /
       <a class="btn btn-lg" href="#setup">Find the right setup for my computer</a>
     </div>
     <p class="hero-note"><code>code --install-extension {{ site.extension_id }}</code><span>·</span><a href="{{ site.download }}">Download VSIX</a><span>·</span><a href="{{ site.repo }}">Source on GitHub</a></p>
+    {% include pageviews.html total=true %}
 
     <figure class="shot hero-shot">
       <img src="{{ '/assets/screenshots/hero-agent.png' | relative_url }}" width="1800" height="1125" alt="LocalPilot inside VS Code: the agent read cart.js and its test, fixed applyDiscount with a +1/−1 edit, ran npm test (2 passing) in the LocalPilot Agent terminal, and offers Apply to workspace or Discard" loading="eager" fetchpriority="high">
@@ -36,6 +37,18 @@ permalink: /
     <span>Docker Model Runner</span>
     <span>colibri</span>
     <span>any OpenAI-compatible API</span>
+  </div>
+  <div class="wrap strip-cloud">
+    <span class="strip-label">Your key</span>
+    <span>OpenAI</span>
+    <span>Claude</span>
+    <span>Gemini</span>
+    <span>OpenRouter</span>
+    <span>Groq</span>
+    <span>Mistral</span>
+    <span>DeepSeek</span>
+    <span>Azure OpenAI</span>
+    <span>OmniRoute</span>
   </div>
 </div>
 
@@ -132,6 +145,22 @@ permalink: /
   </div>
 </section>
 
+<section id="providers">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Models</span>
+      <h2>Local first. Cloud when you want it.</h2>
+      <p>Run everything on your machine, or add a cloud model with your own key for the hard tasks. Automatic picks keep using local models; a cloud model answers when you choose it.</p>
+    </div>
+    <div class="mini-grid prov-grid">
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span><h3>On your machine</h3><p>Detected automatically. Code and prompts stay here.</p><ul class="tag-list"><li>Ollama</li><li>LM Studio</li><li>llama.cpp</li><li>vLLM</li><li>SGLang</li><li>Docker Model Runner</li><li>Jan</li><li>LocalAI</li><li>KoboldCpp</li><li>GPT4All</li><li>colibri</li></ul></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.6-9.97A6 6 0 0 1 18 8a4.5 4.5 0 0 1-.5 10z"/></svg></span><h3>Cloud APIs, your key</h3><p>Keys live in your OS keychain, never in settings.json. Models are marked <b>cloud</b>.</p><ul class="tag-list"><li>OpenAI</li><li>Claude</li><li>Gemini</li><li>OpenRouter</li><li>Groq</li><li>Mistral</li><li>DeepSeek</li><li>xAI</li><li>Together</li><li>Fireworks</li><li>Cerebras</li><li>Hugging Face</li><li>NVIDIA NIM</li><li>Azure OpenAI</li><li>Ollama Cloud</li></ul></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 12h4l6-6M11 12l6 6"/></svg></span><h3>Gateways</h3><p>One local endpoint that routes to many clouds, with fallback in the gateway.</p><ul class="tag-list"><li>OmniRoute</li><li>LiteLLM</li><li>any OpenAI-compatible URL</li></ul></div>
+    </div>
+    <p class="section-foot"><a class="more" href="{{ '/guides/cloud-models-vscode/' | relative_url }}">Use a cloud model</a> · <a class="more" href="{{ '/docs/models/' | relative_url }}">All providers</a></p>
+  </div>
+</section>
+
 <section id="setup">
   <div class="wrap">
     <div class="section-head">
@@ -206,7 +235,7 @@ permalink: /
     <div class="section-head">
       <span class="eyebrow">Compare</span>
       <h2>The agent workflow, without the subscription</h2>
-      <p>Cloud tools run frontier models and bill per seat. LocalPilot runs what your hardware can, costs nothing per prompt and keeps your code on your machine.</p>
+      <p>Cloud tools run frontier models and bill per seat. LocalPilot runs what your hardware can, costs nothing per prompt and keeps your code on your machine, and uses a frontier model with your own key when you choose one.</p>
     </div>
     <div class="compare">
       <table>
@@ -215,12 +244,12 @@ permalink: /
           <tr><td>Price per developer</td><td class="y">Free · MIT</td><td>$10–100 / month</td><td>$8–100 / month</td><td>$20–200 / month</td></tr>
           <tr><td>Usage limits</td><td class="y">Your hardware</td><td class="p">Monthly AI credits</td><td class="p">Usage pool</td><td class="p">Usage limits</td></tr>
           <tr><td>Works offline</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td></tr>
-          <tr><td>Where your code is processed</td><td class="y">Your machine</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td></tr>
+          <tr><td>Where your code is processed</td><td class="y">Your machine, or a cloud you add</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td><td class="n">Vendor cloud</td></tr>
           <tr><td>Bring any local model</td><td class="y">Yes</td><td class="p">Limited</td><td class="p">Limited</td><td class="p">Limited</td></tr>
           <tr><td>Agent mode, approvals, MCP</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
           <tr><td>Parallel agents with change review</td><td class="y">Yes</td><td class="p">Partial</td><td class="y">Yes</td><td class="y">Yes</td></tr>
           <tr><td>Works inside VS Code</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">Own editor</td><td class="y">Yes</td></tr>
-          <tr><td>Model quality</td><td class="p">What your hardware runs</td><td class="y">Frontier models</td><td class="y">Frontier models</td><td class="y">Frontier models</td></tr>
+          <tr><td>Model quality</td><td class="y">Your hardware, or any frontier model with your key</td><td class="y">Frontier models</td><td class="y">Frontier models</td><td class="y">Frontier models</td></tr>
           <tr><td>Account required</td><td class="y">No</td><td class="n">Yes</td><td class="n">Yes</td><td class="n">Yes</td></tr>
         </tbody>
       </table>
@@ -245,7 +274,8 @@ permalink: /
     <details><summary>Is LocalPilot free?</summary><p>Yes. It is free and open source under the MIT license, with no paid tier, account or usage limit. Your only cost is the hardware you already own. It is an independent project by <a href="{{ site.author.url }}">{{ site.author.name }}</a>, not affiliated with any model or editor vendor.</p></details>
     <details><summary>Which models work best?</summary><p>Automatic setup installs <code>gemma4:e4b</code> (or <code>gemma4:e2b</code> on machines with less memory). It calls tools and reads screenshots, so one model covers agent work and images. With more memory, <code>qwen2.5-coder</code> 14B or 32B, <code>qwen3</code>, <code>devstral</code>, <code>gpt-oss</code> and <code>mistral-small</code> are stronger agent models. For inline completions use <code>qwen2.5-coder:1.5b</code>, <code>starcoder2</code> or <code>codestral</code>. After a few days, the Dashboard ranks your installed models by how they actually performed for you.</p></details>
     <details><summary>What hardware do I need?</summary><p>A 7B model needs about 8 GB of RAM and runs on most recent laptops; 14B to 32B models want 16 to 32 GB. A GPU or Apple Silicon makes responses much faster but is not required. For very large mixture-of-experts models on modest RAM, use <a href="{{ '/guides/colibri-vscode/' | relative_url }}">colibri</a>, which streams the experts from disk.</p></details>
-    <details><summary>Does any data leave my machine?</summary><p>Your code and prompts go only to the model servers you configure, which are all <code>localhost</code> by default. Two optional features make other requests: the skill registry fetches an index from GitHub at most once a day, and the web search and fetch tools follow <code>localpilot.approvals.network</code>. Both can be switched off. Dashboard metrics stay in <code>~/.localpilot/telemetry</code>. See the <a href="{{ '/privacy/' | relative_url }}">privacy page</a>.</p></details>
+    <details><summary>Does any data leave my machine?</summary><p>Your code and prompts go only to the model servers you configure, which are all <code>localhost</code> by default. A cloud provider you add receives what you send to its models. Two optional features make other requests: the skill registry fetches an index from GitHub at most once a day, and the web search and fetch tools follow <code>localpilot.approvals.network</code>. Both can be switched off. Dashboard metrics stay in <code>~/.localpilot/telemetry</code>. See the <a href="{{ '/privacy/' | relative_url }}">privacy page</a>.</p></details>
+    <details><summary>Can I use OpenAI, Claude, Gemini or OpenRouter?</summary><p>Yes, with your own API key. <strong>Settings → Providers → Cloud APIs</strong> has presets for OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud, plus the OmniRoute and LiteLLM gateways. A pasted key goes to your OS keychain. Cloud models are marked <b>cloud</b>; Auto, subagents and inline completions keep using local models unless you pick a cloud one. See <a href="{{ '/guides/cloud-models-vscode/' | relative_url }}">Cloud models</a>.</p></details>
     <details><summary>My model doesn't support tool calling. Does agent mode still work?</summary><p>Yes. When a model has no native tool support, LocalPilot switches to a text protocol and reads the tool calls out of the model's reply. Results depend on the model, but 7B coder models handle it well.</p></details>
     <details><summary>Can I use my existing Claude Code or Cursor rules and skills?</summary><p>Yes. <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>, <code>.cursor/rules</code>, <code>.claude/skills</code>, <code>.claude/agents</code>, <code>.claude/settings.json</code> permissions and hooks, <code>.claude/commands</code> and <code>.github/copilot-instructions.md</code> are all read without changes. See <a href="{{ '/docs/claude-code-compatibility/' | relative_url }}">Claude Code compatibility</a>.</p></details>
     <details><summary>How is this different from Copilot's "bring your own key"?</summary><p>Bring-your-own-key swaps the model behind Copilot. LocalPilot is a complete agent: the loop, the tools, parallel agents, change review, skills, subagents, screenshots and MCP. It also registers your local models with VS Code's Language Model API, so other extensions can use them too.</p></details>

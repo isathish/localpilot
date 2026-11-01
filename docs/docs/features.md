@@ -44,7 +44,9 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 
 ## Models
 
-- **Auto-detection.** At startup LocalPilot probes the default local ports (Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp) and running Docker containers of known model servers.
+- **Auto-detection.** At startup LocalPilot probes the default local ports (Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp, and the OmniRoute and LiteLLM gateways) and running Docker containers of known model servers.
+- **Cloud providers with your own key.** Presets for OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud. Pasted keys are stored in your OS keychain, or read from `${env:NAME}`. Claude uses the native Messages API with tool use, thinking and prompt caching. Cloud models are marked **cloud**, and automatic picks keep preferring local models. See [Cloud models]({{ '/guides/cloud-models-vscode/' | relative_url }}).
+- **Gateways.** OmniRoute and LiteLLM run locally and forward to cloud models; they are marked as cloud so automatic picks treat them that way. See [OmniRoute & LiteLLM]({{ '/guides/omniroute-vscode/' | relative_url }}).
 - **Automatic setup.** With no model anywhere, LocalPilot can install or start Ollama and download a starter model sized for your RAM and GPU. See [Automatic setup]({{ '/docs/models/#automatic-setup' | relative_url }}).
 - **Model manager and catalog.** **Settings → Models** shows your hardware budget and marks each catalog size as fits, tight or too big. Install to Ollama, Docker Model Runner or LM Studio.
 - **Automatic routing.** Image turns go to a vision model, completions to a small fill-in-the-middle model, and Plan mode optionally to a reasoning model. If the chosen model is offline, LocalPilot falls back to another.

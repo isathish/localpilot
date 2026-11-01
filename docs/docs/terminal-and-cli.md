@@ -59,8 +59,10 @@ localpilot --yes "update all deps and run tests"  # approve every command/edit/n
 localpilot -p "summarise this repo" > NOTES.md    # print only the final answer
 git diff | localpilot --ask "review this diff"    # piped stdin becomes the prompt
 localpilot -m ollama/qwen3:8b "…"                 # pick a model for this run
-localpilot models                                 # models from every reachable server
+localpilot models                                 # models from every reachable server (cloud ones marked)
 localpilot doctor                                 # check servers, settings, skills, MCP, ripgrep
+localpilot providers add anthropic                # add Claude; asks for the key (not echoed)
+localpilot -m anthropic/claude-sonnet-4-6 "…"     # run a task on a cloud model
 localpilot skill install anthropics/skills/skills/pdf
 localpilot skill search "write a plan" --install
 ```
@@ -69,8 +71,14 @@ localpilot skill search "write a plan" --install
 
 | Command | What it does |
 |---|---|
-| `localpilot models` | Lists models from your local servers |
-| `localpilot doctor` | Checks servers, settings and tools |
+| `localpilot models` | Lists models from every reachable provider. Cloud models are marked `cloud` |
+| `localpilot doctor` | Checks providers (reachability and key state), settings and tools |
+| `localpilot providers` | Lists providers under **Local** and **Cloud** with reachability, model count and where each key comes from. Never prints a key |
+| `localpilot providers presets` | Lists what `providers add` accepts: local servers, cloud APIs and gateways |
+| `localpilot providers add <preset\|url>` | Adds a provider: a preset (`openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `omniroute`…) or any OpenAI-compatible URL. Options: `--key <key>`, `--key-env VAR`, `--url <url>`, `--id <id>`, `--name <name>`, `--type ollama\|openai\|anthropic`, `--cloud` / `--no-cloud`. Checks the connection and lists the models |
+| `localpilot providers key <id> [key]` | Sets a provider's API key: as an argument, typed at a hidden prompt, or piped in (`pass openai \| localpilot providers key openai`). `--key-env VAR` reads it from a variable instead; `--remove-key` deletes it |
+| `localpilot providers test [id]` | Checks one provider, or all, and lists their models |
+| `localpilot providers remove <id>` | Removes a provider added from the CLI, with its stored key. A provider from VS Code settings is disabled for the CLI only |
 | `localpilot skill install <source> [--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `--user` installs to `~/.localpilot/skills` |
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
 
@@ -100,6 +108,7 @@ Run `localpilot` with no task to start a session. These commands are available:
 |---|---|
 | `/mode agent\|multitask\|debug\|plan\|ask` | Switch mode |
 | `/model <name>`, `/models` | Switch model, list models |
+| `/providers` | List providers with reachability and key state |
 | `/changes`, `/undo`, `/keep` | Show, revert or accept this session's file changes |
 | `/file <path>` (`/attach`) | Attach a file to the next prompt |
 | `/isolate`, `/apply`, `/discard` | Move to a git worktree; bring its changes into your checkout; throw them away |
@@ -137,7 +146,7 @@ The CLI reads settings in this order, later sources winning:
 3. `~/.localpilot/config.json`
 4. command-line flags
 
-A model server configured in LocalPilot Settings is therefore already known to the CLI. Changes made from the CLI (such as `/model`) are saved to `~/.localpilot/config.json`, never to VS Code's settings. Logs go to `~/.localpilot/cli.log`.
+A model server configured in LocalPilot Settings is therefore already known to the CLI. API keys that Settings stored in VS Code's secret storage (`${secret:<id>}`) are out of the CLI's reach: set `LOCALPILOT_KEY_<ID>` instead, the provider id in upper case with other characters as `_` (for example `LOCALPILOT_KEY_OPENAI` or `LOCALPILOT_KEY_OLLAMA_CLOUD`). Keys written as `${env:NAME}` work in both. Changes made from the CLI (such as `/model`) are saved to `~/.localpilot/config.json`, never to VS Code's settings. Logs go to `~/.localpilot/cli.log`.
 
 `~/.localpilot/config.json` uses the same keys without the `localpilot.` prefix:
 
@@ -148,6 +157,31 @@ A model server configured in LocalPilot Settings is therefore already known to t
   "approvals": { "terminal": "ask", "write": "always" }
 }
 ```
+
+### Providers and API keys
+
+The CLI sees every provider configured in VS Code. Providers you add with `localpilot providers add` go to `~/.localpilot/config.json` and join VS Code's list by id, so both stay in use and VS Code's settings are never written.
+
+```bash
+localpilot providers presets                      # what you can add
+localpilot providers add openai                   # uses $OPENAI_API_KEY, or asks for the key
+localpilot providers add anthropic --key "$KEY"   # stores the key (see below)
+localpilot providers add groq --key-env GROQ_API_KEY
+localpilot providers add omniroute                # local gateway, marked cloud
+localpilot providers add http://gpu-box:8000/v1 --id homelab
+localpilot providers                              # Local / Cloud, reachability, key state
+localpilot -m anthropic/claude-sonnet-4-6 "review the auth module"
+```
+
+Where keys come from:
+
+| `apiKey` | In the CLI |
+|---|---|
+| `${env:NAME}` | The variable in your shell. |
+| `${secret:<id>}` | VS Code keeps this key in the OS keychain, which the CLI cannot read. It uses `~/.localpilot/keys.json` instead (written by `providers add --key` and `providers key`, readable by you only), or the variable `LOCALPILOT_KEY_<ID>`, for example `LOCALPILOT_KEY_OPENAI`. |
+| the key itself | Used as is. |
+
+Cloud models are marked `cloud` in `localpilot models`. As in the editor, a run without `-m` uses Auto, which prefers local models: a cloud model answers when you pick it with `-m`, `/model` or as the default model.
 
 ### Deep links
 

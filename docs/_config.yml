@@ -1,6 +1,6 @@
 title: LocalPilot
 tagline: Local-first AI coding agent for VS Code
-description: LocalPilot is a free, open-source coding agent for VS Code that runs on local models from Ollama, LM Studio, llama.cpp, vLLM or colibri, and can install a model for you in one click. Agent mode, parallel agents, skills, subagents, screenshots and MCP, with no subscription or account, and no telemetry sent from the extension. A private, offline alternative to GitHub Copilot, Cursor and Claude Code.
+description: LocalPilot is a free, open-source coding agent for VS Code that runs on local models from Ollama, LM Studio, llama.cpp, vLLM or colibri, and can install a model for you in one click. Add OpenAI, Claude, Gemini, OpenRouter, Groq and more with your own key when you want a cloud model. Agent mode, parallel agents, skills, subagents, screenshots and MCP, with no subscription or account, and no telemetry sent from the extension. A private, offline alternative to GitHub Copilot, Cursor and Claude Code.
 url: https://isathish.github.io
 baseurl: /localpilot
 repo: https://github.com/isathish/localpilot
@@ -31,7 +31,10 @@ keywords: >-
   local AI coding assistant, offline AI code assistant, VS Code AI agent, Ollama VS Code extension,
   LM Studio VS Code, llama.cpp VS Code, vLLM VS Code, GitHub Copilot alternative, Cursor alternative,
   Claude Code alternative, private coding assistant, self-hosted copilot, local LLM coding, qwen2.5-coder VS Code,
-  AI agent VS Code extension, MCP VS Code, agentic coding, open source copilot
+  AI agent VS Code extension, MCP VS Code, agentic coding, open source copilot,
+  bring your own key VS Code, BYOK coding agent, Claude in VS Code, Anthropic API VS Code, OpenAI API VS Code agent,
+  Gemini VS Code, OpenRouter VS Code, Groq VS Code, Mistral VS Code, DeepSeek VS Code, Azure OpenAI VS Code,
+  OmniRoute VS Code, LiteLLM VS Code, Ollama Cloud VS Code
 markdown: kramdown
 kramdown:
   input: GFM
@@ -102,6 +105,10 @@ guides:
     url: /guides/offline-ai-coding-assistant/
   - title: Huge MoE models with colibri
     url: /guides/colibri-vscode/
+  - title: Cloud models (bring your own key)
+    url: /guides/cloud-models-vscode/
+  - title: OmniRoute & LiteLLM gateways
+    url: /guides/omniroute-vscode/
 # "Ask AI" buttons rendered by _includes/ask-ai.html. Each product opens with the prompt pre-filled via its public query parameter.
 # Gemini has no public prefill parameter in the Gemini app, so it uses Google AI Mode (udm=50), which is powered by Gemini.
 ask_ai:
@@ -157,6 +164,20 @@ topics:
     url: /docs/models/
   - title: AI agent VS Code extension
     url: /docs/features/
+  - title: Bring your own key VS Code
+    url: /guides/cloud-models-vscode/
+  - title: Claude in VS Code
+    url: /guides/cloud-models-vscode/
+  - title: OpenAI API VS Code agent
+    url: /guides/cloud-models-vscode/
+  - title: Gemini VS Code
+    url: /guides/cloud-models-vscode/
+  - title: OpenRouter VS Code
+    url: /guides/cloud-models-vscode/
+  - title: OmniRoute VS Code
+    url: /guides/omniroute-vscode/
+  - title: LiteLLM VS Code
+    url: /guides/omniroute-vscode/
   - title: MCP VS Code
     url: /docs/mcp/
   - title: Agentic coding
@@ -182,5 +203,11 @@ works_with:
     url: /docs/models/
   - title: OpenAI-compatible servers
     url: /docs/models/
+  - title: OpenAI, Claude & Gemini
+    url: /guides/cloud-models-vscode/
+  - title: OpenRouter, Groq & more
+    url: /guides/cloud-models-vscode/
+  - title: OmniRoute & LiteLLM
+    url: /guides/omniroute-vscode/
   - title: MCP servers
     url: /docs/mcp/

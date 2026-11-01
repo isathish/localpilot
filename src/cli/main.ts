@@ -4,7 +4,8 @@
  * Runs the exact same agent loop, tools, skills, memory, MCP servers and change tracking as the
  * VS Code extension, against the model servers you already configured (Ollama, LM Studio,
  * llama.cpp, vLLM…). Settings are read from VS Code's user settings.json, the workspace's
- * .vscode/settings.json and ~/.localpilot/config.json. Nothing leaves your machine.
+ * .vscode/settings.json and ~/.localpilot/config.json. Code goes only to the providers you configure: local servers
+ * keep it on your machine; cloud providers (`localpilot providers add openai`) receive what you send to their models.
  */
 import * as readline from 'readline';
 import * as path from 'path';
@@ -39,7 +40,9 @@ import { webTools } from '../tools/web';
 import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
 import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
-import { ask, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
+import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
+import { setSecretValues } from '../providers/cloud';
+import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -68,13 +71,21 @@ function md(s: string): string {
     .replace(/^(\s*)[-*]\s+/gm, (_, sp) => `${sp}${amber('•')} `);
 }
 
+const STYLE: Style = { bold, dim, red, green, yellow, amber, cyan };
+
 const HELP = `${BRAND} ${dim(`v${VERSION}`)} — local-first coding agent for your terminal
 
 ${bold('Usage')}
   localpilot [options] "task"            run one task in agent mode and exit
   localpilot                              interactive session (REPL)
-  localpilot models                       list models from your local servers
+  localpilot models                       list models from your providers (cloud ones are marked)
   localpilot doctor                       check servers, settings and tools
+  localpilot providers                    local and cloud providers: reachability, models, key state
+  localpilot providers presets            providers you can add (Ollama, LM Studio… OpenAI, Claude, Gemini, OpenRouter…)
+  localpilot providers add <preset|url>   add one [--id <id>] [--key <key> | --key-env VAR] [--url <url>] [--cloud]
+  localpilot providers key <id> [key]     set its API key (prompted if omitted, or piped in) [--key-env VAR] [--remove-key]
+  localpilot providers test [id]          check a provider and list its models
+  localpilot providers remove <id>        remove a provider added here (disables a VS Code one for the CLI)
   localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
   localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
   localpilot --ide [options] "task"       open the task in VS Code instead
@@ -94,13 +105,15 @@ ${bold('Options')}
   -h, --help · --version
 
 ${bold('In a session')}
-  /mode agent|multitask|debug|plan|ask   /model <name>   /models   /undo   /keep   /changes   /clear   /help   /exit
+  /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins)   /permissions   /hooks   settings.json rules
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
   anything you type while a run is going is handed to the agent at its next step.
 
 ${bold('Settings')} read from ${dim(USER_SETTINGS_PATH)}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
+${bold('API keys')} \${env:NAME} works everywhere. Keys VS Code keeps in your OS keychain (\${secret:id}) are read here from
+${dim(CLI_KEYS_PATH)} (set with \`localpilot providers key <id>\`) or LOCALPILOT_KEY_<ID>.
 Log: ${dim(LOG_FILE)}`;
 
 // ------------------------------------------------------------------ args
@@ -114,7 +127,9 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers';
+  /** `providers add|key|remove|test|presets` options. */
+  provider: ProviderFlags;
   /** `skill install`: write into ~/.localpilot/skills instead of the workspace. */
   user: boolean;
   /** `skill search --install`: install the best match. */
@@ -124,7 +139,7 @@ interface Args {
   apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {} };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -152,6 +167,16 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--parallel' || x === '-P') {a.cmd = a.cmd ?? 'ide';} // parallel sessions live in the editor's Agents panel
     else if (x === '--user' || x === '-u') {a.user = true;}
     else if (x === '--install') {a.install = true;}
+    else if (x === '--key') {a.provider.key = next();}
+    else if (x === '--key-env') {a.provider.keyEnv = next();}
+    else if (x === '--remove-key') {a.provider.removeKey = true;}
+    else if (x === '--url') {a.provider.url = next();}
+    else if (x === '--id') {a.provider.id = next();}
+    else if (x === '--type') {a.provider.type = next();}
+    else if (x === '--name') {a.provider.name = next();}
+    else if (x === '--cloud') {a.provider.cloud = true;}
+    else if (x === '--no-cloud') {a.provider.cloud = false;}
+    else if (x === 'providers' && !words.length && !a.cmd) {a.cmd = 'providers';}
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
     else if (!x.startsWith('-') && !words.length && !a.cmd && ['models', 'doctor', 'help', 'version'].includes(x)) {a.cmd = x as Args['cmd'];}
@@ -681,7 +706,7 @@ function changesSummary(core: Core, session: Session): void {
 
 // ------------------------------------------------------------------ subcommands
 function modelLine(m: ModelInfo, def: string): string {
-  const tags = [m.supportsTools ? green('tools') : dim('prompt-tools'), m.supportsVision ? 'vision' : '', m.supportsFim ? 'fim' : ''].filter(Boolean).join(' ');
+  const tags = [m.remote ? yellow('cloud') : '', m.supportsTools ? green('tools') : dim('prompt-tools'), m.supportsVision ? 'vision' : '', m.supportsFim ? 'fim' : ''].filter(Boolean).join(' ');
   return `  ${m.id === def ? amber('●') : dim('○')} ${bold(m.id.padEnd(44))} ${dim(`${Math.round(m.contextWindow / 1024)}k`)}  ${tags}`;
 }
 
@@ -689,7 +714,7 @@ async function cmdModels(core: Core): Promise<void> {
   const models = await core.providers.listModels(true);
   const def = getConfig().defaultModel;
   if (!models.length) {
-    console.log(`${red('✖')} No models found. Start Ollama (ollama serve), LM Studio, llama.cpp or vLLM, or add a provider in LocalPilot Settings.`);
+    console.log(`${red('✖')} No models found. Start Ollama (ollama serve), LM Studio, llama.cpp or vLLM, or add a cloud API: localpilot providers add openai --key <key>   (all: localpilot providers presets)`);
     return;
   }
   const by = new Map<string, ModelInfo[]>();
@@ -702,7 +727,27 @@ async function cmdModels(core: Core): Promise<void> {
       console.log(modelLine(m, def));
     }
   }
-  console.log(dim(`\n${amber('●')} = default. Change with: localpilot --model <id> … or /model in a session`));
+  console.log(dim(`\n${amber('●')} = default. Change with: localpilot --model <id> … or /model in a session${models.some((m) => m.remote) ? '. Cloud models answer only when chosen; automatic picks prefer local ones.' : ''}`));
+}
+
+/** `localpilot providers [list|presets|add|key|remove|test] …` */
+async function cmdProviders(args: Args): Promise<number> {
+  const [sub = 'list', target, value] = args.prompt ? args.prompt.split(/\s+/) : [];
+  switch (sub) {
+    case 'list': case 'ls': await listProviders(STYLE); return 0;
+    case 'presets': case 'available': listPresets(STYLE); return 0;
+    case 'add': return addProvider(target ?? '', args.provider, STYLE);
+    case 'key': case 'set-key':
+      if (!target) { console.error(`${red('✖')} Usage: localpilot providers key <id> [key] [--key-env VAR] [--remove-key]`); return 2; }
+      return setProviderKey(target, value ?? args.provider.key, args.provider, STYLE);
+    case 'remove': case 'rm':
+      if (!target) { console.error(`${red('✖')} Usage: localpilot providers remove <id>`); return 2; }
+      return removeProvider(target, STYLE);
+    case 'test': case 'check': return testProviders(target, STYLE);
+    default:
+      console.error(`${red('✖')} Unknown: providers ${sub}. Try: list, presets, add, key, test, remove`);
+      return 2;
+  }
 }
 
 async function cmdDoctor(core: Core): Promise<void> {
@@ -711,15 +756,7 @@ async function cmdDoctor(core: Core): Promise<void> {
   const cfg = getConfig();
   console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network}`);
   console.log(`\n${bold('Providers')}`);
-  for (const p of core.providers.all) {
-    const started = Date.now();
-    const ok = await p.healthCheck();
-    let n = 0;
-    if (ok) {
-      n = (await p.listModels().catch(() => [])).length;
-    }
-    console.log(`  ${ok ? green('●') : red('●')} ${bold(p.displayName.padEnd(22))} ${dim(p.baseUrl.padEnd(34))} ${ok ? `${n} model${n === 1 ? '' : 's'} · ${Date.now() - started} ms` : red('unreachable')}`);
-  }
+  await listProviders(STYLE, (l) => console.log(`  ${l}`), { compact: true });
   console.log(`\n${bold('Workspace')}\n  ${core.workspace.root ?? dim('(none)')}`);
   console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);
   const rg = await runProcess('rg', ['--version']).then(() => true).catch(() => false);
@@ -835,6 +872,12 @@ async function main(): Promise<void> {
     setAutoApprove(true);
   }
   setLogLevel(args.verbose ? 'debug' : 'warn');
+  // Keys for `${secret:id}` references: VS Code keeps them in the OS keychain, the CLI in its own key file.
+  setSecretValues(readCliKeys());
+  if (args.cmd === 'providers') {
+    process.exitCode = await cmdProviders(args);
+    return;
+  }
 
   const quiet = args.print || (!args.prompt && !process.stdin.isTTY);
   const renderer = new Renderer(args.verbose, quiet);
@@ -982,6 +1025,7 @@ async function main(): Promise<void> {
         console.log(dim(`model → ${m.id}`)); return true;
       }
       case 'models': await cmdModels(core); return true;
+      case 'providers': await listProviders(STYLE); return true;
       case 'changes': changesSummary(core, session); if (!core.tracker.forSession(session.id).length) { console.log(dim('no pending changes')); } return true;
       case 'undo': { const n = await core.tracker.undo(session.id); console.log(n ? yellow(`reverted ${n} file${n === 1 ? '' : 's'}`) : dim('nothing to undo')); return true; }
       case 'keep': core.tracker.keep(session.id); console.log(green('changes kept')); return true;

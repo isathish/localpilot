@@ -263,6 +263,7 @@ export class MarkdownViewer implements vscode.Disposable {
   <main id="doc" class="doc" aria-live="polite"><div class="loading">Rendering…</div></main>
 </div>
 <div id="toasts"></div>
+<script nonce="${nonce}" src="${media('glass.js')}"></script>
 <script nonce="${nonce}" src="${media('mdview.js')}"></script>
 </body>
 </html>`;

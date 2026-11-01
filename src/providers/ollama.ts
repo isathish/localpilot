@@ -8,7 +8,7 @@ import {
   StreamEvent,
   WarmOptions,
 } from '../types';
-import { isRemoteUrl, resolveApiKey } from './cloud';
+import { isCloudProvider, resolveApiKey } from './cloud';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 import { ThinkTagSplitter } from './thinkTags';
 
@@ -56,7 +56,7 @@ export class OllamaProvider implements LLMProvider {
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
     const key = resolveApiKey(cfg);
     this.headers = key ? { authorization: `Bearer ${key}` } : {};
-    this.remote = isRemoteUrl(this.baseUrl);
+    this.remote = isCloudProvider(cfg);
     this.defaultCtx = cfg.contextWindow ?? 32768;
   }
 

@@ -33,7 +33,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Model servers. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
+| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs. Per provider: `type` (`ollama`, `openai`, `anthropic`), `baseUrl`, `apiKey` (`${secret:id}`, `${env:NAME}` or the key), `cloud`, `models`, `contextWindow`, `enabled`. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
 | `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model that fits this machine |
 | `localpilot.models.disabled` | `[]` | `provider/model` ids hidden from pickers, routing and the status bar. Toggle them in **Settings → Models** |
 | `localpilot.models.autoSetup` | `true` | Offer to install Ollama and a starter model when no local model is found |

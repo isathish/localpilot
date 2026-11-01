@@ -41,6 +41,13 @@ export interface ChatMessage {
     steerId?: string;
     /** On the last assistant message of a turn: wall-clock time of the whole turn, for the "Worked for …" summary. */
     durationMs?: number;
+    /** On the last assistant message of a turn: the model that answered (provider-qualified id). */
+    model?: string;
+    /** On the last assistant message of a turn: tokens generated and the time spent generating them, for the speed shown under the answer. */
+    outputTokens?: number;
+    genMs?: number;
+    /** The model call that ended this turn failed: the friendly message shown in the error box. */
+    error?: string;
     /** What the transcript shows instead of the content (a slash command whose expanded prompt is the content). */
     display?: string;
     /** Misspelled names in the request that were corrected to real workspace names before it was sent. */
@@ -159,8 +166,13 @@ export interface ProviderConfig {
   /** `ollama` native API, `openai` any OpenAI-compatible `/v1` API (local servers and most clouds), `anthropic` Claude's Messages API. */
   type: 'ollama' | 'openai' | 'anthropic';
   baseUrl: string;
-  /** Literal key or an environment reference such as `${env:OPENAI_API_KEY}`. */
+  /** Literal key, an environment reference (`${env:OPENAI_API_KEY}`) or a key kept in VS Code's secret storage (`${secret:openai}`). */
   apiKey?: string;
+  /**
+   * The server forwards prompts to cloud models although it runs locally (gateways such as OmniRoute or LiteLLM).
+   * Unset = decided by the URL: anything off this machine and the private network is cloud.
+   */
+  cloud?: boolean;
   displayName?: string;
   /** Optional explicit model list (for servers whose /models is empty, e.g. some llama.cpp builds). */
   models?: string[];

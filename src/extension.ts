@@ -23,6 +23,8 @@ import { autoDetectProviders } from './providers/discovery';
 import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaUp } from './providers/modelManager';
 import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
+import { secretRefs } from './providers/cloud';
+import { ProviderSecrets } from './providers/secrets';
 import { coliLauncher, colibriServeCommand, COLIBRI_REPO_URL } from './providers/colibri';
 import { ModelTuner } from './ui/modelAutoTune';
 import { getSystemProfile } from './providers/system';
@@ -36,7 +38,7 @@ import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
 import { terminalTools } from './tools/terminal';
 import { webTools } from './tools/web';
-import { ModelInfo, Session } from './types';
+import { ModelInfo, ProviderConfig, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
@@ -111,6 +113,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Core services -----------------------------------------------------------------------
   const providers = new ProviderRegistry(log);
   providers.telemetry = telemetry;
+  // API keys entered in Settings live in the OS keychain; settings.json holds only `${secret:<id>}` references.
+  const providerSecrets = new ProviderSecrets(context.secrets, context.globalState);
+  const loadSecrets = () => void providerSecrets.load().catch((e) => log.warn(`provider keys: ${e instanceof Error ? e.message : String(e)}`));
+  context.subscriptions.push(providerSecrets, onConfigChange(loadSecrets));
+  loadSecrets();
   const tools = new ToolRegistry();
   const skills = new SkillManager(log, path.join(context.extensionPath, 'skills'));
   const workspace = new WorkspaceContext(log);
@@ -323,7 +330,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry);
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry, providerSecrets);
   settingsPanel.learner = learner;
   // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
   const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
@@ -1212,6 +1219,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       await setModelEnabled(target.id, !!target.disabled);
       vscode.window.setStatusBarMessage(`LocalPilot: ${target.name} ${target.disabled ? 'enabled' : 'disabled'}`, 2500);
     }
+  });
+  cmd('localpilot.setProviderApiKey', async (providerId?: unknown) => {
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const list = cfg.get<ProviderConfig[]>('providers', []);
+    let target = typeof providerId === 'string' ? list.find((p) => p.id === providerId) : undefined;
+    if (!target) {
+      const picked = await vscode.window.showQuickPick(
+        list.map((p) => ({ label: p.displayName || p.id, description: p.baseUrl, detail: p.apiKey ? (secretRefs(p.apiKey).length ? 'key in secret storage' : /\$\{env:/.test(p.apiKey) ? `key from ${p.apiKey}` : 'key in settings.json') : 'no key', p })),
+        { title: 'Set the API key of a provider' }
+      );
+      target = picked?.p;
+    }
+    if (!target) {
+      return;
+    }
+    const key = await vscode.window.showInputBox({ title: `API key for ${target.displayName || target.id}`, prompt: 'Stored in VS Code secret storage (your OS keychain), not in settings.json. Leave empty to remove it.', password: true, ignoreFocusOut: true });
+    if (key === undefined) {
+      return;
+    }
+    const id = target.id;
+    const ref = key.trim() ? await providerSecrets.store(id, key.trim()) : undefined;
+    const next = list.map((p) => {
+      if (p.id !== id) {
+        return p;
+      }
+      const out = { ...p, apiKey: ref };
+      if (!ref) {
+        delete out.apiKey;
+      }
+      return out;
+    });
+    await cfg.update('providers', next, vscode.ConfigurationTarget.Global);
+    await providerSecrets.prune();
+    await providers.listModels(true).catch(() => []);
+    vscode.window.setStatusBarMessage(`LocalPilot: API key for ${target.displayName || id} ${ref ? 'saved' : 'removed'}`, 2500);
   });
   cmd('localpilot.refreshModels', async () => {
     await autoDetect();

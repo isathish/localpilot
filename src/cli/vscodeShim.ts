@@ -324,9 +324,64 @@ export function loadSettings(workspaceRoot?: string): void {
   const cli: Record<string, unknown> = {};
   flatten(readJsonc(CLI_SETTINGS_PATH), cli);
   for (const [k, v] of Object.entries(cli)) {
-    settings[k.replace(/^localpilot\./, '')] = v;
+    const key = k.replace(/^localpilot\./, '');
+    // Providers added from the CLI join VS Code's list by id instead of replacing it, so both keep working.
+    settings[key] = key === 'providers' ? mergeProviders(settings.providers, v) : v;
   }
   Object.assign(settings, cliOverrides);
+}
+
+/** `over` entries replace or extend same-id entries of `base` field by field; new ids are appended. */
+export function mergeProviders(base: unknown, over: unknown): unknown {
+  if (!Array.isArray(over)) {
+    return base;
+  }
+  const out = Array.isArray(base) ? base.map((p) => ({ ...(p as object) })) as Record<string, unknown>[] : [];
+  for (const o of over as Record<string, unknown>[]) {
+    const i = out.findIndex((p) => p.id === o?.id);
+    if (i >= 0) {
+      out[i] = { ...out[i], ...o };
+    } else if (o && typeof o === 'object') {
+      out.push({ ...o });
+    }
+  }
+  return out;
+}
+
+/** The CLI's own config file (`~/.localpilot/config.json`), raw. */
+export function readCliConfig(): Record<string, unknown> {
+  return readJsonc(CLI_SETTINGS_PATH);
+}
+
+export async function writeCliConfig(cfg: Record<string, unknown>): Promise<void> {
+  await fsp.mkdir(path.dirname(CLI_SETTINGS_PATH), { recursive: true });
+  await fsp.writeFile(CLI_SETTINGS_PATH, JSON.stringify(cfg, null, 2) + '\n');
+  loadSettings(workspaceRoot);
+  configEmitter.fire({ affectsConfiguration: (s: string) => s === 'localpilot' || s.startsWith('localpilot.providers') });
+}
+
+/**
+ * API keys for `${secret:<name>}` references when running outside VS Code, which has the OS keychain the CLI cannot
+ * reach. Readable by the owner only. `LOCALPILOT_KEY_<NAME>` environment variables work too.
+ */
+export const CLI_KEYS_PATH = path.join(os.homedir(), '.localpilot', 'keys.json');
+
+export function readCliKeys(): Record<string, string> {
+  const raw = readJsonc(CLI_KEYS_PATH);
+  return Object.fromEntries(Object.entries(raw).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1]));
+}
+
+export async function writeCliKey(name: string, key: string | undefined): Promise<void> {
+  const keys = readCliKeys();
+  if (key) {
+    keys[name] = key;
+  } else {
+    delete keys[name];
+  }
+  await fsp.mkdir(path.dirname(CLI_KEYS_PATH), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(CLI_KEYS_PATH, JSON.stringify(keys, null, 2) + '\n', { mode: 0o600 });
+  // writeFile keeps the mode of an existing file: tighten it in case it was created more permissively.
+  await fsp.chmod(CLI_KEYS_PATH, 0o600).catch(() => undefined);
 }
 
 const configEmitter = new EventEmitter<{ affectsConfiguration(s: string): boolean }>();
@@ -604,6 +659,7 @@ export const window = {
   },
   createTextEditorDecorationType: () => ({ dispose() {} }),
   onDidChangeActiveTextEditor: () => new Disposable(),
+  onDidChangeTextEditorSelection: () => new Disposable(),
   onDidChangeVisibleTextEditors: () => new Disposable(),
   onDidStartTerminalShellExecution: () => new Disposable(),
   onDidEndTerminalShellExecution: () => new Disposable(),

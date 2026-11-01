@@ -1,9 +1,31 @@
 /** Small HTTP helpers shared by providers (uses global fetch available in VS Code's Node runtime). */
 
 export class HttpError extends Error {
-  constructor(public status: number, public body: string, url: string) {
+  /** How long the server asked to wait before retrying (`retry-after` / `retry-after-ms`), when it said. */
+  readonly retryAfterMs?: number;
+
+  constructor(public status: number, public body: string, url: string, headers?: Headers) {
     super(`HTTP ${status} from ${url}: ${body.slice(0, 500)}`);
+    this.retryAfterMs = headers ? retryAfter(headers) : undefined;
   }
+}
+
+/** `retry-after-ms`, or `retry-after` as seconds or an HTTP date. */
+export function retryAfter(headers: Headers): number | undefined {
+  const ms = Number(headers.get('retry-after-ms'));
+  if (ms > 0) {
+    return ms;
+  }
+  const v = headers.get('retry-after')?.trim();
+  if (!v) {
+    return undefined;
+  }
+  const secs = Number(v);
+  if (Number.isFinite(secs)) {
+    return secs > 0 ? secs * 1000 : undefined;
+  }
+  const at = Date.parse(v);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
 }
 
 export async function postJson<T>(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal): Promise<T> {
@@ -14,7 +36,7 @@ export async function postJson<T>(url: string, body: unknown, headers: Record<st
     signal,
   });
   if (!res.ok) {
-    throw new HttpError(res.status, await res.text().catch(() => ''), url);
+    throw new HttpError(res.status, await res.text().catch(() => ''), url, res.headers);
   }
   return (await res.json()) as T;
 }
@@ -22,7 +44,7 @@ export async function postJson<T>(url: string, body: unknown, headers: Record<st
 export async function getJson<T>(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { headers, signal });
   if (!res.ok) {
-    throw new HttpError(res.status, await res.text().catch(() => ''), url);
+    throw new HttpError(res.status, await res.text().catch(() => ''), url, res.headers);
   }
   return (await res.json()) as T;
 }
@@ -36,7 +58,7 @@ export async function* streamLines(url: string, body: unknown, headers: Record<s
     signal,
   });
   if (!res.ok || !res.body) {
-    throw new HttpError(res.status, await res.text().catch(() => ''), url);
+    throw new HttpError(res.status, await res.text().catch(() => ''), url, res.headers);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
