@@ -3,6 +3,8 @@
 All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
+
+## 1.3.2 — 2026-11-01
 ### Added
 - **Cloud model providers.** **Settings → Providers** now lists cloud APIs next to local servers: OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud. Claude uses a new `anthropic` provider type that talks to the Messages API directly, with tools and images. The other clouds use the OpenAI-compatible API. Cloud providers are marked **cloud**. Auto and other automatic picks still prefer local models and use a cloud model only when nothing local is available. A cloud model you choose yourself is always used.
 - **API keys from the environment.** An API key can be written as `${env:NAME}`, so it stays out of `settings.json`. Cloud presets use the provider's usual variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`…). If the variable is missing, **Test connection** names it.
