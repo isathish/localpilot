@@ -45,13 +45,33 @@
         <feBlend in="c1" in2="c2" mode="screen"/>
       </filter>`;
   }
+  // Icon material: each icon's strokes are treated as a raised glass surface lit from the top left (specular
+  // lighting on a softened height map), with a soft glow in the icon's own colour and a little depth below. The icon
+  // keeps its colour (SourceGraphic), so semantic colours still read.
+  function iconGlass(id, o) {
+    return `
+      <filter id="${id}" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+        <feGaussianBlur in="SourceAlpha" stdDeviation="0.65" result="h"/>
+        <feSpecularLighting in="h" surfaceScale="2.4" specularConstant="1.3" specularExponent="18" lighting-color="#fff" result="sp">
+          <feDistantLight azimuth="225" elevation="50"/>
+        </feSpecularLighting>
+        <feComposite in="sp" in2="SourceAlpha" operator="in" result="spec"/>
+        <feGaussianBlur in="SourceGraphic" stdDeviation="1.3" result="g"/>
+        <feColorMatrix in="g" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${o.glow} 0" result="glow"/>
+        <feOffset in="SourceAlpha" dy="0.9" result="o"/>
+        <feGaussianBlur in="o" stdDeviation="0.7" result="ob"/>
+        <feColorMatrix in="ob" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 ${o.shadow} 0" result="shadow"/>
+        <feMerge result="base"><feMergeNode in="shadow"/><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+        <feComposite in="spec" in2="base" operator="arithmetic" k2="${o.spec}" k3="1"/>
+      </filter>`;
+  }
   function installLens() {
     if (doc.getElementById('lp-glass-defs')) { return; }
     const holder = doc.createElement('div');
     holder.id = 'lp-glass-defs';
     holder.setAttribute('aria-hidden', 'true');
     holder.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
-    holder.innerHTML = `<svg width="0" height="0" focusable="false"><defs>${lens('lp-lens', { scale: 30, soft: 8, reach: 6 })}${lens('lp-lens-sm', { scale: 16, soft: 5, reach: 4 })}</defs></svg>`;
+    holder.innerHTML = `<svg width="0" height="0" focusable="false"><defs>${lens('lp-lens', { scale: 30, soft: 8, reach: 6 })}${lens('lp-lens-sm', { scale: 16, soft: 5, reach: 4 })}${iconGlass('lp-icon', { spec: 0.8, glow: 0.5, shadow: 0.45 })}${iconGlass('lp-icon-light', { spec: 1, glow: 0.3, shadow: 0.18 })}</defs></svg>`;
     doc.body.appendChild(holder);
   }
   // The lens is Chromium-only (SVG filters in backdrop-filter) and is skipped when the user asked for less
@@ -59,6 +79,8 @@
   function syncLens() {
     const on = !reduceGlass.matches && !highContrast() && CSS.supports('backdrop-filter', 'url(#lp-lens)');
     root.classList.toggle('lg-lens', on);
+    // The icon material is an ordinary CSS filter (any engine); only the user's transparency / contrast choice turns it off.
+    root.classList.toggle('lg-icons', !reduceGlass.matches && !highContrast());
   }
 
   // ------------------------------------------------------------------ 2. pointer light
@@ -81,6 +103,25 @@
     if (e.pointerType === 'touch') { return; }
     px = e.clientX; py = e.clientY;
     if (!lightQueued) { lightQueued = true; requestAnimationFrame(paintLight); }
+  }
+
+  // ------------------------------------------------------------------ 2b. press ripple
+  // A press sends a liquid ring out from the pointer across the control. The ring is a radial gradient on an inset
+  // layer with the control's own radius, so it never spills outside or needs overflow clipping.
+  const PRESSABLE = 'button:not(:disabled), .side a, .suggestion, .recent-row, .find-item, [role="tab"], .preset, .gal-tab, .ap';
+  function onPress(e) {
+    if (e.button !== 0 || reduceMotion.matches) { return; }
+    const t = e.target && e.target.closest ? e.target.closest(PRESSABLE) : null;
+    if (!t || getComputedStyle(t).position === 'static') { return; }
+    const r = t.getBoundingClientRect();
+    const ring = doc.createElement('span');
+    ring.className = 'lg-ripple';
+    ring.setAttribute('aria-hidden', 'true');
+    ring.style.setProperty('--rx', `${e.clientX - r.left}px`);
+    ring.style.setProperty('--ry', `${e.clientY - r.top}px`);
+    ring.style.setProperty('--rmax', `${Math.hypot(Math.max(e.clientX - r.left, r.right - e.clientX), Math.max(e.clientY - r.top, r.bottom - e.clientY)) + 6}px`);
+    t.appendChild(ring);
+    setTimeout(() => ring.remove(), 650);
   }
 
   // ------------------------------------------------------------------ 3. liquid selection
@@ -153,6 +194,7 @@
     syncLens();
     reduceGlass.addEventListener?.('change', syncLens);
     doc.addEventListener('pointermove', onPointer, { passive: true });
+    doc.addEventListener('pointerdown', onPress, { passive: true });
     doc.addEventListener('pointerleave', () => { if (lit) { lit.classList.remove('lg-on'); lit = null; } });
     // Watch only the roots that can move a selection; the chat transcript (which streams) is never observed.
     const mo = new MutationObserver(schedule);

@@ -1017,3 +1017,33 @@ button svg, .side a svg { transition: transform .4s var(--ease-spring), color .2
 body.vscode-high-contrast, body.vscode-high-contrast-light { --spec: transparent; --spec-rim: transparent; }
 body.vscode-high-contrast .lg-ind, body.vscode-high-contrast-light .lg-ind { background: transparent; border: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); box-shadow: none; }
 body.vscode-high-contrast .lg-ind::before, body.vscode-high-contrast-light .lg-ind::before { box-shadow: none; }
+
+/* ════ Liquid glass icons ════════════════════════════════════════════════════════════════════════════════════════
+   Every UI icon (16×16 line icons, the bot mark, provider logos) is drawn as lit glass by #lp-icon (glass.js): a
+   specular highlight along its top edges, a glow in its own colour and a little depth. Charts are untouched. */
+.lg-icons :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-logo svg, .empty .logo svg, .brand-mark svg) { filter: url(#lp-icon); }
+html.lg-icons body.vscode-light :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-logo svg, .empty .logo svg, .brand-mark svg), html.lg-icons.light body :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-logo svg, .empty .logo svg, .brand-mark svg) { filter: url(#lp-icon-light); }
+.lg-icons svg[viewBox="0 0 16 16"] { stroke-width: 1.65; overflow: visible; }
+
+/* Icon tiles: small glass bubbles — a lit top edge, a darker lower rim, a soft shadow. */
+:is(.suggestion .ico, .find-item .ico, .preset .ic:not(.brand-mark), .cat-head .ic:not(.brand-mark), .sys .ic, .find-open, .brand-mark) {
+  background-image: linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.03) 55%, rgba(0,0,0,.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 0 rgba(0,0,0,.18), 0 4px 10px -6px rgba(0,0,0,.5);
+  transition: transform .45s var(--ease-spring), box-shadow .3s, background-color .2s;
+}
+:is(.suggestion:hover .ico, .find-item.sel .ico, .preset:not([disabled]):hover .ic, .gal-tab:hover .brand-mark) { transform: translateY(-1px) scale(1.06); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), inset 0 -1px 0 rgba(0,0,0,.18), 0 8px 16px -8px rgba(0,0,0,.55); }
+
+/* ── Motion: icons wobble like a drop of liquid on hover; controls with their own gesture keep it. */
+@keyframes jelly { 0% { transform: scale(1, 1); } 28% { transform: scale(1.2, .84); } 48% { transform: scale(.88, 1.14); } 68% { transform: scale(1.06, .96); } 84% { transform: scale(.98, 1.02); } 100% { transform: scale(1, 1); } }
+:is(.ib:not(#btnNewTab):not(#btnHistory):not(#btnImprove):not(#btnImage), .afoot .acts button:not([data-act="regen"]), .code-head button, .hist-row .acts button, .change .acts button, .bgrun .stop, .btn:not(.busy), .hist-foot button, .navtog, .navall, .side button.grp, .pick):hover > svg { animation: jelly .62s var(--ease-glass); }
+/* Press: a liquid ring spreads from the pointer (glass.js adds .lg-ripple). */
+@property --rr { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.lg-ripple { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
+  background: radial-gradient(circle at var(--rx) var(--ry), rgba(255,255,255,.16) 0, rgba(255,255,255,.1) calc(var(--rr) - 10px), rgba(255,255,255,.42) calc(var(--rr) - 1px), transparent var(--rr));
+  animation: lgRipple .6s var(--ease-glass) forwards; }
+@keyframes lgRipple { from { --rr: 4px; opacity: 1; } to { --rr: var(--rmax, 120px); opacity: 0; } }
+:is(body.vscode-light, html.lg-icons.light body) .lg-ripple { background: radial-gradient(circle at var(--rx) var(--ry), color-mix(in srgb, var(--accent) 10%, transparent) 0, color-mix(in srgb, var(--accent) 8%, transparent) calc(var(--rr) - 10px), color-mix(in srgb, var(--accent) 30%, transparent) calc(var(--rr) - 1px), transparent var(--rr)); }
+:where(button) { position: relative; }
+
+@media (prefers-reduced-motion: reduce) { :is(.ib, .btn, .pick, button) > svg { animation: none !important; } .lg-ripple { display: none; } }
+body.vscode-high-contrast :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open), body.vscode-high-contrast-light :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open) { background-image: none; box-shadow: none; }

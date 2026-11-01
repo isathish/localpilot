@@ -43,6 +43,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
   - A soft highlight follows the pointer across cards and buttons.
   - The selected tab, settings section, User/Workspace switch and every Ask/Allow/Block choice sit on a glass pill. When you pick another one, the pill stretches toward it and settles.
   - Icons react: send lifts off, new tab spins, history turns back, copy draws a check. Settings sections cross-fade.
+  - Icons are drawn as lit glass: a highlight along their top edges, a soft glow in their own colour and a little depth, in their usual colours. Icon tiles (suggestions, search results, provider logos) are glossy glass bubbles.
+  - Icon buttons wobble like a drop of liquid on hover, and every press sends a liquid ring out from the pointer.
   - All of this is off with **Reduce motion**, **Reduce transparency** or a high-contrast theme.
 - **Answers show which model replied and how fast.** Under each answer: the model, its speed in tokens per second, and Copy, **Regenerate** and Open as document, visible without hovering. **Regenerate** sends your last message again for a new answer. Copy buttons confirm on the button itself.
 - **A better empty chat.** Suggestions name the file you're on (**Explain dice.py**, **Write tests for my selection**). Your three most recent chats are one click away, with the shortcuts worth knowing underneath.

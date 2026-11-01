@@ -932,7 +932,8 @@
   /** Copy with feedback on the button itself (icon → check for a moment); a toast only if the clipboard refuses. */
   function copyTo(btn, text) {
     navigator.clipboard.writeText(text).then(() => {
-      if (!btn.dataset.html) { btn.dataset.html = btn.innerHTML; }
+      // Saved without the press ripple glass.js adds on pointerdown, so restoring never brings a stale one back.
+      if (!btn.dataset.html) { btn.dataset.html = btn.innerHTML.replace(/<span class="lg-ripple"[^>]*><\/span>/g, ''); }
       btn.innerHTML = btn.dataset.html.replace(/<svg[\s\S]*?<\/svg>/, I.check).replace(/>Copy</, '>Copied<'); btn.classList.add('copied');
       clearTimeout(btn._t); btn._t = setTimeout(() => { btn.innerHTML = btn.dataset.html; btn.classList.remove('copied'); }, 1400);
     }, () => toast('Could not copy to the clipboard', 'error'));
