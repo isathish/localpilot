@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.6 — 2026-11-01
+
 ### Fixed
 - **The newest message is no longer hidden under the composer.** The floating composer reserved a fixed 108 px at the end of the chat. When it grew (Tasks checklist, changed files, an approval, the status line), it covered the latest reply or the steering message you just queued. The space now follows the composer's real height.
 
