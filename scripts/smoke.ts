@@ -6,6 +6,10 @@
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
+import { AnthropicProvider, toAnthropicMessages } from '../src/providers/anthropic';
+import { isRemoteUrl, resolveApiKey } from '../src/providers/cloud';
+import { pickForRole } from '../src/providers/registry';
+import { ModelInfo } from '../src/types';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
 import { ContextManager, effectiveContextWindow } from '../src/context/contextManager';
@@ -172,6 +176,99 @@ async function mockOpenAI() {
   } finally {
     srv.close();
   }
+}
+
+async function cloudProviders() {
+  console.log('Cloud providers');
+  check('local and private hosts are not remote', ['http://localhost:11434', 'http://127.0.0.1:1234/v1', 'http://192.168.1.5:8000', 'http://10.0.0.2', 'http://gpu-box:8080', 'http://[::1]:1234'].every((u) => !isRemoteUrl(u)));
+  check('cloud APIs are remote', ['https://api.openai.com/v1', 'https://api.anthropic.com/v1', 'https://ollama.com'].every(isRemoteUrl));
+  process.env.LP_SMOKE_KEY = 'sk-from-env';
+  check('${env:NAME} keys are expanded', resolveApiKey({ apiKey: '${env:LP_SMOKE_KEY}' }) === 'sk-from-env' && resolveApiKey({ apiKey: '${env:LP_SMOKE_UNSET}' }) === undefined && resolveApiKey({ apiKey: ' sk-1 ' }) === 'sk-1');
+
+  const conv = toAnthropicMessages([
+    { role: 'system', content: 'be brief' },
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'call:1', name: 'read_file', arguments: '{"path":"a"}' }, { id: 'call_2', name: 'list', arguments: 'oops' }] },
+    { role: 'tool', content: 'A', toolCallId: 'call:1' },
+    { role: 'tool', content: '', toolCallId: 'call_2' },
+    { role: 'user', content: 'go on' },
+  ]);
+  const blocks = conv.messages[2]?.content as { type: string; tool_use_id?: string; text?: string }[];
+  check('anthropic: system lifted, roles alternate, tool results grouped with the next user text', conv.system === 'be brief' && conv.messages.map((m) => m.role).join() === 'user,assistant,user' && blocks.map((b) => b.type).join() === 'tool_result,tool_result,text' && blocks[0].tool_use_id === 'call_1', conv);
+
+  let anthropicHeaders: http.IncomingHttpHeaders = {};
+  let anthropicBody: Record<string, unknown> = {};
+  const ant = await listen(async (req, res) => {
+    anthropicHeaders = req.headers;
+    if (req.url?.startsWith('/v1/models')) {
+      res.end(JSON.stringify({ data: [{ id: 'claude-sonnet-x', display_name: 'Claude Sonnet X' }], has_more: false }));
+      return;
+    }
+    anthropicBody = JSON.parse(await readBody(req));
+    res.setHeader('content-type', 'text/event-stream');
+    const ev = (o: unknown) => res.write(`event: x\ndata: ${JSON.stringify(o)}\n\n`);
+    ev({ type: 'message_start', message: { usage: { input_tokens: 12 } } });
+    ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Reading.' } });
+    ev({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } });
+    ev({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":' } });
+    ev({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"a.ts"}' } });
+    ev({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 7 } });
+    ev({ type: 'message_stop' });
+    res.end();
+  });
+  try {
+    const p = new AnthropicProvider({ id: 'anthropic', type: 'anthropic', baseUrl: `${ant.url}/v1`, apiKey: '${env:LP_SMOKE_KEY}' });
+    const models = await p.listModels();
+    check('anthropic: models listed with key and version headers', models[0]?.id === 'anthropic/claude-sonnet-x' && models[0].supportsTools && anthropicHeaders['x-api-key'] === 'sk-from-env' && !!anthropicHeaders['anthropic-version'], models);
+    const evs = await collect(p.chat({ model: 'claude-sonnet-x', messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'read a.ts' }], tools: [{ name: 'read_file', description: 'Read', parameters: { type: 'object', properties: {} } }] }));
+    const call = evs.find((e) => e.type === 'tool_call');
+    check('anthropic: streamed text, tool call and usage', evs.some((e) => e.type === 'text' && e.text === 'Reading.') && call?.type === 'tool_call' && call.call.arguments === '{"path":"a.ts"}' && evs.some((e) => e.type === 'usage' && e.promptTokens === 12 && e.completionTokens === 7), evs);
+    check('anthropic: request has system, max_tokens and input_schema tools', anthropicBody.system === 'sys' && typeof anthropicBody.max_tokens === 'number' && (anthropicBody.tools as { input_schema?: unknown }[])[0].input_schema !== undefined, anthropicBody);
+  } finally {
+    ant.close();
+  }
+
+  // An OpenAI reasoning model rejects max_tokens and temperature: the provider renames/drops them and remembers.
+  const bodies: Record<string, unknown>[] = [];
+  const oai = await listen(async (req, res) => {
+    if (req.url?.endsWith('/models')) {
+      res.end(JSON.stringify({ data: [{ id: 'mistral-large', capabilities: { completion_chat: true, function_calling: true, vision: false } }, { id: 'mistral-embed', capabilities: { completion_chat: false } }] }));
+      return;
+    }
+    const b = JSON.parse(await readBody(req));
+    bodies.push(b);
+    if ('max_tokens' in b) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." } }));
+      return;
+    }
+    if ('temperature' in b) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: { message: "Unsupported value: 'temperature' does not support 0.2 with this model." } }));
+      return;
+    }
+    res.setHeader('content-type', 'text/event-stream');
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  try {
+    const p = new OpenAICompatProvider({ id: 'mistral', type: 'openai', baseUrl: `${oai.url}/v1` });
+    const models = await p.listModels();
+    check('openai: Mistral-style capability flags parsed, non-chat models dropped', models.length === 1 && models[0].supportsTools && !models[0].supportsVision, models);
+    const first = await collect(p.chat({ model: 'o-reasoner', messages: [{ role: 'user', content: 'hi' }], maxTokens: 100 }));
+    const n = bodies.length;
+    const second = await collect(p.chat({ model: 'o-reasoner', messages: [{ role: 'user', content: 'again' }], maxTokens: 100 }));
+    check('openai: rejected parameters are fixed and retried', first.some((e) => e.type === 'text' && e.text === 'ok') && bodies[n - 1].max_completion_tokens === 100 && !('temperature' in bodies[n - 1]), bodies);
+    check('openai: fixes are remembered for the model', second.some((e) => e.type === 'text') && bodies.length === n + 1, bodies.length - n);
+  } finally {
+    oai.close();
+  }
+
+  const mk = (id: string, remote: boolean, tools = true): ModelInfo => ({ id, providerId: id.split('/')[0], modelId: id.split('/')[1], name: id, contextWindow: 128000, maxOutputTokens: 8192, supportsTools: tools, supportsVision: remote, remote: remote || undefined });
+  const local = mk('ollama/qwen2.5-coder:7b', false);
+  const cloud = mk('openai/gpt-5', true);
+  check('routing: Auto prefers a local model over a cloud one', pickForRole([cloud, local], 'agent')?.id === local.id);
+  check('routing: a cloud model is used when nothing local is available', pickForRole([cloud], 'agent')?.id === cloud.id);
 }
 
 async function pureLogic() {
@@ -1322,6 +1419,7 @@ async function redisStorage() {
   await worktrees();
   await mockOllama();
   await mockOpenAI();
+  await cloudProviders();
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();

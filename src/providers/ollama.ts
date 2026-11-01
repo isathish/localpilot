@@ -8,6 +8,7 @@ import {
   StreamEvent,
   WarmOptions,
 } from '../types';
+import { isRemoteUrl, resolveApiKey } from './cloud';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 import { ThinkTagSplitter } from './thinkTags';
 
@@ -45,13 +46,17 @@ export class OllamaProvider implements LLMProvider {
   baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly defaultCtx: number;
+  /** Ollama's cloud (ollama.com) rather than a server on this machine or the private network. */
+  private readonly remote: boolean;
   private infoCache = new Map<string, ModelInfo>();
 
   constructor(cfg: ProviderConfig) {
     this.id = cfg.id;
     this.displayName = cfg.displayName ?? 'Ollama';
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
-    this.headers = cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {};
+    const key = resolveApiKey(cfg);
+    this.headers = key ? { authorization: `Bearer ${key}` } : {};
+    this.remote = isRemoteUrl(this.baseUrl);
     this.defaultCtx = cfg.contextWindow ?? 32768;
   }
 
@@ -97,6 +102,8 @@ export class OllamaProvider implements LLMProvider {
         const caps = show?.capabilities ?? [];
         const ctxKey = Object.keys(show?.model_info ?? {}).find((k) => k.endsWith('.context_length'));
         const ctx = ctxKey ? Number(show!.model_info![ctxKey]) : this.defaultCtx;
+        // `*-cloud` tags on a local Ollama are proxied to ollama.com: they run remotely and take no local memory.
+        const remote = this.remote || /[:-]cloud$/i.test(m.name);
         const info: ModelInfo = {
           id: `${this.id}/${m.name}`,
           providerId: this.id,
@@ -110,8 +117,9 @@ export class OllamaProvider implements LLMProvider {
           // Older Ollama versions list no capabilities at all: unknown, not "cannot think".
           supportsThinking: caps.length ? caps.includes('thinking') : undefined,
           supportsFim: caps.includes('insert') || /coder|code|starcoder|deepseek/i.test(m.name),
-          sizeBytes: typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
+          sizeBytes: !remote && typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
           parameterSize: show?.details?.parameter_size ?? m.details?.parameter_size,
+          remote: remote || undefined,
         };
         this.infoCache.set(key, info);
         return info;

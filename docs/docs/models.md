@@ -6,14 +6,15 @@ permalink: /docs/models/
 
 <p><img src="{{ '/assets/screenshots/model-picker.png' | relative_url }}" alt="Model picker grouped by provider (Ollama), each model with its context window, tool support and vision badge" width="370"></p>
 
-LocalPilot talks to model servers that run on your machine or your network. This page covers which servers it supports, how it finds them, how to install and remove models, and how it picks a model for each task.
+LocalPilot talks to model servers that run on your machine or your network, and to cloud model APIs you add. This page covers which servers it supports, how it finds them, how to install and remove models, and how it picks a model for each task.
 
 ## Provider types
 
 | `type` | Protocol | Use for |
 |---|---|---|
-| `ollama` | Ollama native API (`/api/chat`, `/api/generate`, `/api/tags`, `/api/show`) | Ollama. Full support for tools, thinking, FIM `suffix`, vision and `num_ctx`. |
-| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, colibri, OpenRouter, OpenAI, Azure OpenAI… |
+| `ollama` | Ollama native API (`/api/chat`, `/api/generate`, `/api/tags`, `/api/show`) | Ollama, local or [Ollama Cloud](https://ollama.com) (`https://ollama.com`). Full support for tools, thinking, FIM `suffix`, vision and `num_ctx`. |
+| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, LiteLLM, colibri. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI… |
+| `anthropic` | Anthropic Messages API (`/v1/messages`, `/v1/models`) | Claude models. Tools, images and streaming. |
 
 You refer to a model as **`<providerId>/<modelId>`**, for example `ollama/qwen2.5-coder:14b` or `lmstudio/qwen2.5-coder-14b-instruct`.
 
@@ -290,8 +291,8 @@ Containers appear as providers named `docker-<container>`, for example *vLLM (Do
 
 The quickest way is **Settings → Providers** (gear icon in the chat toolbar):
 
-1. Pick a preset or *Custom endpoint*.
-2. Enter the URL and, if needed, an API key.
+1. Pick a preset: *Local servers* or *Cloud APIs*, or *Custom endpoint*.
+2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). Replace it with the key itself if you prefer; that stores it in your settings file.
 3. Press **Test connection** to confirm the server answers and see which models it exposes.
 
 ![Provider editor with a successful connection test]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
@@ -310,7 +311,19 @@ The same configuration lives in `localpilot.providers` if you prefer `settings.j
 }
 ```
 
-A provider on another machine or a cloud endpoint receives your prompts and code. Keep providers on `localhost` if your code must stay on this machine.
+Cloud providers look like this:
+
+```jsonc
+{ "id": "openai", "type": "openai", "baseUrl": "https://api.openai.com/v1", "apiKey": "${env:OPENAI_API_KEY}" },
+{ "id": "anthropic", "type": "anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKey": "${env:ANTHROPIC_API_KEY}" },
+{ "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${env:GEMINI_API_KEY}" }
+```
+
+`${env:NAME}` is read from VS Code's environment. Launch VS Code from a shell that exports the variable, or set it in your shell profile. Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`.
+
+When a cloud model rejects a parameter (OpenAI reasoning models do not take `temperature` or `max_tokens`, and some APIs do not take `reasoning_effort`), LocalPilot drops or renames it, asks again and remembers this for that model. Speech, image, embedding and moderation models in cloud listings are hidden.
+
+A provider on another machine or a cloud endpoint receives your prompts and code. Cloud providers are marked **cloud** in Settings. Automatic model picks (Auto, subagents, completions, images) prefer local models and use a cloud model only when nothing local is available. A cloud model you pick yourself, or set as `localpilot.defaultModel`, is always used. Keep providers on `localhost` if your code must stay on this machine.
 
 ## Unsloth models
 

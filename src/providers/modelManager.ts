@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS, forgetModel, getConfig } from '../config';
 import { ProviderConfig } from '../types';
 import { CatalogPick, InstallTarget, installId, starterPlan } from './catalog';
+import { isRemoteUrl, resolveApiKey } from './cloud';
 import { withTimeout } from './http';
 import { createProvider, ProviderRegistry } from './registry';
 import { getSystemProfile, SystemProfile } from './system';
@@ -282,7 +283,7 @@ export class ModelManager implements vscode.Disposable {
   async detectRuntimes(): Promise<RuntimeStatus[]> {
     const cfg = getConfig();
     const providers = [...cfg.providers];
-    const ollamaCfg = providers.find((p) => p.type === 'ollama' && p.enabled !== false) ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
+    const ollamaCfg = providers.find((p) => p.type === 'ollama' && p.enabled !== false && !isRemoteUrl(p.baseUrl)) ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
     const dockerCfg = providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker');
     const lmsCfg = providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio');
     const health = (c?: ProviderConfig) => (c ? createProvider(c).healthCheck().catch(() => false) : Promise.resolve(false));
@@ -398,8 +399,9 @@ export class ModelManager implements vscode.Disposable {
 
   private ollamaBase(providerId?: string): { id: string; baseUrl: string; headers: Record<string, string> } {
     const cfg = getConfig();
-    const c = (providerId ? cfg.providers.find((p) => p.id === providerId && p.type === 'ollama') : undefined) ?? cfg.providers.find((p) => p.type === 'ollama') ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
-    return { id: c.id, baseUrl: c.baseUrl.replace(/\/+$/, ''), headers: c.apiKey ? { authorization: `Bearer ${c.apiKey}` } : {} };
+    const c = (providerId ? cfg.providers.find((p) => p.id === providerId && p.type === 'ollama') : undefined) ?? cfg.providers.find((p) => p.type === 'ollama' && !isRemoteUrl(p.baseUrl)) ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
+    const key = resolveApiKey(c);
+    return { id: c.id, baseUrl: c.baseUrl.replace(/\/+$/, ''), headers: key ? { authorization: `Bearer ${key}` } : {} };
   }
 
   /** Downloads a model onto a runtime. Resolves with the finished job (status tells success). */
@@ -511,7 +513,7 @@ export class ModelManager implements vscode.Disposable {
   /** Provider id a runtime's models are listed under (for the `${provider}/${model}` ids used in settings). */
   private providerIdFor(target: InstallTarget): string | undefined {
     const providers = getConfig().providers;
-    return target === 'ollama' ? providers.find((p) => p.type === 'ollama')?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
+    return target === 'ollama' ? providers.find((p) => p.type === 'ollama' && !isRemoteUrl(p.baseUrl))?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
   }
 
   // ------------------------------------------------------------------ Ollama lifecycle

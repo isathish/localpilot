@@ -2,6 +2,7 @@ import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { DEFAULT_PROVIDERS } from '../config';
 import { ProviderConfig } from '../types';
+import { isRemoteUrl, resolveApiKey } from './cloud';
 import { COLIBRI_DEFAULT_PORT } from './colibri';
 import { createProvider } from './registry';
 
@@ -42,7 +43,12 @@ export async function probeProvider(cfg: ProviderConfig, configured: boolean, so
   const timer = setTimeout(() => ctl.abort(), 4000);
   try {
     const provider = createProvider(cfg);
-    const ok = await provider.healthCheck(ctl.signal);
+    const remote = isRemoteUrl(cfg.baseUrl);
+    if (remote && !resolveApiKey(cfg)) {
+      return { ...base, error: /\$\{env:/.test(cfg.apiKey ?? '') ? `${cfg.apiKey} is not set in VS Code's environment` : 'API key required' };
+    }
+    // A cloud API is always up; skipping the bare health check surfaces its real error (invalid key, no access).
+    const ok = remote || (await provider.healthCheck(ctl.signal));
     if (!ok) {
       return { ...base, latencyMs: Date.now() - started, error: 'No response — is the server running?' };
     }

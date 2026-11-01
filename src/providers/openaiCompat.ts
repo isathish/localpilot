@@ -7,8 +7,9 @@ import {
   ProviderConfig,
   StreamEvent,
 } from '../types';
+import { isAzureUrl, isNonChatModel, isRemoteUrl, knownContextWindow, knownVision, resolveApiKey } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
-import { getJson, newId, postJson, streamSse, withTimeout } from './http';
+import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { ThinkTagSplitter } from './thinkTags';
 
 /** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
@@ -22,8 +23,15 @@ interface OpenAIModel {
   context_length?: number;
   max_context_length?: number;
   loaded_context_length?: number;
+  /** Groq */
+  context_window?: number;
   type?: string;
-  capabilities?: string[];
+  /** A list (LM Studio, vLLM) or Mistral's flags object (`function_calling`, `vision`, `completion_chat`…). */
+  capabilities?: string[] | Record<string, unknown>;
+  /** OpenRouter */
+  supported_parameters?: string[];
+  architecture?: { input_modalities?: string[] };
+  top_provider?: { context_length?: number };
   /** colibri: `["text"]` or `["text", "image"]`. */
   input_modalities?: string[];
 }
@@ -51,7 +59,11 @@ export class OpenAICompatProvider implements LLMProvider {
   readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly explicitModels?: string[];
-  private readonly defaultCtx: number;
+  private readonly configuredCtx?: number;
+  /** A cloud API rather than a server on this machine or the private network. */
+  readonly remote: boolean;
+  /** Request parameters a model rejected once (see PARAM_FIXES), re-applied to its later requests. */
+  private readonly learnedFixes = new Map<string, Set<string>>();
   private readonly configuredName: string;
   /** Engine the server identified itself as on the last model listing. */
   engine?: 'colibri';
@@ -65,9 +77,11 @@ export class OpenAICompatProvider implements LLMProvider {
     this.id = cfg.id;
     this.configuredName = cfg.displayName ?? cfg.id;
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
-    this.headers = cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {};
+    const key = resolveApiKey(cfg);
+    this.headers = !key ? {} : isAzureUrl(this.baseUrl) ? { 'api-key': key } : { authorization: `Bearer ${key}` };
     this.explicitModels = cfg.models;
-    this.defaultCtx = cfg.contextWindow ?? 32768;
+    this.configuredCtx = cfg.contextWindow;
+    this.remote = isRemoteUrl(this.baseUrl);
   }
 
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
@@ -103,10 +117,14 @@ export class OpenAICompatProvider implements LLMProvider {
     const slots = colibri ? colibriSlots(await colibriHealth(this.baseUrl, this.headers, signal)) : undefined;
     return models
       .filter((m) => m.type !== 'embeddings' && !/embed/i.test(m.id))
+      // Cloud listings mix in speech, image and moderation models; Mistral flags the ones that cannot chat.
+      .filter((m) => !this.remote || (!isNonChatModel(m.id) && capabilityList(m)?.includes('completion_chat') !== false))
       // colibri decision (System One) and picture models cannot chat.
-      .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || m.capabilities.includes('chat'))
+      .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || !!capabilityList(m)?.includes('chat'))
       .map((m) => {
-        const ctx = m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? this.defaultCtx;
+        const ctx =
+          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? this.configuredCtx ?? (this.remote ? knownContextWindow(m.id) : undefined) ?? 32768;
+        const caps = capabilityList(m);
         if (m.owned_by === COLIBRI_OWNER) {
           const spec = colibriSpec(m.id);
           return {
@@ -137,9 +155,11 @@ export class OpenAICompatProvider implements LLMProvider {
           contextWindow: ctx,
           maxOutputTokens: 8192,
           // Most local OpenAI-compatible servers advertise tool support; we fall back to prompt-based tools otherwise.
-          supportsTools: m.capabilities ? m.capabilities.includes('tool_use') || m.capabilities.includes('tools') : true,
-          supportsVision: m.capabilities?.includes('vision') ?? /vl|vision|llava|pixtral|gemma-3|qwen.*vl/i.test(m.id),
-          supportsFim: /coder|code|starcoder|codestral|deepseek/i.test(m.id),
+          supportsTools: caps ? caps.includes('tool_use') || caps.includes('tools') || caps.includes('function_calling') : m.supported_parameters ? m.supported_parameters.includes('tools') : true,
+          supportsVision: caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? knownVision(m.id) : /vl|vision|llava|pixtral|gemma-3|qwen.*vl/i.test(m.id))),
+          // Cloud APIs have no `suffix`-style /completions (Mistral and DeepSeek use separate FIM endpoints).
+          supportsFim: !this.remote && /coder|code|starcoder|codestral|deepseek/i.test(m.id),
+          remote: this.remote || undefined,
         } satisfies ModelInfo;
       });
   }
@@ -174,7 +194,7 @@ export class OpenAICompatProvider implements LLMProvider {
     let finish: string | undefined;
     const split = new ThinkTagSplitter();
 
-    for await (const chunk of streamSse<OpenAIChunk>(`${this.baseUrl}/chat/completions`, body, this.headers, opts.signal)) {
+    for await (const chunk of this.stream(opts.model, body, opts.signal)) {
       if (chunk.error) {
         throw new Error(typeof chunk.error === 'string' ? chunk.error : chunk.error.message ?? 'provider error');
       }
@@ -216,6 +236,38 @@ export class OpenAICompatProvider implements LLMProvider {
     yield { type: 'done', finishReason: finish };
   }
 
+  /**
+   * Streams a chat completion. Cloud APIs reject parameters their models do not take (OpenAI reasoning models:
+   * `temperature`, `max_tokens`; many: `reasoning_effort`, `stream_options`…): such a 4xx is answered by dropping or
+   * renaming the parameter and asking again, before anything was streamed, and remembered for the model.
+   */
+  private async *stream(model: string, body: Record<string, unknown>, signal?: AbortSignal): AsyncGenerator<OpenAIChunk> {
+    const learned = this.learnedFixes.get(model) ?? new Set<string>();
+    for (const name of learned) {
+      PARAM_FIXES.find((f) => f.name === name)?.apply(body);
+    }
+    for (let attempt = 0; ; attempt++) {
+      const it = streamSse<OpenAIChunk>(`${this.baseUrl}/chat/completions`, body, this.headers, signal)[Symbol.asyncIterator]();
+      let first: IteratorResult<OpenAIChunk>;
+      try {
+        first = await it.next();
+      } catch (e) {
+        const fix = attempt < PARAM_FIXES.length && e instanceof HttpError && e.status >= 400 && e.status < 500 ? PARAM_FIXES.find((f) => f.applies(body, e.body)) : undefined;
+        if (!fix) {
+          throw e;
+        }
+        fix.apply(body);
+        learned.add(fix.name);
+        this.learnedFixes.set(model, learned);
+        continue;
+      }
+      for (let r = first; !r.done; r = await it.next()) {
+        yield r.value;
+      }
+      return;
+    }
+  }
+
   async complete(opts: CompletionRequestOptions): Promise<string> {
     const body: Record<string, unknown> = {
       model: opts.model,
@@ -239,6 +291,45 @@ export class OpenAICompatProvider implements LLMProvider {
     return res.data.map((d) => d.embedding);
   }
 }
+
+/** Capabilities as a list, whether the server sends one (LM Studio, vLLM) or Mistral's `{ function_calling: true, … }`. */
+function capabilityList(m: OpenAIModel): string[] | undefined {
+  const c = m.capabilities;
+  return !c ? undefined : Array.isArray(c) ? c : Object.keys(c).filter((k) => c[k] === true);
+}
+
+interface ParamFix {
+  name: string;
+  /** The request carries the parameter and the error body names it. */
+  applies(body: Record<string, unknown>, error: string): boolean;
+  apply(body: Record<string, unknown>): void;
+}
+
+const dropParam = (key: string, mention: RegExp): ParamFix => ({
+  name: key,
+  applies: (body, error) => body[key] !== undefined && mention.test(error),
+  apply: (body) => delete body[key],
+});
+
+/** Parameters cloud models are known to reject, in the order they are tried. */
+const PARAM_FIXES: ParamFix[] = [
+  {
+    name: 'max_completion_tokens',
+    applies: (body, error) => body.max_tokens !== undefined && /max_tokens/.test(error),
+    apply: (body) => {
+      if (body.max_tokens !== undefined) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+      }
+    },
+  },
+  dropParam('temperature', /temperature/i),
+  dropParam('reasoning_effort', /reasoning/i),
+  dropParam('stream_options', /stream_options|include_usage/i),
+  dropParam('response_format', /response_format|json_schema/i),
+  dropParam('tool_choice', /tool_choice/i),
+  dropParam('stop', /\bstop\b/i),
+];
 
 function toOpenAIMessage(m: ChatMessage): Record<string, unknown> {
   if (m.role === 'tool') {

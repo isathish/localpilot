@@ -5,6 +5,7 @@ import { LLMProvider, ModelInfo, ProviderConfig } from '../types';
 import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
+import { AnthropicProvider } from './anthropic';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
@@ -517,7 +518,7 @@ export class ProviderRegistry implements vscode.Disposable {
 }
 
 export function createProvider(cfg: ProviderConfig): LLMProvider {
-  return cfg.type === 'ollama' ? new OllamaProvider(cfg) : new OpenAICompatProvider(cfg);
+  return cfg.type === 'ollama' ? new OllamaProvider(cfg) : cfg.type === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatProvider(cfg);
 }
 
 /**
@@ -543,11 +544,17 @@ function clampBonus(b: number): number {
   return Number.isFinite(b) ? Math.max(-MAX_USAGE_BONUS, Math.min(MAX_USAGE_BONUS, b)) : 0;
 }
 
+/** Enough that any usable local model outranks a cloud one, small enough that a cloud model still beats "nothing" (-50). */
+const REMOTE_PENALTY = 30;
+
 function baseScore(m: ModelInfo, n: string, role: ModelRole, profile?: SystemProfile): number {
   const cat = lookupCatalog(m);
   const gb = modelFootprintGb(m);
   const fit = profile && gb !== undefined ? (gb <= profile.modelBudgetGb ? 1 : gb <= profile.modelBudgetGb * 1.25 ? 0 : -1) : 0.5;
   let s = fit * 8;
+  // Automatic picks keep code on this machine: a cloud model is chosen only when no comparable local one is available
+  // (selecting it explicitly, as the default or in the picker, always works).
+  s -= m.remote ? REMOTE_PENALTY : 0;
   // colibri streaming experts from disk: minutes of prefill and ~1 tok/s decode. Worth it for one careful answer
   // (Plan mode), too slow for agent loops, chatty read-only subagents and ghost text.
   if (streamsFromDisk(m, profile?.modelBudgetGb)) {
@@ -584,7 +591,7 @@ function baseScore(m: ModelInfo, n: string, role: ModelRole, profile?: SystemPro
     s -= /base$|-base\b|:.*base/.test(n) ? 8 : 0;
     s -= /vl|llava|vision/.test(n) ? 4 : 0;
     // Bigger is better for agent quality as long as it fits.
-    const b = cat?.variant.paramsB ?? (gb !== undefined ? gb / 0.72 : 7);
+    const b = m.remote ? 32 : cat?.variant.paramsB ?? (gb !== undefined ? gb / 0.72 : 7);
     s += Math.min(b, 32) / 8;
     if (role === 'reasoning') {
       s += /r1|qwen3|gpt-oss|gemma4|gemma-4|nemotron-3\.5|think|reason/.test(n) ? 6 : 0;

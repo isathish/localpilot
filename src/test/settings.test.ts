@@ -207,6 +207,7 @@ suite('LocalPilot settings & setup', () => {
     const p = sanitizeProvider({ id: ' My Server! ', type: 'openai', baseUrl: 'localhost:1234/v1/', apiKey: ' ', displayName: ' LM ', models: [' a ', ''], contextWindow: 8192.4, enabled: false, extra: 1 } as never);
     assert.deepStrictEqual(p, { id: 'my-server', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM', models: ['a'], contextWindow: 8192, enabled: false });
     assert.strictEqual(sanitizeProvider({ id: '', type: 'weird' as never, baseUrl: '' }).type, 'openai');
+    assert.strictEqual(sanitizeProvider({ id: 'anthropic', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: '${env:ANTHROPIC_API_KEY}' }).type, 'anthropic');
   });
 
   test('sanitizeMcpServers validates names, commands and env', () => {

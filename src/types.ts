@@ -89,6 +89,8 @@ export interface ModelInfo {
   diskGb?: number;
   /** Requests the server decodes at once for this model (colibri KV slots); undefined = LocalPilot's default assumption. */
   parallelSlots?: number;
+  /** Served by a cloud API (not this machine or the private network): automatic routing prefers local models. */
+  remote?: boolean;
 }
 
 export interface ChatRequestOptions {
@@ -137,7 +139,7 @@ export interface WarmOptions {
 
 export interface LLMProvider {
   readonly id: string;
-  readonly type: 'ollama' | 'openai';
+  readonly type: ProviderConfig['type'];
   readonly displayName: string;
   readonly baseUrl: string;
   listModels(signal?: AbortSignal): Promise<ModelInfo[]>;
@@ -154,8 +156,10 @@ export interface LLMProvider {
 
 export interface ProviderConfig {
   id: string;
-  type: 'ollama' | 'openai';
+  /** `ollama` native API, `openai` any OpenAI-compatible `/v1` API (local servers and most clouds), `anthropic` Claude's Messages API. */
+  type: 'ollama' | 'openai' | 'anthropic';
   baseUrl: string;
+  /** Literal key or an environment reference such as `${env:OPENAI_API_KEY}`. */
   apiKey?: string;
   displayName?: string;
   /** Optional explicit model list (for servers whose /models is empty, e.g. some llama.cpp builds). */

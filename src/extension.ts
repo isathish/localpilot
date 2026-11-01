@@ -178,7 +178,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Background services -------------------------------------------------------------------
   // Keeps the local model server and (when enabled) Redis running while VS Code is open; see ServiceSupervisor.
   const isLocalUrl = (u: string) => /^\w+:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(u);
-  const ollamaCfg = () => getConfig().providers.find((p) => p.type === 'ollama');
+  const ollamaCfg = () => getConfig().providers.find((p) => p.type === 'ollama' && isLocalUrl(p.baseUrl));
   const supervisor = new ServiceSupervisor(
     [
       {

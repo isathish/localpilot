@@ -11,7 +11,7 @@ LocalPilot has two parts with different privacy behaviour: the **extension** you
 
 ### Where your code and prompts go
 
-Only to the model servers listed in `localpilot.providers`. The defaults are all on `localhost`:
+Only to the model servers listed in `localpilot.providers`. Cloud APIs (OpenAI, Anthropic, Gemini…) are used only if you add them, and automatic model picks prefer local models even then. The defaults are all on `localhost`:
 
 | Server | Default address |
 |---|---|

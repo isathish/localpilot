@@ -7,6 +7,7 @@ import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
 import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
+import { isRemoteUrl } from '../providers/cloud';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
@@ -704,7 +705,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private runtimeProvider(target: InstallTarget): string | undefined {
     const providers = getConfig().providers;
-    return target === 'ollama' ? providers.find((p) => p.type === 'ollama')?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
+    return target === 'ollama' ? providers.find((p) => p.type === 'ollama' && !isRemoteUrl(p.baseUrl))?.id : target === 'docker' ? providers.find((p) => /:12434\//.test(p.baseUrl) || p.id === 'docker')?.id : providers.find((p) => /:1234\//.test(p.baseUrl) || p.id === 'lmstudio')?.id;
   }
 
   /** Builds the model-manager view: machine profile, runtimes, installed models with roles, catalog and jobs. */
@@ -872,7 +873,7 @@ function galleryError(e: unknown, source: GallerySource): string {
 /** Keep only known fields and normalise URLs/ids so a malformed form can't produce a broken provider. */
 export function sanitizeProvider(p: ProviderConfig): ProviderConfig {
   const id = String(p.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'provider';
-  const type: ProviderConfig['type'] = p.type === 'ollama' ? 'ollama' : 'openai';
+  const type: ProviderConfig['type'] = p.type === 'ollama' || p.type === 'anthropic' ? p.type : 'openai';
   let baseUrl = String(p.baseUrl || '').trim().replace(/\/+$/, '');
   if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
     baseUrl = `http://${baseUrl}`;

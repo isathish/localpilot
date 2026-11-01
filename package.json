@@ -1160,7 +1160,7 @@
       "properties": {
         "localpilot.providers": {
           "type": "array",
-          "markdownDescription": "Local/remote model servers. `type` is `ollama` (native API) or `openai` (any OpenAI-compatible server: LM Studio, llama.cpp, vLLM, SGLang, Unsloth/llama-server, LocalAI, Jan, OpenRouter…). Models are referenced as `<id>/<model>`.",
+          "markdownDescription": "Local and cloud model servers. `type` is `ollama` (native API, local or Ollama Cloud), `openai` (any OpenAI-compatible API: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenAI, Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Azure OpenAI…) or `anthropic` (Claude). Models are referenced as `<id>/<model>`. Automatic model picks prefer local models; cloud models are used when you choose them or nothing local fits.",
           "items": {
             "type": "object",
             "required": [
@@ -1177,7 +1177,8 @@
                 "type": "string",
                 "enum": [
                   "ollama",
-                  "openai"
+                  "openai",
+                  "anthropic"
                 ]
               },
               "baseUrl": {
@@ -1185,7 +1186,8 @@
                 "description": "e.g. http://localhost:11434 or http://localhost:1234/v1"
               },
               "apiKey": {
-                "type": "string"
+                "type": "string",
+                "markdownDescription": "API key, or a reference to an environment variable such as `${env:OPENAI_API_KEY}` so the key stays out of this file."
               },
               "displayName": {
                 "type": "string"
