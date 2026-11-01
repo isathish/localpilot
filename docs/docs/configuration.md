@@ -133,6 +133,7 @@ Values: `always`, `ask`, `never`.
 | `localpilot.queue.concurrency` | `1` | Tasks from the task queue (**LocalPilot: Queue Agent Task…**) that run at once. `1` runs them one after another; higher values run them side by side, each in its own worktree |
 | `localpilot.worktrees.mode` | `always` | Isolate agents in git worktrees: `always`, `parallel` (only agents started together) or `off`. See [Parallel agents → Isolated worktrees]({{ '/docs/parallel-agents/#isolated-worktrees' | relative_url }}) |
 | `localpilot.worktrees.location` | `""` (= `~/.localpilot/worktrees`) | Where the worktrees live, one sub-folder per repository |
+| `localpilot.clarify.questions` | `smart` | When the agent asks before building: `smart` (new features and open-ended requests), `interview` (every change, then waits for your OK on the plan) or `minimal`. See [Questions before it starts]({{ '/docs/agent-modes/#questions-before-it-starts' | relative_url }}) |
 | `localpilot.autoClarify` | `true` | Detect vague requests and give the agent a workspace snapshot (editor, open files, errors, git), so it states its interpretation before acting |
 
 ## Telemetry & storage

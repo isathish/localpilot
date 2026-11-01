@@ -59,7 +59,7 @@ The card has four parts:
 
 To undo an automatic change, use **Undo** in the notification that announced it, or set the role back in **Settings → Models → Routing**. To stop automatic changes, set `localpilot.models.autoTune` to `suggest` or `off`. For how the scoring and guardrails work, see [Learning from your usage]({{ '/docs/models/#learning-from-your-usage' | relative_url }}).
 
-![Model tuning card: for each role, installed models ranked by measured run success and speed, with the learned bonus or penalty]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
+![Model tuning card: suggestions (qwen2.5-coder:7b for read-only subagents, with the reason and confidence), and for each role the installed models ranked by finished runs and speed, with the learned bonus or penalty]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
 
 ## Logs
 

@@ -264,7 +264,7 @@ In `auto` mode, LocalPilot may update `localpilot.defaultModel`, `localpilot.rou
 - To stop automatic changes, set `localpilot.models.autoTune` to `suggest` or `off`.
 
 
-![Dashboard → Model tuning: a suggestion to use gemma4:12b for read-only subagents, and for each role the installed models ranked by the share of runs that finished and their speed, with the learned bonus or penalty]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
+![Dashboard → Model tuning: a suggestion to use qwen2.5-coder:7b for read-only subagents, and for each role the installed models ranked by the share of runs that finished and their speed, with the learned bonus or penalty]({{ '/assets/screenshots/dashboard-tuning.png' | relative_url }})
 
 ## Docker-based models
 

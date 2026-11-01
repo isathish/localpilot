@@ -9,8 +9,8 @@
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; };
   /** Placeholder shapes while a list or the dashboard loads: a status line for screen readers plus shimmering rows. */
   const skeleton = (text, rows = 3, kind = 'rows') => el('div', `skel ${kind}`, `<div class="loading short" role="status"><span class="spinner"></span>${text}</div>${kind === 'kpis'
-    ? `<div class="kpis">${'<div class="kpi skel-card"><i class="sk sk-l"></i><i class="sk sk-v"></i><i class="sk sk-s"></i></div>'.repeat(rows)}</div>`
-    : '<div class="skel-row"><i class="sk sk-ic"></i><span><i class="sk sk-t"></i><i class="sk sk-s"></i></span></div>'.repeat(rows)}`);
+    ? `<div class="kpis">${'<div class="kpi skel-card"><i class="skl skl-l"></i><i class="skl skl-v"></i><i class="skl skl-s"></i></div>'.repeat(rows)}</div>`
+    : '<div class="skel-row"><i class="skl skl-ic"></i><span><i class="skl skl-t"></i><i class="skl skl-s"></i></span></div>'.repeat(rows)}`);
   const I = {
     server: '<svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2"/><rect x="2" y="9" width="12" height="4.5" rx="1.2"/><path d="M4.5 4.8h.01M4.5 11.3h.01"/></svg>',
     cpu: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="3" height="3"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2"/></svg>',
@@ -404,7 +404,7 @@
   function renderShell() {
     const d = state.data;
     const top = el('header', 'top');
-    top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings · v${esc(d.version)}</span></div></div>
+    top.innerHTML = `<div class="brand"><img src="${LOGO}" alt=""><div><b>LocalPilot</b><span>Settings</span></div></div>
       <div class="find" role="search"><button class="find-open" title="Search settings (⌘F)" aria-label="Search settings">${I.search}</button><label class="find-box">${I.search}<input type="search" placeholder="Search settings" aria-label="Search settings" aria-controls="find-list" aria-autocomplete="list" autocomplete="off" spellcheck="false"><kbd>⌘F</kbd></label><div class="find-list hidden" id="find-list" role="listbox" aria-label="Matching settings"></div></div>
       <span class="spacer"></span>
       <span class="saved" role="status" aria-live="polite">${I.check}Saved</span>
@@ -531,7 +531,6 @@
   /** Cheap per-render sync of the persistent shell: version, scope buttons, active nav entry. */
   function syncShell() {
     const d = state.data;
-    const v = app.querySelector('.top .brand span'); if (v) { v.textContent = `Settings · v${d.version}`; }
     app.querySelectorAll('.top .scope button').forEach((b) => {
       b.classList.toggle('on', state.scope === b.dataset.s);
       if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? '' : 'Open a folder to edit workspace settings'; }
@@ -566,7 +565,7 @@
   function providersList() { const v = val('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }
   function saveProviders(list) { set('providers', list); }
   function secProviders(sec) {
-    head(sec, 'Providers', 'Model servers LocalPilot can talk to: local servers keep everything on your machine; cloud providers receive the prompts and code you send to their models. Automatic picks prefer local models.');
+    head(sec, 'Providers', 'Local servers keep your code on this machine; cloud providers receive what you send them. Automatic picks prefer local models.');
     const list = providersList();
     const bar = el('div', 'btnrow');
     bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
@@ -774,7 +773,7 @@
     }
   }
   function secModels(sec) {
-    head(sec, 'Models', 'Everything about local models in one place: what this machine can run, what is installed, which model answers which task, and a catalog to install more — smallest first.');
+    head(sec, 'Models', 'What this machine can run, what is installed, and which model handles each task.');
     if (!state.models) {
       if (!state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
       sec.appendChild(el('div', 'loading', '<span class="spinner"></span>Checking this machine and the model servers…'));
@@ -870,7 +869,8 @@
       if (m.id === val('routing.vision')) { tags.innerHTML += '<span class="badge role">images</span>'; }
       if (m.id === val('routing.reasoning')) { tags.innerHTML += '<span class="badge role">plan</span>'; }
       for (const r of m.autoRoles) { if (r !== 'agent' && !tags.innerHTML.includes(`>${ROLE_LABEL[r]}<`)) { tags.innerHTML += `<span class="badge" title="Routing picks this model for ${ROLE_LABEL[r]} unless you choose one">auto · ${ROLE_LABEL[r]}</span>`; } }
-      tags.innerHTML += fitBadge(m.fit);
+      // Installed models normally fit; only say so when they don't (tight / too big).
+      if (m.fit !== 'ok') { tags.innerHTML += fitBadge(m.fit); }
       right.appendChild(tags);
       const acts = el('div', 'acts');
       if (!m.disabled && m.id !== def) {
@@ -1072,7 +1072,7 @@
     return row;
   }
   function secGallery(sec) {
-    head(sec, 'Model gallery', `Browse and install any model from the registries your runtimes download from — the <a data-url="https://ollama.com/library">Ollama library</a>, Docker Hub's <a data-url="https://hub.docker.com/u/ai">ai/</a> models for Docker Model Runner and <a data-url="https://huggingface.co/models?library=gguf">Hugging Face GGUF</a> repositories for LM Studio and Ollama — not just the curated catalog. Sizes are compared against this machine; installed models show up under <a data-sec="models">Models</a>.`);
+    head(sec, 'Model gallery', `Install models from the <a data-url="https://ollama.com/library">Ollama library</a>, <a data-url="https://hub.docker.com/u/ai">Docker Hub</a> and <a data-url="https://huggingface.co/models?library=gguf">Hugging Face</a>; sizes are checked against this machine.`);
     if (!state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
     const sources = gallerySources();
     if (!sources.includes(state.gallery.source)) { state.gallery.source = sources[0]; }
@@ -1290,7 +1290,7 @@
 
   // ------------------------------------------------------------------ agent & approvals
   function secAgent(sec) {
-    head(sec, 'Agent & approvals', 'Control what the agent may do on its own. “Ask” shows an inline approval card in the chat; “Allow” proceeds silently; “Block” refuses.');
+    head(sec, 'Agent & approvals', 'What the agent may do without asking: Ask shows an approval card in the chat, Allow proceeds, Block refuses.');
     const APPROVAL_KEYS = ['approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network'];
     const presetsEl = () => {
       const cur = { terminal: val('approvals.terminal'), write: val('approvals.write'), delete: val('approvals.delete'), network: val('approvals.network') };
@@ -1425,7 +1425,7 @@
   }
   function secSkills(sec) {
     const d = state.data;
-    head(sec, 'Skills & subagents', 'Skills are step-by-step playbooks (<code>SKILL.md</code>) the agent loads when a request matches — project conventions, release procedures, document formats, cloud workflows. Install them from the registry below, write your own, and decide per chat how eagerly they are used.');
+    head(sec, 'Skills & subagents', 'Playbooks (<code>SKILL.md</code>) the agent loads when a request matches.');
     const mode = val('skills.autoInstall') || 'auto';
 
     // ---- how skills are used
@@ -1775,7 +1775,7 @@
   function requestLogs() { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: state.dash.follow }); }
   function stopDashboardTimer() { if (state.dash.timer) { clearInterval(state.dash.timer); state.dash.timer = null; } if (state.dash.follow) { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: false }); } }
   function secDashboard(sec) {
-    head(sec, 'Dashboard', 'What LocalPilot did on this machine: model throughput and latency, tool usage, agent runs, inline completions, provider health and the live log. Everything is recorded locally in <code>~/.localpilot/telemetry</code> — nothing is sent anywhere.');
+    head(sec, 'Dashboard', 'Usage recorded on this machine in <code>~/.localpilot/telemetry</code>; nothing is sent anywhere.');
     const bar = el('div', 'dash-bar');
     const seg = el('div', 'seg');
     for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { requestDashboard(d); render(); }; seg.appendChild(b); }

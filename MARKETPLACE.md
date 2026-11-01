@@ -64,8 +64,8 @@ Every read, search, edit and command shows up as it happens. Before anything ris
 
 <table align="center">
   <tr>
-    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/approval.png" alt="The agent waits for approval before running git log --oneline -5, with Deny, Allow for session and Allow once" width="430"></td>
-    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/pause-steer.png" alt="A paused agent with a queued steering message and a Resume button" width="430"></td>
+    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/approval.png" alt="The agent waits for approval before running python -m pytest -q, with Deny, Allow for session and Allow once" width="430"></td>
+    <td align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/pause-steer.png" alt="A paused agent: two subagents working and two queued, a queued steering message, the Tasks checklist and the Resume button" width="430"></td>
   </tr>
   <tr>
     <td align="center"><sub>Approval gate</sub></td>
@@ -115,6 +115,9 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 | Feature | What you get |
 |---|---|
 | **Agent · Plan · Ask · Debug · Multitask** | Autonomous edit-and-run loop with approval gates, a live task checklist, diagnostics checks and retries. |
+| **Questions before it starts** | For a new feature, the agent reads the code and asks up to four explained questions in one card, with a recommended answer. Then it plans and builds. |
+| **Auto mode & task queue** | A small local reviewer approves safe actions so long runs don't stop to ask. Risky ones always ask. Queue tasks to run one after another or side by side. |
+| **Improve prompt** <kbd>⌘I</kbd> | Turns a terse draft into a precise request naming the real file or function, and fixes mistyped file and symbol names. |
 | **Parallel agents** | Independent tabs, one worktree each, Best-of-N across models, live Agents panel, per-agent pause and stop. |
 | **Change review & checkpoints** | Side-by-side diffs, accept or reject per file or session, restore any checkpoint. |
 | **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp, the OmniRoute and LiteLLM gateways, and model servers in Docker. |

@@ -63,11 +63,22 @@ const SHOTS = [
   { file: 'settings-memory.png', url: settings('section=memory'), size: [900, 648], clip: 'viewport' },
   { file: 'settings-mcp.png', url: settings('section=mcp'), size: [900, 648], clip: 'viewport' },
   { file: 'settings-dashboard.png', url: settings('section=dashboard'), size: [900, 648], clip: 'viewport', wait: 1500 },
-  // dashboard-tuning.png needs local usage history the harness does not mock: taken by hand.
+  { file: 'dashboard-tuning.png', url: settings('section=dashboard'), size: [1000, 3200], wait: 1500, clip: { selector: '.tblwrap:has(h3)', pad: 0, text: 'Model tuning' } },
   { file: 'setup-detect.png', url: settings('page=setup&local=1'), size: [900, 760], steps: [`document.querySelector('#back') && document.querySelector('#back').click()`, 300], clip: 'viewport' },
   { file: 'setup-model.png', url: settings('page=setup&local=1'), size: [900, 760], steps: [`document.querySelector('#back') && document.querySelector('#back').click()`, 200, `document.querySelector('#next').click()`, 300], clip: 'viewport' },
   { file: 'setup-approvals.png', url: settings('page=setup&local=1'), size: [900, 760], steps: [`document.querySelector('#back') && document.querySelector('#back').click()`, 200, `document.querySelector('#next').click()`, 200, `document.querySelector('#next').click()`, 300], clip: 'viewport' },
   { file: 'model-picker.png', url: harness('ui-preview.html', 'live=0'), size: [370, 796], steps: [`document.getElementById('modelBtn').click()`, 400], clip: 'viewport' },
+  { file: 'mode-picker.png', url: harness('ui-preview.html', 'live=0'), size: [370, 796], steps: [`document.getElementById('modeBtn').click()`, 400], clip: 'viewport' },
+  // Chat transcript: steps, the diff and test-output cards, and the run-command approval the agent is waiting on.
+  { file: 'chat-rendering.png', url: harness('ui-preview.html', 'live=0'), size: [471, 836], wait: 1200, clip: 'viewport' },
+  { file: 'approval.png', url: harness('ui-preview.html', 'live=0'), size: [471, 836], wait: 1200, steps: [`(() => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; })()`, 400], clip: 'viewport' },
+  // A live run fanned out to subagents, paused, with a steering message queued for its next step.
+  {
+    file: 'pause-steer.png', url: harness('ui-preview.html', ''), size: [471, 836], wait: 2600,
+    steps: [`document.getElementById('btnPause').click()`, 900, `(() => { const i = document.getElementById('input'); i.value = 'Also cover negative modifiers like 2d10 - 1'; i.dispatchEvent(new Event('input', { bubbles: true })); document.getElementById('btnSend').click(); })()`, 700],
+    clip: 'viewport',
+  },
+  { file: 'questions.png', url: harness('ui-preview.html', 'live=0&question=1'), size: [471, 836], wait: 1200, clip: 'viewport' },
 ];
 
 // ------------------------------------------------------------------ DevTools Protocol
@@ -127,7 +138,7 @@ const CLIP_JS = (c) => `(() => {
     const end = c.toHeadingText ? byText(c.toHeadingText) : null;
     h = end ? rectOf(end).y - y : (c.maxHeight || 600);
   } else {
-    const el = document.querySelector(c.selector);
+    const el = c.text ? [...document.querySelectorAll(c.selector)].find((e) => e.textContent.includes(c.text)) : document.querySelector(c.selector);
     if (!el) { return null; }
     const r = rectOf(el); x = r.x; y = r.y; w = r.w; h = r.h;
   }

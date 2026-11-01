@@ -1045,10 +1045,9 @@
     return d;
   }
   function renderEmpty() {
+    // No greeting or explainer: a short list of things to start with, then the recent chats.
     const wrap = el('div', 'empty');
-    const hour = new Date().getHours();
-    const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    wrap.innerHTML = `<div class="logo">${I.bot}</div><h2>${greet}. What are we building?</h2><p>Agent mode edits files and runs commands. Ask answers questions. Plan designs before coding.</p>`;
+    wrap.appendChild(el('div', 'recent-h', 'Start with'));
     const sug = el('div', 'suggestions');
     // Suggestions name the file you are on (sent by the host as the active editor changes); without one, project-wide ones.
     const file = state.activeFile ? base(state.activeFile) : '';
@@ -1063,7 +1062,7 @@
       [I.bug, 'Find and fix errors in the workspace', 'Run get_diagnostics for the workspace and fix every error.', 'agent'],
     ];
     for (const [icon, label, prompt, mode] of picks) {
-      const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span><span class="mode">${mode === 'ask' ? 'Ask' : 'Agent'}</span>`);
+      const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span><span class="mode" title="${mode === 'ask' ? 'Answers without changing files' : 'Edits files and runs commands'}">${mode === 'ask' ? 'Ask' : 'Agent'}</span>`);
       b.title = prompt;
       b.onclick = () => { setMode(mode); els.input.value = prompt; sendCurrent(true); };
       sug.appendChild(b);
@@ -1082,7 +1081,6 @@
       r.querySelector('[data-a="all"]').onclick = () => els.history.click();
       wrap.appendChild(r);
     }
-    wrap.appendChild(el('div', 'hints', '<span><kbd>@</kbd> add context</span><span><kbd>/</kbd> commands</span><span><kbd>↑</kbd> last prompt</span>'));
     if (!state.models.length && !state.modelsLoading) {
       const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
       n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };

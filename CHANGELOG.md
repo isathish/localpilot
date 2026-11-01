@@ -4,6 +4,13 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **The newest message is no longer hidden under the composer.** The floating composer reserved a fixed 108 px at the end of the chat. When it grew (Tasks checklist, changed files, an approval, the status line), it covered the latest reply or the steering message you just queued. The space now follows the composer's real height.
+
+### Documentation
+- **"Questions before it starts" is documented** (Agent modes), with the `localpilot.clarify.questions` setting in the configuration reference.
+- **More screenshots match the current UI:** the approval card, a paused run with subagents and a queued message, a finished turn, the mode picker, the questions card and Dashboard → Model tuning. `npm run docs:screenshots` now takes these too.
+
 ## 1.3.5 — 2026-11-01
 ### Changed
 - Enhance UI interactions and testing capabilities
@@ -60,9 +67,14 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
   - Everything that expands and collapses now grows and shrinks smoothly instead of popping: tool steps, thinking, workers, the "Worked for …" summary, edit diffs, terminal output, the Tasks and Changes panels, settings nav groups, provider and MCP server cards, and **Choose size** in the model gallery. Chevrons turn on a spring.
   - All of this is off with **Reduce motion**, **Reduce transparency** or a high-contrast theme.
 - **Answers show which model replied and how fast.** Under each answer: the model, its speed in tokens per second, and Copy, **Regenerate** and Open as document, visible without hovering. **Regenerate** sends your last message again for a new answer. Copy buttons confirm on the button itself.
-- **A better empty chat.** Suggestions name the file you're on (**Explain dice.py**, **Write tests for my selection**). Your three most recent chats are one click away, with the shortcuts worth knowing underneath.
+- **A plainer empty chat.** No greeting or banner: a short **Start with** list that names the file you're on (**Explain dice.py**, **Write tests for my selection**), then your most recent chats.
 - **A clearer chat box when no model is available.** The model picker says **Finding models…** while LocalPilot looks, then **Set up a model**. Clicking it offers to set up a local model, look for model servers again, or add a cloud model. The context meter hides until there's a model to measure against. A disabled Send button no longer looks clickable, and **@ Add context** keeps its label on narrow panels.
 - **Failed answers stay actionable.** When a model call fails, the chat keeps the error box with **Retry** and **Change model**, including after the run ends or the chat is reopened. Before, it turned into plain "(error: …)" text.
+- **Calmer, more consistent design.**
+  - One primary colour for primary actions, including **Build**, **Continue** and switched-on toggles; orange is kept for LocalPilot itself and "working".
+  - Selection shows as a plain focus border instead of a glow. Toggles sit at the right edge of their row on every page.
+  - Your own messages are flat, approval cards are neutral with a warning edge, and the key hints moved into tooltips. **Accept all** keeps its label on narrow panels.
+  - Settings pages open with a single sentence. Providers you have already added aren't offered again, disabled providers show a grey dot, and installed models only show a size badge when the model doesn't fit.
 - **Search settings.** A search box in the settings header finds any setting by name or key (`temperature`, `api key`, `redis`). Press **⌘F** / **Ctrl+F** or **/** to open it, then use the arrow keys and Enter to jump. The page opens the right section, scrolls to the setting and highlights it. On narrow panels the box folds into an icon.
 - **Clearer loading and refresh.**
   - The dashboard, model gallery and skill registry show placeholder cards while they load, instead of a bare "Loading…".

@@ -239,7 +239,21 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
       ],
       storage: { events: 4812, bytes: 1324000, files: 14, oldest: Date.now() - 7 * 86400e3, dir: '/Users/me/.localpilot/telemetry' },
     };
-    send({ type: 'dashboard', days, summary, logFile: '/Users/me/.localpilot/telemetry/localpilot-2026-10-24.log' });
+    // What usage taught about each installed model per role (Dashboard → Model tuning).
+    const tuning = {
+      mode: 'auto', analysed: { runs: 41, calls: 163, days: 14 },
+      suggestions: [
+        { role: 'fast', suggested: 'ollama/qwen2.5-coder:7b', current: 'ollama/gemma4:e4b', currentStruggling: false, reason: '1.8× faster first token on read-only subagents, same success rate', confidence: 'high', kind: 'setting' },
+        { role: 'completion', suggested: 'ollama/qwen2.5-coder:1.5b', current: '', reason: '31% of its suggestions accepted vs 18%', confidence: 'medium', kind: 'routing' },
+      ],
+      rankings: [
+        { label: 'Chat & agent', current: 'ollama/gemma4:e4b', models: [{ id: 'ollama/gemma4:e4b', evidence: 24, detail: '22 of 24 runs finished · 34 tok/s', bonus: 6 }, { id: 'ollama/qwen2.5-coder:7b', evidence: 9, detail: '8 of 9 runs finished · 41 tok/s', bonus: 3 }, { id: 'docker/smollm2:latest', evidence: 3, detail: '1 of 3 runs finished', bonus: -8 }] },
+        { label: 'Read-only subagents', current: 'ollama/gemma4:e4b', models: [{ id: 'ollama/qwen2.5-coder:7b', evidence: 12, detail: 'first token 0.6 s · 12 of 12 ok', bonus: 7 }, { id: 'ollama/gemma4:e4b', evidence: 10, detail: 'first token 1.1 s · 10 of 10 ok', bonus: 2 }] },
+        { label: 'Inline completions', current: '', models: [{ id: 'ollama/qwen2.5-coder:1.5b', evidence: 280, detail: '31% accepted · 380 ms', bonus: 5 }, { id: 'ollama/qwen2.5-coder:7b', evidence: 0, detail: '', bonus: 0 }] },
+      ],
+      history: [{ setting: 'routing.vision', value: 'ollama/gemma4:e4b', at: Date.now() - 86400e3 * 2 }],
+    };
+    send({ type: 'dashboard', days, summary, tuning, logFile: '/Users/me/.localpilot/telemetry/localpilot-2026-10-24.log' });
   }, 250);
   if (m.type === 'logs') setTimeout(() => {
     const L = (ago, level, msg) => ({ t: Date.now() - ago, level, msg });

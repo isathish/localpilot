@@ -115,13 +115,13 @@ body { background: radial-gradient(60% 40% at 100% 0%, color-mix(in srgb, var(--
 .outline { border-right-color: var(--glass-edge); }
 .outline a { border-radius: 8px; transition: background .2s, color .2s; }
 .outline a.on { background: var(--glass); box-shadow: 0 0 0 1px var(--glass-edge) inset; }
-.md .code, .md blockquote, .md table { background-color: var(--glass); background-image: var(--glass-sheen); box-shadow: var(--glass-shadow); }
+.md .code { background-color: var(--glass); background-image: var(--glass-sheen); box-shadow: var(--glass-shadow); }
 .md .code { border-color: var(--glass-edge); border-radius: 12px; background-color: color-mix(in srgb, var(--bg) 70%, transparent); }
 .md .code-head { background: transparent; border-bottom-color: var(--glass-edge); } .md .code-head .cp { border-radius: 999px; }
-.md blockquote { border-radius: 0 12px 12px 0; padding: 4px 16px; }
-.md table { border-radius: 12px; border: 1px solid var(--glass-edge); border-collapse: separate; border-spacing: 0; overflow: hidden; width: max-content; max-width: 100%; overflow-x: auto; }
+.md blockquote { background: none; border-radius: 0; padding: 0 16px; }
+.md table { border: 0; border-collapse: collapse; }
 .md th, .md td { border: 0; border-bottom: 1px solid var(--glass-edge); } .md tr:last-child td { border-bottom: 0; }
-.md img { border-radius: 12px; box-shadow: var(--glass-shadow); }
+.md img { border-radius: 8px; }
 .toast { border-radius: 999px; padding: 8px 16px; background: color-mix(in srgb, var(--vscode-notifications-background, var(--bg)) 70%, transparent); border-color: var(--glass-edge); box-shadow: 0 20px 44px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
 @media (max-width: 640px) { .outline { background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border-radius: 0 16px 16px 0; } }
 @media (prefers-reduced-transparency: reduce) { body { background: var(--bg); } .bar, .outline, .toast { background: var(--bg); backdrop-filter: none; } }

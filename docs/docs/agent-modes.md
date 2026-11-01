@@ -74,6 +74,26 @@ Plan mode investigates without editing, then shows a **Prepared plan** card:
 
 Ask is read-only. The model can read and search the workspace and use web search and fetch, but cannot edit, delete or run commands. Use it for explanations, architecture questions and code review.
 
+## Questions before it starts
+
+For a new feature or an open-ended or larger request, the agent first reads the relevant code. Then it asks up to four questions in one card before it builds anything:
+
+<p><img src="{{ '/assets/screenshots/questions.png' | relative_url }}" alt="A questions card: 3 questions before I start — where saved dice rolls should be kept (SQLite file recommended, JSON file, in memory only, or something else) and which extras the history view should include (choose any)" width="420"></p>
+
+- **Each option explains what picking it means.** The agent's choice is marked **Recommended**.
+- **Some questions allow several answers** ("choose any"). **Something else…** always lets you answer in your own words.
+- **Keyboard:** <kbd>1</kbd>–<kbd>9</kbd> pick an option, <kbd>Enter</kbd> submits. **Skip** (or <kbd>Esc</kbd>) lets the agent go with its recommendations.
+- **After your answers,** it states a short plan and starts. Clear, specific requests start right away without questions.
+- **Queued tasks** never stop to ask. **In the CLI,** the questions appear in the terminal.
+
+`localpilot.clarify.questions` sets how often it asks:
+
+| Value | Behaviour |
+|---|---|
+| `smart` (default) | New features and open-ended or large requests: questions, a short plan, then it starts. Clear requests start at once. |
+| `interview` | Every change: questions first, then the plan, and it waits for your OK before editing. |
+| `minimal` | Only when two readings of the request would lead to materially different work. |
+
 ## Approvals
 
 Each kind of action has its own setting:
@@ -97,7 +117,7 @@ When a command needs approval and matches a known destructive pattern (`rm -rf /
 
 A prompt waits until you answer. If the chat is hidden, closed or moved while an agent waits, the prompt also appears as a VS Code notification (*Allow*, *Allow for session*, *Deny*, *Show chat*). Answering in either place closes both. **Stop** denies the chat's pending prompts.
 
-<p><img src="{{ '/assets/screenshots/approval.png' | relative_url }}" alt="Approval card: Run command git log --oneline -5, with Deny (N), Allow for session (A) and Allow once (Y)" width="420"></p>
+<p><img src="{{ '/assets/screenshots/approval.png' | relative_url }}" alt="Approval card: Run command python -m pytest -q, with Deny (N), Allow for session (A) and Allow once (Y), above the Tasks and changed-files panels" width="420"></p>
 
 ## Models without native tool calling
 
