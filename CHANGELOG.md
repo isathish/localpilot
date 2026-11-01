@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.3 — 2026-11-01
+### Added
+- Enhance HTTP error handling with retry logic and improve provider configuration management
+
 ## 1.3.2 — 2026-11-01
 ### Added
 - **Cloud model providers.** **Settings → Providers** now lists cloud APIs next to local servers: OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI and Ollama Cloud. Claude uses a new `anthropic` provider type that talks to the Messages API directly, with tools and images. The other clouds use the OpenAI-compatible API. Cloud providers are marked **cloud**. Auto and other automatic picks still prefer local models and use a cloud model only when nothing local is available. A cloud model you choose yourself is always used.
