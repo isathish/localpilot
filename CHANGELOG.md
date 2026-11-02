@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.9 — 2026-11-02
+
 ### Fixed
 - **Context sizes are measured, not guessed.** Token counts came from a character-based estimate that was far off on real models: on Gemma 4 it was 30% low for code and 42–77% high for prose and the agent's own instructions. So the context meter was wrong, and compaction started too late on code-heavy chats and too early on the rest. Every model server reports the real prompt size after each request; LocalPilot now uses it to calibrate its estimates for that model, so the meter and the compaction point follow the real numbers. The meter also updates during a run (before each request, after each reply and after compaction) instead of only when the turn ends.
 - **Compacting by hand can no longer lose your conversation.** When the summary could not be made (the server was down, the model not loaded, or it returned nothing), clicking the context meter or running `/compact` replaced the older messages with a one-line "was truncated" note. It now leaves the chat as it was and says why. It also shows that it is working, ignores a second click while it runs, and keeps the system prompt and tools in the meter's count afterwards.
