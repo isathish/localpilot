@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.4 — 2026-11-02
+### Added
+- Agent benchmark — localpilot eval and 'Run Agent Benchmark…'
+
 ## 1.4.3 — 2026-11-02
 ### Added
 - Pull requests and CI from the chat — /pr, /fix-ci and git/GitHub tools
