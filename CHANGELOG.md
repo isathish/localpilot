@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.1 — 2026-11-02
+
 ### Added
 - **Repository graph.** A new `repo_graph` tool builds an import graph and a symbol index straight from the source (TypeScript/JavaScript, Python, Go, Rust, Java/Kotlin, C#). It needs no language server, so it works in the CLI too, and it re-reads only changed files: this repository's 144 files index in 38 ms. Ask "what breaks if I change `src/util.ts`?" and the agent lists every file that imports it, directly or through others, and the tests to run. It also finds where a symbol is defined, the most-imported modules, import cycles and which files use a package. With Gemma 4 12B, an impact question that a text search answered wrongly (one file found, "no tests") is now answered correctly in one tool call. See [Context](docs/docs/context.md#repository-graph).
 
