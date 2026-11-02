@@ -54,6 +54,24 @@ When usage crosses `localpilot.compactionThreshold` (default `0.75`), LocalPilot
 
 Each tool output is also clamped to `localpilot.maxToolOutputChars` (default 24,000 characters; the start and end are kept). The model is told to read files by line range.
 
+## Repository graph
+
+For a large codebase the agent does not need to read files one by one to know how they connect. The `repo_graph` tool builds an import graph and an index of top-level symbols straight from the source (TypeScript/JavaScript, Python, Go, Rust, Java/Kotlin and C#). It needs no language server, so it also works in the [CLI](terminal-and-cli.md). It indexes a repository of a few hundred files in well under a second and afterwards re-reads only files that changed.
+
+The agent uses it to answer questions such as:
+
+| Action | Answers |
+|---|---|
+| `impact` | What could break if this file changes: every file that imports it, directly or through others, plus the tests among them to run. |
+| `dependents` / `dependencies` | Which files import this one, and what it imports (including external packages). |
+| `symbol` | Where a function, class or type is defined, and how many files import that file. |
+| `hubs` | The most-imported files, the ones where a change ripples furthest. |
+| `cycles` | Files that import each other. |
+| `external` | Which files use a package. |
+| `overview` | A summary of all of the above. |
+
+Ask "what breaks if I change `src/util.ts`?" and the agent answers from the graph instead of guessing from text searches. Before it edits a shared file, it checks the impact the same way.
+
 ## Larger context windows
 
 - `localpilot.contextWindow` is the window requested per call (Ollama's `num_ctx`). The default is 32768.

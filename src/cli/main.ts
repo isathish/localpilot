@@ -18,6 +18,7 @@ import { ChangeTracker } from '../agent/changeTracker';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
+import { repoGraphTool } from '../tools/repoGraph';
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
 import { loadProjectSettings, ProjectSettings } from '../agent/settings';
@@ -451,6 +452,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'file_search': return `Find files ${s(a.pattern)}`;
     case 'find_symbol': return `Look up ${s(a.query)}`;
     case 'find_references': return `References to ${s(a.symbol)}`;
+    case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
     case 'run_command': return `$ ${s(a.command, 100)}`;
     case 'get_diagnostics': return 'Check diagnostics';
     case 'web_search': return `Web search "${s(a.query)}"`;
@@ -526,7 +528,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency)]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;

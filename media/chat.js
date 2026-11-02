@@ -513,6 +513,7 @@
       case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
       case 'find_symbol': return `${v('Looked up', 'Looking up')} ${code(a.query)}`;
       case 'find_references': return `${v('Found', 'Finding')} references to ${code(a.symbol)}`;
+      case 'repo_graph': { const what = { impact: 'what depends on', dependents: 'importers of', dependencies: 'imports of', symbol: 'where', external: 'users of', hubs: 'central modules', cycles: 'import cycles', overview: 'the import graph' }[a.action] || 'the import graph'; return `${v('Mapped', 'Mapping')} ${what}${a.path ? ` ${a.action === 'symbol' || a.action === 'external' ? code(a.path) : fchip(a.path)}` : ''}${a.action === 'symbol' ? ' is defined' : ''}`; }
       case 'get_diagnostics': return `${v('Checked', 'Checking')} ${a.path ? `errors in ${fchip(a.path)}` : 'workspace errors'}`;
       case 'get_editor_state': return `${v('Read', 'Reading')} editor state`;
       case 'gather_context': return `${v('Gathered', 'Gathering')} context${a.query ? ` for ${code(a.query)}` : ''}`;
@@ -798,7 +799,7 @@
         case 'read_file': if (a.path && !files.includes(a.path)) { files.push(a.path); } break;
         case 'list_dir': folders++; break;
         case 'grep_search': case 'file_search': searches++; break;
-        case 'find_symbol': case 'find_references': symbols++; break;
+        case 'find_symbol': case 'find_references': case 'repo_graph': symbols++; break;
         default: other++;
       }
     }

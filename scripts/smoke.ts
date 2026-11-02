@@ -16,11 +16,15 @@ import { PROVIDER_PRESETS } from '../src/providers/presets';
 import { checkGatewayPrereqs, classifyGatewayModels, gatewayEnv, gatewayModels, installCommand as gatewayInstall, needsProviders, nodeVersionOk, startCommand as gatewayStart } from '../src/providers/gatewaySetup';
 import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
 import * as nodeFs from 'fs';
+import * as nodeOs from 'os';
+import * as nodePath from 'path';
 import { ModelInfo } from '../src/types';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
 import { ContextManager, effectiveContextWindow, TokenCalibration } from '../src/context/contextManager';
 import { asksToRemember } from '../src/agent/skillRecommender';
+import { buildRepoGraph, findCycles, parseSource } from '../src/context/repoGraph';
+import { answerRepoGraph } from '../src/tools/repoGraph';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
@@ -801,6 +805,45 @@ async function pureLogic() {
     let emptyThrew = false;
     try { await cm.compact(history, empty, model, undefined, 6, false); } catch { emptyThrew = true; }
     check('an empty summary counts as a failure, not as a summary', emptyThrew);
+  }
+
+  console.log('\n[Repository graph: imports, impact, cycles, symbols]');
+  {
+    const root = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-graph-'));
+    const put = (rel: string, text: string) => { nodeFs.mkdirSync(nodePath.dirname(nodePath.join(root, rel)), { recursive: true }); nodeFs.writeFileSync(nodePath.join(root, rel), text); };
+    put('tsconfig.json', '{ // comment\n "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] }, }, }');
+    put('src/util.ts', "export function add(a: number, b: number) { return a + b; }\nexport const PI = 3.14;\n");
+    put('src/math/index.ts', "import { add } from '../util';\nexport class Calc { sum = add; }\n");
+    put('src/app.ts', "import { Calc } from './math';\nimport type { X } from '@/types';\nimport express from 'express';\nimport { join } from 'node:path';\nconst lazy = () => import('./a.js');\n");
+    put('src/types.ts', "export interface X { a: number }\n");
+    put('src/a.ts', "import { b } from './b';\nexport const a = 1;\n");
+    put('src/b.ts', "import { a } from './a';\nexport const b = 2;\n");
+    put('test/app.test.ts', "import '../src/app';\nimport { describe } from 'vitest';\n");
+    put('py/pkg/__init__.py', '');
+    put('py/pkg/core.py', 'import os\nfrom .helpers import fmt\n\ndef run():\n    return fmt()\n');
+    put('py/pkg/helpers.py', 'def fmt():\n    return "x"\n');
+    put('go.mod', 'module example.com/demo\n\ngo 1.22\n');
+    put('cmd/main.go', 'package main\n\nimport (\n\t"fmt"\n\t"example.com/demo/internal/store"\n)\n\nfunc main() { fmt.Println(store.Get()) }\n');
+    put('internal/store/store.go', 'package store\n\nfunc Get() string { return "" }\n');
+    put('src/lib.rs', 'mod db;\nuse crate::db::Conn;\n');
+    put('src/db.rs', 'pub struct Conn;\n');
+    const g = await buildRepoGraph(root, 0);
+    const deps = (f: string) => [...(g.deps.get(f) ?? [])].sort().join(',');
+    check('TS: relative, folder index, tsconfig paths, ./x.js → x.ts and dynamic import resolve', deps('src/app.ts') === 'src/a.ts,src/math/index.ts,src/types.ts' && deps('src/math/index.ts') === 'src/util.ts', deps('src/app.ts'));
+    check('TS: packages are external, scoped/node: prefixes normalised', g.external.has('express') && g.external.has('path') && g.external.get('vitest')?.has('test/app.test.ts') === true);
+    check('Python: relative "from .x import" resolves; stdlib is external', deps('py/pkg/core.py') === 'py/pkg/helpers.py' && g.external.has('os'));
+    check('Go: module-local package imports resolve through go.mod', deps('cmd/main.go') === 'internal/store/store.go' && g.external.has('fmt'));
+    check('Rust: mod and use crate:: resolve', deps('src/lib.rs') === 'src/db.rs');
+    check('impact is transitive and names the tests to run', /can affect 3 files/.test(answerRepoGraph(g, 'impact', 'src/util.ts').content) && /Tests to run \(1\):\ntest\/app\.test\.ts/.test(answerRepoGraph(g, 'impact', 'src/util.ts').content), answerRepoGraph(g, 'impact', 'src/util.ts').content);
+    check('cycles: a ↔ b found', findCycles(g).some((c) => c.join() === 'src/a.ts,src/b.ts'));
+    check('symbol index across languages', g.symbols.get('Calc')?.[0].file === 'src/math/index.ts' && g.symbols.get('run')?.[0].file === 'py/pkg/core.py' && g.symbols.get('Get')?.[0].kind === 'function' && g.symbols.get('Conn')?.[0].kind === 'struct');
+    check('a bare file name resolves when unique; ambiguity lists candidates', /util\.ts/.test(answerRepoGraph(g, 'dependents', 'util.ts').content) && answerRepoGraph(g, 'dependents', 'index').isError !== true);
+    nodeFs.writeFileSync(nodePath.join(root, 'src/types.ts'), "import { add } from './util';\nexport interface X { a: number }\n");
+    nodeFs.utimesSync(nodePath.join(root, 'src/types.ts'), new Date(), new Date(Date.now() + 5000));
+    const g2 = await buildRepoGraph(root, 0);
+    check('incremental: a changed file is re-parsed', g2.deps.get('src/types.ts')?.has('src/util.ts') === true);
+    check('parser survives broken syntax', parseSource('import { from "x"\nexport function ok( {', 'ts').symbols[0]?.name === 'ok');
+    nodeFs.rmSync(root, { recursive: true, force: true });
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

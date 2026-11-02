@@ -247,7 +247,7 @@ LocalPilot ships 9 subagents. Every one can use `load_skill`.
 | `docs` | README sections, doc comments and changelog entries in the project's tone | all |
 | `researcher` | Web research with cross-checked sources and citations | `web_search`, `web_fetch`, `read_file`, `gather_context` |
 
-"Read-only" means `read_file`, `list_dir`, `file_search`, `grep_search`, `find_symbol`, `find_references`, `get_diagnostics`, `get_editor_state`, `gather_context` and `analyze_workspace`.
+"Read-only" means `read_file`, `list_dir`, `file_search`, `grep_search`, `find_symbol`, `find_references`, `repo_graph`, `get_diagnostics`, `get_editor_state`, `gather_context` and `analyze_workspace`.
 
 Rules that apply to every built-in:
 
