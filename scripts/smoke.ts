@@ -367,7 +367,7 @@ async function cloudAgentE2E() {
     check('gateway marked cloud: its models are remote, speech models hidden', models.filter((m) => m.providerId === 'omniroute').every((m) => m.remote) && !models.some((m) => m.modelId === 'tts-1'));
     check('local server stays local', models.filter((m) => m.providerId === 'local').every((m) => !m.remote));
     const auto = await providers.route({ role: 'agent' });
-    check('Auto routes to the local model, not Claude or the gateway', auto.model.id === 'local/qwen2.5-coder-7b', auto.model.id);
+    check('Auto routes to the local model, not Claude or the gateway', auto.model.id === 'local/qwen2.5-coder-7b', { picked: auto.model.id, reason: auto.reason, models: models.map((m) => `${m.id}${m.remote ? ' (remote)' : ''}${m.disabled ? ' (disabled)' : ''}`), providers: providers.all.map((p) => p.id) });
 
     const tools = new ToolRegistry();
     tools.register({ parallelSafe: true, definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, async execute(args) { return { content: `ECHO:${args.text}` }; } });
