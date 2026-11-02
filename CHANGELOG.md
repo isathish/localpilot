@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.6 — 2026-11-02
+### Fixed
+- Plugin validate reports paths with / on every platform
+
 ## 1.4.5 — 2026-11-02
 ### Added
 - Remote MCP servers — Streamable HTTP and HTTP+SSE with headers
