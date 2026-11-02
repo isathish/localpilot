@@ -1140,8 +1140,10 @@ async function pureLogic() {
 
   console.log('\n[Multi-repository: registry, list, search, exec]');
   {
-    const r = collectRepos({ folders: ['/w/app', '/w/app'], file: { base: '/w/app', map: { api: '../api', gone: '../nope', dup: '.' } }, setting: { web: '/w/web', api: '/elsewhere/api' } }, (p) => p !== '/w/nope');
-    check('registry: workspace folders, repos.json (relative), setting; duplicates and missing folders dropped; names unique', r.map((x) => `${x.name}=${x.path}`).join(' ') === 'app=/w/app api=/w/api web=/w/web api-2=/elsewhere/api' && findRepo(r, 'API')?.path === '/w/api', r);
+    // Paths through path.resolve, so the same expectations hold on Windows (drive letters, backslashes).
+    const P = (p: string) => nodePath.resolve(p);
+    const r = collectRepos({ folders: ['/w/app', '/w/app'], file: { base: '/w/app', map: { api: '../api', gone: '../nope', dup: '.' } }, setting: { web: '/w/web', api: '/elsewhere/api' } }, (p) => p !== P('/w/nope'));
+    check('registry: workspace folders, repos.json (relative), setting; duplicates and missing folders dropped; names unique', r.map((x) => `${x.name}=${x.path}`).join(' ') === `app=${P('/w/app')} api=${P('/w/api')} web=${P('/w/web')} api-2=${P('/elsewhere/api')}` && findRepo(r, 'API')?.path === P('/w/api'), r);
     const base = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-repos-'));
     const mk = async (name: string, files: Record<string, string>) => {
       const dir = nodePath.join(base, name);

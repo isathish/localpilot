@@ -43,7 +43,7 @@ suite('LocalPilot MCP client', () => {
     try {
       await cfg.update('mcpServers', { echo: { command: process.execPath, args: [path.join(dir, 'server.js')] } }, vscode.ConfigurationTarget.Global);
       await mcp.reload();
-      assert.deepStrictEqual(mcp.status, [{ name: 'echo', tools: 1 }]);
+      assert.deepStrictEqual(mcp.status, [{ name: 'echo', tools: 1, transport: 'stdio' }]);
       const tool = tools.get('mcp_echo_echo');
       assert.ok(tool, 'MCP tool must be registered under mcp_<server>_<tool>');
       assert.strictEqual(tool.approvalKind, 'network');
