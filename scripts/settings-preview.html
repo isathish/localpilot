@@ -3,6 +3,8 @@
 <!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 -->
 <style>
 :root{
+--vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
+
 --vscode-editor-background:#1f1f1f;--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-widget-border:#2b2b2b;
 --vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-list-hoverBackground:#2a2d2e;
 --vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c;
@@ -13,6 +15,8 @@
 --vscode-charts-blue:#3794ff;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-charts-orange:#d18616;--vscode-charts-purple:#b180d7;--vscode-charts-lines:#ffffff80;
 }
 html.light{
+--vscode-button-secondaryBackground:#e5e5e5;--vscode-button-secondaryForeground:#3b3b3b;--vscode-button-secondaryHoverBackground:#cccccc;--vscode-button-border:#0000001a;--vscode-icon-foreground:#3b3b3b;
+
 --vscode-editor-background:#ffffff;--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#717171;--vscode-widget-border:#e5e5e5;
 --vscode-sideBar-background:#f8f8f8;--vscode-editorWidget-background:#f3f3f3;--vscode-list-hoverBackground:#e8e8e8;
 --vscode-input-background:#ffffff;--vscode-input-foreground:#3b3b3b;--vscode-input-border:#cecece;
@@ -60,7 +64,7 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'webSearch.provider': 'duckduckgo', 'webSearch.searxngUrl': 'http://localhost:8888', 'webSearch.apiKey': '', 'webSearch.maxResults': 6,
   'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
   mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
-  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
+  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'memory.maxNoteChars': 8000, 'memory.maxNotes': 200, 'autoMode.enabled': false, 'autoMode.model': '', 'queue.concurrency': 1, 'supervisor.enabled': true, 'supervisor.intervalSeconds': 60, 'supervisor.autoInstall': false, 'gateways.litellmConfig': '', 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
   'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '',
   pluginPaths: [], 'hooks.enabled': true, 'browser.chromePath': '', 'colibri.path': '', 'colibri.model': '', 'colibri.port': 8000, 'colibri.kvSlots': 2,
   'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': true, 'telemetry.retentionDays': 30 };

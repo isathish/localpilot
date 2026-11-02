@@ -86,8 +86,9 @@ export function keyStatus(cfg: Pick<ProviderConfig, 'apiKey'>): KeyStatus {
 }
 
 /** Prompts sent to this provider leave the machine: a cloud URL, or a local gateway marked `cloud`. */
-export function isCloudProvider(cfg: Pick<ProviderConfig, 'baseUrl' | 'cloud'>): boolean {
-  return cfg.cloud ?? isRemoteUrl(cfg.baseUrl);
+export function isCloudProvider(cfg: Pick<ProviderConfig, 'baseUrl' | 'cloud'> & { type?: ProviderConfig['type'] }): boolean {
+  // An Anthropic-type provider always ends at Anthropic's API, even behind a proxy on this machine.
+  return cfg.cloud ?? (cfg.type === 'anthropic' || isRemoteUrl(cfg.baseUrl));
 }
 
 /** True for servers outside this machine and the private network: requests to them leave the user's control. */

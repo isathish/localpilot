@@ -365,7 +365,8 @@ async function cloudAgentE2E() {
     const claude = models.find((m) => m.providerId === 'claude');
     check('secret key loaded: providers rebuilt and Claude listed with its 1M context', claude?.contextWindow === 1_000_000 && claude.supportsThinking === true && claudeKeys.at(-1) === 'sk-from-keychain', claude);
     check('gateway marked cloud: its models are remote, speech models hidden', models.filter((m) => m.providerId === 'omniroute').every((m) => m.remote) && !models.some((m) => m.modelId === 'tts-1'));
-    check('local server stays local', models.filter((m) => m.providerId === 'local').every((m) => !m.remote));
+    check('local server stays local', models.some((m) => m.providerId === 'local') && models.filter((m) => m.providerId === 'local').every((m) => !m.remote));
+    check('Claude is cloud even behind a proxy on this machine', !!claude?.remote);
     const auto = await providers.route({ role: 'agent' });
     check('Auto routes to the local model, not Claude or the gateway', auto.model.id === 'local/qwen2.5-coder-7b', { picked: auto.model.id, reason: auto.reason, models: models.map((m) => `${m.id}${m.remote ? ' (remote)' : ''}${m.disabled ? ' (disabled)' : ''}`), providers: providers.all.map((p) => p.id) });
 

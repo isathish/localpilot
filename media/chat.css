@@ -965,6 +965,21 @@ button.copied, button.copied:hover { color: var(--ok-text) !important; }
 .plan-foot .build:hover { background: var(--accent-hover); } .plan-foot .build kbd { background: none; box-shadow: none; padding: 0; opacity: .75; }
 svg[viewBox="0 0 16 16"] { shape-rendering: geometricPrecision; }
 
+/* Buttons and action icons in VS Code's own colours, so they match the rest of the editor in every theme: primary =
+   button.background, secondary = button.secondaryBackground, action icons = icon.foreground. Themes that outline their
+   buttons (button.border: high contrast, Light/Dark Modern) get the outline. */
+:root {
+  --btn2: var(--vscode-button-secondaryBackground, var(--tint-2)); --btn2-fg: var(--vscode-button-secondaryForeground, var(--fg));
+  --btn2-hover: var(--vscode-button-secondaryHoverBackground, var(--hover)); --btn-border: var(--vscode-button-border, transparent);
+  --icon: var(--vscode-icon-foreground, var(--fg));
+}
+.btn { background: var(--btn2); color: var(--btn2-fg); border-color: var(--btn-border); }
+.btn:hover { background: var(--btn2-hover); }
+.btn.primary { border-color: var(--btn-border); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); } .btn.ghost:hover { background: var(--tint); color: var(--fg); }
+.btn.danger { color: var(--error-text); }
+:is(.ib, .afoot .acts button, .code-head button, .card-head .acts button, .hist-row .acts button, .change .acts button, .bgrun .stop) { color: var(--icon); }
+
 /* ════ Light themes: accent colours used for icons and text are darkened so they keep contrast on white
    (LocalPilot's amber is 2:1 on white; status greens and yellows are often under 3:1). Fills keep the brand colour. */
 body.vscode-light, body.vscode-high-contrast-light {

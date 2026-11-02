@@ -859,6 +859,20 @@ body.vscode-light input[type=search]:not(.find-box input), html.light body input
 /* Providers already configured are not offered again in "Add a provider". */
 .preset.added { display: none; }
 
+/* Buttons and action icons in VS Code's own colours (see chat.css): primary = button.background, secondary =
+   button.secondaryBackground with the theme's button.border, action icons = icon.foreground. */
+:root {
+  --btn2: var(--vscode-button-secondaryBackground, var(--tint-2)); --btn2-fg: var(--vscode-button-secondaryForeground, var(--fg));
+  --btn2-hover: var(--vscode-button-secondaryHoverBackground, var(--hover)); --btn-border: var(--vscode-button-border, transparent);
+  --icon: var(--vscode-icon-foreground, var(--fg));
+}
+.btn { background: var(--btn2); color: var(--btn2-fg); border-color: var(--btn-border); }
+.btn:hover:not(:disabled) { background: var(--btn2-hover); }
+.btn.primary, .btn.brand, .btn.on { border-color: var(--btn-border); }
+.btn.ghost, .setup .foot .btn.link { background: transparent; border-color: transparent; color: var(--muted); } .btn.ghost:hover:not(:disabled) { background: var(--tint); color: var(--fg); }
+.btn.danger { color: var(--error-text); }
+:is(.find-open, .prov-head .chev, .navtog, .navall) { color: var(--icon); }
+
 /* ==== Light themes: accent colours used for icons and text are darkened so they keep contrast on white
    (LocalPilot's amber is 2:1 on white; status greens and yellows are often under 3:1). Fills keep the brand colour. */
 body.vscode-light, body.vscode-high-contrast-light {
