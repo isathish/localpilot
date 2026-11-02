@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.8 — 2026-11-02
+
 ### Added
 - **Start colibri installs, configures and starts colibri.** It handles every starting point:
   - **Not installed:** after checking for git and Python, it clones colibri and runs colibri's own setup in a terminal. You choose the folder (default `~/colibri`) and a model ranked for this machine (runs from RAM, streams from disk, or too big), with a free-disk check. Setup builds or downloads the engine, downloads the model and starts the server.
