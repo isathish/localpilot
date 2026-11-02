@@ -279,6 +279,9 @@ export async function scaffoldPlugin(dir: string, name: string): Promise<string[
   return Object.keys(files).map((f) => path.join(target, f));
 }
 
+/** A path inside the plugin as authors write it: relative, with `/` on every platform. */
+const rel = (dir: string, p: string) => path.relative(dir, p).split(path.sep).join('/');
+
 const HOOK_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact', 'Notification']);
 
 /** Problems a plugin author should fix (errors) or look at (warnings), for `localpilot plugin validate`. */
@@ -310,17 +313,17 @@ export async function validatePlugin(dir: string): Promise<{ errors: string[]; w
   for (const f of plugin.commandFiles) {
     const { meta, body } = parseFrontMatter(await fs.promises.readFile(f, 'utf8'));
     if (!meta.description) {
-      warnings.push(`${path.relative(dir, f)}: no "description" in front matter (shown in the / menu)`);
+      warnings.push(`${rel(dir, f)}: no "description" in front matter (shown in the / menu)`);
     }
     if (!body.trim()) {
-      errors.push(`${path.relative(dir, f)}: empty command`);
+      errors.push(`${rel(dir, f)}: empty command`);
     }
   }
   for (const d of plugin.agentDirs) {
     for (const f of (await fs.promises.readdir(d)).filter((x) => x.endsWith('.md'))) {
       const { meta } = parseFrontMatter(await fs.promises.readFile(path.join(d, f), 'utf8'));
       if (!meta.name || !meta.description) {
-        errors.push(`${path.relative(dir, path.join(d, f))}: a subagent needs "name" and "description" in front matter`);
+        errors.push(`${rel(dir, path.join(d, f))}: a subagent needs "name" and "description" in front matter`);
       }
     }
   }
@@ -332,7 +335,7 @@ export async function validatePlugin(dir: string): Promise<{ errors: string[]; w
       }
       const { meta } = parseFrontMatter(await fs.promises.readFile(file, 'utf8'));
       if (!meta.name || !meta.description) {
-        errors.push(`${path.relative(dir, file)}: a skill needs "name" and "description" in front matter`);
+        errors.push(`${rel(dir, file)}: a skill needs "name" and "description" in front matter`);
       }
     }
   }
@@ -343,7 +346,7 @@ export async function validatePlugin(dir: string): Promise<{ errors: string[]; w
     try {
       rawHooks = JSON.parse(await fs.promises.readFile(hookFile, 'utf8'));
     } catch (e) {
-      errors.push(`${path.relative(dir, hookFile)}: not valid JSON (${e instanceof Error ? e.message : String(e)})`);
+      errors.push(`${rel(dir, hookFile)}: not valid JSON (${e instanceof Error ? e.message : String(e)})`);
     }
   }
   const events = rawHooks && typeof rawHooks === 'object' ? ((rawHooks as { hooks?: Record<string, unknown> }).hooks ?? rawHooks) : {};
