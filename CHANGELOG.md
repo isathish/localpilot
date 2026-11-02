@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.11 — 2026-11-02
+
 ### Changed
 - **Real provider logos in their brand colours.** Settings now shows each vendor's own mark instead of letters for OpenAI, Anthropic (Claude), Google Gemini, Groq, OpenRouter, xAI, Together AI, Fireworks AI, Cerebras, Moonshot (Kimi), Azure and Microsoft, alongside the existing Ollama, LM Studio, vLLM, Docker, Mistral, DeepSeek, Qwen, Meta, NVIDIA and Hugging Face marks. Colours follow each brand: OpenAI, xAI, OpenRouter, Ollama and LM Studio use the theme's text colour, the others their official colour. Local servers that publish no logo (Jan, LocalAI, SGLang, KoboldCpp, GPT4All, LiteLLM, text-generation-webui, OmniRoute) keep a monogram. Logos come from Simple Icons (CC0) and LobeHub Icons (MIT).
 - **Buttons and icons use VS Code's own colours.** Secondary buttons (Allow for session, Refresh model list, Reject all…) use the theme's secondary button colour and border instead of an outlined box, so they look like VS Code's in every theme, including high contrast. Action icons (copy, retry, the header and card actions) use the theme's icon colour, so they are as clear as the editor's own toolbar icons.
