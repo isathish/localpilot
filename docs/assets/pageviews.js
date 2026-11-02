@@ -46,9 +46,17 @@
       var target = Math.max(value, floor);
       var from = shown[kind] !== undefined ? shown[kind] : floor;
       var wrap = el.closest('[data-pv-wrap]');
-      if (wrap) { wrap.hidden = false; }
+      if (wrap && wrap.hidden) {
+        wrap.hidden = false;
+        if (wrap.classList) { wrap.classList.add('pv-in'); }
+      }
       el.title = full ? full.format(target) + ' ' + (kind === 'visitors' ? 'visitors' : 'views') : String(target);
-      if (target === from || window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      var bumped = shown[kind] !== undefined && target > from;
+      if (typeof el.getAttribute('data-pv-odo') === 'string' && document.createElement) {
+        // Home page: rolling odometer digits (CSS transitions, so reduced motion simply jumps), plus a "+N" when it moves.
+        odometer(el, fmt(target));
+        if (bumped) { flash(el, target - from); }
+      } else if (target === from || window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         el.textContent = fmt(target);
       } else {
         animate(el, from, target);
@@ -58,6 +66,71 @@
       }
     });
     shown[kind] = Math.max(value, shown[kind] || 0);
+  }
+
+  /**
+   * Renders `text` as odometer columns: each digit is a strip of 0–9 that slides to its value, columns staggered
+   * left to right. The first render starts every column at 0, so the number rolls up into place; later renders
+   * move only the columns that changed. A visually hidden copy of the text is what screen readers announce.
+   */
+  function odometer(el, text) {
+    var shape = text.replace(/\d/g, '0');
+    var box = el.querySelector('.odo');
+    if (!box || box.getAttribute('data-shape') !== shape) {
+      var prev = box ? box.textContent : '';
+      el.textContent = '';
+      var sr = document.createElement('span');
+      sr.className = 'odo-sr';
+      box = document.createElement('span');
+      box.className = 'odo';
+      box.setAttribute('aria-hidden', 'true');
+      box.setAttribute('data-shape', shape);
+      text.split('').forEach(function (ch) {
+        var c = document.createElement('span');
+        if (/\d/.test(ch)) {
+          c.className = 'odo-col';
+          var strip = document.createElement('span');
+          strip.className = 'odo-strip';
+          for (var d = 0; d <= 9; d++) { var n = document.createElement('span'); n.textContent = String(d); strip.appendChild(n); }
+          c.appendChild(strip);
+        } else {
+          c.className = 'odo-sep';
+          c.textContent = ch;
+        }
+        box.appendChild(c);
+      });
+      el.appendChild(sr);
+      el.appendChild(box);
+      // A number that grew a digit (999 → 1,000) keeps its old digits right-aligned so only the change rolls.
+      var old = prev.replace(/\D/g, '');
+      var strips0 = box.querySelectorAll('.odo-strip');
+      for (var k = 0; k < strips0.length; k++) {
+        var o = old.charAt(old.length - strips0.length + k);
+        strips0[k].style.transform = 'translateY(-' + (Number(o) || 0) * 10 + '%)';
+      }
+      void box.offsetWidth; // start the transition from there
+    }
+    el.querySelector('.odo-sr').textContent = text;
+    var digits = text.replace(/\D/g, '');
+    var strips = box.querySelectorAll('.odo-strip');
+    for (var i = 0; i < strips.length; i++) {
+      strips[i].style.transitionDelay = (i * 80) + 'ms';
+      strips[i].style.transform = 'translateY(-' + Number(digits.charAt(i)) * 10 + '%)';
+    }
+  }
+
+  /** A live increase: the number glows and a "+N" chip floats up beside it. */
+  function flash(el, by) {
+    el.classList.remove('pv-bump'); void el.offsetWidth; el.classList.add('pv-bump');
+    var host = el.closest('.pv-stat') || el.parentNode;
+    if (!host) { return; }
+    var chip = document.createElement('span');
+    chip.className = 'pv-plus';
+    chip.setAttribute('aria-hidden', 'true');
+    chip.textContent = '+' + (full ? full.format(by) : by);
+    chip.addEventListener('animationend', function () { chip.remove(); });
+    host.appendChild(chip);
+    setTimeout(function () { if (chip.parentNode) { chip.remove(); } }, 2500);
   }
 
   function animate(el, from, to) {

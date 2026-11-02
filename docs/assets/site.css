@@ -119,7 +119,6 @@ pre code { background: none; border: none; padding: 0; }
 .pageviews svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .pageviews b { color: var(--fg-2); font-weight: 600; }
 .pageviews .sep { opacity: .6; }
-.pageviews-total { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 8px; margin: 10px 0 0; }
 .page-meta { margin: -6px 0 14px; }
 .page-meta:not(:has(.pageviews:not([hidden]))) { display: none; }
 .pageviews[hidden] { display: none; }
@@ -127,10 +126,66 @@ pre code { background: none; border: none; padding: 0; }
 /* A count that moved while the page is open: a brief accent flash, no layout shift. */
 .pageviews b.pv-bump { animation: pv-bump .9s ease-out; }
 @keyframes pv-bump { 0% { color: var(--accent-text, currentColor); } 100% { color: var(--fg-2); } }
-.pv-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.pv-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok, #22c55e); animation: pv-pulse 2s ease-in-out infinite; }
-@keyframes pv-pulse { 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .pageviews b.pv-bump, .pv-live::before { animation: none; } }
+/* Home page: the site totals as a stat card with odometer digits (assets/pageviews.js). */
+@property --pv-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.pv-stats {
+  position: relative; display: flex; align-items: center; justify-content: center; gap: 18px 26px; flex-wrap: wrap;
+  width: fit-content; max-width: 100%; margin: 30px auto 0; padding: 16px 20px 16px 18px; border-radius: 18px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2, var(--bg-2)) 70%, transparent), color-mix(in srgb, var(--bg-2) 85%, transparent));
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--fg) 6%, transparent) inset, 0 12px 32px -14px color-mix(in srgb, #000 55%, transparent);
+  isolation: isolate; text-align: left;
+}
+/* A slow accent sheen travelling round the border. */
+.pv-stats::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none; z-index: -1;
+  background: conic-gradient(from var(--pv-angle), transparent 0 62%, color-mix(in srgb, var(--accent) 75%, transparent) 76%, transparent 90%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: pv-sheen 7s linear infinite;
+}
+@keyframes pv-sheen { to { --pv-angle: 360deg; } }
+.pv-stats[hidden] { display: none; }
+.pv-stats.pv-in { animation: pv-enter .8s cubic-bezier(.16, 1, .3, 1) both; }
+@keyframes pv-enter { from { opacity: 0; transform: translateY(12px) scale(.97); } }
+.pv-stat { position: relative; display: flex; align-items: center; gap: 12px; }
+.pv-ico { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; flex: none; color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset; }
+.pv-ico svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pv-txt { display: flex; flex-direction: column; }
+.pv-num { font-size: clamp(26px, 3.6vw, 34px); font-weight: 800; line-height: 1.1; letter-spacing: -.02em; color: var(--fg); font-variant-numeric: tabular-nums; }
+.pv-lbl { margin-top: 3px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.pv-div { width: 1px; height: 44px; background: linear-gradient(transparent, var(--border-2), transparent); }
+.pv-live { display: inline-flex; align-items: center; gap: 7px; align-self: center; padding: 5px 11px 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 28%, transparent) inset; }
+.pv-live i { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.pv-live i::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok); animation: pv-ripple 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+@keyframes pv-ripple { from { transform: scale(1); opacity: .7; } to { transform: scale(3.2); opacity: 0; } }
+/* Odometer: each digit is a 0–9 strip that slides into place, faded at the top and bottom like a counter wheel. */
+.odo { display: inline-flex; }
+.odo-col { display: inline-block; height: 1.1em; overflow: hidden; -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
+.odo-strip { display: flex; flex-direction: column; transition: transform 1.6s cubic-bezier(.16, 1, .3, 1); will-change: transform; }
+.odo-strip > span { display: block; height: 1.1em; text-align: center; }
+.odo-sep { display: inline-block; }
+.odo-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* A live increase: a glow on the number and a "+N" chip floating up. */
+.pv-num.pv-bump { animation: pv-glow 1.6s ease-out; }
+@keyframes pv-glow { 0%, 35% { color: var(--accent-text); transform: translateY(-2px); } }
+.pv-num { display: inline-block; }
+.pv-plus { position: absolute; left: 50px; top: -14px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, var(--bg)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 35%, transparent) inset; pointer-events: none; animation: pv-float 1.9s cubic-bezier(.16, 1, .3, 1) forwards; }
+@keyframes pv-float { 0% { opacity: 0; transform: translateY(10px) scale(.8); } 18% { opacity: 1; transform: translateY(0) scale(1); } 70% { opacity: 1; } 100% { opacity: 0; transform: translateY(-16px); } }
+@media (max-width: 600px) {
+  .pv-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; width: 100%; padding: 18px 12px 14px; }
+  .pv-stat { flex-direction: column; gap: 8px; text-align: center; }
+  .pv-txt { align-items: center; }
+  .pv-ico { width: 38px; height: 38px; }
+  .pv-num { font-size: 26px; }
+  .pv-lbl { white-space: normal; }
+  .pv-div { display: none; }
+  .pv-live { grid-column: 1 / -1; justify-self: center; }
+  .pv-plus { left: auto; right: 6px; top: -12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pageviews b.pv-bump, .pv-num.pv-bump, .pv-live i::after, .pv-stats::before, .pv-stats.pv-in, .pv-plus { animation: none; }
+  .odo-strip { transition: none; }
+}
 .hero-note a:hover { color: var(--fg); }
 @media (max-width: 600px) { .hero-note code, .hero-note code + span { display: none; } }
 .cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }

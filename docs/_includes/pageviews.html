@@ -9,7 +9,13 @@
 {%- if include.total -%}
   {%- assign base_views = pv_data.total.views | default: 0 -%}
   {%- assign base_users = pv_data.total.users | default: 0 -%}
-<p class="pageviews pageviews-total" data-pv-wrap {% if base_views == 0 %}hidden{% endif %} aria-live="polite">{{ pv_eye }}<span><b data-pv="total" data-pv-base="{{ base_views }}">{{ pv_data.total.views_label }}</b> page views</span><span class="sep">·</span><span><b data-pv="visitors" data-pv-base="{{ base_users }}">{{ pv_data.total.users_label }}</b> people explored LocalPilot</span><span class="pv-live" title="Updates live as people read the site">live</span></p>
+  {%- assign pv_people = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.3 3-5.2 6-5.2s5.4 1.9 6 5.2"/><path d="M15.5 4.9a3.2 3.2 0 0 1 0 6.2M17.6 14.6c1.8.6 3 2.3 3.4 4.9"/></svg>' -%}
+<div class="pv-stats" data-pv-wrap {% if base_views == 0 %}hidden{% endif %} aria-live="polite">
+  <div class="pv-stat"><span class="pv-ico">{{ pv_eye }}</span><span class="pv-txt"><b class="pv-num" data-pv="total" data-pv-odo data-pv-base="{{ base_views }}">{{ pv_data.total.views_label }}</b><span class="pv-lbl">page views</span></span></div>
+  <span class="pv-div" aria-hidden="true"></span>
+  <div class="pv-stat"><span class="pv-ico">{{ pv_people }}</span><span class="pv-txt"><b class="pv-num" data-pv="visitors" data-pv-odo data-pv-base="{{ base_users }}">{{ pv_data.total.users_label }}</b><span class="pv-lbl">people explored LocalPilot</span></span></div>
+  <span class="pv-live" title="Updates live as people read the site"><i aria-hidden="true"></i>Live</span>
+</div>
 {%- else -%}
   {%- assign pv = pv_data.pages[page.url] -%}
   {%- assign base_views = pv.views | default: 0 -%}
