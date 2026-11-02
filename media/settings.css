@@ -622,6 +622,19 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .dash-tbl td.nowrap { white-space: nowrap; }
 .dash-tbl i { font-style: normal; color: var(--muted); font-size: 11px; }
 .dash-tbl.errs td { white-space: normal; }
+/* Tuning suggestions on a narrow panel: one stacked block per suggestion (role and Apply on top, then use X instead of
+   Y, why, confidence) instead of a six-column table that hid the Apply button off the edge. */
+@media (max-width: 760px) {
+  .dash-tbl.tune thead { display: none; }
+  .dash-tbl.tune, .dash-tbl.tune tbody { display: block; }
+  .dash-tbl.tune tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 2px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); }
+  .dash-tbl.tune tr:last-child { border-bottom: 0; }
+  .dash-tbl.tune td { display: block; padding: 0; border: 0; white-space: normal; min-width: 0; grid-column: 1; }
+  .dash-tbl.tune td:nth-child(1) { font-weight: 600; min-width: 0; }
+  .dash-tbl.tune td:nth-child(2)::before { content: 'Use '; font-family: var(--vscode-font-family); color: var(--muted); }
+  .dash-tbl.tune td:nth-child(3)::before { content: 'instead of '; font-family: var(--vscode-font-family); }
+  .dash-tbl.tune td:nth-child(6) { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+}
 .pctl i { font-style: normal; color: var(--muted); font-size: 11px; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--tint); overflow: hidden; vertical-align: middle; }
 .meter i { display: block; height: 100%; background: var(--chart-1); border-radius: 3px; min-width: 2px; }

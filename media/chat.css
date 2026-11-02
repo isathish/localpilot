@@ -699,6 +699,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .pick.model .auto { display: none; }
   .pick.skills .lbl { display: none; }
 }
+/* While a run is going, Pause and Stop take the Send button's place: the mode shrinks to its icon and "improve prompt"
+   (which rewrites a draft before sending) steps aside, so the model name is not cut to a letter. */
+@container (max-width: 420px) {
+  #box:has(#btnStop:not(.hidden)) .pick.mode .lbl, #box:has(#btnStop:not(.hidden)) #btnImprove { display: none; }
+}
 /* Narrow transcript: file names matter more than their language badges. */
 @container messages (max-width: 420px) { .step .fchip .lang { display: none; } }
 @container (max-width: 340px) {
