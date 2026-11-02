@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.0 — 2026-11-02
+
 ### Added
 - **Every setting is in the Settings page.** Auto mode (and its reviewer model) and how many queued tasks run at once are under Agent & approvals; the memory note limits under Memory; keeping Ollama and Redis running and installing Ollama without asking under Advanced → Background services; the LiteLLM config file under Providers → Gateways. Search finds them, along with skill and plugin folders and hidden models.
 - **The task queue is part of the extension API** (`queue.add`, `list`, `cancel`, `retry`, `remove`, `setPaused`, `onDidChange`), so scripts and other extensions can queue agent tasks with dependencies.
