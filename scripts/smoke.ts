@@ -33,6 +33,7 @@ import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
 import { reposTool } from '../src/tools/repos';
+import { checkDependencies, entropy, osvFixes, osvSeverity, parseLockfile, scanText, toSarif } from '../src/security/scan';
 import { McpClient } from '../src/mcp/mcpManager';
 import { SseParser, transportKind } from '../src/mcp/transports';
 import * as nodeHttp from 'http';
@@ -1175,6 +1176,28 @@ async function pureLogic() {
     const ro = await reposTool.execute({ action: 'exec', command: 'true' }, { ...rctx, readOnly: true } as never);
     check('exec refused in read-only modes', !!ro.isError);
     nodeFs.rmSync(base, { recursive: true, force: true });
+  }
+
+  console.log('\n[Security scan: lockfiles, OSV, secrets, risky code, SARIF]');
+  {
+    const names = (f: string, t: string) => parseLockfile(f, t).map((d) => `${d.ecosystem}:${d.name}@${d.version}`).sort().join(' ');
+    check('npm package-lock v3 (nested copies, links skipped) and v1', names('package-lock.json', '{"packages":{"":{},"node_modules/a":{"version":"1.0.0"},"node_modules/b/node_modules/a":{"version":"2.0.0"},"node_modules/l":{"link":true}}}') === 'npm:a@1.0.0 npm:a@2.0.0' && names('package-lock.json', '{"dependencies":{"x":{"version":"1.2.3","dependencies":{"y":{"version":"0.1.0"}}}}}') === 'npm:x@1.2.3 npm:y@0.1.0');
+    check('yarn.lock classic and berry', names('yarn.lock', '"@s/p@^1.0.0", "@s/p@^1.1":\n  version "1.2.0"\n  resolved "x"\n\nlodash@^4:\n  version "4.17.21"\n') === 'npm:@s/p@1.2.0 npm:lodash@4.17.21' && names('yarn.lock', '"react@npm:^18.0.0":\n  version: 18.2.0\n  resolution: "react@npm:18.2.0"\n') === 'npm:react@18.2.0');
+    check('requirements (pinned only), poetry.lock, Pipfile.lock', names('requirements-dev.txt', 'Requests[socks]==2.19.0\nflask>=2\n# c\n') === 'PyPI:requests@2.19.0' && names('poetry.lock', '[[package]]\nname = "Django"\nversion = "3.2.0"\n') === 'PyPI:django@3.2.0' && names('Pipfile.lock', '{"default":{"jinja2":{"version":"==2.10"}},"develop":{}}') === 'PyPI:jinja2@2.10');
+    check('go.mod (block and single, +incompatible), Cargo.lock (registry crates only), Gemfile.lock', names('go.mod', 'module x\nrequire (\n\tgithub.com/a/b v1.2.3 // indirect\n\tgolang.org/x/net v0.0.1\n)\nrequire github.com/c/d v2.0.0+incompatible\n') === 'Go:github.com/a/b@v1.2.3 Go:github.com/c/d@v2.0.0 Go:golang.org/x/net@v0.0.1' && names('Cargo.lock', '[[package]]\nname = "mine"\nversion = "0.1.0"\n\n[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+x"\n') === 'crates.io:serde@1.0.1' && names('Gemfile.lock', 'GEM\n  specs:\n    rack (2.0.1)\n    nokogiri (1.10.0-x86_64-linux)\n\nPLATFORMS\n') === 'RubyGems:nokogiri@1.10.0 RubyGems:rack@2.0.1');
+    const vuln = { id: 'GHSA-x', aliases: ['CVE-1'], database_specific: { severity: 'MODERATE' }, affected: [{ package: { name: 'lodash', ecosystem: 'npm' }, ranges: [{ events: [{ introduced: '0' }, { fixed: '4.17.21' }] }] }, { package: { name: 'other' }, ranges: [{ events: [{ fixed: '9' }] }] }] };
+    check('OSV severity (GitHub label, CVSS score fallback) and fixed versions for the right package', osvSeverity(vuln) === 'medium' && osvSeverity({ id: 'y', severity: [{ type: 'CVSS_V3', score: '9.8' }] }) === 'critical' && osvSeverity({ id: 'z' }) === 'medium' && osvFixes(vuln, { name: 'lodash', ecosystem: 'npm' }).join() === '4.17.21');
+    const fakeOsv = (async (url: string) => ({ ok: true, json: async () => (String(url).includes('querybatch') ? { results: [{ vulns: [{ id: 'GHSA-x' }, { id: 'PYSEC-1' }] }, {}] } : String(url).includes('GHSA-x') ? vuln : { id: 'PYSEC-1', aliases: ['GHSA-x'] }) })) as unknown as typeof fetch;
+    const deps = await checkDependencies([{ ecosystem: 'npm', name: 'lodash', version: '4.17.15', file: 'package-lock.json' }, { ecosystem: 'npm', name: 'ok', version: '1.0.0', file: 'package-lock.json' }], { fetchImpl: fakeOsv });
+    check('dependency check: one finding per advisory (aliases merged), with the fix', deps.length === 1 && deps[0].id === 'GHSA-x' && deps[0].fix === 'upgrade lodash to 4.17.21' && deps[0].aliases?.[0] === 'CVE-1', deps);
+    const sec = scanText('src/conf.ts', ['const k = "AKIAIOSFODNN7EXAMPLQ";', 'const password = "changeme12345";', 'const apiKey = "x9Fq2LmZ8vR1tY6wB3nC";', 'const token = process.env.TOKEN || "abc";', 'key = "-----BEGIN RSA PRIVATE KEY-----"', 'const t = "ghp_' + 'a'.repeat(36) + '"; // localpilot-scan: ignore'].join('\n'), { secrets: true, code: false });
+    check('secrets: real keys found and masked; placeholders, env reads and ignored lines skipped', sec.map((f) => `${f.id}:${f.line}`).join(' ') === 'aws-access-key:1 hardcoded-credential:3 private-key:5' && sec.every((f) => !f.title.includes('AKIAIOSFODNN7EXAMPLQ')) && /AKIA…LQ/.test(sec[0].title), sec.map((f) => `${f.id}:${f.line} ${f.title}`));
+    check('entropy separates random strings from words', entropy('x9Fq2LmZ8vR1tY6wB3nC') > 4 && entropy('aaaaaaaaaaaa') === 0);
+    const code = scanText('app/db.py', ['import subprocess', 'subprocess.run(cmd, shell=True)', 'cur.execute(f"SELECT * FROM t WHERE id = {i}")', 'cur.execute("SELECT * FROM t WHERE id = %s", (i,))', 'requests.get(u, verify=False)', '# subprocess.run(x, shell=True)', 'yaml.load(f, Loader=yaml.SafeLoader)', 'yaml.load(f)'].join('\n'), { secrets: false, code: true });
+    check('risky code: shell=True, f-string SQL, verify=False, unsafe yaml; parameterised SQL, comments and SafeLoader not flagged', code.map((f) => `${f.id}:${f.line}`).join(' ') === 'shell-injection:2 sql-concat:3 tls-verify-off:5 unsafe-deserialization:8', code.map((f) => `${f.id}:${f.line}`));
+    check('the same pattern in a test file is low severity', scanText('tests/test_db.py', 'requests.get(u, verify=False)', { secrets: false, code: true })[0].severity === 'low');
+    const sarif = toSarif({ root: '/r', findings: [...deps, ...sec], dependencies: 2, files: 1, skipped: [] }, '1.0.0') as { version: string; runs: { results: { ruleId: string; level: string; locations: { physicalLocation: { region?: { startLine: number } } }[] }[]; tool: { driver: { rules: unknown[] } } }[] };
+    check('SARIF 2.1.0: one rule per id, levels from severity, line regions', sarif.version === '2.1.0' && sarif.runs[0].results.length === 4 && sarif.runs[0].tool.driver.rules.length === 4 && sarif.runs[0].results.find((r) => r.ruleId === 'aws-access-key')?.level === 'error' && sarif.runs[0].results.find((r) => r.ruleId === 'aws-access-key')?.locations[0].physicalLocation.region?.startLine === 1);
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

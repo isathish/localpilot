@@ -82,6 +82,7 @@ localpilot skill search "write a plan" --install
 | `localpilot skill install <source> [--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `--user` installs to `~/.localpilot/skills` |
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
 | `localpilot eval [--models a,b]` | Benchmarks models on real coding tasks; see [Benchmarking models](#benchmarking-models) |
+| `localpilot scan [folder]` | Security scan: vulnerable dependencies, committed secrets and risky code; see [Security scanning](#security-scanning) |
 | `localpilot work [--once] [--max N]` | Takes tasks from the [shared board](parallel-agents.md#the-shared-board) (`.localpilot/board`) one after another until none is left; run several for parallel workers |
 
 ### Benchmarking models
@@ -122,6 +123,32 @@ The report shows, per model, how many tasks passed, the average time, steps and 
 ```
 
 `verify.command` passes on exit code 0 (`{python}` becomes the Python 3 found on the machine); `verify.files` entries must match (or with `"absent": true`, must not); `verify.answer` is a regular expression the final answer must match. Set `"mode": "ask"` for questions.
+
+### Security scanning
+
+`localpilot scan` checks a workspace for three kinds of problems:
+
+- **Vulnerable dependencies.** Exact versions are read from the lockfiles (`package-lock.json`, `yarn.lock`, `requirements*.txt` pins, `poetry.lock`, `uv.lock`, `Pipfile.lock`, `go.mod`, `Cargo.lock`, `Gemfile.lock`) and checked against [OSV.dev](https://osv.dev), the open vulnerability database that includes GitHub's advisories, PyPA, the Go database and RustSec. Each finding names the advisory (GHSA and CVE ids), its severity and the versions that fix it. Only package names and versions are sent; `--offline` skips this part.
+- **Secrets** committed to tracked files: private keys, AWS, GitHub, OpenAI, Anthropic, Slack, Google and Stripe keys, and passwords or tokens assigned in code. Values are masked in the report. Placeholders (`changeme`, `<token>`, `${VAR}`) and values read from the environment are ignored.
+- **Risky code**, a short list of high-confidence patterns: TLS verification turned off, shell commands or SQL built from strings, unsafe deserialization (`pickle`, `yaml.load` without a safe loader) and `eval`. The same pattern in a test file is reported as low.
+
+Add `localpilot-scan: ignore` (or `nosec`) on a line to skip it. The command exits with 1 when a finding reaches `--fail-on` (default `high`; `none` never fails). `--sarif file` writes SARIF 2.1.0 for GitHub code scanning, `--json file` the raw findings:
+
+In GitHub Actions the CLI runs straight from the release's VSIX (it is self-contained; only Node.js is needed):
+
+```yaml
+- name: LocalPilot security scan
+  env: { GH_TOKEN: "${{ github.token }}" }
+  run: |
+    gh release download --repo isathish/localpilot --pattern localpilot.vsix -O lp.vsix
+    unzip -q lp.vsix 'extension/dist/*' -d lp
+    node lp/extension/dist/cli.js scan --sarif scan.sarif --fail-on critical
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with: { sarif_file: scan.sarif }
+```
+
+In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrades vulnerable dependencies to the fixed version and runs the tests, moves secrets to environment variables (and tells you which credentials to rotate), and rewrites the clearest risky patterns. The agent also has the scan as the `security_scan` tool, and uses it when you ask about security.
 
 ### Options
 

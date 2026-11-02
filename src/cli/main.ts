@@ -50,6 +50,8 @@ import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, 
 import { LEASE_MS, TeamBoard } from '../agent/teamBoard';
 import { boardOwner, teamBoardTool } from '../tools/teamBoard';
 import { reposTool } from '../tools/repos';
+import { securityScanTool } from '../tools/security';
+import { formatFindings, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -87,6 +89,7 @@ ${bold('Usage')}
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your providers (cloud ones are marked)
   localpilot doctor                       check servers, settings and tools
+  localpilot scan [folder]               security scan: vulnerable dependencies (OSV.dev), secrets, risky code [--fail-on high] [--sarif out.sarif] [--json out.json] [--offline]
   localpilot work [--once] [--max N]      take tasks from the shared board (.localpilot/board) until none is left
   localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
   localpilot providers                    local and cloud providers: reachability, models, key state
@@ -136,7 +139,9 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan';
+  /** `scan`: exit 1 at or above this severity; SARIF/JSON outputs; skip the online dependency check. */
+  scanOpts: { failOn: 'low' | 'medium' | 'high' | 'critical' | 'none'; sarif?: string; json?: string; offline: boolean };
   /** `work`: stop after one task; give up waiting after this many seconds with nothing claimable. */
   workOpts: { once: boolean; max?: number };
   /** `eval`: models to compare, suite file, task ids, keep workspaces. */
@@ -152,7 +157,7 @@ interface Args {
   apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false } };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false } };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -191,13 +196,17 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--no-cloud') {a.provider.cloud = false;}
     else if (x === 'eval' && !words.length && !a.cmd) {a.cmd = 'eval';}
     else if (x === 'work' && !words.length && !a.cmd) {a.cmd = 'work';}
+    else if (x === 'scan' && !words.length && !a.cmd) {a.cmd = 'scan';}
+    else if (x === '--fail-on') {const v = next(); a.scanOpts.failOn = (['low', 'medium', 'high', 'critical', 'none'].includes(v) ? v : 'high') as Args['scanOpts']['failOn'];}
+    else if (x === '--sarif') {a.scanOpts.sarif = next();}
+    else if (x === '--offline') {a.scanOpts.offline = true;}
     else if (x === '--once') {a.workOpts.once = true;}
     else if (x === '--max') {a.workOpts.max = Math.max(1, Number(next()) || 1);}
     else if (x === '--models') {a.evalOpts.models.push(...next().split(',').map((m) => m.trim()).filter(Boolean));}
     else if (x === '--suite') {a.evalOpts.suite = next();}
     else if (x === '--tasks') {a.evalOpts.tasks.push(...next().split(',').map((t) => t.trim()).filter(Boolean));}
     else if (x === '--keep') {a.evalOpts.keep = true;}
-    else if (x === '--json') {a.evalOpts.json = next();}
+    else if (x === '--json') {a.evalOpts.json = next(); a.scanOpts.json = a.evalOpts.json;}
     else if (x === 'providers' && !words.length && !a.cmd) {a.cmd = 'providers';}
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
@@ -474,6 +483,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'find_symbol': return `Look up ${s(a.query)}`;
     case 'find_references': return `References to ${s(a.symbol)}`;
     case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
+    case 'security_scan': return `Security scan${Array.isArray(a.kinds) && a.kinds.length ? `: ${s(a.kinds.join(', '))}` : ''}${a.path ? ` in ${s(a.path)}` : ''}`;
     case 'repos': return `Repos: ${s(a.action)}${a.command ? ` $ ${s(a.command, 60)}` : a.query ? ` "${s(a.query, 40)}"` : ''}${Array.isArray(a.repos) && a.repos.length ? ` in ${s(a.repos.join(', '), 40)}` : ''}`;
     case 'team_board': return `Board: ${s(a.action)}${a.id ? ` ${s(a.id)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}`;
     case 'git_status': return `Git ${s(a.action || 'status')}${a.path ? ` ${s(a.path)}` : ''}`;
@@ -556,7 +566,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
@@ -778,6 +788,27 @@ async function cmdProviders(args: Args): Promise<number> {
       console.error(`${red('✖')} Unknown: providers ${sub}. Try: list, presets, add, key, test, remove`);
       return 2;
   }
+}
+
+/** `localpilot scan`: the security scan for a terminal or CI job; exit 1 when a finding reaches --fail-on. */
+async function cmdScan(args: Args, renderer: Renderer): Promise<number> {
+  const o = args.scanOpts;
+  const r = await scanWorkspace(args.cwd, { kinds: { dependencies: !o.offline, secrets: true, code: true }, path: args.prompt || undefined, progress: (t) => renderer.status(t) });
+  renderer.status('');
+  console.log(formatFindings(r, 200));
+  const fs = await import('fs');
+  if (o.sarif) {
+    await fs.promises.writeFile(o.sarif, JSON.stringify(toSarif(r, VERSION), null, 2));
+    console.log(dim(`SARIF written to ${o.sarif}`));
+  }
+  if (o.json) {
+    await fs.promises.writeFile(o.json, JSON.stringify(r, null, 2));
+  }
+  if (o.failOn === 'none') {
+    return 0;
+  }
+  const at = SEVERITY_ORDER.indexOf(o.failOn);
+  return r.findings.some((f) => SEVERITY_ORDER.indexOf(f.severity) >= at) ? 1 : 0;
 }
 
 /**
@@ -1057,6 +1088,10 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'eval') {
     process.exitCode = await cmdEval(core, args);
+    return;
+  }
+  if (args.cmd === 'scan') {
+    process.exitCode = await cmdScan(args, renderer);
     return;
   }
   if (args.cmd === 'work') {

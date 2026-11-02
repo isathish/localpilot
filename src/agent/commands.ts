@@ -208,6 +208,17 @@ async function listMarkdown(dir: string, depth = 2): Promise<{ file: string; sub
  * `/pr`). They drive the source-control tools (git_status, git_commit, git_push, pull_request, ci_status).
  */
 const BUILTIN_COMMANDS: Record<string, string> = {
+  scan: `---
+description: Scan for vulnerable dependencies, committed secrets and risky code, then fix what is safe to fix
+argument-hint: [folder]
+---
+Check this workspace for security problems and fix them. $ARGUMENTS
+
+1. security_scan with all kinds.
+2. Vulnerable dependencies: for each critical/high one, upgrade to the fixed version (prefer the smallest upgrade that fixes it; say so if it crosses a major version), update the lockfile with the package manager, and run the tests. Leave medium/low ones listed with their fix.
+3. Secrets: move each value to an environment variable (and .env.example with a placeholder), make the code read it, and tell the user which credentials to rotate — a committed secret must be considered leaked even after removal.
+4. Risky code: fix the high-severity patterns (parameterised SQL, argument lists instead of shell strings, TLS verification back on) when the intent is clear; otherwise explain the risk.
+5. Run security_scan again and report what was fixed, what is left and why.`,
   pr: `---
 description: Commit the current changes on a branch, push it and open a pull request
 argument-hint: [title or what the change is about]
