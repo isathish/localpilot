@@ -221,6 +221,10 @@ suite('LocalPilot settings & setup', () => {
     assert.deepStrictEqual(out, { 'file-system': { command: 'npx', args: ['-y', 'pkg'], env: { A: '1' }, cwd: '/tmp', enabled: false } });
     assert.throws(() => sanitizeMcpServers({ bad: { command: '' } }), /needs a name and a command/);
     assert.throws(() => sanitizeMcpServers([]), /must be an object/);
+    // Remote servers: a URL instead of a command, with optional transport and headers; non-HTTP URLs are refused.
+    const remote = sanitizeMcpServers({ wiki: { url: ' https://mcp.example.com/mcp ', type: 'sse', headers: { Authorization: 'Bearer ${env:T}', ' ': 'x' }, args: ['ignored'] } });
+    assert.deepStrictEqual(remote.wiki, { url: 'https://mcp.example.com/mcp', type: 'sse', headers: { Authorization: 'Bearer ${env:T}' } });
+    assert.throws(() => sanitizeMcpServers({ bad: { url: 'ftp://x' } }), /must start with http/);
   });
 
   test('settings written through the VS Code API are picked up by the extension', async function () {

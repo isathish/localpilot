@@ -854,11 +854,24 @@ export function sanitizeMcpServers(value: unknown): Record<string, McpServerConf
     const name = rawName.trim().replace(/[^\w.-]+/g, '-');
     const c = (rawCfg ?? {}) as Partial<McpServerConfig>;
     const command = String(c.command ?? '').trim();
-    if (!name || !command) {
-      throw new Error(`MCP server "${rawName || '?'}" needs a name and a command`);
+    const url = String(c.url ?? '').trim();
+    if (!name || (!command && !url)) {
+      throw new Error(`MCP server "${rawName || '?'}" needs a name and a command (local) or a URL (remote)`);
     }
-    const entry: McpServerConfig = { command };
-    if (Array.isArray(c.args) && c.args.length) {
+    if (url && !/^https?:\/\//i.test(url)) {
+      throw new Error(`MCP server "${name}": the URL must start with http:// or https://`);
+    }
+    const entry: McpServerConfig = url ? { url } : { command };
+    if (url && (c.type === 'http' || c.type === 'sse')) {
+      entry.type = c.type;
+    }
+    if (url && c.headers && typeof c.headers === 'object' && !Array.isArray(c.headers)) {
+      const h = Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [k.trim(), String(v)]).filter(([k]) => k));
+      if (Object.keys(h).length) {
+        entry.headers = h;
+      }
+    }
+    if (!url && Array.isArray(c.args) && c.args.length) {
       entry.args = c.args.map(String);
     }
     if (c.env && typeof c.env === 'object' && !Array.isArray(c.env)) {

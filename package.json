@@ -1604,7 +1604,7 @@
         "localpilot.mcpServers": {
           "type": "object",
           "default": {},
-          "markdownDescription": "MCP servers (stdio) whose tools are exposed to the agent, e.g. `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`",
+          "markdownDescription": "MCP servers whose tools are exposed to the agent. A local server is started from a command: `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`. A remote server is reached at a URL over Streamable HTTP (or HTTP+SSE for a URL ending in `/sse` or `\"type\": \"sse\"`), with optional headers: `{ \"github\": { \"url\": \"https://api.githubcopilot.com/mcp/\", \"headers\": { \"Authorization\": \"Bearer ${env:GITHUB_TOKEN}\" } } }`. Header values accept `${env:NAME}` and `${secret:NAME}`.",
           "additionalProperties": {
             "type": "object",
             "properties": {
@@ -1629,6 +1629,31 @@
               "enabled": {
                 "type": "boolean",
                 "default": true
+              },
+              "url": {
+                "type": "string",
+                "markdownDescription": "Remote server endpoint (`https://…`). Use instead of `command`."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stdio",
+                  "http",
+                  "sse"
+                ],
+                "enumDescriptions": [
+                  "Local process (command)",
+                  "Streamable HTTP (current MCP remote transport)",
+                  "HTTP + Server-Sent Events (older remote servers)"
+                ],
+                "markdownDescription": "Transport; inferred from `command` / `url` when omitted."
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "markdownDescription": "Request headers for a remote server, e.g. `{ \"Authorization\": \"Bearer ${env:TOKEN}\" }`."
               }
             }
           }

@@ -10,7 +10,14 @@ export interface WebSearchConfig {
 }
 
 export interface McpServerConfig {
-  command: string;
+  /** Local server: the program to start (stdio). */
+  command?: string;
+  /** Remote server: its endpoint (Streamable HTTP, or legacy HTTP+SSE for a URL ending in /sse or type "sse"). */
+  url?: string;
+  /** `stdio`, `http` or `sse`; inferred from command/url when omitted (Claude Code's `.mcp.json` uses the same names). */
+  type?: 'stdio' | 'http' | 'sse' | 'streamable-http' | 'streamableHttp';
+  /** Request headers for remote servers, e.g. `{ "Authorization": "Bearer ${env:GITHUB_TOKEN}" }`. */
+  headers?: Record<string, string>;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;

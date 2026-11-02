@@ -1,17 +1,10 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
 import { getConfig, McpServerConfig, onConfigChange } from '../config';
 import { ToolRegistry } from '../tools/registry';
 import { Tool, ToolDefinition } from '../types';
 import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
-
-interface JsonRpcResponse {
-  id?: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-  method?: string;
-  params?: unknown;
-}
+import { resolveApiKey } from '../providers/cloud';
+import { expandHeaders, HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
 
 interface McpToolInfo {
   name: string;
@@ -19,14 +12,21 @@ interface McpToolInfo {
   inputSchema?: ToolDefinition['parameters'];
 }
 
-/** Minimal MCP client over stdio (JSON-RPC 2.0, newline-delimited). */
-class McpClient implements vscode.Disposable {
-  private child?: cp.ChildProcess;
+/** Expands `${env:NAME}` / `${secret:NAME}` the same way provider API keys are. */
+const resolveRef = (raw: string) => resolveApiKey({ apiKey: raw });
+
+/** An MCP client: JSON-RPC requests and responses over whichever transport the server uses (stdio, HTTP, SSE). */
+export class McpClient implements vscode.Disposable {
+  private transport?: Transport;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-  private buffer = '';
-  private stderrTail = '';
   tools: McpToolInfo[] = [];
+
+  constructor(readonly name: string, private readonly cfg: McpServerConfig, private readonly log: vscode.LogOutputChannel, private readonly clientVersion: string, private readonly fetchImpl: typeof fetch = fetch) {}
+
+  get kind(): Transport['kind'] | undefined {
+    return this.transport?.kind;
+  }
 
   private failPending(err: Error): void {
     for (const [, p] of this.pending) {
@@ -35,73 +35,78 @@ class McpClient implements vscode.Disposable {
     this.pending.clear();
   }
 
-  constructor(readonly name: string, private readonly cfg: McpServerConfig, private readonly log: vscode.LogOutputChannel, private readonly clientVersion: string) {}
+  private make(kind: 'stdio' | 'http' | 'sse'): Transport {
+    const headers = expandHeaders(this.cfg.headers, resolveRef);
+    if (kind === 'stdio') {
+      return new StdioTransport(this.cfg, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, (m) => this.log.debug(`[mcp:${this.name}] ${m}`));
+    }
+    return kind === 'http' ? new StreamableHttpTransport(this.cfg.url!, headers, this.fetchImpl) : new SseTransport(this.cfg.url!, headers, this.fetchImpl);
+  }
 
   async start(): Promise<void> {
-    const cwd = this.cfg.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    // `shell: true` on Windows so `npx` / `.cmd` launchers resolve the same way they do in a terminal.
-    this.child = cp.spawn(this.cfg.command, this.cfg.args ?? [], { cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' });
-    const spawned = new Promise<void>((resolve, reject) => {
-      this.child!.once('spawn', () => resolve());
-      this.child!.once('error', (e) => reject(new Error(`cannot start "${this.cfg.command}": ${e.message}`)));
-    });
-    this.child.on('error', (e) => this.failPending(new Error(`MCP server error: ${e.message}`)));
-    // A failed spawn or an early exit also errors the pipes (EPIPE); without listeners those would be uncaught.
-    for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
-      stream?.on('error', (e: Error) => this.log.debug(`[mcp:${this.name}] pipe: ${e.message}`));
+    const kind = transportKind(this.cfg);
+    if (!kind) {
+      throw new Error('needs a "command" (a local server) or a "url" (a remote one)');
     }
-    this.child.stdout!.on('data', (d: Buffer) => this.onData(d));
-    this.child.stderr!.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
-      this.stderrTail = line.slice(-300);
-      this.log.debug(`[mcp:${this.name}] ${line}`);
-    });
-    this.child.on('exit', (code) => {
-      this.log.warn(`[mcp:${this.name}] exited with ${code}`);
-      this.failPending(new Error(`MCP server exited with code ${code ?? 'null'}${this.stderrTail ? `: ${this.stderrTail}` : ''}`));
-    });
-    await spawned;
-    await this.request('initialize', {
-      protocolVersion: '2024-11-05',
+    try {
+      await this.connect(kind);
+    } catch (e) {
+      // Backwards compatibility from the MCP spec: a server that rejects the Streamable HTTP POST with a 4xx may be
+      // an older HTTP+SSE server at the same URL. Only when the type was not set explicitly.
+      if (kind === 'http' && !this.cfg.type && e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403) {
+        this.log.info(`[mcp:${this.name}] Streamable HTTP refused (${e.status}); trying HTTP+SSE`);
+        this.transport?.close();
+        await this.connect('sse');
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  private async connect(kind: 'stdio' | 'http' | 'sse'): Promise<void> {
+    this.transport = this.make(kind);
+    await this.transport.start(
+      (m) => this.onMessage(m),
+      (err) => {
+        this.log.warn(`[mcp:${this.name}] ${err.message}`);
+        this.failPending(err);
+      }
+    );
+    const init = (await this.request('initialize', {
+      protocolVersion: kind === 'http' ? '2025-06-18' : '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'LocalPilot', version: this.clientVersion },
-    });
-    this.notify('notifications/initialized', {});
+    })) as { protocolVersion?: string; serverInfo?: { name?: string; version?: string } };
+    if (init?.protocolVersion) {
+      this.transport.setProtocolVersion?.(init.protocolVersion);
+    }
+    await this.notify('notifications/initialized', {});
     const res = (await this.request('tools/list', {})) as { tools?: McpToolInfo[] };
     this.tools = res.tools ?? [];
-    this.log.info(`[mcp:${this.name}] ${this.tools.length} tools`);
+    this.log.info(`[mcp:${this.name}] ${kind}${this.cfg.url ? ` ${this.cfg.url}` : ''}: ${init?.serverInfo?.name ?? 'server'} ${init?.serverInfo?.version ?? ''} · protocol ${init?.protocolVersion ?? '?'} · ${this.tools.length} tools`);
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
-    const res = (await this.request('tools/call', { name, arguments: args }, 120_000, signal)) as { content?: { type: string; text?: string; data?: string }[]; isError?: boolean };
-    const text = (res.content ?? []).map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type} content]`)).join('\n');
-    return { text, isError: !!res.isError };
+    const res = (await this.request('tools/call', { name, arguments: args }, 120_000, signal)) as { content?: { type: string; text?: string; data?: string }[]; isError?: boolean; structuredContent?: unknown };
+    const parts = (res.content ?? []).map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type} content]`));
+    if (!parts.length && res.structuredContent !== undefined) {
+      parts.push(JSON.stringify(res.structuredContent, null, 2));
+    }
+    return { text: parts.join('\n'), isError: !!res.isError };
   }
 
-  private onData(d: Buffer): void {
-    this.buffer += d.toString();
-    let idx: number;
-    while ((idx = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, idx).trim();
-      this.buffer = this.buffer.slice(idx + 1);
-      if (!line) {
-        continue;
+  private onMessage(msg: JsonRpcMessage): void {
+    if (typeof msg.id === 'number' && this.pending.has(msg.id) && (msg.result !== undefined || msg.error)) {
+      const p = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        p.reject(new Error(msg.error.message));
+      } else {
+        p.resolve(msg.result);
       }
-      let msg: JsonRpcResponse;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const p = this.pending.get(msg.id)!;
-        this.pending.delete(msg.id);
-        if (msg.error) {
-          p.reject(new Error(msg.error.message));
-        } else {
-          p.resolve(msg.result);
-        }
-      }
+    } else if (msg.method === 'ping' && msg.id !== undefined) {
+      // Servers may ping the client; answer so they do not drop the connection.
+      void this.transport?.send({ id: msg.id, result: {} }).catch(() => undefined);
     }
   }
 
@@ -114,7 +119,7 @@ class McpClient implements vscode.Disposable {
       const onAbort = () => {
         if (this.pending.delete(id)) {
           clearTimeout(t);
-          this.notify('notifications/cancelled', { requestId: id, reason: 'Cancelled by user' });
+          void this.notify('notifications/cancelled', { requestId: id, reason: 'Cancelled by user' });
           reject(new Error('Cancelled'));
         }
       };
@@ -124,36 +129,41 @@ class McpClient implements vscode.Disposable {
         reject(new Error(`MCP ${method} timed out`));
       }, timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
+      const done = () => {
+        clearTimeout(t);
+        signal?.removeEventListener('abort', onAbort);
+      };
       this.pending.set(id, {
         resolve: (v) => {
-          clearTimeout(t);
-          signal?.removeEventListener('abort', onAbort);
+          done();
           resolve(v);
         },
         reject: (e) => {
-          clearTimeout(t);
-          signal?.removeEventListener('abort', onAbort);
+          done();
           reject(e);
         },
       });
-      const stdin = this.child?.stdin;
-      if (!stdin || stdin.destroyed) {
+      if (!this.transport) {
         this.pending.delete(id);
-        clearTimeout(t);
-        signal?.removeEventListener('abort', onAbort);
+        done();
         return reject(new Error('MCP server is not running'));
       }
-      stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      this.transport.send({ id, method, params }).catch((e: Error) => {
+        if (this.pending.delete(id)) {
+          done();
+          reject(e);
+        }
+      });
     });
   }
 
-  private notify(method: string, params: unknown): void {
-    this.child?.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+  private async notify(method: string, params: unknown): Promise<void> {
+    await this.transport?.send({ method, params }).catch((e: Error) => this.log.debug(`[mcp:${this.name}] ${method}: ${e.message}`));
   }
 
   dispose(): void {
     this.failPending(new Error('MCP server stopped'));
-    this.child?.kill();
+    this.transport?.close();
   }
 }
 
@@ -188,7 +198,7 @@ export class McpManager implements vscode.Disposable {
     await Promise.all(
       Object.entries(servers)
         .filter(([name, c]) => {
-          if (c.enabled === false || !c.command) {
+          if (c.enabled === false || !transportKind(c)) {
             return false;
           }
           if (!mcpServerAllowed(getManagedPolicy(this.log), name)) {
@@ -243,9 +253,9 @@ export class McpManager implements vscode.Disposable {
   }
 
   /** Connected servers with their tool counts, plus configured servers that failed to start and why. */
-  get status(): { name: string; tools: number; error?: string }[] {
+  get status(): { name: string; tools: number; error?: string; transport?: string }[] {
     return [
-      ...[...this.clients.values()].map((c) => ({ name: c.name, tools: c.tools.length })),
+      ...[...this.clients.values()].map((c) => ({ name: c.name, tools: c.tools.length, transport: c.kind })),
       ...[...this.errors].map(([name, error]) => ({ name, tools: 0, error })),
     ];
   }

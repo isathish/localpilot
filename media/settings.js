@@ -1654,7 +1654,7 @@
   }
   // ------------------------------------------------------------------ mcp
   function secMcp(sec) {
-    head(sec, 'MCP servers', 'Model Context Protocol servers (stdio) whose tools become available to the agent. Governed by the Network approval policy.');
+    head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the Network approval policy.');
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
     const status = new Map((state.data.mcp || []).map((s) => [s.name, s]));
     const names = Object.keys(servers);
@@ -1667,7 +1667,7 @@
       const st = status.get(name);
       const tools = st && !st.error ? st.tools : undefined;
       const err = st && st.error;
-      c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc([s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+      c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
       if (err && s.enabled !== false) { c.appendChild(el('div', 'prov-result err', `${I.x} ${esc(err)}`)); }
       disclosure(c.querySelector('.prov-head'), open, `${name} server settings`, () => { state.expanded = open ? null : `mcp:${name}`; render(); });
       if (open) { c.appendChild(mcpForm(name, s, servers)); }
@@ -1677,15 +1677,16 @@
     sec.appendChild(el('h2', 'sub', 'Add a server'));
     const add = el('div', 'card');
     const f = el('div', 'field wide');
-    f.innerHTML = `<div><div class="lbl">New MCP server</div><div class="desc">Give it a name and the command to launch it. Example: <code>npx -y @modelcontextprotocol/server-filesystem /path</code></div></div>`;
+    f.innerHTML = `<div><div class="lbl">New MCP server</div><div class="desc">Give it a name and either the command that starts it (<code>npx -y @modelcontextprotocol/server-filesystem /path</code>) or the URL of a remote server (<code>https://mcp.example.com/mcp</code>). Add authentication headers after adding it.</div></div>`;
     const ctl = el('div', 'ctl');
-    ctl.innerHTML = `<div class="row"><input type="text" id="mcpName" placeholder="name (e.g. filesystem)" style="max-width:200px"><input type="text" id="mcpCmd" placeholder="command and args"><button class="btn primary sm" id="mcpAdd">${I.plus}Add</button></div>`;
+    ctl.innerHTML = `<div class="row"><input type="text" id="mcpName" placeholder="name (e.g. filesystem)" style="max-width:200px"><input type="text" id="mcpCmd" placeholder="command and args, or https://… URL"><button class="btn primary sm" id="mcpAdd">${I.plus}Add</button></div>`;
     ctl.querySelector('#mcpAdd').onclick = () => {
       const name = ctl.querySelector('#mcpName').value.trim().replace(/[^\w.-]+/g, '-');
-      const parts = ctl.querySelector('#mcpCmd').value.trim().match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-      if (!name || !parts.length) { toast('Name and command are required', 'error'); return; }
+      const raw = ctl.querySelector('#mcpCmd').value.trim();
+      const parts = raw.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+      if (!name || !parts.length) { toast('Name and a command or URL are required', 'error'); return; }
       if (servers[name]) { toast(`“${name}” already exists`, 'error'); return; }
-      servers[name] = { command: parts[0].replace(/"/g, ''), args: parts.slice(1).map((a) => a.replace(/"/g, '')) };
+      servers[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0].replace(/"/g, ''), args: parts.slice(1).map((a) => a.replace(/"/g, '')) };
       state.expanded = `mcp:${name}`;
       set('mcpServers', servers);
     };
@@ -1704,10 +1705,21 @@
     const env = el('textarea'); env.value = s.env ? JSON.stringify(s.env, null, 2) : ''; env.placeholder = '{ "API_KEY": "…" }';
     env.onchange = () => { try { upd({ env: env.value.trim() ? JSON.parse(env.value) : undefined }); env.classList.remove('invalid'); } catch { env.classList.add('invalid'); toast('Environment must be valid JSON', 'error'); } };
     const en = el('button', `toggle ${s.enabled !== false ? 'on' : ''}`); en.onclick = () => upd({ enabled: s.enabled === false ? undefined : false });
-    body.appendChild(row('Command', '', cmd));
-    body.appendChild(row('Arguments', '', args));
-    body.appendChild(row('Working directory', '', cwd));
-    body.appendChild(row('Environment', 'JSON object of extra environment variables.', env));
+    if (s.url) {
+      // Remote server: endpoint, transport and request headers instead of a command line.
+      const url = el('input'); url.type = 'url'; url.value = s.url; url.onchange = () => upd({ url: url.value.trim() });
+      const type = el('select'); type.innerHTML = '<option value="">Automatic</option><option value="http">Streamable HTTP</option><option value="sse">HTTP + SSE (older servers)</option>'; type.value = s.type || ''; type.onchange = () => upd({ type: type.value || undefined });
+      const headers = el('textarea'); headers.value = s.headers ? JSON.stringify(s.headers, null, 2) : ''; headers.placeholder = '{ "Authorization": "Bearer ${env:MY_TOKEN}" }';
+      headers.onchange = () => { try { upd({ headers: headers.value.trim() ? JSON.parse(headers.value) : undefined }); headers.classList.remove('invalid'); } catch { headers.classList.add('invalid'); toast('Headers must be valid JSON', 'error'); } };
+      body.appendChild(row('URL', '', url));
+      body.appendChild(row('Transport', 'Automatic tries Streamable HTTP and falls back to SSE; a URL ending in <code>/sse</code> uses SSE.', type));
+      body.appendChild(row('Headers', 'JSON object sent with every request. Use <code>${env:NAME}</code> or <code>${secret:NAME}</code> so tokens stay out of settings.json.', headers));
+    } else {
+      body.appendChild(row('Command', '', cmd));
+      body.appendChild(row('Arguments', '', args));
+      body.appendChild(row('Working directory', '', cwd));
+      body.appendChild(row('Environment', 'JSON object of extra environment variables.', env));
+    }
     body.appendChild(row('Enabled', '', en));
     const foot = el('div', 'prov-foot');
     foot.innerHTML = `<span class="spacer"></span><button class="btn danger">${I.trash}Remove</button>`;

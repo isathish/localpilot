@@ -1,12 +1,10 @@
 ---
 title: MCP servers
-description: Add Model Context Protocol servers to give the agent more tools. Configure them in Settings or localpilot.mcpServers.
+description: Add local or remote Model Context Protocol servers to give the agent more tools. Configure them in Settings or localpilot.mcpServers.
 permalink: /docs/mcp/
 ---
 
-LocalPilot includes an [MCP](https://modelcontextprotocol.io) client for servers that use the **stdio** transport (a local process). Every tool a server exposes becomes an agent tool named `mcp_<server>_<tool>`. Characters other than letters, digits, `_` and `-` are replaced with `_`, and the name is cut at 64 characters.
-
-Remote servers (HTTP or SSE, configured with a `url`) are not supported.
+LocalPilot includes an [MCP](https://modelcontextprotocol.io) client for local servers (a process started from a command, the **stdio** transport) and remote servers (a `url`, over **Streamable HTTP** or the older **HTTP+SSE** transport). Every tool a server exposes becomes an agent tool named `mcp_<server>_<tool>`. Characters other than letters, digits, `_` and `-` are replaced with `_`, and the name is cut at 64 characters.
 
 ## Configuration
 
@@ -27,6 +25,13 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
     "args": ["-y", "@modelcontextprotocol/server-github"],
     "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_…" }
   },
+  "deepwiki": {
+    "url": "https://mcp.deepwiki.com/mcp"
+  },
+  "github-remote": {
+    "url": "https://api.githubcopilot.com/mcp/",
+    "headers": { "Authorization": "Bearer ${env:GITHUB_TOKEN}" }
+  },
   "postgres": {
     "command": "uvx",
     "args": ["mcp-server-postgres", "postgresql://localhost/mydb"],
@@ -37,15 +42,22 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
 
 | Field | Required | Purpose |
 |---|---|---|
-| `command` | yes | Program to launch |
+| `command` | for a local server | Program to launch |
 | `args` | no | Arguments |
+| `url` | for a remote server | The server's endpoint (`https://…`) |
+| `type` | no | `stdio`, `http` (Streamable HTTP) or `sse` (HTTP+SSE). Inferred when omitted: a `command` is stdio, a `url` ending in `/sse` is SSE, any other `url` is Streamable HTTP |
+| `headers` | no | Remote servers: headers sent with every request, typically `Authorization`. Values accept `${env:NAME}` and `${secret:NAME}` |
 | `env` | no | Extra environment variables, added to the environment VS Code was started with |
 | `cwd` | no | Working directory. Default: the first workspace folder |
 | `enabled` | no | Set `false` to keep the entry without starting the server |
 
-Avoid committing tokens in `env` to a shared workspace `settings.json`; put such servers in your user settings.
+Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: use `${env:NAME}` or `${secret:NAME}` references, or put such servers in your user settings.
 
-[Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can add servers through their `.mcp.json`. Those appear as `plugin:server`.
+### Remote servers
+
+For a remote server without an explicit `type`, LocalPilot first speaks Streamable HTTP, the current MCP transport: it posts each request to the URL, accepts JSON or event-stream replies, and keeps the session the server assigns (`Mcp-Session-Id`). If the server refuses that with a 4xx error other than 401 or 403, LocalPilot connects again with HTTP+SSE at the same URL, as the MCP specification recommends for older servers. An authentication error is reported as it is, not retried. Each server's card in Settings shows which transport it uses.
+
+[Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can add servers through their `.mcp.json`, local or remote (`{ "type": "http", "url": …, "headers": … }`, the same format as Claude Code). Those appear as `plugin:server`.
 
 ## Starting and reloading
 

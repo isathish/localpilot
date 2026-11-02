@@ -353,7 +353,7 @@ suite('Claude Code compatibility: plugins', () => {
     await write(path.join(p1, 'agents', 'helper.md'), '---\nname: helper\ndescription: h\n---\nyou help');
     await write(path.join(p1, 'skills', 'sk', 'SKILL.md'), '---\nname: sk\ndescription: s\n---\nbody');
     await write(path.join(p1, 'hooks', 'hooks.json'), '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/check.sh"}]}]}}');
-    await write(path.join(p1, '.mcp.json'), '{"mcpServers":{"srv":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/server.js"],"env":{"ROOT":"${CLAUDE_PLUGIN_ROOT}"}}}}');
+    await write(path.join(p1, '.mcp.json'), '{"mcpServers":{"srv":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/server.js"],"env":{"ROOT":"${CLAUDE_PLUGIN_ROOT}"}},"remote":{"type":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer ${env:TOKEN}"}}}}');
     // Marketplace checkout under the user folder, two levels deep.
     const market = path.join(home, '.claude', 'plugins', 'repos', 'acme');
     await write(path.join(market, '.claude-plugin', 'marketplace.json'), '{"name":"acme","plugins":[{"name":"beta","source":"./plugins/beta"}]}');
@@ -368,10 +368,11 @@ suite('Claude Code compatibility: plugins', () => {
     assert.strictEqual(alpha.hooks.PreToolUse?.[0].hooks[0].pluginRoot, p1);
     assert.strictEqual(alpha.mcpServers.srv.args?.[0], path.join(p1, 'server.js'));
     assert.strictEqual(alpha.mcpServers.srv.env?.ROOT, p1);
+    assert.deepStrictEqual(alpha.mcpServers.remote, { url: 'https://mcp.example.com/mcp', type: 'http', headers: { Authorization: 'Bearer ${env:TOKEN}' } });
     assert.strictEqual(alpha.enabled, true);
     assert.strictEqual(beta.enabled, false);
     const src = pluginSource(list);
-    assert.deepStrictEqual(Object.keys(src.mcpServers()), ['alpha:srv']);
+    assert.deepStrictEqual(Object.keys(src.mcpServers()), ['alpha:srv', 'alpha:remote']);
     assert.strictEqual(src.settingsLayers().length, 1);
     assert.strictEqual(src.commandFiles()[0].plugin.name, 'alpha');
   });

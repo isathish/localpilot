@@ -102,9 +102,22 @@ function normalizeMcp(raw: unknown, root: string): Record<string, McpServerConfi
     if (!cfg || typeof cfg !== 'object') {
       continue;
     }
-    const c = cfg as { command?: unknown; args?: unknown; env?: unknown; cwd?: unknown; type?: unknown; url?: unknown };
+    const c = cfg as { command?: unknown; args?: unknown; env?: unknown; cwd?: unknown; type?: unknown; url?: unknown; headers?: unknown };
+    // Remote server (`{ "type": "http" | "sse", "url", "headers" }`, as in Claude Code's .mcp.json).
+    if (typeof c.url === 'string' && c.url.trim()) {
+      const headers: Record<string, string> = {};
+      if (c.headers && typeof c.headers === 'object') {
+        for (const [k, v] of Object.entries(c.headers as Record<string, unknown>)) {
+          if (typeof v === 'string') {
+            headers[k] = substitute(v, root);
+          }
+        }
+      }
+      out[name] = { url: substitute(c.url.trim(), root), type: c.type === 'sse' || c.type === 'http' ? c.type : undefined, headers: Object.keys(headers).length ? headers : undefined };
+      continue;
+    }
     if (typeof c.command !== 'string' || !c.command.trim()) {
-      continue; // remote (url) servers are not supported by the stdio client
+      continue;
     }
     const env: Record<string, string> = {};
     if (c.env && typeof c.env === 'object') {

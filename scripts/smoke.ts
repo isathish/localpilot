@@ -29,6 +29,9 @@ import { answerRepoGraph } from '../src/tools/repoGraph';
 import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
 import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
+import { McpClient } from '../src/mcp/mcpManager';
+import { SseParser, transportKind } from '../src/mcp/transports';
+import * as nodeHttp from 'http';
 import { checkStatic, formatReport, summarize as summarizeEval, verifyTask } from '../src/eval/runner';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
@@ -976,6 +979,119 @@ async function pureLogic() {
     check('summary: pass rate first, skipped tasks not counted, tool error rate', sums[0].model === 'm2' && sums[0].total === 1 && sums[0].skipped === 1 && sums[1].passed === 1 && sums[1].total === 2 && Math.abs(sums[1].toolErrorRate - 2 / 12) < 1e-9 && sums[1].tokens === 4400);
     const rep = formatReport({ suite: 's', startedAt: '2026-11-02T10:00:00Z', host: 'h', results }, new Map([['m1', { suite: 's', startedAt: '2026-11-01T10:00:00Z', host: 'h', results: [{ ...results[0], pass: false, reason: 'x' }, results[1]] }]]));
     check('report: summary table with change since the last run, task matrix, failure reasons', /\| m1 \| 1\/2 \(50% \(\+50\)\)/.test(rep) && /\| a \| ✔ 10 s \| ✔ 20 s \|/.test(rep) && /- b · m1: tests failed/.test(rep) && /skipped/.test(rep), rep);
+  }
+
+  console.log('\n[Remote MCP: Streamable HTTP, SSE, sessions, auth, fallback]');
+  {
+    check('transport inferred from command / url / type', transportKind({ command: 'npx' }) === 'stdio' && transportKind({ url: 'https://x/mcp' }) === 'http' && transportKind({ url: 'https://x/sse' }) === 'sse' && transportKind({ url: 'https://x/mcp', type: 'sse' }) === 'sse' && transportKind({ url: 'https://x', type: 'streamable-http' }) === 'http' && transportKind({}) === undefined);
+    const evs: { event: string; data: string }[] = [];
+    const sp = new SseParser();
+    sp.push('event: endpoint\r\ndata: /m?s=1\r\n\r\n: comment\n\ndata: {"a":', (e) => evs.push(e));
+    sp.push('1}\ndata: 2\n\n', (e) => evs.push(e));
+    check('SSE parser: CRLF, comments, events split across chunks, multi-line data', evs.length === 2 && evs[0].event === 'endpoint' && evs[0].data === '/m?s=1' && evs[1].event === 'message' && evs[1].data === '{"a":1}\n2');
+    const reply = (id: unknown, method: string, params: Record<string, unknown> | undefined) => {
+      if (method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: { protocolVersion: String(params?.protocolVersion ?? '2024-11-05'), capabilities: { tools: {} }, serverInfo: { name: 'mock', version: '1' } } };
+      }
+      if (method === 'tools/list') {
+        return { jsonrpc: '2.0', id, result: { tools: [{ name: 'echo', description: 'Echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] } };
+      }
+      if (method === 'tools/call') {
+        return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: `echo: ${(params?.arguments as { text?: string })?.text}` }] } };
+      }
+      return { jsonrpc: '2.0', id, error: { code: -32601, message: 'no' } };
+    };
+    const seen = { sessionOk: true, protocolOk: true, auth: [] as string[] };
+    const sseClients = new Map<string, nodeHttp.ServerResponse>();
+    const server = nodeHttp.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        const url = req.url ?? '';
+        const msg = body ? JSON.parse(body) : undefined;
+        if (url.startsWith('/auth')) {
+          seen.auth.push(String(req.headers.authorization));
+          if (req.headers.authorization !== 'Bearer t0ken') {
+            res.writeHead(401).end('unauthorized');
+            return;
+          }
+        }
+        if (/^\/(json|stream|auth)/.test(url) && req.method === 'POST') {
+          if (msg.method !== 'initialize') {
+            seen.sessionOk &&= req.headers['mcp-session-id'] === 'sess-1';
+            seen.protocolOk &&= req.headers['mcp-protocol-version'] === '2025-06-18';
+          }
+          if (msg.id === undefined) {
+            res.writeHead(202).end();
+            return;
+          }
+          const r = reply(msg.id, msg.method, msg.params);
+          const h: Record<string, string> = msg.method === 'initialize' ? { 'mcp-session-id': 'sess-1' } : {};
+          if (url.startsWith('/stream')) {
+            res.writeHead(200, { ...h, 'content-type': 'text/event-stream' });
+            res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: {} })}\n\n`);
+            res.end(`event: message\ndata: ${JSON.stringify(r)}\n\n`);
+          } else {
+            res.writeHead(200, { ...h, 'content-type': 'application/json' }).end(JSON.stringify(r));
+          }
+          return;
+        }
+        // Legacy HTTP+SSE: /legacy/sse (explicit) and /old (found by the fallback after the POST is refused).
+        if ((url === '/legacy/sse' || url === '/old') && req.method === 'GET') {
+          const sid = String(sseClients.size + 1);
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.write(`event: endpoint\ndata: /legacy/messages?sid=${sid}\n\n`);
+          sseClients.set(sid, res);
+          return;
+        }
+        if (url === '/old' && req.method === 'POST') {
+          res.writeHead(405).end();
+          return;
+        }
+        if (url.startsWith('/legacy/messages')) {
+          const sid = new URL(url, 'http://x').searchParams.get('sid')!;
+          res.writeHead(202).end();
+          if (msg.id !== undefined) {
+            sseClients.get(sid)?.write(`event: message\ndata: ${JSON.stringify(reply(msg.id, msg.method, msg.params))}\n\n`);
+          }
+          return;
+        }
+        res.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const mlog = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+    const tryServer = async (cfg: Record<string, unknown>) => {
+      const c = new McpClient('t', cfg as never, mlog, '1');
+      try {
+        await c.start();
+        const r = await c.callTool('echo', { text: 'hi' });
+        return { kind: c.kind, tools: c.tools.length, text: r.text };
+      } catch (e) {
+        return { error: String(e) };
+      } finally {
+        c.dispose();
+      }
+    };
+    const j = await tryServer({ url: `${base}/json/mcp` });
+    check('Streamable HTTP, JSON replies: initialize, tools, call', j.kind === 'http' && j.tools === 1 && j.text === 'echo: hi', j);
+    check('session id and negotiated protocol version sent on every later request', seen.sessionOk && seen.protocolOk);
+    const st = await tryServer({ url: `${base}/stream/mcp` });
+    check('Streamable HTTP, event-stream replies (with a notification first)', st.kind === 'http' && st.text === 'echo: hi', st);
+    const sse = await tryServer({ url: `${base}/legacy/sse` });
+    check('legacy HTTP+SSE: endpoint event, POSTs, replies on the stream', sse.kind === 'sse' && sse.text === 'echo: hi', sse);
+    const fb = await tryServer({ url: `${base}/old` });
+    check('a refused Streamable HTTP POST falls back to SSE at the same URL', fb.kind === 'sse' && fb.text === 'echo: hi', fb);
+    process.env.LP_SMOKE_MCP_TOKEN = 't0ken';
+    const au = await tryServer({ url: `${base}/auth/mcp`, headers: { Authorization: 'Bearer ${env:LP_SMOKE_MCP_TOKEN}' } });
+    const noAuth = await tryServer({ url: `${base}/auth/mcp` });
+    check('headers with ${env:…} authenticate; 401 is reported, not retried as SSE', au.text === 'echo: hi' && /401/.test(String(noAuth.error)) && seen.auth[0] === 'Bearer t0ken', { au, noAuth });
+    for (const r of sseClients.values()) {
+      r.end();
+    }
+    server.closeAllConnections?.();
+    server.close();
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');
