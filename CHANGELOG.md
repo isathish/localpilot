@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.8 — 2026-11-02
+### Added
+- Enhance pageviews display with odometer effect and improved styling
+
 ## 1.4.7 — 2026-11-02
 
 ### Fixed
