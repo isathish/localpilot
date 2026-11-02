@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.5 — 2026-11-02
+### Added
+- Remote MCP servers — Streamable HTTP and HTTP+SSE with headers
+
 ## 1.4.4 — 2026-11-02
 ### Added
 - Agent benchmark — localpilot eval and 'Run Agent Benchmark…'
