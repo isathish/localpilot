@@ -1422,6 +1422,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.showLogs', () => log.show());
   cmd('localpilot.installCli', () => installCli(context));
+  // The benchmark (`localpilot eval`) in a terminal: same agent loop, run by the bundled CLI on the extension host's Node.
+  cmd('localpilot.runBenchmark', async () => {
+    const models = (await providers.listModels().catch(() => [])).filter((m) => m.supportsTools && !/embed/i.test(m.modelId));
+    if (!models.length) {
+      void vscode.window.showWarningMessage('No tool-capable model is available to benchmark. Start a model server first.');
+      return;
+    }
+    const def = getConfig().defaultModel;
+    const picked = await vscode.window.showQuickPick(
+      models.map((m) => ({ label: m.name, description: `${m.id}${m.remote ? ' · cloud' : ''}`, id: m.id, picked: m.id === def })),
+      { canPickMany: true, title: 'Benchmark models', placeHolder: 'Pick the models to compare on the built-in coding tasks (each task takes a minute or two per model)' }
+    );
+    if (!picked?.length) {
+      return;
+    }
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+    const term = vscode.window.createTerminal({
+      name: 'LocalPilot Benchmark',
+      cwd: root,
+      shellPath: process.execPath,
+      shellArgs: [vscode.Uri.joinPath(context.extensionUri, 'dist', 'cli.js').fsPath, 'eval', '-C', root, '--models', picked.map((p) => p.id).join(',')],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    term.show();
+  });
   cmd('localpilot.openTerminal', (run?: unknown) => {
     const term = terminals.openCliTerminal(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
     if (typeof run === 'string' && run.trim()) {

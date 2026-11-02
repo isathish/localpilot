@@ -28,6 +28,8 @@ import { describePolicy, flooredApproval, getManagedPolicy, managedPolicyPath, m
 import { answerRepoGraph } from '../src/tools/repoGraph';
 import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
 import { builtinCommands } from '../src/agent/commands';
+import { BUILTIN_SUITE } from '../src/eval/suite';
+import { checkStatic, formatReport, summarize as summarizeEval, verifyTask } from '../src/eval/runner';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
@@ -917,6 +919,63 @@ async function pureLogic() {
       check('git_commit refuses an option-looking branch name', !!bad.isError);
       nodeFs.rmSync(base, { recursive: true, force: true });
     }
+  }
+
+  console.log('\n[Benchmark: every task fails as shipped and passes with a reference solution]');
+  {
+    const solutions: Record<string, Record<string, string> | string> = {
+      'py-off-by-one': { 'pager.py': 'def page(items, n, size):\n    start = (n - 1) * size\n    return items[start:start + size]\n' },
+      'js-implement-slugify': { 'slug.js': "function slugify(t) { return t.normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }\nmodule.exports = { slugify };\n" },
+      'py-rename-across-files': { 'geo/calc.py': 'import math\n\n\ndef euclidean_distance(a, b):\n    return math.hypot(a[0] - b[0], a[1] - b[1])\n', 'geo/route.py': 'from geo.calc import euclidean_distance\n\n\ndef length(points):\n    return sum(euclidean_distance(p, q) for p, q in zip(points, points[1:]))\n', 'main.py': 'from geo.calc import euclidean_distance\nfrom geo.route import length\n\nprint(round(euclidean_distance((0, 0), (3, 4)), 1), round(length([(0, 0), (3, 4), (3, 0)]), 1))\n' },
+      'js-signature-change': { 'src/money.js': "function format(cents, currency = 'USD') { return (currency === 'EUR' ? '€' : '$') + (cents / 100).toFixed(2); }\nmodule.exports = { format };\n", 'src/cart.js': "const { format } = require('./money');\nexports.total = (items, currency) => format(items.reduce((s, i) => s + i.cents, 0), currency);\n", 'src/receipt.js': "const { format } = require('./money');\nexports.line = (name, cents, currency) => `${name}: ${format(cents, currency)}`;\n" },
+      'json-config-edit': { 'config.json': '{"server":{"port":9090,"host":"0.0.0.0"},"features":{"beta":true,"search":true},"retries":3,"timeoutMs":5000}' },
+      'js-async-bug': { 'store.js': "const db = new Map();\nexports.save = async (k, v) => { await new Promise((r) => setTimeout(r, 5)); db.set(k, v); };\nexports.load = async (k) => db.get(k);\nexports.saveAll = async (pairs) => { for (const [k, v] of pairs) { await exports.save(k, v); } };\n" },
+      'ask-where-defined': 'The check is in app/payments.py (charge raises ValueError).',
+      'ask-impact': 'lib/trip.ts imports it directly, and app/summary.ts depends on it through trip.ts.',
+    };
+    check('every built-in task has a reference solution', BUILTIN_SUITE.tasks.every((t) => solutions[t.id] !== undefined), BUILTIN_SUITE.tasks.map((t) => t.id).filter((id) => !solutions[id]));
+    const runnable = async (t: typeof BUILTIN_SUITE.tasks[number]) => !(t.needs ?? []).length || (await Promise.all((t.needs ?? []).map(async (n) => (await runCmd(n === 'python3' ? (process.platform === 'win32' ? 'python' : 'python3') : n, ['--version'], undefined)).code === 0))).every(Boolean);
+    let failsAsShipped = 0;
+    let passesSolved = 0;
+    let ran = 0;
+    const bad: string[] = [];
+    for (const t of BUILTIN_SUITE.tasks) {
+      if (!(await runnable(t))) {
+        continue;
+      }
+      ran++;
+      const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), `lp-evalchk-${t.id}-`));
+      const put = (files: Record<string, string>) => Object.entries(files).forEach(([rel, text]) => { nodeFs.mkdirSync(nodePath.dirname(nodePath.join(dir, rel)), { recursive: true }); nodeFs.writeFileSync(nodePath.join(dir, rel), text); });
+      put(t.files);
+      const sol = solutions[t.id];
+      if (await verifyTask(t, dir, '')) {
+        failsAsShipped++;
+      } else {
+        bad.push(`${t.id} passes untouched`);
+      }
+      if (typeof sol === 'object') {
+        put(sol);
+      }
+      const why = await verifyTask(t, dir, typeof sol === 'string' ? sol : 'done');
+      if (!why) {
+        passesSolved++;
+      } else {
+        bad.push(`${t.id}: ${why}`);
+      }
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+    }
+    check(`all ${ran} runnable tasks fail as shipped and pass when solved`, ran > 0 && failsAsShipped === ran && passesSolved === ran, bad);
+    check('ask tasks reject a wrong answer', !!checkStatic(BUILTIN_SUITE.tasks.find((t) => t.id === 'ask-impact')!, () => undefined, 'lib/trip.ts, app/summary.ts and app/other.ts'));
+    const results = [
+      { task: 'a', category: 'fix' as const, model: 'm1', pass: true, durationMs: 20_000, steps: 3, toolCalls: 4, toolErrors: 0, promptTokens: 1000, completionTokens: 100 },
+      { task: 'b', category: 'fix' as const, model: 'm1', pass: false, reason: 'tests failed', durationMs: 40_000, steps: 6, toolCalls: 8, toolErrors: 2, promptTokens: 3000, completionTokens: 300 },
+      { task: 'a', category: 'fix' as const, model: 'm2', pass: true, durationMs: 10_000, steps: 2, toolCalls: 2, toolErrors: 0, promptTokens: 500, completionTokens: 50 },
+      { task: 'b', category: 'fix' as const, model: 'm2', pass: false, skipped: 'node is not installed', durationMs: 0, steps: 0, toolCalls: 0, toolErrors: 0, promptTokens: 0, completionTokens: 0 },
+    ];
+    const sums = summarizeEval(results);
+    check('summary: pass rate first, skipped tasks not counted, tool error rate', sums[0].model === 'm2' && sums[0].total === 1 && sums[0].skipped === 1 && sums[1].passed === 1 && sums[1].total === 2 && Math.abs(sums[1].toolErrorRate - 2 / 12) < 1e-9 && sums[1].tokens === 4400);
+    const rep = formatReport({ suite: 's', startedAt: '2026-11-02T10:00:00Z', host: 'h', results }, new Map([['m1', { suite: 's', startedAt: '2026-11-01T10:00:00Z', host: 'h', results: [{ ...results[0], pass: false, reason: 'x' }, results[1]] }]]));
+    check('report: summary table with change since the last run, task matrix, failure reasons', /\| m1 \| 1\/2 \(50% \(\+50\)\)/.test(rep) && /\| a \| ✔ 10 s \| ✔ 20 s \|/.test(rep) && /- b · m1: tests failed/.test(rep) && /skipped/.test(rep), rep);
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

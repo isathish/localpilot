@@ -934,7 +934,7 @@ export class AgentRunner {
       // Which model answered and how fast, for the footer under the answer (kept with the transcript, never sent).
       last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
-    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model } });
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens } });
     return finalText;
   }
 

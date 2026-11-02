@@ -81,6 +81,46 @@ localpilot skill search "write a plan" --install
 | `localpilot providers remove <id>` | Removes a provider added from the CLI, with its stored key. A provider from VS Code settings is disabled for the CLI only |
 | `localpilot skill install <source> [--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `--user` installs to `~/.localpilot/skills` |
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
+| `localpilot eval [--models a,b]` | Benchmarks models on real coding tasks; see [Benchmarking models](#benchmarking-models) |
+
+### Benchmarking models
+
+`localpilot eval` measures how well a model does the agent's job. It runs a suite of coding tasks with the real agent loop, the same tools, prompts and context management as the chat. Each task runs in a fresh temporary workspace and is checked by running something: the task's tests, a command, file contents or the answer. No model grades another model.
+
+```bash
+localpilot eval                                                    # the default model, built-in suite
+localpilot eval --models ollama/qwen2.5-coder:7b,ollama/gemma4:12b # compare models
+localpilot eval --tasks py-off-by-one,js-async-bug --keep          # some tasks; keep the workspaces to inspect
+localpilot eval --suite .localpilot/evals/backend.json --json out.json
+```
+
+In VS Code, **LocalPilot: Run Agent Benchmark…** in the Command Palette lets you pick the models and runs the same command in a terminal.
+
+The built-in suite has eight tasks: fixing bugs (an off-by-one, a missing `await`), implementing a function from its tests, renaming a function across files, changing a shared function's signature and its callers, editing a config file precisely, and two questions about a codebase (where something is handled, what a change affects). They need Python 3 and Node.js; a task whose interpreter is missing is skipped, not failed. Every task fails as shipped and passes with a reference solution, and the smoke tests check both.
+
+The report shows, per model, how many tasks passed, the average time, steps and tool calls, the share of tool calls that failed and the tokens used, then a task-by-model grid and the reason for each failure. Results are saved in `~/.localpilot/evals/`, and the next run of the same suite shows the change in pass rate since the last one. The command exits with 1 when a task fails, so a CI job can gate on it.
+
+**Your own suite.** Put a JSON file in `.localpilot/evals/` (the first one found is the default for that workspace) or pass `--suite`:
+
+```json
+{
+  "name": "backend",
+  "tasks": [
+    {
+      "id": "fix-tax-rounding",
+      "title": "Round tax to cents",
+      "category": "fix",
+      "needs": ["python3"],
+      "files": { "tax.py": "def tax(x):\n    return x * 0.2\n", "test_tax.py": "..." },
+      "prompt": "test_tax.py fails; fix tax.py.",
+      "verify": { "command": ["{python}", "-m", "unittest", "-q"], "files": [{ "path": "tax.py", "pattern": "round\\(" }] },
+      "timeoutSec": 300
+    }
+  ]
+}
+```
+
+`verify.command` passes on exit code 0 (`{python}` becomes the Python 3 found on the machine); `verify.files` entries must match (or with `"absent": true`, must not); `verify.answer` is a regular expression the final answer must match. Set `"mode": "ask"` for questions.
 
 ### Options
 

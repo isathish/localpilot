@@ -534,6 +534,12 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "localpilot.runBenchmark",
+        "title": "Run Agent Benchmark…",
+        "category": "LocalPilot",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "localpilot.openTerminal",
         "title": "Open LocalPilot Terminal",
         "category": "LocalPilot",

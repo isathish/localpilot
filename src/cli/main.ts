@@ -46,6 +46,7 @@ import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider,
 import { setSecretValues } from '../providers/cloud';
 import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
+import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -83,6 +84,7 @@ ${bold('Usage')}
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your providers (cloud ones are marked)
   localpilot doctor                       check servers, settings and tools
+  localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
   localpilot providers                    local and cloud providers: reachability, models, key state
   localpilot providers presets            providers you can add (Ollama, LM Studio… OpenAI, Claude, Gemini, OpenRouter…)
   localpilot providers add <preset|url>   add one [--id <id>] [--key <key> | --key-env VAR] [--url <url>] [--cloud]
@@ -130,7 +132,9 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval';
+  /** `eval`: models to compare, suite file, task ids, keep workspaces. */
+  evalOpts: { models: string[]; suite?: string; tasks: string[]; keep: boolean; json?: string };
   /** `providers add|key|remove|test|presets` options. */
   provider: ProviderFlags;
   /** `skill install`: write into ~/.localpilot/skills instead of the workspace. */
@@ -142,7 +146,7 @@ interface Args {
   apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {} };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false } };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -179,6 +183,12 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--name') {a.provider.name = next();}
     else if (x === '--cloud') {a.provider.cloud = true;}
     else if (x === '--no-cloud') {a.provider.cloud = false;}
+    else if (x === 'eval' && !words.length && !a.cmd) {a.cmd = 'eval';}
+    else if (x === '--models') {a.evalOpts.models.push(...next().split(',').map((m) => m.trim()).filter(Boolean));}
+    else if (x === '--suite') {a.evalOpts.suite = next();}
+    else if (x === '--tasks') {a.evalOpts.tasks.push(...next().split(',').map((t) => t.trim()).filter(Boolean));}
+    else if (x === '--keep') {a.evalOpts.keep = true;}
+    else if (x === '--json') {a.evalOpts.json = next();}
     else if (x === 'providers' && !words.length && !a.cmd) {a.cmd = 'providers';}
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
@@ -759,6 +769,66 @@ async function cmdProviders(args: Args): Promise<number> {
   }
 }
 
+/** `localpilot eval`: the benchmark, one task at a time per model (a local server serves one request well at a time). */
+async function cmdEval(core: Core, args: Args): Promise<number> {
+  const o = args.evalOpts;
+  let suite;
+  try {
+    suite = await loadSuite(o.suite ?? (await projectSuites(args.cwd))[0]);
+  } catch (e) {
+    console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
+  const tasks = o.tasks.length ? suite.tasks.filter((t) => o.tasks.includes(t.id)) : suite.tasks;
+  if (!tasks.length) {
+    console.error(`${red('✖')} No tasks match ${o.tasks.join(', ')}. Tasks: ${suite.tasks.map((t) => t.id).join(', ')}`);
+    return 2;
+  }
+  const models = o.models.length ? o.models : [args.model ?? getConfig().defaultModel].filter(Boolean);
+  if (!models.length) {
+    const auto = await core.providers.resolve('').catch(() => undefined);
+    if (auto) {
+      models.push(auto.model.id);
+    }
+  }
+  if (!models.length) {
+    console.error(`${red('✖')} No model to evaluate. Pass --models provider/model[,…] (see \`localpilot models\`).`);
+    return 2;
+  }
+  setAutoApprove(true);
+  const run: EvalRun = { suite: suite.name, startedAt: new Date().toISOString(), host: os.hostname(), results: [] };
+  const ctl = new AbortController();
+  process.once('SIGINT', () => ctl.abort());
+  console.log(`${BRAND} benchmark ${bold(suite.name)}: ${tasks.length} task${tasks.length === 1 ? '' : 's'} × ${models.length} model${models.length === 1 ? '' : 's'}\n`);
+  for (const model of models) {
+    console.log(bold(model));
+    for (const task of tasks) {
+      if (ctl.signal.aborted) {
+        break;
+      }
+      process.stdout.write(`  ${task.id.padEnd(26)} `);
+      const r = await runTask(core.runner, task, model, { signal: ctl.signal, keep: o.keep });
+      run.results.push(r);
+      console.log(r.skipped ? dim(`skipped (${r.skipped})`) : `${r.pass ? green('✔ pass') : red('✖ fail')}  ${dim(`${(r.durationMs / 1000).toFixed(0)} s · ${r.steps} steps · ${r.toolCalls} tools${r.workspace ? ` · ${r.workspace}` : ''}`)}${r.pass ? '' : `\n    ${dim(String(r.reason).slice(0, 240))}`}`);
+    }
+  }
+  const prev = new Map<string, EvalRun>();
+  for (const m of models) {
+    const p = await previousRun(suite.name, m, run.startedAt);
+    if (p) {
+      prev.set(m, p);
+    }
+  }
+  const saved = await saveRun(run);
+  const report = formatReport(run, prev);
+  console.log(`\n${md(report)}\n\n${dim(`Saved ${saved}`)}`);
+  if (o.json) {
+    await import('fs').then((fs) => fs.promises.writeFile(o.json!, JSON.stringify({ ...run, summary: summarize(run.results) }, null, 2)));
+  }
+  // Exit 1 when anything that ran failed, so CI can gate on a benchmark.
+  return run.results.some((r) => !r.pass && !r.skipped) ? 1 : 0;
+}
+
 async function cmdDoctor(core: Core): Promise<void> {
   console.log(`${BRAND} ${dim(`v${VERSION}`)} doctor\n`);
   console.log(`${bold('Settings')}\n  ${dim(USER_SETTINGS_PATH)}\n  ${dim(CLI_SETTINGS_PATH)}`);
@@ -910,6 +980,10 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'doctor') {
     return cmdDoctor(core);
+  }
+  if (args.cmd === 'eval') {
+    process.exitCode = await cmdEval(core, args);
+    return;
   }
 
   // Resolve the model up front so a missing server fails fast with a useful message.
