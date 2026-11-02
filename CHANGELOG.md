@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.3 — 2026-11-02
+### Added
+- Pull requests and CI from the chat — /pr, /fix-ci and git/GitHub tools
+
 ## 1.4.2 — 2026-11-02
 ### Added
 - Organization policy (managed-settings.json) that users and projects cannot override
