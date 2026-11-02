@@ -159,6 +159,7 @@ const SETTING_KEYS = [
   'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'colibri.modelsDir', 'colibri.backend', 'telemetry.enabled', 'telemetry.retentionDays',
   'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
+  'memory.maxNoteChars', 'memory.maxNotes', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */

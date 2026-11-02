@@ -1590,6 +1590,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     applyWorktree: (id) => controller.applyWorktree(id),
     discardWorktree: (id) => controller.discardWorktree(id),
     runBestOfN: (prompt, models, mode) => controller.runBestOfN(prompt, models, mode),
+    queue: taskQueue,
     get runningSessionIds() {
       return controller.runningSessionIds;
     },
@@ -1622,6 +1623,8 @@ export interface LocalPilotApi {
   discardWorktree(sessionId: string): Promise<void>;
   /** Run one prompt on several models at once (each isolated); returns the session ids. */
   runBestOfN(prompt: string, models: string[], mode?: Session['mode']): Promise<string[]>;
+  /** The persistent task queue (Agents view → Queue): tasks run as chats, `queue.concurrency` at a time, after their dependencies. */
+  readonly queue: Pick<TaskQueue, 'add' | 'list' | 'cancel' | 'retry' | 'remove' | 'paused' | 'setPaused' | 'onDidChange'>;
   readonly runningSessionIds: string[];
   readonly onDidChangeRuns: vscode.Event<void>;
   listModels(): Promise<ModelInfo[]>;

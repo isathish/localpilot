@@ -686,4 +686,38 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('providers', prevProviders, vscode.ConfigurationTarget.Global);
     }
   });
+
+  test('changing providers while a model listing is in flight lists the new providers, not the old ones', async function () {
+    this.timeout(30_000);
+    // An OpenAI-style server that answers /v1/models slowly, so the first listing is still running when the setting changes.
+    const server = (id: string, delayMs: number) =>
+      new Promise<{ url: string; close(): void }>((resolve) => {
+        const srv = http.createServer((req, res) =>
+          setTimeout(() => {
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ data: req.url?.startsWith('/v1/models') ? [{ id, object: 'model' }] : [] }));
+          }, delayMs)
+        );
+        srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close() }));
+      });
+    const [oldSrv, newSrv] = await Promise.all([server('old-model', 1500), server('new-model', 0)]);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    try {
+      await cfg.update('providers', [{ id: 'old', type: 'openai', baseUrl: oldSrv.url }], vscode.ConfigurationTarget.Global);
+      const inFlight = reg.listModels();
+      await new Promise((r) => setTimeout(r, 200));
+      await cfg.update('providers', [{ id: 'new', type: 'openai', baseUrl: newSrv.url }], vscode.ConfigurationTarget.Global);
+      const [first, now] = await Promise.all([inFlight, reg.listModels()]);
+      assert.deepStrictEqual(now.map((m) => m.id), ['new/new-model'], 'a caller after the change sees the new provider');
+      assert.ok(!first.some((m) => m.id === 'old/old-model'), `the stale round is not handed out: ${first.map((m) => m.id).join(', ')}`);
+      assert.deepStrictEqual(reg.cachedModels().map((m) => m.id), ['new/new-model'], 'and does not fill the cache');
+    } finally {
+      reg.dispose();
+      oldSrv.close();
+      newSrv.close();
+      await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
+    }
+  });
 });

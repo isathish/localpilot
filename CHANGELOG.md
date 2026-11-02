@@ -4,8 +4,16 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Every setting is in the Settings page.** Auto mode (and its reviewer model) and how many queued tasks run at once are under Agent & approvals; the memory note limits under Memory; keeping Ollama and Redis running and installing Ollama without asking under Advanced → Background services; the LiteLLM config file under Providers → Gateways. Search finds them, along with skill and plugin folders and hidden models.
+- **The task queue is part of the extension API** (`queue.add`, `list`, `cancel`, `retry`, `remove`, `setPaused`, `onDidChange`), so scripts and other extensions can queue agent tasks with dependencies.
+
 ### Changed
 - **Version numbers carry over after 9.** Each part counts 0–9: the release after 1.3.9 is 1.4.0 (not 1.3.10), and after 1.9.9 it is 2.0.0. The next release after the current 1.3.11 is 1.4.0.
+
+### Fixed
+- **Changing providers takes effect at once.** A model listing that was still running when you added, removed or edited a provider finished afterwards and put the old providers' models back for up to 30 seconds. Agents started in that window (a parallel batch, Best of N, queued tasks) could be sent to a provider that was no longer configured and fail with "Provider … not configured". Results from before the change are now dropped and the current providers are listed.
+- **A provider added while LocalPilot starts is no longer lost.** Startup detection probes local ports and Docker for a few seconds, then saved the provider list as it was when it began, which dropped a provider added meanwhile (in Settings, by Start Gateway or by setup). It now adds what it found to the list as it is at that moment.
 
 ## 1.3.11 — 2026-11-02
 

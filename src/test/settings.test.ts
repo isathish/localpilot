@@ -111,12 +111,16 @@ suite('LocalPilot settings & setup', () => {
       }
       // The real "Move Chat To…" flow: run the command and answer its quick pick like a user would. Let the view
       // settle first: a webview that becomes visible focuses its input, which would dismiss a quick pick opening at that instant.
-      await until(() => false, 800);
-      const picked = vscode.commands.executeCommand('localpilot.moveChat');
-      await until(() => false, 1200);
-      await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
-      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-      await picked;
+      // If focus still dismissed the pick (or it opened late), the setting is unchanged: try again, as a user would.
+      for (let attempt = 0; attempt < 3 && vscode.workspace.getConfiguration('localpilot').get('chat.location') !== 'secondarySidebar'; attempt++) {
+        await until(() => false, 800);
+        const picked = vscode.commands.executeCommand('localpilot.moveChat');
+        await until(() => false, 1200);
+        await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+        await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+        await Promise.race([picked, until(() => false, 3000)]);
+        await until(() => vscode.workspace.getConfiguration('localpilot').get('chat.location') === 'secondarySidebar', 1500);
+      }
       assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('chat.location'), 'secondarySidebar', 'the second item (Secondary Side Bar) was accepted');
       const moved = await until(() => api.chatHost?.viewId === 'localpilot.chatView' && api.chatHost.visible && api.chatHost.ready, 10_000);
       assert.ok(moved, `Move Chat To… should show the booted chat, got ${JSON.stringify(api.chatHost)}`);

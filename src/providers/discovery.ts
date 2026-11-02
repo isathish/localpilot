@@ -269,8 +269,24 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
     added.push({ ...c, id });
   }
   if (added.length && opts.write !== false) {
-    await cfg.update('providers', [...configured, ...added], vscode.ConfigurationTarget.Global);
-    log.info(`auto-detect: added ${added.map((a) => `${a.id} (${a.baseUrl})`).join(', ')}`);
+    // Probing takes seconds: merge into the list as it is now, so a provider added meanwhile (Settings, Start
+    // Gateway, setup) is kept, and a server that was added meanwhile is not added twice.
+    const current = vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
+    const urls = new Set(current.map((p) => norm(p.baseUrl)));
+    const taken = new Set(current.map((p) => p.id));
+    const fresh = added.filter((a) => !urls.has(norm(a.baseUrl))).map((a) => {
+      let id = a.id;
+      for (let n = 2; taken.has(id); n++) {
+        id = `${a.id.replace(/-\d+$/, '')}-${n}`;
+      }
+      taken.add(id);
+      return { ...a, id };
+    });
+    added.splice(0, added.length, ...fresh);
+    if (fresh.length) {
+      await vscode.workspace.getConfiguration('localpilot').update('providers', [...current, ...fresh], vscode.ConfigurationTarget.Global);
+      log.info(`auto-detect: added ${fresh.map((a) => `${a.id} (${a.baseUrl})`).join(', ')}`);
+    }
   }
   const recommended = recommendModel(results.filter((r) => r.ok && r.enabled).flatMap((r) => r.models));
   return { results, added, dockerModelRunner, recommended };

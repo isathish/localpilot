@@ -73,6 +73,8 @@ export class ProviderRegistry implements vscode.Disposable {
   /** Learned per-model adjustments from local usage, applied to automatic picks (never to explicit choices). */
   usageBonus?: UsageBonus;
   private lastRefresh = 0;
+  /** Bumped when the provider set changes, so a discovery round started before the change cannot fill the cache with the old providers' models. */
+  private generation = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
   /** Model ids that are gone from their server (removed outside LocalPilot too); settings pointing at them were cleared. */
@@ -120,6 +122,8 @@ export class ProviderRegistry implements vscode.Disposable {
     if (!same) {
       this.modelCache = [];
       this.lastRefresh = 0;
+      this.generation++;
+      this.discovery = undefined;
     }
     this._onDidChange.fire();
   }
@@ -207,6 +211,10 @@ export class ProviderRegistry implements vscode.Disposable {
       // Concurrent callers share one discovery round instead of each probing every server.
       await (this.discovery ?? this.startDiscovery());
     }
+    // The provider set changed while the round ran: its result was dropped, so list the current providers.
+    for (let i = 0; i < 3 && !this.lastRefresh; i++) {
+      await (this.discovery ?? this.startDiscovery());
+    }
     const disabled = new Set(getConfig().disabledModels);
     return this.modelCache.map((m) => ({ ...m, disabled: disabled.has(m.id) || undefined }));
   }
@@ -224,6 +232,7 @@ export class ProviderRegistry implements vscode.Disposable {
   }
 
   private async discover(): Promise<void> {
+    const generation = this.generation;
     const reachable = new Set<string>();
     const listed = new Map<string, ModelInfo[]>();
     const probed = this.all;
@@ -246,6 +255,9 @@ export class ProviderRegistry implements vscode.Disposable {
         }
       })
     );
+    if (generation !== this.generation) {
+      return; // the providers changed meanwhile; these results describe servers that may no longer be configured
+    }
     const models: ModelInfo[] = [];
     results.forEach((r, i) => {
       if (r.status === 'fulfilled') {

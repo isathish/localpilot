@@ -138,7 +138,7 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 - **VS Code platform.**
   - `@localpilot` in the built-in Chat view (`/agent`, `/ask`, `/plan`).
   - Your models in VS Code's language-model picker, with cloud ones labelled.
-  - An extension API: `runPrompt`, `runParallel`, `runBestOfN`, `send`, `stop`, `applyWorktree`, `listModels`. See [Development]({{ '/docs/development/' | relative_url }}).
+  - An extension API: `runPrompt`, `runParallel`, `runBestOfN`, `queue`, `send`, `stop`, `applyWorktree`, `listModels`. See [Development]({{ '/docs/development/' | relative_url }}).
 - **Private by default.** No account and no telemetry upload. Code goes only to the providers you configure. See [Privacy]({{ '/privacy/' | relative_url }}).
 
 Small local models are weaker than frontier cloud models. Give them precise instructions and review more. Or pick a cloud model for the hard tasks and keep local models for the rest.

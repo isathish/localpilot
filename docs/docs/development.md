@@ -73,6 +73,7 @@ The full surface (`LocalPilotApi` in `src/extension.ts`):
 | `runPrompt(prompt, mode?, attachments?)` | Starts a new session and returns its id; the run streams in the background. |
 | `runParallel(tasks, mode?)` | One independent agent per task, all concurrent; returns the session ids. |
 | `runBestOfN(prompt, models, mode?)` | The same prompt on several models at once, each in its own git worktree; returns the session ids. |
+| `queue` | The persistent task queue: `add({ prompt, mode?, model?, dependsOn? })`, `list`, `cancel(id)`, `retry(id)`, `remove(id)`, `setPaused(bool)`, `onDidChange`. Tasks run as chats, `queue.concurrency` at a time, each after the tasks it depends on succeed. |
 | `send(sessionId, text)` | Follow-up in an existing session; resolves with the final assistant text. |
 | `stop(sessionId)` | Cancels a running session. |
 | `getSession(id)` | The persisted `Session` (messages, todos, model, worktree…). |
