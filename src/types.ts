@@ -361,6 +361,8 @@ export interface AgentEvent {
     | 'status'
     | 'error'
     | 'compaction'
+    /** Durable facts from the finished run were saved to project memory (after turn_end). Payload: { saved: string[] }. */
+    | 'memory'
     /** The prompt size changed: an estimate before a request, the server's real count after it. Payload: { contextTokens, contextWindow }. */
     | 'context'
     /** A model request failed transiently (or came back empty) and is being retried. Payload: { attempt, max, reason, message }. */

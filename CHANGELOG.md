@@ -4,6 +4,15 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Local thinking models no longer loop.** LocalPilot sent `temperature: 0.2` to every model. Gemma 4 and Qwen 3 ship with 1.0 and are tuned for it; near-greedy sampling made them repeat themselves inside a tool call until the 4,096-token limit, which looked like minutes of silence followed by an empty reply. Agent requests now use each model's own sampling unless you set `localpilot.temperature` (its default is now `-1`, "model default"; Settings shows it at the left end of the slider). A benchmark task that timed out every time now passes in 98 seconds.
+- **A model that goes silent after thinking is asked again.** When a local model streamed only its reasoning and then stopped responding (typically stuck inside a tool call it never finished), the whole run failed. Nothing visible had been produced, so the request is now retried like a stall before the first token, with the partial reasoning dropped.
+- **Edits no longer fail on copied line numbers.** Small models often copy the `   12 | ` gutter of `read_file` output into `edit_file`'s `old_text`, which then matches nothing. When every line carries that prefix and the text without it matches, `edit_file` removes it (from `new_text` too), makes the edit and tells the model, so it stops doing it.
+- **Shorter first prompts.** The source-control, board, multi-repository and security tools are offered only when the recent conversation is about them or the workspace calls for them (a board exists, several repositories are registered). That is about 1,900 fewer tokens for the model to read before its first token on ordinary coding requests. `/pr`, `/fix-ci` and `/scan` still get theirs.
+
+### Added
+- **Memory that fills itself.** After a run with at least three tool calls in which the agent saved nothing, LocalPilot asks the same model, after the answer, whether the run revealed durable facts (a build or test command that worked, a convention, a pitfall and its fix) and appends at most three short notes to project memory, showing "Saved to memory: …". Credentials are filtered out; benchmark and other unattended runs never save; the CLI waits for it before exiting. `localpilot.memory.autoSave` turns it off.
+
 ## 1.4.6 — 2026-11-02
 ### Fixed
 - Plugin validate reports paths with / on every platform

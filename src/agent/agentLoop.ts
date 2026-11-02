@@ -27,6 +27,9 @@ import { thinkFor } from './thinking';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
 import { audit, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed } from './managedPolicy';
 import { emptySettings, ProjectSettings } from './settings';
+import { runDigest, saveRunMemories } from './autoMemory';
+import { irrelevantTools } from './toolRelevance';
+import { listRepos } from './repos';
 
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
 
@@ -230,7 +233,10 @@ export class AgentRunner {
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
-    const toolList = this.selectTools(session.mode, o.toolFilter);
+    // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
+    const recent = [...session.messages.filter((m) => m.role === 'user').slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
+    const root = o.workspaceRoot ?? this.workspace.root;
+    const toolList = this.selectTools(session.mode, o.toolFilter, o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, [], getConfig().repos).length : 0));
     const nativeTools = model.supportsTools;
     const toolDefs: ToolDefinition[] = toolsEnabled ? toolList.map((t) => t.definition) : [];
 
@@ -707,7 +713,9 @@ export class AgentRunner {
             });
             continue;
           }
-          modelEvent(isTransient(kind) && first && attempt < maxModelRetries ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
+          // Only thinking streamed before a stall (no answer text, no tool call): nothing was produced that a retry could duplicate.
+          const retryable = isTransient(kind) && (first || (kind === 'stall' && !text && !calls.length)) && attempt < maxModelRetries;
+          modelEvent(retryable ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
           if (kind === 'overflow' && !compactedForOverflow) {
             // The server knows better than our estimate: shrink the history and send again.
             compactedForOverflow = true;
@@ -726,8 +734,11 @@ export class AgentRunner {
             emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
             continue;
           }
-          if (isTransient(kind) && first && attempt < maxModelRetries) {
+          if (retryable) {
             attempt++;
+            // A model that went silent inside a tool call after thinking samples afresh; its partial reasoning goes.
+            thinking = '';
+            first = true;
             const wait = retryDelayMs(kind, e, attempt, RETRY_BACKOFF_MS);
             this.log.warn(`model call failed (${kind}), retry ${attempt}/${maxModelRetries} in ${wait}ms: ${msg}`);
             status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? `The server is rate limiting — waiting ${Math.round(wait / 1000)} s` : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
@@ -935,7 +946,37 @@ export class AgentRunner {
       last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
     emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens } });
+    // Keep what a substantial run taught about the project, after the answer is out (never delays the reply).
+    const turnStart = session.messages.indexOf(turnMessage);
+    const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
+    const savedByModel = turnMsgs.some((m) => m.toolCalls?.some((c) => c.name === 'memory_save'));
+    // Not for unattended runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
+    if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.unattended && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(session.mode)) {
+      this.track(saveRunMemories(this.memory, { provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined }, runDigest(userText(o.userMessage.content), turnMsgs, finalText))
+        .then((saved) => {
+          if (saved.length) {
+            this.log.info(`memory: saved ${saved.join(', ')} from the run`);
+            emit({ sessionId: session.id, type: 'memory', payload: { saved } });
+          }
+        })
+        .catch((e) => this.log.debug(`memory: automatic save skipped: ${e instanceof Error ? e.message : String(e)}`)));
+    }
     return finalText;
+  }
+
+  /** Work that outlives a run (the automatic memory save); a process about to exit waits for it with `idle()`. */
+  private readonly background = new Set<Promise<unknown>>();
+  private track(p: Promise<unknown>): void {
+    this.background.add(p);
+    void p.finally(() => this.background.delete(p));
+  }
+  /** Resolves when background work has finished, or after `timeoutMs`; true when something was still running. */
+  async idle(timeoutMs = 60_000): Promise<boolean> {
+    if (!this.background.size) {
+      return false;
+    }
+    await Promise.race([Promise.allSettled([...this.background]), new Promise((r) => setTimeout(r, timeoutMs))]);
+    return true;
   }
 
   private release(modelId: string, sessionId: string): void {
@@ -1020,8 +1061,11 @@ export class AgentRunner {
     return [...this.inflight].map(([model, set]) => ({ model, sessions: [...set] }));
   }
 
-  private selectTools(mode: Session['mode'], filter?: string[]): Tool[] {
+  private selectTools(mode: Session['mode'], filter?: string[], omit?: Set<string>): Tool[] {
     let list = this.tools.list();
+    if (omit?.size) {
+      list = list.filter((t) => !omit.has(t.definition.name));
+    }
     if (filter) {
       const allowed = new Set(filter);
       list = list.filter((t) => allowed.has(t.definition.name));

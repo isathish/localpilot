@@ -168,8 +168,9 @@ export const editFileTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const oldText = typeof args.old_text === 'string' ? args.old_text : '';
-    const newText = typeof args.new_text === 'string' ? args.new_text : '';
+    let oldText = typeof args.old_text === 'string' ? args.old_text : '';
+    let newText = typeof args.new_text === 'string' ? args.new_text : '';
+    let note = '';
     let doc: vscode.TextDocument;
     try {
       doc = await vscode.workspace.openTextDocument(uri);
@@ -181,6 +182,13 @@ export const editFileTool: Tool = {
       return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
     }
     const text = doc.getText();
+    // Small models copy read_file's line-number gutter ("   12 | ") into old_text/new_text; take it off before matching.
+    const bare = !text.includes(oldText) ? stripGutter(oldText) : undefined;
+    if (bare !== undefined && text.includes(bare)) {
+      oldText = bare;
+      newText = stripGutter(newText) ?? newText;
+      note = ' (the "NN | " line-number prefixes from read_file were removed from old_text/new_text — leave them out next time)';
+    }
     let range: vscode.Range;
     if (!oldText) {
       range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
@@ -213,7 +221,7 @@ export const editFileTool: Tool = {
     if (!(await doc.save())) {
       return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
     }
-    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.`, data: { path: uri.fsPath, line: range.start.line + 1 } };
+    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.${note}`, data: { path: uri.fsPath, line: range.start.line + 1 } };
   },
 };
 
@@ -267,6 +275,16 @@ export const deleteTool: Tool = {
     return { content: `Deleted ${displayPath(uri, ctx)}` };
   },
 };
+
+/** `text` without read_file's `   12 | ` gutter when every non-empty line carries one; undefined when it does not. */
+export function stripGutter(text: string): string | undefined {
+  const lines = text.split('\n');
+  const gutter = /^ *\d+ \| ?/;
+  if (!lines.some((l) => l.trim()) || !lines.every((l) => !l.trim() || gutter.test(l))) {
+    return undefined;
+  }
+  return lines.map((l) => l.replace(gutter, '')).join('\n');
+}
 
 function fuzzyFind(haystack: string, needle: string): { start: number; end: number } | undefined {
   const norm = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();

@@ -40,7 +40,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 | `localpilot.models.autoTune` | `auto` | Learn from local telemetry which installed models work best per role. `auto` updates role settings when another model is measurably better (with Undo); `suggest` only offers changes; `off` disables learning. Needs `localpilot.telemetry.enabled`. See [Learning from your usage]({{ '/docs/models/#learning-from-your-usage' | relative_url }}) |
 | `localpilot.contextWindow` | `32768` | Requested context in tokens (Ollama `num_ctx`), capped by the model's maximum. `0` = the model's full native window, which needs enough RAM/VRAM. Compaction is budgeted against the same number |
 | `localpilot.maxOutputTokens` | `4096` | Maximum tokens per response |
-| `localpilot.temperature` | `0.2` | Sampling temperature (0–2) |
+| `localpilot.temperature` | `-1` | Sampling temperature. `-1` uses each model's own setting (Gemma 4 and Qwen 3 ship 1.0 and repeat themselves at low temperatures); 0–2 forces one value for every model |
 | `localpilot.thinking` | `off` | Extended thinking for reasoning models: `off`, `on`, `low`, `medium` or `high`. Sent as Ollama `think` or OpenAI-compatible `reasoning_effort`. Reasoning shows as a collapsible step |
 | `localpilot.keepAlive` | `30m` | How long Ollama keeps the model loaded after a request (for example `5m`, `30m`, or `-1` for forever). Avoids reload delays between turns |
 | `localpilot.prewarm` | `true` | Load the chat's model as soon as you focus the composer or switch models, so the first reply does not wait for a weight load. Ollama only; at most once every few minutes per model |

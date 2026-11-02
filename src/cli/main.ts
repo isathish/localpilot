@@ -680,6 +680,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {});} break;
         case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
         case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
+        case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
         case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
         case 'skill_suggestions': {
           const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined;
@@ -1266,6 +1267,12 @@ async function main(): Promise<void> {
     }
     if (wt) {
       await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet);
+    }
+    // The automatic memory save runs after the answer; give it a moment before the process ends.
+    if (!ctl.signal.aborted) {
+      renderer.status('Saving what this run learned to memory…');
+      await core.runner.idle(45_000);
+      renderer.status('');
     }
     core.mcp?.dispose();
     // After finishIsolated the worktree may be gone, so hooks run in the real workspace.

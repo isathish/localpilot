@@ -45,7 +45,8 @@ export interface LocalPilotConfig {
   /** Requested context window in tokens, capped by the model; 0 = the model's full native window. */
   contextWindow: number;
   maxOutputTokens: number;
-  temperature: number;
+  /** Sampling temperature for agent turns; undefined = the model's own default (its Modelfile / server setting). */
+  temperature?: number;
   compactionThreshold: number; // 0..1 fraction of context before compaction
   maxToolOutputChars: number;
   approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
@@ -86,6 +87,8 @@ export interface LocalPilotConfig {
   /** When the agent asks questions first: new/vague/large work (smart), every build task with a plan to confirm (interview), or only when stuck (minimal). */
   clarify: 'smart' | 'interview' | 'minimal';
   memoryEnabled: boolean;
+  /** After a substantial run, save the durable facts it revealed (build/test commands, conventions, pitfalls) to project memory. */
+  memoryAutoSave: boolean;
   /** Caps that keep memory from growing without bound: characters per note and notes per scope. */
   memoryLimits: { maxNoteChars: number; maxNotes: number };
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
@@ -130,7 +133,8 @@ export function getConfig(): LocalPilotConfig {
     defaultModel: c.get<string>('defaultModel', ''),
     contextWindow: Math.max(0, Math.floor(c.get<number>('contextWindow', 32768))),
     maxOutputTokens: c.get<number>('maxOutputTokens', 4096),
-    temperature: c.get<number>('temperature', 0.2),
+    // Negative (the default, -1) means: send none, so each model samples as its makers tuned it.
+    temperature: (() => { const t = c.get<number>('temperature', -1); return typeof t === 'number' && t >= 0 ? Math.min(2, t) : undefined; })(),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
     approvals: {
@@ -191,6 +195,7 @@ export function getConfig(): LocalPilotConfig {
     thinking: normalizeThinking(c.get<unknown>('thinking', 'auto')),
     clarify: (['smart', 'interview', 'minimal'] as const).find((m) => m === c.get<string>('clarify.questions', 'smart')) ?? 'smart',
     memoryEnabled: c.get<boolean>('memory.enabled', true),
+    memoryAutoSave: c.get<boolean>('memory.autoSave', true),
     memoryLimits: {
       maxNoteChars: Math.max(500, Math.floor(c.get<number>('memory.maxNoteChars', 8000))),
       maxNotes: Math.max(5, Math.floor(c.get<number>('memory.maxNotes', 200))),

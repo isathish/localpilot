@@ -1330,9 +1330,10 @@
         },
         "localpilot.temperature": {
           "type": "number",
-          "default": 0.2,
-          "minimum": 0,
-          "maximum": 2
+          "default": -1,
+          "minimum": -1,
+          "maximum": 2,
+          "markdownDescription": "Sampling temperature for the agent. `-1` (the default) uses each model's own setting, as its makers tuned it — for example Gemma 4 and Qwen 3 ship 1.0, and at low temperatures they tend to repeat themselves until the token limit. Set 0–2 to force one value for every model. Inline completions, summaries and other short internal requests use their own low values."
         },
         "localpilot.thinking": {
           "type": "string",
@@ -1394,6 +1395,11 @@
           "type": "boolean",
           "default": true,
           "description": "Let the agent read and save durable notes in .localpilot/memory (project) and global storage (user)."
+        },
+        "localpilot.memory.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable facts about the project — verified build and test commands, conventions, pitfalls and their fixes — and append them (at most three short notes) to project memory in `.localpilot/memory`. Runs after the answer, never delays it; anything that looks like a credential is dropped. Needs `#localpilot.memory.enabled#`."
         },
         "localpilot.memory.maxNoteChars": {
           "type": "number",

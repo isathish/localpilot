@@ -170,7 +170,7 @@ export class OpenAICompatProvider implements LLMProvider {
       messages: opts.messages.map(toOpenAIMessage),
       stream: true,
       stream_options: { include_usage: true },
-      temperature: opts.temperature ?? 0.2,
+      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
     };
     if (opts.maxTokens) {
       body.max_tokens = opts.maxTokens;

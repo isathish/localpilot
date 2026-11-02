@@ -133,7 +133,8 @@ export class OllamaProvider implements LLMProvider {
       messages: opts.messages.map(toOllamaMessage),
       stream: true,
       options: {
-        temperature: opts.temperature ?? 0.2,
+        // Only when asked: otherwise the model's Modelfile sampling applies (Gemma 4, Qwen 3 loop at low temperatures).
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         num_ctx: opts.contextWindow ?? this.defaultCtx,
         ...(opts.maxTokens ? { num_predict: opts.maxTokens } : {}),
         ...(opts.stop?.length ? { stop: opts.stop } : {}),

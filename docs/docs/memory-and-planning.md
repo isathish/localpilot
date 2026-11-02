@@ -16,8 +16,10 @@ The agent can save notes and reads them back at the start of every session. Note
 How it works:
 
 - The agent uses `memory_save` (replace or append), `memory_read`, `memory_list` and `memory_delete`. Its instructions tell it to record verified facts and never secrets.
-- Every system prompt includes an index of notes (name and first line). Notes of 1,200 characters or less are included in full, within a 6,000-character budget. Larger notes are read on demand.
+- Every system prompt includes an index of notes (name and first line), newest first, and the full text of notes of 1,200 characters or less, within about 5% of the context window (1,500 to 12,000 characters). Notes that do not fit are counted and stay reachable with `memory_list` and `memory_read`.
 - You can ask directly: *"remember that we deploy with `make release` and tests need `DATABASE_URL`"*.
+- **Saved automatically.** Small local models rarely save notes on their own. After a run with at least three tool calls in which the agent saved nothing, LocalPilot asks the same model, in the background once the answer is out, whether the run revealed durable facts: a build or test command that worked, a convention, a pitfall and its fix, a stated preference. It appends at most three short notes to project memory and shows **Saved to memory: …**; most runs save nothing. Anything that looks like a credential is dropped, and benchmark and other unattended runs never save. Set `localpilot.memory.autoSave` to `false` to turn this off.
+- `/memory` in the chat lists the saved notes along with the instruction files in force.
 
 To manage notes, open **Settings → Memory & history**. It lists every note with scope, size and age, and lets you open or delete notes or clear a whole scope. *LocalPilot: Open Memory Notes* opens the folder. Set `localpilot.memory.enabled` to `false` to turn memory off.
 

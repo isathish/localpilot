@@ -29,6 +29,8 @@ import { answerRepoGraph } from '../src/tools/repoGraph';
 import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
 import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
+import { parseMemoryNotes, runDigest } from '../src/agent/autoMemory';
+import { irrelevantTools } from '../src/agent/toolRelevance';
 import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
@@ -1246,6 +1248,36 @@ async function pureLogic() {
     const v2 = await validatePlugin(nodePath.join(base, 'my-tools'));
     check('validate reports unknown hook events and incomplete subagents', v2.errors.some((e) => /unknown event "BeforeAll"/.test(e)) && v2.errors.some((e) => /agents\/reviewer\.md: a subagent needs/.test(e)), v2.errors);
     nodeFs.rmSync(base, { recursive: true, force: true });
+  }
+
+  console.log('\n[edit_file: read_file line numbers copied into old_text]');
+  {
+    const { stripGutter } = await import('../src/tools/fs');
+    check('gutter removed when every line has it (blank numbered lines included)', stripGutter('    2 |   "server": { "port": 8080 },\n    3 | \n   10 |   x') === '  "server": { "port": 8080 },\n\n  x');
+    check('text without a gutter, or only partly numbered, is left alone', stripGutter('a | b\nplain') === undefined && stripGutter('  port: 1') === undefined && stripGutter('    2 | x\nplain') === undefined);
+  }
+
+  console.log('\n[Situational tools: offered only when relevant]');
+  {
+    const plain = irrelevantTools('fix the off-by-one in pager.py', undefined, 1);
+    check('a plain coding request leaves out git/CI, board, repos and security tools', ['git_commit', 'git_push', 'pull_request', 'ci_status', 'team_board', 'repos', 'security_scan'].every((n) => plain.has(n)) && !plain.has('git_status') && !plain.has('repo_graph'));
+    check('the conversation brings them in: "open a PR", "is this secure?", "split it on the board", "across repositories"', !irrelevantTools('commit this and open a PR', undefined, 1).has('pull_request') && !irrelevantTools('is this code secure?', undefined, 1).has('security_scan') && !irrelevantTools('split it on the board', undefined, 1).has('team_board') && !irrelevantTools('change it across both repositories', undefined, 1).has('repos'));
+    check('so does the workspace: several registered repositories', !irrelevantTools('rename the port constant', undefined, 3).has('repos'));
+  }
+
+  console.log('\n[Automatic memory: digest of the run, notes filtered]');
+  {
+    const turn: ChatMessage[] = [
+      { role: 'user', content: 'fix the failing test' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'run_command', arguments: '{"command":"make check-all"}' }, { id: 'b', name: 'read_file', arguments: '{"path":"src/x.py"}' }] },
+      { role: 'tool', content: 'Ran 12 tests\nOK', toolCallId: 'a' },
+      { role: 'tool', content: 'Tool read_file failed: ENOENT', toolCallId: 'b' },
+    ];
+    const dg = runDigest('fix the failing test', turn, 'Fixed it; make check-all passes.');
+    check('digest: request, each call with its argument and outcome, command output tail, answer', /- run_command make check-all → ok: Ran 12 tests OK/.test(dg) && /- read_file src\/x\.py → failed/.test(dg) && /Answer: Fixed it/.test(dg), dg);
+    const notes = parseMemoryNotes('```json\n{"notes":[{"name":"Build & Test","content":"- `make check-all` runs the tests"},{"name":"x","content":"short"},{"name":"keys","content":"- deploy with AKIAIOSFODNN7EXAMPLQ as the key"},{"name":"a","content":"- one fact here"},{"name":"b","content":"- another fact"},{"name":"c","content":"- a third fact"}]}\n```'); // localpilot-scan: ignore (test fixture)
+    check('notes: fenced JSON read, names normalised, too-short and secret-bearing notes dropped, at most three', notes.length === 3 && notes[0].name === 'build-test' && !notes.some((n) => n.name === 'keys' || n.name === 'x'), notes);
+    check('nothing worth keeping and invalid replies give no notes', parseMemoryNotes('{"notes":[]}').length === 0 && parseMemoryNotes('I think nothing.').length === 0 && parseMemoryNotes('{"notes": "no"}').length === 0);
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');
