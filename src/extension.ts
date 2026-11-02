@@ -61,6 +61,7 @@ import { RedisTelemetry } from './storage/redisTelemetry';
 import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
 import { TaskQueue } from './agent/taskQueue';
 import { AutoReviewer } from './agent/autoReviewer';
+import { reposTool } from './tools/repos';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -270,7 +271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
   const markdownViewer = new MarkdownViewer(context, log);
   controller.markdownViewer = markdownViewer;

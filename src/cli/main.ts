@@ -49,6 +49,7 @@ import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/ma
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard } from '../agent/teamBoard';
 import { boardOwner, teamBoardTool } from '../tools/teamBoard';
+import { reposTool } from '../tools/repos';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -473,6 +474,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'find_symbol': return `Look up ${s(a.query)}`;
     case 'find_references': return `References to ${s(a.symbol)}`;
     case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
+    case 'repos': return `Repos: ${s(a.action)}${a.command ? ` $ ${s(a.command, 60)}` : a.query ? ` "${s(a.query, 40)}"` : ''}${Array.isArray(a.repos) && a.repos.length ? ` in ${s(a.repos.join(', '), 40)}` : ''}`;
     case 'team_board': return `Board: ${s(a.action)}${a.id ? ` ${s(a.id)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}`;
     case 'git_status': return `Git ${s(a.action || 'status')}${a.path ? ` ${s(a.path)}` : ''}`;
     case 'git_commit': return `Commit${a.branch ? ` on ${s(a.branch)}` : ''}: ${s(String(a.message ?? '').split('\n')[0], 70)}`;
@@ -554,7 +556,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;

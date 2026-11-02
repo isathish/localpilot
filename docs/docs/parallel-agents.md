@@ -131,6 +131,19 @@ The same controls are in the tab's right-click menu, the background strip, the *
 
 <p><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" alt="A paused agent: its subagent lanes (docs and tester working, two coders queued), a queued steering message, Paused · message waiting and the Resume button" width="420"></p>
 
+## Several repositories
+
+A change often spans repositories: an API and the app that calls it, a library and its users. The agent can see every repository in reach:
+
+- the folders of a multi-root VS Code workspace;
+- repositories listed in the workspace's `.localpilot/repos.json`, with paths relative to it:
+  ```json
+  { "repos": { "api": "../api", "web": "../web", "shared": "../libs/shared" } }
+  ```
+- repositories in the `localpilot.repos` setting (`{ "api": "~/src/api" }`), for ones you use with any workspace.
+
+With the `repos` tool the agent lists them (path, branch, uncommitted changes), searches all of them at once, and runs one command in several, such as the tests or `git pull`; that asks once, like a terminal command. For the change itself it runs one subagent per repository at the same time (`run_parallel_subagents` with `"repo": "api"` on each task). Each subagent works inside its repository with every tool, including `git_commit`, `git_push` and `pull_request`, so a cross-repository change ends with one branch and pull request per repository. Ask for it plainly: "make the API listen on 4000 and update the web app to call it there".
+
 ## The shared board
 
 For work that several people or agents share, put it on the board in the repository: `.localpilot/board/`, one Markdown file per task. Commit the folder and the board travels with the code; a reviewer reads it like any other file.

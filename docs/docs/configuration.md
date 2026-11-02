@@ -120,6 +120,12 @@ Values: `always`, `ask`, `never`.
 
 **Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Toggle Auto Mode**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
 
+## Repositories
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `localpilot.repos` | `{}` | Extra repositories the agent can work across, name → folder (`{ "api": "~/src/api" }`). The folders of a multi-root workspace and the workspace's `.localpilot/repos.json` are included automatically. See [Several repositories](parallel-agents.md#several-repositories) |
+
 ## Organization policy
 
 Administrators can deploy a policy that users and projects cannot override. LocalPilot reads it from a system location (an administrator-owned file, so a user cannot edit it):

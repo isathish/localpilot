@@ -513,6 +513,7 @@
       case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
       case 'find_symbol': return `${v('Looked up', 'Looking up')} ${code(a.query)}`;
       case 'find_references': return `${v('Found', 'Finding')} references to ${code(a.symbol)}`;
+      case 'repos': return `${v(a.action === 'exec' ? 'Ran' : a.action === 'search' ? 'Searched' : 'Listed', a.action === 'exec' ? 'Running' : a.action === 'search' ? 'Searching' : 'Listing')} ${a.action === 'exec' ? `${code(a.command, 50)} in ` : a.action === 'search' ? `${code(a.query, 40)} in ` : ''}${Array.isArray(a.repos) && a.repos.length ? esc(a.repos.join(', ')) : 'all repositories'}`;
       case 'team_board': return `${v({ add: 'Added to', claim: 'Claimed from', complete: 'Completed on', release: 'Released on', fail: 'Marked failed on', note: 'Noted on' }[a.action] || 'Read', { add: 'Adding to', claim: 'Claiming from', complete: 'Completing on', release: 'Releasing on', fail: 'Failing on', note: 'Noting on' }[a.action] || 'Reading')} the board${a.id ? ` ${code(a.id, 40)}` : ''}${a.title ? ` ${code(a.title, 50)}` : ''}`;
       case 'git_status': return `${v('Checked', 'Checking')} git ${esc(a.action || 'status')}${a.path ? ` of ${fchip(a.path)}` : ''}`;
       case 'git_commit': return `${v('Committed', 'Committing')}${a.branch ? ` on ${code(a.branch, 30)}` : ''} ${code(String(a.message || '').split('\n')[0], 60)}`;

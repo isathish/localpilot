@@ -7,6 +7,8 @@ import { SkillManager } from './skills';
 import { newId } from '../providers/http';
 import { classifyModelError } from './resilience';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
+import { findRepo } from './repos';
+import { reposFor } from '../tools/repos';
 
 /** Appended to every subagent persona (built-in or custom). */
 const SUBAGENT_CONTRACT = `# You are a subagent
@@ -100,7 +102,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
             description: 'Independent tasks to run in parallel',
             items: {
               type: 'object',
-              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this task must follow' } },
+              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this task must follow' }, repo: { type: 'string', description: 'Optional repository name (see the repos tool): the subagent works inside that repository instead of this workspace' } },
               required: ['agent', 'prompt'],
             },
           },
@@ -109,14 +111,23 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       },
     },
     async execute(args, ctx) {
-      const tasks = Array.isArray(args.tasks) ? (args.tasks as { agent: string; prompt: string; model?: string; skills?: unknown }[]) : [];
+      const tasks = Array.isArray(args.tasks) ? (args.tasks as { agent: string; prompt: string; model?: string; skills?: unknown; repo?: unknown }[]) : [];
       if (!tasks.length) {
         return { content: 'tasks must be a non-empty array', isError: true };
       }
+      // Tasks for other repositories run with that repository as their workspace (multi-repository work).
+      const repos = tasks.some((t) => typeof t.repo === 'string' && t.repo.trim()) ? reposFor(ctx) : [];
+      const roots = tasks.map((t) => (typeof t.repo === 'string' && t.repo.trim() ? findRepo(repos, t.repo) : undefined));
+      const missing = tasks.map((t, i) => (typeof t.repo === 'string' && t.repo.trim() && !roots[i] ? t.repo : '')).filter(Boolean);
+      if (missing.length) {
+        return { content: `Unknown repositor${missing.length === 1 ? 'y' : 'ies'}: ${missing.join(', ')}. Known: ${repos.map((r) => r.name).join(', ') || '(none — see the repos tool)'}.`, isError: true };
+      }
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
-      const settled = await pool.map(tasks, (t) => runChild(t.agent, t.prompt, t.model, ctx, undefined, strList(t.skills)));
+      // A subagent in another repository is told where it is: paths it writes are relative to that repository's root.
+      const inRepo = (t: (typeof tasks)[number], i: number) => (roots[i] ? `You are working in the repository "${roots[i]!.name}" (${roots[i]!.path}). Every relative path is relative to that repository's root: write "server.js", not "${roots[i]!.name}/server.js". Make and verify the change there.\n\n${t.prompt}` : t.prompt);
+      const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path } : ctx, roots[i]?.name, strList(t.skills)));
       const out = settled.map((r, i) => {
-        const header = `## Task ${i + 1} (${tasks[i].agent}): ${tasks[i].prompt.slice(0, 80)}`;
+        const header = `## Task ${i + 1} (${tasks[i].agent}${roots[i] ? ` in ${roots[i]!.name}` : ''}): ${tasks[i].prompt.slice(0, 80)}`;
         return r.status === 'fulfilled' ? `${header}\n${r.value.content}` : `${header}\nFAILED: ${String(r.reason)}`;
       });
       return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected') };

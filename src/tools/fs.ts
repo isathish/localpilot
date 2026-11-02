@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Tool, ToolContext } from '../types';
+import { listRepos } from '../agent/repos';
+import { getConfig } from '../config';
 
 // Windows paths are case-insensitive and VS Code lowercases drive letters (`c:\`) while models and users write `C:\`.
 const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
@@ -20,6 +22,16 @@ export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
   return vscode.workspace.asRelativePath(uri, false);
 }
 
+let repoCache: { root: string; at: number; paths: string[] } | undefined;
+/** Registered repositories of `root`, cached for a few seconds: paths are resolved on every file tool call. */
+function registeredRepoPaths(root: string): string[] {
+  if (!repoCache || repoCache.root !== root || Date.now() - repoCache.at > 5_000) {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    repoCache = { root, at: Date.now(), paths: listRepos(root, folders, getConfig().repos).map((r) => r.path) };
+  }
+  return repoCache.paths;
+}
+
 export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
@@ -28,7 +40,8 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   let abs = path.isAbsolute(p) ? p : path.join(root, p);
   // Isolated worktree: an absolute path into the real workspace (the model may have seen it in context) is the
   // same file inside the copy — never let the agent reach around its isolation.
-  if (ctx.workspaceRoot && path.isAbsolute(p)) {
+  // A path already inside the agent's own root (e.g. a repository nested in another workspace folder) is left alone.
+  if (ctx.workspaceRoot && path.isAbsolute(p) && !isWithin(abs, ctx.workspaceRoot)) {
     for (const f of vscode.workspace.workspaceFolders ?? []) {
       const main = f.uri.fsPath;
       if (foldCase(main) !== foldCase(ctx.workspaceRoot) && isWithin(abs, main)) {
@@ -40,7 +53,8 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   const normalized = path.normalize(abs);
   // Prevent path traversal outside the workspace unless the user opened that folder — or outside the agent's
   // isolated copy of it when it works in a worktree.
-  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : [])];
+  // Repositories the user registered for multi-repository work (.localpilot/repos.json, localpilot.repos) are in reach too.
+  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...registeredRepoPaths(root)];
   const inside = roots.some((r) => isWithin(normalized, r));
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);

@@ -64,6 +64,8 @@ export interface LocalPilotConfig {
   webSearch: WebSearchConfig;
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
+  /** Extra repositories the agent can work across, name → path (besides the workspace folders and .localpilot/repos.json). */
+  repos: Record<string, string>;
   skillsPaths: string[];
   /** Extra folders scanned for Claude Code-style plugins (`.claude-plugin/plugin.json`). */
   pluginPaths: string[];
@@ -174,6 +176,7 @@ export function getConfig(): LocalPilotConfig {
       maxTokens: c.get<number>('inlineCompletion.maxTokens', 128),
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
+    repos: Object.fromEntries(Object.entries(c.get<Record<string, unknown>>('repos', {}) ?? {}).filter(([, v]) => typeof v === 'string')) as Record<string, string>,
     skillsPaths: c.get<string[]>('skillsPaths', []),
     pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     hooksEnabled: c.get<boolean>('hooks.enabled', true),

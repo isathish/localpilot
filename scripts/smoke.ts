@@ -31,6 +31,8 @@ import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
 import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
 import { teamBoardTool } from '../src/tools/teamBoard';
+import { collectRepos, findRepo } from '../src/agent/repos';
+import { reposTool } from '../src/tools/repos';
 import { McpClient } from '../src/mcp/mcpManager';
 import { SseParser, transportKind } from '../src/mcp/transports';
 import * as nodeHttp from 'http';
@@ -1132,6 +1134,47 @@ async function pureLogic() {
     const completed = await teamBoardTool.execute({ action: 'complete', id: 'write-tests', text: 'tests pass' }, tctx);
     check('team_board tool: add, claim and complete under the chat identity', /Added "write-tests"/.test(added.content) && /Claimed "write-tests"/.test(claimed.content) && /Completed/.test(completed.content) && (await board.get('write-tests'))!.status === 'done', [added.content, claimed.content, completed.content]);
     nodeFs.rmSync(root, { recursive: true, force: true });
+  }
+
+  console.log('\n[Multi-repository: registry, list, search, exec]');
+  {
+    const r = collectRepos({ folders: ['/w/app', '/w/app'], file: { base: '/w/app', map: { api: '../api', gone: '../nope', dup: '.' } }, setting: { web: '/w/web', api: '/elsewhere/api' } }, (p) => p !== '/w/nope');
+    check('registry: workspace folders, repos.json (relative), setting; duplicates and missing folders dropped; names unique', r.map((x) => `${x.name}=${x.path}`).join(' ') === 'app=/w/app api=/w/api web=/w/web api-2=/elsewhere/api' && findRepo(r, 'API')?.path === '/w/api', r);
+    const base = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-repos-'));
+    const mk = async (name: string, files: Record<string, string>) => {
+      const dir = nodePath.join(base, name);
+      nodeFs.mkdirSync(dir, { recursive: true });
+      for (const [f, t] of Object.entries(files)) {
+        nodeFs.writeFileSync(nodePath.join(dir, f), t);
+      }
+      await runCmd('git', ['init', '-q', '-b', 'main'], dir);
+      await runCmd('git', ['add', '.'], dir);
+      await runCmd('git', ['-c', 'user.email=t@x', '-c', 'user.name=t', 'commit', '-qm', 'init'], dir);
+      return dir;
+    };
+    const hub = await mk('hub', { 'README.md': 'hub\n' });
+    await mk('api', { 'server.js': 'const PORT = 3000;\n' });
+    await mk('web', { 'config.js': 'export const API = "http://localhost:3000";\n' });
+    nodeFs.mkdirSync(nodePath.join(hub, '.localpilot'), { recursive: true });
+    nodeFs.writeFileSync(nodePath.join(hub, '.localpilot', 'repos.json'), '{ "repos": { "api": "../api", "web": "../web" } }');
+    nodeFs.writeFileSync(nodePath.join(base, 'web', 'config.js'), 'export const API = "http://localhost:3000"; // edited\n');
+    const asked: string[] = [];
+    const rctx = { sessionId: 's', workspaceRoot: hub, signal: new AbortController().signal, requestApproval: async (t: string) => { asked.push(t); return true; }, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext;
+    const list = await reposTool.execute({ action: 'list' }, rctx);
+    check('list: every repository with branch and changes', /^hub .*main\s+· 1 changed/m.test(list.content) && /^api .*main\s+· clean/m.test(list.content) && /^web .*· 1 changed/m.test(list.content), list.content);
+    const search = await reposTool.execute({ action: 'search', query: '3000' }, rctx);
+    check('search across repositories', /## api\nserver\.js:1:const PORT = 3000/.test(search.content) && /## web\nconfig\.js/.test(search.content) && !/## hub/.test(search.content), search.content);
+    const ex = await reposTool.execute({ action: 'exec', command: 'git rev-parse --abbrev-ref HEAD', repos: ['api', 'web'] }, rctx);
+    check('exec in chosen repositories, after one approval', /All 2 succeeded/.test(ex.content) && /## api — exit 0\nmain/.test(ex.content) && asked.length === 1 && /Run in 2 repositories/.test(asked[0]), ex.content);
+    const bad = await reposTool.execute({ action: 'exec', command: 'true', repos: ['nope'] }, rctx);
+    check('unknown repository names are refused with the known ones', !!bad.isError && /Known: hub, api, web/.test(bad.content));
+    const { resolveWorkspacePath } = await import('../src/tools/fs');
+    let outside = '';
+    try { resolveWorkspacePath('../elsewhere/x.js', rctx); } catch (e) { outside = String(e); }
+    check('file paths reach registered repositories, not other folders', resolveWorkspacePath('../api/server.js', rctx).fsPath === nodePath.join(base, 'api', 'server.js') && /outside the workspace/.test(outside));
+    const ro = await reposTool.execute({ action: 'exec', command: 'true' }, { ...rctx, readOnly: true } as never);
+    check('exec refused in read-only modes', !!ro.isError);
+    nodeFs.rmSync(base, { recursive: true, force: true });
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

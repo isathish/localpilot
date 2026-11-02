@@ -1664,6 +1664,14 @@
             }
           }
         },
+        "localpilot.repos": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra repositories the agent can work across, name → folder, e.g. `{ \"api\": \"~/src/api\", \"web\": \"~/src/web\" }`. The folders of a multi-root workspace and a workspace's `.localpilot/repos.json` are included automatically. The agent lists, searches and runs commands in them with the `repos` tool and runs one subagent per repository for cross-repository changes."
+        },
         "localpilot.pluginPaths": {
           "type": "array",
           "items": {
