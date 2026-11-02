@@ -12,11 +12,12 @@
  *   - at least one feat / fix / perf / refactor / other code commit   → patch
  *   - only docs / chore / ci / build / test / style / release commits → nothing
  */
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const [sinceTag, pushRange] = process.argv.slice(2);
 const messagesIn = (range) =>
-  execSync(`git log ${range} --no-merges --format=%B%x00`, { encoding: 'utf8' })
+  // Arguments as a list: the range comes from the workflow and never goes through a shell.
+  execFileSync('git', ['log', range, '--no-merges', '--format=%B%x00'], { encoding: 'utf8' })
     .split('\0')
     .map((m) => m.trim())
     .filter(Boolean);
