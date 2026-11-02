@@ -71,7 +71,7 @@
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
   };
   const FIELD_INDEX = [
-    ['providers', 'colibri.path', 'colibri folder'], ['providers', 'colibri.model', 'Colibri model'], ['providers', 'colibri.port', 'Colibri port'], ['providers', 'colibri.kvSlots', 'Parallel conversations'],
+    ['providers', 'colibri.path', 'colibri folder'], ['providers', 'colibri.model', 'Colibri model'], ['providers', 'colibri.port', 'Colibri port'], ['providers', 'colibri.modelsDir', 'Colibri models folder'], ['providers', 'colibri.backend', 'Colibri GPU backend'], ['providers', 'colibri.kvSlots', 'Parallel conversations'],
     ['models', 'models.autoSetup', 'Offer automatic setup'], ['models', 'routing.enabled', 'Route automatically'], ['models', 'models.autoTune', 'Learn from usage'],
     ['models', 'defaultModel', 'Default model for agent & chat'], ['models', 'inlineCompletion.model', 'Inline completions model'], ['models', 'routing.vision', 'Images model'],
     ['models', 'routing.reasoning', 'Plan mode model'], ['models', 'routing.fast', 'Read-only subagents model'], ['models', 'routing.coding', 'Implementing subagents model'],
@@ -635,11 +635,13 @@
     sec.appendChild(add);
     sec.appendChild(el('h2', 'sub', 'Huge MoE models (colibri)'));
     const coli = el('div', 'btnrow');
-    coli.innerHTML = `<span class="muted small">A running <code>coli serve</code> is detected automatically; this starts one in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.startColibri">${I.bolt}Start colibri</button>`;
+    coli.innerHTML = `<span class="muted small">A running colibri is detected automatically. <b>Start</b> installs colibri if needed (clone, engine, a model that fits) and starts it in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.stopColibri">${I.x}Stop</button><button class="btn sm primary" data-cmd="localpilot.startColibri">${I.bolt}Start colibri</button>`;
     sec.appendChild(card(
       el('div', 'field wide', '<div><div class="desc"><a data-url="https://github.com/JustVugg/colibri">colibri</a> runs very large mixture-of-experts models (GLM-5.2, DeepSeek V4 Flash, Qwen3-Coder-30B…) by keeping the dense part in RAM and streaming experts from disk.</div></div>'),
-      field('colibri.path', 'colibri folder', 'The checkout that has <code>c/coli</code>. Empty = <code>coli</code> on PATH.', 'text', { placeholder: '~/colibri', wide: true }),
-      field('colibri.model', 'Model', 'A colibri model name (<code>qwen3-coder-30b</code>, <code>glm-5.2</code>) or a model folder. Empty = the one colibri\'s setup installed.', 'text', { placeholder: 'installed model' }),
+      field('colibri.path', 'colibri folder', 'A checkout (with <code>c/coli</code>) or an unpacked release. Empty = <code>coli</code> on PATH, then <code>~/colibri</code>; Start colibri offers to install it.', 'text', { placeholder: '~/colibri', wide: true }),
+      field('colibri.model', 'Model', 'A catalog id (<code>qwen3-coder-30b</code>, <code>glm-5.2</code>) or a model folder. Empty = colibri recommends one for this machine.', 'text', { placeholder: 'recommended' }),
+      field('colibri.modelsDir', 'Models folder', 'Where models are downloaded (19 GB to 1.6 TB each). Empty = <code>~/colibri-models</code>.', 'text', { placeholder: '~/colibri-models', wide: true }),
+      field('colibri.backend', 'GPU backend', 'The engine colibri builds or downloads at setup. Apple Silicon uses Metal automatically.', 'select', { options: [['auto', 'Automatic (CUDA, then Vulkan, then CPU)'], ['cuda', 'CUDA (NVIDIA)'], ['vulkan', 'Vulkan'], ['cpu', 'CPU only']] }),
       field('colibri.port', 'Port', 'Where <code>coli serve</code> listens; auto-detect probes it too.', 'number', { min: 1, max: 65535 }),
       field('colibri.kvSlots', 'Parallel conversations', 'KV slots, so parallel agents keep their own cached context. A few hundred MB each; capped by <a data-sec="agent">max concurrent tools / subagents</a>.', 'number', { min: 1, max: 16 }),
       coli

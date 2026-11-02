@@ -12,6 +12,7 @@ import { retryAfter } from '../src/providers/http';
 import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
 import { PROVIDER_PRESETS } from '../src/providers/presets';
+import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
 import * as nodeFs from 'fs';
 import { ModelInfo } from '../src/types';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
@@ -494,6 +495,49 @@ async function cloudResilience() {
     }
     srv.close();
   }
+}
+
+/** Start colibri: finding it, the commands it gets on each platform, prerequisites, port conflicts, model ranking. */
+async function colibriSetupChecks() {
+  console.log('\n[colibri setup]');
+  const has = (...files: string[]) => (p: string) => files.includes(p);
+  const none = () => undefined;
+  check('configured folder: a checkout runs c/coli', findColibri({ configured: '/opt/colibri', platform: 'linux', exists: has('/opt/colibri/c/coli'), which: none })?.command === '/opt/colibri/c/coli');
+  check('configured folder that is not colibri: not found (no silent fallback)', findColibri({ configured: '/tmp/x', platform: 'linux', exists: has(), which: () => '/usr/local/bin/coli' }) === undefined);
+  check('nothing configured: coli on PATH first', findColibri({ platform: 'darwin', exists: has(), which: (n) => (n === 'coli' ? '/usr/local/bin/coli' : undefined) })?.kind === 'path');
+  check('then a checkout in ~/colibri', findColibri({ platform: 'linux', exists: has('/home/u/colibri/c/coli'), which: none, home: '/home/u' })?.folder === '/home/u/colibri');
+  check('~ in the configured folder is expanded', findColibri({ configured: '~/tools/colibri', platform: 'linux', exists: has('/home/u/tools/colibri/c/coli'), which: none, home: '/home/u' })?.kind === 'checkout');
+  check('Windows checkout runs py -3 c\\coli; a release runs coli.cmd', launcherIn('C:\\c', 'win32', has('C:\\c\\c\\coli'))?.command === 'py' && launcherIn('C:\\r', 'win32', has('C:\\r\\coli.cmd'))?.kind === 'release');
+
+  check('setup: never interactive or a browser, configured port', setupArgs({ port: 8011 }).join(' ') === 'setup --yes --no-browser --host 127.0.0.1 --port 8011');
+  check('setup: a catalog id is --model, a folder is --model-dir', setupArgs({ model: 'glm-5.2', exists: () => false }).includes('--model') && setupArgs({ model: '/nvme/qwen36', exists: () => true }).join(' ').includes('--model-dir /nvme/qwen36'));
+  check('setup: models folder, backend, switch model', setupArgs({ modelsDir: '/big/models', backend: 'vulkan', reconfigure: true }).join(' ').endsWith('--dir /big/models --backend vulkan --reconfigure') && !setupArgs({ backend: 'auto' }).includes('--backend'));
+  check('paths with spaces are quoted per shell', coliCommand({ kind: 'checkout', command: '/My Tools/colibri/c/coli', prefix: [] }, ['stop'], 'darwin') === "'/My Tools/colibri/c/coli' stop" && coliCommand({ kind: 'checkout', command: 'py', prefix: ['-3', 'C:\\My Tools\\colibri\\c\\coli'] }, ['stop'], 'win32') === "py -3 'C:\\My Tools\\colibri\\c\\coli' stop");
+  const unixInstall = installCommand('/home/u/colibri', ['setup', '--yes'], 'linux');
+  const winInstall = installCommand('C:\\Users\\u\\colibri', ['setup', '--yes'], 'win32');
+  check('install: shallow clone, then setup from the checkout (bash && / PowerShell $?)', unixInstall === 'git clone --depth 1 https://github.com/JustVugg/colibri /home/u/colibri && /home/u/colibri/c/coli setup --yes' && /^git clone --depth 1 \S+ 'C:\\Users\\u\\colibri'; if \(\$\?\) \{ py -3 'C:\\Users\\u\\colibri\\c\\coli' setup --yes \}$/.test(winInstall), { unixInstall, winInstall });
+
+  const missing = checkPrereqs('linux', (n) => (n === 'git' ? '/usr/bin/git' : undefined));
+  check('prerequisites: missing Python is reported with the install command; a compiler is optional', missing.missing.join() === 'Python 3' && /apt install/.test(missing.hint ?? '') && !missing.compiler && checkPrereqs('darwin', (n) => '/bin/' + n).missing.length === 0);
+  check('Windows accepts py for Python', checkPrereqs('win32', (n) => (n === 'git' || n === 'py' ? 'x' : undefined)).missing.length === 0);
+
+  const coli = await listen((req, res) => res.end(req.url?.startsWith('/v1/models') ? JSON.stringify({ data: [{ id: 'glm-5.2', owned_by: 'colibri' }] }) : '{}'));
+  const vllm = await listen((req, res) => res.end(req.url?.startsWith('/v1/models') ? JSON.stringify({ data: [{ id: 'Qwen/Qwen3-8B', owned_by: 'vllm' }] }) : 'not found'));
+  try {
+    const port = (u: string) => Number(new URL(u).port);
+    check('port probe: colibri, another server (vLLM on 8000), or free', (await probePort(port(coli.url))) === 'colibri' && (await probePort(port(vllm.url))) === 'other' && (await probePort(1)) === 'free');
+    const next = await freePort(port(vllm.url));
+    check('a free port is found next to a taken one', !!next && next !== port(vllm.url));
+  } finally {
+    coli.close();
+    vllm.close();
+  }
+
+  const ranked = modelChoices(36, 300);
+  check('models for 36 GB RAM: ones that run from RAM first, then disk-streamed; manual-conversion ones left out', ranked[0].fit === 'ram' && ranked.some((c) => c.fit === 'streams') && !ranked.some((c) => ['olmoe', 'qwen38-27b', 'glm-5.3-flash', 'deepseek-v4.1-flash'].includes(c.spec.name)), ranked.map((c) => `${c.spec.name}:${c.fit}`));
+  check('not enough disk is flagged on the model', modelChoices(64, 30).find((c) => c.spec.name === 'glm-5.2')?.enoughDisk === false);
+  check('a 1.6 TB model on 16 GB RAM is too big', modelChoices(16, 5000).find((c) => c.spec.name === 'kimi-k3')?.fit === 'too-big');
+  check('status progress from colibri JSON of any shape', statusProgress('{"install":{"phase":"downloading","progress":0.42}}') === 'downloading · 42%' && statusProgress('{"state":"running"}') === 'running' && statusProgress('not json') === undefined && statusProgress('{"a":1}') === undefined);
 }
 
 async function pureLogic() {
@@ -1647,6 +1691,7 @@ async function redisStorage() {
   await cloudProviders();
   await cloudAgentE2E();
   await cloudResilience();
+  await colibriSetupChecks();
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();

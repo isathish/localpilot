@@ -3,7 +3,8 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import { watchdogFor } from '../agent/agentLoop';
 import { modelFootprintGb } from '../providers/catalog';
-import { colibriRoot, colibriServeCommand, colibriSlots, colibriSpec, coliLauncher, streamsFromDisk } from '../providers/colibri';
+import { colibriRoot, colibriSlots, colibriSpec, streamsFromDisk } from '../providers/colibri';
+import { coliCommand, launcherIn, setupArgs } from '../providers/colibriSetup';
 import { probeProvider, providersFromContainers } from '../providers/discovery';
 import { OpenAICompatProvider } from '../providers/openaiCompat';
 import { isSaturated, pickForRole, scoreForRole } from '../providers/registry';
@@ -170,10 +171,15 @@ suite('colibri runtime', () => {
   });
 
   test('launch command, launcher path, health parsing and Docker detection', () => {
-    assert.strictEqual(colibriServeCommand({ folder: '/opt/colibri', model: 'qwen3-coder-30b', port: 8001, kvSlots: 3, platform: 'linux' }), '/opt/colibri/c/coli serve --host 127.0.0.1 --port 8001 --model qwen3-coder-30b --kv-slots 3');
-    assert.strictEqual(colibriServeCommand({ platform: 'darwin' }), 'coli serve --host 127.0.0.1 --port 8000');
-    assert.match(colibriServeCommand({ folder: 'C:\\My Tools\\colibri', platform: 'win32' }), /^& "C:\\My Tools\\colibri\\c\\coli\.cmd" serve/);
-    assert.strictEqual(coliLauncher('/x/colibri/', 'linux'), '/x/colibri/c/coli');
+    // Launchers: a checkout runs c/coli (with `py -3` on Windows), a release archive its own coli / coli.cmd.
+    const has = (...files: string[]) => (p: string) => files.includes(p);
+    assert.deepStrictEqual(launcherIn('/x/colibri/', 'linux', has('/x/colibri/c/coli')), { kind: 'checkout', command: '/x/colibri/c/coli', prefix: [], folder: '/x/colibri' });
+    assert.deepStrictEqual(launcherIn('C:\\Tools\\colibri', 'win32', has('C:\\Tools\\colibri\\c\\coli')), { kind: 'checkout', command: 'py', prefix: ['-3', 'C:\\Tools\\colibri\\c\\coli'], folder: 'C:\\Tools\\colibri' });
+    assert.strictEqual(launcherIn('C:\\rel', 'win32', has('C:\\rel\\coli.cmd'))?.kind, 'release');
+    assert.strictEqual(launcherIn('/nothing', 'linux', has()), undefined);
+    // Commands: setup installs on first use and starts afterwards; never interactive, never opens a browser.
+    assert.strictEqual(coliCommand({ kind: 'checkout', command: '/opt/colibri/c/coli', prefix: [] }, setupArgs({ port: 8001, model: 'qwen3-coder-30b', backend: 'cpu', exists: () => false }), 'linux'), '/opt/colibri/c/coli setup --yes --no-browser --host 127.0.0.1 --port 8001 --model qwen3-coder-30b --backend cpu');
+    assert.match(coliCommand({ kind: 'release', command: 'C:\\My Tools\\coli.cmd', prefix: [] }, ['stop'], 'win32'), /^& 'C:\\My Tools\\coli\.cmd' stop$/);
     assert.strictEqual(colibriRoot('http://localhost:8000/v1/'), 'http://localhost:8000');
     assert.strictEqual(colibriSlots({ scheduler: { capacity: 4 } }), 4);
     assert.strictEqual(colibriSlots({ status: 'ok' }), 1);

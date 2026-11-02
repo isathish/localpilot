@@ -480,6 +480,12 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "localpilot.stopColibri",
+        "title": "Stop colibri",
+        "category": "LocalPilot",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "localpilot.openSettings",
         "title": "Settings",
         "category": "LocalPilot",
@@ -1741,7 +1747,7 @@
         "localpilot.colibri.model": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`--model` for *LocalPilot: Start colibri*: a colibri model name (e.g. `qwen3-coder-30b`, `glm-5.2`) or a model folder. Empty = the model colibri's setup installed."
+          "markdownDescription": "Model for *LocalPilot: Start colibri*: a colibri catalog id (`qwen3-coder-30b`, `qwen36-35b`, `glm-5.2`, `deepseek-v4-flash`\u2026) or a folder with a model already on disk. Empty: colibri's setup recommends one for this machine. *Start colibri \u2192 Switch model\u2026* picks another."
         },
         "localpilot.colibri.port": {
           "type": "number",
@@ -1756,6 +1762,18 @@
           "minimum": 1,
           "maximum": 16,
           "markdownDescription": "`--kv-slots` for *LocalPilot: Start colibri*: conversations colibri decodes together, each with its own cached prefix, so parallel agents do not evict each other's context. Each slot costs a few hundred MB; capped by `#localpilot.parallel.maxConcurrency#`."
+        },
+        "localpilot.colibri.modelsDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where colibri downloads models (`coli setup --dir`). Empty: `~/colibri-models`. Pick a disk with room: models are 19 GB to 1.6 TB."
+        },
+        "localpilot.colibri.backend": {
+          "type": "string",
+          "enum": ["auto", "cpu", "vulkan", "cuda"],
+          "enumDescriptions": ["CUDA, then Vulkan, then the CPU, whichever this machine supports (Apple Silicon uses Metal automatically)", "CPU only", "Vulkan GPUs (Linux, Windows)", "NVIDIA GPUs with the CUDA toolkit (Linux)"],
+          "default": "auto",
+          "markdownDescription": "Engine colibri builds or downloads at setup (`coli setup --backend`)."
         },
         "localpilot.models.disabled": {
           "type": "array",

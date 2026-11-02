@@ -49,12 +49,14 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 
 Settings for [colibri]({{ '/docs/models/#colibri-huge-moe-models-from-disk' | relative_url }}), which runs very large mixture-of-experts models by streaming experts from disk. They are used by *LocalPilot: Start colibri*. A running `coli serve` is detected whatever these are set to. They are also at the bottom of **Settings → Providers**, with a **Start colibri** button.
 
-![Settings → Providers → Huge MoE models (colibri): folder, model, port and parallel conversations, with a Start colibri button]({{ '/assets/screenshots/settings-colibri.png' | relative_url }})
+![Settings → Providers → Huge MoE models (colibri): folder, model, models folder, GPU backend, port and parallel conversations, with Stop and Start colibri buttons]({{ '/assets/screenshots/settings-colibri.png' | relative_url }})
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.colibri.path` | `""` | Folder of a colibri checkout (the one containing `c/coli`). Empty = `coli` on PATH |
+| `localpilot.colibri.path` | `""` | colibri folder: a checkout (`c/coli`) or a release (`coli`). Empty = `coli` on PATH, then `~/colibri`. **Start colibri** installs colibri when it is not found |
 | `localpilot.colibri.model` | `""` | `--model` value: a colibri model name (for example `qwen3-coder-30b`, `glm-5.2`) or a model folder. Empty = the model colibri's setup installed |
+| `localpilot.colibri.modelsDir` | `""` | Where colibri downloads models (`--dir`). Empty = `~/colibri-models` |
+| `localpilot.colibri.backend` | `auto` | Engine built at setup: `auto`, `cuda`, `vulkan` or `cpu` |
 | `localpilot.colibri.port` | `8000` | Port `coli serve` listens on. Auto-detect also probes it when it is not `8000` |
 | `localpilot.colibri.kvSlots` | `2` | `--kv-slots`: conversations colibri decodes together, each with its own cached prefix. 1–16, and capped by `localpilot.parallel.maxConcurrency`. Each slot costs a few hundred MB |
 

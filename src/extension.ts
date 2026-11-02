@@ -1,5 +1,4 @@
 import * as os from 'os';
-import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
@@ -25,7 +24,7 @@ import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
 import { secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
-import { coliLauncher, colibriServeCommand, COLIBRI_REPO_URL } from './providers/colibri';
+import { ColibriLauncher } from './ui/colibriCommand';
 import { ModelTuner } from './ui/modelAutoTune';
 import { getSystemProfile } from './providers/system';
 import { SessionStore } from './sessions/sessionStore';
@@ -1004,73 +1003,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
   cmd('localpilot.setupRedis', () => setupRedis(log));
   cmd('localpilot.tuneModels', () => tuner.runCommand());
-  cmd('localpilot.startColibri', async () => {
-    const cfg = getConfig().colibri;
-    let folder = cfg.path;
-    if (!folder) {
-      const pick = await vscode.window.showQuickPick(
-        [
-          { label: '$(folder-opened) Choose my colibri folder…', description: 'the git checkout that has c/coli', id: 'folder' },
-          { label: '$(terminal) Use `coli` on PATH', id: 'path' },
-          { label: '$(link-external) Get colibri', description: 'github.com/JustVugg/colibri — its setup picks a model for this machine', id: 'get' },
-        ],
-        { title: 'LocalPilot: start colibri', placeHolder: 'colibri runs huge MoE models by streaming experts from disk' }
-      );
-      if (!pick) {
-        return;
-      }
-      if (pick.id === 'get') {
-        return void vscode.env.openExternal(vscode.Uri.parse(COLIBRI_REPO_URL));
-      }
-      if (pick.id === 'folder') {
-        const uri = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, title: 'colibri checkout folder' });
-        if (!uri?.[0]) {
-          return;
-        }
-        folder = uri[0].fsPath;
-        await vscode.workspace.getConfiguration('localpilot').update('colibri.path', folder, vscode.ConfigurationTarget.Global);
-      }
-    }
-    if (folder && !fs.existsSync(coliLauncher(folder))) {
-      const fix = await vscode.window.showErrorMessage(`No colibri launcher at ${coliLauncher(folder)}. Run colibri's own setup (start-here) in that folder once, or pick another folder.`, 'Choose folder', 'Open colibri on GitHub');
-      if (fix === 'Choose folder') {
-        await vscode.workspace.getConfiguration('localpilot').update('colibri.path', undefined, vscode.ConfigurationTarget.Global);
-        void vscode.commands.executeCommand('localpilot.startColibri');
-      } else if (fix) {
-        void vscode.env.openExternal(vscode.Uri.parse(COLIBRI_REPO_URL));
-      }
-      return;
-    }
-    const term = vscode.window.createTerminal({ name: 'LocalPilot · colibri', cwd: folder });
-    term.show(true);
-    term.sendText(colibriServeCommand({ folder, model: cfg.model, port: cfg.port, kvSlots: Math.min(cfg.kvSlots, Math.max(1, getConfig().parallel.maxConcurrency)) }));
-    const url = `http://127.0.0.1:${cfg.port}/v1/models`;
-    const up = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: starting colibri (loading the resident part of the model)…', cancellable: true }, async (progress, token) => {
-      const started = Date.now();
-      while (!token.isCancellationRequested && Date.now() - started < 10 * 60_000) {
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-          if (res.ok) {
-            return true;
-          }
-        } catch {
-          /* not listening yet */
-        }
-        progress.report({ message: `${Math.round((Date.now() - started) / 1000)} s — watch the colibri terminal for progress` });
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-      return false;
-    });
-    if (!up) {
-      return;
-    }
-    await autoDetect();
-    await providers.listModels(true);
-    await controller.handle({ type: 'refreshModels' });
-    void refreshStatus();
-    const models = (await providers.listModels()).filter((m) => m.runtime === 'colibri');
-    void vscode.window.showInformationMessage(`colibri is serving ${models.map((m) => m.name).join(', ') || 'a model'} on port ${cfg.port}. LocalPilot routes to it automatically where it fits.`);
+  // colibri: install, configure and start through its own `coli setup`; reuse a server that already runs.
+  const colibri = new ColibriLauncher({
+    log,
+    onReady: async (port) => {
+      await autoDetect();
+      await providers.listModels(true);
+      await controller.handle({ type: 'refreshModels' });
+      void refreshStatus();
+      return (await providers.listModels()).filter((m) => m.runtime === 'colibri' && m.providerId && new RegExp(`:${port}(/|$)`).test(providers.get(m.providerId)?.baseUrl ?? '')).map((m) => m.name);
+    },
   });
+  context.subscriptions.push(colibri);
+  cmd('localpilot.startColibri', () => colibri.start());
+  cmd('localpilot.stopColibri', () => colibri.stop());
   cmd('localpilot.enableOllamaParallel', async () => {
     const slots = ModelManager.ollamaParallelSlots();
     const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());

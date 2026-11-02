@@ -4,6 +4,16 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Start colibri installs, configures and starts colibri.** It handles every starting point:
+  - **Not installed:** after checking for git and Python, it clones colibri and runs colibri's own setup in a terminal. You choose the folder (default `~/colibri`) and a model ranked for this machine (runs from RAM, streams from disk, or too big), with a free-disk check. Setup builds or downloads the engine, downloads the model and starts the server.
+  - **Installed but not set up:** colibri recommends a model and sets up without questions.
+  - **Set up:** it just starts, with no download or build.
+  - **Already running:** it reuses the server and offers **Switch model…**, **Stop colibri** and **Open dashboard**.
+  - **Another server on the port** (vLLM also uses 8000): it offers the next free port.
+
+  colibri is found as a configured checkout or release, `coli` on PATH, or `~/colibri`. A Windows source checkout runs with `py -3`. KV slots for parallel agents are passed through `COLI_KV_SLOTS`. The progress notification shows colibri's install phase and percentage, and waits as long as a large download needs. Cancelling never stops colibri. New: **LocalPilot: Stop colibri**, and the `localpilot.colibri.modelsDir` and `localpilot.colibri.backend` settings.
+
 ## 1.3.7 — 2026-11-02
 
 ### Changed

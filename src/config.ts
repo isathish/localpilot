@@ -98,7 +98,7 @@ export interface LocalPilotConfig {
   /** Learn from local usage which installed models work best per role: apply them (auto), offer them (suggest) or neither (off). */
   autoTune: 'auto' | 'suggest' | 'off';
   /** colibri (experts streamed from disk): checkout folder, model and port for `LocalPilot: Start colibri`. */
-  colibri: { path?: string; model?: string; port: number; kvSlots: number };
+  colibri: { path?: string; model?: string; port: number; kvSlots: number; modelsDir?: string; backend: 'auto' | 'cpu' | 'vulkan' | 'cuda' };
   routing: RoutingConfig;
 }
 
@@ -205,6 +205,8 @@ export function getConfig(): LocalPilotConfig {
       model: c.get<string>('colibri.model', '') || undefined,
       port: Math.max(1, Math.floor(c.get<number>('colibri.port', 8000))),
       kvSlots: Math.max(1, Math.min(16, Math.floor(c.get<number>('colibri.kvSlots', 2)))),
+      modelsDir: c.get<string>('colibri.modelsDir', '') || undefined,
+      backend: (['auto', 'cpu', 'vulkan', 'cuda'] as const).find((b) => b === c.get<string>('colibri.backend', 'auto')) ?? 'auto',
     },
     routing: {
       enabled: c.get<boolean>('routing.enabled', true),

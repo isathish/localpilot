@@ -31,20 +31,42 @@ LocalPilot judges memory fit by the RAM-resident size, not the download. That is
 
 ## Set it up
 
-1. **Install colibri and a model.** Clone [colibri](https://github.com/JustVugg/colibri) and run its setup script, `./start-here.sh`, in the checkout. The script picks a model for your machine and downloads it. LocalPilot never downloads colibri models itself.
-2. **Start the server.** Either run `coli serve` yourself, or use LocalPilot:
-   1. Open the Command Palette and run **LocalPilot: Start colibri (stream huge MoE models from disk)**.
-   2. If `localpilot.colibri.path` is empty, choose your colibri checkout folder (the one containing `c/coli`) or **Use `coli` on PATH**. The folder is saved to `localpilot.colibri.path`.
-   3. LocalPilot opens a terminal named *LocalPilot · colibri* and runs:
+Run **LocalPilot: Start colibri** from the Command Palette, or **Start colibri** in **Settings → Providers → Huge MoE models**. It handles every starting point:
 
-      ```bash
-      c/coli serve --host 127.0.0.1 --port 8000 [--model <name>] [--kv-slots <n>]
-      ```
+| Your machine | What Start colibri does |
+|---|---|
+| colibri is not installed | Checks that git and Python are installed and shows the install command if not. Asks where to put the checkout (default `~/colibri`) and which model to use. Then it clones colibri and runs its setup in a terminal: detect the hardware, build the engine (or download a prebuilt one when there is no compiler), download the model and start the server. |
+| colibri is installed but nothing is set up | Runs colibri's setup without questions, and colibri downloads the model it recommends for this machine. |
+| colibri is set up | Runs the same setup command. It sees the completed setup and only starts the server: no download, no build. |
+| colibri is already running | Uses it. It does not start a second server. It offers **Switch model…**, **Stop colibri** and **Open dashboard**. |
+| Another server holds the port (vLLM also uses 8000) | Offers the next free port and saves it to `localpilot.colibri.port`. |
+| `localpilot.colibri.path` is not a colibri folder | Offers to choose another folder, install colibri there, or forget the folder. |
 
-   4. It waits up to 10 minutes for the server to answer while the resident part of the model loads. Watch the terminal for progress.
-3. **Pick the model.** When the server answers, LocalPilot refreshes its model list and the colibri model appears in the picker.
+colibri is found in this order: `localpilot.colibri.path` (a git checkout with `c/coli` or an unpacked release with `coli`), then `coli` on your PATH, then a checkout in `~/colibri`.
 
-To check the server yourself, run `curl http://127.0.0.1:8000/v1/models`. The response lists the model with `"owned_by": "colibri"`.
+**Choosing a model.** The picker ranks colibri's catalog against this machine:
+
+- **Runs from RAM** (fast) comes first, then **streams from disk** (slow, best for Plan mode). Models that need more RAM than you have are left out.
+- Each entry shows its download size. A model that does not fit on the free disk in the models folder is flagged, and you are asked before it downloads.
+- **Let colibri recommend** leaves the choice to colibri.
+- **A model folder I already have…** uses a model on disk (`--model-dir`).
+- Models colibri cannot install without a manual conversion (OLMoE, Qwen3.8-27B, GLM-5.3-Flash, DeepSeek V4.1 Flash) are not offered.
+
+**What runs.** A terminal named *LocalPilot · colibri* runs colibri's own setup, never interactive and never opening a browser:
+
+```bash
+~/colibri/c/coli setup --yes --no-browser --host 127.0.0.1 --port 8000 [--model <id> | --model-dir <folder>] [--dir <models folder>] [--backend <cuda|vulkan|cpu>] [--reconfigure]
+```
+
+On a first install the line starts with `git clone --depth 1 https://github.com/JustVugg/colibri ~/colibri &&`. On Windows it runs in PowerShell with `py -3 c\coli`, or `coli.cmd` from a release archive. Parallel agents each get a KV slot through `COLI_KV_SLOTS`, which `coli serve` reads.
+
+**Waiting.** A notification shows how long it has been running and, when colibri reports it (`coli status --json`), the install phase and percentage. A first install can take hours for the larger models, so LocalPilot waits up to 12 hours; a start waits up to 20 minutes. **Cancel** only stops the waiting: colibri keeps going in its terminal, and LocalPilot picks it up when it answers. If the terminal is closed first, run Start colibri again: an interrupted download resumes where it stopped.
+
+When the server answers, LocalPilot adds colibri as a provider, refreshes the model list, and the model appears in the picker.
+
+**Switching or stopping.** **Start colibri** while it runs → **Switch model…** stops it and runs setup with `--reconfigure` and the new model. **LocalPilot: Stop colibri** (also in Settings) runs `coli stop` and closes the terminal.
+
+To check the server yourself, run `curl http://127.0.0.1:8000/v1/models`. The response lists the model with `"owned_by": "colibri"`. `coli status`, `coli doctor` and `coli logs -n 50` in the checkout show colibri's own view.
 
 ## How LocalPilot detects colibri
 
@@ -79,11 +101,11 @@ A colibri model that fits in RAM is routed like any other local model, apart fro
 
 | Setting | Default | What it does |
 |---|---|---|
-| `localpilot.colibri.path` | `""` | colibri checkout folder containing `c/coli`. Empty means `coli` on your PATH. |
-| `localpilot.colibri.model` | `""` | `--model` for **Start colibri**: a colibri model name such as `qwen3-coder-30b` or `glm-5.2`, or a model folder. Empty uses the model colibri's setup installed. |
-| `localpilot.colibri.port` | `8000` | Port for `coli serve`. Auto-detect also probes it when it is not 8000. |
-| `localpilot.colibri.kvSlots` | `2` | `--kv-slots`: conversations colibri decodes together, each with its own cached prefix. Maximum 16, and capped by `localpilot.parallel.maxConcurrency`. Each slot costs a few hundred MB. |
-
-If a vLLM server already uses port 8000, set `localpilot.colibri.port` to another port before you start colibri.
+| `localpilot.colibri.path` | `""` | colibri folder: a checkout with `c/coli` or a release with `coli`. Empty means `coli` on your PATH, then `~/colibri`. Set by Start colibri when it installs colibri or you choose a folder. |
+| `localpilot.colibri.model` | `""` | A colibri catalog id (`qwen3-coder-30b`, `qwen36-35b`, `glm-5.2`, `deepseek-v4-flash`…) or a folder with a model on disk. Empty lets colibri recommend one. **Switch model…** sets it. |
+| `localpilot.colibri.modelsDir` | `""` | Where models are downloaded (`--dir`). Empty means `~/colibri-models`. Pick a disk with room: models are 19 GB to 1.6 TB. |
+| `localpilot.colibri.backend` | `auto` | Engine built or downloaded at setup: `auto` (CUDA, then Vulkan, then CPU; Metal on Apple Silicon), `cuda`, `vulkan` or `cpu`. |
+| `localpilot.colibri.port` | `8000` | Where the server listens. Auto-detect also probes it when it is not 8000. Start colibri offers another port when something else holds this one. |
+| `localpilot.colibri.kvSlots` | `2` | Conversations colibri decodes together, each with its own cached prefix (`COLI_KV_SLOTS`). Maximum 16, and capped by `localpilot.parallel.maxConcurrency`. Each slot costs a few hundred MB. |
 
 Next: [Models & providers]({{ '/docs/models/' | relative_url }}) · [Agent, Ask & Plan]({{ '/docs/agent-modes/' | relative_url }}) · [Offline AI coding assistant]({{ '/guides/offline-ai-coding-assistant/' | relative_url }})

@@ -50,7 +50,7 @@ const SHOTS = [
     steps: [`[...document.querySelectorAll('.add-prov .chip')].find((b) => /Cloud APIs/.test(b.textContent)).click()`, 300],
     clip: { selector: '.add-prov', pad: 18 },
   },
-  { file: 'settings-colibri.png', url: settings('section=providers'), size: [704, 2400], clip: { headingText: 'Huge MoE models', pad: 14, maxHeight: 450, side: 'content' } },
+  { file: 'settings-colibri.png', url: settings('section=providers'), size: [704, 2400], clip: { headingText: 'Huge MoE models', pad: 14, maxHeight: 880, side: 'content' } },
   { file: 'settings-models-manager.png', url: settings('section=models'), size: [900, 936], clip: 'viewport' },
   { file: 'landing-models.png', url: settings('section=models'), size: [1100, 1600], clip: { headingText: 'Models', tag: 'h1', toHeadingText: 'Model catalog', pad: 18, maxHeight: 780, side: 'content' } },
   { file: 'settings-models-catalog.png', url: settings('section=models'), size: [704, 2400], clip: { headingText: 'catalog', pad: 14, maxHeight: 684, side: 'content' } },
