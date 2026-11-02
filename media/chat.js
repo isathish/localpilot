@@ -513,6 +513,11 @@
       case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
       case 'find_symbol': return `${v('Looked up', 'Looking up')} ${code(a.query)}`;
       case 'find_references': return `${v('Found', 'Finding')} references to ${code(a.symbol)}`;
+      case 'git_status': return `${v('Checked', 'Checking')} git ${esc(a.action || 'status')}${a.path ? ` of ${fchip(a.path)}` : ''}`;
+      case 'git_commit': return `${v('Committed', 'Committing')}${a.branch ? ` on ${code(a.branch, 30)}` : ''} ${code(String(a.message || '').split('\n')[0], 60)}`;
+      case 'git_push': return `${v('Pushed', 'Pushing')} the branch`;
+      case 'pull_request': return `${v(a.action === 'create' ? 'Opened' : a.action === 'comment' ? 'Commented on' : 'Read', a.action === 'create' ? 'Opening' : a.action === 'comment' ? 'Commenting on' : 'Reading')} ${a.action === 'list' ? 'pull requests' : `pull request${a.number ? ` #${esc(a.number)}` : ''}`}${a.title ? ` ${code(a.title, 50)}` : ''}`;
+      case 'ci_status': return `${v(a.action === 'rerun' ? 'Re-ran' : 'Read', a.action === 'rerun' ? 'Re-running' : 'Reading')} CI ${a.action === 'logs' ? 'failure logs' : a.action === 'rerun' ? 'failed jobs' : 'runs'}`;
       case 'repo_graph': { const what = { impact: 'what depends on', dependents: 'importers of', dependencies: 'imports of', symbol: 'where', external: 'users of', hubs: 'central modules', cycles: 'import cycles', overview: 'the import graph' }[a.action] || 'the import graph'; return `${v('Mapped', 'Mapping')} ${what}${a.path ? ` ${a.action === 'symbol' || a.action === 'external' ? code(a.path) : fchip(a.path)}` : ''}${a.action === 'symbol' ? ' is defined' : ''}`; }
       case 'get_diagnostics': return `${v('Checked', 'Checking')} ${a.path ? `errors in ${fchip(a.path)}` : 'workspace errors'}`;
       case 'get_editor_state': return `${v('Read', 'Reading')} editor state`;

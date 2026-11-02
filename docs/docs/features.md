@@ -98,6 +98,7 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 - Each file is snapshotted before the agent edits it. Changed lines are highlighted in open editors.
 - The changes card above the chat box lists every changed file. Open a diff, or accept or reject per file or all at once.
 - Changes are tracked per session, so rejecting one agent's work never touches another's.
+- **Ship it as a pull request.** `/pr` checks what changed, runs the checks that cover it, commits on a new branch, pushes and opens a pull request with a description of what changed and how it was verified. `/fix-ci` reads the failing checks of the branch, reproduces the failure locally, fixes it and pushes. Behind them are tools the agent also uses on its own: `git_status`, `git_commit` (asks like any edit), `git_push` (asks like a terminal command; never force-pushes, and refuses the default branch unless you ask), `pull_request` (create, view, list, comment) and `ci_status` (workflow runs, the log lines of failed steps, re-run). Pull requests and CI use the [GitHub CLI](https://cli.github.com) (`gh auth login` once). Commands run without a shell, so nothing in a commit message or branch name is executed. A project's own `.claude/commands/pr.md` replaces the built-in `/pr`.
 
 ## 7. Context, memory, tools and skills
 

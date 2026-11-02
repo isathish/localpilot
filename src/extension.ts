@@ -8,6 +8,7 @@ import { createSkillPrompt, SkillLearner } from './agent/skillRecommender';
 import { describeSource, discoverSkills, installSkills, parseSkillSource, skillsDestination } from './agent/skillInstaller';
 import { CatalogEntry, SkillCatalog, sourceFor } from './agent/skillCatalog';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
+import { gitTools } from './tools/git';
 import { repoGraphTool } from './tools/repoGraph';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -268,7 +269,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
   const markdownViewer = new MarkdownViewer(context, log);
   controller.markdownViewer = markdownViewer;

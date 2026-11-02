@@ -26,6 +26,8 @@ import { asksToRemember } from '../src/agent/skillRecommender';
 import { buildRepoGraph, findCycles, parseSource } from '../src/context/repoGraph';
 import { describePolicy, flooredApproval, getManagedPolicy, managedPolicyPath, mcpServerAllowed, normalizePolicy, policyVerdict, providerAllowed, resetManagedPolicyCache, toolAllowed } from '../src/agent/managedPolicy';
 import { answerRepoGraph } from '../src/tools/repoGraph';
+import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
+import { builtinCommands } from '../src/agent/commands';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
@@ -873,6 +875,48 @@ async function pureLogic() {
     process.env.LOCALPILOT_MANAGED_SETTINGS = prev;
     resetManagedPolicyCache();
     nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  console.log('\n[Source control: git, pull requests, CI]');
+  {
+    check('branch names: options and traversal refused', validBranch('fix/greeting') && validBranch('feat/a.b_c-1') && !validBranch('--force') && !validBranch('a..b') && !validBranch('x y') && !validBranch('main.lock') && !validBranch('a/'));
+    const pr = formatPr({ number: 7, title: 'Fix greeting', state: 'OPEN', isDraft: false, url: 'https://github.com/o/r/pull/7', headRefName: 'fix/greeting', baseRefName: 'main', reviewDecision: 'CHANGES_REQUESTED', statusCheckRollup: [{ workflowName: 'CI', name: 'test (macos)', conclusion: 'FAILURE' }, { workflowName: 'CI', name: 'test (linux)', conclusion: 'SUCCESS' }, { name: 'lint', status: 'IN_PROGRESS' }], reviews: [{ author: { login: 'ana' }, state: 'CHANGES_REQUESTED', body: 'Please add a test' }] });
+    check('PR summary: failed checks first, review asks, next step', /1 passed, 1 failed, 1 pending/.test(pr) && /✖ CI \/ test \(macos\) \(failure\)/.test(pr) && /changes requested/.test(pr) && /ana \(changes_requested\): Please add a test/.test(pr) && /ci_status action "logs"/.test(pr), pr);
+    const log = ['build\tRun tests\t2026-11-02T07:21:47.5Z   ✔ summary: provider health with last state and error', 'build\tRun tests\t2026-11-02T07:21:48.8Z   ✖ Auto routes to the local model', 'build\tRun tests\t2026-11-02T07:21:48.9Z   picked: claude', 'build\tRun tests\t2026-11-02T07:21:55.7Z 1 check(s) FAILED', 'build\tRun tests\t2026-11-02T07:21:55.8Z ##[error]Process completed with exit code 1.'].join('\n');
+    const sum = summarizeFailedLog(log);
+    check('CI log summary keeps the failure and its context, not passing lines that say "error"', /✖ Auto routes/.test(sum) && /##\[error\]/.test(sum) && /^## build › Run tests/m.test(sum) && !/2026-11-02T/.test(sum), sum);
+    const cmds = builtinCommands();
+    check('built-in /pr and /fix-ci commands', cmds.some((c) => c.invoke === '/pr' && /pull_request "create"/.test(c.body)) && cmds.some((c) => c.invoke === '/fix-ci' && /ci_status "logs"/.test(c.body)) && cmds.every((c) => c.source === 'builtin'));
+    if ((await runCmd('git', ['--version'], undefined)).code === 0) {
+      const base = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-git-'));
+      const ws = nodePath.join(base, 'ws');
+      const remote = nodePath.join(base, 'remote.git');
+      const g = (args: string[], cwd = ws) => runCmd('git', args, cwd);
+      await runCmd('git', ['init', '-q', '--bare', '-b', 'main', remote], base);
+      await runCmd('git', ['init', '-q', '-b', 'main', ws], base);
+      await g(['config', 'user.email', 't@example.com']);
+      await g(['config', 'user.name', 'Tester']);
+      nodeFs.writeFileSync(nodePath.join(ws, 'a.txt'), 'one\n');
+      await g(['add', '.']);
+      await g(['commit', '-qm', 'init']);
+      await g(['remote', 'add', 'origin', remote]);
+      await g(['push', '-q', '-u', 'origin', 'main']);
+      nodeFs.writeFileSync(nodePath.join(ws, 'a.txt'), 'two\n');
+      const asked: string[] = [];
+      const tctx = { sessionId: 's', workspaceRoot: ws, signal: new AbortController().signal, requestApproval: async (t: string) => { asked.push(t); return true; }, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext;
+      const st = await gitStatusTool.execute({ action: 'status' }, tctx);
+      check('git_status: branch, default branch and changed files', /Branch: main/.test(st.content) && /default branch: main/.test(st.content) && /M a\.txt/.test(st.content), st.content);
+      const onMain = await gitPushTool.execute({}, tctx);
+      check('git_push refuses the default branch unless asked', !!onMain.isError && /default branch/.test(onMain.content));
+      const c = await gitCommitTool.execute({ message: 'fix: two instead of one\n\nBecause.', branch: 'fix/two' }, tctx);
+      const msg = (await g(['log', '-1', '--pretty=%B'])).out;
+      check('git_commit: new branch, staged, message passed verbatim (no shell)', !c.isError && /on fix\/two/.test(c.content) && msg.trim() === 'fix: two instead of one\n\nBecause.' && asked.some((t) => /Commit on new branch fix\/two/.test(t)), c.content);
+      const pushed = await gitPushTool.execute({}, tctx);
+      check('git_push: the branch reaches the remote with its upstream set', !pushed.isError && (await runCmd('git', ['branch', '--list', 'fix/two'], remote)).out.includes('fix/two') && /origin\/fix\/two/.test((await g(['status', '-sb'])).out), pushed.content);
+      const bad = await gitCommitTool.execute({ message: 'x', branch: '--orphan' }, tctx);
+      check('git_commit refuses an option-looking branch name', !!bad.isError);
+      nodeFs.rmSync(base, { recursive: true, force: true });
+    }
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

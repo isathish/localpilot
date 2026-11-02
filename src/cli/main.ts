@@ -18,6 +18,7 @@ import { ChangeTracker } from '../agent/changeTracker';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
+import { gitTools } from '../tools/git';
 import { repoGraphTool } from '../tools/repoGraph';
 import { SkillManager } from '../agent/skills';
 import { createAgentTools } from '../agent/subagents';
@@ -454,6 +455,11 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'find_symbol': return `Look up ${s(a.query)}`;
     case 'find_references': return `References to ${s(a.symbol)}`;
     case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
+    case 'git_status': return `Git ${s(a.action || 'status')}${a.path ? ` ${s(a.path)}` : ''}`;
+    case 'git_commit': return `Commit${a.branch ? ` on ${s(a.branch)}` : ''}: ${s(String(a.message ?? '').split('\n')[0], 70)}`;
+    case 'git_push': return 'Push branch';
+    case 'pull_request': return `Pull request: ${s(a.action)}${a.number ? ` #${s(a.number)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}`;
+    case 'ci_status': return `CI ${s(a.action)}${a.run_id ? ` ${s(a.run_id)}` : ''}`;
     case 'run_command': return `$ ${s(a.command, 100)}`;
     case 'get_diagnostics': return 'Check diagnostics';
     case 'web_search': return `Web search "${s(a.query)}"`;
@@ -529,7 +535,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;

@@ -35,7 +35,7 @@ export interface CustomCommand {
   disableModelInvocation?: boolean;
   file: string;
   body: string;
-  source: 'project' | 'user' | 'plugin';
+  source: 'project' | 'user' | 'plugin' | 'builtin';
   plugin?: string;
 }
 
@@ -203,6 +203,39 @@ async function listMarkdown(dir: string, depth = 2): Promise<{ file: string; sub
   return out;
 }
 
+/**
+ * Commands that ship with LocalPilot, below every project, user and plugin command (a `.claude/commands/pr.md` replaces
+ * `/pr`). They drive the source-control tools (git_status, git_commit, git_push, pull_request, ci_status).
+ */
+const BUILTIN_COMMANDS: Record<string, string> = {
+  pr: `---
+description: Commit the current changes on a branch, push it and open a pull request
+argument-hint: [title or what the change is about]
+---
+Ship the current changes as a pull request. $ARGUMENTS
+
+1. git_status (action "status", then "diff") to see exactly what changed. If nothing changed, say so and stop.
+2. Run the project's checks that cover these files (repo_graph "impact" names the tests; use the test/lint/type-check commands the project defines). Fix anything that fails before going on.
+3. If the current branch is the default branch, pick a short branch name from the change ("fix/…", "feat/…") and pass it to git_commit as \`branch\`. Commit with a conventional message that says why.
+4. git_push, then pull_request "create" with a clear title and a body: what changed, why, how it was verified (the commands you ran and their result). Use draft=true if anything is unfinished.
+5. Report the PR link and the checks you ran.`,
+  'fix-ci': `---
+description: Read the failing CI checks of this branch or PR, fix them and push
+argument-hint: [PR number or run id]
+---
+Make the failing CI checks pass. $ARGUMENTS
+
+1. pull_request "view" (or ci_status "runs") to see which checks fail. If none fail, say so and stop.
+2. ci_status "logs" for the failed run: read the actual error, not just the job name.
+3. Reproduce it locally with run_command (the same command the workflow runs), find the root cause and fix it with the smallest change. Do not disable or skip the failing check.
+4. Run the command again until it passes, then the related tests.
+5. git_commit ("fix: …" explaining the cause) and git_push. Report what failed, why, the fix, and that the checks will run again.`,
+};
+
+export function builtinCommands(): CustomCommand[] {
+  return Object.entries(BUILTIN_COMMANDS).map(([name, raw]) => parseCommandFile(`(built-in)/${name}.md`, raw, { source: 'builtin' }));
+}
+
 /** Distinct commands, highest-priority location first (project, user, plugins); the first with a given invocation wins. */
 export async function discoverCommands(roots: string[], opts: { home?: string; plugins?: PluginSource; log?: { warn(m: string): void } } = {}): Promise<CustomCommand[]> {
   const home = opts.home ?? os.homedir();
@@ -233,6 +266,7 @@ export async function discoverCommands(roots: string[], opts: { home?: string; p
       opts.log?.warn(`commands: cannot read ${file}: ${String(e)}`);
     }
   }
+  builtinCommands().forEach(add);
   return out;
 }
 
