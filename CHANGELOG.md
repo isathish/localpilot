@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.4.9 — 2026-11-02
+### Fixed
+- Tuning suggestions stack on narrow panels; model name keeps its room during runs
+
 ## 1.4.8 — 2026-11-02
 ### Added
 - Enhance pageviews display with odometer effect and improved styling
