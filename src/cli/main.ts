@@ -47,6 +47,8 @@ import { setSecretValues } from '../providers/cloud';
 import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
+import { LEASE_MS, TeamBoard } from '../agent/teamBoard';
+import { boardOwner, teamBoardTool } from '../tools/teamBoard';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -84,6 +86,7 @@ ${bold('Usage')}
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your providers (cloud ones are marked)
   localpilot doctor                       check servers, settings and tools
+  localpilot work [--once] [--max N]      take tasks from the shared board (.localpilot/board) until none is left
   localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
   localpilot providers                    local and cloud providers: reachability, models, key state
   localpilot providers presets            providers you can add (Ollama, LM Studio… OpenAI, Claude, Gemini, OpenRouter…)
@@ -132,7 +135,9 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work';
+  /** `work`: stop after one task; give up waiting after this many seconds with nothing claimable. */
+  workOpts: { once: boolean; max?: number };
   /** `eval`: models to compare, suite file, task ids, keep workspaces. */
   evalOpts: { models: string[]; suite?: string; tasks: string[]; keep: boolean; json?: string };
   /** `providers add|key|remove|test|presets` options. */
@@ -146,7 +151,7 @@ interface Args {
   apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false } };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false } };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -184,6 +189,9 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--cloud') {a.provider.cloud = true;}
     else if (x === '--no-cloud') {a.provider.cloud = false;}
     else if (x === 'eval' && !words.length && !a.cmd) {a.cmd = 'eval';}
+    else if (x === 'work' && !words.length && !a.cmd) {a.cmd = 'work';}
+    else if (x === '--once') {a.workOpts.once = true;}
+    else if (x === '--max') {a.workOpts.max = Math.max(1, Number(next()) || 1);}
     else if (x === '--models') {a.evalOpts.models.push(...next().split(',').map((m) => m.trim()).filter(Boolean));}
     else if (x === '--suite') {a.evalOpts.suite = next();}
     else if (x === '--tasks') {a.evalOpts.tasks.push(...next().split(',').map((t) => t.trim()).filter(Boolean));}
@@ -465,6 +473,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'find_symbol': return `Look up ${s(a.query)}`;
     case 'find_references': return `References to ${s(a.symbol)}`;
     case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
+    case 'team_board': return `Board: ${s(a.action)}${a.id ? ` ${s(a.id)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}`;
     case 'git_status': return `Git ${s(a.action || 'status')}${a.path ? ` ${s(a.path)}` : ''}`;
     case 'git_commit': return `Commit${a.branch ? ` on ${s(a.branch)}` : ''}: ${s(String(a.message ?? '').split('\n')[0], 70)}`;
     case 'git_push': return 'Push branch';
@@ -545,7 +554,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
@@ -769,6 +778,69 @@ async function cmdProviders(args: Args): Promise<number> {
   }
 }
 
+/**
+ * `localpilot work`: take tasks from the shared board (.localpilot/board) one after another until none is left. Run it
+ * in several terminals, or on several machines sharing the folder, and they split the board between them.
+ */
+async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<number> {
+  const board = new TeamBoard(args.cwd);
+  const ctl = new AbortController();
+  process.once('SIGINT', () => ctl.abort());
+  let done = 0;
+  let idleSince = 0;
+  console.log(`${BRAND} working on the shared board in ${args.cwd}${args.workOpts.once ? ' (one task)' : ''} — Ctrl+C to stop\n`);
+  while (!ctl.signal.aborted && (args.workOpts.max === undefined || done < args.workOpts.max)) {
+    const session = newSession(args.mode, getConfig().defaultModel);
+    core.sessions.set(session.id, session);
+    const owner = boardOwner(session.id);
+    const task = await board.claim(owner);
+    if (!task) {
+      const all = await board.list();
+      // Others are still working (or their tasks unblock ours later): wait for them; otherwise the board is finished.
+      const pending = all.some((t) => t.status === 'claimed' || (t.status === 'open' && t.dependsOn.every((d) => all.find((x) => x.id === d)?.status !== 'failed')));
+      if (args.workOpts.once || !pending) {
+        console.log(dim(all.length ? `Nothing left to take (${all.filter((t) => t.status === 'done').length}/${all.length} done).` : 'The board is empty: add tasks with the team_board tool or as .localpilot/board/<id>.md.'));
+        break;
+      }
+      idleSince ||= Date.now();
+      renderer.status(`Waiting for tasks claimed by others to finish… (${Math.round((Date.now() - idleSince) / 1000)} s)`);
+      await new Promise((r) => setTimeout(r, 15_000));
+      continue;
+    }
+    idleSince = 0;
+    console.log(`${amber('●')} ${bold(task.id)} ${task.title} ${dim(`(${owner})`)}`);
+    // Keep the claim alive while the agent works, so a long task is not taken over by another worker.
+    const heartbeat = setInterval(() => void board.update(task.id, owner, { renew: true }), LEASE_MS / 3);
+    const notes = task.notes.filter((n) => n.text !== 'claimed').map((n) => `- ${n.by}: ${n.text}`).join('\n');
+    const prompt = `You are working on "${task.title}" (id ${task.id}) from the team's shared task board.\n\n${task.brief}${notes ? `\n\nNotes from earlier work on it:\n${notes}` : ''}\n\nDo the work and verify it. Then call team_board with action "complete", id "${task.id}" and a summary of what changed and how you verified it. If you cannot finish, call team_board "release" with a note saying what is done and what is left (or "fail" with the reason if it cannot be done).`;
+    let ok = true;
+    let final = '';
+    try {
+      const run = new RunControl(session.id);
+      const stop = () => run.stop('the worker was stopped');
+      ctl.signal.addEventListener('abort', stop, { once: true });
+      final = await runTurn(core, session, prompt, [], renderer, undefined, run, { display: `board: ${task.id}` }).finally(() => ctl.signal.removeEventListener('abort', stop));
+    } catch (e) {
+      ok = false;
+      final = e instanceof Error ? e.message : String(e);
+    } finally {
+      clearInterval(heartbeat);
+    }
+    // The agent normally closes its own claim; if it did not, close it from the outcome so the task never stays stuck.
+    const after = await board.get(task.id);
+    if (after?.status === 'claimed' && after.owner === owner) {
+      await board.update(task.id, owner, ctl.signal.aborted || !ok ? { note: `released: ${ctl.signal.aborted ? 'the worker was stopped' : final.slice(0, 300)}`, status: 'open' } : { note: 'completed (closed by the worker)', status: 'done', result: final.slice(0, 2000) });
+    }
+    const end = await board.get(task.id);
+    console.log(`  ${end?.status === 'done' ? green('✔ done') : end?.status === 'failed' ? red('✖ failed') : dim(`↩ ${end?.status ?? '?'}`)}\n`);
+    done++;
+    if (args.workOpts.once) {
+      break;
+    }
+  }
+  return 0;
+}
+
 /** `localpilot eval`: the benchmark, one task at a time per model (a local server serves one request well at a time). */
 async function cmdEval(core: Core, args: Args): Promise<number> {
   const o = args.evalOpts;
@@ -983,6 +1055,10 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'eval') {
     process.exitCode = await cmdEval(core, args);
+    return;
+  }
+  if (args.cmd === 'work') {
+    process.exitCode = await cmdWork(core, args, renderer);
     return;
   }
 

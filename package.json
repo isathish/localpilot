@@ -540,6 +540,12 @@
         "icon": "$(beaker)"
       },
       {
+        "command": "localpilot.workOnBoard",
+        "title": "Work on Shared Board",
+        "category": "LocalPilot",
+        "icon": "$(checklist)"
+      },
+      {
         "command": "localpilot.openTerminal",
         "title": "Open LocalPilot Terminal",
         "category": "LocalPilot",

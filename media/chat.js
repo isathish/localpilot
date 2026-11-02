@@ -80,7 +80,7 @@
   const EXPLORE_TOOLS = new Set(['read_file', 'list_dir', 'grep_search', 'file_search', 'find_symbol', 'find_references', 'get_editor_state', 'gather_context']);
   const SLASH = [
     ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'],
+    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'], ['/board', 'Shared task board'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -513,6 +513,7 @@
       case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
       case 'find_symbol': return `${v('Looked up', 'Looking up')} ${code(a.query)}`;
       case 'find_references': return `${v('Found', 'Finding')} references to ${code(a.symbol)}`;
+      case 'team_board': return `${v({ add: 'Added to', claim: 'Claimed from', complete: 'Completed on', release: 'Released on', fail: 'Marked failed on', note: 'Noted on' }[a.action] || 'Read', { add: 'Adding to', claim: 'Claiming from', complete: 'Completing on', release: 'Releasing on', fail: 'Failing on', note: 'Noting on' }[a.action] || 'Reading')} the board${a.id ? ` ${code(a.id, 40)}` : ''}${a.title ? ` ${code(a.title, 50)}` : ''}`;
       case 'git_status': return `${v('Checked', 'Checking')} git ${esc(a.action || 'status')}${a.path ? ` of ${fchip(a.path)}` : ''}`;
       case 'git_commit': return `${v('Committed', 'Committing')}${a.branch ? ` on ${code(a.branch, 30)}` : ''} ${code(String(a.message || '').split('\n')[0], 60)}`;
       case 'git_push': return `${v('Pushed', 'Pushing')} the branch`;

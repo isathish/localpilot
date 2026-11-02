@@ -24,6 +24,7 @@ import { findRipgrep, runProcess } from '../tools/search';
 import { CommandManager, CustomCommand, expandCommand } from '../agent/commands';
 import * as path from 'path';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
+import { formatBoard, TeamBoard } from '../agent/teamBoard';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -2095,7 +2096,7 @@ export class ChatController implements vscode.Disposable {
             '- `/skill mode auto|ask|off` — how this chat uses skills · `/skill pin <name>` / `unpin` — load a skill into every request of this chat',
             '- `/agent <name> <task>` — delegate directly to a subagent',
             '- `/memory` — instruction files in force (CLAUDE.md, AGENTS.md…) and saved memory notes · `/permissions` — permission rules · `/hooks` — configured hooks',
-            '- `/context` — show context usage',
+            '- `/context` — show context usage · `/board` — the shared task board (`.localpilot/board`)',
             ...(custom.length ? ['', '**Custom commands** (`.claude/commands`, `.localpilot/commands`, plugins)', ...custom.map((c) => `- \`${c.invoke}${c.argumentHint ? ` ${c.argumentHint}` : ''}\` — ${c.description || c.file}`)] : []),
           ].join('\n')
         );
@@ -2133,6 +2134,14 @@ export class ChatController implements vscode.Disposable {
         const orgLines = describePolicy(org);
         return say([
           ...(orgLines.length ? [`**Organization policy** (from \`${org.source}\`; cannot be changed here)${org.message ? ` — ${org.message}` : ''}`, ...orgLines.map((l) => `- ${l}`), ''] : []),`**Permission rules** (from ${p.sources.length ? p.sources.map((s) => `\`${vscode.workspace.asRelativePath(s)}\``).join(', ') : 'no settings file'})`, `- deny: ${fmt(p.permissions.deny)}`, `- ask: ${fmt(p.permissions.ask)}`, `- allow: ${fmt(p.permissions.allow)}`, p.permissions.defaultMode ? `- defaultMode: \`${p.permissions.defaultMode}\`` : '', '', 'Edit `.localpilot/settings.json` or `.claude/settings.json`: `{ "permissions": { "allow": ["Bash(npm run test:*)"], "deny": ["Read(.env)"] } }`.'].filter((l) => l !== '').join('\n'));
+      }
+      case 'board': {
+        const root = session.worktree?.path ?? this.workspace.root;
+        if (!root) {
+          return say('Open a folder to use the shared board.');
+        }
+        void new TeamBoard(root).list().then((all) => say(`**Shared board** (\`.localpilot/board\`)\n\n${all.length ? formatBoard(all).split('\n').map((l) => `- ${l}`).join('\n') : formatBoard(all)}\n\nAsk the agent to put work on the board, or run \`localpilot work\` (one or more terminals, **LocalPilot: Work on Shared Board**) to take tasks from it.`));
+        return '';
       }
       case 'hooks': {
         const p = this.runner.projectSettings?.();

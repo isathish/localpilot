@@ -9,6 +9,7 @@ import { describeSource, discoverSkills, installSkills, parseSkillSource, skills
 import { CatalogEntry, SkillCatalog, sourceFor } from './agent/skillCatalog';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { gitTools } from './tools/git';
+import { teamBoardTool } from './tools/teamBoard';
 import { repoGraphTool } from './tools/repoGraph';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -269,7 +270,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools]);
+  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
   const markdownViewer = new MarkdownViewer(context, log);
   controller.markdownViewer = markdownViewer;
@@ -1422,6 +1423,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.showLogs', () => log.show());
   cmd('localpilot.installCli', () => installCli(context));
+  // A worker for the shared board (`localpilot work`) in its own terminal; run the command again for more workers.
+  cmd('localpilot.workOnBoard', () => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) {
+      void vscode.window.showWarningMessage('Open a folder first: the shared board lives in its .localpilot/board.');
+      return;
+    }
+    const n = vscode.window.terminals.filter((t) => t.name.startsWith('LocalPilot Worker')).length + 1;
+    vscode.window.createTerminal({ name: `LocalPilot Worker ${n}`, cwd: root, shellPath: process.execPath, shellArgs: [vscode.Uri.joinPath(context.extensionUri, 'dist', 'cli.js').fsPath, 'work', '-y', '-C', root], env: { ELECTRON_RUN_AS_NODE: '1' } }).show();
+  });
   // The benchmark (`localpilot eval`) in a terminal: same agent loop, run by the bundled CLI on the extension host's Node.
   cmd('localpilot.runBenchmark', async () => {
     const models = (await providers.listModels().catch(() => [])).filter((m) => m.supportsTools && !/embed/i.test(m.modelId));

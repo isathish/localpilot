@@ -131,6 +131,28 @@ The same controls are in the tab's right-click menu, the background strip, the *
 
 <p><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" alt="A paused agent: its subagent lanes (docs and tester working, two coders queued), a queued steering message, Paused · message waiting and the Resume button" width="420"></p>
 
+## The shared board
+
+For work that several people or agents share, put it on the board in the repository: `.localpilot/board/`, one Markdown file per task. Commit the folder and the board travels with the code; a reviewer reads it like any other file.
+
+```markdown
+---
+id: health-endpoint
+title: "Add the /health endpoint"
+status: open
+priority: 1
+dependsOn: []
+---
+Return {"ok": true} from GET /health and add a test for it.
+```
+
+- **Filling it.** Ask the agent to "split this into board tasks": it uses the `team_board` tool to add tasks with a self-contained brief, a priority (1 runs first) and dependencies. You can also write the files by hand.
+- **Working it.** Run **LocalPilot: Work on Shared Board** (once per worker; each opens a terminal) or `localpilot work` in a terminal or on another machine that shares the folder. Each worker claims the next free task whose dependencies are done, runs it as an agent chat, and marks it done with a summary of what changed and how it was checked. When nothing is left it stops; while tasks it waits for are still with others, it waits. `--once` takes a single task, `--max N` stops after N. Workers approve their own actions (`-y`); an [organization policy](configuration.md#organization-policy) still applies.
+- **Claims cannot collide.** A claim is made under an exclusive lock file, so two workers never get the same task. It holds a 10-minute lease the worker renews while it works; if a worker crashes, another takes the task over after the lease ends and the takeover is noted on the task.
+- **Handoffs.** Anyone can leave a note on any task; only its owner can complete, fail or release it. A worker that runs out of time releases the task back to open with a note on what is left, and the next one picks up from there. `/board` in the chat shows the board.
+
+Two workers on a board of three tasks (two scripts and a README that depends on both) split the scripts between them, and the README was written after both were done.
+
 ## The Agents panel
 
 The **Agents** view sits below the chat view (collapsed by default). It stays in the Primary Side Bar when you move the chat elsewhere, and its title bar has **Open Chat**.

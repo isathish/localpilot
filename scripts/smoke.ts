@@ -29,6 +29,8 @@ import { answerRepoGraph } from '../src/tools/repoGraph';
 import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
 import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
+import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
+import { teamBoardTool } from '../src/tools/teamBoard';
 import { McpClient } from '../src/mcp/mcpManager';
 import { SseParser, transportKind } from '../src/mcp/transports';
 import * as nodeHttp from 'http';
@@ -1092,6 +1094,44 @@ async function pureLogic() {
     }
     server.closeAllConnections?.();
     server.close();
+  }
+
+  console.log('\n[Shared board: claims, leases, dependencies, notes]');
+  {
+    const root = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-board-'));
+    const board = new TeamBoard(root);
+    const api = await board.add({ title: 'Add the /health endpoint', brief: 'Return {"ok": true} from GET /health.\nTest it.', priority: 2 }, 'ana@box');
+    const docs = await board.add({ title: 'Document /health', brief: 'Add it to README.', dependsOn: [api.id] }, 'ana@box');
+    const again = await board.add({ title: 'Add the /health endpoint', brief: 'dup' }, 'bo@box');
+    check('ids from titles, unique; unknown dependencies dropped', api.id === 'add-the-health-endpoint' && again.id === 'add-the-health-endpoint-2' && docs.dependsOn[0] === api.id);
+    const round = parseTask(api.id, serializeTask({ ...api, notes: [{ at: '2026-11-02T10:00:00.000Z', by: 'ana@box', text: 'start with the router' }], result: 'done in routes.ts' }));
+    check('task file round-trips (title with quotes, multi-line brief, notes, result)', round.title === api.title && round.brief === api.brief && round.notes[0].text === 'start with the router' && round.result === 'done in routes.ts' && round.priority === 2);
+    // Five workers race for the same task: exactly one gets it.
+    const wins = (await Promise.all([1, 2, 3, 4, 5].map((n) => board.claim(`w${n}`, api.id)))).filter(Boolean);
+    check('concurrent claims of one task: exactly one wins', wins.length === 1, wins.map((w) => w?.owner));
+    const winner = wins[0]!.owner!;
+    check('a task waiting for an unfinished dependency is not claimable', !claimable((await board.get(docs.id))!, await board.list()) && (await board.claim('w9', docs.id)) === undefined);
+    const stolen = await board.update(api.id, 'intruder', { status: 'done', result: 'x' });
+    const noted = await board.update(api.id, 'intruder', { note: 'the router moved to src/http' });
+    check('only the owner closes a claim; anyone can leave a note', !!stolen.error && !noted.error && (await board.get(api.id))!.notes.some((n) => n.by === 'intruder'));
+    const closed = await board.update(api.id, winner, { status: 'done', result: 'GET /health returns {"ok":true}; test added', note: 'completed' });
+    check('owner completes it; the dependent task becomes claimable', closed.task?.status === 'done' && !!(await board.claim('w2', docs.id)));
+    // Lease expiry: a crashed worker's claim is taken over, with a note saying so.
+    const stale = await board.claim('crashed', again.id, -1000);
+    const taken = await board.claim('fresh');
+    check('an expired lease can be taken over, and the takeover is recorded', !!stale && taken?.id === again.id && taken.owner === 'fresh' && /took over/.test(taken.notes.at(-1)!.text));
+    const text = formatBoard(await board.list());
+    check('board listing: state, owner, waiting dependencies', /add-the-health-endpoint \[done\] p2/.test(text) && /document-health \[claimed\]/.test(text), text);
+    // Hand-edited file with an unknown status and list-style dependencies still parses.
+    nodeFs.writeFileSync(nodePath.join(root, '.localpilot', 'board', 'manual.md'), '---\nid: manual\ntitle: Tidy imports\nstatus: someday\ndependsOn: [document-health]\n---\nRemove unused imports.\n');
+    const manual = (await board.get('manual'))!;
+    check('hand-written task files are accepted', manual.status === 'open' && manual.dependsOn[0] === 'document-health' && manual.title === 'Tidy imports');
+    const tctx = { sessionId: 'sess-abcdef12', workspaceRoot: root, signal: new AbortController().signal, requestApproval: async () => true, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext;
+    const added = await teamBoardTool.execute({ action: 'add', title: 'Write tests', brief: 'Cover /health', priority: 1 }, tctx);
+    const claimed = await teamBoardTool.execute({ action: 'claim', id: 'write-tests' }, tctx);
+    const completed = await teamBoardTool.execute({ action: 'complete', id: 'write-tests', text: 'tests pass' }, tctx);
+    check('team_board tool: add, claim and complete under the chat identity', /Added "write-tests"/.test(added.content) && /Claimed "write-tests"/.test(claimed.content) && /Completed/.test(completed.content) && (await board.get('write-tests'))!.status === 'done', [added.content, claimed.content, completed.content]);
+    nodeFs.rmSync(root, { recursive: true, force: true });
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');
