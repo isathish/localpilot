@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.3.7 — 2026-11-02
+
 ### Changed
 - **A plain, native look instead of "liquid glass".** The chat, settings and Markdown viewer drop the decorative layer: frosted translucent bars and cards, gradient sheens, coloured background glows, a highlight that followed the pointer, lens distortion, a sliding glass pill behind tabs and selectors, icons that wobbled, spun or bounced on hover, ripples on click, cards that lifted on hover, and shimmering "working" text. Surfaces are solid and use VS Code's own colours, borders and corner radii. The message box sits below the transcript instead of floating over it, so replies never scroll under it. Running steps still show their spinner. The behaviour script that drove the effects (`media/glass.js`) is gone, so the webviews do less work on every pointer move and selection change.
 - The Tasks panel title no longer shrinks to "Ta…" when the current task is long.
