@@ -63,6 +63,7 @@ import { TaskQueue } from './agent/taskQueue';
 import { AutoReviewer } from './agent/autoReviewer';
 import { reposTool } from './tools/repos';
 import { securityScanTool } from './tools/security';
+import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, searchPlugins, setPluginEnabled } from './agent/pluginInstaller';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -1425,6 +1426,82 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.showLogs', () => log.show());
   cmd('localpilot.installCli', () => installCli(context));
+  // Plugins from marketplaces (Claude Code's format): browse, show what a plugin runs, install, then reload.
+  cmd('localpilot.browsePlugins', async () => {
+    const markets = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Loading plugin marketplaces…' }, async () => {
+      const out: Marketplace[] = [];
+      for (const spec of getConfig().pluginMarketplaces) {
+        try {
+          out.push(await loadMarketplace(spec, { refresh: true }));
+        } catch (e) {
+          log.warn(`plugins: marketplace ${spec}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return out;
+    });
+    if (!markets.length) {
+      void vscode.window.showWarningMessage('No plugin marketplace could be loaded. Check localpilot.plugins.marketplaces and that git is installed.');
+      return;
+    }
+    const installed = new Set(plugins.all.map((p) => p.name));
+    const pick = await vscode.window.showQuickPick(
+      searchPlugins(markets, '').map(({ entry, market }) => ({ label: `${installed.has(entry.name) ? '$(check) ' : ''}${entry.name}`, description: [entry.category, entry.version, market.name].filter(Boolean).join(' · '), detail: entry.description, entry, market })),
+      { title: `Plugins (${markets.map((m) => m.name).join(', ')})`, placeHolder: 'Search by name, category or description', matchOnDescription: true, matchOnDetail: true }
+    );
+    if (!pick) {
+      return;
+    }
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const scope = root ? await vscode.window.showQuickPick([{ label: 'For me', description: '~/.localpilot/plugins — every workspace', id: 'user' as const }, { label: 'For this workspace', description: '.localpilot/plugins — commit it to share with the team', id: 'project' as const }], { title: `Install ${pick.entry.name}` }) : { id: 'user' as const };
+    if (!scope) {
+      return;
+    }
+    try {
+      const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing ${pick.entry.name}…` }, () =>
+        installPlugin(pick.entry, pick.market, pluginsDir(scope.id, root), {
+          // Hooks and MCP servers run commands on this machine: show them and ask before anything is installed.
+          confirm: async (_p, d) => !d.runs.length || (await vscode.window.showWarningMessage(`${d.summary}\n\nThis plugin runs commands on your machine:\n${d.runs.slice(0, 12).join('\n')}`, { modal: true }, 'Install')) === 'Install',
+        })
+      );
+      if (!r) {
+        return;
+      }
+      await plugins.refresh();
+      await vscode.commands.executeCommand('localpilot.reloadSkills');
+      void vscode.window.showInformationMessage(`Installed ${describePlugin(r.plugin).summary}.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not install ${pick.entry.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+  cmd('localpilot.managePlugins', async () => {
+    await plugins.refresh();
+    if (!plugins.all.length) {
+      void vscode.window.showInformationMessage('No plugins installed. Use LocalPilot: Browse Plugins… to find some.');
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(plugins.all.map((p) => ({ label: `${p.enabled ? '$(check)' : '$(circle-slash)'} ${p.name}`, description: `${p.version ?? ''} · ${p.source === 'user' ? 'for me' : 'this workspace'}`, detail: describePlugin(p).summary, p })), { title: 'Plugins' });
+    if (!pick) {
+      return;
+    }
+    const action = await vscode.window.showQuickPick([pick.p.enabled ? 'Disable' : 'Enable', 'Remove', 'Open folder'], { title: pick.p.name });
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const settingsFile = pick.p.source === 'user' || !root ? path.join(os.homedir(), '.localpilot', 'settings.json') : path.join(root, '.localpilot', 'settings.json');
+    if (action === 'Enable' || action === 'Disable') {
+      await setPluginEnabled(settingsFile, pick.p.name, action === 'Enable');
+    } else if (action === 'Remove') {
+      if ((await vscode.window.showWarningMessage(`Remove ${pick.p.name}?`, { modal: true }, 'Remove')) !== 'Remove') {
+        return;
+      }
+      await vscode.workspace.fs.delete(vscode.Uri.file(pick.p.root), { recursive: true, useTrash: true });
+    } else if (action === 'Open folder') {
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(pick.p.root));
+      return;
+    } else {
+      return;
+    }
+    await plugins.refresh();
+    await vscode.commands.executeCommand('localpilot.reloadSkills');
+  });
   // A worker for the shared board (`localpilot work`) in its own terminal; run the command again for more workers.
   cmd('localpilot.workOnBoard', () => {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

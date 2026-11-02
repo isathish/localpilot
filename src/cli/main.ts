@@ -52,6 +52,7 @@ import { boardOwner, teamBoardTool } from '../tools/teamBoard';
 import { reposTool } from '../tools/repos';
 import { securityScanTool } from '../tools/security';
 import { formatFindings, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
+import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, removePlugin, scaffoldPlugin, searchPlugins, setPluginEnabled, validatePlugin } from '../agent/pluginInstaller';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -89,6 +90,7 @@ ${bold('Usage')}
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your providers (cloud ones are marked)
   localpilot doctor                       check servers, settings and tools
+  localpilot plugin search|install|remove|enable|disable|list|new|validate   plugins from marketplaces (Claude Code format) [--project]
   localpilot scan [folder]               security scan: vulnerable dependencies (OSV.dev), secrets, risky code [--fail-on high] [--sarif out.sarif] [--json out.json] [--offline]
   localpilot work [--once] [--max N]      take tasks from the shared board (.localpilot/board) until none is left
   localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
@@ -139,7 +141,11 @@ interface Args {
   print: boolean;
   mcp: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin';
+  /** `plugin <action>`: search, install, remove, enable, disable, list, new, validate, marketplaces. */
+  pluginAction?: string;
+  /** `plugin install --project`: into the workspace's .localpilot/plugins instead of ~/.localpilot/plugins. */
+  project: boolean;
   /** `scan`: exit 1 at or above this severity; SARIF/JSON outputs; skip the online dependency check. */
   scanOpts: { failOn: 'low' | 'medium' | 'high' | 'critical' | 'none'; sarif?: string; json?: string; offline: boolean };
   /** `work`: stop after one task; give up waiting after this many seconds with nothing claimable. */
@@ -157,7 +163,7 @@ interface Args {
   apply: boolean;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false } };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false }, project: false };
   const words: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
@@ -197,6 +203,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === 'eval' && !words.length && !a.cmd) {a.cmd = 'eval';}
     else if (x === 'work' && !words.length && !a.cmd) {a.cmd = 'work';}
     else if (x === 'scan' && !words.length && !a.cmd) {a.cmd = 'scan';}
+    else if (x === 'plugin' && !words.length && !a.cmd) {a.cmd = 'plugin'; a.pluginAction = argv[i + 1] && !argv[i + 1].startsWith('-') ? argv[++i] : 'list';}
+    else if (x === '--project') {a.project = true;}
     else if (x === '--fail-on') {const v = next(); a.scanOpts.failOn = (['low', 'medium', 'high', 'critical', 'none'].includes(v) ? v : 'high') as Args['scanOpts']['failOn'];}
     else if (x === '--sarif') {a.scanOpts.sarif = next();}
     else if (x === '--offline') {a.scanOpts.offline = true;}
@@ -790,6 +798,116 @@ async function cmdProviders(args: Args): Promise<number> {
   }
 }
 
+/** `localpilot plugin …`: marketplaces, install/remove/enable/disable, and authoring (new, validate). */
+async function cmdPlugin(core: Core, args: Args, renderer: Renderer): Promise<number> {
+  const action = args.pluginAction ?? 'list';
+  const arg = args.prompt.trim();
+  const dest = pluginsDir(args.project ? 'project' : 'user', args.cwd);
+  const settingsFile = args.project ? path.join(args.cwd, '.localpilot', 'settings.json') : path.join(os.homedir(), '.localpilot', 'settings.json');
+  const markets = async () => {
+    const out: Marketplace[] = [];
+    for (const spec of getConfig().pluginMarketplaces) {
+      renderer.status(`Fetching marketplace ${spec}…`);
+      try {
+        out.push(await loadMarketplace(spec, { refresh: true }));
+      } catch (e) {
+        console.error(`${red('✖')} ${spec}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    renderer.status('');
+    return out;
+  };
+  switch (action) {
+    case 'list': {
+      if (!core.plugins.length) {
+        console.log(dim('No plugins installed. Find some with `localpilot plugin search <words>`.'));
+        return 0;
+      }
+      for (const p of core.plugins) {
+        console.log(`${p.enabled ? green('●') : dim('○')} ${bold(p.name)} ${dim(`${p.version ?? ''} · ${p.source} · ${p.root}`)}\n  ${describePlugin(p).summary.replace(/^[^:]*: /, '')}${p.enabled ? '' : dim(' (disabled)')}`);
+      }
+      return 0;
+    }
+    case 'marketplaces': {
+      for (const m of await markets()) {
+        console.log(`${bold(m.name)} ${dim(`${m.spec} · ${m.plugins.length} plugins`)}`);
+      }
+      return 0;
+    }
+    case 'search': {
+      const found = searchPlugins(await markets(), arg);
+      const have = new Set(core.plugins.map((p) => p.name));
+      for (const { entry, market } of found.slice(0, 40)) {
+        console.log(`${have.has(entry.name) ? green('✔') : ' '} ${bold(entry.name)} ${dim([entry.category, entry.version, market.name].filter(Boolean).join(' · '))}\n    ${(entry.description ?? '').slice(0, 140)}`);
+      }
+      console.log(dim(`\n${found.length} match${found.length === 1 ? '' : 'es'}${found.length > 40 ? ' (first 40 shown)' : ''}. Install with: localpilot plugin install <name> [--project]`));
+      return 0;
+    }
+    case 'install': {
+      const [name, mk] = arg.split('@');
+      const all = await markets();
+      const hit = all.filter((m) => !mk || m.name === mk).flatMap((market) => market.plugins.filter((e) => e.name === name).map((entry) => ({ entry, market })))[0];
+      if (!hit) {
+        console.error(`${red('✖')} No plugin "${arg}" in ${all.map((m) => m.name).join(', ') || 'the configured marketplaces'}. Search with \`localpilot plugin search\`.`);
+        return 2;
+      }
+      try {
+        const r = await installPlugin(hit.entry, hit.market, dest, {
+          confirm: async (_p, d) => {
+            if (!d.runs.length || isAutoApprove()) {
+              return true;
+            }
+            console.log(`${amber('!')} ${d.summary}\n  This plugin runs commands on your machine:\n${d.runs.map((r) => `    ${r}`).join('\n')}`);
+            return approval(`Install ${hit.entry.name}?`, '', 'terminal');
+          },
+        });
+        if (!r) {
+          console.log(dim('Not installed.'));
+          return 1;
+        }
+        console.log(`${green('✔')} Installed ${describePlugin(r.plugin).summary} → ${r.dir}`);
+        return 0;
+      } catch (e) {
+        console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+        return 1;
+      }
+    }
+    case 'remove':
+    case 'uninstall': {
+      const ok = await removePlugin(arg, dest);
+      console.log(ok ? `${green('✔')} Removed ${arg}` : `${red('✖')} No plugin "${arg}" in ${dest}${args.project ? '' : ' (add --project for the workspace)'}`);
+      return ok ? 0 : 2;
+    }
+    case 'enable':
+    case 'disable': {
+      await setPluginEnabled(settingsFile, arg, action === 'enable');
+      console.log(`${green('✔')} ${arg} ${action}d in ${settingsFile}`);
+      return 0;
+    }
+    case 'new': {
+      const files = await scaffoldPlugin(args.cwd, arg || 'my-plugin');
+      console.log(`${green('✔')} Created ${path.dirname(path.dirname(files[0]))}\n${files.map((f) => `  ${dim(path.relative(args.cwd, f))}`).join('\n')}\nCheck it with: localpilot plugin validate ${path.relative(args.cwd, path.dirname(path.dirname(files[0])))}`);
+      return 0;
+    }
+    case 'validate': {
+      const dir = path.resolve(args.cwd, arg || '.');
+      const v = await validatePlugin(dir);
+      for (const e of v.errors) {
+        console.log(`${red('✖')} ${e}`);
+      }
+      for (const w of v.warnings) {
+        console.log(`${amber('!')} ${w}`);
+      }
+      if (v.plugin && !v.errors.length) {
+        console.log(`${green('✔')} ${describePlugin(v.plugin).summary}`);
+      }
+      return v.errors.length ? 1 : 0;
+    }
+  }
+  console.error(`${red('✖')} Unknown action "${action}". Use: list, search, install, remove, enable, disable, marketplaces, new, validate.`);
+  return 2;
+}
+
 /** `localpilot scan`: the security scan for a terminal or CI job; exit 1 when a finding reaches --fail-on. */
 async function cmdScan(args: Args, renderer: Renderer): Promise<number> {
   const o = args.scanOpts;
@@ -1088,6 +1206,10 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'eval') {
     process.exitCode = await cmdEval(core, args);
+    return;
+  }
+  if (args.cmd === 'plugin') {
+    process.exitCode = await cmdPlugin(core, args, renderer);
     return;
   }
   if (args.cmd === 'scan') {

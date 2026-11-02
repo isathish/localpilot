@@ -283,6 +283,19 @@ Details:
 - Plugin MCP servers appear as `plugin:server`. Only stdio servers (with a `command`) are supported; servers with only a `url` are skipped.
 - To disable a plugin, add `"enabledPlugins": { "my-plugin": false }` (or `"my-plugin@marketplace": false`) to a `settings.json`.
 
+### Finding and installing plugins
+
+Plugins are published in **marketplaces**: git repositories with a `.claude-plugin/marketplace.json`, the format Claude Code uses. LocalPilot searches the ones in `localpilot.plugins.marketplaces`, by default Anthropic's official directory (`anthropics/claude-plugins-official`, over 300 plugins). Add your own as `owner/repo`, any git URL or a local folder; a company can publish an internal marketplace the same way. Marketplaces are fetched with `git`, so private ones work with your git credentials.
+
+- **VS Code:** **LocalPilot: Browse Plugins…** lists every plugin with its category and description. Pick one, choose **For me** (`~/.localpilot/plugins`) or **For this workspace** (`.localpilot/plugins`, commit it to share it). **LocalPilot: Manage Plugins…** enables, disables, removes or opens an installed one.
+- **CLI:** `localpilot plugin search <words>`, `plugin install <name>[@marketplace] [--project]`, `plugin list`, `plugin disable|enable <name>`, `plugin remove <name>`, `plugin marketplaces`.
+
+A plugin can come from a folder of the marketplace, from another repository, or from a folder of another repository, optionally pinned to a tag or commit; all of these install the same way. **Before anything is installed you see what the plugin runs on your machine**: each hook command and each MCP server. In VS Code a dialog asks you to confirm when there are any; the CLI asks unless you pass `-y`. An [organization policy](configuration.md#organization-policy) with `allowSkillInstall: false` blocks plugin downloads too.
+
+### Writing a plugin
+
+`localpilot plugin new my-tools` creates a working plugin with one of each part: a command, a subagent, a skill, an empty hooks file and a README. `localpilot plugin validate my-tools` checks it: the manifest (`name`, `description`, `version`), every command, subagent and skill has the front matter it needs, hook events exist, and MCP servers have a `command` or `url`. It exits with 1 on an error, so it can run in the plugin's CI. To publish it, list it in a marketplace's `marketplace.json` (`{ "name": "my-tools", "source": "./plugins/my-tools", "description": "…" }`). Plugins work in Claude Code and LocalPilot alike.
+
 ## Differences from Claude Code
 
 - **No `SlashCommand` tool.** You run custom commands; the model cannot invoke them. `disable-model-invocation` is accepted and ignored.

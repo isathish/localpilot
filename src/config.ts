@@ -69,6 +69,8 @@ export interface LocalPilotConfig {
   skillsPaths: string[];
   /** Extra folders scanned for Claude Code-style plugins (`.claude-plugin/plugin.json`). */
   pluginPaths: string[];
+  /** Plugin marketplaces to search and install from: `owner/repo`, a git URL or a local folder with .claude-plugin/marketplace.json. */
+  pluginMarketplaces: string[];
   /** Run the hooks configured in settings.json (PreToolUse, PostToolUse, Stop, …). */
   hooksEnabled: boolean;
   builtinSkills: boolean;
@@ -179,6 +181,7 @@ export function getConfig(): LocalPilotConfig {
     repos: Object.fromEntries(Object.entries(c.get<Record<string, unknown>>('repos', {}) ?? {}).filter(([, v]) => typeof v === 'string')) as Record<string, string>,
     skillsPaths: c.get<string[]>('skillsPaths', []),
     pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
+    pluginMarketplaces: (c.get<string[]>('plugins.marketplaces', ['anthropics/claude-plugins-official']) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     hooksEnabled: c.get<boolean>('hooks.enabled', true),
     builtinSkills: c.get<boolean>('skills.builtin', true),
     skillRepositories: (c.get<string[]>('skills.repositories', DEFAULT_SKILL_REPOSITORIES) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),

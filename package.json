@@ -546,6 +546,18 @@
         "icon": "$(checklist)"
       },
       {
+        "command": "localpilot.browsePlugins",
+        "title": "Browse Plugins…",
+        "category": "LocalPilot",
+        "icon": "$(extensions)"
+      },
+      {
+        "command": "localpilot.managePlugins",
+        "title": "Manage Plugins…",
+        "category": "LocalPilot",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "localpilot.openTerminal",
         "title": "Open LocalPilot Terminal",
         "category": "LocalPilot",
@@ -1679,6 +1691,16 @@
           },
           "default": [],
           "markdownDescription": "Extra folders containing Claude Code-style plugins (a folder with `.claude-plugin/plugin.json` bundling `commands/`, `agents/`, `skills/`, `hooks/hooks.json` and `.mcp.json`). `.localpilot/plugins`, `.claude/plugins`, `~/.localpilot/plugins` and `~/.claude/plugins` are scanned automatically; disable one with `enabledPlugins` in `settings.json`."
+        },
+        "localpilot.plugins.marketplaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "anthropics/claude-plugins-official"
+          ],
+          "markdownDescription": "Plugin marketplaces to search and install from (**LocalPilot: Browse Plugins…**, `localpilot plugin search`): `owner/repo` on GitHub, any git URL, or a local folder — each with a `.claude-plugin/marketplace.json` in Claude Code's format. Marketplaces are fetched with `git`, so private repositories work with your git credentials."
         },
         "localpilot.hooks.enabled": {
           "type": "boolean",

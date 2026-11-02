@@ -33,6 +33,7 @@ import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
 import { reposTool } from '../src/tools/repos';
+import { describePlugin as describePluginP, gitUrl, installPlugin, loadMarketplace, parseMarketplace, removePlugin, scaffoldPlugin, searchPlugins, setPluginEnabled, validatePlugin } from '../src/agent/pluginInstaller';
 import { checkDependencies, entropy, osvFixes, osvSeverity, parseLockfile, scanText, toSarif } from '../src/security/scan';
 import { McpClient } from '../src/mcp/mcpManager';
 import { SseParser, transportKind } from '../src/mcp/transports';
@@ -1198,6 +1199,51 @@ async function pureLogic() {
     check('the same pattern in a test file is low severity', scanText('tests/test_db.py', 'requests.get(u, verify=False)', { secrets: false, code: true })[0].severity === 'low');
     const sarif = toSarif({ root: '/r', findings: [...deps, ...sec], dependencies: 2, files: 1, skipped: [] }, '1.0.0') as { version: string; runs: { results: { ruleId: string; level: string; locations: { physicalLocation: { region?: { startLine: number } } }[] }[]; tool: { driver: { rules: unknown[] } } }[] };
     check('SARIF 2.1.0: one rule per id, levels from severity, line regions', sarif.version === '2.1.0' && sarif.runs[0].results.length === 4 && sarif.runs[0].tool.driver.rules.length === 4 && sarif.runs[0].results.find((r) => r.ruleId === 'aws-access-key')?.level === 'error' && sarif.runs[0].results.find((r) => r.ruleId === 'aws-access-key')?.locations[0].physicalLocation.region?.startLine === 1);
+  }
+
+  console.log('\n[Plugins: marketplaces, install, enable, remove, authoring]');
+  {
+    check('marketplace specs: owner/repo → GitHub, URLs kept, folders local', gitUrl('anthropics/claude-plugins-official') === 'https://github.com/anthropics/claude-plugins-official.git' && gitUrl('git@host:a/b.git') === 'git@host:a/b.git' && gitUrl('/tmp/market') === undefined);
+    const mk = parseMarketplace('{ "name": "acme", // jsonc\n "plugins": [ { "name": "lint-kit", "description": "Lint fixes", "category": "quality", "keywords": ["eslint"], "source": "./plugins/lint-kit" }, { "name": "deploy", "description": "Ship it", "source": { "source": "git-subdir", "url": "https://x/y.git", "path": "p" } }, { "description": "no name" } ] }');
+    check('marketplace.json parsed (JSONC; entries without a name dropped)', mk.name === 'acme' && mk.plugins.length === 2);
+    const fakeMarket = { spec: 'x', name: 'acme', dir: '/m', plugins: mk.plugins };
+    check('search ranks by name, then keywords and description; all words must match', searchPlugins([fakeMarket], 'eslint')[0]?.entry.name === 'lint-kit' && searchPlugins([fakeMarket], 'ship')[0]?.entry.name === 'deploy' && searchPlugins([fakeMarket], 'lint ship').length === 0 && searchPlugins([fakeMarket], '').length === 2);
+    const base = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-plug-'));
+    const market = nodePath.join(base, 'market');
+    const put = (rel: string, text: string) => { nodeFs.mkdirSync(nodePath.dirname(nodePath.join(market, rel)), { recursive: true }); nodeFs.writeFileSync(nodePath.join(market, rel), text); };
+    put('.claude-plugin/marketplace.json', JSON.stringify({ name: 'local', plugins: [{ name: 'guard', source: './plugins/guard' }, { name: 'bare', description: 'No manifest', version: '2.0.0', strict: false, source: './plugins/bare' }, { name: 'escape', source: '../../etc' }] }));
+    put('plugins/guard/.claude-plugin/plugin.json', '{"name":"guard-tools","version":"1.0.0","description":"g"}');
+    put('plugins/guard/commands/check.md', '---\ndescription: Check\n---\nRun the checks.');
+    put('plugins/guard/hooks/hooks.json', '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/guard.sh"}]}]}}');
+    put('plugins/guard/.mcp.json', '{"mcpServers":{"docs":{"url":"https://docs.example/mcp"}}}');
+    put('plugins/bare/commands/hi.md', '---\ndescription: Hi\n---\nSay hi.');
+    const m = await loadMarketplace(market);
+    const dest = nodePath.join(base, 'installed');
+    let shown: string[] = [];
+    const declined = await installPlugin(m.plugins[0], m, dest, { confirm: async (_p, d) => { shown = d.runs; return false; } });
+    check('install shows the hooks and MCP servers it will run, and installs nothing when declined', declined === undefined && shown.some((r) => /PreToolUse \(Bash\): .*guard\.sh/.test(r)) && shown.some((r) => /MCP server docs: https:\/\/docs\.example\/mcp/.test(r)) && !nodeFs.existsSync(nodePath.join(dest, 'guard')), shown);
+    const ok = await installPlugin(m.plugins[0], m, dest, { confirm: async () => true });
+    check('installed copy loads, with its manifest name and parts', ok?.plugin.name === 'guard-tools' && describePluginP(ok.plugin).summary === 'guard-tools 1.0.0: 1 command, 1 hook, 1 MCP server', ok && describePluginP(ok.plugin).summary);
+    const bare = await installPlugin(m.plugins[1], m, dest);
+    check('a non-strict entry gets a manifest from the marketplace entry', bare?.plugin.name === 'bare' && bare.plugin.version === '2.0.0' && bare.plugin.commandFiles.length === 1);
+    let escaped = '';
+    try { await installPlugin(m.plugins[2], m, dest); } catch (e) { escaped = String(e); }
+    check('a source path that leaves the marketplace is refused', /leaves its repository/.test(escaped), escaped);
+    const settingsFile = nodePath.join(base, 'settings.json');
+    nodeFs.writeFileSync(settingsFile, '{ "permissions": { "allow": ["Bash(npm test)"] } }');
+    await setPluginEnabled(settingsFile, 'guard-tools', false);
+    const st = JSON.parse(nodeFs.readFileSync(settingsFile, 'utf8'));
+    await setPluginEnabled(settingsFile, 'guard-tools', true);
+    check('enable/disable writes enabledPlugins and keeps other settings', st.enabledPlugins['guard-tools'] === false && st.permissions.allow[0] === 'Bash(npm test)' && !('guard-tools' in JSON.parse(nodeFs.readFileSync(settingsFile, 'utf8')).enabledPlugins));
+    check('remove by manifest name (folder name differs)', (await removePlugin('guard-tools', dest)) && !nodeFs.existsSync(nodePath.join(dest, 'guard')) && !(await removePlugin('nothing', dest)));
+    const files = await scaffoldPlugin(base, 'My Tools');
+    const v = await validatePlugin(nodePath.join(base, 'my-tools'));
+    check('scaffolded plugin validates cleanly', files.length === 6 && v.errors.length === 0 && v.warnings.length === 0, v);
+    nodeFs.writeFileSync(nodePath.join(base, 'my-tools', 'hooks', 'hooks.json'), '{"hooks":{"BeforeAll":[]}}');
+    nodeFs.writeFileSync(nodePath.join(base, 'my-tools', 'agents', 'reviewer.md'), 'no front matter');
+    const v2 = await validatePlugin(nodePath.join(base, 'my-tools'));
+    check('validate reports unknown hook events and incomplete subagents', v2.errors.some((e) => /unknown event "BeforeAll"/.test(e)) && v2.errors.some((e) => /agents\/reviewer\.md: a subagent needs/.test(e)), v2.errors);
+    nodeFs.rmSync(base, { recursive: true, force: true });
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');
