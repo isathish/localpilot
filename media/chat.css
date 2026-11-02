@@ -26,6 +26,11 @@
   --del-bg: var(--vscode-diffEditor-removedLineBackground, rgba(255,99,99,.18));
   --mono: var(--vscode-editor-font-family, Menlo, monospace);
   --brand: #f2a33a;
+  /* Foreground versions of the accent colours (icons, text): the same hue, darkened on light themes so they read on white. */
+  --brand-text: var(--brand);
+  --ok-text: var(--ok);
+  --warn-text: var(--warn);
+  --error-text: var(--error);
   --brand-ink: #17191e;
   --border-soft: color-mix(in srgb, var(--border) 65%, transparent);
   --tint: color-mix(in srgb, var(--fg) 5%, transparent);
@@ -77,19 +82,19 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 @keyframes breathe { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 10%, transparent); opacity: .75; } }
 .tab.running { color: var(--fg); }
 .tab.unread .t { font-weight: 600; color: var(--fg); }
-.tab.attention { color: var(--warn); } .tab.attention .ind { color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.tab.attention { color: var(--warn-text); } .tab.attention .ind { color: var(--warn-text); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
-/* The tab that was clicked but whose chat has not arrived yet: shimmer label + busy indicator. */
+/* The tab that was clicked but whose chat has not arrived yet: full-strength label + busy indicator. */
 .tab.loading { background: var(--tint-2); color: var(--fg); border-color: var(--border-soft); }
-.tab.loading .t { background: linear-gradient(90deg, var(--muted), var(--fg), var(--muted)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.2s linear infinite; }
+.tab.loading .t { color: var(--fg); }
 .tab.loading .ind { opacity: .45; }
 .tab .close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; opacity: 0; transition: opacity .12s, background .12s; }
 .tab .close svg { width: 11px; height: 11px; }
 .tab:hover .close, .tab.active .close, .tab:focus-visible .close { opacity: 1; }
 .tab .close:hover { background: var(--tint-2); color: var(--fg); }
 /* A running tab shows its stop square only when it is the active tab or hovered — the dot already says "running". */
-.tab.running .close { color: var(--brand); } .tab.running .close:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
-.tab.pinned .ind { color: var(--brand); }
+.tab.running .close { color: var(--brand-text); } .tab.running .close:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.tab.pinned .ind { color: var(--brand-text); }
 .tab.selected { background: color-mix(in srgb, var(--focus) 18%, transparent); border-color: color-mix(in srgb, var(--focus) 55%, transparent); color: var(--fg); }
 .tab.selected .close { opacity: 1; }
 .tab.more { padding: 0 8px; color: var(--muted); border-style: dashed; border-color: var(--border-soft); }
@@ -109,7 +114,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .bgrun .st { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bgrun .mdl { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 8px; background: var(--tint-2); color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bgrun .stop { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; }
-.bgrun .stop:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); } .bgrun .stop svg { width: 11px; height: 11px; }
+.bgrun .stop:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .bgrun .stop svg { width: 11px; height: 11px; }
 .bgrun.more { justify-content: center; }
 /* Narrow bar: the title and step matter more than the model chip (still in the row's tooltip). */
 @container bgruns (max-width: 380px) { .bgrun .mdl { display: none; } .bgrun .t { max-width: 55%; } }
@@ -117,7 +122,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* parallel task composer (popover) */
 .par { display: flex; flex-direction: column; gap: 8px; padding: 6px; min-width: 300px; }
 .par-head { display: flex; gap: 10px; align-items: flex-start; }
-.par-head svg { width: 18px; height: 18px; color: var(--brand); margin-top: 2px; }
+.par-head svg { width: 18px; height: 18px; color: var(--brand-text); margin-top: 2px; }
 .par-head b { display: block; font-weight: 600; } .par-head span { display: block; font-size: var(--fs-xs); color: var(--muted); line-height: 1.4; }
 .par textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 96px; padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); line-height: 1.5; }
 .par textarea:focus { outline: none; border-color: var(--focus); }
@@ -127,7 +132,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .par .lbl { font-size: var(--fs-xs); color: var(--muted); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; } .par .lbl i { font-style: normal; opacity: .7; }
 .par-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .par-card { display: grid; grid-template-columns: 16px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: start; text-align: left; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--card); color: var(--muted); }
-.par-card svg { width: 14px; height: 14px; grid-row: 1 / span 2; margin-top: 2px; color: var(--brand); }
+.par-card svg { width: 14px; height: 14px; grid-row: 1 / span 2; margin-top: 2px; color: var(--brand-text); }
 .par-card b { font-size: var(--fs-sm); color: var(--fg); font-weight: 600; } .par-card span { font-size: var(--fs-xs); line-height: 1.35; }
 .par-card:hover { border-color: var(--border); background: var(--tint); }
 .par-card.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 9%, transparent); box-shadow: inset 0 0 0 1px var(--brand); }
@@ -136,7 +141,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .task-row .num { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--tint-2); color: var(--muted); font-size: 10px; font-weight: 600; }
 .task-row input.task { flex: 1; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); }
 .task-row input.task:focus { outline: none; border-color: var(--focus); }
-.task-row .rm { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); opacity: .6; } .task-row .rm:hover { opacity: 1; background: var(--tint); color: var(--error); } .task-row .rm svg { width: 11px; height: 11px; }
+.task-row .rm { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); opacity: .6; } .task-row .rm:hover { opacity: 1; background: var(--tint); color: var(--error-text); } .task-row .rm svg { width: 11px; height: 11px; }
 .task-row .ac { position: absolute; left: 24px; right: 28px; top: 32px; z-index: 3; background: var(--vscode-editorWidget-background, var(--card)); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); overflow: hidden; }
 .task-row .ac .opt { padding: 5px 9px; font-size: var(--fs-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .task-row .ac .opt:hover, .task-row .ac .opt.sel { background: var(--tint); }
 .par-tasks .add { align-self: flex-start; height: 24px; font-size: var(--fs-xs); color: var(--muted); } .par-tasks .add svg { width: 12px; height: 12px; }
@@ -145,7 +150,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .par-models .chip:has(input:checked) { border-color: var(--brand); color: var(--fg); background: color-mix(in srgb, var(--brand) 12%, transparent); }
 .par-models input { margin: 0; accent-color: var(--brand); }
 .par .muted { font-size: var(--fs-xs); color: var(--muted); } .par .muted.loading { align-self: center; padding: 0 4px; }
-.par-ideas .lbl .more { margin-left: auto; height: 22px; font-size: var(--fs-xs); color: var(--brand); } .par-ideas .lbl .more svg { width: 12px; height: 12px; }
+.par-ideas .lbl .more { margin-left: auto; height: 22px; font-size: var(--fs-xs); color: var(--brand-text); } .par-ideas .lbl .more svg { width: 12px; height: 12px; }
 .par-ideas .chips { max-height: 150px; overflow: auto; }
 .idea { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: 100%; padding: 5px 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--card); text-align: left; color: var(--fg); }
 .idea b { font-weight: 500; font-size: var(--fs-xs); } .idea span { font-size: 10.5px; color: var(--muted); line-height: 1.3; }
@@ -199,7 +204,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* A reply the agent loop retracted (it claimed an action it never took): kept for honesty, visibly superseded. */
 .body.retracted { color: var(--muted); opacity: .55; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent); }
 .note.nudge { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0; padding: 0; border: none; font-size: var(--fs-xs); color: var(--muted); }
-.note.nudge svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--warn); }
+.note.nudge svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--warn-text); }
 /* "Understood as: …" — the agent's restatement of an ambiguous request, set as a quiet kicker rather than body text. */
 .body .understood { margin: .2em 0 .6em; color: var(--muted); font-size: var(--fs-sm); line-height: 1.5; }
 .body .understood .k { font-weight: 500; color: var(--fg); margin-right: 5px; }
@@ -244,15 +249,14 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step > summary:hover { background: var(--tint); }
 .step .ico { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; color: var(--muted); align-self: flex-start; margin-top: 3px; }
 .step .ico svg { width: 14px; height: 14px; }
-.step.ok .ico { color: var(--muted); } .step.error .ico { color: var(--error); } .step.running .ico { color: var(--fg); }
+.step.ok .ico { color: var(--muted); } .step.error .ico { color: var(--error-text); } .step.running .ico { color: var(--fg); }
 .step.running .ico svg { animation: spin 1s linear infinite; }
 .step .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step .label b { font-weight: 500; color: var(--fg); }
 .step .label code { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--code-bg); color: var(--fg); white-space: nowrap; vertical-align: middle; }
 .step .label code.cmd { display: inline-block; max-width: min(520px, 75%); overflow: hidden; text-overflow: ellipsis; }
-.step .label .stat { font-family: var(--mono); font-size: 11px; margin-left: 4px; } .step .label .stat .a { color: var(--ok); } .step .label .stat .d { color: var(--error); }
-.step.running .label > b { background: linear-gradient(90deg, var(--muted), var(--fg), var(--muted)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
-@keyframes shimmer { to { background-position: -200% 0; } }
+.step .label .stat { font-family: var(--mono); font-size: 11px; margin-left: 4px; } .step .label .stat .a { color: var(--ok-text); } .step .label .stat .d { color: var(--error-text); }
+.step.running .label > b { color: var(--fg); }
 .step .meta { flex: none; font-size: var(--fs-xs); opacity: .85; font-variant-numeric: tabular-nums; display: inline-flex; gap: 6px; align-items: center; }
 .step .chev { flex: none; opacity: 0; transition: transform .15s, opacity .12s; } .step .chev svg { width: 12px; height: 12px; }
 .step > summary:hover .chev, .step[open] > summary .chev { opacity: .6; }
@@ -261,7 +265,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step.thinking .content { font-family: inherit; font-size: var(--fs-sm); color: var(--muted); border: none; border-left: 1px solid var(--border-soft); background: none; border-radius: 0; }
 .step.thinking .ico { color: var(--muted); }
 .step.thinking.running .content { max-height: 180px; font-style: italic; mask-image: linear-gradient(to bottom, transparent 0, #000 28px); }
-.step.finished .ico { color: var(--ok); } .step.finished.error .ico { color: var(--error); }
+.step.finished .ico { color: var(--ok-text); } .step.finished.error .ico { color: var(--error-text); }
 /* resource chips */
 .fchip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin: 0 1px; height: 20px; padding: 0 7px 0 5px; border: 1px solid transparent; border-radius: 5px; background: var(--tint); color: var(--fg); font-size: 11.5px; vertical-align: middle; cursor: pointer; min-width: 0; }
 .fchip:hover { background: var(--tint-2); color: var(--link); }
@@ -276,7 +280,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .fchip .l-py { color: #4b8bbe; background: color-mix(in srgb, #4b8bbe 16%, transparent); }
 .fchip .l-go { color: #00add8; background: color-mix(in srgb, #00add8 16%, transparent); }
 .fchip .l-rs { color: #dea584; background: color-mix(in srgb, #dea584 18%, transparent); }
-.fchip .l-sh, .fchip .l-yml, .fchip .l-toml { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.fchip .l-sh, .fchip .l-yml, .fchip .l-toml { color: var(--ok-text); background: color-mix(in srgb, var(--ok) 14%, transparent); }
 .step[open] > summary .label { white-space: normal; }
 /* edit group: "Edited settings.js, 2 other steps +4 −2" → expands to per-file cards */
 .step.editgroup > .content.edits { padding: 4px; background: none; border: none; font-family: inherit; white-space: normal; max-height: none; display: flex; flex-direction: column; gap: 4px; margin-left: 30px; }
@@ -290,13 +294,13 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .work .ico { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; color: var(--fg); } .work .ico svg { width: 14px; height: 14px; }
 .work.running .ico svg { animation: spin 1s linear infinite; }
 .work .phase { font-weight: 500; color: var(--fg); white-space: nowrap; flex: none; }
-.work.running .phase { background: linear-gradient(90deg, var(--muted), var(--fg), var(--muted)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
+.work.running .phase { color: var(--fg); }
 .work .facts { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work .facts:not(:empty)::before { content: '·'; margin-right: 8px; opacity: .6; }
 .work .time { flex: none; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; opacity: .85; }
 .work .chev { display: none; flex: none; opacity: .5; transition: transform .15s; } .work .chev svg { width: 12px; height: 12px; }
 .work.done { cursor: pointer; } .work.done:hover { background: var(--tint); }
-.work.done .ico { color: var(--ok); } .work.done.failed .ico { color: var(--error); }
+.work.done .ico { color: var(--ok-text); } .work.done.failed .ico { color: var(--error-text); }
 .work.done .chev { display: inline-flex; transform: rotate(90deg); } .turn.folded > .work.done .chev { transform: none; }
 .turn.folded > .steps, .turn.folded > .note { display: none; }
 /* web search hits: title · domain · snippet, each a link */
@@ -315,10 +319,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .term-acts button:hover { background: var(--tint-2); color: var(--fg); } .term-acts svg { width: 11px; height: 11px; }
 .termout pre.term { margin: 0; padding: 8px 10px; white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--fg-2); max-height: 300px; overflow: auto; }
 .step .meta .exit { font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 0 6px; line-height: 16px; border-radius: 8px; background: var(--tint-2); }
-.step .meta .exit.bad { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); } .step .meta .exit.good { color: var(--muted); background: none; padding: 0; font-weight: 400; }
+.step .meta .exit.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .step .meta .exit.good { color: var(--muted); background: none; padding: 0; font-weight: 400; }
 /* subagent pill + nested rows */
 .pill { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; vertical-align: middle; height: 26px; padding: 0 11px 0 8px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--card); color: var(--muted); font-size: var(--fs-sm); min-width: 0; }
-.pill .pico { display: inline-grid; place-items: center; color: var(--brand); } .pill .pico svg { width: 13px; height: 13px; }
+.pill .pico { display: inline-grid; place-items: center; color: var(--brand-text); } .pill .pico svg { width: 13px; height: 13px; }
 .pill b { font-weight: 600; color: var(--fg); } .pill i { font-style: normal; opacity: .5; } .pill .task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; } .pill .model { white-space: nowrap; opacity: .85; }
 /* Subagent row: ● | who (pill) | what (task) | step · n steps | ⏸ ■ | › — a grid so the task can never be squeezed out of view. */
 .step.subagent > summary { display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto auto auto; align-items: center; column-gap: 10px; }
@@ -327,7 +331,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step.subagent[open] > summary .lane-task { white-space: normal; }
 .step.subagent > summary .meta { justify-self: end; }
 .step.subagent > summary .ico { margin: 0; justify-self: center; }
-.step.subagent.running > summary .ico { color: var(--brand); }
+.step.subagent.running > summary .ico { color: var(--brand-text); }
 /* Narrow sidebar: who + step on the first line, the task on its own line underneath. */
 @container messages (max-width: 560px) {
   /* The agent name never shrinks; the current-step text takes whatever is left and ellipsizes. */
@@ -359,7 +363,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .lane .who { font-weight: 500; color: var(--fg); opacity: .7; flex: none; }
 .lane .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lane.pending::after { content: 'Queued'; margin-left: auto; font-size: var(--fs-xs); opacity: .7; flex: none; }
-.lane.skipped { opacity: .5; } .lane.error { color: var(--error); }
+.lane.skipped { opacity: .5; } .lane.error { color: var(--error-text); }
 
 /* edit / diff card */
 .card { margin: 6px 0; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--editor-bg); overflow: hidden; min-width: 0; }
@@ -368,37 +372,37 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .card:has(.diff:not(.collapsed)) .card-head, .card:has(.term:not(.collapsed)) .card-head { border-bottom: 1px solid var(--border-soft); }
 .card-head .ico { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--muted); }
 .card-head .ico svg { width: 14px; height: 14px; }
-.card.edit .card-head .ico { color: var(--brand); }
+.card.edit .card-head .ico { color: var(--brand-text); }
 .card-head .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
 .card-head .stat { flex: none; font-family: var(--mono); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-.card-head .stat .a { color: var(--ok); } .card-head .stat .d { color: var(--error); margin-left: 4px; }
+.card-head .stat .a { color: var(--ok-text); } .card-head .stat .d { color: var(--error-text); margin-left: 4px; }
 .card-head .acts { display: inline-flex; gap: 2px; flex: none; }
 .card-head .acts button { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); }
 .card-head .acts button:hover { background: var(--tint-2); color: var(--fg); }
 .card-head .acts svg { width: 13px; height: 13px; }
 .card.running .card-head .ico svg { animation: spin 1s linear infinite; }
-.card.error .card-head { color: var(--error); }
+.card.error .card-head { color: var(--error-text); }
 .card .diff { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; overflow: auto; max-height: 360px; }
 .card .diff .ln { display: flex; white-space: pre; min-width: max-content; }
 .card .diff .ln .g { width: 20px; flex: none; text-align: center; color: var(--muted); user-select: none; }
 .card .diff .ln .c { padding-right: 12px; }
-.card .diff .ln.add { background: var(--add-bg); } .card .diff .ln.add .g { color: var(--ok); }
-.card .diff .ln.del { background: var(--del-bg); } .card .diff .ln.del .g { color: var(--error); }
+.card .diff .ln.add { background: var(--add-bg); } .card .diff .ln.add .g { color: var(--ok-text); }
+.card .diff .ln.del { background: var(--del-bg); } .card .diff .ln.del .g { color: var(--error-text); }
 .card .diff .ln.skip { color: var(--muted); padding: 2px 10px; font-style: italic; background: var(--tint); }
 .card .diff.collapsed { display: none; }
 .card .term { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; padding: 8px 10px; white-space: pre-wrap; max-height: 320px; overflow: auto; color: var(--fg-2); }
 .card .term.collapsed { display: none; }
 .card .exit { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 0 7px; line-height: 18px; border-radius: 9px; background: var(--tint-2); font-variant-numeric: tabular-nums; }
-.card .exit.bad { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); } .card .exit.good { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.card .exit.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .card .exit.good { color: var(--ok-text); background: color-mix(in srgb, var(--ok) 14%, transparent); }
 .note { margin: 6px 0; padding: 6px 10px; font-size: var(--fs-sm); color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius-sm); }
 .note.skills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .note.skills .lbl { margin-right: 2px; }
 .note.skills .learn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .note .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; font: inherit; font-size: var(--fs-sm); color: var(--fg); background: var(--bg-alt, transparent); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .note .chip svg { width: 11px; height: 11px; }
-.note .chip:hover { border-color: var(--brand); color: var(--brand); }
-.note .chip.brand { border-color: var(--brand); color: var(--brand); }
-.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--error); border: 1px solid color-mix(in srgb, var(--error) 50%, transparent); background: color-mix(in srgb, var(--error) 8%, transparent); border-radius: var(--radius-sm); display: flex; align-items: flex-start; gap: 10px; }
+.note .chip:hover { border-color: var(--brand); color: var(--brand-text); }
+.note .chip.brand { border-color: var(--brand); color: var(--brand-text); }
+.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--error-text); border: 1px solid color-mix(in srgb, var(--error) 50%, transparent); background: color-mix(in srgb, var(--error) 8%, transparent); border-radius: var(--radius-sm); display: flex; align-items: flex-start; gap: 10px; }
 .error-box .msg { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .error-box .retry-btn { flex: none; color: var(--fg); }
 .error-box .retry-btn svg { animation: none; }
@@ -428,7 +432,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .btn:hover { background: var(--tint); }
 .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; } .btn.primary:hover { background: var(--accent-hover); }
 .btn.ghost { border-color: transparent; color: var(--muted); font-weight: 400; } .btn.ghost:hover { color: var(--fg); }
-.btn.danger { color: var(--error); }
+.btn.danger { color: var(--error-text); }
 .btn kbd { font-family: var(--mono); font-size: 9.5px; line-height: 14px; min-width: 14px; text-align: center; padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, currentColor 14%, transparent); opacity: .85; margin-left: 2px; }
 
 /* approvals (permission prompts) */
@@ -436,7 +440,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 #approvals:empty { display: none; }
 .approval { position: relative; border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border-soft)); border-radius: var(--radius); background: var(--card); font-size: var(--fs-sm); animation: fadeUp .18s ease-out; overflow: hidden; }
 .approval .head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-weight: 600; background: color-mix(in srgb, var(--warn) 7%, transparent); }
-.approval .head svg { color: var(--warn); width: 14px; height: 14px; }
+.approval .head svg { color: var(--warn-text); width: 14px; height: 14px; }
 .approval .head .kind { margin-left: auto; font-weight: 400; font-size: var(--fs-xs); color: var(--muted); }
 .approval pre { margin: 0; padding: 8px 10px; max-height: 160px; overflow: auto; white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; background: var(--editor-bg); border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); color: var(--fg-2); }
 .approval .actions { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 10px; flex-wrap: nowrap; }
@@ -448,7 +452,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* composer */
 .approval.question { border-color: color-mix(in srgb, var(--brand) 35%, var(--border-soft)); }
 .approval.question .head { background: color-mix(in srgb, var(--brand) 7%, transparent); }
-.approval.question .head svg { color: var(--brand); }
+.approval.question .head svg { color: var(--brand-text); }
 .question .q { padding: 8px 10px 4px; border-top: 1px solid var(--border-soft); }
 .question .q-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; line-height: 1.4; }
 .question .q-chip { flex: none; font-size: var(--fs-xs); color: var(--muted); border: 1px solid var(--border-soft); border-radius: 10px; padding: 0 7px; line-height: 16px; }
@@ -465,12 +469,12 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .question .ol { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .question .ot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .question .ot b { font-weight: 500; }
-.question .rec { font-size: 10px; color: var(--brand); border: 1px solid color-mix(in srgb, var(--brand) 50%, transparent); border-radius: 8px; padding: 0 6px; line-height: 15px; }
+.question .rec { font-size: 10px; color: var(--brand-text); border: 1px solid color-mix(in srgb, var(--brand) 50%, transparent); border-radius: 8px; padding: 0 6px; line-height: 15px; }
 .question .od { font-size: var(--fs-xs); color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
 .question .opt.own { cursor: text; align-items: center; }
 .question .opt.own input { flex: 1; min-width: 0; background: transparent; border: 0; border-bottom: 1px solid var(--border-soft); color: var(--fg); font: inherit; padding: 2px 0; outline: none; }
 .question .opt.own input:focus { border-bottom-color: var(--focus); }
-.question .q.done .q-text::after { content: ' ✓'; color: var(--ok); font-weight: 400; }
+.question .q.done .q-text::after { content: ' ✓'; color: var(--ok-text); font-weight: 400; }
 .question .actions { border-top: 1px solid var(--border-soft); }
 .question .actions .btn:disabled { opacity: .45; cursor: default; pointer-events: none; }
 #composer { flex: none; padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; container-type: inline-size; max-height: 68vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
@@ -485,6 +489,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .panel-toggle:hover, button.panel-head:hover { background: var(--tint); }
 .panel .chev svg { width: 12px; height: 12px; transition: transform .15s; opacity: .7; }
 .panel.open .chev svg { transform: rotate(90deg); }
+#tasksLabel { flex: none; white-space: nowrap; }
 .panel-head .now-task { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; }
 /* Tasks and Changes read as one card when both are shown: shared border, a divider instead of a gap. */
 #tasks:not(.hidden):has(+ #changes:not(.hidden)) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: transparent; margin-bottom: -6px; }
@@ -495,9 +500,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .todo { display: flex; align-items: flex-start; gap: 8px; padding: 3px 4px; border-radius: 4px; }
 .todo .box { width: 14px; height: 14px; border: 1.5px solid var(--muted); border-radius: 4px; display: inline-grid; place-items: center; flex: none; margin-top: 2px; }
 .todo .box svg { width: 10px; height: 10px; stroke-width: 2; }
-.todo.done .box { background: var(--ok); border-color: var(--ok); color: #fff; }
+/* A dark check on the green fill: white on the light green of dark themes was 2:1. */
+.todo.done .box { background: var(--ok); border-color: var(--ok); color: color-mix(in srgb, var(--ok) 14%, #000); }
 .todo.done .title { color: var(--muted); }
-.todo.in_progress .box { border-color: var(--brand); color: var(--brand); } .todo.in_progress .box .now { width: 6px; height: 6px; border-radius: 2px; background: var(--brand); }
+.todo.in_progress .box { border-color: var(--brand); color: var(--brand-text); } .todo.in_progress .box .now { width: 6px; height: 6px; border-radius: 2px; background: var(--brand); }
 .todo.skipped .box { color: var(--muted); }
 .todo.in_progress .title { font-weight: 500; }
 .todo.skipped .title { color: var(--muted); font-style: italic; }
@@ -505,12 +511,12 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .todo .todo-agent { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; margin-top: 1px; line-height: 16px; }
 .todo .todo-agent svg { width: 10px; height: 10px; }
 .todo .todo-after { margin-left: 4px; padding-left: 5px; border-left: 1px solid var(--border); opacity: .8; }
-.todo.in_progress .todo-agent { color: var(--brand); border-color: var(--brand); }
+.todo.in_progress .todo-agent { color: var(--brand-text); border-color: var(--brand); }
 .change { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; min-width: 0; }
 .change:hover { background: var(--tint); }
 .change .kind { flex: none; width: 14px; text-align: center; font-weight: 600; font-size: 10.5px; }
-.change .kind.create { color: var(--ok); } .change .kind.modify { color: var(--warn); } .change .kind.delete { color: var(--error); } .change .kind.rename { color: var(--muted); }
-.change .stat { flex: none; display: inline-flex; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; } .change .stat i { font-style: normal; } .change .stat .add { color: var(--ok); } .change .stat .del { color: var(--error); }
+.change .kind.create { color: var(--ok-text); } .change .kind.modify { color: var(--warn-text); } .change .kind.delete { color: var(--error-text); } .change .kind.rename { color: var(--muted); }
+.change .stat { flex: none; display: inline-flex; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; } .change .stat i { font-style: normal; } .change .stat .add { color: var(--ok-text); } .change .stat .del { color: var(--error-text); }
 /* Isolated-worktree changes: not in the workspace yet, so the panel is tinted and headed by Apply / Discard. */
 .panel.isolated > .panel-head { background: color-mix(in srgb, var(--brand) 7%, transparent); }
 .panel.isolated .panel-toggle { color: var(--fg); }
@@ -541,7 +547,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .pick .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pick.mode { flex: none; }
 .pick.model { flex: 0 1 auto; max-width: 220px; color: var(--muted); }
-.pick.model.warn { color: var(--warn); }
+.pick.model.warn { color: var(--warn-text); }
 .pick.model .ico { display: none; }
 .pick.skills { flex: none; max-width: 160px; color: var(--muted); }
 .pick.skills.on { color: var(--fg); } .pick.skills.on .ico { color: var(--brand, #f2a33a); }
@@ -552,7 +558,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .ctx:hover { background: var(--tint); }
 .ctx .ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--ring-color, var(--brand)) calc(var(--pct, 0) * 1%), var(--tint-2) 0); position: relative; flex: none; }
 .ctx .ring::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--input-bg); }
-.ctx.warn { --ring-color: var(--warn); } .ctx.danger { --ring-color: var(--error); color: var(--error); }
+.ctx.warn { --ring-color: var(--warn); } .ctx.danger { --ring-color: var(--error); color: var(--error-text); }
 .send { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius); background: var(--accent); color: var(--accent-fg); flex: none; margin-left: 4px; transition: opacity .12s, background .12s; }
 .send:hover { background: var(--accent-hover); } .send:disabled { opacity: .35; cursor: default; }
 .send.stop { background: var(--fg); color: var(--bg); } .send svg { width: 14px; height: 14px; stroke-width: 1.8; }
@@ -561,22 +567,22 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .progress.paused::after { animation-play-state: paused; opacity: .45; }
 /* Steering rows: a message typed while the agent worked, shown inline in its turn. "queued" until the loop takes it. */
 .steer { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 4px; padding: 7px 10px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--tint); font-size: var(--fs-sm); line-height: 1.45; }
-.steer .ico { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--brand); flex: none; margin-top: 1px; } .steer .ico svg { width: 13px; height: 13px; }
+.steer .ico { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--brand-text); flex: none; margin-top: 1px; } .steer .ico svg { width: 13px; height: 13px; }
 .steer .txt { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
 .steer .badge { flex: none; font-size: 10.5px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: var(--tint-2); color: var(--muted); }
-.steer.queued { border-color: color-mix(in srgb, var(--brand) 55%, var(--border)); } .steer.queued .badge { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand); }
+.steer.queued { border-color: color-mix(in srgb, var(--brand) 55%, var(--border)); } .steer.queued .badge { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand-text); }
 .steer .imgs { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; } .steer .imgs img { max-height: 90px; border-radius: 6px; border: 1px solid var(--border); }
 /* Paused indicators in tabs and the background strip. */
-.pausedind { display: inline-grid; place-items: center; color: var(--brand); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
+.pausedind { display: inline-grid; place-items: center; color: var(--brand-text); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
 .tab .ind .pausedind svg { width: 12px; height: 12px; }
-.bgrun.paused .st { color: var(--brand); }
+.bgrun.paused .st { color: var(--brand-text); }
 /* Per-lane subagent controls, visible while the lane is running. */
 .lanectl { display: none; align-items: center; gap: 2px; flex: none; margin-left: 4px; }
 .step.subagent.running > summary .lanectl { display: inline-flex; }
 .lanectl button { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: var(--muted); }
 .lanectl button:hover { background: var(--tint-2); color: var(--fg); } .lanectl button svg { width: 11px; height: 11px; }
-.lanectl [data-c="stop"]:hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
-.step.subagent.paused > summary .pill { border-style: dashed; } .step.subagent.paused > summary .ico { color: var(--brand); } .step.subagent.paused > summary .ico svg { animation: none; }
+.lanectl [data-c="stop"]:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.step.subagent.paused > summary .pill { border-style: dashed; } .step.subagent.paused > summary .ico { color: var(--brand-text); } .step.subagent.paused > summary .ico svg { animation: none; }
 /* Workers card: "4 working · Stop all", one row per background worker with its current step. */
 .step.subhost.workers { border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--card); margin: 6px 0; }
 .step.subhost.workers > summary { min-height: 34px; padding: 4px 8px 4px 8px; } .step.subhost.workers > summary .label b { font-weight: 600; color: var(--fg); }
@@ -602,7 +608,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .step.subhost.workers .lane.pending::after { grid-column: 4; grid-row: 1; }
 }
 .lanectl.host { display: none; } .step.subhost.running > summary .lanectl.host { display: inline-flex; }
-.lanectl.host button { display: inline-flex; align-items: center; width: auto; height: 22px; padding: 0 8px; gap: 5px; font-size: var(--fs-xs); white-space: nowrap; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); } .lanectl.host button:hover { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
+.lanectl.host button { display: inline-flex; align-items: center; width: auto; height: 22px; padding: 0 8px; gap: 5px; font-size: var(--fs-xs); white-space: nowrap; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); } .lanectl.host button:hover { color: var(--error-text); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
 .step.subagent > summary .meta .now { color: var(--muted); font-weight: 400; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step.subhost.workers > .content > .step.subagent > summary .pill { border: none; background: none; box-shadow: none; padding-left: 0; height: auto; }
 /* Prepared plan card (Plan mode result). */
@@ -659,11 +665,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-row.sel .tag, .hist-row:hover .tag, .hist-row.confirm .tag { display: none; }
 .hist-row .acts button { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); }
 .hist-row .acts button:hover { background: var(--hover); color: var(--fg); }
-.hist-row .acts button[aria-pressed="true"] { color: var(--brand); }
+.hist-row .acts button[aria-pressed="true"] { color: var(--brand-text); }
 .hist-row .acts svg { width: 13px; height: 13px; }
 .hist-row .acts .q { font-size: 11px; color: var(--muted); margin-right: 3px; white-space: nowrap; }
 .hist-row .acts button[data-a="confirm"], .hist-row .acts button[data-a="cancel"] { width: auto; padding: 0 7px; font-size: 11px; }
-.hist-row .acts .danger { color: var(--error); } .hist-row .acts .danger:hover { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+.hist-row .acts .danger { color: var(--error-text); } .hist-row .acts .danger:hover { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-text); }
 .hist-row input.rename { flex: 1 1 auto; min-width: 0; height: 20px; padding: 0 4px; border: 1px solid var(--focus); border-radius: 3px; background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); outline: none; }
 .hist-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 2px 2px; margin-top: 2px; border-top: 1px solid var(--border-soft); }
 .hist-foot .spacer { flex: 1 1 auto; }
@@ -671,7 +677,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-foot button:hover:not(:disabled) { background: var(--tint-2); color: var(--fg); }
 .hist-foot button:disabled { opacity: .45; cursor: default; }
 .hist-foot button svg { width: 13px; height: 13px; flex: none; }
-.hist-foot button.danger:hover:not(:disabled) { color: var(--error); }
+.hist-foot button.danger:hover:not(:disabled) { color: var(--error-text); }
 
 /* toasts */
 #toasts { position: fixed; left: 50%; bottom: calc(var(--composer-h, 108px) + 10px); transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 70; pointer-events: none; max-width: 90%; }
@@ -750,8 +756,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tk-o { color: var(--muted); }
 .tk-op { color: var(--fg); opacity: .85; }
 .tk-meta { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
-.tk-add { color: var(--ok); background: var(--add-bg); display: inline-block; width: 100%; }
-.tk-del { color: var(--error); background: var(--del-bg); display: inline-block; width: 100%; }
+.tk-add { color: var(--ok-text); background: var(--add-bg); display: inline-block; width: 100%; }
+.tk-del { color: var(--error-text); background: var(--del-bg); display: inline-block; width: 100%; }
 .code-head .meta { font-size: var(--fs-xs); color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .code-head .lang.path-link { color: var(--link); cursor: pointer; }
 .code-head .lang.path-link:hover { text-decoration: underline; }
@@ -804,7 +810,7 @@ pre.numbered .t { padding-right: 14px; }
 
 /* images */
 .body .md-img { display: block; max-width: min(100%, 520px); max-height: 320px; margin: .5em 0; border-radius: var(--radius); border: 1px solid var(--border-soft); cursor: zoom-in; background: var(--tint); }
-.turn.user .imgs img { cursor: zoom-in; transition: transform .12s; } .turn.user .imgs img:hover { transform: translateY(-1px); }
+.turn.user .imgs img { cursor: zoom-in; }
 .lightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.78); backdrop-filter: blur(6px); cursor: zoom-out; animation: fadeUp .12s ease-out; }
 .lightbox img { max-width: 94vw; max-height: 86vh; border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,.6); background: #111; }
 .lightbox .lb-bar { position: absolute; top: 10px; right: 10px; left: 10px; display: flex; align-items: center; gap: 6px; color: #eee; font-size: var(--fs-sm); }
@@ -826,10 +832,10 @@ pre.numbered .t { padding-right: 14px; }
 .ins .ins-title { font-weight: 600; color: var(--fg); }
 .ins .ins-head a { color: var(--link); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
 .ins .badge { display: inline-block; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--tint-2); color: var(--muted); line-height: 16px; font-weight: 600; }
-.ins .badge.ok { color: var(--ok); background: var(--ok-bg, color-mix(in srgb, var(--ok) 15%, transparent)); } .ins .badge.err { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.ins .badge.ok { color: var(--ok-text); background: var(--ok-bg, color-mix(in srgb, var(--ok) 15%, transparent)); } .ins .badge.err { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
 .ins .ins-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 10px 8px; }
 .ins .chip { font-size: var(--fs-xs); padding: 2px 8px; border-radius: 999px; background: var(--tint-2); color: var(--muted); border: 1px solid transparent; }
-.ins .chip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); } .ins .chip.err { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); } .ins .chip.warn { color: var(--warn, #cca700); background: color-mix(in srgb, var(--warn, #cca700) 14%, transparent); }
+.ins .chip.ok { color: var(--ok-text); background: color-mix(in srgb, var(--ok) 12%, transparent); } .ins .chip.err { color: var(--error-text); background: color-mix(in srgb, var(--error) 12%, transparent); } .ins .chip.warn { color: var(--warn, #cca700); background: color-mix(in srgb, var(--warn, #cca700) 14%, transparent); }
 .ins .ins-row { padding: 4px 10px; font-size: var(--fs-xs); }
 .ins .ins-row.warn { color: var(--fg); display: flex; gap: 6px; align-items: flex-start; } .ins .ins-row.warn svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--warn, #cca700); }
 .ins .ins-row svg { width: 12px; height: 12px; vertical-align: -2px; }
@@ -841,13 +847,13 @@ pre.numbered .t { padding-right: 14px; }
 .ins .ins-sec > summary:hover { background: var(--tint); color: var(--fg); }
 .ins .ins-log { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 2px 8px; padding: 3px 10px; font-family: var(--mono); font-size: 11px; line-height: 1.45; border-top: 1px solid var(--border-soft); }
 .ins .ins-log .lv { font-weight: 600; text-transform: uppercase; font-size: 9.5px; letter-spacing: .04em; align-self: start; padding-top: 2px; color: var(--muted); }
-.ins .ins-log.lv-error .lv { color: var(--error); } .ins .ins-log.lv-warn .lv { color: var(--warn, #cca700); } .ins .ins-log.lv-info .lv { color: var(--link); }
+.ins .ins-log.lv-error .lv { color: var(--error-text); } .ins .ins-log.lv-warn .lv { color: var(--warn, #cca700); } .ins .ins-log.lv-info .lv { color: var(--link); }
 .ins .ins-log.lv-error { background: color-mix(in srgb, var(--error) 6%, transparent); }
 .ins .ins-log .src { grid-column: 2; font-size: 10px; color: var(--muted); }
 .ins .ins-log .msg { grid-column: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ins .ins-log .at { grid-column: 2; font-size: 10px; color: var(--muted); } .ins .ins-log .at .path-link, .ins .ins-log .at a { color: var(--link); }
 .ins .ins-req { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px; font-family: var(--mono); font-size: 11px; border-top: 1px solid var(--border-soft); }
-.ins .ins-req .m { color: var(--muted); font-weight: 600; min-width: 34px; } .ins .ins-req .u { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ins .ins-req .st.err { color: var(--error); } .ins .ins-req .ms { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ins .ins-req .m { color: var(--muted); font-weight: 600; min-width: 34px; } .ins .ins-req .u { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ins .ins-req .st.err { color: var(--error-text); } .ins .ins-req .ms { color: var(--muted); font-variant-numeric: tabular-nums; }
 .ins .ins-perf { display: flex; gap: 6px 14px; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid var(--border-soft); font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .ins .ins-perf span::before { content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 6px; border-radius: 1px; background: var(--brand); transform: rotate(45deg); vertical-align: 1px; }
 .ins .ins-text { margin: 0; padding: 8px 10px; font-size: 11px; white-space: pre-wrap; max-height: 200px; overflow: auto; color: var(--muted); }
@@ -855,7 +861,7 @@ pre.numbered .t { padding-right: 14px; }
 /* user text: inline code and file links, but no block markdown */
 .turn.user .utext { white-space: pre-wrap; overflow-wrap: anywhere; }
 .turn.user .corrected { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
-.turn.user .corrected svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--ok); }
+.turn.user .corrected svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--ok-text); }
 .turn.user .corrected code { font-family: var(--mono); font-size: .95em; background: var(--tint-2); padding: 0 4px; border-radius: 3px; }
 .turn.user .utext code { font-family: var(--mono); font-size: .9em; background: var(--tint-2); padding: 1px 4px; border-radius: 4px; }
 .turn.user .utext .path-link, .turn.user .utext a { color: var(--link); cursor: pointer; }
@@ -894,415 +900,89 @@ pre.numbered .t { padding-right: 14px; }
 .box.improving textarea { color: var(--muted); }
 .box.improving { border-color: var(--brand, var(--focus)); }
 
-/* ── Liquid glass ─────────────────────────────────────────────────────────────
-   One material for every surface: tinted translucent fill, hairline edge, a specular highlight along the top, a soft
-   drop shadow. The composer floats over the transcript, so replies scroll under real frosted glass. backdrop-filter is
-   only paid by layers that sit over moving content (bars, composer, popovers, toasts, hover toolbars) to keep streaming
-   cheap. Light themes get a brighter sheen; high contrast and "reduce transparency" fall back to solid fills. */
-:root {
-  --glass: color-mix(in srgb, var(--card) 58%, transparent);
-  --glass-2: color-mix(in srgb, var(--card) 74%, transparent);
-  --glass-float: color-mix(in srgb, var(--vscode-editorWidget-background, var(--bg)) 70%, transparent);
-  --glass-bar: color-mix(in srgb, var(--bg) 58%, transparent);
-  --glass-edge: color-mix(in srgb, var(--fg) 13%, transparent);
-  --glass-edge-hi: color-mix(in srgb, var(--fg) 22%, transparent);
-  --glass-hi: rgba(255,255,255,.08);
-  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 42%);
-  --glass-blur: saturate(180%) blur(20px);
-  --glass-shadow: 0 10px 30px -14px rgba(0,0,0,.5), 0 1px 0 var(--glass-hi) inset;
-  --glass-lift: 0 18px 44px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
-  --ease-glass: cubic-bezier(.2,.8,.2,1);
-  --ease-spring: cubic-bezier(.34,1.56,.64,1);
-  --r-pill: 999px;
-  --r-card: 14px;
-}
-body.vscode-light {
-  --glass: color-mix(in srgb, var(--card) 66%, transparent); --glass-2: color-mix(in srgb, var(--card) 80%, transparent);
-  --glass-hi: rgba(255,255,255,.85); --glass-edge: color-mix(in srgb, var(--fg) 11%, transparent); --glass-edge-hi: color-mix(in srgb, var(--fg) 18%, transparent);
-  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 50%);
-  --glass-shadow: 0 10px 28px -16px rgba(20,20,40,.28), 0 1px 0 var(--glass-hi) inset;
-  --glass-lift: 0 18px 40px -18px rgba(20,20,40,.35), 0 1px 0 var(--glass-hi) inset;
-  --tint: color-mix(in srgb, var(--fg) 4%, transparent); --tint-2: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-body { background:
-  radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--brand) 8%, transparent), transparent 60%),
-  radial-gradient(100% 55% at 0% 100%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 65%),
-  var(--bg); background-attachment: fixed; }
-.boot { background: var(--glass-bar); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
-.boot-logo { background: var(--brand); color: var(--brand-ink); border-radius: 14px; box-shadow: 0 1px 0 rgba(255,255,255,.45) inset, 0 12px 28px -8px color-mix(in srgb, var(--brand) 70%, transparent); }
-.progress { height: 2px; } .progress::after { background: linear-gradient(90deg, transparent, var(--brand), transparent); box-shadow: 0 0 10px var(--brand); }
-
-/* ── Tab bar: a frosted strip of pill tabs; the active tab is a raised glass lozenge. */
-.tabbar { height: 38px; gap: 4px; padding: 0 8px; background: var(--glass-bar); border-bottom-color: var(--glass-edge); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); position: relative; z-index: 4; }
-.tabs { gap: 3px; padding: 2px 0; }
-.tab { height: 28px; border-radius: var(--r-pill); padding: 0 6px 0 10px; transition: background .25s var(--ease-glass), color .2s, border-color .2s, box-shadow .25s var(--ease-glass); }
-.tab.active { background: var(--glass-2); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: 0 1px 0 var(--glass-hi) inset, 0 4px 12px -6px rgba(0,0,0,.45); }
-.tabbar > .ib { width: 28px; height: 28px; }
-.bgruns { gap: 2px; padding: 4px 8px; background: color-mix(in srgb, var(--brand) 6%, var(--glass-bar)); border-bottom-color: var(--glass-edge); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); position: relative; z-index: 3; }
-.bgrun { border-radius: var(--r-pill); padding: 0 4px 0 8px; transition: background .2s; }
-.bgrun .mdl { border-radius: var(--r-pill); background: var(--glass-2); box-shadow: 0 0 0 1px var(--glass-edge) inset; }
-
-/* ── The glass material, applied to every card-like surface. */
-.card, .code, .panel, .approval, .plan, .step.subhost.workers, .par-card, .idea, .notice, .question, .pill {
-  background-color: var(--glass); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: var(--glass-shadow);
-}
-.card, .code, .panel, .approval, .plan, .step.subhost.workers, .question, .notice { border-radius: var(--r-card); }
-.card-head { background: transparent; } .card-head:hover { background: var(--tint); }
-.code { background-color: color-mix(in srgb, var(--editor-bg) 72%, transparent); }
-.code-head { background: var(--tint); border-bottom: 1px solid var(--glass-edge); }
-.approval pre, .step.term > .content.termout { background: color-mix(in srgb, var(--editor-bg) 60%, transparent); }
-.pill { border-radius: var(--r-pill); }
-
-/* User turns: an accent-tinted glass bubble anchored to the right. */
-.turn.user { border-radius: 16px; border-top-right-radius: 6px; margin-left: max(12px, 12%); background: var(--tint-2); border-color: transparent; box-shadow: none; }
-.turn .actions { border-radius: var(--r-pill); padding: 2px; }
-.turn .actions button { border-radius: var(--r-pill); }
-
-/* Approvals: amber-lit glass with a glowing edge so they read as "needs you" without a heavy fill. */
-.approval { border-color: var(--glass-edge); border-left: 3px solid var(--warn); background-color: var(--glass); }
-.approval .btn kbd { display: none; }
-.approval .actions { gap: 6px; }
-
-/* Questions: options are glass rows; the chosen one glows in the accent. */
-.question .opt { border-radius: 10px; transition: background .2s var(--ease-glass), border-color .2s, box-shadow .2s; }
-.question .opt.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: 0 1px 0 var(--glass-hi) inset, 0 4px 14px -8px color-mix(in srgb, var(--accent) 70%, transparent); }
-.question .q-chip { border-radius: var(--r-pill); background: var(--tint); }
-
-/* Tasks + changes: one glass stack; the meter is a liquid bar with a highlight. */
-#tasks:not(.hidden):has(+ #changes:not(.hidden)) { border-bottom-color: transparent; box-shadow: 0 1px 0 var(--glass-hi) inset; }
-#tasks:not(.hidden) + #changes:not(.hidden) { border-top-color: var(--glass-edge); }
-.panel-body { border-top-color: var(--glass-edge); }
-.panel-toggle, button.panel-head, .change, .todo { border-radius: 8px; }
-.meter { height: 6px; border-radius: var(--r-pill); background: var(--tint-2); box-shadow: 0 1px 1px rgba(0,0,0,.18) inset; }
-.meter i { border-radius: inherit; background: var(--ok); transition: width .5s var(--ease-glass); }
-.todo .box { border-radius: 5px; background: var(--tint); }
-
-/* Empty state: a lit brand orb over glass suggestion tiles. */
-.empty h2 { font-size: 1.35em; letter-spacing: -.02em; }
-.suggestions { gap: 8px; }
-.idea, .par-card { transition: transform .25s var(--ease-spring), background-color .2s, border-color .2s, box-shadow .25s var(--ease-glass); }
-.idea:hover, .par-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--glass-edge)); }
-.idea, .par-card { border-radius: 12px; }
-.notice { background-color: color-mix(in srgb, var(--warn) 8%, var(--glass)); border-color: color-mix(in srgb, var(--warn) 45%, var(--glass-edge)); }
-
-/* ── Composer: floats over the bottom of the transcript as a glass capsule. A spacer at the end of #messages keeps the
-   last reply clear of it (its height follows --composer-h, which chat.js keeps in sync with a ResizeObserver). */
-/* Default on :root, where chat.js writes the measured height: a declaration on #app would shadow it (always 108px). */
-:root { --composer-h: 108px; }
-#composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding-top: 18px; gap: 8px; }
-#messages { padding-bottom: 0; }
-#messages::after { content: ''; flex: none; height: calc(var(--composer-h) + 4px); }
-#composer > #box { position: sticky; bottom: 0; }
-#box { background-color: var(--glass-2); background-image: var(--glass-sheen); border-color: var(--glass-edge); border-radius: 20px; box-shadow: var(--glass-lift); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); transition: border-color .2s, box-shadow .3s var(--ease-glass); }
-#box:focus-within { border-color: var(--focus); }
-#box.drop { border-color: var(--accent); box-shadow: var(--glass-lift), 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
-#box.improving { border-color: var(--brand); box-shadow: var(--glass-lift), 0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent); }
-#composer > .panel, #approvals > .approval { backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); background-color: var(--glass-2); }
-.status { padding: 0 8px; }
-.ctxbtn { border-radius: var(--r-pill); border-color: var(--glass-edge); background: var(--tint); height: 24px; padding: 0 9px 0 7px; }
-.chips .chip, .ctx-row .chip { border-radius: var(--r-pill); }
-.pick, .ctx { border-radius: var(--r-pill); padding-inline: 8px; transition: background .2s, color .2s; }
-.pick.mode { background: var(--tint); box-shadow: 0 0 0 1px var(--glass-edge) inset; }
-.ctx .ring::after { background: var(--card); }
-.ib { border-radius: var(--r-pill); transition: background .2s, color .2s, transform .2s var(--ease-spring); }
-.send { width: 30px; height: 30px; border-radius: var(--r-pill); background-image: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.28) inset, 0 6px 14px -5px color-mix(in srgb, var(--accent) 75%, transparent); transition: transform .2s var(--ease-spring), opacity .15s, background-color .15s, box-shadow .2s; }
-.send:not(:disabled):hover { transform: translateY(-1px); }
-.send.stop { box-shadow: 0 1px 0 rgba(255,255,255,.3) inset, 0 6px 14px -6px rgba(0,0,0,.5); }
-.send.pause { background-color: var(--glass-2); border-color: var(--glass-edge); }
-.send:not(:disabled):active, .btn:not(:disabled):active, .ib:active, .pick:active { transform: scale(.94); }
-
-/* ── Buttons: glass pills; primary is lit accent glass. */
-.btn { border-radius: var(--r-pill); border-color: var(--glass-edge); background-color: var(--tint); background-image: var(--glass-sheen); box-shadow: 0 1px 0 var(--glass-hi) inset; transition: background-color .2s, border-color .2s, transform .2s var(--ease-spring), box-shadow .2s; }
-.btn:hover { background-color: var(--tint-2); border-color: var(--glass-edge-hi); }
-.btn.primary { background-color: var(--accent); background-image: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,0)); box-shadow: 0 1px 0 rgba(255,255,255,.22) inset; }
-.btn.primary:hover { background-color: var(--accent-hover); }
-.btn.ghost { background: transparent; box-shadow: none; border-color: transparent; }
-.btn kbd { border-radius: 4px; }
-
-/* ── Floating layers: true frosted glass over whatever scrolls beneath. */
-.popover, .toast, .jump, .turn .actions, .task-row .ac {
-  background-color: var(--glass-float); background-image: var(--glass-sheen); border-color: var(--glass-edge); box-shadow: 0 22px 48px -14px rgba(0,0,0,.55), 0 1px 0 var(--glass-hi) inset;
-  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
-}
-.popover { border-radius: 16px; padding: 5px; animation: glassIn .22s var(--ease-glass); }
-.popover .item { border-radius: 10px; transition: background .15s; }
-.popover .item.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) inset; }
-.popover .item.sel .tag { background: var(--tint-2); }
-.popover .search { background: var(--tint); border-color: var(--glass-edge); }
-.popover .item .tag { border-radius: var(--r-pill); }
-.toast { border-radius: var(--r-pill); padding: 8px 16px; animation: glassIn .25s var(--ease-spring); }
-.jump { padding: 6px 13px; transition: transform .2s var(--ease-spring); } .jump:hover { transform: translateX(-50%) translateY(-1px); }
-.lightbox { background: rgba(0,0,0,.5); backdrop-filter: saturate(140%) blur(16px); -webkit-backdrop-filter: saturate(140%) blur(16px); }
-.lightbox img { border-radius: 12px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); }
-@keyframes glassIn { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
-::-webkit-scrollbar-thumb { border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
-
-/* ── Responsive: lighter blur, tighter radii and padding as the sidebar narrows; short hosts shrink the fade. */
-@container messages (max-width: 360px) { .turn.user { margin-left: 8%; margin-right: 8px; } .card, .code, .plan, .panel, .approval, .question { border-radius: 12px; } }
-@media (max-width: 320px) { :root { --glass-blur: saturate(160%) blur(14px); --r-card: 12px; } #box { border-radius: 16px; } #composer { padding-left: 8px; padding-right: 8px; } .tabbar { padding: 0 4px; } }
-@media (max-height: 420px) { #composer { padding-top: 10px; } .tabbar { height: 32px; } .tab { height: 24px; } }
-
-/* ── Fallbacks: no backdrop-filter, reduced transparency, high contrast, reduced motion. */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root { --glass-float: var(--vscode-editorWidget-background, var(--bg)); --glass-2: var(--card); --glass-bar: var(--bg); }
-  #composer { background: var(--bg); }
-}
-@media (prefers-reduced-transparency: reduce) {
-  :root { --glass: var(--card); --glass-2: var(--card); --glass-float: var(--vscode-editorWidget-background, var(--bg)); --glass-bar: var(--bg); --glass-blur: none; --glass-sheen: none; }
-  body { background: var(--bg); } #composer { background: var(--bg); }
-}
-body.vscode-high-contrast, body.vscode-high-contrast-light {
-  --glass: var(--bg); --glass-2: var(--bg); --glass-float: var(--bg); --glass-bar: var(--bg); --glass-edge: var(--vscode-contrastBorder, var(--border)); --glass-edge-hi: var(--glass-edge);
-  --glass-hi: transparent; --glass-sheen: none; --glass-shadow: none; --glass-lift: none; --glass-blur: none; background: var(--bg);
-}
-body.vscode-high-contrast #composer, body.vscode-high-contrast-light #composer { border-top: 1px solid var(--glass-edge); }
-body.vscode-high-contrast .meter i, body.vscode-high-contrast-light .meter i { background: var(--ok); box-shadow: none; }
-@media (prefers-reduced-motion: reduce) {
-  .idea:hover, .par-card:hover, .suggestion:hover, .send:not(:disabled):hover, .jump:hover { transform: none; }
-  .jump:hover { transform: translateX(-50%); }
-  .popover, .toast { animation: none; }
-}
-/* Narrow composers: pickers give their padding back so the model name survives next to Pause / Stop. */
-@container (max-width: 340px) { .pick, .ctx { padding-inline: 5px; } .send { width: 28px; height: 28px; } }
-
-/* ── Loading & progress, redrawn in the glass language. */
-/* Boot: the brand tile with a sweeping halo, dots that ripple in brand colour. */
-.boot-logo { position: relative; animation: none; }
-.boot-logo::after { content: ''; position: absolute; inset: -6px; border-radius: 18px; padding: 2px; background: conic-gradient(from 0deg, transparent 0 68%, var(--brand)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: spin 1.4s linear infinite; }
-.boot-dots i { background: var(--brand); opacity: .8; }
-/* One spinner shape everywhere: a brand arc on a faint track. */
-.status .spinner, .empty-i.searching .spinner, .tab .spin, .bgrun .spin { border: 2px solid color-mix(in srgb, var(--fg) 14%, transparent); border-top-color: var(--brand); border-right-color: color-mix(in srgb, var(--brand) 45%, transparent); animation: spin .75s cubic-bezier(.5,.15,.5,.85) infinite; }
-.status .spinner, .empty-i.searching .spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none; }
-.tab .spin, .bgrun .spin { border-width: 1.6px; }
-/* Waiting for the first token: three brand dots in a small glass pill, rising in a wave. */
-.typing { gap: 5px; height: 24px; padding: 0 10px; border-radius: var(--r-pill); background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: 0 1px 0 var(--glass-hi) inset; }
-.typing i { width: 6px; height: 6px; background: var(--brand); animation: wave 1.2s infinite ease-in-out; }
-@keyframes wave { 0%, 70%, 100% { transform: translateY(0) scale(.85); opacity: .35; } 35% { transform: translateY(-3px) scale(1); opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--brand) 60%, transparent); } }
-.caret { width: 2px; border-radius: 2px; background: var(--brand); box-shadow: 0 0 6px color-mix(in srgb, var(--brand) 70%, transparent); }
-.status { min-height: 20px; }
-.status .text { background: linear-gradient(90deg, var(--muted) 30%, var(--fg) 50%, var(--muted) 70%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite; }
-
-/* ── Search fields (history, context and model menus): a lens, a pill, and a focus glow. */
-.popover .search { height: 32px; padding: 0 10px 0 30px; border-radius: var(--r-pill); background-color: var(--tint); background-repeat: no-repeat; background-position: 10px center; background-size: 13px;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239d9d9d' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>");
-  transition: border-color .2s, box-shadow .25s var(--ease-glass), background-color .2s; }
-body.vscode-light .popover .search { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23717171' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/></svg>"); }
-.popover .search:focus { background-color: var(--glass-2); border-color: color-mix(in srgb, var(--focus) 65%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent); }
-.hist-row { border-radius: 10px; transition: background .15s; }
-.hist-row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.hist-row mark { background: color-mix(in srgb, var(--brand) 30%, transparent); border-radius: 4px; padding: 0 2px; }
-.hist-row .tag { border-radius: var(--r-pill); }
-.hist-row .acts button, .hist-foot button { border-radius: var(--r-pill); }
-.hist-foot { border-top-color: var(--glass-edge); }
-.empty-i.searching { display: flex; align-items: center; gap: 8px; }
-.hist-list.pending { position: relative; }
-.hist-list.pending::before { content: ''; position: sticky; top: 0; display: block; height: 2px; margin-bottom: -2px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--brand), transparent); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; z-index: 1; }
-
-@media (prefers-reduced-motion: reduce) {
-  .boot-logo::after, .status .text, .hist-list.pending::before { animation: none !important; }
-  .status .text { color: var(--muted); background: none; }
-  .typing i { animation: none !important; opacity: .7; }
-}
-body.vscode-high-contrast .typing, body.vscode-high-contrast-light .typing { background: transparent; }
-body.vscode-high-contrast .status .text, body.vscode-high-contrast-light .status .text { color: var(--fg); background: none; animation: none; }
-
-/* ── Answer footer: model · speed on the left, actions on the right. Quiet until hovered or focused. */
+/* Answer footer: model · speed on the left, actions on the right. Quiet until hovered or focused. */
 .afoot { display: flex; align-items: center; gap: 8px; min-height: 26px; margin: 4px 0 2px; font-size: var(--fs-xs); color: var(--muted); }
 .afoot .info { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .afoot .info i { font-style: normal; opacity: .6; }
 .afoot .info span { overflow: hidden; text-overflow: ellipsis; }
 .afoot .mdl { color: var(--muted); max-width: 180px; }
-.afoot .acts { display: inline-flex; gap: 2px; margin-left: auto; flex: none; opacity: .55; transition: opacity .2s; }
+.afoot .acts { display: inline-flex; gap: 2px; margin-left: auto; flex: none; opacity: .6; transition: opacity .12s; }
 .turn:hover .afoot .acts, .afoot .acts:focus-within { opacity: 1; }
-.afoot .acts button { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--r-pill); color: var(--muted); transition: background .15s, color .15s, transform .2s var(--ease-spring); }
+.afoot .acts button { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--muted); }
 .afoot .acts button:hover { background: var(--tint-2); color: var(--fg); }
-.afoot .acts button:active { transform: scale(.9); }
 .afoot .acts button:disabled { opacity: .4; pointer-events: none; }
 .afoot .acts svg { width: 14px; height: 14px; }
-.afoot .acts button[data-act="regen"]:hover svg { transform: rotate(-60deg); transition: transform .3s var(--ease-glass); }
-/* Copied: the button itself confirms. */
-button.copied, button.copied:hover { color: var(--ok) !important; }
-button.copied svg { animation: pop .3s var(--ease-spring); }
-@keyframes pop { from { transform: scale(.6); } to { transform: none; } }
 @container messages (max-width: 340px) { .afoot .mdl { max-width: 120px; } }
 @media (hover: none) { .afoot .acts { opacity: 1; } }
+/* Copied: the button itself confirms. */
+button.copied, button.copied:hover { color: var(--ok-text) !important; }
 
-/* ── Empty chat: contextual suggestions, recent chats, and the three shortcuts worth knowing. */
-.empty { max-width: 460px; }
-.suggestion { gap: 10px; min-width: 0; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; }
+/* Empty chat: two small lists — where to start, and recent chats — left-aligned under one heading style. */
+.empty { text-align: left; margin: auto 0 0; padding: 16px 12px 8px; max-width: 460px; }
+.empty .suggestions { gap: 0; }
+.suggestion { gap: 10px; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; }
+.suggestion:hover { background: var(--tint); }
 .suggestion .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); }
 .suggestion .ico svg { width: 14px; height: 14px; }
 .suggestion:hover .ico { color: var(--fg); }
 .suggestion .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggestion .mode { flex: none; font-size: var(--fs-xs); color: var(--muted); }
 .recent { margin-top: 18px; text-align: left; }
-.recent-h { display: flex; align-items: center; padding: 0 4px 6px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.recent-h button { margin-left: auto; font-size: var(--fs-xs); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--link); padding: 2px 6px; border-radius: var(--r-pill); }
+.recent-h { display: flex; align-items: center; padding: 0 8px 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.recent-h button { margin-left: auto; font-size: var(--fs-xs); font-weight: 400; color: var(--link); padding: 2px 6px; border-radius: var(--radius-sm); }
 .recent-h button:hover { background: var(--tint); }
-.recent-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 0 8px; border-radius: 10px; color: var(--fg); font-size: var(--fs-sm); text-align: left; transition: background .15s; }
+.recent-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 30px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--fg); font-size: var(--fs-sm); text-align: left; }
 .recent-row:hover { background: var(--tint); }
 .recent-row .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); } .recent-row .ico svg { width: 13px; height: 13px; }
 .recent-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-row .when { flex: none; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
-@container messages (max-width: 340px) { .suggestion .mode { display: none; } .hints { gap: 4px 10px; } }
+@container messages (max-width: 340px) { .suggestion .mode { display: none; } }
+.empty-i.searching { display: flex; align-items: center; gap: 8px; }
 
-/* ── Failed turn: message, then Change model / Retry on their own row. */
-.error-box { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-radius: var(--r-card); background-color: color-mix(in srgb, var(--error) 8%, var(--glass)); background-image: var(--glass-sheen); border-color: color-mix(in srgb, var(--error) 45%, var(--glass-edge)); box-shadow: var(--glass-shadow); }
+/* Failed turn: message, then Change model / Retry on their own row. */
+.error-box { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px; }
 .error-box .msg { flex: 1 1 200px; }
 .err-acts { display: inline-flex; gap: 6px; margin-left: auto; flex: none; color: var(--fg); }
 .err-acts .btn svg { width: 12px; height: 12px; }
 
-/* ════ Liquid glass: motion, light and refraction (driven by media/glass.js) ════════════════════════════════════
-   Registered properties so the light position and strength animate instead of jumping. */
-@property --mx { syntax: '<percentage>'; inherits: false; initial-value: 50%; }
-@property --my { syntax: '<percentage>'; inherits: false; initial-value: -40%; }
-:root { --spec: rgba(255,255,255,.15); --spec-rim: rgba(255,255,255,.2); }
-body.vscode-light { --spec: rgba(255,255,255,.75); --spec-rim: rgba(255,255,255,.9); }
+/* Approvals keep their buttons plain; the shortcuts are in the tooltips. */
+.approval .btn kbd { display: none; }
+.approval .actions { gap: 6px; }
 
-/* ── Pointer light: a soft highlight that follows the pointer across glass, painted between the surface and its
-   content (isolation + z-index -1), so text is never washed out. glass.js sets --mx/--my and .lg-on. */
-:is(.btn, .card, .panel, .approval, .plan, .suggestion, .idea, .par-card, .recent-row, .afoot .acts button, .tab, .ib:not(.badge), .send) { position: relative; isolation: isolate; }
-#box, .popover { isolation: isolate; }
-:is(.btn, .card, .panel, .approval, .plan, .suggestion, .idea, .par-card, .recent-row, .afoot .acts button, .tab, .ib:not(.badge), .send, #box, .popover)::after {
-  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0;
-  background: radial-gradient(220px circle at var(--mx) var(--my), var(--spec), transparent 62%);
-  transition: opacity .45s var(--ease-glass), --mx .18s linear, --my .18s linear;
-}
-.lg-on::after { opacity: 1; }
-/* Small controls: a tighter, brighter glint. */
-:is(.ib, .send, .afoot .acts button, .tab)::after { background: radial-gradient(40px circle at var(--mx) var(--my), var(--spec-rim), transparent 70%); }
-.btn.primary::after, .send:not(.pause)::after { background: radial-gradient(90px circle at var(--mx) var(--my), rgba(255,255,255,.28), transparent 65%); }
-
-/* ── Lens: floating layers bend what scrolls beneath them (SVG displacement, Chromium only; html.lg-lens).
-   Less blur than before so the bending is visible; fills drop a little so the light can come through. */
-.lg-lens #box { backdrop-filter: url(#lp-lens) saturate(170%) blur(6px); -webkit-backdrop-filter: none; background-color: color-mix(in srgb, var(--card) 58%, transparent); }
-.lg-lens :is(.popover, .toast, .jump, .turn .actions) { backdrop-filter: url(#lp-lens-sm) saturate(180%) blur(10px); -webkit-backdrop-filter: none; }
-.lg-lens .tabbar, .lg-lens .bgruns { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(12px); -webkit-backdrop-filter: none; }
-.lg-lens #composer > .panel, .lg-lens #approvals > .approval { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(8px); -webkit-backdrop-filter: none; }
-/* A lit rim on lensed glass: bright where light enters (top-left), darker where it leaves. */
-.lg-lens #box { box-shadow: var(--glass-lift), inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.18); }
-.lg-lens #box:focus-within { border-color: var(--focus); }
-
-/* ── Liquid tab selection: one glass pill behind the active tab that flows to the next one (glass.js animates it). */
-.tabs { position: relative; }
-.lg-ind { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; border-radius: var(--r-pill); will-change: transform, width;
-  background-color: var(--glass-2); background-image: var(--glass-sheen); border: 1px solid var(--glass-edge);
-  box-shadow: inset 1px 1px 0 var(--spec-rim), inset -1px -1px 0 rgba(0,0,0,.14), 0 4px 14px -6px rgba(0,0,0,.45); transition: opacity .25s; }
-.tabs.lg-has-ind > .tab { z-index: 1; }
-.tabs.lg-has-ind > .tab.active { background: transparent; border-color: transparent; box-shadow: none; }
-
-/* ── Icons that respond: every icon eases on a spring; each control has its own small gesture. */
-button svg { transition: transform .4s var(--ease-spring), color .2s, opacity .2s; }
-#btnNewTab:hover svg { transform: rotate(90deg) scale(1.08); }
-#btnHistory:hover svg { transform: rotate(-40deg); }
-#btnImprove:hover svg { animation: twinkle .9s var(--ease-glass); }
-#btnImage:hover svg { transform: rotate(-8deg) scale(1.12); }
-.tab .close:hover svg { transform: rotate(90deg); }
-.pick:hover .chev svg { transform: translateY(1.5px); }
-.ctxbtn .at { display: inline-block; transition: transform .4s var(--ease-spring); } .ctxbtn:hover .at { transform: rotate(-18deg) scale(1.2); }
-.recent-row:hover .ico svg { transform: scale(1.1); }
-.btn:not(.busy):hover svg { transform: translateY(-1px) scale(1.06); }
-.code-head button:hover svg { transform: translateY(-1px); }
-.panel .chev svg, .work .chev svg { transition: transform .35s var(--ease-spring); }
-/* Send: the arrow lifts on hover and launches on press. */
-.send:not(:disabled):not(.stop):not(.pause):hover svg { transform: translateY(-2px); }
-.send:not(:disabled):not(.stop):not(.pause):active svg { transform: translateY(-9px); opacity: 0; transition-duration: .18s; }
-.send.stop:hover svg { transform: scale(.85); }
-/* Copied: the check draws itself. */
-button.copied svg path { stroke-dasharray: 18; stroke-dashoffset: 18; animation: draw .45s var(--ease-glass) forwards; }
-@keyframes draw { to { stroke-dashoffset: 0; } }
-@keyframes twinkle { 0% { transform: none; } 30% { transform: rotate(-18deg) scale(1.25); } 60% { transform: rotate(10deg) scale(.95); } 100% { transform: none; } }
-
-@media (prefers-reduced-motion: reduce) {
-  button svg, .ctxbtn .at { transition: none; }
-  #btnImprove:hover svg, button.copied svg path { animation: none; }
-  button.copied svg path { stroke-dashoffset: 0; }
-}
-body.vscode-high-contrast, body.vscode-high-contrast-light { --spec: transparent; --spec-rim: transparent; }
-body.vscode-high-contrast .lg-ind, body.vscode-high-contrast-light .lg-ind { background: transparent; border: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); box-shadow: none; }
-
-/* ── Floating composer, refined: a light veil only, so the message box has something to refract; the status line
-   becomes its own small glass pill instead of text drawn over the transcript. */
-#composer { background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 94%, transparent) 16px); }
-#composer > .status:not(.hidden) { align-self: flex-start; max-width: 100%; height: 26px; padding: 0 12px 0 9px; border-radius: var(--r-pill);
-  background-color: var(--glass-2); background-image: var(--glass-sheen); border: 1px solid var(--glass-edge); box-shadow: 0 6px 16px -10px rgba(0,0,0,.5), inset 1px 1px 0 var(--spec-rim);
-  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
-.lg-lens #composer > .status { backdrop-filter: url(#lp-lens-sm) saturate(170%) blur(10px); }
-body.vscode-high-contrast #composer, body.vscode-high-contrast-light #composer { background: var(--bg); }
-@media (prefers-reduced-transparency: reduce) { #composer { background: var(--bg); } }
-
-/* ════ Liquid glass icons ════════════════════════════════════════════════════════════════════════════════════════
-   Every UI icon (16×16 line icons, the bot mark, provider logos) is drawn as lit glass by #lp-icon (glass.js): a
-   specular highlight along its top edges, a glow in its own colour and a little depth. Charts are untouched. */
-.lg-icons :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-logo svg, .empty .logo svg, .brand-mark svg) { filter: url(#lp-icon); }
-html.lg-icons body.vscode-light :is(svg[viewBox="0 0 16 16"], svg.logo, .boot-logo svg, .empty .logo svg, .brand-mark svg) { filter: url(#lp-icon-light); }
-.lg-icons svg[viewBox="0 0 16 16"] { stroke-width: 1.65; overflow: visible; }
-
-/* Icon tiles: small glass bubbles — a lit top edge, a darker lower rim, a soft shadow. */
-:is(.find-item .ico, .preset .ic:not(.brand-mark), .cat-head .ic:not(.brand-mark), .sys .ic, .find-open, .brand-mark) {
-  background-image: linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.03) 55%, rgba(0,0,0,.06));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 0 rgba(0,0,0,.18), 0 4px 10px -6px rgba(0,0,0,.5);
-  transition: transform .45s var(--ease-spring), box-shadow .3s, background-color .2s;
-}
-:is(.find-item.sel .ico, .preset:not([disabled]):hover .ic, .gal-tab:hover .brand-mark) { transform: translateY(-1px) scale(1.06); }
-
-/* ── Motion: icons wobble like a drop of liquid on hover; controls with their own gesture keep it. */
-@keyframes jelly { 0% { transform: scale(1, 1); } 28% { transform: scale(1.2, .84); } 48% { transform: scale(.88, 1.14); } 68% { transform: scale(1.06, .96); } 84% { transform: scale(.98, 1.02); } 100% { transform: scale(1, 1); } }
-:is(.ib:not(#btnNewTab):not(#btnHistory):not(#btnImprove):not(#btnImage), .afoot .acts button:not([data-act="regen"]), .code-head button, .hist-row .acts button, .change .acts button, .bgrun .stop, .btn:not(.busy), .hist-foot button, .navtog, .navall, .side button.grp, .pick):hover > svg { animation: jelly .62s var(--ease-glass); }
-/* Press: a liquid ring spreads from the pointer (glass.js adds .lg-ripple). */
-@property --rr { syntax: '<length>'; inherits: false; initial-value: 0px; }
-.lg-ripple { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
-  background: radial-gradient(circle at var(--rx) var(--ry), rgba(255,255,255,.16) 0, rgba(255,255,255,.1) calc(var(--rr) - 10px), rgba(255,255,255,.42) calc(var(--rr) - 1px), transparent var(--rr));
-  animation: lgRipple .6s var(--ease-glass) forwards; }
-@keyframes lgRipple { from { --rr: 4px; opacity: 1; } to { --rr: var(--rmax, 120px); opacity: 0; } }
-:is(body.vscode-light) .lg-ripple { background: radial-gradient(circle at var(--rx) var(--ry), color-mix(in srgb, var(--accent) 10%, transparent) 0, color-mix(in srgb, var(--accent) 8%, transparent) calc(var(--rr) - 10px), color-mix(in srgb, var(--accent) 30%, transparent) calc(var(--rr) - 1px), transparent var(--rr)); }
-:where(button) { position: relative; }
-
-@media (prefers-reduced-motion: reduce) { :is(.ib, .btn, .pick, button) > svg { animation: none !important; } .lg-ripple { display: none; } }
-body.vscode-high-contrast :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open), body.vscode-high-contrast-light :is(.suggestion .ico, .find-item .ico, .brand-mark, .find-open) { background-image: none; box-shadow: none; }
-
-/* ════ Liquid expand / collapse ═════════════════════════════════════════════════════════════════════════════════
-   Content grows and shrinks to its natural height (interpolate-size lets height animate to and from auto) instead of
-   popping, and every chevron turns on a spring. Where the engine is older, the same rules still open and close —
-   just without the motion. */
-:root { interpolate-size: allow-keywords; }
-.chev, .chev svg, summary .chev { transition: transform .5s var(--ease-spring), opacity .2s; }
-/* Native <details> (tool steps, thinking, workers, reports): the content box itself animates. */
-details::details-content { block-size: 0; opacity: 0; overflow-y: clip; transition: block-size .38s var(--ease-glass), opacity .26s var(--ease-glass), content-visibility .38s allow-discrete; }
-details[open]::details-content { block-size: auto; opacity: 1; }
-/* "Worked for …" folds the turn's steps away. */
-.turn > .steps, .turn > .note { overflow: clip; overflow-clip-margin: 14px; transition: height .38s var(--ease-glass), opacity .26s var(--ease-glass), margin .38s var(--ease-glass), visibility .38s; }
-.turn.folded > .steps { display: flex; height: 0; opacity: 0; margin-block: 0; visibility: hidden; }
-.turn.folded > .note { display: block; height: 0; opacity: 0; margin-block: 0; padding-block: 0; border-width: 0; visibility: hidden; }
-/* Edit diffs and terminal output inside cards. */
-.card .diff, .card .term { transition: height .36s var(--ease-glass), opacity .24s, padding .36s var(--ease-glass), visibility .36s; }
-.card .diff.collapsed { display: block; height: 0; opacity: 0; overflow: hidden; visibility: hidden; }
-.card .term.collapsed { display: block; height: 0; opacity: 0; overflow: hidden; padding-block: 0; visibility: hidden; }
-/* Tasks / Changes panels. */
-.panel-body { transition: height .36s var(--ease-glass), opacity .24s, padding .36s var(--ease-glass), border-color .36s, visibility .36s; }
-.panel-body.hidden { display: block !important; height: 0; opacity: 0; padding-block: 0; border-top-color: transparent; overflow: hidden; visibility: hidden; }
-@media (prefers-reduced-motion: reduce) {
-  details::details-content, .turn > .steps, .turn > .note, .card .diff, .card .term, .panel-body, .chev, .chev svg { transition: none; }
-}
-
-/* ════ Composer, fixed ════════════════════════════════════════════════════════════════════════════════════════════ */
-/* No model: an amber glass pill that reads in light and dark themes and invites a click (the picker offers setup). */
-.pick.model.warn { color: color-mix(in srgb, var(--warn) 62%, var(--fg)); background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent); font-weight: 500; }
-.pick.model.warn:hover { background: color-mix(in srgb, var(--warn) 22%, transparent); }
+/* Model picker: "no model" is a warning that invites a click (the picker offers setup); "finding" is quiet. */
+.pick.model.warn { color: var(--warn-text); font-weight: 500; }
+.pick.model.warn:hover { background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .pick.model.warn .chev { color: inherit; }
 .pick.model.finding { color: var(--muted); }
-.pick.model .spinner { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; border-radius: 50%; border: 1.6px solid color-mix(in srgb, var(--fg) 14%, transparent); border-top-color: var(--brand); animation: spin .75s linear infinite; }
-/* Send while there is nothing to send: a quiet glass circle, not a faded accent button that still looks pressable. */
-.send:disabled { opacity: 1; background-color: var(--tint-2); background-image: none; color: var(--muted); box-shadow: inset 0 0 0 1px var(--glass-edge); }
-.send:disabled svg { opacity: .55; }
+.pick.model .spinner { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; border-radius: 50%; border: 1.5px solid var(--border); border-top-color: var(--fg); animation: spin .75s linear infinite; }
+/* Send with nothing to send: a quiet square, not a faded accent button that still looks pressable. */
+.send:disabled { opacity: 1; background: var(--tint-2); color: var(--muted); }
 /* "@ Add context" keeps its label until there are chips sharing the row. */
 @container (max-width: 340px) { .ctx-row:not(:has(.chip)) .ctxbtn .lbl { display: inline; } }
-/* Empty chat: two small lists — where to start, and recent chats — left-aligned under one heading style. */
-.empty { text-align: left; margin: auto 0 0; padding: 16px 12px 8px; }
-.empty .recent-h { padding: 0 8px 6px; }
-.empty .suggestions { gap: 0; }
 /* Narrow composers keep the primary's label ("Accept all"); only the secondary action collapses to an icon. */
 @container (max-width: 340px) { .panel-head .btn.primary .long { display: inline; } .panel-head .btn.primary { padding: 0 9px; } }
-
 /* Build is a primary action: the accent colour like every other primary button; its shortcut is quiet text. */
 .plan-foot .build:hover { background: var(--accent-hover); } .plan-foot .build kbd { background: none; box-shadow: none; padding: 0; opacity: .75; }
+svg[viewBox="0 0 16 16"] { shape-rendering: geometricPrecision; }
+
+/* ════ Light themes: accent colours used for icons and text are darkened so they keep contrast on white
+   (LocalPilot's amber is 2:1 on white; status greens and yellows are often under 3:1). Fills keep the brand colour. */
+body.vscode-light, body.vscode-high-contrast-light {
+  --brand-text: color-mix(in srgb, var(--brand) 58%, #000);
+  --ok-text: color-mix(in srgb, var(--ok) 68%, #000);
+  --warn-text: color-mix(in srgb, var(--warn) 64%, #000);
+  --error-text: color-mix(in srgb, var(--error) 80%, #000);
+}
+/* Code tokens: webviews don't get the editor's token colours, and the fallbacks above are Dark+ hues (pale yellow and
+   cyan, under 2:1 on white). Light themes use the Light+ palette instead. */
+body.vscode-light .tk-s { color: #a31515; } body.vscode-light .tk-n { color: #098658; } body.vscode-light .tk-k { color: #0000ff; }
+body.vscode-light .tk-t { color: #267f99; } body.vscode-light .tk-f { color: #795e26; } body.vscode-light :is(.tk-p, .tk-v) { color: #001080; }
+body.vscode-light .tk-meta { color: #af00db; }
+body.vscode-high-contrast-light :is(.tk-s, .tk-n, .tk-k, .tk-t, .tk-f, .tk-p, .tk-v, .tk-meta) { color: var(--fg); }
+/* Thin strokes antialias to grey on white, and muted text at reduced opacity drops to ~2:1, so light themes draw
+   icons a little heavier and keep secondary icons near full strength. */
+body.vscode-light svg[viewBox="0 0 16 16"] { stroke-width: 1.65; }
+body.vscode-light .afoot .acts { opacity: .85; }
+body.vscode-light :is(.lane .ico, .work .chev, .task-row .rm) { opacity: .8; }
+body.vscode-light :is(.lane .who, .panel .chev svg, .step.subhost.workers .lane .who) { opacity: 1; }
+body.vscode-light pre.numbered .n { opacity: 1; }

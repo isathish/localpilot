@@ -4,9 +4,22 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Changed
+- **A plain, native look instead of "liquid glass".** The chat, settings and Markdown viewer drop the decorative layer: frosted translucent bars and cards, gradient sheens, coloured background glows, a highlight that followed the pointer, lens distortion, a sliding glass pill behind tabs and selectors, icons that wobbled, spun or bounced on hover, ripples on click, cards that lifted on hover, and shimmering "working" text. Surfaces are solid and use VS Code's own colours, borders and corner radii. The message box sits below the transcript instead of floating over it, so replies never scroll under it. Running steps still show their spinner. The behaviour script that drove the effects (`media/glass.js`) is gone, so the webviews do less work on every pointer move and selection change.
+- The Tasks panel title no longer shrinks to "Ta…" when the current task is long.
+
+### Fixed
+- **The light theme is readable end to end.** Code blocks in the chat used dark-theme syntax colours (pale yellow and cyan on white). They now use the Light+ palette. Icons draw slightly heavier on light backgrounds, and secondary icons (message actions, worker lanes, panel chevrons) are no longer faded to about 2:1 contrast. In Settings, switches that are off have a visible track instead of a white knob on near-white, and the Ask / Allow / Block selectors mark the chosen option with a white segment and an edge.
+- **Provider logos show their brand colours.** In **Settings → Providers → Add a provider**, every logo was painted grey by a rule meant for the subtitle under the name: Gemini, Mistral, DeepSeek, Groq and the rest looked alike. Each tile now has its vendor's colour on a matching tint, in dark and light themes. Ollama and xAI, whose marks are monochrome, follow the theme's text colour instead of a fixed grey.
+
 ## 1.3.6 — 2026-11-01
 
 ### Fixed
+- **Icons, logos and status colours are readable in light and dark themes.** An audit of every icon in the chat, Settings and setup pages, in dark, light and both high-contrast themes (2,264 icons), found many under the 3:1 contrast icons need. All of them now pass; the lowest is 3.3:1.
+  - LocalPilot's amber, and the green, yellow and red status colours, are darkened for icons and text on light themes. Amber on white was 2:1. Buttons and badge fills keep the brand colour.
+  - Provider logos lean toward the theme's text colour, so each reads on its own tint. A logo in its brand colour on a tint of that same colour fell to 1.7:1.
+  - The check on a finished task is dark on the green box. White on light green was 2:1.
+- **Softer shadows on light themes.** Cards, the message box, icon tiles and menus used shadows tuned for dark themes, which showed as grey smudges on white. On light themes they are now tight and faint.
 - **The newest message is no longer hidden under the composer.** The floating composer reserved a fixed 108 px at the end of the chat. When it grew (Tasks checklist, changed files, an approval, the status line), it covered the latest reply or the steering message you just queued. The space now follows the composer's real height.
 
 ### Documentation

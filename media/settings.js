@@ -180,16 +180,16 @@
   };
   /** Brand marks for provider cards: real logo where we have one, otherwise a monogram, each in the vendor accent colour. */
   const BRANDS = {
-    ollama: { mark: LOGOS.ollama, color: '#9ca3af' }, lmstudio: { mark: LOGOS.lmstudio, color: '#7c5cff' }, llamacpp: { mark: 'λ', color: '#f2a33a' },
+    ollama: { mark: LOGOS.ollama, color: 'var(--fg)' }, lmstudio: { mark: LOGOS.lmstudio, color: '#7c5cff' }, llamacpp: { mark: 'λ', color: '#f2a33a' },
     vllm: { mark: LOGOS.vllm, color: '#30a2ff' }, docker: { mark: LOGOS.docker, color: '#2496ed' }, jan: { mark: 'JA', color: '#22c55e' },
     localai: { mark: 'LA', color: '#06b6d4' }, sglang: { mark: 'SG', color: '#ef4444' }, custom: { mark: I.plug, color: '' },
     koboldcpp: { mark: 'KC', color: '#64748b' }, omniroute: { mark: 'OM', color: '#14b8a6' }, textgen: { mark: 'TG', color: '#f97316' }, gpt4all: { mark: 'G4', color: '#16a34a' }, litellm: { mark: 'LL', color: '#0ea5e9' },
     openai: { mark: 'OA', color: '#10a37f' }, anthropic: { mark: 'A\\', color: '#d97757' }, gemini: { mark: LOGOS.google, color: '#4285f4' },
     openrouter: { mark: 'OR', color: '#6467f2' }, groq: { mark: 'GQ', color: '#f55036' }, mistral: { mark: LOGOS.mistral, color: '#fa520f' },
-    deepseek: { mark: LOGOS.deepseek, color: '#4d6bfe' }, xai: { mark: 'xAI', color: '#9ca3af' }, together: { mark: 'TA', color: '#0f6fff' },
+    deepseek: { mark: LOGOS.deepseek, color: '#4d6bfe' }, xai: { mark: 'xAI', color: 'var(--fg)' }, together: { mark: 'TA', color: '#0f6fff' },
     fireworks: { mark: 'FW', color: '#7c3aed' }, cerebras: { mark: 'CB', color: '#f05a28' }, huggingface: { mark: LOGOS.huggingface, color: '#f59e0b' },
     nvidia: { mark: LOGOS.nvidia, color: '#76b900' }, moonshot: { mark: 'KI', color: '#3b82f6' }, dashscope: { mark: LOGOS.qwen, color: '#615ced' },
-    'ollama-cloud': { mark: LOGOS.ollama, color: '#9ca3af' }, azure: { mark: 'AZ', color: '#0078d4' },
+    'ollama-cloud': { mark: LOGOS.ollama, color: 'var(--fg)' }, azure: { mark: 'AZ', color: '#0078d4' },
   };
   /** Resolves a brand from a preset key or a provider config (id prefix such as "ollama-2", then baseUrl/type hints). */
   const brandOf = (keyOrCfg) => {
@@ -214,7 +214,7 @@
     nvidia: { mark: LOGOS.nvidia, color: '#76b900' }, alibaba: { mark: LOGOS.qwen, color: '#615ced' },
     'mistral ai': { mark: LOGOS.mistral, color: '#fa520f' }, mistral: { mark: LOGOS.mistral, color: '#fa520f' }, openai: { mark: 'OA', color: '#10a37f' },
     meta: { mark: LOGOS.meta, color: '#0866ff' }, deepseek: { mark: LOGOS.deepseek, color: '#4d6bfe' },
-    microsoft: { mark: 'MS', color: '#0078d4' }, anthropic: { mark: 'A\\', color: '#d97757' }, xai: { mark: 'xAI', color: '#9ca3af' }, 'hugging face': { mark: LOGOS.huggingface, color: '#f59e0b' }, bigcode: { mark: 'BC', color: '#a855f7' },
+    microsoft: { mark: 'MS', color: '#0078d4' }, anthropic: { mark: 'A\\', color: '#d97757' }, xai: { mark: 'xAI', color: 'var(--fg)' }, 'hugging face': { mark: LOGOS.huggingface, color: '#f59e0b' }, bigcode: { mark: 'BC', color: '#a855f7' },
   };
   /** Vendor guessed from a model id, for installed models the catalog does not know. */
   const vendorFromModelId = (id) => {

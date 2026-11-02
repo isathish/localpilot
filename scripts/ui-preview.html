@@ -137,6 +137,5 @@ window.acquireVsCodeApi=()=>({postMessage(m){
   if(m.type==='stopChild'){ send({type:'event',event:{sessionId:m.sessionId,type:'subagent_end',payload:{childId:m.childId,agent:'docs',error:'Stopped by user'}}}); }
 }});
 </script>
-<script src="../media/glass.js"></script>
 <script src="../media/chat.js"></script>
 </body></html>

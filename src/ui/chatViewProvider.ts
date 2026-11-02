@@ -360,7 +360,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="popover" class="popover hidden" role="menu"></div>
   <div id="toasts"></div>
 </div>
-<script nonce="${nonce}" src="${media('glass.js')}"></script>
 <script nonce="${nonce}" src="${media('chat.js')}"></script>
 </body>
 </html>`;
