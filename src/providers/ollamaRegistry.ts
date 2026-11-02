@@ -190,18 +190,13 @@ export function isValidOllamaModelRef(ref: string): boolean {
 }
 
 async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(new Error('timeout')), 15_000);
-  signal?.addEventListener('abort', () => ctrl.abort(signal.reason), { once: true });
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: { accept: 'text/html', 'user-agent': 'LocalPilot (VS Code extension)' } });
-    if (!res.ok) {
-      throw new Error(`ollama.com answered HTTP ${res.status}`);
-    }
-    return await res.text();
-  } finally {
-    clearTimeout(t);
+  // No listener left on the caller's signal (see withTimeout).
+  const ctrl = { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) };
+  const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: { accept: 'text/html', 'user-agent': 'LocalPilot (VS Code extension)' } });
+  if (!res.ok) {
+    throw new Error(`ollama.com answered HTTP ${res.status}`);
   }
+  return await res.text();
 }
 
 /** Browses ollama.com so the user can install any public model, not only the curated catalog. Results are cached briefly. */

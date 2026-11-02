@@ -295,7 +295,10 @@ Preserve exact file paths, identifiers, commands, error messages and numbers. Do
       },
     ];
     let out = '';
-    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, think: false, maxTokens: 1500, contextWindow: model.contextWindow, keepAlive: this.opts.keepAlive, signal })) {
+    // A server that accepts the request and then hangs must not leave the run on "Compacting…": after 4 minutes the
+    // summary is abandoned and compact() falls back to truncation (or, when asked by the user, reports the failure).
+    const limited = signal ? AbortSignal.any([signal, AbortSignal.timeout(240_000)]) : AbortSignal.timeout(240_000);
+    for await (const ev of provider.chat({ model: model.modelId, messages, temperature: 0, think: false, maxTokens: 1500, contextWindow: model.contextWindow, keepAlive: this.opts.keepAlive, signal: limited })) {
       if (ev.type === 'text') {
         out += ev.text;
       }

@@ -14,6 +14,8 @@ export type RunControlListener = (source: RunControl) => void;
  */
 export class RunControl {
   private readonly ac = new AbortController();
+  /** Removes this control's listeners from the upstream/parent signals (see link in the constructor). */
+  private readonly unlink: (() => void)[] = [];
   private ownPaused = false;
   private _holding = false;
   private readonly listeners = new Set<RunControlListener>();
@@ -40,7 +42,10 @@ export class RunControl {
       if (s.aborted) {
         this.ac.abort(s.reason);
       } else {
-        s.addEventListener('abort', () => this.ac.abort(s.reason), { once: true });
+        const relay = () => this.ac.abort(s.reason);
+        s.addEventListener('abort', relay, { once: true });
+        // Removed on dispose: a stopped or finished lane must not stay attached to its parent's signal.
+        this.unlink.push(() => s.removeEventListener('abort', relay));
       }
     };
     link(upstream);
@@ -167,6 +172,7 @@ export class RunControl {
   }
 
   dispose(): void {
+    this.unlink.splice(0).forEach((f) => f());
     this.parent?.children.delete(this.id);
     this.listeners.clear();
     this.wake();

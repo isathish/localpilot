@@ -170,6 +170,29 @@ export class SessionStore implements vscode.Disposable {
    * Full-text search over what was said (not tool output or hidden steering), newest chat first. A chat appears once,
    * with the first matching line; title matches count too so the result set is a superset of the title filter.
    */
+  /**
+   * The searchable text of a chat (what the user and the agent wrote), kept between queries and rebuilt only when the
+   * chat changed. Search runs on every keystroke in the history panel; reading and parsing every transcript from disk
+   * each time blocked the extension host with a long history.
+   */
+  private searchCache = new Map<string, { updatedAt: number; parts: { role: 'user' | 'assistant'; text: string; lower: string }[] }>();
+  private searchText(id: string, updatedAt: number): { role: 'user' | 'assistant'; text: string; lower: string }[] {
+    const hit = this.searchCache.get(id);
+    if (hit && hit.updatedAt === updatedAt) {
+      return hit.parts;
+    }
+    const parts: { role: 'user' | 'assistant'; text: string; lower: string }[] = [];
+    for (const m of this.peek(id)?.messages ?? []) {
+      if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages) {
+        continue;
+      }
+      const text = (m.role === 'user' ? userText(m.content) : m.content).slice(0, 20_000);
+      parts.push({ role: m.role, text, lower: text.toLowerCase() });
+    }
+    this.searchCache.set(id, { updatedAt, parts });
+    return parts;
+  }
+
   search(query: string, limit = 20): SessionSearchHit[] {
     const q = query.trim().toLowerCase();
     if (q.length < 2) {
@@ -181,13 +204,9 @@ export class SessionStore implements vscode.Disposable {
       if (row.title.toLowerCase().includes(q)) {
         hit = { id: row.id, snippet: '', role: 'user' };
       }
-      const s = this.peek(row.id);
-      for (const m of s?.messages ?? []) {
-        if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages) {
-          continue;
-        }
-        const text = m.role === 'user' ? userText(m.content) : m.content;
-        const at = text.toLowerCase().indexOf(q);
+      for (const { role, text, lower } of this.searchText(row.id, row.updatedAt)) {
+        const m = { role };
+        const at = lower.indexOf(q);
         if (at < 0) {
           continue;
         }
@@ -262,8 +281,11 @@ export class SessionStore implements vscode.Disposable {
     this.deleted.add(id);
     this.sessions.delete(id);
     this.index.delete(id);
+    this.searchCache.delete(id);
     clearTimeout(this.saveTimers.get(id));
     this.saveTimers.delete(id);
+    // A save still writing would otherwise recreate the file after it is deleted, and the chat would come back.
+    await this.chains.get(id)?.catch(() => undefined);
     try {
       await vscode.workspace.fs.delete(vscode.Uri.joinPath(this.dir, `${id}.json`));
     } catch {
@@ -369,20 +391,37 @@ export class SessionStore implements vscode.Disposable {
     }
   }
 
-  async flush(s: Session): Promise<void> {
+  /** One write chain per chat: writes land in order, and `delete` waits for the one in flight. */
+  private chains = new Map<string, Promise<void>>();
+
+  flush(s: Session): Promise<void> {
     // This write carries the latest state, so a debounced one still pending is redundant.
     clearTimeout(this.saveTimers.get(s.id));
     this.saveTimers.delete(s.id);
     this.writing.add(s.id);
-    try {
-      await vscode.workspace.fs.createDirectory(this.dir);
-      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(this.dir, `${s.id}.json`), Buffer.from(JSON.stringify(s), 'utf8'));
-    } catch (e) {
-      this.log.error(`Failed to save session ${s.id}: ${String(e)}`);
-    } finally {
-      this.writing.delete(s.id);
-    }
-    this.evict();
+    const run = (this.chains.get(s.id) ?? Promise.resolve()).then(async () => {
+      if (this.deleted.has(s.id)) {
+        return;
+      }
+      // Written beside and renamed over: a crash or a concurrent reader never sees half a transcript.
+      const target = vscode.Uri.joinPath(this.dir, `${s.id}.json`);
+      const tmp = vscode.Uri.joinPath(this.dir, `${s.id}.json.tmp`);
+      try {
+        await vscode.workspace.fs.createDirectory(this.dir);
+        await vscode.workspace.fs.writeFile(tmp, Buffer.from(JSON.stringify(s), 'utf8'));
+        await vscode.workspace.fs.rename(tmp, target, { overwrite: true });
+      } catch (e) {
+        this.log.error(`Failed to save session ${s.id}: ${String(e)}`);
+      }
+    });
+    this.chains.set(s.id, run);
+    return run.finally(() => {
+      if (this.chains.get(s.id) === run) {
+        this.chains.delete(s.id);
+        this.writing.delete(s.id);
+      }
+      this.evict();
+    });
   }
 
   async exportMarkdown(id: string): Promise<string> {
@@ -405,9 +444,23 @@ export class SessionStore implements vscode.Disposable {
   }
 
   dispose(): void {
-    for (const [, t] of this.saveTimers) {
+    // Saves still waiting for their debounce carry the last moments of a chat (often the final turn): write them now,
+    // synchronously, since the window is closing and nothing after dispose() is awaited.
+    for (const [id, t] of this.saveTimers) {
       clearTimeout(t);
+      const s = this.sessions.get(id);
+      if (s && !this.deleted.has(id)) {
+        try {
+          const file = path.join(this.dir.fsPath, `${id}.json`);
+          fs.mkdirSync(this.dir.fsPath, { recursive: true });
+          fs.writeFileSync(`${file}.tmp`, JSON.stringify(s), 'utf8');
+          fs.renameSync(`${file}.tmp`, file);
+        } catch (e) {
+          this.log.error(`Failed to save session ${id} on shutdown: ${String(e)}`);
+        }
+      }
     }
+    this.saveTimers.clear();
     clearTimeout(this.changeTimer);
     this._onDidChange.dispose();
   }

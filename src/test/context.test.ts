@@ -212,8 +212,9 @@ suite('ContextManager', () => {
     const abort = new AbortController();
     const p = fakeProvider('summary');
     const orig = p.chat.bind(p);
+    let seen: AbortSignal | undefined;
     p.chat = (opts) => {
-      assert.strictEqual(opts.signal, abort.signal, 'the caller\'s signal reaches the provider');
+      seen = opts.signal;
       return orig(opts);
     };
     const history: ChatMessage[] = [];
@@ -223,5 +224,9 @@ suite('ContextManager', () => {
     const budgetOf = (h: ChatMessage[]) => cm.budget({ ...model, contextWindow: MIN_CONTEXT_WINDOW }, 'sys', [], h, 512);
     await cm.fit(history, p, model, budgetOf, abort.signal);
     assert.ok(p.calls >= 1);
+    // The summariser gets the caller's signal combined with its own time limit: aborting the caller still stops it.
+    assert.ok(seen && !seen.aborted, 'a live signal reaches the provider');
+    abort.abort();
+    assert.ok(seen?.aborted, 'aborting the caller aborts the summariser');
   });
 });

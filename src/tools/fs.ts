@@ -89,13 +89,17 @@ export const readFileTool: Tool = {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
     const doc = await vscode.workspace.openTextDocument(uri);
     const start = Math.max(1, Number(args.start_line ?? 1));
-    const end = Math.min(doc.lineCount, Number(args.end_line ?? Math.min(doc.lineCount, start + 799)));
+    // At most 2,000 lines per read and 2,000 characters per line (minified code): a whole large file in one result
+    // would only be cut from the middle later, without telling the model where to continue.
+    const end = Math.min(doc.lineCount, Number(args.end_line ?? Math.min(doc.lineCount, start + 799)), start + 1999);
     const lines: string[] = [];
     for (let i = start - 1; i < end; i++) {
-      lines.push(`${String(i + 1).padStart(5)} | ${doc.lineAt(i).text}`);
+      const t = doc.lineAt(i).text;
+      lines.push(`${String(i + 1).padStart(5)} | ${t.length > 2000 ? `${t.slice(0, 2000)} … [line cut: ${t.length.toLocaleString()} characters]` : t}`);
     }
     const header = `File: ${displayPath(uri, ctx)} (${doc.lineCount} lines total, showing ${start}-${end})`;
-    return { content: `${header}\n${lines.join('\n')}` };
+    const more = end < doc.lineCount && args.end_line !== undefined && Number(args.end_line) > end ? `\n… read the rest with start_line ${end + 1}` : '';
+    return { content: `${header}\n${lines.join('\n')}${more}` };
   },
 };
 

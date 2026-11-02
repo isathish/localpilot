@@ -70,6 +70,10 @@ export class McpClient implements vscode.Disposable {
       (err) => {
         this.log.warn(`[mcp:${this.name}] ${err.message}`);
         this.failPending(err);
+        // An exit nobody asked for (a crash, a dropped SSE stream): let the manager restart the server.
+        if (!this.closing) {
+          this.onDown?.(err);
+        }
       }
     );
     const init = (await this.request('initialize', {
@@ -161,7 +165,12 @@ export class McpClient implements vscode.Disposable {
     await this.transport?.send({ method, params }).catch((e: Error) => this.log.debug(`[mcp:${this.name}] ${method}: ${e.message}`));
   }
 
+  /** Called when the server goes away on its own after starting (not on dispose). */
+  onDown?: (err: Error) => void;
+  private closing = false;
+
   dispose(): void {
+    this.closing = true;
     this.failPending(new Error('MCP server stopped'));
     this.transport?.close();
   }
@@ -171,7 +180,9 @@ export class McpClient implements vscode.Disposable {
 export class McpManager implements vscode.Disposable {
   private clients = new Map<string, McpClient>();
   private errors = new Map<string, string>();
-  private registrations: vscode.Disposable[] = [];
+  private registrations = new Map<string, vscode.Disposable>();
+  /** Restart attempts per server since it last ran fine, and their timers. */
+  private restarts = new Map<string, { attempts: number; timer?: ReturnType<typeof setTimeout> }>();
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   /** Fires after every (re)load so UIs can refresh connection status. */
   readonly onDidChange = this._onDidChange.event;
@@ -180,7 +191,13 @@ export class McpManager implements vscode.Disposable {
   extraServers: () => Record<string, McpServerConfig> = () => ({});
 
   constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
-    this.configSub = onConfigChange(() => void this.reload());
+    // Only a change to the servers themselves restarts them. Any other localpilot.* change (a default model, LocalPilot's
+    // own auto-tuning) used to stop every server and fail the MCP tool calls in flight.
+    this.configSub = onConfigChange(() => {
+      if (this.signature() !== this.loadedSignature) {
+        void this.reload();
+      }
+    });
   }
 
   /** Reloads run one at a time: a second settings change while servers are still starting must not race `stopAll()` against `start()`. */
@@ -191,7 +208,14 @@ export class McpManager implements vscode.Disposable {
     return this.reloading;
   }
 
+  private loadedSignature = '';
+  /** Everything that decides which servers run and how: configured and plugin servers, and the policy's allowlist. */
+  private signature(): string {
+    return JSON.stringify([getConfig().mcpServers, this.extraServers(), getManagedPolicy(this.log).allowedMcpServers ?? null]);
+  }
+
   private async doReload(): Promise<void> {
+    this.loadedSignature = this.signature();
     this.stopAll();
     this.errors.clear();
     const servers = { ...this.extraServers(), ...getConfig().mcpServers };
@@ -207,21 +231,68 @@ export class McpManager implements vscode.Disposable {
           }
           return true;
         })
-        .map(async ([name, cfg]) => {
-          const client = new McpClient(name, cfg, this.log, this.clientVersion);
-          try {
-            await client.start();
-            this.clients.set(name, client);
-            this.registrations.push(this.tools.registerAll(client.tools.map((t) => this.toTool(client, t))));
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            this.errors.set(name, msg);
-            this.log.error(`MCP server "${name}" failed to start: ${msg}`);
-            client.dispose();
-          }
-        })
+        .map(([name, cfg]) => this.startOne(name, cfg))
     );
     this._onDidChange.fire();
+  }
+
+  private async startOne(name: string, cfg: McpServerConfig): Promise<boolean> {
+    const client = new McpClient(name, cfg, this.log, this.clientVersion);
+    try {
+      await client.start();
+      this.clients.set(name, client);
+      this.errors.delete(name);
+      this.registrations.set(name, this.tools.registerAll(client.tools.map((t) => this.toTool(client, t))));
+      client.onDown = (err) => this.serverDown(name, cfg, client, err);
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.errors.set(name, msg);
+      this.log.error(`MCP server "${name}" failed to start: ${msg}`);
+      client.dispose();
+      return false;
+    }
+  }
+
+  /**
+   * A server that was running went away: its tools are withdrawn (calls would only fail) and it is started again,
+   * after 2 s, 10 s and 60 s; after three failed attempts it stays down with the error shown in Settings.
+   */
+  private serverDown(name: string, cfg: McpServerConfig, client: McpClient, err: Error): void {
+    if (this.clients.get(name) !== client) {
+      return;
+    }
+    this.registrations.get(name)?.dispose();
+    this.registrations.delete(name);
+    this.clients.delete(name);
+    client.dispose();
+    this.scheduleRestart(name, cfg, err);
+  }
+
+  private scheduleRestart(name: string, cfg: McpServerConfig, err: Error): void {
+    const r = this.restarts.get(name) ?? { attempts: 0 };
+    const delays = [2_000, 10_000, 60_000];
+    if (r.attempts >= delays.length) {
+      this.errors.set(name, `stopped: ${err.message} (gave up after ${delays.length} restarts)`);
+      this._onDidChange.fire();
+      return;
+    }
+    this.errors.set(name, `stopped: ${err.message} — restarting`);
+    this._onDidChange.fire();
+    r.timer = setTimeout(() => {
+      r.attempts++;
+      void this.startOne(name, cfg).then((ok) => {
+        this.log.info(`MCP server "${name}" ${ok ? 'restarted' : 'could not be restarted'} (attempt ${r.attempts})`);
+        // A server that then runs for a minute counts as healthy again.
+        if (ok) {
+          setTimeout(() => this.clients.has(name) && this.restarts.delete(name), 60_000).unref?.();
+        } else {
+          this.scheduleRestart(name, cfg, err);
+        }
+        this._onDidChange.fire();
+      });
+    }, delays[r.attempts]);
+    this.restarts.set(name, r);
   }
 
   private toTool(client: McpClient, t: McpToolInfo): Tool {
@@ -245,7 +316,9 @@ export class McpManager implements vscode.Disposable {
 
   private stopAll(): void {
     this.registrations.forEach((r) => r.dispose());
-    this.registrations = [];
+    this.registrations.clear();
+    this.restarts.forEach((r) => clearTimeout(r.timer));
+    this.restarts.clear();
     for (const [, c] of this.clients) {
       c.dispose();
     }

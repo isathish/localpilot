@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { onAbort } from './resilience';
 
 /**
  * Isolated workspaces for agents, built on `git worktree`.
@@ -351,7 +352,8 @@ function gitFull(args: string[], cwd: string, signal?: AbortSignal, timeoutMs = 
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.stdout.on('data', (d: Buffer) => out.push(d));
     child.stderr.on('data', (d) => (err += d.toString()));
-    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);
       reject(e);
@@ -379,7 +381,8 @@ function shell(command: string, cwd: string, signal: AbortSignal | undefined, ti
   return new Promise((resolve, reject) => {
     const child = cp.spawn(command, { cwd, shell: true, stdio: 'ignore' });
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);
       reject(e);

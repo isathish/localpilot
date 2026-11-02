@@ -7,6 +7,7 @@ import { parseFrontMatter } from './frontMatter';
 import { evaluatePermission } from './permissions';
 import { PluginSource } from './plugins';
 import { emptySettings } from './settings';
+import { onAbort } from './resilience';
 
 /**
  * Custom slash commands in the Claude Code format: a markdown file whose body is the prompt, with optional
@@ -116,7 +117,8 @@ function runShell(command: string, cwd: string | undefined, signal?: AbortSignal
     let out = '';
     const child = cp.spawn(shell, args, { cwd, env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1' }, windowsHide: true });
     const t = setTimeout(() => child.kill('SIGKILL'), 30_000);
-    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.stdout.on('data', (d: Buffer) => (out.length < 60_000 ? (out += d.toString()) : undefined));
     child.stderr.on('data', (d: Buffer) => (out.length < 60_000 ? (out += d.toString()) : undefined));
     child.on('error', (e) => {

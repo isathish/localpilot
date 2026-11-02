@@ -11,7 +11,7 @@ import { parseArgs, ToolRegistry } from '../tools/registry';
 import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
-import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog } from './resilience';
+import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
 import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
@@ -160,6 +160,10 @@ export class AgentRunner {
   autoReviewer?: AutoReviewer;
 
   async run(o: AgentRunOptions): Promise<string> {
+    // The user is waiting on this run: background model work from earlier runs gives way.
+    if ((o.depth ?? 0) === 0) {
+      this.backgroundAborts.forEach((a) => a.abort());
+    }
     const stats = new RunStats();
     let outcome: 'done' | 'stopped' | 'failed' = 'done';
     try {
@@ -236,7 +240,21 @@ export class AgentRunner {
     // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
     const recent = [...session.messages.filter((m) => m.role === 'user').slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
     const root = o.workspaceRoot ?? this.workspace.root;
-    const toolList = this.selectTools(session.mode, o.toolFilter, o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, [], getConfig().repos).length : 0));
+    // Once offered in a chat, a tool stays offered: tool definitions sit at the start of the prompt, and a list that
+    // changes from turn to turn would make the server re-read the whole prompt (no prefix cache) on every change.
+    const offered = this.offeredTools.get(session.id) ?? new Set<string>();
+    const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, [], getConfig().repos).length : 0);
+    offered.forEach((n) => omit?.delete(n));
+    const toolList = this.selectTools(session.mode, o.toolFilter, omit);
+    if (!o.toolFilter && depth === 0) {
+      toolList.forEach((t) => offered.add(t.definition.name));
+      this.offeredTools.delete(session.id);
+      this.offeredTools.set(session.id, offered);
+      // Most recently used chats only: the map must not grow with every chat ever opened.
+      if (this.offeredTools.size > 200) {
+        this.offeredTools.delete(this.offeredTools.keys().next().value!);
+      }
+    }
     const nativeTools = model.supportsTools;
     const toolDefs: ToolDefinition[] = toolsEnabled ? toolList.map((t) => t.definition) : [];
 
@@ -952,7 +970,11 @@ export class AgentRunner {
     const savedByModel = turnMsgs.some((m) => m.toolCalls?.some((c) => c.name === 'memory_save'));
     // Not for unattended runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
     if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.unattended && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(session.mode)) {
-      this.track(saveRunMemories(this.memory, { provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined }, runDigest(userText(o.userMessage.content), turnMsgs, finalText))
+      // At most 90 s, and cancelled by the next run: on a one-slot server it must never hold the model the user is waiting for.
+      const memoryAbort = new AbortController();
+      this.backgroundAborts.add(memoryAbort);
+      this.track(saveRunMemories(this.memory, { provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined, signal: AbortSignal.any([memoryAbort.signal, AbortSignal.timeout(90_000)]) }, runDigest(userText(o.userMessage.content), turnMsgs, finalText))
+        .finally(() => this.backgroundAborts.delete(memoryAbort))
         .then((saved) => {
           if (saved.length) {
             this.log.info(`memory: saved ${saved.join(', ')} from the run`);
@@ -963,6 +985,12 @@ export class AgentRunner {
     }
     return finalText;
   }
+
+  /** Tools offered so far per chat (see the tool gating in run): the list only grows, so the prompt prefix stays cacheable. */
+  private readonly offeredTools = new Map<string, Set<string>>();
+
+  /** Cancels background model requests (memory saves) when a new run needs the model. */
+  private readonly backgroundAborts = new Set<AbortController>();
 
   /** Work that outlives a run (the automatic memory save); a process about to exit waits for it with `idle()`. */
   private readonly background = new Set<Promise<unknown>>();
@@ -1322,7 +1350,17 @@ export class AgentRunner {
       // Fire-and-forget: a Notification hook may ping the user (desktop notification, sound) while the prompt waits.
       void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt' });
     }
-    return decided(await ask(), 'user');
+    // A stopped run (or a single stopped subagent lane) must not hang on an approval nobody will answer now.
+    const sig = info?.signal;
+    if (sig?.aborted) {
+      return decided(false, 'stopped');
+    }
+    const asked = ask();
+    const stopped = new Promise<boolean>((r) => {
+      const off = onAbort(sig, () => r(false));
+      void asked.finally(off).catch(() => undefined);
+    });
+    return decided(await Promise.race([asked, stopped]), sig?.aborted ? 'stopped' : 'user');
   }
 }
 

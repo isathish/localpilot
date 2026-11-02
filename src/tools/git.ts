@@ -1,6 +1,7 @@
 import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { Tool, ToolContext } from '../types';
+import { onAbort } from '../agent/resilience';
 
 /**
  * Source control and CI for the agent: inspect and commit with `git`, push, open and follow pull requests and read CI
@@ -28,7 +29,8 @@ export function runCmd(cmd: string, args: string[], cwd: string | undefined, sig
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.stdout?.on('data', (d) => (out += d.toString()));
     child.stderr?.on('data', (d) => (err += d.toString()));
-    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);
       resolve({ code: -1, out, err: (e as NodeJS.ErrnoException).code === 'ENOENT' ? `${cmd}: command not found` : e.message });

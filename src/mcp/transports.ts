@@ -110,7 +110,8 @@ export class StdioTransport implements Transport {
 
   async start(onMessage: (m: JsonRpcMessage) => void, onClose: (err: Error) => void): Promise<void> {
     // `shell: true` on Windows so `npx` / `.cmd` launchers resolve the same way they do in a terminal.
-    this.child = cp.spawn(this.cfg.command!, this.cfg.args ?? [], { cwd: this.cfg.cwd ?? this.cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+    // Its own process group (POSIX), so stopping it reaches the real server and not only a launcher such as npx.
+    this.child = cp.spawn(this.cfg.command!, this.cfg.args ?? [], { cwd: this.cfg.cwd ?? this.cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', detached: process.platform !== 'win32' });
     const spawned = new Promise<void>((resolve, reject) => {
       this.child!.once('spawn', () => resolve());
       this.child!.once('error', (e) => reject(new Error(`cannot start "${this.cfg.command}": ${e.message}`)));
@@ -153,7 +154,20 @@ export class StdioTransport implements Transport {
   }
 
   close(): void {
-    this.child?.kill();
+    const pid = this.child?.pid;
+    if (!pid || this.child?.exitCode !== null || this.child?.signalCode !== null) {
+      return;
+    }
+    // The whole tree: `npx server` or a Windows shell wrapper would otherwise leave the server itself running.
+    if (process.platform === 'win32') {
+      cp.spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => this.child?.kill());
+    } else {
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        this.child?.kill();
+      }
+    }
   }
 }
 

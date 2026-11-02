@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import { Tool, ToolContext } from '../types';
 import { displayPath, resolveWorkspacePath } from './fs';
+import { onAbort } from '../agent/resilience';
 
 /** `findFiles` scoped to the agent's root: the workspace by default, its isolated worktree when it has one. */
 function findIn(ctx: ToolContext, pattern: string, max: number): Thenable<vscode.Uri[]> {
@@ -87,22 +88,27 @@ export const grepSearchTool: Tool = {
         return out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
       }
       // Fallback: naive JS search (slower, but dependency-free).
+      // This runs the model's pattern in-process, where nothing can interrupt one regex test: a nested quantifier such
+      // as (a+)+ can backtrack for minutes and freeze the extension host. Such patterns are searched as plain text, very
+      // long lines (minified code) are skipped, and the whole search stops after 10 s.
       const files = await findIn(ctx, include ?? '**/*', 2000);
-      const re = new RegExp(isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
-      const results: string[] = [];
+      const risky = isRegex && /\([^()]*[+*][^()]*\)[+*{]/.test(query);
+      const re = new RegExp(isRegex && !risky ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
+      const results: string[] = risky ? [`(the pattern has a nested repetition that can hang a search without ripgrep; it was searched as plain text)`] : [];
+      const deadline = Date.now() + 10_000;
       for (const f of files) {
-        if (ctx.signal.aborted || results.length >= max) {
+        if (ctx.signal.aborted || results.length >= max || Date.now() > deadline) {
           break;
         }
         try {
-          const bytes = await vscode.workspace.fs.readFile(f);
-          if (bytes.byteLength > 1_000_000) {
+          if ((await vscode.workspace.fs.stat(f)).size > 1_000_000) {
             continue;
           }
+          const bytes = await vscode.workspace.fs.readFile(f);
           const text = Buffer.from(bytes).toString('utf8');
           const lines = text.split('\n');
           for (let i = 0; i < lines.length && results.length < max; i++) {
-            if (re.test(lines[i])) {
+            if (lines[i].length <= 2000 && re.test(lines[i])) {
               results.push(`${displayPath(f, ctx)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
             }
           }
@@ -216,7 +222,8 @@ export function runProcess(cmd: string, args: string[], cwd?: string, signal?: A
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.stdout.on('data', (d) => (out += d.toString()));
     child.stderr.on('data', (d) => (err += d.toString()));
-    signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);
       reject(e);

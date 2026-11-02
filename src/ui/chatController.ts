@@ -368,8 +368,10 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  /** Chats with a manual compaction in flight, so a second click does not start another. */
-  private readonly compacting = new Set<string>();
+  /** Chats with a manual compaction in flight: a second click does not start another, and a message waits for it. */
+  private readonly compacting = new Map<string, Promise<void>>();
+  /** Chats whose run is being set up (before `runs` has it), so two quick sends cannot both start one. */
+  private readonly starting = new Set<string>();
   private readonly pendingDeltas = new Map<string, { sessionId: string; type: 'assistant_delta' | 'thinking_delta'; payload: string }>();
   private deltaTimer?: NodeJS.Timeout;
 
@@ -575,6 +577,16 @@ export class ChatController implements vscode.Disposable {
     // runs once more afterwards so the result is never stale.
     const st = this.pushState.get(sessionId) ?? { pending: false, running: false };
     this.pushState.set(sessionId, st);
+    // Entries of chats that no longer exist go once the map grows (it gained one per chat that ever ran a worktree).
+    if (this.pushState.size > 100) {
+      const live = new Set(this.store.list().map((x) => x.id));
+      for (const [id, v] of this.pushState) {
+        if (!live.has(id) && !v.running && !v.pending) {
+          clearTimeout(v.timer);
+          this.pushState.delete(id);
+        }
+      }
+    }
     if (st.running) {
       st.pending = true;
       return;
@@ -951,6 +963,8 @@ export class ChatController implements vscode.Disposable {
         await this.runner.hooks?.sessionEnd(msg.id, 'other', this.sessionRoot(msg.id));
         await this.dropWorktree(msg.id);
         await this.store.delete(msg.id);
+        clearTimeout(this.pushState.get(msg.id)?.timer);
+        this.pushState.delete(msg.id);
         if (this.activeSessionId === msg.id) {
           const next = this.store.list()[0]?.id;
           const s = next ? this.store.get(next) : undefined;
@@ -1188,7 +1202,8 @@ export class ChatController implements vscode.Disposable {
         if (!s || this.isRunning(s.id) || this.compacting.has(s.id)) {
           return;
         }
-        this.compacting.add(s.id);
+        let finished: () => void = () => undefined;
+        this.compacting.set(s.id, new Promise<void>((r) => (finished = r)));
         try {
           const { provider, model: picked } = await this.providers.resolve(s.model);
           const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
@@ -1196,7 +1211,8 @@ export class ChatController implements vscode.Disposable {
           if (s.messages.length > 6) {
             this.broadcast({ type: 'toast', level: 'info', text: `Compacting with ${model.name}…` });
           }
-          const res = await cm.compact(s.messages, provider, model, undefined, 4, false);
+          // A server that stalls must not leave the chat stuck in "compacting": give up after 3 minutes, history unchanged.
+          const res = await cm.compact(s.messages, provider, model, AbortSignal.timeout(180_000), 4, false);
           if (res.removed > 0) {
             s.messages = res.messages;
             s.compactions++;
@@ -1211,6 +1227,7 @@ export class ChatController implements vscode.Disposable {
           this.broadcast({ type: 'toast', level: 'error', text: `Could not compact — the conversation was left as it was (${e instanceof Error ? e.message : String(e)})` });
         } finally {
           this.compacting.delete(s.id);
+          finished();
         }
         return;
       }
@@ -1618,11 +1635,30 @@ export class ChatController implements vscode.Disposable {
     if (!session) {
       throw new Error('Session not found');
     }
-    if (this.runs.has(sessionId)) {
+    if (this.runs.has(sessionId) || this.starting.has(sessionId)) {
+      // A run that is still being set up registers within moments; wait for it so the message is not dropped.
+      for (let i = 0; i < 50 && !this.runs.has(sessionId) && this.starting.has(sessionId); i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
       // Busy: the message becomes a steering instruction for the running agent instead of being refused.
       await this.steer(sessionId, text, attachments, images);
       return '';
     }
+    // A manual compaction rewrites the history when it finishes; a turn started meanwhile would be dropped by it.
+    const compaction = this.compacting.get(sessionId);
+    if (compaction) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Compacting this chat — your message is sent when it finishes' });
+      await compaction;
+    }
+    this.starting.add(sessionId);
+    try {
+      return await this.startRun(session, sessionId, text, attachments, images, opts);
+    } finally {
+      this.starting.delete(sessionId);
+    }
+  }
+
+  private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean }): Promise<string> {
     const slash = opts.display ? undefined : this.handleSlash(session, text);
     if (slash !== undefined) {
       return slash;

@@ -159,11 +159,13 @@ export async function discoverSkills(src: SkillSource, opts: Pick<InstallOptions
     if (!dirs.length) {
       throw new Error(`No SKILL.md found in ${describeSource(src)} (branch ${ref}). Point at the skill folder, e.g. owner/repo/skills/<name>.`);
     }
-    // One SKILL.md per skill for its name/description — fetched concurrently so a 20-skill collection lists quickly.
-    const settled = await new ParallelPool(6).map(dirs, async (dir) => {
+    // One SKILL.md per skill for its name/description. Only the front matter is needed, so just the first 4 KB of each
+    // file is requested (raw.githubusercontent.com honours Range), 48 at a time: measured on a 470-skill collection,
+    // 1.3 s instead of 9 s at 6 at a time (each request is ~0.3 s of latency, not bandwidth).
+    const settled = await new ParallelPool(48).map(dirs, async (dir) => {
       const prefix = dir ? `${dir}/` : '';
       const files = blobs.filter((b) => (dir ? b.path.startsWith(prefix) : !b.path.includes('/')) && (b.size ?? 0) <= MAX_FILE_BYTES).map((b) => b.path.slice(prefix.length)).slice(0, MAX_FILES_PER_SKILL);
-      const raw = await fetchText(`https://raw.githubusercontent.com/${src.owner}/${src.repo}/${encodeURIComponent(ref)}/${prefix}SKILL.md`, fetchImpl, opts.signal);
+      const raw = await fetchText(`https://raw.githubusercontent.com/${src.owner}/${src.repo}/${encodeURIComponent(ref)}/${prefix}SKILL.md`, fetchImpl, opts.signal, 4096);
       const { meta } = parseFrontMatter(raw);
       return { dir, name: safeName(String(meta.name || path.posix.basename(dir) || src.repo)), description: String(meta.description ?? ''), files } as RemoteSkill;
     });
@@ -270,12 +272,13 @@ export async function installSkills(src: SkillSource, opts: InstallOptions): Pro
   return installed;
 }
 
-async function fetchText(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<string> {
-  return Buffer.from(await fetchBytes(url, fetchImpl, signal)).toString('utf8');
+async function fetchText(url: string, fetchImpl: typeof fetch, signal?: AbortSignal, firstBytes?: number): Promise<string> {
+  // A Range request may end inside a multi-byte character; drop a partial trailing one.
+  return Buffer.from(await fetchBytes(url, fetchImpl, signal, firstBytes)).toString('utf8').replace(/\uFFFD+$/, '');
 }
 
-async function fetchBytes(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Buffer> {
-  const headers: Record<string, string> = { 'user-agent': 'LocalPilot' };
+async function fetchBytes(url: string, fetchImpl: typeof fetch, signal?: AbortSignal, firstBytes?: number): Promise<Buffer> {
+  const headers: Record<string, string> = { 'user-agent': 'LocalPilot', ...(firstBytes ? { range: `bytes=0-${firstBytes - 1}` } : {}) };
   // Private repositories: the token that listed the tree must also fetch the files — but only ever sent to GitHub.
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (token && new URL(url).hostname === 'raw.githubusercontent.com') {

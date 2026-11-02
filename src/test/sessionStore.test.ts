@@ -15,6 +15,41 @@ async function freshStore(): Promise<{ store: SessionStore; dir: string }> {
 }
 
 suite('session store (chat history)', () => {
+  test('saves are atomic and ordered; a deleted chat never comes back; closing flushes pending saves', async () => {
+    const { store, dir } = await freshStore();
+    const files = async () => (await fs.readdir(path.join(dir, 'sessions')).catch(() => [] as string[])).filter((f) => f.endsWith('.json'));
+    try {
+      const a = store.create('m');
+      a.messages.push({ role: 'user', content: 'first' });
+      // Overlapping writes of a growing transcript end as the newest complete JSON, never a mix.
+      const writes = [];
+      for (let i = 0; i < 5; i++) {
+        a.messages.push({ role: 'assistant', content: `reply ${i} ${'x'.repeat(200_000)}` });
+        writes.push(store.flush(a));
+      }
+      await Promise.all(writes);
+      const saved = JSON.parse(await fs.readFile(path.join(dir, 'sessions', `${a.id}.json`), 'utf8'));
+      assert.strictEqual(saved.messages.length, 6, 'the last write wins and the file parses');
+      // Deleting while a save is in flight: the save must not recreate the file.
+      const b = store.create('m');
+      b.messages.push({ role: 'user', content: 'to delete' });
+      const inflight = store.flush(b);
+      await store.delete(b.id);
+      await inflight;
+      assert.ok(!(await files()).includes(`${b.id}.json`), 'deleted chat stays deleted');
+      // A debounced save still pending when the window closes is written by dispose().
+      const c = store.create('m');
+      c.messages.push({ role: 'user', content: 'last words' });
+      store.save(c);
+      store.dispose();
+      const last = JSON.parse(await fs.readFile(path.join(dir, 'sessions', `${c.id}.json`), 'utf8'));
+      assert.strictEqual(last.messages[0].content, 'last words');
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('title comes from the user\'s own words, not the attachment blocks the UI prepends', async () => {
     const { store, dir } = await freshStore();
     try {

@@ -126,7 +126,8 @@ export class TaskQueue implements vscode.Disposable {
   /** Puts a finished task (and anything it blocked) back in line. */
   retry(id: string): boolean {
     const t = this.tasks.find((x) => x.id === id);
-    if (!t || !FINISHED.has(t.status) || t.status === 'done') {
+    // A cancelled task whose run is still winding down cannot start again yet: it would run twice.
+    if (!t || !FINISHED.has(t.status) || t.status === 'done' || this.running.has(id)) {
       return false;
     }
     const again = new Set([id]);
@@ -202,10 +203,15 @@ export class TaskQueue implements vscode.Disposable {
     }
   }
 
+  /** The current run of each task: a finish from an older run (cancelled, then retried) must not touch the newer one. */
+  private readonly runTokens = new Map<string, symbol>();
+
   private start(t: QueueTask): void {
     t.status = 'running';
     t.startedAt = Date.now();
     this.running.add(t.id);
+    const token = Symbol(t.id);
+    this.runTokens.set(t.id, token);
     this.log?.info(`Task queue: starting ${t.id} (${t.mode}${t.model ? `, ${t.model}` : ''}): ${t.prompt.slice(0, 80)}`);
     const started = (sessionId: string) => {
       t.sessionId = sessionId;
@@ -214,6 +220,10 @@ export class TaskQueue implements vscode.Disposable {
     void this.runner(t, started)
       .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
       .then((r) => {
+        if (this.runTokens.get(t.id) !== token) {
+          return;
+        }
+        this.runTokens.delete(t.id);
         this.running.delete(t.id);
         if (t.status === 'running') {
           t.status = r.ok ? 'done' : 'failed';

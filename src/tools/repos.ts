@@ -5,6 +5,7 @@ import { ParallelPool } from '../agent/parallel';
 import { findRepo, listRepos, RepoInfo } from '../agent/repos';
 import { Tool, ToolContext } from '../types';
 import { runCmd } from './git';
+import { onAbort } from '../agent/resilience';
 
 /** The repositories in reach of this run (see agent/repos.ts). */
 export function reposFor(ctx: Pick<ToolContext, 'workspaceRoot'>): RepoInfo[] {
@@ -24,7 +25,8 @@ function shell(command: string, cwd: string, signal: AbortSignal, timeoutMs: num
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.stdout.on('data', (d) => (out += d.toString()));
     child.stderr.on('data', (d) => (out += d.toString()));
-    signal.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
+    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);
       resolve({ code: -1, out: e.message });

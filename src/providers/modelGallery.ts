@@ -28,18 +28,13 @@ const PAGE_SIZE = 20;
 export type JsonFetcher = (url: string, signal?: AbortSignal) => Promise<{ json: unknown; link?: string }>;
 
 const defaultFetcher: JsonFetcher = async (url, signal) => {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(new Error('timeout')), 15_000);
-  signal?.addEventListener('abort', () => ctrl.abort(signal.reason), { once: true });
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: { accept: 'application/json', 'user-agent': 'LocalPilot (VS Code extension)' } });
-    if (!res.ok) {
-      throw new Error(`${new URL(url).host} answered HTTP ${res.status}`);
-    }
-    return { json: await res.json(), link: res.headers.get('link') ?? undefined };
-  } finally {
-    clearTimeout(t);
+  // No listener left on the caller's signal (see withTimeout).
+  const ctrl = { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) };
+  const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: { accept: 'application/json', 'user-agent': 'LocalPilot (VS Code extension)' } });
+  if (!res.ok) {
+    throw new Error(`${new URL(url).host} answered HTTP ${res.status}`);
   }
+  return { json: await res.json(), link: res.headers.get('link') ?? undefined };
 };
 
 const gb = (bytes: number | undefined): number | undefined => (typeof bytes === 'number' && bytes > 0 ? Math.round((bytes / 1024 ** 3) * 100) / 100 : undefined);

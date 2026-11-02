@@ -105,12 +105,13 @@ export async function* streamSse<T>(url: string, body: unknown, headers: Record<
   }
 }
 
+/**
+ * A signal that aborts after `ms` or with `parent`. Built from AbortSignal.any/timeout, which hold no listener on the
+ * parent once they are collected: a long run's signal used to gain one listener (and a live timer) per request.
+ */
 export function withTimeout(ms: number, parent?: AbortSignal): AbortSignal {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(new Error('timeout')), ms);
-  parent?.addEventListener('abort', () => ctrl.abort(parent.reason), { once: true });
-  ctrl.signal.addEventListener('abort', () => clearTimeout(t), { once: true });
-  return ctrl.signal;
+  const timeout = AbortSignal.timeout(ms);
+  return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
 export function newId(prefix = 'call'): string {

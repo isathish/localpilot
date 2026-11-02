@@ -31,6 +31,10 @@ import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
 import { parseMemoryNotes, runDigest } from '../src/agent/autoMemory';
 import { irrelevantTools } from '../src/agent/toolRelevance';
+import { getEventListeners } from 'events';
+import { onAbort, sleep as rsleep } from '../src/agent/resilience';
+import { withTimeout } from '../src/providers/http';
+import { McpManager } from '../src/mcp/mcpManager';
 import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
@@ -1255,6 +1259,49 @@ async function pureLogic() {
     const { stripGutter } = await import('../src/tools/fs');
     check('gutter removed when every line has it (blank numbered lines included)', stripGutter('    2 |   "server": { "port": 8080 },\n    3 | \n   10 |   x') === '  "server": { "port": 8080 },\n\n  x');
     check('text without a gutter, or only partly numbered, is left alone', stripGutter('a | b\nplain') === undefined && stripGutter('  port: 1') === undefined && stripGutter('    2 | x\nplain') === undefined);
+  }
+
+  console.log('\n[Stability: no listeners left on a long run signal; crashed MCP servers restart]');
+  {
+    const run = new AbortController();
+    for (let i = 0; i < 30; i++) {
+      await runCmd('git', ['--version'], undefined, run.signal);
+      withTimeout(5_000, run.signal);
+      await rsleep(1, run.signal);
+      onAbort(run.signal, () => undefined)();
+    }
+    // AbortSignal.any keeps no listener once its result is collected; force a GC when exposed, else count the rest.
+    (globalThis as { gc?: () => void }).gc?.();
+    const left = getEventListeners(run.signal, 'abort').length;
+    check('30 commands, timeouts and sleeps on one run signal leave no abort listeners behind', left === 0 || (left <= 30 && !(globalThis as { gc?: unknown }).gc), left);
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-mcp-crash-'));
+    const server = nodePath.join(dir, 'server.js');
+    nodeFs.writeFileSync(server, `const rl = require('readline').createInterface({ input: process.stdin });
+rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: r }) + '\\n');
+  if (m.method === 'initialize') out({ protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'crashy', version: '1' } });
+  else if (m.method === 'tools/list') out({ tools: [{ name: 'boom', description: 'crash', inputSchema: { type: 'object', properties: {} } }] });
+  else if (m.method === 'tools/call') process.exit(3); });`);
+    const prevCfg = process.env.LP_CONFIG;
+    process.env.LP_CONFIG = JSON.stringify({ mcpServers: { crashy: { command: process.execPath, args: [server] } } });
+    const reg = new ToolRegistry();
+    const mlog2 = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+    const mgr = new McpManager(reg, mlog2, '1');
+    await mgr.reload();
+    const before = reg.list().some((t) => t.definition.name === 'mcp_crashy_boom');
+    const call = await reg.execute('mcp_crashy_boom', {}, { sessionId: 's', signal: new AbortController().signal, requestApproval: async () => true, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext);
+    await new Promise((r) => setTimeout(r, 300));
+    const down = mgr.status.find((x) => x.name === 'crashy');
+    const toolsGone = !reg.list().some((t) => t.definition.name === 'mcp_crashy_boom');
+    await new Promise((r) => setTimeout(r, 2_800));
+    const back = mgr.status.find((x) => x.name === 'crashy');
+    check('a crashed MCP server: the call fails, its tools are withdrawn, it is restarted and its tools return', before && !!call.isError && /restarting/.test(String(down?.error)) && toolsGone && back?.tools === 1 && !back.error && reg.list().some((t) => t.definition.name === 'mcp_crashy_boom'), { before, call: call.content.slice(0, 80), down, toolsGone, back });
+    mgr.dispose();
+    if (prevCfg === undefined) {
+      delete process.env.LP_CONFIG;
+    } else {
+      process.env.LP_CONFIG = prevCfg;
+    }
+    nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 
   console.log('\n[Situational tools: offered only when relevant]');

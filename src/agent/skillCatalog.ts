@@ -97,13 +97,22 @@ export class SkillCatalog {
     return this.loaded;
   }
 
-  private async save(): Promise<void> {
-    try {
-      await fs.mkdir(path.dirname(this.opts.cacheFile), { recursive: true });
-      await fs.writeFile(this.opts.cacheFile, JSON.stringify(this.state, null, 2), 'utf8');
-    } catch (e) {
-      this.opts.log?.warn(`skill catalog: could not save ${this.opts.cacheFile}: ${String(e)}`);
-    }
+  private saving: Promise<void> = Promise.resolve();
+  /** Writes the index; saves are serialised and atomic (write beside, then rename), so parallel repositories finishing
+   *  at once — or another LocalPilot process reading — never see half a file. */
+  private save(): Promise<void> {
+    this.saving = this.saving.then(async () => {
+      const tmp = `${this.opts.cacheFile}.${process.pid}.tmp`;
+      try {
+        await fs.mkdir(path.dirname(this.opts.cacheFile), { recursive: true });
+        await fs.writeFile(tmp, JSON.stringify(this.state, null, 2), 'utf8');
+        await fs.rename(tmp, this.opts.cacheFile);
+      } catch (e) {
+        await fs.rm(tmp, { force: true }).catch(() => undefined);
+        this.opts.log?.warn(`skill catalog: could not save ${this.opts.cacheFile}: ${String(e)}`);
+      }
+    });
+    return this.saving;
   }
 
   /** Repositories whose index is missing or older than the TTL. */
@@ -117,7 +126,7 @@ export class SkillCatalog {
    * repository that was never indexed (first run, just added) is waited for briefly, so the request that comes in
    * right after start-up or a settings change is matched against it instead of an empty list.
    */
-  async entries(firstIndexWaitMs = 5_000): Promise<CatalogEntry[]> {
+  async entries(firstIndexWaitMs = 2_000): Promise<CatalogEntry[]> {
     await this.load();
     const repos = this.opts.repositories();
     if (this.stale(repos).length) {
@@ -154,9 +163,17 @@ export class SkillCatalog {
             if (!src || src.kind === 'local') {
               throw new Error(`"${repo}" is not a GitHub repository or SKILL.md URL`);
             }
+            // Mark the attempt on disk first: a process that ends before a large repository is indexed (a short CLI
+            // run) must not make the next one wait for it again — it retries in the background after 10 minutes.
+            if (!this.state.repos[repo]) {
+              this.state.repos[repo] = { fetched: Date.now() - this.ttl + 10 * 60_000, entries: [], error: 'indexing' };
+              void this.save();
+            }
             const found = await discoverSkills(src, { fetchImpl: this.fetchImpl, signal, maxSkills: MAX_ENTRIES_PER_REPO });
             this.state.repos[repo] = { fetched: Date.now(), entries: found.map((f) => ({ name: f.name, description: f.description, dir: f.dir })) };
             this.opts.log?.info(`skill catalog: ${found.length} skills from ${describeSource(src)}`);
+            // Each repository is kept as soon as it is indexed, not only when all of them are.
+            void this.save();
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             // Keep the previous index when a refresh fails (offline, rate limited); retry after a short back-off.

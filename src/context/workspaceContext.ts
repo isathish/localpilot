@@ -334,6 +334,12 @@ export class WorkspaceContext implements vscode.Disposable {
         const e = end ? Number(end) : s + 1;
         text = doc.getText(new vscode.Range(s, 0, e, 0));
       }
+      // A whole large file would crowd out everything else in the prompt; the agent reads the rest with read_file.
+      const MAX = 60_000;
+      if (text.length > MAX) {
+        const shownLines = text.slice(0, MAX).split('\n').length;
+        text = `${text.slice(0, MAX)}\n… [attachment cut at ${MAX.toLocaleString()} of ${text.length.toLocaleString()} characters; read the rest with read_file from line ${(start ? Number(start) : 1) + shownLines}]`;
+      }
       return `<attachment path="${vscode.workspace.asRelativePath(uri)}"${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
     } catch (e) {
       this.log.warn(`attachment read failed: ${ref}: ${String(e)}`);

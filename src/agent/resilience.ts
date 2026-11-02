@@ -149,13 +149,29 @@ export async function* withWatchdog(stream: AsyncIterable<StreamEvent>, opts: Wa
   }
 }
 
+/**
+ * Calls `fn` when `signal` aborts and returns the function that removes the listener. Call it when the work ends:
+ * a run's signal lives as long as the run, and listeners left on it pile up (MaxListenersExceeded) and keep their
+ * closures — a child process and all its output — in memory.
+ */
+export function onAbort(signal: AbortSignal | undefined, fn: () => void): () => void {
+  if (!signal) {
+    return () => undefined;
+  }
+  signal.addEventListener('abort', fn, { once: true });
+  return () => signal.removeEventListener('abort', fn);
+}
+
 export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
+    const off = onAbort(signal, () => {
       clearTimeout(t);
       resolve();
-    }, { once: true });
+    });
+    const t = setTimeout(() => {
+      off();
+      resolve();
+    }, ms);
   });
 
 /** Stable key for "the same tool call again" detection. */
