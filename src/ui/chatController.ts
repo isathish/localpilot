@@ -23,6 +23,7 @@ import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { findRipgrep, runProcess } from '../tools/search';
 import { CommandManager, CustomCommand, expandCommand } from '../agent/commands';
 import * as path from 'path';
+import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -2128,7 +2129,10 @@ export class ChatController implements vscode.Disposable {
           return say('Permission rules are not available.');
         }
         const fmt = (list: string[]) => (list.length ? list.map((r) => `\`${r}\``).join(', ') : '_none_');
-        return say([`**Permission rules** (from ${p.sources.length ? p.sources.map((s) => `\`${vscode.workspace.asRelativePath(s)}\``).join(', ') : 'no settings file'})`, `- deny: ${fmt(p.permissions.deny)}`, `- ask: ${fmt(p.permissions.ask)}`, `- allow: ${fmt(p.permissions.allow)}`, p.permissions.defaultMode ? `- defaultMode: \`${p.permissions.defaultMode}\`` : '', '', 'Edit `.localpilot/settings.json` or `.claude/settings.json`: `{ "permissions": { "allow": ["Bash(npm run test:*)"], "deny": ["Read(.env)"] } }`.'].filter((l) => l !== '').join('\n'));
+        const org = getManagedPolicy(this.log);
+        const orgLines = describePolicy(org);
+        return say([
+          ...(orgLines.length ? [`**Organization policy** (from \`${org.source}\`; cannot be changed here)${org.message ? ` — ${org.message}` : ''}`, ...orgLines.map((l) => `- ${l}`), ''] : []),`**Permission rules** (from ${p.sources.length ? p.sources.map((s) => `\`${vscode.workspace.asRelativePath(s)}\``).join(', ') : 'no settings file'})`, `- deny: ${fmt(p.permissions.deny)}`, `- ask: ${fmt(p.permissions.ask)}`, `- allow: ${fmt(p.permissions.allow)}`, p.permissions.defaultMode ? `- defaultMode: \`${p.permissions.defaultMode}\`` : '', '', 'Edit `.localpilot/settings.json` or `.claude/settings.json`: `{ "permissions": { "allow": ["Bash(npm run test:*)"], "deny": ["Read(.env)"] } }`.'].filter((l) => l !== '').join('\n'));
       }
       case 'hooks': {
         const p = this.runner.projectSettings?.();

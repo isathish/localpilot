@@ -25,6 +25,7 @@ import { HookRunner } from './hooks';
 import { AutoReviewer } from './autoReviewer';
 import { thinkFor } from './thinking';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
+import { audit, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed } from './managedPolicy';
 import { emptySettings, ProjectSettings } from './settings';
 
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
@@ -348,7 +349,8 @@ export class AgentRunner {
         // Registry behaviour follows the chat override, else `skills.autoInstall`. Only the chat-level "off" also
         // silences suggestions for installed skills — the global setting is about downloading, and matching what is
         // already on disk costs nothing.
-        const mode: 'auto' | 'ask' | 'off' = ss.mode ?? cfg.skillAutoInstall;
+        // An organisation that turned skill downloads off gets no catalog matching at all (installed skills still match).
+        const mode: 'auto' | 'ask' | 'off' = getManagedPolicy(this.log).allowSkillInstall ? ss.mode ?? cfg.skillAutoInstall : 'off';
         const quiet = ss.mode === 'off';
         const enabled = this.skills.enabledSkills;
         // Already in context: load_skill results and skills preloaded into earlier hidden messages.
@@ -1024,6 +1026,9 @@ export class AgentRunner {
       const allowed = new Set(filter);
       list = list.filter((t) => allowed.has(t.definition.name));
     }
+    // Organisation policy: web access and other tool families it switched off are not offered at all.
+    const managed = getManagedPolicy(this.log);
+    list = list.filter((t) => toolAllowed(managed, t.definition.name));
     // Memory off: no notes are loaded into the prompt, so none should be written or looked up either.
     if (!getConfig().memoryEnabled) {
       list = list.filter((t) => !t.definition.name.startsWith('memory_'));
@@ -1085,11 +1090,16 @@ export class AgentRunner {
       if (coordinatorFirst && call.name === 'run_command') {
         result = { content: 'Nothing was run. In Multitask mode you coordinate and workers do the work: call run_todos_parallel now with each piece in "tasks" (title, agent, complete prompt). Use run_command only to verify after the workers report.', isError: true };
       }
+      const managed = getManagedPolicy(this.log);
+      const org = tool && !result ? policyVerdict(managed, call.name, args, policy?.root ?? ctx.workspaceRoot) : { decision: 'none' as const };
+      if (org.decision === 'deny') {
+        result = { content: `Blocked by ${org.reason}. Nothing was done; do not retry this action — choose another approach or tell the user it is not permitted here.`, isError: true };
+      }
       if (tool && policy && !result) {
-        // Permission rules from settings.json: deny → ask → allow, then the project's default mode.
-        const verdict = evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
+        // Organisation policy first (it cannot be overridden), then settings.json: deny → ask → allow, then the default mode.
+        const verdict = org.decision === 'ask' ? { decision: 'ask' as const, rule: undefined } : evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
         let decision: 'allow' | 'deny' | 'ask' | 'none' = verdict.decision;
-        let reason = verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
+        let reason = org.decision === 'ask' ? org.reason! : verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
         if (decision === 'deny') {
           result = { content: `Blocked by ${reason} in settings.json. Do not retry this exact action; choose another approach or ask the user to change the rule.`, isError: true };
         } else if (policy.hooks?.has('PreToolUse')) {
@@ -1100,7 +1110,8 @@ export class AgentRunner {
             if (r.updatedInput) {
               args = fromClaudeToolInput(call.name, r.updatedInput, args);
             }
-            if (r.permission) {
+            // A hook may tighten a policy prompt to a block, never loosen it to an allow.
+            if (r.permission && !(org.decision === 'ask' && r.permission === 'allow')) {
               decision = r.permission;
               reason = 'a PreToolUse hook';
             }
@@ -1110,16 +1121,25 @@ export class AgentRunner {
           }
         }
         if (!result) {
-          if (decision === 'none') {
+          if (decision === 'none' && !(managed.disableBypassPermissions && policy.settings.permissions.defaultMode && policy.settings.permissions.defaultMode !== 'default' && policy.settings.permissions.defaultMode !== 'plan')) {
             decision = defaultModeDecision(policy.settings.permissions.defaultMode, call.name);
             reason = decision === 'none' ? '' : `permissions.defaultMode = ${policy.settings.permissions.defaultMode}`;
           }
           if (decision === 'deny') {
             result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
-          } else if (decision === 'allow') {
+          } else if (decision === 'allow' && !(tool.approvalKind && managed.approvals[tool.approvalKind])) {
+            // A project allow skips the prompt, unless the organisation set an approval floor for this kind of action.
             callCtx = { ...ctx, requestApproval: async () => true };
           } else if (decision === 'ask') {
             callCtx = { ...ctx, requestApproval: policy.ask };
+            // Tools that never ask for approval themselves (reads, searches) would run straight through an `ask`
+            // rule (`Read(.env)`): prompt here, before the call.
+            if (!tool.approvalKind) {
+              const target = Object.values(args).find((v) => typeof v === 'string') as string | undefined;
+              if (!(await policy.ask(`${call.name}${target ? ` ${target.slice(0, 80)}` : ''}`, `Requires approval: ${reason}`, 'write'))) {
+                result = { content: `The user declined ${call.name} (${reason}). Nothing was done.`, isError: true };
+              }
+            }
           }
         }
         if (result?.isError) {
@@ -1156,6 +1176,7 @@ export class AgentRunner {
         }
       }
       this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: Date.now() - started, error: !!result.isError });
+      audit(managed, { event: 'tool', session: sessionId, tool: call.name, args: JSON.stringify(args).slice(0, 2000), outcome: result.isError ? 'error' : 'ok', blocked: /^Blocked by /.test(result.content ?? '') || undefined, durationMs: Date.now() - started }, policy?.root ?? ctx.workspaceRoot, this.log);
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
       return { msg: toolMsg(call, content), isError: !!result.isError };
     };
@@ -1227,19 +1248,28 @@ export class AgentRunner {
     sessionId: string,
     info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal }
   ): Promise<boolean> {
-    if (mode === 'always') {
-      return true;
+    const managed = getManagedPolicy(this.log);
+    const floored = flooredApproval(managed, kind, mode);
+    const decided = (ok: boolean, by: string) => {
+      audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: ok, by }, info?.root, this.log);
+      return ok;
+    };
+    if (floored === 'always') {
+      return decided(true, 'setting');
     }
-    if (mode === 'never') {
-      return false;
+    if (floored === 'never') {
+      if (managed.approvals[kind] === 'never') {
+        emit({ sessionId, type: 'status', payload: `${info?.title ?? kind} is not permitted by your organization's policy` });
+      }
+      return decided(false, managed.approvals[kind] === 'never' ? 'policy' : 'setting');
     }
     const auto = getConfig().autoMode;
-    if (auto.enabled && info && this.autoReviewer) {
+    if (auto.enabled && info && this.autoReviewer && !managed.disableBypassPermissions) {
       emit({ sessionId, type: 'status', payload: `Auto mode: reviewing "${info.title.slice(0, 60)}"…` });
       const v = await this.autoReviewer.review({ kind, title: info.title, detail: info.detail, request: info.request ?? '', signal: info.signal }, auto.model);
       if (v.decision === 'allow') {
         emit({ sessionId, type: 'status', payload: `Auto mode approved: ${info.title.slice(0, 60)}${v.reason ? ` (${v.reason})` : ''}` });
-        return true;
+        return decided(true, 'auto-mode');
       }
       emit({ sessionId, type: 'status', payload: `Auto mode needs you: ${v.reason || info.title.slice(0, 60)}` });
     }
@@ -1248,7 +1278,7 @@ export class AgentRunner {
       // Fire-and-forget: a Notification hook may ping the user (desktop notification, sound) while the prompt waits.
       void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt' });
     }
-    return ask();
+    return decided(await ask(), 'user');
   }
 }
 

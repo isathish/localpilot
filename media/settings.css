@@ -873,6 +873,13 @@ body.vscode-light input[type=search]:not(.find-box input), html.light body input
 .btn.danger { color: var(--error-text); }
 :is(.find-open, .prov-head .chev, .navtog, .navall) { color: var(--icon); }
 
+/* Organisation policy note: informational, so neutral colours and the shield icon; one per section head. */
+.policy { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--tint); font-size: var(--fs-sm); line-height: 1.45; }
+.policy > svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--icon); }
+.policy b { font-weight: 600; } .policy .pm { color: var(--muted); }
+.policy ul { margin: 6px 0 4px; padding-left: 16px; } .policy li { margin: 1px 0; }
+.policy small { display: block; margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+
 /* ==== Light themes: accent colours used for icons and text are darkened so they keep contrast on white
    (LocalPilot's amber is 2:1 on white; status greens and yellows are often under 3:1). Fills keep the brand colour. */
 body.vscode-light, body.vscode-high-contrast-light {

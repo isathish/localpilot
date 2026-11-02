@@ -21,6 +21,7 @@ import { SessionStore } from '../sessions/sessionStore';
 import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/telemetry';
 import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
+import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
@@ -96,7 +97,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -804,6 +805,7 @@ export class SettingsPanel implements vscode.Disposable {
       learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
       mcp: this.mcp.status,
+      managed: (() => { const p = getManagedPolicy(this.log); return p.source ? { source: p.source, message: p.message, lines: describePolicy(p) } : undefined; })(),
       memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length, notes: notes.slice(0, 200).map((n) => ({ name: n.name, scope: n.scope, summary: n.summary, updatedAt: n.updatedAt, chars: n.chars })) },
       sessions: { ...stats, running: this.running().length, pinned: this.store.list().filter((x) => x.pinned).length },
       welcomed: !!this.ctx.globalState.get(WELCOMED_KEY),

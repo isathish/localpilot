@@ -120,6 +120,40 @@ Values: `always`, `ask`, `never`.
 
 **Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Toggle Auto Mode**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
 
+## Organization policy
+
+Administrators can deploy a policy that users and projects cannot override. LocalPilot reads it from a system location (an administrator-owned file, so a user cannot edit it):
+
+| Platform | Path |
+|---|---|
+| macOS | `/Library/Application Support/LocalPilot/managed-settings.json` |
+| Linux | `/etc/localpilot/managed-settings.json` |
+| Windows | `%ProgramData%\LocalPilot\managed-settings.json` |
+
+The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, for testing or a non-standard deployment. Changes apply within a few seconds, without restarting VS Code. A policy only tightens: it never grants anything a user's own settings refuse.
+
+```jsonc
+{
+  "message": "Questions: it-security@example.com",       // shown wherever the policy blocks something
+  "permissions": {
+    "deny": ["Bash(curl:*)", "Read(.env)", "Read(**/*.pem)"], // always blocked, whatever settings.json allows
+    "ask":  ["Bash(git push:*)"]                              // always asks, even if a project allows it
+  },
+  "approvals": { "terminal": "ask", "delete": "never" },     // floor: "ask" = never auto-approved, "never" = refused
+  "disableBypassPermissions": true,   // no bypassPermissions/acceptEdits/dontAsk default mode, no Auto mode
+  "allowCloudProviders": false,       // only providers on this machine or the private network load
+  "allowedProviderHosts": ["localhost", "127.0.0.1", "*.corp.example"],
+  "allowWebAccess": false,            // removes web_search, web_fetch and the browser tools
+  "allowedMcpServers": ["github"],    // other MCP servers do not start
+  "allowSkillInstall": false,         // no skill downloads; skills from a local folder still install
+  "auditLog": "/var/log/localpilot/${workspaceFolder}.jsonl"  // every tool call and approval, as JSON Lines
+}
+```
+
+Rules use the same syntax as [permission rules](claude-code-compatibility.md) in `settings.json`. Every key is optional. A policy file that exists but cannot be parsed fails closed: cloud providers, web access and skill downloads are switched off, and every action needs approval, until it is fixed.
+
+Users see the policy in **Settings** (a note on the Agent & approvals, Providers, Skills, MCP and Web search pages), in `/permissions` in the chat, and in `localpilot doctor`. Each audit record has the time, user, host, workspace, session, tool, its arguments (cut at 2,000 characters), the outcome, and whether the policy blocked it. Approvals are recorded with who decided: the setting, the policy, Auto mode or the user.
+
 ## Terminal
 
 | Setting | Default | Description |

@@ -6,7 +6,8 @@ import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
-import { onSecretsChanged, resolveApiKey } from './cloud';
+import { isCloudProvider, onSecretsChanged, resolveApiKey } from './cloud';
+import { getManagedPolicy, providerAllowed } from '../agent/managedPolicy';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
@@ -96,10 +97,23 @@ export class ProviderRegistry implements vscode.Disposable {
     );
   }
 
+  /** Providers left out because of the organisation policy (logged once each). */
+  private readonly policyBlocked = new Set<string>();
+
   private rebuild(): void {
     const next = new Map<string, LLMProvider>();
     const nextConfigs = new Map<string, string>();
+    const managed = getManagedPolicy(this.log);
     for (const cfg of getConfig().providers) {
+      // Organisation policy: a provider it does not permit is never built, so nothing can route to it.
+      const allowed = providerAllowed(managed, cfg.baseUrl, isCloudProvider(cfg));
+      if (!allowed.ok) {
+        if (!this.policyBlocked.has(cfg.id)) {
+          this.policyBlocked.add(cfg.id);
+          this.log.warn(`provider ${cfg.id} not loaded: ${allowed.reason}`);
+        }
+        continue;
+      }
       // The resolved key is part of the identity, so a changed environment variable or stored secret takes effect.
       const key = `${JSON.stringify(cfg)}\0${resolveApiKey(cfg) ?? ''}`;
       nextConfigs.set(cfg.id, key);

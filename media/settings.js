@@ -578,7 +578,9 @@
     root.querySelectorAll('[data-url]').forEach((b) => (b.onclick = () => post({ type: 'openExternal', url: b.dataset.url })));
     root.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); reset(b.dataset.reset); }));
   }
-  const head = (sec, title, lead) => { sec.innerHTML = `<h1>${esc(title)}</h1><p class="lead">${lead}</p>`; };
+  // An organisation policy (managed-settings.json) is shown in full where it bites (approvals, providers), and as one line elsewhere.
+  const policyNote = (full) => { const m = state.data && state.data.managed; if (!m) { return ''; } return `<div class="policy" role="note">${I.shield}<div><b>Managed by your organization</b>${m.message ? ` <span class="pm">${esc(m.message)}</span>` : ''}${full && m.lines.length ? `<ul>${m.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ' Some settings here may have no effect.'}<small>${esc(m.source)}</small></div></div>`; };
+  const head = (sec, title, lead) => { sec.innerHTML = `<h1>${esc(title)}</h1><p class="lead">${lead}</p>${policyNote(['Agent & approvals', 'Providers', 'Skills & subagents', 'MCP servers', 'Web search'].includes(title))}`; };
 
   // ------------------------------------------------------------------ providers
   function providersList() { const v = val('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }

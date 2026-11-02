@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parseFrontMatter } from './frontMatter';
 import { ParallelPool } from './parallel';
+import { getManagedPolicy, isManaged } from './managedPolicy';
 
 /**
  * Skill installation: fetches a skill folder (SKILL.md plus any companion files) from GitHub, a URL or a local
@@ -206,6 +207,10 @@ export async function discoverSkills(src: SkillSource, opts: Pick<InstallOptions
 
 /** Downloads/copies the skills of a source into `opts.dest/<name>/…` and returns what was installed. */
 export async function installSkills(src: SkillSource, opts: InstallOptions): Promise<InstalledSkill[]> {
+  const policy = getManagedPolicy();
+  if (src.kind !== 'local' && isManaged(policy) && !policy.allowSkillInstall) {
+    throw new Error(`Downloading skills is turned off by your organization's policy${policy.message ? ` (${policy.message})` : ''}. Skills from a local folder still install.`);
+  }
   const fetchImpl = opts.fetchImpl ?? fetch;
   const found = await discoverSkills(src, opts);
   const wanted = opts.only ? found.filter((s) => opts.only!.includes(s.name)) : found;

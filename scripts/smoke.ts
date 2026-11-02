@@ -24,6 +24,7 @@ import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
 import { ContextManager, effectiveContextWindow, TokenCalibration } from '../src/context/contextManager';
 import { asksToRemember } from '../src/agent/skillRecommender';
 import { buildRepoGraph, findCycles, parseSource } from '../src/context/repoGraph';
+import { describePolicy, flooredApproval, getManagedPolicy, managedPolicyPath, mcpServerAllowed, normalizePolicy, policyVerdict, providerAllowed, resetManagedPolicyCache, toolAllowed } from '../src/agent/managedPolicy';
 import { answerRepoGraph } from '../src/tools/repoGraph';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
@@ -844,6 +845,34 @@ async function pureLogic() {
     check('incremental: a changed file is re-parsed', g2.deps.get('src/types.ts')?.has('src/util.ts') === true);
     check('parser survives broken syntax', parseSource('import { from "x"\nexport function ok( {', 'ts').symbols[0]?.name === 'ok');
     nodeFs.rmSync(root, { recursive: true, force: true });
+  }
+
+  console.log('\n[Organization policy (managed-settings.json)]');
+  {
+    check('system locations per platform; env override wins', managedPolicyPath('darwin', {}) === '/Library/Application Support/LocalPilot/managed-settings.json' && managedPolicyPath('linux', {}) === '/etc/localpilot/managed-settings.json' && /ProgramData[\\/]LocalPilot[\\/]managed-settings\.json$/.test(managedPolicyPath('win32', { ProgramData: 'C:\\ProgramData' })) && managedPolicyPath('linux', { LOCALPILOT_MANAGED_SETTINGS: '/x.json' }) === '/x.json');
+    const p = normalizePolicy({ permissions: { deny: ['Bash(curl:*)', 'Read(.env)'], ask: ['Bash(git push:*)'] }, approvals: { terminal: 'ask', delete: 'never', write: 'bogus' }, disableBypassPermissions: true, allowCloudProviders: false, allowedProviderHosts: ['localhost', '127.0.0.1', '*.corp.example'], allowWebAccess: false, allowedMcpServers: ['github'], allowSkillInstall: false, auditLog: '~/audit.jsonl', message: 'ask IT' }, '/etc/localpilot/managed-settings.json');
+    check('deny rules block regardless of project settings', policyVerdict(p, 'run_command', { command: 'curl https://x' }).decision === 'deny' && policyVerdict(p, 'read_file', { path: '.env' }, '/w').decision === 'deny');
+    check('ask rules force a prompt; other calls are left to the project', policyVerdict(p, 'run_command', { command: 'git push origin main' }).decision === 'ask' && policyVerdict(p, 'run_command', { command: 'npm test' }).decision === 'none');
+    check('approval floor: "always" becomes "ask", "never" refuses, unknown values ignored', flooredApproval(p, 'terminal', 'always') === 'ask' && flooredApproval(p, 'delete', 'always') === 'never' && flooredApproval(p, 'write', 'always') === 'always');
+    check('providers: cloud off, host allowlist with wildcards', !providerAllowed(p, 'https://api.openai.com/v1', true).ok && providerAllowed(p, 'http://localhost:11434', false).ok && providerAllowed(p, 'http://gpu1.corp.example:8000/v1', false).ok && !providerAllowed(p, 'http://10.0.0.5:8000', false).ok);
+    check('web tools removed, MCP allowlist', !toolAllowed(p, 'web_fetch') && !toolAllowed(p, 'browser_inspect') && toolAllowed(p, 'read_file') && mcpServerAllowed(p, 'github') && !mcpServerAllowed(p, 'filesystem'));
+    check('no policy deployed: nothing is restricted', policyVerdict(normalizePolicy({}), 'run_command', { command: 'curl x' }).decision === 'none' && providerAllowed(normalizePolicy({}), 'https://api.openai.com', true).ok && describePolicy(normalizePolicy({})).length === 0);
+    check('described for /permissions and doctor', describePolicy(p).length === 10 && describePolicy(p).some((l) => /Cloud providers are off/.test(l)));
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-policy-'));
+    const file = nodePath.join(dir, 'managed-settings.json');
+    const prev = process.env.LOCALPILOT_MANAGED_SETTINGS;
+    process.env.LOCALPILOT_MANAGED_SETTINGS = file;
+    resetManagedPolicyCache();
+    nodeFs.writeFileSync(file, '{ "allowWebAccess": false, }');
+    check('loaded from the deployed file (JSONC)', getManagedPolicy().source === file && getManagedPolicy().allowWebAccess === false);
+    nodeFs.writeFileSync(file, '{ not json');
+    nodeFs.utimesSync(file, new Date(), new Date(Date.now() + 10_000));
+    resetManagedPolicyCache();
+    const broken = getManagedPolicy();
+    check('an unreadable policy fails closed (cloud, web and downloads off), never open', broken.source === file && !broken.allowCloudProviders && !broken.allowWebAccess && !broken.allowSkillInstall);
+    process.env.LOCALPILOT_MANAGED_SETTINGS = prev;
+    resetManagedPolicyCache();
+    nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 
   console.log('\n[Release versions: each part counts 0–9 and carries]');

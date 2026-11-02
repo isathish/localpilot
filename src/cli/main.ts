@@ -44,6 +44,7 @@ import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserA
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { setSecretValues } from '../providers/cloud';
 import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
+import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -757,6 +758,8 @@ async function cmdDoctor(core: Core): Promise<void> {
   console.log(`${bold('Settings')}\n  ${dim(USER_SETTINGS_PATH)}\n  ${dim(CLI_SETTINGS_PATH)}`);
   const cfg = getConfig();
   console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network}`);
+  const org = getManagedPolicy();
+  console.log(`\n${bold('Organization policy')}\n  ${org.source ? `${org.source}${org.message ? dim(` — ${org.message}`) : ''}\n${describePolicy(org).map((l) => `  ${amber('●')} ${l}`).join('\n') || dim('  (no restrictions)')}` : dim(`none (${managedPolicyPath()})`)}`);
   console.log(`\n${bold('Providers')}`);
   await listProviders(STYLE, (l) => console.log(`  ${l}`), { compact: true });
   console.log(`\n${bold('Workspace')}\n  ${core.workspace.root ?? dim('(none)')}`);

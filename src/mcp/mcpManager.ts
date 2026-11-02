@@ -3,6 +3,7 @@ import * as cp from 'child_process';
 import { getConfig, McpServerConfig, onConfigChange } from '../config';
 import { ToolRegistry } from '../tools/registry';
 import { Tool, ToolDefinition } from '../types';
+import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
 
 interface JsonRpcResponse {
   id?: number;
@@ -186,7 +187,16 @@ export class McpManager implements vscode.Disposable {
     const servers = { ...this.extraServers(), ...getConfig().mcpServers };
     await Promise.all(
       Object.entries(servers)
-        .filter(([, c]) => c.enabled !== false && c.command)
+        .filter(([name, c]) => {
+          if (c.enabled === false || !c.command) {
+            return false;
+          }
+          if (!mcpServerAllowed(getManagedPolicy(this.log), name)) {
+            this.errors.set(name, "not on the MCP server allowlist in your organization's policy");
+            return false;
+          }
+          return true;
+        })
         .map(async ([name, cfg]) => {
           const client = new McpClient(name, cfg, this.log, this.clientVersion);
           try {
