@@ -6,3 +6,4 @@ node_modules
 
 # Generated at deploy time from Google Analytics (scripts/ga-pageviews.mjs)
 docs/_data/pageviews.json
+.vscode-test.tmp.mjs

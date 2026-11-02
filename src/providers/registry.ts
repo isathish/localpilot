@@ -614,9 +614,14 @@ function baseScore(m: ModelInfo, n: string, role: ModelRole, profile?: SystemPro
 export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus): ModelInfo | undefined {
   const pool = needsVision || role === 'vision' ? models.filter((m) => m.supportsVision) : models;
   const score = new Map(pool.map((m) => [m, scoreForRole(m, role, profile, bonus)]));
-  const ranked = [...pool].sort((a, b) => score.get(b)! - score.get(a)!);
-  const best = ranked[0];
-  return best && score.get(best)! > -50 ? best : undefined;
+  const best = (list: ModelInfo[]) => {
+    const top = [...list].sort((a, b) => score.get(b)! - score.get(a)!)[0];
+    return top && score.get(top)! > -50 ? top : undefined;
+  };
+  // Automatic picks keep code on this machine: any usable local model wins, and a cloud one is chosen only when
+  // there is none. A rule, not a score: on a small machine a tight local model lost its memory points and a cloud
+  // model (which needs no memory here) gained them, enough to cancel REMOTE_PENALTY.
+  return best(pool.filter((m) => !m.remote)) ?? best(pool.filter((m) => m.remote));
 }
 
 /**

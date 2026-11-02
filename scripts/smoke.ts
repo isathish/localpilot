@@ -11,6 +11,7 @@ import { completeViaChat, isCloudProvider, isRemoteUrl, resolveApiKey, setSecret
 import { retryAfter } from '../src/providers/http';
 import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
+import { buildProfile } from '../src/providers/system';
 import { PROVIDER_PRESETS } from '../src/providers/presets';
 import { checkGatewayPrereqs, classifyGatewayModels, gatewayEnv, gatewayModels, installCommand as gatewayInstall, needsProviders, nodeVersionOk, startCommand as gatewayStart } from '../src/providers/gatewaySetup';
 import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
@@ -276,6 +277,9 @@ async function cloudProviders() {
   const cloud = mk('openai/gpt-5', true);
   check('routing: Auto prefers a local model over a cloud one', pickForRole([cloud, local], 'agent')?.id === local.id);
   check('routing: a cloud model is used when nothing local is available', pickForRole([cloud], 'agent')?.id === cloud.id);
+  // GitHub's macOS runners have 7 GB: the 7B model is "too big" there and the cloud one needs no memory at all.
+  const small = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 3, ramGb: 7, vramGb: 0 });
+  check('routing: on a 7 GB machine a tight local model (even without tools) still beats the cloud', pickForRole([cloud, local], 'agent', small)?.id === local.id && pickForRole([cloud, mk('local/qwen2.5-coder-7b', false, false)], 'agent', small)?.id === 'local/qwen2.5-coder-7b');
 }
 
 /**

@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Auto never sends code to the cloud while a local model can do the job.** On a machine with little memory (8 GB or less), a local model that only just fits lost its memory points, while a cloud model, which needs no memory here, gained them. That was enough to cancel the cloud penalty, so Auto could pick Claude or a gateway over the local model. Auto now chooses among local models first and uses a cloud model only when there is no usable local one; choosing a cloud model yourself works as before.
+- **Start colibri finds a checkout in `~/colibri` on every platform.** The default folder was joined with the separator of the machine running the check rather than the target platform's.
+
 ## 1.3.9 — 2026-11-02
 
 ### Fixed

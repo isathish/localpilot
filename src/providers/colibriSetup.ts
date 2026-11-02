@@ -71,7 +71,8 @@ export function findColibri(o: FindOptions = {}): ColiLauncher | undefined {
   if (onPath) {
     return { kind: 'path', command: onPath, prefix: [] };
   }
-  return launcherIn(path.join(o.home ?? os.homedir(), 'colibri'), platform, exists);
+  // The target platform's separator, not the host's: the same code answers for a Windows user from any machine.
+  return launcherIn((platform === 'win32' ? path.win32 : path.posix).join(o.home ?? os.homedir(), 'colibri'), platform, exists);
 }
 
 export function expandHome(p: string, home = os.homedir()): string {
