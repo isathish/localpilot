@@ -803,6 +803,16 @@ async function pureLogic() {
     check('an empty summary counts as a failure, not as a summary', emptyThrew);
   }
 
+  console.log('\n[Release versions: each part counts 0–9 and carries]');
+  {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { nextVersion } = require('./next-version.js') as { nextVersion: (v: string, l: string) => string };
+    check('patch after 9 promotes the minor: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0', nextVersion('1.2.9', 'patch') === '1.3.0' && nextVersion('1.3.9', 'patch') === '1.4.0');
+    check('ordinary patch: 1.3.4 → 1.3.5; a part already past 9 carries: 1.3.11 → 1.4.0', nextVersion('1.3.4', 'patch') === '1.3.5' && nextVersion('1.3.11', 'patch') === '1.4.0');
+    check('minor after 9 promotes the major: 1.9.9 → 2.0.0 (patch), 1.9.3 → 2.0.0 (minor)', nextVersion('1.9.9', 'patch') === '2.0.0' && nextVersion('1.9.3', 'minor') === '2.0.0');
+    check('minor and major as usual: 1.3.4 → 1.4.0, → 2.0.0', nextVersion('1.3.4', 'minor') === '1.4.0' && nextVersion('1.3.4', 'major') === '2.0.0');
+  }
+
   console.log('\n[Effective context window]');
   const wide = { contextWindow: 131072 };
   check('setting caps the native window', effectiveContextWindow(wide, 32768) === 32768);

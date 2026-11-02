@@ -149,6 +149,8 @@ Only needed to pick a specific version (for example a minor or major bump). Two 
 
 Both run `scripts/release.js`, which bumps the version in `package.json`, `package-lock.json` and `docs/_config.yml`, promotes the **Unreleased** section of `CHANGELOG.md` to `## X.Y.Z — date`, runs `check:version`, compile, smoke and packaging, then commits `release: vX.Y.Z` and pushes it. Write changelog entries under `## Unreleased` as you go; if there are none, the script generates them from the conventional commits since the previous tag (`feat:` → Added, `fix:` → Fixed, `docs:`/`site:`/`copy:`/`readme:` → Documentation, anything else → Changed; `chore:`, `ci:`, `build:`, `test:`, `style:` and `release:` commits are skipped unless they are all there is). If `package.json` was already bumped by hand and is untagged, `patch`/`minor`/`major` release that pending version instead of bumping again.
 
+Version parts count from 0 to 9 and carry into the part above, like a counter: a patch release after `1.2.9` is `1.3.0`, after `1.3.9` it is `1.4.0`, and after `1.9.9` it is `2.0.0`. A minor release from `1.9.x` is `2.0.0`. The rule lives in `scripts/next-version.js`; an explicit version (`npm run release -- 1.3.12`) is used as given.
+
 Editing `package.json` by hand and pushing still works, provided `docs/_config.yml` matches and the changelog has a `## X.Y.Z` section with entries; CI and the Release workflow fail early otherwise. Pushing a tag manually or running *Actions → Release → Run workflow* for an existing tag is still supported.
 
 ## Website

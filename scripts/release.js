@@ -2,6 +2,7 @@
 /**
  * Prepare a release:
  *   npm run release -- patch            (or: minor | major | 1.2.3)
+ *   Each version part counts 0–9 and carries into the next: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0, 1.9.9 → 2.0.0.
  *
  * 1. Picks the next version (or releases the version already in package.json if it has no tag yet).
  * 2. Updates package.json, package-lock.json and docs/_config.yml.
@@ -21,6 +22,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { nextVersion } = require('./next-version');
 
 const root = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
@@ -62,9 +64,8 @@ if (/^(patch|minor|major)$/.test(arg) && !tags.includes(`v${current}`) && previo
   log(`package.json is already at ${current}, which has no tag yet; releasing it (pass an explicit version to override)`);
   next = current;
 } else {
-  const [maj, min, pat] = current.split('.').map(Number);
-  next =
-    arg === 'patch' ? `${maj}.${min}.${pat + 1}` : arg === 'minor' ? `${maj}.${min + 1}.0` : arg === 'major' ? `${maj + 1}.0.0` : arg.replace(/^v/, '');
+  // Parts count 0–9 and carry: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0, 1.9.9 → 2.0.0 (scripts/next-version.js).
+  next = /^(patch|minor|major)$/.test(arg) ? nextVersion(current, arg) : arg.replace(/^v/, '');
 }
 if (!/^\d+\.\d+\.\d+$/.test(next)) {
   fail(`invalid version "${next}"`);

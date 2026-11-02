@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Changed
+- **Version numbers carry over after 9.** Each part counts 0–9: the release after 1.3.9 is 1.4.0 (not 1.3.10), and after 1.9.9 it is 2.0.0. The next release after the current 1.3.11 is 1.4.0.
+
 ## 1.3.11 — 2026-11-02
 
 ### Changed
