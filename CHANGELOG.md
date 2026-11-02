@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.0 — 2026-11-02
+
 ### Fixed
 - **Every CLI run waited 5 seconds for the skill catalog.** The catalog's index was saved only when every repository had been indexed; the largest one took longer than a CLI run, so nothing was ever saved and each run waited and downloaded it again. Each repository is now saved as soon as it is indexed (atomically), an attempt is recorded so a run that ends early does not make the next one wait, and the first wait is at most 2 seconds. Indexing itself is ~7× faster: only the first 4 KB of each `SKILL.md` is fetched, 48 at a time (470 skills: 1.3 s instead of 9 s). A run against an instant model now takes 0.13 s end to end instead of 5.1 s.
 - **Tool lists no longer defeat the model's prompt cache.** A tool offered in a chat stays offered for the rest of it, so the start of the prompt stays identical between turns and a local server reuses its cache instead of re-reading thousands of tokens.
