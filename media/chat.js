@@ -80,7 +80,7 @@
   const EXPLORE_TOOLS = new Set(['read_file', 'list_dir', 'grep_search', 'file_search', 'find_symbol', 'find_references', 'get_editor_state', 'gather_context']);
   const SLASH = [
     ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files in force (CLAUDE.md, AGENTS.md…)'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'],
+    ['/compact', 'Summarise older messages'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -1428,6 +1428,8 @@
         showTyping(live); followLive(live);
         break;
       }
+      // The meter follows the run: an estimate before each request, the server's real count after it.
+      case 'context': if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
       case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;

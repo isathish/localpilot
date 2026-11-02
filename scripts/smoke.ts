@@ -12,12 +12,14 @@ import { retryAfter } from '../src/providers/http';
 import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
 import { PROVIDER_PRESETS } from '../src/providers/presets';
+import { checkGatewayPrereqs, classifyGatewayModels, gatewayEnv, gatewayModels, installCommand as gatewayInstall, needsProviders, nodeVersionOk, startCommand as gatewayStart } from '../src/providers/gatewaySetup';
 import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
 import * as nodeFs from 'fs';
 import { ModelInfo } from '../src/types';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
-import { ContextManager, effectiveContextWindow } from '../src/context/contextManager';
+import { ContextManager, effectiveContextWindow, TokenCalibration } from '../src/context/contextManager';
+import { asksToRemember } from '../src/agent/skillRecommender';
 import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
@@ -540,6 +542,115 @@ async function colibriSetupChecks() {
   check('status progress from colibri JSON of any shape', statusProgress('{"install":{"phase":"downloading","progress":0.42}}') === 'downloading · 42%' && statusProgress('{"state":"running"}') === 'running' && statusProgress('not json') === undefined && statusProgress('{"a":1}') === undefined);
 }
 
+/**
+ * OmniRoute end to end against a faithful mock of its API: /v1/models is never key-gated and lists its `auto` routes
+ * first, then provider models once a provider is connected; chat needs `Bearer <key>` with REQUIRE_API_KEY, and with
+ * no provider connected it fails with a no-route error. Driven through LocalPilot's real provider and agent loop.
+ */
+async function gatewayChecks() {
+  console.log('\n[gateways: OmniRoute / LiteLLM]');
+  check('start: OmniRoute on its port, no browser, no prompts; LiteLLM on 127.0.0.1 with its config', gatewayStart('omniroute', { port: 20128, exe: '/usr/local/bin/omniroute', platform: 'darwin' }) === '/usr/local/bin/omniroute --port 20128 --no-open --non-interactive' && gatewayStart('litellm', { port: 4000, exe: '/u/bin/litellm', config: '/cfg/proxy config.yaml', platform: 'linux' }) === "/u/bin/litellm --host 127.0.0.1 --port 4000 --config '/cfg/proxy config.yaml'");
+  check('OmniRoute is bound to 127.0.0.1 (its default is every interface)', gatewayEnv('omniroute').OMNIROUTE_SERVER_HOST === '127.0.0.1');
+  check('install commands: npm for OmniRoute, pip for LiteLLM', gatewayInstall('omniroute') === 'npm install -g omniroute' && /pip install --user 'litellm\[proxy\]'/.test(gatewayInstall('litellm', 'linux')));
+  check("Node versions OmniRoute accepts (>=22.22.2 <23, 24-26)", nodeVersionOk('v24.21.0') && nodeVersionOk('v22.22.2') && !nodeVersionOk('v22.21.9') && !nodeVersionOk('v20.18.0') && !nodeVersionOk('v27.0.0'));
+  check('prerequisites: missing Node, old Node, missing Python', !checkGatewayPrereqs('omniroute', () => undefined).ok && /too old/.test(checkGatewayPrereqs('omniroute', (n) => n, 'v20.1.0').problem ?? '') && checkGatewayPrereqs('omniroute', (n) => n, 'v24.1.0').ok && !checkGatewayPrereqs('litellm', () => undefined, undefined, 'linux').ok);
+  const split = classifyGatewayModels(['auto', 'auto/coding', 'auto/fast', 'openai/gpt-5.4', 'glm/glm-5.2']);
+  check('model list split into gateway routes and provider models', split.routes.length === 3 && split.models.join() === 'openai/gpt-5.4,glm/glm-5.2' && !needsProviders(split) && needsProviders(classifyGatewayModels(['auto', 'auto/coding'])));
+
+  const state = { providers: false, requireKey: false, chats: 0 };
+  const omni = await listen(async (req, res) => {
+    const url = req.url ?? '';
+    if (url.startsWith('/api/monitoring/health')) {
+      return res.end(JSON.stringify({ status: 'healthy' }));
+    }
+    if (url.startsWith('/v1/models')) {
+      const routes = ['auto', 'auto/coding', 'auto/fast'].map((id) => ({ id, object: 'model', owned_by: 'omniroute' }));
+      const models = state.providers ? [{ id: 'openai/gpt-5.4', object: 'model', owned_by: 'openai' }, { id: 'glm/glm-5.2', object: 'model', owned_by: 'glm' }] : [];
+      return res.end(JSON.stringify({ object: 'list', data: [...routes, ...models] }));
+    }
+    if (url.startsWith('/v1/chat/completions')) {
+      state.chats++;
+      const body = JSON.parse(await readBody(req));
+      if (state.requireKey && req.headers.authorization !== 'Bearer sk-omni-local') {
+        res.statusCode = 401;
+        return res.end(JSON.stringify({ error: { message: 'Invalid or missing API key', type: 'invalid_request_error' } }));
+      }
+      if (!state.providers) {
+        res.statusCode = 503;
+        return res.end(JSON.stringify({ error: { message: `No eligible route for model ${body.model}: no providers connected` } }));
+      }
+      const sawTool = JSON.stringify(body.messages).includes('ECHO:');
+      res.setHeader('content-type', 'text/event-stream');
+      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+      if (!sawTool && Array.isArray(body.tools) && body.tools.length) {
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_gw1', function: { name: 'echo', arguments: '{"text":"via omniroute"}' } }] } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+      } else {
+        send({ choices: [{ delta: { content: `OmniRoute (${body.model}) answered.` } }] });
+        send({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 4 } });
+      }
+      return res.end('data: [DONE]\n\n');
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  const port = Number(new URL(omni.url).port);
+  const prevConfig = process.env.LP_CONFIG;
+  const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
+  try {
+    const fresh = await gatewayModels(port);
+    check('fresh OmniRoute: up, but only its auto routes, so it needs a provider', !!fresh && needsProviders(fresh) && fresh.routes.includes('auto/coding'), fresh);
+
+    const setup = (apiKey?: string) => {
+      process.env.LP_CONFIG = JSON.stringify({ providers: [{ id: 'local', type: 'openai', baseUrl: `${omni.url}/nope/v1` }, { id: 'omniroute', type: 'openai', baseUrl: `${omni.url}/v1`, cloud: true, ...(apiKey ? { apiKey } : {}) }] });
+      const providers = new ProviderRegistry(log);
+      const tools = new ToolRegistry();
+      tools.register({ parallelSafe: true, definition: { name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, async execute(args) { return { content: `ECHO:${args.text}` }; } });
+      return { providers, runner: new AgentRunner(providers, tools, new SkillManager(log), new WorkspaceContext(log), log) };
+    };
+    const run = async (runner: AgentRunner, model: string) => {
+      const events: AgentEvent[] = [];
+      const sess: Session = { id: `gw-${Math.random()}`, title: '', createdAt: 0, updatedAt: 0, model, messageCount: 0, messages: [], contextTokens: 0, compactions: 0, mode: 'agent', attachments: [] };
+      const out = await runner.run({ session: sess, userMessage: { role: 'user', content: 'echo something' }, emit: (e) => events.push(e), signal: new AbortController().signal, requestApproval: async () => true }).catch((e) => `THREW ${e}`);
+      return { out, events, text: JSON.stringify(events), sess };
+    };
+
+    let { providers, runner } = setup();
+    let models = await providers.listModels(true);
+    check('LocalPilot lists the gateway routes as cloud models', models.filter((m) => m.providerId === 'omniroute').map((m) => m.modelId).join() === 'auto,auto/coding,auto/fast' && models.filter((m) => m.providerId === 'omniroute').every((m) => m.remote), models.map((m) => m.id));
+    const noRoute = await run(runner, 'omniroute/auto');
+    check('no provider connected: a clear message, no retries', /no provider it can send this request to/.test(noRoute.text) && /dashboard/.test(noRoute.text) && !noRoute.events.some((e) => e.type === 'retry') && state.chats === 1, noRoute.text.slice(0, 300));
+    providers.dispose();
+
+    state.providers = true;
+    ({ providers, runner } = setup());
+    models = await providers.listModels(true);
+    check('provider connected: its models appear next to the routes', models.some((m) => m.id === 'omniroute/openai/gpt-5.4') && models.some((m) => m.id === 'omniroute/glm/glm-5.2'));
+    const auto = await run(runner, 'omniroute/auto/coding');
+    check('agent run through the gateway: tool call executed, answer streamed', auto.out === 'OmniRoute (auto/coding) answered.' && auto.sess.messages.some((m) => m.role === 'tool' && m.content === 'ECHO:via omniroute'), auto.out);
+    const direct = await run(runner, 'omniroute/openai/gpt-5.4');
+    check('a provider-prefixed model id passes through unchanged', direct.out === 'OmniRoute (openai/gpt-5.4) answered.', direct.out);
+    providers.dispose();
+
+    state.requireKey = true;
+    ({ providers, runner } = setup());
+    const locked = await run(runner, 'omniroute/auto');
+    check('REQUIRE_API_KEY without a key: models still list, chat says the key was rejected', (await providers.listModels(true)).some((m) => m.providerId === 'omniroute') && /rejected the API key/.test(locked.text), locked.text.slice(0, 300));
+    providers.dispose();
+    ({ providers, runner } = setup('sk-omni-local'));
+    const keyed = await run(runner, 'omniroute/auto');
+    check('with its key, the gateway answers', keyed.out === 'OmniRoute (auto) answered.', keyed.out);
+    providers.dispose();
+  } finally {
+    if (prevConfig === undefined) {
+      delete process.env.LP_CONFIG;
+    } else {
+      process.env.LP_CONFIG = prevConfig;
+    }
+    omni.close();
+  }
+}
+
 async function pureLogic() {
   console.log('\n[Text tool-call protocol]');
   const a = extractTextToolCalls('Let me look.\n```tool_call\n{"name":"read_file","arguments":{"path":"x.ts"}}\n```\n<tool_call>{"name":"list_dir","arguments":{"path":"."}}</tool_call>');
@@ -653,6 +764,39 @@ async function pureLogic() {
   check('compact replaces older turns with summary and keeps split on user boundary', c.removed > 0 && c.messages[0].meta?.summary === true && c.messages[1].role === 'user' && c.after < c.before, { removed: c.removed, before: c.before, after: c.after });
   const onlySummary = await cm.compact([c.messages[0], { role: 'user', content: 'next' }, { role: 'assistant', content: 'ok' }], fake, model, undefined, 2);
   check('compact: nothing but a prior summary to fold → no model call, history unchanged', onlySummary.removed === 0);
+
+  console.log('\n[Token calibration: real counts correct the estimate]');
+  {
+    const cal = new TokenCalibration();
+    check('unknown model: estimate used as is', cal.scale('m') === 1);
+    // Measured on Gemma 4: 18k chars of code were 8,695 real tokens against an estimate of 6,088.
+    check('a plausible server count is recorded', cal.record('m', 6088, 8695) && Math.abs(cal.scale('m') - 8695 / 6088) < 1e-9);
+    check('later samples blend in, the latest weighing most', cal.record('m', 1000, 1200) && Math.abs(cal.scale('m') - ((8695 / 6088) * 0.3 + 1.2 * 0.7)) < 1e-9);
+    check('implausible counts (only the uncached part, tiny prompts, none) are ignored', !cal.record('m', 10000, 900) && !cal.record('m', 100, 300) && !cal.record('m', 5000, undefined) && Math.abs(cal.scale('m') - ((8695 / 6088) * 0.3 + 1.2 * 0.7)) < 1e-9);
+    check('models are calibrated separately', cal.scale('other') === 1);
+    const scaled = new ContextManager({ compactionThreshold: 0.75, maxToolOutputChars: 1000, scale: () => 1.5 });
+    const plain = cm.budget(model, 'sys', [], history.slice(0, 6), 1024);
+    const real = scaled.budget(model, 'sys', [], history.slice(0, 6), 1024);
+    check('budget is in real tokens: scaled by the calibration, raw estimate kept for the next sample', Math.abs(real.historyTokens - plain.historyTokens * 1.5) <= 1 && real.rawPromptTokens === plain.rawPromptTokens && real.usageRatio > plain.usageRatio * 1.45, { plain: plain.historyTokens, real: real.historyTokens });
+  }
+
+  console.log('\n["Remember …" goes to the built-in memory, not to a skill]');
+  check('remember / memorise / keep in mind / forget / in project memory are memory requests', ['Remember that tests run with make check-all', 'please memorize my preferred style', "Don't forget: no type hints", 'Keep in mind the API is v2', 'forget that rule about tabs', 'save this to project memory'].every(asksToRemember));
+  check('ordinary requests are not', !['Write tests for utils', 'Fix the memory leak in the cache', 'Add a remember-me checkbox to the login form', 'Store sessions in memory instead of Redis'].some(asksToRemember));
+
+  console.log('\n[Manual compaction never loses history]');
+  {
+    const broken = { ...fake, chat: async function* (): AsyncGenerator<StreamEvent> { throw new Error('connection refused'); } };
+    let threw = '';
+    try { await cm.compact(history, broken, model, undefined, 6, false); } catch (e) { threw = String(e); }
+    check('a failed summary throws instead of truncating when asked to', /connection refused/.test(threw));
+    const mid = await cm.compact(history, broken, model, undefined, 6);
+    check('mid-run, a failed summary still falls back to a truncation note so the run goes on', mid.removed > 0 && /truncated/.test(mid.summary));
+    const empty = { ...fake, chat: async function* (): AsyncGenerator<StreamEvent> { yield { type: 'text', text: '  ' } as StreamEvent; } };
+    let emptyThrew = false;
+    try { await cm.compact(history, empty, model, undefined, 6, false); } catch { emptyThrew = true; }
+    check('an empty summary counts as a failure, not as a summary', emptyThrew);
+  }
 
   console.log('\n[Effective context window]');
   const wide = { contextWindow: 131072 };
@@ -1692,6 +1836,7 @@ async function redisStorage() {
   await cloudAgentE2E();
   await cloudResilience();
   await colibriSetupChecks();
+  await gatewayChecks();
   await pureLogic();
   await agentLoopE2E();
   await pauseAndSteer();

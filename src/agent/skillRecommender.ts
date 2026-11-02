@@ -110,6 +110,15 @@ export function namesTool(request: string, toolNames: Iterable<string>): boolean
 }
 
 /**
+ * True when the request asks the agent to remember or forget something. The built-in memory tools (memory_save,
+ * memory_delete) do exactly that, so no skill should be installed or preloaded for it: a catalog skill named
+ * "remember" keeps its own files elsewhere, and loading its long playbook left a small local model with nothing to say.
+ */
+export function asksToRemember(request: string): boolean {
+  return /\b(remember(?!-)|memori[sz]e|don'?t forget|keep in mind|forget (?:that|about)|(?:project|global|your) memory)\b/i.test(userText(request));
+}
+
+/**
  * Scores skills against a request. A skill is recommended when its name, a quoted trigger phrase or several
  * description terms occur in the request. Returns up to `max` matches, strongest first.
  */

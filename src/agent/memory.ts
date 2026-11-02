@@ -205,21 +205,33 @@ export class MemoryStore {
     }
   }
 
-  /** Prompt section: index of all notes plus inlined bodies of small ones, within a character budget. */
+  /**
+   * Prompt section within `maxChars`: an index of the notes (newest first) taking at most half the budget, then the
+   * bodies of small notes inlined while the budget lasts. Notes that do not fit are counted, not listed, so a large
+   * memory never crowds a small context window; memory_list and memory_read still reach all of them.
+   */
   async promptSection(maxChars = 6000): Promise<string> {
     const notes = await this.list();
     if (!notes.length) {
       return '';
     }
     const lines: string[] = [];
+    const listed: MemoryNote[] = [];
     let used = 0;
     for (const n of notes) {
       const head = `- ${n.name} (${n.scope}): ${n.summary}`;
+      if (lines.length && used + head.length > maxChars / 2) {
+        break;
+      }
       lines.push(head);
-      used += head.length;
+      listed.push(n);
+      used += head.length + 1;
+    }
+    if (listed.length < notes.length) {
+      lines.push(`- …and ${notes.length - listed.length} older note${notes.length - listed.length === 1 ? '' : 's'}: memory_list shows them all`);
     }
     const inlined: string[] = [];
-    for (const n of notes) {
+    for (const n of listed) {
       if (n.chars <= 1200 && used + n.chars < maxChars) {
         const body = await this.read(n.name, n.scope);
         if (body) {

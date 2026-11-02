@@ -2,7 +2,7 @@ import { HttpError } from '../providers/http';
 import { StreamEvent } from '../types';
 
 /** Why a model request failed, used to decide whether and how to retry. */
-export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'auth' | 'quota' | 'other';
+export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'auth' | 'quota' | 'unroutable' | 'other';
 
 export class ModelStallError extends Error {
   constructor(public readonly phase: 'first-token' | 'mid-stream', seconds: number) {
@@ -11,6 +11,7 @@ export class ModelStallError extends Error {
 }
 
 const OVERFLOW = /context (length|window|size)|too (long|large|many tokens)|exceeds? .*(limit|maximum|context)|maximum context|prompt is too long|input length|num_ctx|token limit|reduce the length/i;
+const UNROUTABLE = /no (eligible|available|healthy|matching|valid) (route|provider|account|target|deployment|connection)s?|no providers? (are |is )?(configured|connected|available)|all (providers|accounts|targets|routes) (failed|exhausted|unavailable)|no deployments? available|invalid model name passed in model=/i;
 const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits/i;
 const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
 
@@ -22,6 +23,10 @@ export function classifyModelError(e: unknown): ModelFailure {
     // Out of credits or quota is also sent as 429 (OpenAI) or 400/402 (Anthropic): waiting does not help.
     if (QUOTA.test(e.body) && (e.status === 429 || e.status === 402 || e.status === 400 || e.status === 403)) {
       return 'quota';
+    }
+    // A gateway (OmniRoute, LiteLLM) that is up but has no upstream it may send this model to: not worth retrying.
+    if (UNROUTABLE.test(e.body)) {
+      return 'unroutable';
     }
     if (e.status === 429) {
       return 'ratelimit';
@@ -78,6 +83,8 @@ export function describeModelError(kind: ModelFailure, raw: string, modelName: s
       return `The server is rate limiting requests for ${modelName}. Wait a moment and try again.${detail ? ` (${detail})` : ''}`;
     case 'auth':
       return `The provider rejected the API key for ${modelName}. Set a valid key in Settings → Providers (or \`localpilot providers key <id>\` in the terminal).${detail ? ` (${detail})` : ''}`;
+    case 'unroutable':
+      return `The gateway serving ${modelName} has no provider it can send this request to. Connect a provider in its dashboard (OmniRoute: Providers; LiteLLM: model_list in its config), or pick a specific model instead of an automatic route.${detail ? ` (${detail})` : ''}`;
     case 'quota':
       return `The provider says the account behind ${modelName} is out of credits or quota. Add credits or raise the limit with the provider, or pick another model.${detail ? ` (${detail})` : ''}`;
     case 'overflow':

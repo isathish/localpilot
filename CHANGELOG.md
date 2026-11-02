@@ -4,6 +4,14 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Context sizes are measured, not guessed.** Token counts came from a character-based estimate that was far off on real models: on Gemma 4 it was 30% low for code and 42–77% high for prose and the agent's own instructions. So the context meter was wrong, and compaction started too late on code-heavy chats and too early on the rest. Every model server reports the real prompt size after each request; LocalPilot now uses it to calibrate its estimates for that model, so the meter and the compaction point follow the real numbers. The meter also updates during a run (before each request, after each reply and after compaction) instead of only when the turn ends.
+- **Compacting by hand can no longer lose your conversation.** When the summary could not be made (the server was down, the model not loaded, or it returned nothing), clicking the context meter or running `/compact` replaced the older messages with a one-line "was truncated" note. It now leaves the chat as it was and says why. It also shows that it is working, ignores a second click while it runs, and keeps the system prompt and tools in the meter's count afterwards.
+- **"Remember …" saves to LocalPilot's memory.** Asking the agent to remember something could install a catalog skill named "remember" that keeps notes somewhere LocalPilot never reads, and with Gemma 4 the run then failed with empty replies. Requests to remember or forget something now go straight to the built-in memory tools, and the next chat starts with them.
+- **Memory stays within its share of the prompt.** The index of saved notes was added to every system prompt in full, however many notes there were. It now takes about 5% of the context window (1,500 to 12,000 characters); notes that do not fit are counted, and `memory_list` still shows them all.
+- **Turning memory off turns it off.** With `localpilot.memory.enabled` off, the agent was still offered the memory tools and told to save notes, which were then never read. Now it is not.
+- `/memory` lists the saved memory notes as well as the instruction files (CLAUDE.md, AGENTS.md…).
+
 ## 1.3.8 — 2026-11-02
 
 ### Added
@@ -15,6 +23,13 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
   - **Another server on the port** (vLLM also uses 8000): it offers the next free port.
 
   colibri is found as a configured checkout or release, `coli` on PATH, or `~/colibri`. A Windows source checkout runs with `py -3`. KV slots for parallel agents are passed through `COLI_KV_SLOTS`. The progress notification shows colibri's install phase and percentage, and waits as long as a large download needs. Cancelling never stops colibri. New: **LocalPilot: Stop colibri**, and the `localpilot.colibri.modelsDir` and `localpilot.colibri.backend` settings.
+- **Start Gateway runs OmniRoute or LiteLLM end to end.**
+  - **Starting:** it adds the gateway as a provider marked cloud, reuses one that is already running, moves to a free port if something else holds it, and starts it in a terminal bound to 127.0.0.1. OmniRoute's own default is every network interface.
+  - **Installing:** OmniRoute installs with `npm install -g omniroute` after a Node.js version check. LiteLLM installs with pip, and Start Gateway asks once for its config file.
+  - **No provider connected:** a fresh OmniRoute lists only its `auto` routes. Start Gateway says so and offers **Open dashboard** and **Refresh models**.
+  - **No route in chat:** a "no eligible route" reply reads "the gateway has no provider it can send this request to", says where to fix it, and isn't retried.
+  - **Also:** **Start** buttons on the gateway provider cards, and **LocalPilot: Stop Gateway**.
+  - **Checking a real gateway:** `npm run e2e:gateway` drives the CLI through a running gateway, including a real tool call.
 
 ## 1.3.7 — 2026-11-02
 

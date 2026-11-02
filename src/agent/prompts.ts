@@ -22,6 +22,8 @@ export interface PromptOptions {
   clarify?: 'smart' | 'interview' | 'minimal';
   /** Rendered memory index/bodies (see MemoryStore.promptSection). */
   memory?: string;
+  /** Whether memory_save is among this run's tools; when memory is off the prompt must not ask for notes. */
+  canSaveMemory?: boolean;
   /** Files touched so far in this session. */
   workingSet?: string[];
   /** Current checklist, if any. */
@@ -53,9 +55,9 @@ You have no file-editing tools in this mode — every change goes through a work
 - Form one hypothesis at a time, check it against the code (add a focused log or a small test if needed), then fix the root cause with the smallest change that makes the reproduction pass. Do not paper over symptoms.
 - Re-run the reproduction and the related tests; remove temporary logging. Add a regression test when the project has a test suite.
 - Report: what was wrong, why, what changed (files), and how it was verified.`);
-    parts.push(agentWorkingStyle());
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false));
   } else if (o.mode === 'agent') {
-    parts.push(agentWorkingStyle());
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false));
   } else if (o.mode === 'plan') {
     parts.push(`# Plan mode
 You are in read-only planning mode. Investigate the codebase with read/search tools (analyze_workspace first for anything repository-wide, then fan out explore subagents per shard with run_parallel_subagents), then produce the plan BOTH as a manage_todos checklist AND as a short numbered explanation with the files to change and the rationale.
@@ -72,7 +74,7 @@ Answer the user's question directly. You may read files and search the workspace
 - To locate code, search file contents with grep_search (text) or find_symbol (definitions); file_search only matches file names. Read a file (read_file) before answering questions about its details.
 - Independent lookups (several reads, searches, diagnostics) go in ONE message so they run in parallel; dependent steps follow in the next message. Identical read-only calls are cached within a turn.
 - If a search comes back empty, try another tool or a broader query before concluding that something does not exist.
-- Research when the code cannot answer: an unfamiliar library or API, version-specific behaviour, an error message that is not explained by the code, or anything that may have changed recently — call web_search, then web_fetch the most authoritative hit (official docs, the project's repository or changelog) and base the answer on what it says, citing the source as a Markdown link. Do not guess at APIs you have not seen. Keep durable findings (a quirk, a required flag, a version constraint) with memory_save so the next session starts with them.`);
+- Research when the code cannot answer: an unfamiliar library or API, version-specific behaviour, an error message that is not explained by the code, or anything that may have changed recently — call web_search, then web_fetch the most authoritative hit (official docs, the project's repository or changelog) and base the answer on what it says, citing the source as a Markdown link. Do not guess at APIs you have not seen.${o.canSaveMemory !== false ? ' Keep durable findings (a quirk, a required flag, a version constraint) with memory_save so the next session starts with them.' : ''}`);
   }
 
   parts.push(`# Environment
@@ -180,7 +182,7 @@ export function buildTurnContext(o: Pick<PromptOptions, 'mode' | 'workspace' | '
 }
 
 /** The autonomous working style shared by Agent and Debug mode. */
-function agentWorkingStyle(): string {
+function agentWorkingStyle(canSaveMemory: boolean): string {
   return `# Working style
 - Work autonomously to complete the task. Gather context with tools before editing; read a file before you modify it.
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
@@ -192,8 +194,7 @@ function agentWorkingStyle(): string {
 - When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
 - Work in visible phases: understand (read, search) → plan (manage_todos for anything with more than two steps) → change (edits) → verify (diagnostics, tests, a browser check for UI) → report. Do not skip verification because the edit looked right.
 - For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents (or checklist items via run_todos_parallel) and integrate their results. Give them everything they need: the goal, the files/symbols involved, constraints and what to return.
-- When you learn something durable about this project (build commands, conventions, gotchas, a library quirk found through research) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.
-- Never fabricate file contents, command output or API behaviour. If unsure, check.
+${canSaveMemory ? "- When you learn something durable about this project (build commands, conventions, gotchas, a library quirk found through research) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.\n" : ''}- Never fabricate file contents, command output or API behaviour. If unsure, check.
 - File paths are relative to the workspace root ("notes.txt" is a file at the root; "." is the root directory itself and cannot be written to).
 - Finish with a brief summary: what changed (files), how it was verified, anything left open.`;
 }

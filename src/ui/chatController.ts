@@ -7,7 +7,7 @@ import { skillsDestination } from '../agent/skillInstaller';
 import { ChangeTracker } from '../agent/changeTracker';
 import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
-import { ContextManager, effectiveContextWindow } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
@@ -366,6 +366,8 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
+  /** Chats with a manual compaction in flight, so a second click does not start another. */
+  private readonly compacting = new Set<string>();
   private readonly pendingDeltas = new Map<string, { sessionId: string; type: 'assistant_delta' | 'thinking_delta'; payload: string }>();
   private deltaTimer?: NodeJS.Timeout;
 
@@ -1181,21 +1183,33 @@ export class ChatController implements vscode.Disposable {
         return; // handled by the view (needs the session's local attachment list)
       case 'compactNow': {
         const s = this.store.get(msg.sessionId);
-        if (!s || this.isRunning(s.id)) {
+        if (!s || this.isRunning(s.id) || this.compacting.has(s.id)) {
           return;
         }
-        const { provider, model: picked } = await this.providers.resolve(s.model);
-        const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
-        const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined });
-        const res = await cm.compact(s.messages, provider, model, undefined, 4);
-        s.messages = res.messages;
-        if (res.removed > 0) {
-          s.compactions++;
+        this.compacting.add(s.id);
+        try {
+          const { provider, model: picked } = await this.providers.resolve(s.model);
+          const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
+          const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined, scale: () => tokenCalibration.scale(model.id) });
+          if (s.messages.length > 6) {
+            this.broadcast({ type: 'toast', level: 'info', text: `Compacting with ${model.name}…` });
+          }
+          const res = await cm.compact(s.messages, provider, model, undefined, 4, false);
+          if (res.removed > 0) {
+            s.messages = res.messages;
+            s.compactions++;
+            // contextTokens includes the system prompt and tools, which compaction leaves alone: subtract what was saved.
+            s.contextTokens = Math.max(0, s.contextTokens - (res.before - res.after));
+            this.store.save(s);
+            this.broadcast(this.sessionMsg(s));
+          }
+          this.broadcast({ type: 'toast', level: 'info', text: res.removed > 0 ? `Compacted ${res.removed} messages: ${res.before.toLocaleString()} → ${res.after.toLocaleString()} tokens` : 'Nothing to compact yet — the conversation is still short' });
+        } catch (e) {
+          this.log.warn(`compact: ${e instanceof Error ? e.message : String(e)}`);
+          this.broadcast({ type: 'toast', level: 'error', text: `Could not compact — the conversation was left as it was (${e instanceof Error ? e.message : String(e)})` });
+        } finally {
+          this.compacting.delete(s.id);
         }
-        s.contextTokens = res.after;
-        this.store.save(s);
-        this.broadcast(this.sessionMsg(s));
-        this.broadcast({ type: 'toast', level: 'info', text: res.removed > 0 ? `Compacted: ${res.before} → ${res.after} tokens` : 'Nothing to compact yet — the conversation is still short' });
         return;
       }
       case 'clearSession': {
@@ -2079,7 +2093,7 @@ export class ChatController implements vscode.Disposable {
             '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill registry',
             '- `/skill mode auto|ask|off` — how this chat uses skills · `/skill pin <name>` / `unpin` — load a skill into every request of this chat',
             '- `/agent <name> <task>` — delegate directly to a subagent',
-            '- `/memory` — instruction files in force (CLAUDE.md, AGENTS.md…) · `/permissions` — permission rules · `/hooks` — configured hooks',
+            '- `/memory` — instruction files in force (CLAUDE.md, AGENTS.md…) and saved memory notes · `/permissions` — permission rules · `/hooks` — configured hooks',
             '- `/context` — show context usage',
             ...(custom.length ? ['', '**Custom commands** (`.claude/commands`, `.localpilot/commands`, plugins)', ...custom.map((c) => `- \`${c.invoke}${c.argumentHint ? ` ${c.argumentHint}` : ''}\` — ${c.description || c.file}`)] : []),
           ].join('\n')
@@ -2094,8 +2108,17 @@ export class ChatController implements vscode.Disposable {
         return say(custom.length ? custom.map(line).join('\n') : 'No custom commands. Add markdown files under `.localpilot/commands/` or `.claude/commands/` (front-matter: `description`, `argument-hint`, `allowed-tools`, `model`; body: the prompt, with `$ARGUMENTS`, `@file` and `!` + backtick-quoted shell commands).');
       }
       case 'memory': {
-        void this.workspace.instructionFiles().then((files) => {
-          say(files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.');
+        // Both kinds of standing context: the instruction files you write, and the notes the agent saved itself.
+        void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => {
+          const on = getConfig().memoryEnabled;
+          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
+          const shown = notes.slice(0, 30);
+          const notesPart = !on
+            ? '**Memory notes** are off (`localpilot.memory.enabled`).'
+            : notes.length
+              ? `**Memory notes** (${notes.length}, newest first; the agent sees an index and the short ones in full)\n${shown.map((n) => `- \`${n.name}\` (${n.scope}, ${n.chars.toLocaleString()} chars): ${n.summary}`).join('\n')}${notes.length > shown.length ? `\n- …and ${notes.length - shown.length} more` : ''}\n\nEdit or delete them in **Settings → Memory**, or as Markdown in \`.localpilot/memory/\`.`
+              : '**Memory notes**: none yet. The agent saves durable facts (build commands, conventions, your preferences) with `memory_save`; you can also ask it to "remember" something.';
+          say(`${filesPart}\n\n${notesPart}`);
         });
         return '';
       }

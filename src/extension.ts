@@ -25,6 +25,7 @@ import { ProviderRegistry } from './providers/registry';
 import { secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
 import { ColibriLauncher } from './ui/colibriCommand';
+import { GatewayLauncher } from './ui/gatewayCommand';
 import { ModelTuner } from './ui/modelAutoTune';
 import { getSystemProfile } from './providers/system';
 import { SessionStore } from './sessions/sessionStore';
@@ -1016,6 +1017,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   context.subscriptions.push(colibri);
   cmd('localpilot.startColibri', () => colibri.start());
+  // Gateways (OmniRoute, LiteLLM): install if needed, start on 127.0.0.1, register as a cloud provider.
+  const gateways = new GatewayLauncher({
+    log,
+    onReady: async () => {
+      await providers.listModels(true).catch(() => []);
+      await controller.handle({ type: 'refreshModels' });
+      void refreshStatus();
+    },
+  });
+  context.subscriptions.push(gateways);
+  cmd('localpilot.startGateway', (id?: unknown) => gateways.start(id === 'omniroute' || id === 'litellm' ? id : undefined));
+  cmd('localpilot.stopGateway', (id?: unknown) => gateways.stop(id === 'omniroute' || id === 'litellm' ? id : undefined));
   cmd('localpilot.stopColibri', () => colibri.stop());
   cmd('localpilot.enableOllamaParallel', async () => {
     const slots = ModelManager.ollamaParallelSlots();

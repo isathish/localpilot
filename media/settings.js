@@ -733,7 +733,9 @@
     en.onclick = () => upd({ enabled: p.enabled === false ? undefined : false });
     body.appendChild(row('Enabled', 'Disabled providers are kept in settings but never contacted.', en));
     const foot = el('div', 'prov-foot');
-    foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button><span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
+    // Gateways LocalPilot can install and start (OmniRoute, LiteLLM) get a Start button next to Test connection.
+    const gw = pr && pr.group === 'gateway' ? pr.key : '';
+    foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
     foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: p }); };
     foot.querySelector('#rm').onclick = () => { saveProviders(list.filter((o) => o !== p)); state.expanded = null; };
     body.appendChild(foot);

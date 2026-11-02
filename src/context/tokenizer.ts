@@ -1,8 +1,9 @@
 import { ChatMessage, ToolDefinition } from '../types';
 
 /**
- * Fast heuristic tokenizer. Local models use different BPE vocabularies, so an exact count is
- * impossible without the model's tokenizer; this estimate errs slightly high to keep us safe.
+ * Fast heuristic tokenizer. Local models use different BPE vocabularies, so an exact count is impossible without the
+ * model's tokenizer, and this estimate can be off by a third or more either way (code tokenizes denser than prose).
+ * ContextManager scales it by what the server reports (TokenCalibration) once the model has answered a request.
  */
 export function estimateTokens(text: string): number {
   if (!text) {

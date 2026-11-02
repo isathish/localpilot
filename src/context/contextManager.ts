@@ -10,6 +10,8 @@ export interface ContextBudget {
   /** Tokens still available for history before compaction triggers. */
   available: number;
   usageRatio: number;
+  /** The uncalibrated estimate of the whole prompt, kept so the server's real count can calibrate the next one. */
+  rawPromptTokens: number;
 }
 
 export interface CompactionResult {
@@ -26,6 +28,39 @@ export interface FitResult {
   /** Every summarisation pass that was needed, oldest first (usually none or one). */
   compactions: CompactionResult[];
 }
+
+/**
+ * Corrects the character-based estimate with the prompt sizes servers report. Tokenizers differ a lot: measured on
+ * Gemma 4, the estimate was 30% low for code and 77% high for plain prose, so neither the context meter nor the point
+ * where compaction starts can rely on it. After every request the ratio real / estimated is blended into a per-model
+ * factor, and later estimates for that model are scaled by it. The history is mostly the same from one request to the
+ * next, so the latest ratio is a good predictor; samples outside 0.4–3× are ignored (a server that reports only the
+ * uncached part of the prompt would otherwise shrink every estimate).
+ */
+export class TokenCalibration {
+  private readonly ratio = new Map<string, number>();
+
+  scale(modelId: string): number {
+    return this.ratio.get(modelId) ?? 1;
+  }
+
+  /** Records one request; returns false when the sample was rejected as implausible. */
+  record(modelId: string, estimated: number, actual: number | undefined): boolean {
+    if (!actual || actual <= 0 || estimated < 256) {
+      return false;
+    }
+    const r = actual / estimated;
+    if (r < 0.4 || r > 3) {
+      return false;
+    }
+    const prev = this.ratio.get(modelId);
+    this.ratio.set(modelId, prev === undefined ? r : prev * 0.3 + r * 0.7);
+    return true;
+  }
+}
+
+/** Shared by every run, so what one chat learns about a model's tokenizer applies to the next. */
+export const tokenCalibration = new TokenCalibration();
 
 /** Below this a local model cannot hold the system prompt and tool schemas, so a smaller request is never useful. */
 export const MIN_CONTEXT_WINDOW = 4096;
@@ -61,13 +96,21 @@ export class ContextManager {
       keepRecent?: number;
       /** Ollama keep_alive for the summarisation request, so compaction does not shorten how long the model stays loaded. */
       keepAlive?: string;
+      /** Real tokens per estimated token for the model in use (see TokenCalibration); read on every budget. */
+      scale?: () => number;
     }
   ) {}
 
+  /** An estimate in the model's real tokens. */
+  private tokens(estimated: number): number {
+    return Math.ceil(estimated * (this.opts.scale?.() ?? 1));
+  }
+
   budget(model: ModelInfo, system: string, tools: ToolDefinition[], history: ChatMessage[], maxOutput: number): ContextBudget {
-    const systemTokens = estimateTokens(system);
-    const toolsTokens = estimateToolsTokens(tools);
-    const historyTokens = estimateMessagesTokens(history);
+    const raw = { system: estimateTokens(system), tools: estimateToolsTokens(tools), history: estimateMessagesTokens(history) };
+    const systemTokens = this.tokens(raw.system);
+    const toolsTokens = this.tokens(raw.tools);
+    const historyTokens = this.tokens(raw.history);
     const reservedForOutput = Math.min(maxOutput, Math.floor(model.contextWindow * 0.25));
     const hardLimit = model.contextWindow - reservedForOutput - systemTokens - toolsTokens;
     return {
@@ -78,6 +121,7 @@ export class ContextManager {
       historyTokens,
       available: hardLimit - historyTokens,
       usageRatio: (systemTokens + toolsTokens + historyTokens) / (model.contextWindow - reservedForOutput),
+      rawPromptTokens: raw.system + raw.tools + raw.history,
     };
   }
 
@@ -178,9 +222,12 @@ export class ContextManager {
     provider: LLMProvider,
     model: ModelInfo,
     signal?: AbortSignal,
-    keepRecent = this.opts.keepRecent ?? 8
+    keepRecent = this.opts.keepRecent ?? 8,
+    /** Mid-run, a failed summary falls back to dropping the older messages so the run can go on; a compaction the
+     *  user asked for throws instead, so a server that is down never costs them their history. */
+    truncateOnFailure = true
   ): Promise<CompactionResult> {
-    const before = estimateMessagesTokens(history);
+    const before = this.tokens(estimateMessagesTokens(history));
     if (history.length <= keepRecent + 2) {
       return { messages: history, summary: '', removed: 0, before, after: before };
     }
@@ -206,7 +253,10 @@ export class ContextManager {
     let summary: string;
     try {
       summary = await this.summarise(provider, model, priorSummaries, transcript, signal);
-    } catch {
+    } catch (e) {
+      if (!truncateOnFailure) {
+        throw e;
+      }
       // Strategy 3 fallback: hard truncation with a plain-text stub.
       summary = `Earlier conversation (${older.length} messages) was truncated because the context window filled up.`;
     }
@@ -216,7 +266,7 @@ export class ContextManager {
       meta: { summary: true, timestamp: Date.now() },
     };
     const messages = [summaryMsg, ...recent];
-    return { messages, summary, removed: older.length, before, after: estimateMessagesTokens(messages) };
+    return { messages, summary, removed: older.length, before, after: this.tokens(estimateMessagesTokens(messages)) };
   }
 
   private async summarise(
@@ -249,6 +299,9 @@ Preserve exact file paths, identifiers, commands, error messages and numbers. Do
       if (ev.type === 'text') {
         out += ev.text;
       }
+    }
+    if (!out.trim()) {
+      throw new Error('the model returned an empty summary');
     }
     return out.trim();
   }

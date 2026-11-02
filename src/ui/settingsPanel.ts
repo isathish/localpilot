@@ -167,7 +167,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
-  'localpilot.setupRedis', 'localpilot.startColibri',
+  'localpilot.setupRedis', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {

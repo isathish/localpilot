@@ -57,6 +57,7 @@ Settings for [colibri]({{ '/docs/models/#colibri-huge-moe-models-from-disk' | re
 | `localpilot.colibri.model` | `""` | `--model` value: a colibri model name (for example `qwen3-coder-30b`, `glm-5.2`) or a model folder. Empty = the model colibri's setup installed |
 | `localpilot.colibri.modelsDir` | `""` | Where colibri downloads models (`--dir`). Empty = `~/colibri-models` |
 | `localpilot.colibri.backend` | `auto` | Engine built at setup: `auto`, `cuda`, `vulkan` or `cpu` |
+| `localpilot.gateways.litellmConfig` | `""` | LiteLLM proxy config file (`model_list`) used by **Start Gateway** |
 | `localpilot.colibri.port` | `8000` | Port `coli serve` listens on. Auto-detect also probes it when it is not `8000` |
 | `localpilot.colibri.kvSlots` | `2` | `--kv-slots`: conversations colibri decodes together, each with its own cached prefix. 1–16, and capped by `localpilot.parallel.maxConcurrency`. Each slot costs a few hundred MB |
 

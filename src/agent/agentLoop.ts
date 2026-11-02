@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
-import { ContextManager, effectiveContextWindow } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
@@ -13,7 +13,7 @@ import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
-import { clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
+import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
@@ -140,7 +140,7 @@ export class AgentRunner {
     private readonly workspace: WorkspaceContext,
     private readonly log: vscode.LogOutputChannel,
     private readonly tracker?: ChangeTracker,
-    private readonly memory?: MemoryStore,
+    readonly memory?: MemoryStore,
     private readonly learner?: SkillLearner,
     /** Skills that can be installed from configured repositories when a request matches one. */
     readonly catalog?: SkillCatalog
@@ -225,7 +225,7 @@ export class AgentRunner {
       session.model = model.id;
     }
 
-    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined });
+    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined, scale: () => tokenCalibration.scale(model.id) });
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
@@ -245,7 +245,9 @@ export class AgentRunner {
       append: cfg.systemPromptAppend,
       roleOverride: o.roleOverride,
       clarify: cfg.clarify,
-      memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection() : undefined,
+      canSaveMemory: toolDefs.some((t) => t.name === 'memory_save'),
+      // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
+      memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
     });
     const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = o.workspaceRoot && this.workspace.root && o.workspaceRoot !== this.workspace.root;
@@ -340,7 +342,8 @@ export class AgentRunner {
         const forcedName = /^Use the "([^"]+)" skill\b/.exec(text)?.[1];
         const forced = !!forcedName || /^\/skill\b/.test(text);
         // "Use the write_file tool to…" — the user has prescribed the tool; a playbook detour would only cost turns.
-        const prescribed = namesTool(request, toolDefs.map((t) => t.name));
+        // "Remember that…" is the memory tools' job; a skill detour would store it somewhere the next session never reads.
+        const prescribed = namesTool(request, toolDefs.map((t) => t.name)) || (toolDefs.some((t) => t.name === 'memory_save') && asksToRemember(request));
         const ss = session.skills ?? {};
         // Registry behaviour follows the chat override, else `skills.autoInstall`. Only the chat-level "off" also
         // silences suggestions for installed skills — the global setting is about downloading, and matching what is
@@ -576,6 +579,7 @@ export class AgentRunner {
         }
       }
       session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
+      emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
 
       // --- Model call -----------------------------------------------------------------------
       // Back on the model after tools ran: hold the slot again (it was handed to workers during tool execution).
@@ -663,7 +667,16 @@ export class AgentRunner {
               case 'usage':
                 usage = ev;
                 if (ev.promptTokens) {
-                  session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
+                  // The server's count is the real size of this prompt: show it, and let it correct the estimate for
+                  // the next request. A count the calibration rejects (e.g. only the uncached part) keeps the estimate.
+                  const scaleBefore = tokenCalibration.scale(model.id);
+                  if (tokenCalibration.record(model.id, budget.rawPromptTokens, ev.promptTokens)) {
+                    if (Math.abs(tokenCalibration.scale(model.id) / scaleBefore - 1) > 0.1) {
+                      this.log.info(`context: ${model.id} prompt was ${ev.promptTokens.toLocaleString()} tokens (estimated ${budget.rawPromptTokens.toLocaleString()}); estimates for it are now scaled ×${tokenCalibration.scale(model.id).toFixed(2)}`);
+                    }
+                    session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
+                    emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
+                  }
                   stats.promptTokens += ev.promptTokens;
                   stats.completionTokens += ev.completionTokens ?? 0;
                 }
@@ -705,6 +718,10 @@ export class AgentRunner {
               session.compactions++;
               emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
             }
+            // Re-measure, so the retry's real count calibrates against the prompt actually sent.
+            budget = budgetOf(session.messages);
+            session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
+            emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
             continue;
           }
           if (isTransient(kind) && first && attempt < maxModelRetries) {
@@ -1006,6 +1023,10 @@ export class AgentRunner {
     if (filter) {
       const allowed = new Set(filter);
       list = list.filter((t) => allowed.has(t.definition.name));
+    }
+    // Memory off: no notes are loaded into the prompt, so none should be written or looked up either.
+    if (!getConfig().memoryEnabled) {
+      list = list.filter((t) => !t.definition.name.startsWith('memory_'));
     }
     if (!isWriteMode(mode)) {
       // Read-only modes: strip mutating tools.

@@ -40,6 +40,10 @@ The webviews can be opened in a plain browser with mock data for quick visual ch
 | `scripts/ui-preview-parallel.html` | Chat view with a stateful mock controller; `window.sim.start/tool/text/end(sessionId, …)` drives several sessions streaming at once to check tabs and background runs. `sim.reopen()` reloads the page the way a re-created webview boots (init + `session` with `liveFrom` + `replay`) to check that runs in flight are rebuilt. |
 | `scripts/settings-preview.html?section=models&light=1` | Settings / setup wizard (`?page=setup`) with mocked local and cloud providers, key states, probe results, hardware profile, installed models, catalog and jobs. `?local=1` keeps only local servers (a first run); `?expand=<id>` opens a provider card. |
 
+### Real-gateway check
+
+`npm run e2e:gateway` runs the CLI against a gateway that is really running (OmniRoute on `127.0.0.1:20128` by default; `GATEWAY_URL`, `GATEWAY`, `GATEWAY_KEY`, `GATEWAY_MODEL` to change it). It adds the gateway as a provider, lists its models, gets a real answer and runs a real tool call through it. The smoke tests cover the same flow against a mock of OmniRoute's API; this one proves it with real upstream providers.
+
 ### Icon contrast
 
 `npm run test:contrast` opens every chat, Settings and setup view from these harnesses in the dark, light and both high-contrast themes. It measures each visible icon, logo and monogram against the background behind it, and fails if any is below 3:1 (WCAG 1.4.11). Run it after changing colours or icons. For icons and text in an accent colour, use the `--brand-text`, `--ok-text`, `--warn-text` and `--error-text` tokens: they are darkened on light themes. The plain tokens are for fills and borders.

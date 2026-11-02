@@ -480,6 +480,18 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "localpilot.startGateway",
+        "title": "Start Gateway (OmniRoute or LiteLLM)",
+        "category": "LocalPilot",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "localpilot.stopGateway",
+        "title": "Stop Gateway",
+        "category": "LocalPilot",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "localpilot.stopColibri",
         "title": "Stop colibri",
         "category": "LocalPilot",
@@ -1763,6 +1775,11 @@
           "maximum": 16,
           "markdownDescription": "`--kv-slots` for *LocalPilot: Start colibri*: conversations colibri decodes together, each with its own cached prefix, so parallel agents do not evict each other's context. Each slot costs a few hundred MB; capped by `#localpilot.parallel.maxConcurrency#`."
         },
+        "localpilot.gateways.litellmConfig": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "LiteLLM proxy config file (`model_list`) for *LocalPilot: Start Gateway*. Asked for on first start."
+        },
         "localpilot.colibri.modelsDir": {
           "type": "string",
           "default": "",
@@ -1947,6 +1964,7 @@
     "lint": "eslint src",
     "smoke": "node scripts/run-smoke.js",
     "e2e:cli": "node esbuild.js && node scripts/cli-e2e.mjs",
+    "e2e:gateway": "node esbuild.js && node scripts/gateway-e2e.mjs",
     "test:site": "node --experimental-eventsource --no-warnings scripts/pageviews-test.mjs",
     "docs:screenshots": "node scripts/docs-screenshots.mjs",
     "test:contrast": "node scripts/icon-contrast.mjs",
