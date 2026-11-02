@@ -4,6 +4,16 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Every CLI run waited 5 seconds for the skill catalog.** The catalog's index was saved only when every repository had been indexed; the largest one took longer than a CLI run, so nothing was ever saved and each run waited and downloaded it again. Each repository is now saved as soon as it is indexed (atomically), an attempt is recorded so a run that ends early does not make the next one wait, and the first wait is at most 2 seconds. Indexing itself is ~7× faster: only the first 4 KB of each `SKILL.md` is fetched, 48 at a time (470 skills: 1.3 s instead of 9 s). A run against an instant model now takes 0.13 s end to end instead of 5.1 s.
+- **Tool lists no longer defeat the model's prompt cache.** A tool offered in a chat stays offered for the rest of it, so the start of the prompt stays identical between turns and a local server reuses its cache instead of re-reading thousands of tokens.
+- **Chats are saved safely.** Transcript files are written atomically, one write at a time per chat; a crash mid-save no longer leaves a truncated, unreadable chat, a deleted chat no longer comes back when a save was still in flight, and the last moments of a chat are written when the window closes instead of being dropped.
+- **No more listener and memory build-up during long runs.** Every command, search, git call, web request and retry used to leave a listener (and the command's whole output) attached to the run until it ended; long runs hit Node's MaxListeners warning. They are removed as soon as the work ends.
+- **MCP servers are restarted only when their settings change** (not on any LocalPilot setting, which killed tool calls in flight, e.g. when model tuning changed the default model); a server that crashes has its tools withdrawn and is restarted after 2, 10 and 60 seconds; stopping a server now ends its whole process tree, not only an `npx` or shell launcher.
+- **Nothing can hang forever:** a summary during compaction gives up after 4 minutes (falling back to truncation), a manual compaction after 3 (leaving the chat unchanged), and the background memory save after 90 seconds — it is also cancelled when you send the next message, so it never holds a one-slot server. Stopping a single subagent while it waits for your approval now stops it.
+- **Races fixed:** a message sent while a manual compaction runs waits for it (it used to be dropped when the compaction finished); two quick sends can no longer start two runs in one chat; cancelling and retrying a queued task that was still winding down no longer runs it twice.
+- **Search without ripgrep cannot freeze the editor:** a pattern with nested repetition (`(a+)+`) is searched as plain text, very long lines are skipped and the search stops after 10 seconds. Chat history search keeps each chat's text in memory instead of re-reading every transcript on each keystroke. `read_file` returns at most 2,000 lines (and says where to continue), cuts lines longer than 2,000 characters, and attachments are cut at 60,000 characters with a pointer to the rest.
+
 ## 1.4.9 — 2026-11-02
 ### Fixed
 - Tuning suggestions stack on narrow panels; model name keeps its room during runs
