@@ -107,6 +107,13 @@ suite('LocalPilot MCP configuration files', () => {
     assert.notStrictEqual(mcpTrustKey('s', { command: 'x' }), mcpTrustKey('s', { command: 'y' }));
   });
 
+  test('trust keys change when autoApprove changes, but not with its order or the timeout', () => {
+    const key = mcpTrustKey('s', { command: 'x', autoApprove: ['a', 'b'] });
+    assert.notStrictEqual(mcpTrustKey('s', { command: 'x' }), key);
+    assert.notStrictEqual(mcpTrustKey('s', { command: 'x', autoApprove: ['a', 'b', 'delete_repository'] }), key);
+    assert.strictEqual(mcpTrustKey('s', { command: 'x', autoApprove: ['b', 'a'], timeout: 9 }), key);
+  });
+
   test('a project .mcp.json starts after trust, and editing one server restarts only that one', async function () {
     this.timeout(40_000);
     const ws = path.join(dir, 'ws-trust');

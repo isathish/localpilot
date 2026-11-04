@@ -44,8 +44,21 @@ export function workspaceMcpTrust(state: vscode.Memento): McpTrust {
   };
 }
 
-/** The CLI: trusted keys per workspace folder in ~/.localpilot/mcp-trust.json; `--trust-workspace` trusts everything. */
-export function cliMcpTrust(workspace: string, trustAll: () => boolean, file = path.join(os.homedir(), '.localpilot', 'mcp-trust.json')): McpTrust {
+export interface CliMcpTrustOptions {
+  /** Reads one answer from the terminal (the shim's `ask` under its prompt lock); never the auto-approving picker. */
+  prompt: (question: string) => Promise<string | undefined>;
+  /** Whether there is a terminal to ask in; defaults to stdin being a TTY. */
+  interactive?: () => boolean;
+  file?: string;
+}
+
+/**
+ * The CLI: trusted keys per workspace folder in ~/.localpilot/mcp-trust.json; `--trust-workspace` trusts everything.
+ * Only a typed yes starts servers: `-y` does not answer this question, and with no terminal they stay stopped.
+ */
+export function cliMcpTrust(workspace: string, trustAll: () => boolean, opts: CliMcpTrustOptions): McpTrust {
+  const file = opts.file ?? path.join(os.homedir(), '.localpilot', 'mcp-trust.json');
+  const interactive = opts.interactive ?? (() => !!process.stdin.isTTY);
   const read = (): Record<string, string[]> => {
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
@@ -59,8 +72,8 @@ export function cliMcpTrust(workspace: string, trustAll: () => boolean, file = p
     blocking: true,
     isTrusted: (key) => trustAll() || (Array.isArray(read()[ws]) && read()[ws].includes(key)),
     async ask(names, mcpFile, keys) {
-      const pick = await vscode.window.showWarningMessage(question(names, mcpFile), 'Start', 'Not now');
-      if (pick !== 'Start') {
+      const answer = interactive() ? await opts.prompt(`${question(names, mcpFile)} [y/N] `) : undefined;
+      if (!/^\s*y(es)?\s*$/i.test(answer ?? '')) {
         process.stderr.write(`MCP servers from ${mcpFile} were not started (pass --trust-workspace to start them without asking).\n`);
         return false;
       }

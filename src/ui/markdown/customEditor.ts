@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { MarkdownViewSession } from './viewSession';
+import { MarkdownViewSession, ReaderChat } from './viewSession';
 
 /**
  * "Open With… → LocalPilot Markdown Reader": one reader per editor tab, each bound to its own document, so two files
@@ -14,12 +14,13 @@ export class MarkdownCustomEditor implements vscode.CustomTextEditorProvider {
 
   private constructor(
     private readonly ctx: vscode.ExtensionContext,
-    private readonly log: vscode.LogOutputChannel
+    private readonly log: vscode.LogOutputChannel,
+    private readonly chat?: ReaderChat
   ) {}
 
   /** Register synchronously during activation so editors restored at startup resolve. */
-  static register(ctx: vscode.ExtensionContext, log: vscode.LogOutputChannel): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(MarkdownCustomEditor.viewType, new MarkdownCustomEditor(ctx, log), {
+  static register(ctx: vscode.ExtensionContext, log: vscode.LogOutputChannel, chat?: ReaderChat): vscode.Disposable {
+    return vscode.window.registerCustomEditorProvider(MarkdownCustomEditor.viewType, new MarkdownCustomEditor(ctx, log, chat), {
       webviewOptions: { retainContextWhenHidden: true, enableFindWidget: true },
       supportsMultipleEditorsPerDocument: true,
     });
@@ -33,6 +34,8 @@ export class MarkdownCustomEditor implements vscode.CustomTextEditorProvider {
       ctx: this.ctx,
       log: this.log,
       isCustomEditor: true,
+      panel,
+      chat: this.chat,
       openMarkdown: (uri, anchor) => this.open(uri, anchor),
     });
     const set = this.sessions.get(key) ?? new Set();

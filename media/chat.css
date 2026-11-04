@@ -192,6 +192,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .turn:hover .actions, .turn:focus-within .actions { opacity: 1; pointer-events: auto; }
 .turn .actions button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 4px; color: var(--muted); font-size: 11px; }
 .turn .actions button:hover { background: var(--hover); color: var(--fg); }
+.turn .actions button:disabled, .turn .actions button.off { opacity: .45; }
+.turn .actions button:disabled { cursor: default; background: none; color: var(--muted); }
 .turn .actions svg { width: 13px; height: 13px; }
 /* Narrow sidebar: the action bar must not outgrow the bubble it sits on — icons only, the title carries the label. */
 @container messages (max-width: 420px) { .turn .actions button span { display: none; } }
@@ -548,6 +550,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .row { display: flex; align-items: center; gap: 2px; padding: 2px 6px 6px; min-width: 0; flex-wrap: nowrap; }
 .ib { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--muted); flex: none; }
 .ib:hover { background: var(--tint); color: var(--fg); }
+.ib.off { opacity: .4; cursor: default; } .ib.off:hover { background: none; color: var(--muted); }
 .pick { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 7px; border-radius: var(--radius-sm); color: var(--fg); font-size: var(--fs-sm); min-width: 0; flex: 0 1 auto; }
 .pick:hover { background: var(--tint); }
 .pick .ico { display: inline-grid; place-items: center; color: var(--muted); flex: none; } .pick .ico svg { width: 13px; height: 13px; }

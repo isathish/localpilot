@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createShowMarkdownTool, MarkdownViewer } from '../ui/markdownViewer';
+import { __test, createShowMarkdownTool, MarkdownViewer } from '../ui/markdownViewer';
 import { ToolContext } from '../types';
 
 suite('LocalPilot Markdown reader', () => {
@@ -53,5 +53,53 @@ suite('LocalPilot Markdown reader', () => {
     } finally {
       await fs.rm(wt, { recursive: true, force: true });
     }
+  });
+  test('the custom editor, its settings and the panel serializer are contributed', () => {
+    const pkg = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON;
+    const ed = (pkg.contributes.customEditors as { viewType: string; priority: string; selector: { filenamePattern: string }[] }[]).find((e) => e.viewType === 'localpilot.markdownEditor');
+    assert.ok(ed, 'localpilot.markdownEditor is contributed');
+    assert.strictEqual(ed.priority, 'option');
+    assert.deepStrictEqual(ed.selector.map((s) => s.filenamePattern).sort(), ['*.markdown', '*.md']);
+    const props = pkg.contributes.configuration.properties ?? Object.assign({}, ...pkg.contributes.configuration.map((c: { properties: object }) => c.properties));
+    assert.strictEqual(props['localpilot.markdownViewer.scrollSync'].default, true);
+    assert.strictEqual(props['localpilot.markdownViewer.outlineDepth'].default, 3);
+    assert.strictEqual(props['localpilot.markdownViewer.frontMatter'].default, 'collapsed');
+    assert.strictEqual(props['localpilot.markdownViewer.mermaid'].default, true);
+    assert.ok(__test.serializerRegistered, 'MarkdownViewer.registerSerializer ran during activation');
+  });
+
+  test('Open With → LocalPilot Markdown Reader: two files open side by side and close independently', async function () {
+    this.timeout(30_000);
+    const root = vscode.workspace.workspaceFolders![0].uri.fsPath;
+    const a = vscode.Uri.file(path.join(root, 'READER-A.md'));
+    const b = vscode.Uri.file(path.join(root, 'READER-B.md'));
+    await fs.writeFile(a.fsPath, '# A\n\ntext\n');
+    await fs.writeFile(b.fsPath, '---\ntitle: B\n---\n# B\n\n```mermaid\nflowchart LR\n  x --> y\n```\n');
+    const custom = () =>
+      vscode.window.tabGroups.all
+        .flatMap((g) => g.tabs)
+        .filter((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType === 'localpilot.markdownEditor')
+        .map((t) => (t.input as vscode.TabInputCustom).uri.fsPath);
+    try {
+      await vscode.commands.executeCommand('vscode.openWith', a, 'localpilot.markdownEditor');
+      await vscode.commands.executeCommand('vscode.openWith', b, 'localpilot.markdownEditor', vscode.ViewColumn.Beside);
+      assert.deepStrictEqual(custom().sort(), [a.fsPath, b.fsPath].sort());
+      const tabA = vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => t.input instanceof vscode.TabInputCustom && t.input.uri.fsPath === a.fsPath)!;
+      await vscode.window.tabGroups.close(tabA);
+      assert.deepStrictEqual(custom(), [b.fsPath]);
+    } finally {
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await fs.rm(a.fsPath, { force: true });
+      await fs.rm(b.fsPath, { force: true });
+    }
+  });
+
+  test("math renders through VS Code's engine (KaTeX output the reader styles)", async function () {
+    if (!vscode.extensions.getExtension('vscode.markdown-math')) {
+      this.skip();
+    }
+    this.timeout(20_000);
+    const html = await vscode.commands.executeCommand<string>('markdown.api.render', 'Inline $a^2$ math.');
+    assert.ok(/katex/.test(html), html);
   });
 });

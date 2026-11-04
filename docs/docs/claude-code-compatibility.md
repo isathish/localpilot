@@ -62,6 +62,8 @@ A rule is `Tool` or `Tool(specifier)`, using Claude Code's tool names.
 
 **Chained shell commands.** `&&`, `||`, `;`, `|`, `|&`, `&` and newlines split a command into parts. A command such as `a && b | c` is allowed only if every part is allowed. It is denied if any part is denied. A command that contains `$(…)`, backticks or process substitution (`<(…)`, `>(…)`) is never auto-allowed by an allow rule; you are asked instead.
 
+**Batched reads.** A `read_file` call that reads several files is checked against every one: it is denied or asked about if any file matches, and allowed by a rule only if all of them match.
+
 **Path patterns** for `Edit`, `Write` and `Read`:
 
 | Pattern | Meaning |
@@ -151,7 +153,7 @@ Each hook runs through the shell in the project folder. It receives the event as
   "tool_name": "Bash", "tool_input": { "command": "npm test" }, "localpilot_tool_name": "run_command" }
 ```
 
-- `tool_input` carries Claude's field names (`command`, `file_path`, `old_string`, `new_string`, `content`) alongside LocalPilot's.
+- `tool_input` carries Claude's field names (`command`, `file_path`, `old_string`, `new_string`, `content`) alongside LocalPilot's. For a batched `read_file`, `file_path` is the first file and `file_paths` lists them all.
 - `PostToolUse` adds `tool_response: { content, is_error }`.
 - `UserPromptSubmit` adds `prompt`.
 - `Stop` and `SubagentStop` add `stop_hook_active` and `last_assistant_message`.
@@ -223,6 +225,7 @@ Typing `/fix-issue 123` sends the expanded body. The transcript shows what you t
 | `allowed-tools` | Extra **allow** rules while that turn runs |
 | `model` | Model for that turn |
 | `disable-model-invocation` | Accepted and ignored (see [differences](#differences-from-claude-code)) |
+| `disabled` | `true` hides the command (set by the switch in **Settings → Customize**) |
 
 ### Names and precedence
 
@@ -252,7 +255,34 @@ Instruction files are joined into the system prompt in this order:
 
 **Size limit.** The combined instructions are cut at 12,000 characters, so keep the important rules near the top of the first files.
 
-Front matter in rule files (for example `.mdc`) is treated as metadata and removed. `/memory` lists the files currently in force.
+Front matter in rule files (for example `.mdc`) is metadata: it is not sent to the model. `/memory` lists the files currently in force.
+
+### Turning rules off, and conditional rules
+
+These front-matter keys work in every instruction file:
+
+| Key | Effect |
+|---|---|
+| `disabled: true` (or the older `enabled: false`) | The file is left out of the prompt and of `/memory` |
+| `paths:` or `globs:` | A list (`[src/**/*.tsx, "*.css"]`, or `- item` lines) or a comma-separated string. The rule is added only while a file in context matches one of the globs. `paths: []` means never |
+| `alwaysApply: true` | Always added, whatever `globs` says (Cursor's `.mdc` form). `alwaysApply: false` with `globs` is conditional |
+
+The files in context are the paths you mention in the message (`src/app.tsx`, `@lib/util.ts`, attachments; not code blocks, URLs or absolute paths), the open and visible editors, and the files the agent has read or edited in this chat. Globs are relative to the workspace folder. A glob without `/` (`*.tsx`) matches at any depth.
+
+For example, this `.cursor/rules/react.mdc` is added only when a `.tsx` file is in context:
+
+```markdown
+---
+description: React conventions
+globs: src/**/*.tsx
+alwaysApply: false
+---
+Use function components and hooks.
+```
+
+When conditional rules are added, the chat shows *Conditional rules applied: …* under the turn, and `/memory` marks them as conditional. Front matter that cannot be read is ignored and the whole file is used as it is.
+
+Switch rules, commands, hooks and skills on or off in **Settings → Customize** (see [Customize]({{ '/docs/skills-and-agents/' | relative_url }}#customize-rules-commands-hooks-and-skills)).
 
 ### Cline and Cursor compatibility
 

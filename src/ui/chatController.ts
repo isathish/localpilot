@@ -5,18 +5,24 @@ import { SkillLearner } from '../agent/skillRecommender';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
 import { ChangeTracker } from '../agent/changeTracker';
+import { ChangedFile, gitCheckpoint, relativeIn, RestoreType } from '../agent/checkpoints';
+import { rewindAttachments } from './rewindDraft';
 import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { currentEditor, EditorState, WorkspaceContext } from '../context/workspaceContext';
 import { FileIndex } from '../context/fileIndex';
 import { MentionHit } from '../context/mentionSearch';
+import { MAX_ATTACHMENT_BYTES, searchCommits } from '../context/mentionResolvers';
+import { formatSize } from '../context/extractors';
 import { ProviderRegistry } from '../providers/registry';
 import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
+import { archiveCompaction } from '../sessions/transcriptArchive';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, UserAnswer, UserQuestion } from '../types';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
-import { captureScreenshot, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
+import { MAX_ATTACHMENTS } from './imageSize';
+import { captureScreenshot, IMAGE_EXT, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
 import { RunControl } from '../agent/runControl';
 import { WorktreeChange, WorktreeManager } from '../agent/worktrees';
 import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPrompt, TaskSuggestion } from '../agent/taskSuggestions';
@@ -29,6 +35,7 @@ import { agentTaskPrompt, CommandManager, CustomCommand, expandCommand, parseTas
 import * as path from 'path';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { formatBoard, TeamBoard } from '../agent/teamBoard';
+import { isPdfPath, openPdf } from './pdf/open';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -60,7 +67,7 @@ export type ToWebview =
   | { type: 'replay'; sessionId: string; items: ToWebview[]; startedAt: number; status?: string; truncated: boolean }
   /** `contextWindow` is the `localpilot.contextWindow` setting (0 = model maximum) so the meter shows the window a model is actually given. */
   /** `autoModel`: the id the router would answer an Auto chat with right now (the default model if set and reachable, else the best fit). */
-  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string> }
+  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string>; visionRouting?: boolean }
   | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off' }
   | { type: 'event'; event: AgentEvent }
   /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
@@ -83,14 +90,22 @@ export type ToWebview =
       type: 'changes';
       sessionId: string;
       files: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete' | 'rename'; added?: number; removed?: number }[];
+      /** Turns with file snapshots (a restore reverts every turn from the one picked on). */
       checkpoints: number[];
+      /** Turns with a git checkpoint taken before them. */
+      gitCheckpoints?: number[];
+      checkpointsEnabled?: boolean;
+      /** Files changed since the latest user message, for View changes under the latest answer. */
+      lastTurn?: { key: number; files: number };
       /** Present when the files come from the session's isolated worktree rather than the workspace. */
       worktree?: { path: string; applied: boolean; conflicts?: string[] };
     }
   | { type: 'image'; image: ImageAttachment }
+  | { type: 'insertMention'; ref: string }
   | { type: 'openFiles'; files: string[]; active?: string; selection?: boolean }
-  | { type: 'mentionResults'; query: string; items: MentionHit[] }
-  | { type: 'draft'; text: string; images?: string[] }
+  | { type: 'mentionResults'; query: string; items: MentionHit[]; commits?: { sha: string; subject: string }[] }
+  /** `append`: add the text below the current draft and the attachments to its chips instead of replacing them. */
+  | { type: 'draft'; text: string; images?: string[]; attachments?: string[]; append?: boolean }
   /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
   | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
   | { type: 'focusInput' }
@@ -120,7 +135,7 @@ export type FromWebview =
   | { type: 'renameSession'; id: string; title: string }
   | { type: 'pinSession'; id: string }
   | { type: 'forkSession'; id: string; uptoIndex?: number }
-  | { type: 'exportSession'; id: string }
+  | { type: 'exportSession'; id: string; format?: 'markdown' | 'html' }
   | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
   | { type: 'retry'; sessionId: string }
   | { type: 'stop'; sessionId: string }
@@ -160,7 +175,7 @@ export type FromWebview =
   | { type: 'autoSetupModels' }
   | { type: 'openExternal'; url: string }
   | { type: 'openInEditor' }
-  | { type: 'attachUri'; uri: string }
+  | { type: 'attachUri'; uri: string; insert?: boolean }
   | { type: 'pickImage' }
   | { type: 'captureScreenshot'; mode?: ScreenshotMode; delayMs?: number }
   | { type: 'captureUrl'; url?: string; mobile?: boolean; fullPage?: boolean }
@@ -174,7 +189,11 @@ export type FromWebview =
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
   | { type: 'showDiff'; sessionId: string; fsPath: string }
-  | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number }
+  /** `restoreType`: files only (`workspace`), conversation only (`task`) or both (the default). */
+  | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number; restoreType?: RestoreType }
+  /** Multi-file diff of what changed since the latest user message (`turn`) or in the whole chat (`session`). */
+  | { type: 'viewChanges'; sessionId: string; scope: 'turn' | 'session' }
+  | { type: 'openCheckpointSetting' }
   /** Edit & resend: drop this user message and everything after it, keep files as they are, put the text in the composer. */
   | { type: 'editMessage'; sessionId: string; messageIndex: number }
   | { type: 'runParallelPrompt' }
@@ -389,7 +408,18 @@ export class ChatController implements vscode.Disposable {
     this.pendingDraft = { text, at: Date.now() };
     this.broadcast({ type: 'draft', text });
   }
-  private pendingDraft?: { text: string; at: number };
+  private pendingDraft?: { text: string; at: number; attachments?: string[]; append?: boolean };
+
+  /** Adds chips and a draft paragraph to the current chat's composer and focuses it, without sending ("Add to Chat"). */
+  addToComposer(text: string, attachments: string[] = []): void {
+    this.pendingDraft = { text, at: Date.now(), attachments, append: true };
+    this.broadcast({ type: 'draft', text, attachments, append: true });
+  }
+
+  /** Adds an image to the composer of every chat surface (the PDF viewer's "Attach page as image"). */
+  attachImage(img: ImageAttachment): void {
+    this.broadcast({ type: 'image', image: img });
+  }
 
   /** Answers the surface that asked (side bar or editor tab); without one (commands) every surface gets it. */
   private replyTo(reply: Sink | undefined, m: ToWebview): void {
@@ -700,7 +730,49 @@ export class ChatController implements vscode.Disposable {
         return;
       }
     }
-    this.broadcast({ type: 'changes', sessionId, files: tracked, checkpoints: this.tracker.checkpoints(sessionId) });
+    this.broadcast({
+      type: 'changes',
+      sessionId,
+      files: tracked,
+      checkpoints: this.tracker.checkpoints(sessionId),
+      gitCheckpoints: (session?.checkpoints?.history ?? []).filter((e) => gitCheckpoint(session?.checkpoints, e.run)).map((e) => e.run),
+      checkpointsEnabled: getConfig().checkpointsEnabled,
+      lastTurn: await this.lastTurnChanges(session),
+    });
+  }
+
+  /** How many files changed since the active chat's latest message (git when it has a checkpoint, else the turn's snapshots). */
+  private async lastTurnChanges(s: Session | undefined): Promise<{ key: number; files: number } | undefined> {
+    const key = s && lastTurnKey(s);
+    if (!s || key === undefined || s.worktree || this.runs.has(s.id) || s.id !== this.activeSessionId) {
+      return undefined;
+    }
+    const entry = gitCheckpoint(s.checkpoints, key);
+    const changed = entry && this.runner.checkpoints ? await this.runner.checkpoints.changedFiles(entry).catch(() => undefined) : undefined;
+    // Counted the way viewChanges lists them, so the button never promises files the diff leaves out.
+    const viewable = async ([fsPath, original]: [string, string | undefined]) => this.inWorkspace(fsPath) && (original !== undefined || (await ChatController.exists(fsPath)));
+    let files = 0;
+    for (const snap of this.tracker.turnOriginals(s.id, key)) {
+      if ((!changed || relativeIn(entry!.root!, snap[0]) === undefined) && (await viewable(snap))) {
+        files++;
+      }
+    }
+    if (changed) {
+      files += changed.filter((f) => this.inWorkspace(path.join(entry!.root!, ...f.path.split('/')), entry!.root)).length;
+    }
+    return { key, files };
+  }
+
+  /** Whether a file belongs to the open workspace (a repository root can sit above it). */
+  private inWorkspace(fsPath: string, root?: string): boolean {
+    return vscode.workspace.workspaceFolders?.length ? !!vscode.workspace.getWorkspaceFolder(vscode.Uri.file(fsPath)) : !!root && relativeIn(root, fsPath) !== undefined;
+  }
+
+  private static exists(fsPath: string): Promise<boolean> {
+    return Promise.resolve(vscode.workspace.fs.stat(vscode.Uri.file(fsPath))).then(
+      () => true,
+      () => false
+    );
   }
 
   /** Whether this session's agent should work in an isolated worktree, per `localpilot.worktrees.mode`. */
@@ -1119,6 +1191,17 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'exportSession': {
+        if (msg.format === 'html') {
+          const html = await this.store.exportHtml(msg.id);
+          const name = (this.store.peek(msg.id)?.title ?? 'chat').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'chat';
+          const base = vscode.workspace.workspaceFolders?.[0]?.uri;
+          const target = html && (await vscode.window.showSaveDialog({ defaultUri: base ? vscode.Uri.joinPath(base, `${name}.html`) : undefined, filters: { HTML: ['html'] }, saveLabel: 'Export' }));
+          if (target) {
+            await vscode.workspace.fs.writeFile(target, Buffer.from(html, 'utf8'));
+            void vscode.window.showInformationMessage(`Chat exported to ${vscode.workspace.asRelativePath(target)}`);
+          }
+          return;
+        }
         const md = await this.store.exportMarkdown(msg.id);
         const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: md });
         await vscode.window.showTextDocument(doc);
@@ -1320,6 +1403,11 @@ export class ChatController implements vscode.Disposable {
           return;
         }
         try {
+          // `x.pdf:3` arrives as line 3: for a PDF that is the page.
+          if (isPdfPath(uri.path)) {
+            await openPdf(uri, msg.line);
+            return;
+          }
           const doc = await vscode.workspace.openTextDocument(uri);
           const ed = await vscode.window.showTextDocument(doc, { preview: true });
           if (msg.line) {
@@ -1382,8 +1470,8 @@ export class ChatController implements vscode.Disposable {
         try {
           const { provider, model: picked } = await this.providers.resolve(s.model);
           const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
-          const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined, scale: () => tokenCalibration.scale(model.id) });
-          if (s.messages.length > 6) {
+          const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined, scale: () => tokenCalibration.scale(model.id), strategy: getConfig().compactionStrategy === 'basic' ? 'basic' : 'agentic' });
+          if (s.messages.length > 6 && cm.strategy !== 'basic') {
             this.broadcast({ type: 'toast', level: 'info', text: `Compacting with ${model.name}…` });
           }
           const snapshot = s.messages;
@@ -1398,6 +1486,7 @@ export class ChatController implements vscode.Disposable {
             return;
           }
           if (res.removed > 0) {
+            archiveCompaction(this.store, s.id, s.compactions, s.messages, res.messages);
             s.messages = res.messages;
             s.compactions++;
             // contextTokens includes the system prompt and tools, which compaction leaves alone: subtract what was saved.
@@ -1430,6 +1519,7 @@ export class ChatController implements vscode.Disposable {
           s.compactions = 0;
           s.todos = [];
           s.workingSet = [];
+          await this.store.clearArchive(s.id);
           this.tracker.dropTurnsFrom(s.id, 0);
           this.store.save(s);
           this.broadcast(this.sessionMsg(s));
@@ -1454,11 +1544,18 @@ export class ChatController implements vscode.Disposable {
         try {
           const uri = vscode.Uri.parse(msg.uri);
           if (uri.scheme === 'file') {
-            const img = await readImage(uri.fsPath);
-            if (img) {
-              this.replyTo(reply, { type: 'image', image: img });
+            const stat = await vscode.workspace.fs.stat(uri);
+            const rel = vscode.workspace.asRelativePath(uri);
+            if (!(stat.type & vscode.FileType.Directory) && IMAGE_EXT.test(uri.fsPath)) {
+              // readImage explains a refusal (over 12 MB or 7,680 px) itself.
+              const img = await readImage(uri.fsPath);
+              if (img) {
+                this.replyTo(reply, { type: 'image', image: img });
+              }
+            } else if (!(stat.type & vscode.FileType.Directory) && stat.size > MAX_ATTACHMENT_BYTES) {
+              this.replyTo(reply, { type: 'toast', level: 'error', text: `${path.basename(uri.fsPath)} is ${formatSize(stat.size)}, over the ${formatSize(MAX_ATTACHMENT_BYTES)} attachment limit` });
             } else {
-              this.replyTo(reply, { type: 'toast', level: 'info', text: `attach:${vscode.workspace.asRelativePath(uri)}` });
+              this.replyTo(reply, msg.insert ? { type: 'insertMention', ref: rel } : { type: 'toast', level: 'info', text: `attach:${rel}` });
             }
           }
         } catch {
@@ -1503,8 +1600,10 @@ export class ChatController implements vscode.Disposable {
         this.broadcast(this.openFilesMsg());
         return;
       case 'mentionSearch': {
-        const items = await this.mentionIndex.search(msg.query, this.workspace.openEditors());
-        this.broadcast({ type: 'mentionResults', query: msg.query, items });
+        // Commits too, once the text could be a message word or a hash (not a path).
+        const q = msg.query.trim();
+        const [items, commits] = await Promise.all([this.mentionIndex.search(msg.query, this.workspace.openEditors()), q.length >= 3 && !/[/"]/.test(q) ? searchCommits(q, this.workspace.root, 10).catch(() => []) : []]);
+        this.broadcast({ type: 'mentionResults', query: msg.query, items, commits });
         return;
       }
       case 'openMention': {
@@ -1577,60 +1676,199 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'restoreCheckpoint':
-        await this.rewindTo(msg.sessionId, msg.messageIndex, true, reply);
+        await this.rewindTo(msg.sessionId, msg.messageIndex, msg.restoreType ?? 'both', reply);
         return;
       case 'editMessage':
-        await this.rewindTo(msg.sessionId, msg.messageIndex, false, reply);
+        await this.rewindTo(msg.sessionId, msg.messageIndex, 'edit', reply);
+        return;
+      case 'viewChanges':
+        await this.viewChanges(msg.sessionId, msg.scope);
+        return;
+      case 'openCheckpointSetting':
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.checkpoints.enabled');
         return;
     }
   }
 
   /**
-   * Rewinds a chat to one of the user's messages so it can be edited and sent again: that message and everything
-   * after it are removed and its text goes back into the composer. With `revertFiles` the files changed since that
-   * turn are restored too ("Restore checkpoint"); without it the work on disk is kept ("Edit").
+   * Rewinds a chat to one of the user's messages. `edit` and `task` remove that message and everything after it and
+   * put it (text, images, attachments) back into the composer, keeping the files; `workspace` puts the files back as
+   * they were before that turn and keeps the chat; `both` does both ("Restore checkpoint"). Files come back from the
+   * turn's git checkpoint when there is one (changes made by shell commands included), else from the file snapshots.
    */
-  private async rewindTo(sessionId: string, messageIndex: number, revertFiles: boolean, reply?: Sink): Promise<void> {
+  private async rewindTo(sessionId: string, messageIndex: number, type: RestoreType | 'edit', reply?: Sink): Promise<void> {
     if (this.compacting.has(sessionId)) {
       this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
       return;
     }
-    const s = this.store.get(sessionId);
-    if (!s || this.isRunning(s.id)) {
-      this.broadcast({ type: 'toast', level: 'error', text: `Stop the running agent before ${revertFiles ? 'restoring a checkpoint' : 'editing a message'}` });
-      return;
+    if (this.isRunning(sessionId)) {
+      if (type === 'edit') {
+        this.broadcast({ type: 'toast', level: 'error', text: 'Stop the running agent before editing a message' });
+        return;
+      }
+      // A restore cancels the run first: its edits are what the user wants undone.
+      if (!(await this.stopAndWait(sessionId))) {
+        this.broadcast({ type: 'toast', level: 'error', text: 'The agent did not stop in time; try restoring again' });
+        return;
+      }
     }
-    const target = s.messages[messageIndex];
-    if (!target || target.role !== 'user') {
+    const s = this.store.get(sessionId);
+    const target = s?.messages[messageIndex];
+    if (!s || !target || target.role !== 'user') {
       return;
     }
     const key = target.meta?.checkpoint;
-    // Worktree-isolated runs never snapshot into the tracker; their changes live in the worktree until applied or discarded.
-    const reverted = revertFiles && key !== undefined && !s.worktree ? await this.tracker.restoreToTurn(s.id, key) : 0;
-    const prompt = promptText(target);
-    s.messages = s.messages.slice(0, messageIndex);
-    s.contextTokens = 0;
-    this.store.save(s);
-    this.telemetry?.record({ type: 'checkpoint', action: revertFiles ? 'restore' : 'rewind', outcome: revertFiles && (key === undefined || s.worktree) ? 'skipped' : 'ok', files: revertFiles ? reverted : undefined });
-    if (!revertFiles && key !== undefined) {
-      this.tracker.dropTurnsFrom(s.id, key); // the removed turns can no longer be restored
+    const revertFiles = type === 'workspace' || type === 'both';
+    const rewindChat = type !== 'workspace';
+    // Worktree-isolated runs work in their own copy; their changes stay there until applied or discarded.
+    let restore = { restored: 0, failed: 0 };
+    let safetyStash: string | undefined;
+    if (revertFiles && key !== undefined && !s.worktree) {
+      const entry = gitCheckpoint(s.checkpoints, key);
+      try {
+        if (entry && this.runner.checkpoints) {
+          const r = await this.runner.checkpoints.restoreWorkspace(entry);
+          if (!r.ok) {
+            this.telemetry?.record({ type: 'checkpoint', action: 'restore', outcome: 'failed' });
+            const saved = r.safetyStash ? ' Your state before the restore is saved in git stash ("localpilot pre-restore").' : '';
+            this.broadcast({ type: 'toast', level: 'error', text: `Could not restore the checkpoint: ${r.error}.${saved}` });
+            return;
+          }
+          // The git snapshot covers only its repository; edits outside it (another root folder) come back from the turn snapshots.
+          const outside = await this.tracker.restoreTurn(s.id, key, (p) => relativeIn(entry.root!, p) === undefined);
+          restore = { restored: r.files + outside.restored, failed: outside.failed };
+          safetyStash = r.safetyStash;
+          await this.tracker.settle(s.id);
+        } else {
+          restore = await this.tracker.restoreTurn(s.id, key);
+        }
+      } catch (e) {
+        this.telemetry?.record({ type: 'checkpoint', action: 'restore', outcome: 'failed' });
+        throw e;
+      }
     }
-    this.broadcast(this.sessionMsg(s));
-    if (revertFiles) {
-      this.pushChanges(s.id);
+    if (rewindChat) {
+      // A message from before a compaction gets the original messages back from the transcript archive.
+      s.messages = await this.store.historyBefore(s, messageIndex);
+      s.contextTokens = 0;
+      // The removed turns can no longer be restored (snapshots of files that failed to restore stay for a retry).
+      if (key !== undefined && !restore.failed) {
+        this.tracker.dropTurnsFrom(s.id, key);
+        await this.runner.checkpoints?.dropFrom(s, key).catch((e) => this.log.warn(`checkpoint cleanup: ${String(e)}`));
+      }
+      this.store.save(s);
     }
-    this.replyTo(reply, { type: 'draft', text: prompt });
+    this.telemetry?.record({
+      type: 'checkpoint',
+      action: revertFiles ? 'restore' : 'rewind',
+      outcome: revertFiles && (key === undefined || s.worktree) ? 'skipped' : restore.failed ? 'failed' : 'ok',
+      files: revertFiles ? restore.restored : undefined,
+    });
+    if (rewindChat) {
+      this.broadcast(this.sessionMsg(s));
+      this.replyTo(reply, { type: 'draft', text: promptText(target), images: target.images, attachments: rewindAttachments(target.content) });
+    }
+    this.pushChanges(s.id);
+    const n = (k: number) => `${k} file${k === 1 ? '' : 's'}`;
+    const stashNote = safetyStash ? ' (your previous state is in git stash "localpilot pre-restore")' : '';
+    const what = type === 'workspace' ? 'Restored files' : 'Restored checkpoint';
     this.broadcast({
       type: 'toast',
       level: 'info',
-      text: !revertFiles
-        ? 'Edit the message and send it again — later turns were removed, files were kept'
-        : s.worktree
-          ? "Rewound the conversation — files in the isolated worktree were not reverted; use Discard to drop the agent's changes"
-          : reverted
-            ? `Restored checkpoint — reverted ${reverted} file${reverted === 1 ? '' : 's'}`
-            : 'Rewound the conversation — no file changes were recorded for this message',
+      text:
+        type === 'edit'
+          ? 'Edit the message and send it again — later turns were removed, files were kept'
+          : type === 'task'
+            ? 'Rewound the conversation — files were kept as they are'
+            : s.worktree
+              ? `${type === 'both' ? 'Rewound the conversation — f' : 'F'}iles in the isolated worktree were not reverted; use Discard to drop the agent's changes`
+              : key === undefined
+                ? 'No checkpoint was recorded for this message — files were not changed'
+                : restore.failed
+                  ? `${what} — reverted ${n(restore.restored)}; ${restore.failed} could not be restored (see the LocalPilot log)`
+                  : restore.restored
+                    ? `${what} — reverted ${n(restore.restored)}${stashNote}`
+                    : type === 'both'
+                      ? 'Rewound the conversation — no file changes since this message'
+                      : 'No file changes since this message',
     });
+  }
+
+  /** Stops a chat's run and waits (up to `ms`) for it to wind down; false when it is still running. */
+  private async stopAndWait(sessionId: string, ms = 15_000): Promise<boolean> {
+    this.stop(sessionId);
+    const deadline = Date.now() + ms;
+    while (this.runs.has(sessionId) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return !this.runs.has(sessionId);
+  }
+
+  /** Multi-file diff of what changed since the chat's latest message (`turn`) or of everything the chat changed (`session`). */
+  private async viewChanges(sessionId: string, scope: 'turn' | 'session'): Promise<void> {
+    const s = this.store.get(sessionId);
+    if (!s) {
+      return;
+    }
+    type Item = [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+    const exists = ChatController.exists;
+    const inWorkspace = (fsPath: string, root?: string) => this.inWorkspace(fsPath, root);
+    const fromSnapshots = async (originals: [string, string | undefined][], turn?: number): Promise<Item[]> => {
+      const items: Item[] = [];
+      for (const [fsPath, original] of originals) {
+        const file = vscode.Uri.file(fsPath);
+        const now = await exists(fsPath);
+        if ((now || original !== undefined) && inWorkspace(fsPath)) {
+          items.push([file, original === undefined ? undefined : ChangeTracker.originalUri(s.id, fsPath, turn), now ? file : undefined]);
+        }
+      }
+      return items;
+    };
+    let items: Item[];
+    let title: string;
+    if (scope === 'session') {
+      title = 'Changes in this chat';
+      items = await fromSnapshots(this.tracker.forSession(s.id).map((c) => [c.fsPath, c.original]));
+      if (!items.length) {
+        this.broadcast({ type: 'toast', level: 'info', text: 'No file changes found in this chat' });
+        return;
+      }
+    } else {
+      title = 'Changes since your last message';
+      const key = lastTurnKey(s);
+      const entry = key !== undefined ? gitCheckpoint(s.checkpoints, key) : undefined;
+      if (entry && this.runner.checkpoints) {
+        let files: ChangedFile[];
+        try {
+          files = await this.runner.checkpoints.changedFiles(entry);
+        } catch (e) {
+          this.log.warn(`view changes: ${String(e)}`);
+          this.broadcast({ type: 'toast', level: 'error', text: `Could not list the changes: ${e instanceof Error ? e.message : String(e)}` });
+          return;
+        }
+        items = files
+          .map((f): Item => {
+            const file = vscode.Uri.file(path.join(entry.root!, ...f.path.split('/')));
+            return [file, f.status === 'A' ? undefined : ChangeTracker.checkpointUri(entry.root!, entry.sha!, entry.kind, file.fsPath), f.status === 'D' ? undefined : file];
+          })
+          .filter(([file]) => inWorkspace(file.fsPath, entry.root));
+        const outside = [...this.tracker.turnOriginals(s.id, key!)].filter(([fsPath]) => relativeIn(entry.root!, fsPath) === undefined);
+        items.push(...(await fromSnapshots(outside, key)));
+      } else {
+        items = key !== undefined ? await fromSnapshots([...this.tracker.turnOriginals(s.id, key)], key) : [];
+      }
+      if (!items.length) {
+        const text =
+          key === undefined
+            ? 'No checkpoint was recorded for your last message'
+            : !entry && !getConfig().checkpointsEnabled
+              ? 'No file edits found since your last message — checkpoints are off (localpilot.checkpoints.enabled), so changes made by commands are not tracked'
+              : 'No file changes found since your last message';
+        this.broadcast({ type: 'toast', level: 'info', text });
+        return;
+      }
+    }
+    await vscode.commands.executeCommand('vscode.changes', title, items);
   }
 
   /**
@@ -1678,7 +1916,7 @@ export class ChatController implements vscode.Disposable {
       this._onDidChangeActive.fire(s);
     }
     if (this.pendingDraft && Date.now() - this.pendingDraft.at < 15_000) {
-      post({ type: 'draft', text: this.pendingDraft.text });
+      post({ type: 'draft', text: this.pendingDraft.text, attachments: this.pendingDraft.attachments, append: this.pendingDraft.append });
     }
     this.pendingDraft = undefined;
     // Runs in flight: the active one first so the visible transcript fills in before background tabs are rebuilt.
@@ -1730,7 +1968,7 @@ export class ChatController implements vscode.Disposable {
     const autoModel = models.length ? await this.providers.route({ role: 'agent', start: false }).then((r) => r.model.id, () => undefined) : undefined;
     // Group headings in the picker use the provider's name ("LM Studio", "colibri"), not its settings id.
     const providerNames = Object.fromEntries(this.providers.all.map((p) => [p.id, p.displayName]));
-    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames };
+    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames, visionRouting: getConfig().routing.enabled };
   }
 
   /** Entry point used by webviews and commands. Runs are per-session, so several sessions can stream at once. */
@@ -2084,9 +2322,8 @@ export class ChatController implements vscode.Disposable {
         this.broadcast(this.sessionMsg(session));
       }
       this._onDidChangeRuns.fire();
-      if (session.worktree) {
-        this.pushChanges(sessionId);
-      }
+      // Also refreshes View changes under the answer (the turn may have changed files through commands only).
+      this.pushChanges(sessionId);
       // Last agent of a batch done: offer the review (compare and pick for Best of N, review each for split tasks).
       if (session.group && session.group.size > 1 && !this.groupSessions(session.group.id).some((s) => this.runs.has(s.id))) {
         const g = session.group;
@@ -2189,7 +2426,7 @@ export class ChatController implements vscode.Disposable {
       if (e.sessionId !== s.id || e.type !== 'error' || (e.payload && typeof e.payload === 'object' && 'childId' in e.payload)) {
         return;
       }
-      error = String(e.payload ?? '').slice(0, 300);
+      error = (e.payload && typeof e.payload === 'object' ? String((e.payload as { message?: string }).message ?? '') : String(e.payload ?? '')).slice(0, 300);
     });
     try {
       const text = await this.send(s.id, task.prompt, [], undefined, { modelRef: task.model, unattended: true });
@@ -2291,6 +2528,10 @@ export class ChatController implements vscode.Disposable {
 
   /** Reads the attachments of a message; any that could not be read are reported in one toast instead of being dropped silently. */
   private async readAttachments(attachments: string[], session?: Session): Promise<string[]> {
+    if (attachments.length > MAX_ATTACHMENTS) {
+      this.broadcast({ type: 'toast', level: 'warn', text: `Only the first ${MAX_ATTACHMENTS} of ${attachments.length} attachments were read` });
+      attachments = attachments.slice(0, MAX_ATTACHMENTS);
+    }
     const root = session?.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
     const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a, root)));
     if (!root) {
@@ -2301,7 +2542,7 @@ export class ChatController implements vscode.Disposable {
       this.broadcast({ type: 'toast', level: 'warn', text: `Could not attach ${failed.join(', ')}` });
     }
     // Binaries, unreadable documents and oversized PDFs are attached as a note; say so in the chat too.
-    const notes = blocks.map((b) => /^<attachment [^>]*(?:kind="(?:binary|image)"|error="(?!not found)[^"]*")[^>]*>\n([^\n]*)/.exec(b ?? '')?.[1]).filter((n): n is string => !!n);
+    const notes = blocks.map((b) => /^<(?:attachment|url_content) [^>]*(?:kind="(?:binary|image)"|error="(?!not found)[^"]*")[^>]*>\n([^\n]*)/.exec(b ?? '')?.[1]).filter((n): n is string => !!n);
     if (notes.length) {
       this.broadcast({ type: 'toast', level: 'info', text: notes.join(' ') });
     }
@@ -2555,7 +2796,7 @@ export class ChatController implements vscode.Disposable {
         // Both kinds of standing context: the instruction files you write, and the notes the agent saved itself.
         void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => {
           const on = getConfig().memoryEnabled;
-          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope}${f.note ? `, ${f.note}: over the instruction size cap` : ''})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
+          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope}${f.paths ? `, conditional: ${f.paths.length ? f.paths.map((g) => `\`${g}\``).join(', ') : 'never'}${f.applied ? ', applied last turn' : ''}` : ''}${f.note ? `, ${f.note}: over the instruction size cap` : ''})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
           const shown = notes.slice(0, 30);
           const notesPart = !on
             ? '**Memory notes** are off (`localpilot.memory.enabled`).'
@@ -2726,6 +2967,17 @@ Rules:
 
 /** The model's rewrite without the wrappers small models add anyway ("Rewritten request:", quotes, a code fence). */
 /** What the user typed for a stored prompt: the command line they entered, or the content without the context blocks the UI prepended. */
+/** Checkpoint key of a chat's latest user message. */
+function lastTurnKey(s: Session): number | undefined {
+  for (let i = s.messages.length - 1; i >= 0; i--) {
+    const k = s.messages[i].role === 'user' ? s.messages[i].meta?.checkpoint : undefined;
+    if (k !== undefined) {
+      return k;
+    }
+  }
+  return undefined;
+}
+
 function promptText(m: ChatMessage): string {
   return (m.meta?.display ?? userText(m.content)).replace(/\n\n\[\d+ images? attached\]$/, '').trim();
 }

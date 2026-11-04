@@ -8,7 +8,7 @@ import { Tool, ToolDefinition } from '../types';
 import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
 import { forgetMcpToolOrigin, mcpToolOrigin, registerMcpToolOrigin } from '../agent/permissions';
 import { resolveApiKey } from '../providers/cloud';
-import { expandMcpServer, loadMcpFiles, McpLayer, McpSource, mcpFingerprint, mcpTrustKey, mergeMcpLayers, normalizeMcpServers, userMcpFile } from './config';
+import { expandMcpServer, loadMcpFiles, McpLayer, mcpLogLevel, McpSource, mcpFingerprint, mcpTimeoutMessage, mcpTimeoutSeconds, mcpTrustKey, mergeMcpLayers, normalizeMcpServers, userMcpFile } from './config';
 import type { McpTrust } from './trust';
 import { HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
 import { recordTelemetry } from '../telemetry/catalog';
@@ -20,6 +20,21 @@ interface McpToolInfo {
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
+export interface McpResourceInfo {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpPromptInfo {
+  name: string;
+  description?: string;
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
+type ListKind = 'tools' | 'resources' | 'prompts';
+
 /** `${env:NAME}` from the environment; `${secret:NAME}` the same way provider API keys are. */
 const lookupRef = (kind: 'env' | 'secret', name: string) => (kind === 'env' ? process.env[name] : resolveApiKey({ apiKey: `\${secret:${name}}` }));
 
@@ -29,6 +44,15 @@ export class McpClient implements vscode.Disposable {
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   tools: McpToolInfo[] = [];
+  resources: McpResourceInfo[] = [];
+  prompts: McpPromptInfo[] = [];
+  /** What the server said it supports in `initialize`. */
+  private capabilities: { tools?: unknown; resources?: unknown; prompts?: unknown } = {};
+  private listTimers = new Map<ListKind, ReturnType<typeof setTimeout>>();
+  /** The live `timeout` (seconds) and the file it is set in; read per request so an edit applies without a restart. */
+  settings?: () => { timeout?: number; file?: string } | undefined;
+  /** A list the server announced as changed was fetched again. */
+  onListChanged?: (kind: ListKind) => void;
 
   constructor(readonly name: string, private readonly cfg: McpServerConfig, private readonly log: vscode.LogOutputChannel, private readonly clientVersion: string, private readonly fetchImpl: typeof fetch = fetch) {}
 
@@ -63,7 +87,26 @@ export class McpClient implements vscode.Disposable {
     if (kind === 'stdio') {
       return new StdioTransport(cfg, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, (m) => this.log.debug(`[mcp:${this.name}] ${m}`));
     }
-    return kind === 'http' ? new StreamableHttpTransport(cfg.url!, headers, this.fetchImpl) : new SseTransport(cfg.url!, headers, this.fetchImpl);
+    if (kind === 'http') {
+      const http = new StreamableHttpTransport(cfg.url!, headers, this.fetchImpl);
+      http.debug = (m) => this.log.debug(`[mcp:${this.name}] ${m}`);
+      http.onSessionExpired = () => {
+        if (this.closing || this.transport !== http) {
+          return;
+        }
+        this.log.info(`[mcp:${this.name}] session expired (event stream); starting a new one`);
+        // Notifications sent while the session was gone are lost: fetch the lists again once the new one is up.
+        void this.renewSession(http).then(() => {
+          for (const k of ['tools', 'resources', 'prompts'] as const) {
+            if (k === 'tools' || this.capabilities[k]) {
+              this.listChanged(k);
+            }
+          }
+        }, () => undefined);
+      };
+      return http;
+    }
+    return new SseTransport(cfg.url!, headers, this.fetchImpl);
   }
 
   async start(): Promise<void> {
@@ -100,17 +143,12 @@ export class McpClient implements vscode.Disposable {
       }
     );
     const init = await this.handshake(kind);
-    const tools: McpToolInfo[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) {
-      const res = (await this.request('tools/list', cursor ? { cursor } : {})) as { tools?: McpToolInfo[]; nextCursor?: string };
-      tools.push(...(res?.tools ?? []));
-      cursor = res?.nextCursor;
-      if (!cursor) {
-        break;
+    this.tools = await this.listAll<McpToolInfo>('tools', true);
+    for (const k of ['resources', 'prompts'] as const) {
+      if (this.capabilities[k]) {
+        await this.refreshList(k);
       }
     }
-    this.tools = tools;
     this.log.info(`[mcp:${this.name}] ${kind}${this.cfg.url ? ` ${this.cfg.url}` : ''}: ${init?.serverInfo?.name ?? 'server'} ${init?.serverInfo?.version ?? ''} · protocol ${init?.protocolVersion ?? '?'} · ${this.tools.length} tools`);
   }
 
@@ -119,12 +157,71 @@ export class McpClient implements vscode.Disposable {
       protocolVersion: kind === 'http' ? '2025-06-18' : '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'LocalPilot', version: this.clientVersion },
-    })) as { protocolVersion?: string; serverInfo?: { name?: string; version?: string } };
+    })) as { protocolVersion?: string; capabilities?: McpClient['capabilities']; serverInfo?: { name?: string; version?: string } };
     if (init?.protocolVersion) {
       this.transport?.setProtocolVersion?.(init.protocolVersion);
     }
+    this.capabilities = init?.capabilities ?? {};
     await this.notify('notifications/initialized', {});
+    this.transport?.listen?.();
     return init;
+  }
+
+  /** Every page of `tools/list`, `resources/list` or `prompts/list`. */
+  private async listAll<T>(kind: ListKind, first = false): Promise<T[]> {
+    const out: T[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      // While connecting a refused request must reach start(), which may fall back to SSE.
+      const res = (await (first ? this.request(`${kind}/list`, cursor ? { cursor } : {}) : this.requestWithReinit(`${kind}/list`, cursor ? { cursor } : {}))) as Record<string, unknown> & { nextCursor?: string };
+      out.push(...((Array.isArray(res?.[kind]) ? res[kind] : []) as T[]));
+      cursor = res?.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+    return out;
+  }
+
+  /** Fetches one list again; a server that fails it keeps the previous list. */
+  private async refreshList(kind: ListKind): Promise<boolean> {
+    try {
+      if (kind === 'tools') {
+        this.tools = await this.listAll<McpToolInfo>(kind);
+      } else if (kind === 'resources') {
+        this.resources = await this.listAll<McpResourceInfo>(kind);
+      } else {
+        this.prompts = await this.listAll<McpPromptInfo>(kind);
+      }
+      return true;
+    } catch (e) {
+      this.log.debug(`[mcp:${this.name}] ${kind}/list: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  /** `notifications/<kind>/list_changed`: fetched again 300 ms after the last one, so a burst costs one request. */
+  private listChanged(kind: ListKind): void {
+    clearTimeout(this.listTimers.get(kind));
+    const t = setTimeout(() => {
+      this.listTimers.delete(kind);
+      if (this.closing) {
+        return;
+      }
+      void this.refreshList(kind).then((ok) => {
+        if (ok && !this.closing) {
+          this.log.info(`[mcp:${this.name}] ${kind} changed: ${kind === 'tools' ? this.tools.length : kind === 'resources' ? this.resources.length : this.prompts.length} now`);
+          this.onListChanged?.(kind);
+        }
+      });
+    }, 300);
+    t.unref?.();
+    this.listTimers.set(kind, t);
+  }
+
+  /** The request timeout in seconds, from the server's live configuration. */
+  get timeoutSeconds(): number {
+    return mcpTimeoutSeconds(this.settings?.()?.timeout ?? this.cfg.timeout);
   }
 
   /** One re-handshake shared by every call that found the HTTP session gone. */
@@ -145,25 +242,30 @@ export class McpClient implements vscode.Disposable {
         throw e;
       }
       this.log.info(`[mcp:${this.name}] session expired (${e.status}); starting a new one`);
-      this.reinit ??= (async () => {
-        transport.resetSession();
-        await this.handshake('http');
-      })().finally(() => (this.reinit = undefined));
-      try {
-        await this.reinit;
-      } catch (err) {
-        const down = err instanceof Error ? err : new Error(String(err));
-        this.log.warn(`[mcp:${this.name}] could not start a new session: ${down.message}`);
-        if (!this.closing) {
-          this.onDown?.(down);
-        }
-        throw down;
-      }
+      await this.renewSession(transport);
       return this.request(method, params, timeoutMs, signal);
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs = 120_000): Promise<{ text: string; isError: boolean }> {
+  /** Starts a new HTTP session (shared by every caller that found the old one gone); a failure takes the server down. */
+  private async renewSession(transport: StreamableHttpTransport): Promise<void> {
+    this.reinit ??= (async () => {
+      transport.resetSession();
+      await this.handshake('http');
+    })().finally(() => (this.reinit = undefined));
+    try {
+      await this.reinit;
+    } catch (err) {
+      const down = err instanceof Error ? err : new Error(String(err));
+      this.log.warn(`[mcp:${this.name}] could not start a new session: ${down.message}`);
+      if (!this.closing) {
+        this.onDown?.(down);
+      }
+      throw down;
+    }
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<{ text: string; isError: boolean }> {
     const res = (await this.requestWithReinit('tools/call', { name, arguments: args }, timeoutMs, signal)) as { content?: { type: string; text?: string; data?: string; uri?: string; resource?: { uri?: string; text?: string } }[]; isError?: boolean; structuredContent?: unknown };
     const parts = (res.content ?? []).map((c) =>
       c.type === 'text' ? c.text ?? '' : c.type === 'resource' ? c.resource?.text ?? `[resource ${c.resource?.uri ?? ''}]` : c.type === 'resource_link' ? `[resource ${c.uri ?? ''}]` : `[${c.type} content]`
@@ -186,11 +288,25 @@ export class McpClient implements vscode.Disposable {
     } else if (msg.method === 'ping' && msg.id !== undefined) {
       // Servers may ping the client; answer so they do not drop the connection.
       void this.transport?.send({ id: msg.id, result: {} }).catch(() => undefined);
+    } else if (msg.method && msg.id === undefined) {
+      this.onNotification(msg.method, msg.params);
     }
   }
 
-  private request(method: string, params: unknown, timeoutMs = 30_000, signal?: AbortSignal): Promise<unknown> {
+  private onNotification(method: string, params: unknown): void {
+    const changed = /^notifications\/(tools|resources|prompts)\/list_changed$/.exec(method);
+    if (changed) {
+      this.listChanged(changed[1] as ListKind);
+    } else if (method === 'notifications/message') {
+      const p = (params ?? {}) as { level?: unknown; logger?: unknown; data?: unknown };
+      const text = typeof p.data === 'string' ? p.data : JSON.stringify(p.data);
+      this.log[mcpLogLevel(p.level)](`[mcp:${this.name}]${typeof p.logger === 'string' && p.logger ? ` ${p.logger}:` : ''} ${text ?? ''}`);
+    }
+  }
+
+  private request(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown> {
     const id = this.nextId++;
+    const ms = timeoutMs ?? this.timeoutSeconds * 1000;
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
         return reject(new Error('Cancelled'));
@@ -205,8 +321,9 @@ export class McpClient implements vscode.Disposable {
       const t = setTimeout(() => {
         this.pending.delete(id);
         signal?.removeEventListener('abort', onAbort);
-        reject(new Error(`MCP ${method} timed out`));
-      }, timeoutMs);
+        void this.notify('notifications/cancelled', { requestId: id, reason: 'Timed out' });
+        reject(new Error(mcpTimeoutMessage(this.name, Math.round(ms / 1000), this.settings?.()?.file)));
+      }, ms);
       signal?.addEventListener('abort', onAbort, { once: true });
       const done = () => {
         clearTimeout(t);
@@ -246,6 +363,8 @@ export class McpClient implements vscode.Disposable {
 
   dispose(): void {
     this.closing = true;
+    this.listTimers.forEach((t) => clearTimeout(t));
+    this.listTimers.clear();
     this.failPending(new Error('MCP server stopped'));
     this.transport?.close();
   }
@@ -487,6 +606,7 @@ export class McpManager implements vscode.Disposable {
 
   private async startOne(name: string, cfg: McpServerConfig, gen = this.gen(name)): Promise<boolean> {
     const client = new McpClient(name, cfg, this.log, this.clientVersion);
+    client.settings = () => this.servers[name];
     this.started.set(name, mcpFingerprint(cfg));
     client.onMissingRefs = (missing) => {
       const key = `${name}\n${missing.join('\n')}`;
@@ -511,22 +631,20 @@ export class McpManager implements vscode.Disposable {
         client.dispose();
         return false;
       }
-      this.registrations.get(name)?.dispose();
-      this.registrations.delete(name);
       this.clients.get(name)?.dispose();
       this.clients.set(name, client);
       this.errors.delete(name);
-      const tools = client.tools.map((t) => this.toTool(client, t));
-      const forget = new vscode.Disposable(() =>
-        tools.forEach((t, i) => {
-          const o = mcpToolOrigin(t.definition.name);
-          if (o && o.server === name && o.tool === client.tools[i].name) {
-            forgetMcpToolOrigin(t.definition.name);
-          }
-        })
-      );
-      this.registrations.set(name, vscode.Disposable.from(this.tools.registerAll(tools), forget));
+      this.registerTools(name, client);
       client.onDown = (err) => this.serverDown(name, client, err);
+      client.onListChanged = (kind) => {
+        if (this.clients.get(name) !== client || this.disposed) {
+          return;
+        }
+        if (kind === 'tools') {
+          this.registerTools(name, client);
+        }
+        this._onDidChange.fire();
+      };
       return true;
     } catch (e) {
       clearTimeout(timer);
@@ -540,6 +658,23 @@ export class McpManager implements vscode.Disposable {
       client.dispose();
       return false;
     }
+  }
+
+  /** (Re)registers one server's tools, replacing only that server's previous ones. */
+  private registerTools(name: string, client: McpClient): void {
+    this.registrations.get(name)?.dispose();
+    this.registrations.delete(name);
+    const infos = [...client.tools];
+    const tools = infos.map((t) => this.toTool(client, t));
+    const forget = new vscode.Disposable(() =>
+      tools.forEach((t, i) => {
+        const o = mcpToolOrigin(t.definition.name);
+        if (o && o.server === name && o.tool === infos[i].name) {
+          forgetMcpToolOrigin(t.definition.name);
+        }
+      })
+    );
+    this.registrations.set(name, vscode.Disposable.from(this.tools.registerAll(tools), forget));
   }
 
   /**
@@ -611,29 +746,28 @@ export class McpManager implements vscode.Disposable {
     }
     registerMcpToolOrigin(registeredName, client.name, t.name);
     const live = () => this.servers[client.name];
-    const log = this.log;
     return {
       definition: {
         name: registeredName,
         description: `[MCP ${client.name}] ${t.description ?? t.name}`,
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },
-      approvalKind: 'network',
+      approvalKind: 'mcp',
       readOnly: t.annotations?.readOnlyHint === true,
       async execute(args, ctx) {
         if (ctx.readOnly && t.annotations?.readOnlyHint !== true) {
           return { content: 'This MCP tool may change files or remote state, which Plan/Ask mode does not allow. Switch to Agent mode to use it.', isError: true };
         }
         const cfg = live();
-        // A server's autoApprove list skips the prompt, unless the organisation's policy or the user's setting forbids or floors it.
-        const auto = !!cfg?.autoApprove?.includes(t.name) && !getManagedPolicy(log).approvals.network && getConfig().approvals.network !== 'never';
-        if (!auto && !(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'network'))) {
+        // A server's autoApprove list is only a hint: the approval gate honours it unless a rule, hook or the organisation asks.
+        const autoApprove = !!cfg?.autoApprove?.includes(t.name);
+        if (!(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'mcp', autoApprove ? { autoApprove } : undefined))) {
           return { content: 'User declined the MCP tool call.', isError: true };
         }
         const started = Date.now();
         let ok = false;
         try {
-          const r = await client.callTool(t.name, args, ctx.signal, cfg?.timeout ? Math.min(3600, Math.max(1, cfg.timeout)) * 1000 : undefined);
+          const r = await client.callTool(t.name, args, ctx.signal);
           ok = !r.isError;
           return { content: r.text, isError: r.isError };
         } finally {

@@ -28,12 +28,18 @@ export interface PromptOptions {
   canScreenshot?: boolean;
   canInspect?: boolean;
   canOpenBrowser?: boolean;
+  /** Whether web_search / web_fetch are offered (off with `localpilot.webSearch.enabled` or the org policy). */
+  canSearchWeb?: boolean;
+  /** `localpilot.preferredLanguage`; `auto` or unset adds no instruction. */
+  preferredLanguage?: string;
   /** Files touched so far in this session. */
   workingSet?: string[];
   /** Current checklist, if any. */
   todos?: TodoItem[];
   /** false for a throwaway folder (benchmark): the launching workspace's map and rules do not apply. */
   project?: boolean;
+  /** Files in context (workspace-relative, POSIX) that bring in conditional rules (`paths:` / `globs:` front matter). */
+  contextPaths?: readonly string[];
 }
 
 export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
@@ -67,21 +73,25 @@ You have no file-editing tools in this mode — every change goes through a work
   } else if (o.mode === 'plan') {
     parts.push(`# Plan mode
 You are in read-only planning mode. Investigate the codebase with read/search tools (analyze_workspace first for anything repository-wide, then fan out explore subagents per shard with run_parallel_subagents), then produce the plan BOTH as a manage_todos checklist AND as a short numbered explanation with the files to change and the rationale.
-The checklist must be directly executable: one item per implementation step, each with an "agent" (coder, tester, docs…), a complete self-contained "prompt" (goal, exact files/symbols, constraints, how to verify, what to report) and "dependsOn" listing the ids it needs finished first. Items that touch different files and do not depend on each other must NOT depend on each other, so they can run in parallel. Do NOT edit files or run commands that modify state. The user may switch to Agent mode and say "implement the plan" — run_todos_parallel then executes the checklist in dependency waves.`);
+The checklist must be directly executable: one item per implementation step, each with an "agent" (coder, tester, docs…), a complete self-contained "prompt" (goal, exact files/symbols, constraints, how to verify, what to report) and "dependsOn" listing the ids it needs finished first. Items that touch different files and do not depend on each other must NOT depend on each other, so they can run in parallel. Do NOT edit files or run commands that modify state: run_command only runs read-only commands here (git log/diff, ls, tests); anything that writes files, changes git state or installs packages is refused. The user may switch to Agent mode and say "implement the plan" — run_todos_parallel then executes the checklist in dependency waves.`);
   } else {
     parts.push(`# Ask mode
-Answer the user's question directly. You may read files and search the workspace for context, but do not modify anything.`);
+Answer the user's question directly. You may read files, search the workspace and run read-only commands (git log, ls, tests) for context, but do not modify anything — commands that write are refused.`);
   }
 
   if (o.toolsEnabled) {
     parts.push(`# Using tools
 - Actually invoke tools — never describe or print a tool call as text, and never claim a step is done unless the tool result confirms it.
 - Keep the user in the loop: before a batch of tool calls that starts a new phase (investigating, editing, verifying), write one short plain sentence saying what you are about to check or change and why — in the SAME message as the tool calls, never instead of them. Skip it for a single trivial read. When a result changes your plan, say so in one line before the next calls.
-- To locate code, search file contents with grep_search (text) or find_symbol (definitions); file_search only matches file names. Read a file (read_file) before answering questions about its details.
+- To locate code, search file contents with grep_search (text) or find_symbol (definitions); file_search only matches file names. Read a file (read_file) before answering questions about its details; read_file takes up to 8 files at once with "files": [{"path": …}].
 - Questions about what depends on what — "what breaks if I change X", "who uses this module", "which tests cover it" — go to repo_graph (action "impact", "dependents" or "dependencies"), not grep: it follows imports transitively and lists the affected tests. Before changing a shared file (a util, a type, a public API) check its impact the same way. repo_graph "symbol" finds where a name is defined; "overview"/"hubs" show a large codebase's structure.
 - Independent lookups (several reads, searches, diagnostics) go in ONE message so they run in parallel; dependent steps follow in the next message. Identical read-only calls are cached within a turn.
 - If a search comes back empty, try another tool or a broader query before concluding that something does not exist.
-- Research when the code cannot answer: an unfamiliar library or API, version-specific behaviour, an error message that is not explained by the code, or anything that may have changed recently — call web_search, then web_fetch the most authoritative hit (official docs, the project's repository or changelog) and base the answer on what it says, citing the source as a Markdown link. Do not guess at APIs you have not seen.${o.canSaveMemory !== false ? ' Keep durable findings (a quirk, a required flag, a version constraint) with memory_save so the next session starts with them.' : ''}`);
+${
+  o.canSearchWeb === false
+    ? '- Web access is turned off: there is no web search or fetch. Work from the code and the workspace, and say plainly when an answer would need checking online.'
+    : `- Research when the code cannot answer: an unfamiliar library or API, version-specific behaviour, an error message that is not explained by the code, or anything that may have changed recently — call web_search, then web_fetch the most authoritative hit (official docs, the project's repository or changelog) and base the answer on what it says, citing the source as a Markdown link. Do not guess at APIs you have not seen.${o.canSaveMemory !== false ? ' Keep durable findings (a quirk, a required flag, a version constraint) with memory_save so the next session starts with them.' : ''}`
+}`);
   }
 
   parts.push(`# Environment
@@ -95,7 +105,7 @@ Answer the user's question directly. You may read files and search the workspace
     parts.push(`# Project map\n${map}\nUse list_dir / read_file for details; the user can attach the full file list with @workspace.`);
   }
 
-  const rules = o.project === false ? undefined : await o.workspace.loadInstructions();
+  const rules = o.project === false ? undefined : await o.workspace.loadInstructions(undefined, o.contextPaths);
   if (rules) {
     parts.push(`# Project instructions\nThe repository provides these rules. Follow them; they override general defaults.\n${rules}`);
   }
@@ -131,8 +141,9 @@ This model has no native function calling, so call tools by emitting exactly one
 You may emit several consecutive tool_call blocks to run tools in parallel. Wait for results before continuing. When finished, answer normally without a tool_call block.`);
   }
 
+  const language = languageInstruction(o.preferredLanguage);
   parts.push(`# Output format
-Use Markdown. Reference code locations as \`path:line\`. Use fenced code blocks with a language tag for code. Keep answers focused.`);
+Use Markdown. Reference code locations as \`path:line\`. Use fenced code blocks with a language tag for code. Keep answers focused.${language ? `\n${language}` : ''}`);
 
   if (!o.roleOverride) {
     parts.push(`# Understanding the request
@@ -154,6 +165,15 @@ ${questionPolicy(o.clarify ?? 'smart', o.mode)}`);
     parts.push(o.append.trim());
   }
   return parts.join('\n\n');
+}
+
+/** The response-language line for `localpilot.preferredLanguage`; empty for `auto` (the model follows the user). */
+export function languageInstruction(language: string | undefined): string {
+  const l = language?.trim();
+  if (!l || l.toLowerCase() === 'auto') {
+    return '';
+  }
+  return `Always respond in ${l}. Keep code, identifiers and commands in their original form.`;
 }
 
 /**
@@ -195,7 +215,7 @@ function agentWorkingStyle(canSaveMemory: boolean, canInspect: boolean, canOpenB
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
 - Large tasks: split the work into independent pieces (by file, module or concern) and put the plan in manage_todos — every item gets an "agent" (coder, tester, docs, explore…) and a self-contained "prompt"; use "dependsOn" for items that need another item's result. Then call run_todos_parallel ONCE: independent items run concurrently and dependent ones follow automatically in later waves, with their prerequisites' reports attached. Keep only the final integration (combined diagnostics/tests, summary) for yourself. Never give two parallel items the same file to edit. Do not delegate tiny edits — a single-file, few-line change is faster done directly.
 - Whole-workspace analysis, audits or reviews: call analyze_workspace first (fast, no model call — layout, stacks, manifests and suggested shards), then fan out one explore/reviewer subagent per shard with run_parallel_subagents and merge their reports. Do not read a large repository file by file yourself.
-- Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase.
+- Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase. For several changes (in one file or many), send several edit_file calls in one response.
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
 ${canInspect ? `- For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports${canOpenBrowser ? ', re-inspect, and use open_browser to show the user' : ' and re-inspect'}.\n` : ''}- When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
 - Work in visible phases: understand (read, search) → plan (manage_todos for anything with more than two steps) → change (edits) → verify (diagnostics, tests, a browser check for UI) → report. Do not skip verification because the edit looked right.

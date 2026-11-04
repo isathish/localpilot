@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { Tool, ToolContext } from '../types';
+import * as fsp from 'fs/promises';
+import { Tool, ToolContext, ToolResult } from '../types';
 import { listRepos } from '../agent/repos';
 import { getConfig } from '../config';
 import { readPdf } from './pdf';
+import { unifiedDiff } from './lineDiff';
+import { lenientMatch, looksBinary, normalizeReadArgs, ReadRequest, renderWindow, windowBudget } from './readArgs';
+import { CACHE_EXPIRED, isCacheRef, toolResultCache } from '../context/toolResultCache';
 
 // Windows paths are case-insensitive and VS Code lowercases drive letters (`c:\`) while models and users write `C:\`.
 const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
@@ -71,44 +75,137 @@ function str(v: unknown, name: string): string {
   return v;
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+const MAX_READ_BYTES = 100 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** The file `uri` names, or the one in its folder whose name differs only in the kind of whitespace (U+202F in macOS screenshot names). */
+async function statLenient(uri: vscode.Uri, shown: string): Promise<{ uri: vscode.Uri; stat: vscode.FileStat }> {
+  try {
+    return { uri, stat: await vscode.workspace.fs.stat(uri) };
+  } catch {
+    const dir = vscode.Uri.file(path.dirname(uri.fsPath));
+    const names = await Promise.resolve(vscode.workspace.fs.readDirectory(dir)).then(
+      (entries) => entries.map(([n]) => n),
+      () => [] as string[]
+    );
+    const hit = lenientMatch(path.basename(uri.fsPath), names);
+    if (!hit) {
+      throw new Error(`${shown} not found. Check the path with list_dir or file_search.`);
+    }
+    const alt = vscode.Uri.file(path.join(dir.fsPath, hit));
+    return { uri: alt, stat: await vscode.workspace.fs.stat(alt) };
+  }
+}
+
+/** The first bytes of a file on disk; empty when it cannot be read directly. */
+async function headBytes(fsPath: string, n = 8192): Promise<Uint8Array> {
+  let fh: fsp.FileHandle | undefined;
+  try {
+    fh = await fsp.open(fsPath, 'r');
+    const buf = Buffer.alloc(n);
+    const { bytesRead } = await fh.read(buf, 0, n, 0);
+    return buf.subarray(0, bytesRead);
+  } catch {
+    return new Uint8Array();
+  } finally {
+    await fh?.close();
+  }
+}
+
+/** One file (or cached tool output) of a read_file call. Throws when the file cannot be found. */
+async function readOne(req: ReadRequest, ctx: ToolContext, maxChars: number): Promise<ToolResult> {
+  if (isCacheRef(req.path)) {
+    const text = toolResultCache.get(req.path);
+    if (text === undefined) {
+      return { content: `${req.path}: ${CACHE_EXPIRED}`, isError: true };
+    }
+    const lines = text.split('\n');
+    const w = renderWindow((i) => lines[i], lines.length, req.start, req.end, maxChars);
+    return { content: `Cached output: ${req.path} (${lines.length} lines total, showing ${w.start}-${w.end})\n${w.text}` };
+  }
+  const asked = resolveWorkspacePath(req.path, ctx);
+  const { uri, stat } = await statLenient(asked, displayPath(asked, ctx));
+  const shown = displayPath(uri, ctx);
+  if (stat.type & vscode.FileType.Directory) {
+    return { content: `${shown} is a directory, not a file. Use list_dir to see what it contains.`, isError: true };
+  }
+  if (/\.pdf$/i.test(uri.fsPath)) {
+    const pages = req.start !== undefined || req.end !== undefined ? `${req.start ?? 1}-${req.end ?? ''}` : undefined;
+    const r = await readPdf({ path: uri.fsPath, pages }, ctx);
+    return { ...r, content: `(read_file on a PDF: start_line/end_line are page numbers; prefer read_pdf)\n${r.content}` };
+  }
+  if (stat.size > MAX_READ_BYTES) {
+    return { content: `${shown} is ${(stat.size / 1024 / 1024).toFixed(0)} MB, too large to read (limit 100 MB). Search it with grep_search, or print a range with run_command (sed -n '1000,1100p' or grep -n).`, isError: true };
+  }
+  if (IMAGE_EXT.test(uri.fsPath)) {
+    if (stat.size > MAX_IMAGE_BYTES) {
+      return { content: `${shown} is an image of ${(stat.size / 1024 / 1024).toFixed(1)} MB, over the 10 MB limit for images.`, isError: true };
+    }
+    const ext = path.extname(uri.fsPath).slice(1).toLowerCase();
+    const data = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('base64');
+    return { content: `[image ${shown}: ${ext}, ${stat.size.toLocaleString()} bytes]`, images: [{ name: shown, data, mime: ext === 'jpg' ? 'image/jpeg' : `image/${ext}` }] };
+  }
+  // An open editor holds text (maybe unsaved); otherwise check the first bytes on disk before decoding the file as text.
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (!open && uri.scheme === 'file' && looksBinary(await headBytes(uri.fsPath))) {
+    return { content: `${shown}: binary file, ${stat.size.toLocaleString()} bytes. It cannot be shown as text.`, isError: true };
+  }
+  let total: number;
+  let line: (i: number) => string;
+  try {
+    const doc = open ?? (await vscode.workspace.openTextDocument(uri));
+    total = doc.lineCount;
+    line = (i) => doc.lineAt(i).text;
+  } catch {
+    // VS Code does not open very large files as documents; read them from disk.
+    const lines = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8').split(/\r?\n/);
+    total = lines.length;
+    line = (i) => lines[i];
+  }
+  const w = renderWindow(line, total, req.start, req.end, maxChars);
+  return { content: `File: ${shown} (${total} lines total, showing ${w.start}-${w.end})\n${w.text}` };
+}
+
 export const readFileTool: Tool = {
   parallelSafe: true,
   definition: {
     name: 'read_file',
     description:
-      'Read a file from the workspace. Returns numbered lines. For large files use start_line/end_line to read a range (1-based, inclusive).',
+      'Read files from the workspace. Returns numbered lines, at most 2,000 lines per file; use start_line/end_line (1-based, inclusive) to read further. Read several files at once with "files" (up to 8, read in parallel). Images are shown to vision models. Also reads lp-cache:// references from truncated tool output.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Workspace-relative or absolute path' },
         start_line: { type: 'integer', description: 'First line to read (1-based)' },
         end_line: { type: 'integer', description: 'Last line to read (inclusive)' },
+        files: {
+          type: 'array',
+          description: 'Several files in one call, instead of path',
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, start_line: { type: 'integer' }, end_line: { type: 'integer' } },
+            required: ['path'],
+          },
+        },
       },
-      required: ['path'],
     },
   },
   async execute(args, ctx) {
-    const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    if (/\.pdf$/i.test(uri.fsPath)) {
-      const s = args.start_line !== undefined ? Math.max(1, Math.floor(Number(args.start_line)) || 1) : undefined;
-      const e = args.end_line !== undefined ? Math.max(1, Math.floor(Number(args.end_line)) || 1) : undefined;
-      const pages = s !== undefined || e !== undefined ? `${s ?? 1}-${e ?? ''}` : undefined;
-      const r = await readPdf({ path: uri.fsPath, pages }, ctx);
-      return { ...r, content: `(read_file on a PDF: start_line/end_line are page numbers; prefer read_pdf)\n${r.content}` };
+    const reqs = normalizeReadArgs(args);
+    if (typeof reqs === 'string') {
+      return { content: reqs, isError: true };
     }
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const start = Math.max(1, Number(args.start_line ?? 1));
-    // At most 2,000 lines per read and 2,000 characters per line (minified code): a whole large file in one result
-    // would only be cut from the middle later, without telling the model where to continue.
-    const end = Math.min(doc.lineCount, Number(args.end_line ?? Math.min(doc.lineCount, start + 799)), start + 1999);
-    const lines: string[] = [];
-    for (let i = start - 1; i < end; i++) {
-      const t = doc.lineAt(i).text;
-      lines.push(`${String(i + 1).padStart(5)} | ${t.length > 2000 ? `${t.slice(0, 2000)} … [line cut: ${t.length.toLocaleString()} characters]` : t}`);
+    // Windows fit the tool-output limit, so the result is never truncated (and re-cached) by the agent loop.
+    const budget = windowBudget(getConfig().maxToolOutputChars, reqs.length);
+    if (reqs.length === 1) {
+      return readOne(reqs[0], ctx, budget);
     }
-    const header = `File: ${displayPath(uri, ctx)} (${doc.lineCount} lines total, showing ${start}-${end})`;
-    const more = end < doc.lineCount && args.end_line !== undefined && Number(args.end_line) > end ? `\n… read the rest with start_line ${end + 1}` : '';
-    return { content: `${header}\n${lines.join('\n')}${more}` };
+    const results = await Promise.all(
+      reqs.map((r) => readOne(r, ctx, budget).catch((e: unknown): ToolResult => ({ content: `File: ${r.path}\nError: ${e instanceof Error ? e.message : String(e)}`, isError: true })))
+    );
+    const images = results.flatMap((r) => r.images ?? []);
+    return { content: results.map((r) => r.content).join('\n\n'), isError: results.every((r) => r.isError), images: images.length ? images : undefined };
   },
 };
 
@@ -178,21 +275,27 @@ export const editFileTool: Tool = {
   definition: {
     name: 'edit_file',
     description:
-      'Replace an exact text snippet in a file. `old_text` must appear exactly once (include a few lines of context to make it unique). Use empty old_text to append.',
+      'Replace an exact text snippet in a file. `old_text` must appear exactly once (include a few lines of context to make it unique). Use empty old_text to append, or insert_line (instead of old_text) to insert new_text before that line. Keep old_text and new_text under 6,000 characters each; for larger changes send several edit_file calls in one response. Returns a diff of the change.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string' },
         old_text: { type: 'string', description: 'Exact text to replace (must match once)' },
         new_text: { type: 'string', description: 'Replacement text' },
+        insert_line: { type: 'integer', description: 'Insert new_text before this line (1-based; line count + 1 appends) instead of replacing old_text' },
       },
-      required: ['path', 'old_text', 'new_text'],
+      required: ['path', 'new_text'],
     },
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const rawOld = args.old_text ?? args.old_string;
+    const rawInsert = args.insert_line ?? args.insertLine;
+    const insertAt = rawInsert === undefined || rawInsert === null || rawInsert === '' ? undefined : Number(rawInsert);
+    const rawOld = args.old_text ?? args.old_string ?? (insertAt !== undefined ? '' : undefined);
     const rawNew = args.new_text ?? args.new_string;
+    if (insertAt !== undefined && !Number.isInteger(insertAt)) {
+      return { content: `insert_line must be a whole line number (got ${JSON.stringify(rawInsert)}). Nothing was changed.`, isError: true };
+    }
     if (typeof rawOld !== 'string' || typeof rawNew !== 'string') {
       return { content: 'edit_file needs "old_text" (exact text to replace, "" to append) and "new_text" (replacement) as strings. Nothing was changed.', isError: true };
     }
@@ -204,16 +307,23 @@ export const editFileTool: Tool = {
       doc = await vscode.workspace.openTextDocument(uri);
     } catch {
       // Models routinely "append to" a file that does not exist yet; with nothing to match that is a create.
-      if (!oldText) {
+      if (!oldText && (insertAt === undefined || insertAt === 1)) {
         return writeFileTool.execute({ path: args.path, content: newText }, ctx);
       }
       return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
     }
+    const tooBig = [['old_text', oldText], ['new_text', newText]].find(([, t]) => t.length > MAX_EDIT_CHARS);
+    if (tooBig) {
+      return { content: `${tooBig[0]} is ${tooBig[1].length.toLocaleString()} characters (limit ${MAX_EDIT_CHARS.toLocaleString()}). Split the edit into several smaller edit_file calls (send them in one response), or use write_file to replace the whole file. Nothing was changed.`, isError: true };
+    }
     const text = doc.getText();
-    // Models write "\n"; a CRLF file only matches (and stays consistent) with its own line endings.
+    // Models write "\n"; keep the file's own line endings (CRLF or LF) and convert the model's text to match.
     const crlf = text.includes('\r\n');
-    const eol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : s);
     const lf = (s: string) => s.replace(/\r\n/g, '\n');
+    const eol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : lf(s));
+    if (insertAt !== undefined) {
+      return insertLines(uri, doc, insertAt, eol(lf(newText).replace(/\n$/, '')), crlf ? '\r\n' : '\n', ctx);
+    }
     // Small models copy read_file's line-number gutter ("   12 | ") into old_text/new_text; take it off before matching.
     const bare = !text.includes(eol(oldText)) ? stripGutter(lf(oldText)) : undefined;
     if (bare !== undefined && text.includes(eol(bare))) {
@@ -284,6 +394,7 @@ export const editFileTool: Tool = {
       newText = m.newText;
       range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
     }
+    const before = doc.getText();
     const edit = new vscode.WorkspaceEdit();
     edit.replace(uri, range, oldText ? newText : `${crlf ? '\r\n' : '\n'}${newText}`);
     if (!(await vscode.workspace.applyEdit(edit))) {
@@ -292,9 +403,57 @@ export const editFileTool: Tool = {
     if (!(await doc.save())) {
       return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
     }
-    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.${note}`, data: { path: uri.fsPath, line: range.start.line + 1 } };
+    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.${note}${await diffSection(uri, before)}`, data: { path: uri.fsPath, line: range.start.line + 1 } };
   },
 };
+
+/** Larger old_text/new_text is refused: small models garble long verbatim copies, and one bad character fails the match. */
+const MAX_EDIT_CHARS = 6000;
+
+/** The change from `before` to the file's current text, as a unified diff section of a tool result. */
+async function diffSection(uri: vscode.Uri, before: string): Promise<string> {
+  const after = (await vscode.workspace.openTextDocument(uri)).getText();
+  const diff = unifiedDiff(before, after, { maxLines: 200 });
+  return diff ? `\n\nDiff:\n${diff}` : '';
+}
+
+/** edit_file with insert_line: `text` (already in the file's line endings, no trailing newline) goes before line `at`. */
+async function insertLines(uri: vscode.Uri, doc: vscode.TextDocument, at: number, text: string, eolStr: string, ctx: ToolContext): Promise<ToolResult> {
+  const count = (t: string) => (t === '' ? 0 : t.split(/\r?\n/).length - (/\n$/.test(t) ? 1 : 0));
+  const total = count(doc.getText());
+  if (at < 1 || at > total + 1) {
+    return { content: `insert_line ${at} is out of range: ${displayPath(uri, ctx)} has ${total} lines, so use 1-${total + 1} (${total + 1} appends). Nothing was changed.`, isError: true };
+  }
+  const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview('', text.replace(/\r\n/g, '\n')), 'write');
+  if (!ok) {
+    return { content: 'User declined the edit.', isError: true };
+  }
+  await ctx.trackChange(uri.fsPath);
+  try {
+    doc = await vscode.workspace.openTextDocument(uri);
+  } catch {
+    return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+  }
+  const before = doc.getText();
+  if (count(before) !== total) {
+    return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+  }
+  const end = doc.positionAt(before.length);
+  const edit = new vscode.WorkspaceEdit();
+  if (at <= total) {
+    edit.insert(uri, new vscode.Position(at - 1, 0), `${text}${eolStr}`);
+  } else {
+    edit.insert(uri, end, before === '' || /\n$/.test(before) ? `${text}${eolStr}` : `${eolStr}${text}`);
+  }
+  if (!(await vscode.workspace.applyEdit(edit))) {
+    return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
+  }
+  if (!(await doc.save())) {
+    return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
+  }
+  const n = text.split('\n').length;
+  return { content: `Inserted ${n} line${n === 1 ? '' : 's'} at line ${at} of ${displayPath(uri, ctx)}.${await diffSection(uri, before)}`, data: { path: uri.fsPath, line: at } };
+}
 
 export const listDirTool: Tool = {
   parallelSafe: true,

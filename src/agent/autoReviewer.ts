@@ -3,7 +3,7 @@ import { getConfig } from '../config';
 import { effectiveContextWindow } from '../context/contextManager';
 import type { ProviderRegistry } from '../providers/registry';
 
-export type ApprovalKind = 'terminal' | 'write' | 'delete' | 'network';
+export type ApprovalKind = 'terminal' | 'write' | 'delete' | 'network' | 'mcp';
 
 export interface AutoReviewRequest {
   kind: ApprovalKind;

@@ -33,7 +33,7 @@ LocalPilot records the commands you run in any VS Code terminal that has shell i
 |---|---|
 | Explain the last output | Right-click a terminal → **LocalPilot: Explain Terminal Output** |
 | Fix a failed command | Right-click a terminal → **LocalPilot: Fix Failed Command**. It takes the most recent command that exited non-zero, opens an Agent chat and asks it to find the cause, fix it and re-run the command |
-| Attach the output | Right-click a terminal → **LocalPilot: Add Terminal Output to Chat**, or type `@terminal` in the chat |
+| Attach the output | Right-click a terminal → **LocalPilot: Add Terminal Output to Chat**, or type `@terminal` in the chat. With text selected in the terminal, the selection is drafted as a **Terminal output:** block instead (your clipboard is left as it was); otherwise the last command and its output are attached |
 | Generate a shell command | <kbd>⌘⌥K</kbd> (<kbd>Ctrl+Alt+K</kbd>) in a terminal, or right-click → **LocalPilot: Generate Terminal Command…** |
 
 ## The `localpilot` CLI
@@ -45,7 +45,7 @@ LocalPilot records the commands you run in any VS Code terminal that has shell i
 ### Install
 
 - **Inside VS Code.** Run *LocalPilot: Open LocalPilot Terminal*. It is also in the chat toolbar's ⋯ menu, and in the terminal **+** dropdown as the **LocalPilot** profile. The CLI is already on `PATH` in that terminal.
-- **In any shell.** Run *LocalPilot: Install 'localpilot' CLI in PATH*. It writes `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`). The script finds the newest installed LocalPilot after updates. It needs Node.js 18.17+ (20+ recommended); with an older or missing `node` the script uses VS Code's bundled runtime. If `~/.local/bin` is not on your `PATH`, the notification tells you the line to add.
+- **In any shell.** Run *LocalPilot: Install 'localpilot' CLI in PATH*. It writes `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`). The script finds the newest installed LocalPilot after updates. It needs Node.js 18.17+ (20+ recommended); with an older or missing `node` the script uses VS Code's bundled runtime. Reading PDFs (`read_pdf`, PDF attachments) needs Node.js 22.13 or newer; on an older Node that tool returns an error and everything else works. If `~/.local/bin` is not on your `PATH`, the notification tells you the line to add.
 
 ### Examples
 
@@ -85,6 +85,9 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
 | `localpilot eval [--models a,b]` | Benchmarks models on real coding tasks; see [Benchmarking models](#benchmarking-models) |
 | `localpilot scan [folder]` | Security scan: vulnerable dependencies, committed secrets and risky code; see [Security scanning](#security-scanning) |
+| `localpilot history [--json] [--limit 50]` | Lists the sessions saved in this folder, newest first, with title, age, message count and model. `--json` prints them as JSON |
+| `localpilot history delete <id>` | Deletes a saved session (by id, unique id prefix or list number) |
+| `localpilot history export <id> [-o file]` | Exports a session as Markdown (printed, or written to `-o file.md`) or as a standalone HTML page (`-o file.html`) |
 | `localpilot work [--once] [--max N]` | Takes tasks from the [shared board](parallel-agents.md#the-shared-board) (`.localpilot/board`) one after another until none is left; run several for parallel workers |
 
 ### Benchmarking models
@@ -159,16 +162,26 @@ In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrad
 | `--agent`, `--ask`, `--plan`, `--multitask`, `--debug` | Mode (default `agent`) |
 | `-i`, `--isolate` | Work in an isolated git worktree. Your checkout is untouched while the agent works. A one-shot run applies the result back as uncommitted changes when it ends |
 | `--no-apply` | With `--isolate`: leave the result in the worktree and print its path |
+| `-c`, `--continue` | Continue the most recent session in this folder. With a task, it runs in that session; without one, the REPL opens in it |
+| `-r`, `--resume [id]` | Resume a saved session by id or list number. Without an id, shows a numbered list (title, age, messages, model) and reads a number |
+| `--data-dir <dir>` | Where sessions are saved (default `~/.localpilot`; also `LOCALPILOT_DATA_DIR`) |
 | `-m`, `--model <provider/model>` | Model for this run |
 | `-f`, `--file <path>` | Attach a file; repeatable. `path#L10-L20` for a range |
 | `-y`, `--yes` | Approve every command, edit and network call |
 | `-C`, `--cwd <dir>` | Workspace root (default: current directory) |
 | `-p`, `--print` | Print only the final answer; no tool log, non-interactive |
 | `--no-mcp` | Do not start MCP servers |
+| `--compaction <strategy>` | How a full context is compacted for this run: `agentic` (model summary), `basic` (no model call) or `off`. Overrides `localpilot.compaction.strategy` |
 | `-v`, `--verbose` | Show tool arguments and debug logs |
 | `--ide` (`--vscode`) | Open the task in VS Code instead of running it in the shell |
 | `--settings`, `--setup` | Open LocalPilot Settings or the setup wizard in VS Code |
 | `-h`, `--help`; `-V`, `--version` | Help, version |
+
+### Saved sessions
+
+Every CLI session is saved after each turn, per folder, under `~/.localpilot/workspaces/<hash>/sessions` (`<hash>` is derived from the folder path; `--data-dir` or `LOCALPILOT_DATA_DIR` moves the root). Quit, then `localpilot -c` to carry on where you left off, or `localpilot -r` to pick an older one.
+
+VS Code lists these sessions in the chat history of the same folder, marked **CLI** (turn off with `localpilot.history.includeCli`). Continuing one in VS Code saves it with the editor's chats; deleting it there deletes the CLI's copy too. Forks made in either place show "forked from …" in the history.
 
 ### Interactive session
 
@@ -184,6 +197,9 @@ Run `localpilot` with no task to start a session. These commands are available:
 | `/isolate`, `/apply`, `/discard` | Move to a git worktree; bring its changes into your checkout; throw them away |
 | `/commands`, `/permissions`, `/hooks` | Custom commands, permission rules, hooks (see [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }})) |
 | `/clear` | Clear the conversation |
+| `/history` | List the saved sessions in this folder |
+| `/resume [N\|id]` | Switch to a saved session (without an argument, pick from the list) |
+| `/fork [name]` | Copy this session and continue in the copy; the original stays as it was. History shows "forked from …" |
 | `/doctor` | Run the checks from `localpilot doctor` |
 | `/help`, `/exit` (`/quit`, `/q`) | Help, leave |
 | `/<custom-command> …` | Run a custom slash command |

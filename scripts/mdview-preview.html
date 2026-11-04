@@ -1,35 +1,72 @@
 <!doctype html>
-<!-- Dev harness for media/mdview.js: open in a browser, no VS Code needed. -->
+<!-- Dev harness for media/mdview.js: open in a browser, no VS Code needed. ?theme=light | hc | hcl switches the theme;
+     Mermaid needs a build first (dist/webview/mermaid.js). window.__send({type:'scrollToLine', line: 30}) drives scroll sync. -->
 <html><head><meta charset="utf-8"><title>LocalPilot Markdown reader preview</title>
 <style>
-:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-textLink-foreground:#4daafc; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-notifications-background:#252526; --vscode-notifications-foreground:#ccc; --vscode-errorForeground:#f48771; }
+:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-textLink-foreground:#4daafc; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-notifications-background:#252526; --vscode-notifications-foreground:#ccc; --vscode-errorForeground:#f48771; --vscode-editorInfo-foreground:#3794ff; --vscode-editorWarning-foreground:#cca700; --vscode-editorError-foreground:#f14c4c; --vscode-input-background:#3c3c3c; --vscode-input-foreground:#ccc; }
+.vscode-light { --vscode-editor-background:#ffffff; --vscode-editor-foreground:#1f1f1f; --vscode-foreground:#3b3b3b; --vscode-descriptionForeground:#717171; --vscode-widget-border:#d4d4d4; --vscode-textLink-foreground:#005fb8; --vscode-notifications-background:#fff; --vscode-notifications-foreground:#3b3b3b; --vscode-errorForeground:#a1260d; --vscode-editorInfo-foreground:#1a85ff; --vscode-editorWarning-foreground:#bf8803; --vscode-editorError-foreground:#e51400; --vscode-input-background:#fff; --vscode-input-foreground:#3b3b3b; }
+.vscode-high-contrast { --vscode-editor-background:#000; --vscode-editor-foreground:#fff; --vscode-foreground:#fff; --vscode-descriptionForeground:#fff; --vscode-contrastBorder:#6fc3df; --vscode-contrastActiveBorder:#f38518; --vscode-textLink-foreground:#21a6ff; }
+.vscode-high-contrast-light { --vscode-editor-background:#fff; --vscode-editor-foreground:#000; --vscode-foreground:#000; --vscode-descriptionForeground:#000; --vscode-contrastBorder:#0f4a85; --vscode-contrastActiveBorder:#b5200d; --vscode-textLink-foreground:#0f4a85; }
 </style>
+<link rel="stylesheet" href="../dist/webview/katex/katex.min.css">
 <link rel="stylesheet" href="../media/mdview.css">
-</head><body>
+</head><body class="vscode-dark">
 <header id="bar" class="bar">
   <div class="meta"><b id="title">Document</b><span id="subtitle"></span></div><span class="spacer"></span>
   <button id="toc" class="ib" title="Outline" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
+  <button id="wrap" class="ib" title="Wrap" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8m1.5-1.5L8 12l1.5 1.5M2.5 12h3"/></svg></button>
   <button id="smaller" class="ib" title="Smaller"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
   <button id="larger" class="ib" title="Larger"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
   <button id="copy" class="ib" title="Copy"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
   <button id="save" class="ib" title="Save as"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
   <button id="open" class="ib" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
+  <button id="prefs" class="ib txt" title="Reading settings (a)" aria-haspopup="true" aria-expanded="false">Aa</button>
+  <button id="more" class="ib" title="More actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
+  <button id="ask" class="ib hidden" title="Ask LocalPilot about this document"><svg viewBox="0 0 16 16"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5A1.5 1.5 0 0 1 12 10.5H7L4 13v-2.5a1.5 1.5 0 0 1-1.5-1.5Z"/></svg></button>
 </header>
-<div id="layout" class="layout"><nav id="outline" class="outline hidden"></nav><main id="doc" class="doc"><div class="loading">Rendering…</div></main></div>
+<div id="prefs-pop" class="pop hidden" role="dialog" aria-label="Reading settings">
+  <div class="row"><span>Width</span><div class="seg" data-key="width"><button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button></div></div>
+  <div class="row"><span>Font</span><div class="seg" data-key="font"><button data-v="sans">Sans</button><button data-v="serif">Serif</button><button data-v="editor">Editor</button></div></div>
+  <div class="row"><span>Line height</span><div class="seg" data-key="lineHeight"><button data-v="1.5">Tight</button><button data-v="1.65">Normal</button><button data-v="1.8">Loose</button></div></div>
+  <div class="row"><span>Text size</span><div class="seg"><button data-size="-1" title="Smaller text">−</button><output id="size-val">15</output><button data-size="1" title="Larger text">+</button></div></div>
+</div>
+<div id="more-pop" class="pop menu hidden" role="menu">
+  <button role="menuitem" data-act="html">Export HTML…</button>
+  <button role="menuitem" data-act="pdf">Export PDF…</button>
+  <button role="menuitem" data-act="clipboard">Copy HTML</button>
+</div>
+<button id="ask-sel" class="ask-sel hidden" title="Ask LocalPilot about the selection">Ask LocalPilot</button>
+<div id="layout" class="layout"><nav id="outline" class="outline hidden"><input id="filter" class="filter hidden" type="search" placeholder="Filter headings" /><div id="outline-list"></div></nav><main id="doc" class="doc"><div class="loading">Rendering…</div></main></div>
 <div id="toasts"></div>
 <script>
+const theme = new URLSearchParams(location.search).get('theme');
+document.body.className = document.documentElement.className = { light: 'vscode-light', hc: 'vscode-high-contrast', hcl: 'vscode-high-contrast-light' }[theme] || 'vscode-dark';
 window.__posted = [];
-window.acquireVsCodeApi = () => ({ postMessage(m) { window.__posted.push(m); if (m.type === 'ready') { window.dispatchEvent(new MessageEvent('message', { data: { type: 'content', title: 'design.md', subtitle: 'docs/design/design.md', isFile: true, fontSize: 15, words: 412, markdown: '# x', html: `
-<h1>Dice parser — design</h1><p>Links: requirements → <a href="../requirements/dice.md">dice.md</a>, external <a href="https://example.com">example</a>, code <a href="src/dice.py:12">src/dice.py:12</a>.</p>
-<h2>Summary</h2><p>One paragraph: what we build and the <strong>shape</strong> of the solution with <code>inline code</code>.</p>
-<blockquote><p>Keep it boring.</p></blockquote>
-<h2>Architecture</h2><ul><li>Parser</li><li>Roller<ul><li>RNG</li></ul></li></ul>
-<h3>File changes</h3><table><thead><tr><th>Path</th><th>Change</th></tr></thead><tbody><tr><td>src/dice.py</td><td>edit</td></tr><tr><td>tests/test_dice.py</td><td>new</td></tr></tbody></table>
-<h2>Decisions</h2><ul class="contains-task-list"><li class="task-list-item"><input type="checkbox" checked disabled> single regex</li><li class="task-list-item"><input type="checkbox" disabled> i18n</li></ul>
-<pre><code class="language-python hljs"><span class="hljs-keyword">def</span> <span class="hljs-title function_">roll</span>(n: <span class="hljs-built_in">str</span>) -&gt; <span class="hljs-built_in">int</span>:
-    <span class="hljs-comment"># parse</span>
+window.__send = (data) => window.dispatchEvent(new MessageEvent('message', { data }));
+window.acquireVsCodeApi = () => ({ postMessage(m) { window.__posted.push(m); if (m.type === 'ready') { window.__send({ type: 'content', title: 'design.md', subtitle: 'docs/design/design.md', isFile: true, fontSize: 15, canAsk: true, prefs: { fontSize: 15, width: 'normal', font: 'sans', lineHeight: 1.65 }, prefsCss: { '--fs': '15px', '--measure': '80ch', '--font': 'var(--vscode-font-family)', '--lh': '1.65' }, words: 412, markdown: '# x', syncScroll: true, isCustomEditor: false, outlineDepth: 3, frontMatterMode: 'collapsed', pathRef: 'docs/design/design.md', lineOffset: 4,
+  frontMatter: { title: 'Dice parser', tags: ['design', 'parser'], draft: false, reviewers: { lead: 'ana' } },
+  mermaidSrc: new URLSearchParams(location.search).get('mermaid') || '../dist/webview/mermaid.js', html: `
+<h1 data-line="0" class="code-line">Dice parser — design</h1><p data-line="2" class="code-line">Links: requirements → <a href="../requirements/dice.md#scope">dice.md#scope</a>, external <a href="https://example.com">example</a>, code <a href="src/dice.py#L12-L20">src/dice.py#L12-L20</a>, spec <a href="spec.pdf#page=3">spec.pdf#page=3</a>, ignored <a href="javascript:alert(1)">script</a>. A claim<sup class="fn-ref"><a href="#fn-src" id="fnref-src">1</a></sup>.</p>
+<p data-line="4" class="code-line">[[toc]]</p>
+<h2 data-line="6" class="code-line">Summary</h2><p data-line="8" class="code-line">One paragraph: what we build and the <strong>shape</strong> of the solution with <code>inline code</code>.</p>
+<blockquote data-line="10" class="code-line"><p>[!NOTE]<br>Keep it boring.</p></blockquote>
+<blockquote data-line="12" class="code-line"><p>[!WARNING]<br>Rolls above 1000 dice are rejected.</p></blockquote>
+<blockquote data-line="14" class="code-line"><p>A plain quote.</p></blockquote>
+<h2 data-line="16" class="code-line">Architecture</h2><ul data-line="18" class="code-line"><li>Parser</li><li>Roller<ul><li>RNG</li></ul></li></ul>
+<pre data-line="21"><code class="language-mermaid">flowchart LR
+  A[Input] --> B{Parse}
+  B -->|ok| C[Roll]
+  B -->|error| D[Message]</code></pre>
+<pre data-line="27"><code class="language-mermaid">flowchart LR
+  A --> </code></pre>
+<h3 data-line="31" class="code-line">File changes</h3><table data-line="33" class="code-line"><thead><tr><th>Path</th><th>Change</th></tr></thead><tbody><tr><td>src/dice.py</td><td>edit</td></tr><tr><td>tests/test_dice.py</td><td>new</td></tr></tbody></table>
+<h2 data-line="37" class="code-line">Decisions</h2><ul class="contains-task-list"><li class="task-list-item"><input type="checkbox" checked disabled> single regex</li><li class="task-list-item"><input type="checkbox" disabled> i18n</li></ul>
+<pre data-line="41"><code class="language-python hljs"><span class="hljs-keyword">def</span> <span class="hljs-title function_">roll</span>(n: <span class="hljs-built_in">str</span>) -&gt; <span class="hljs-built_in">int</span>:
+    <span class="hljs-comment"># parse a very long line that should wrap when the wrap toggle is on so the reader does not need to scroll sideways at all</span>
     <span class="hljs-keyword">return</span> <span class="hljs-number">4</span></code></pre>
-<h2>Risks</h2><p>text</p><h2>Testing</h2><p>text</p>` } })); } }, getState() { return null; }, setState() {} });
+<p data-line="46"><img src="missing/diagram.png" alt="architecture diagram"></p>
+<h2 data-line="48" class="code-line">Risks</h2><p data-line="50">text</p><h2 data-line="52" class="code-line">Testing</h2><p data-line="54">text</p>
+<section class="footnotes"><hr><ol><li id="fn-src">From the <em>2024</em> survey. <a href="#fnref-src" class="fn-back">↩</a></li></ol></section>` }); } }, getState() { return null; }, setState() {} });
 </script>
 <script src="../media/mdview.js"></script>
 </body></html>

@@ -13,4 +13,15 @@ esbuild.buildSync({
   logLevel: 'warning',
   alias: { vscode: path.resolve(__dirname, 'vscode-stub.js') },
 });
+// The PDF extractor child, next to the bundle as in dist/; pdf.js straight from the package.
+esbuild.buildSync({
+  entryPoints: [path.resolve(__dirname, '..', 'src', 'pdf', 'extractChild.ts')],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'cjs',
+  outfile: path.resolve(__dirname, '..', 'out', 'pdf', 'extract-child.js'),
+  logLevel: 'warning',
+});
+process.env.LOCALPILOT_PDFJS_DIR ??= path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build');
 require(outfile);

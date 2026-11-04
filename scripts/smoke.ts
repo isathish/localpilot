@@ -33,13 +33,14 @@ import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
 import { parseMemoryNotes, runDigest } from '../src/agent/autoMemory';
 import { irrelevantTools } from '../src/agent/toolRelevance';
-import { checkpointRef, isOrphanCheckpoint, pickOutcome, recordCheckpoint, SessionCheckpoints } from '../src/agent/checkpoints';
+import { checkpointChanges, checkpointRef, gitCheckpoint, isOrphanCheckpoint, parseNameStatus, pickOutcome, recordCheckpoint, relativeIn, SessionCheckpoints } from '../src/agent/checkpoints';
+import { rewindAttachments } from '../src/ui/rewindDraft';
 import { foldersOf, fuzzyMatch, MentionEntry, rankMentions } from '../src/context/mentionSearch';
 import { getEventListeners } from 'events';
 import { onAbort, sleep as rsleep } from '../src/agent/resilience';
 import { withTimeout } from '../src/providers/http';
 import { McpManager } from '../src/mcp/mcpManager';
-import { expandMcpServer, mcpFingerprint, mergeMcpLayers, normalizeMcpServers } from '../src/mcp/config';
+import { expandMcpServer, mcpFingerprint, mcpLogLevel, mcpTimeoutMessage, mcpTimeoutSeconds, mergeMcpLayers, normalizeMcpServers } from '../src/mcp/config';
 import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
@@ -55,7 +56,17 @@ import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
 import { parseFrontMatter } from '../src/agent/skills';
 import { parseArgs } from '../src/tools/registry';
+import { parseLinkTarget, preprocessFootnotes } from '../src/ui/markdown/render';
 import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/types';
+import { loopSafety } from './smokeLoopSafety';
+import { documents } from './smokeDocuments';
+import { agentModes } from './smokeAgentModes';
+import { pdfViewer } from './smokePdfViewer';
+import { rules } from './smokeRules';
+import { markdownExport } from './smokeMarkdownExport';
+import { readTools } from './smokeReadTools';
+import { mentions } from './smokeMentions';
+import { pricing } from './smokePricing';
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
 import { WorktreeManager } from '../src/agent/worktrees';
@@ -718,6 +729,15 @@ async function gatewayChecks() {
 }
 
 async function pureLogic() {
+  console.log('\n[markdown reader]');
+  {
+    const md = 'See[^a].\n\n```\n[^a]\n```\n[^a]: Note';
+    const out = preprocessFootnotes(md);
+    check('footnotes keep the line count', out.split('\n').length === md.split('\n').length, out);
+    check('footnote reference numbered, fenced code untouched', /id="fnref-a">1</.test(out) && out.split('\n')[3] === '[^a]', out);
+    check('link #L10-L20 and .md#heading parsed', JSON.stringify(parseLinkTarget('src/a.ts#L10-L20')) === JSON.stringify({ kind: 'path', path: 'src/a.ts', line: 10, endLine: 20 }) && parseLinkTarget('docs/b.md#intro')?.kind === 'path');
+    check('javascript: links are ignored', parseLinkTarget('javascript:alert(1)') === undefined);
+  }
   console.log('\n[checkpoints]');
   {
     check('checkpoint ref is per session and run', checkpointRef('s_ab::w1', 42) === 'refs/localpilot/checkpoints/s_ab/42');
@@ -730,6 +750,15 @@ async function pureLogic() {
     check('checkpoint history is capped, newest kept', st.history.map((e) => e.run).join() === '2,3' && st.latest === 3);
     const old = (Date.now() - 30 * 86_400_000).toString(36);
     check('old CLI checkpoints are orphans, live chats are not', isOrphanCheckpoint(`cli-${old}`, undefined) && !isOrphanCheckpoint(`s_${old}zz11`, new Set([`s_${old}zz11`])));
+    check('an old chat with a recent checkpoint is not an orphan', !isOrphanCheckpoint(`s_${old}zz11`, new Set(), Date.now(), Date.now() - 60_000));
+    check('only git checkpoints are restorable through git', !!gitCheckpoint({ history: [{ run: 5, createdAt: 0, kind: 'stash', outcome: 'stash', sha: 'abc', root: '/r' }] }, 5) && !gitCheckpoint({ history: [{ run: 5, createdAt: 0, kind: 'files', outcome: 'skipped' }] }, 5));
+    const ns = parseNameStatus('M\0a.txt\0D\0b.txt\0A\0c.txt\0');
+    check('git name-status is parsed', ns.get('a.txt') === 'M' && ns.get('b.txt') === 'D' && ns.get('c.txt') === 'A');
+    const changed = checkpointChanges(new Map([['a.txt', 'D']]), new Map([['u.txt', 'b1'], ['v.txt', 'b2'], ['w.txt', 'b3']]), ['u.txt', 'v.txt', 'x.txt'], new Map([['u.txt', 'b1'], ['v.txt', 'b9'], ['w.txt', undefined]]));
+    check('changed files: commands included, untracked files compared by content', changed.map((f) => `${f.status}${f.path}`).join() === 'Da.txt,Mv.txt,Dw.txt,Ax.txt');
+    check('paths outside the checkpoint root are rejected', relativeIn('/r', '/r/src/a.ts') === 'src/a.ts' && relativeIn('/r', '/other/a.ts') === undefined && relativeIn('/r', '/r/..x/a.ts') === '..x/a.ts');
+    const rw = rewindAttachments('fix\n<attachment path="src/a.ts">\nx\n</attachment>\n<attachment path="b.ts" lines="3-9">\ny\n</attachment><attachment path="d.pdf" kind="pdf" pages="2-4 of 9">\nz\n</attachment><attachment path="e.pdf" kind="pdf" pages="1-3 of 3">\nz\n</attachment><problems>\nnone\n</problems>');
+    check('a rewound message gets its attachments back', rw.join() === 'src/a.ts,b.ts#L3-9,d.pdf#page=2-4,e.pdf,@problems');
   }
   console.log('\n[@ mention search]');
   {
@@ -1379,6 +1408,9 @@ rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdou
 
   console.log('\n[MCP server files: .mcp.json normalizer, merge, expansion]');
   {
+    check('MCP timeout: clamped to 1–3600 s, default 60, message names the file', mcpTimeoutSeconds(undefined) === 60 && mcpTimeoutSeconds(0.4) === 1 && mcpTimeoutSeconds(7200) === 3600 && mcpTimeoutMessage('db', 30, '/w/.mcp.json') === 'MCP request to "db" timed out after 30s. Raise "timeout" for this server in /w/.mcp.json.');
+    check('MCP log levels map onto the output channel', ['debug', 'notice', 'warning', 'critical', 'x'].map(mcpLogLevel).join() === 'debug,info,warn,error,info');
+    check('MCP approval floor: a policy network floor covers MCP unless it sets its own', normalizePolicy({ approvals: { network: 'ask' } }).approvals.mcp === 'ask' && normalizePolicy({ approvals: { network: 'never', mcp: 'ask' } }).approvals.mcp === 'ask' && normalizePolicy({}).approvals.mcp === undefined);
     const table: [string, unknown, unknown][] = [
       ['Claude stdio', { type: 'stdio', command: 'npx', args: ['-y', 'srv'] }, { type: 'stdio', command: 'npx', args: ['-y', 'srv'] }],
       ['Cline disabled + timeout + autoApprove', { command: 'node', disabled: true, timeout: 30, autoApprove: ['a'] }, { command: 'node', enabled: false, timeout: 30, autoApprove: ['a'] }],
@@ -2186,7 +2218,7 @@ async function reopenReplay() {
     tools.register({ parallelSafe: true, definition: { name: 'gate', description: 'gated', parameters: { type: 'object', properties: {} } }, async execute(_args, ctx) { const ok = await ctx.requestApproval('Open the gate', 'gate --now', 'delete'); return { content: ok ? 'GATE-PASSED' : 'GATE-DENIED' }; } });
     const runner = new AgentRunner(providers, tools, skills, workspace, log);
     const store = new SessionStore({ storageUri: vscode.Uri.file('/tmp/lp-smoke-reopen') } as unknown as import('vscode').ExtensionContext, log);
-    const tracker = { onDidChange: new vscode.EventEmitter<void>().event, beginTurn() {}, forSession: () => [], keep() {}, restoreToTurn: async () => 0 } as unknown as ChangeTracker;
+    const tracker = { onDidChange: new vscode.EventEmitter<void>().event, beginTurn() {}, forSession: () => [], keep() {}, restoreToTurn: async () => 0, restoreTurn: async () => ({ restored: 0, failed: 0 }) } as unknown as ChangeTracker;
     const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log);
 
     const first: ToWebview[] = [];
@@ -2486,6 +2518,15 @@ async function redisStorage() {
   await gatewayChecks();
   await pureLogic();
   await agentLoopE2E();
+  await loopSafety(check);
+  await documents(check);
+  await agentModes(check);
+  pdfViewer(check);
+  await rules(check);
+  markdownExport(check);
+  await readTools(check);
+  await mentions(check);
+  await pricing(check);
   await pauseAndSteer();
   await reopenReplay();
   await skillsInHarness();

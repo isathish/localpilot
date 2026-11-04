@@ -11,16 +11,24 @@ permalink: /docs/context/
 | How | What it attaches |
 |---|---|
 | Paper-clip button | The active file, or only the selection as `file#L10-L20` |
-| Folder button, drag and drop, or the Explorer context menu | Any files. Images become image attachments |
+| <kbd>⌘'</kbd> / <kbd>Ctrl+'</kbd> or **Add Selection to Chat** in the editor context menu or light bulb | The selection as `file#L10-L20` in the current chat, with any problems (errors, warnings) inside it drafted below as a **Problems:** list. Nothing is sent; the input gets focus |
+| Folder button, drag and drop, or the Explorer context menu (**Add File/Folder to Chat**) | Any files. Images become image attachments. Files dragged from the Explorer or an editor tab (hold <kbd>Shift</kbd> while dropping) are inserted as `@path` mentions; dropped text is inserted as text |
+| `@docs/spec.pdf`, `@docs/spec.pdf#page=3` or `#page=3-7` | The text of a PDF (or of those pages; `#L3-L7` also means pages here), up to `localpilot.pdf.maxChars` characters |
 | `@path/to/file` or `@path/to/file#L10-L40` | A file or line range. Autocomplete searches the whole workspace |
 | `@"docs/my file.md"` | A path with spaces, in quotes |
-| `@folder/` | A directory listing |
+| `@folder/` | A one-level tree of the folder plus the text of each file directly inside it (up to 20,000 characters per file and 60,000 for the folder). Subfolders are only listed; binaries and PDFs are only noted |
+| `@1a2b3c4` (7 to 40 hex digits) | A commit: `git show --stat --format=fuller` with the patch, up to 30,000 characters. The picker also offers recent commits whose message matches what you type |
+| `@https://example.com/page` | The page as readable text, converted as `web_fetch` does. Refused when web access is off, and asks first when `localpilot.approvals.network` is `ask` |
 | `@workspace` | The project file tree, cut at 400 entries |
 | `@selection` | The current selection, or the whole active file if nothing is selected |
 | `@problems` | Current errors and warnings from language servers |
 | `@git` | `git status --short --branch`, the unstaged diff stat and the staged diff |
 | `@editors` | The list of open editors |
 | `@terminal` | The last command and output of the active terminal (VS Code only, not the CLI) |
+
+**Limits.** A message takes at most 20 images and files together. Images larger than 7,680 pixels on a side and other files larger than 20 MB are refused with a message. When the selected model cannot read images and no vision model is available for routing, the image button is greyed out and its tooltip says why.
+
+**Documents and binaries.** PDFs, Word documents (`.docx`) and Jupyter notebooks (`.ipynb`, as cells with their text outputs; image outputs become `[image output]`) are attached as text. Scanned PDF pages have no text layer and say so. Other binary files, such as a `.zip`, are attached as a note with the file name and size, and the chat shows the same note. The agent reads PDFs on its own with the `read_pdf` tool (20 pages or `localpilot.pdf.maxChars` characters per call); `read_file` on a `.pdf` is redirected to it. For a scanned page, open the PDF in the [PDF viewer]({{ '/docs/viewers/' | relative_url }}) and use **⋯ → Attach page as image** with a vision model; **Ask about selection** there attaches the page (`docs/spec.pdf#page=3`) and quotes the selected text.
 
 Type `@` to open the mention picker. Use <kbd>↑</kbd> / <kbd>↓</kbd> to move and <kbd>Tab</kbd> to pick.
 
@@ -52,12 +60,14 @@ Before every model call, LocalPilot adds up the system prompt, tool schemas, his
 
 When usage crosses `localpilot.compactionThreshold` (default `0.75`), LocalPilot applies these steps in order until the history fits:
 
-1. **Prune tool outputs.** Older tool results are replaced with a one-line stub. Recent turns are untouched.
+1. **Prune tool outputs.** Older tool results are replaced with a one-line stub that points to the full text (see below). Recent turns are untouched.
 2. **Compact.** The model summarises the older part of the conversation into a structured note: task, decisions, files touched, findings, next steps. The split always lands on a user turn, so tool calls stay paired with their results.
 3. **Tighten and compact again.** If the recent messages alone still overflow, the number kept word for word shrinks from 8 to 4 to 2, with their tool outputs pruned, and the rest goes into the summary. Each pass shows a *Context compacted* note.
 4. **Truncate.** If summarising fails, the oldest turns are dropped.
 
 Each tool output is also clamped to `localpilot.maxToolOutputChars` (default 24,000 characters; the start and end are kept). The model is told to read files by line range.
+
+The full text of a clamped or pruned output is kept in memory: up to 16 MB per chat, dropped after 5 agent steps without being read. The cut text names it, for example `lp-cache://<chat>/<id>.txt`, and the agent reads the missing part with `read_file` and a `start_line`. A `read_file` result is sized to fit this limit (split across the files of a batched read), so it is never cut again; its footer says which line to continue from. Once it has expired, the agent is told to make a new tool call and not to repeat commands with side effects.
 
 ## Repository graph
 

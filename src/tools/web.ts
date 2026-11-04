@@ -79,17 +79,22 @@ export const webFetchTool: Tool = {
     if (!ok) {
       return { content: 'User declined the fetch.', isError: true };
     }
-    const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/json,text/plain,*/*' }, signal: withTimeout(20_000, ctx.signal), redirect: 'follow' });
-    if (!res.ok) {
-      return { content: `HTTP ${res.status} ${res.statusText}`, isError: true };
-    }
-    const ct = res.headers.get('content-type') ?? '';
-    const raw = await res.text();
-    const text = ct.includes('html') ? htmlToText(raw) : raw;
-    const max = Number(args.max_chars ?? 20000);
-    return { content: `Source: ${url}\n\n${text.length > max ? text.slice(0, max) + `\n\n[truncated ${text.length - max} chars]` : text}` };
+    const r = await fetchReadable(url, Number(args.max_chars ?? 20000), ctx.signal);
+    return r.error ? { content: r.error, isError: true } : { content: `Source: ${url}\n\n${r.text}` };
   },
 };
+
+/** A page as readable text (HTML converted), cut at `max` characters; also used for `@https://…` mentions. */
+export async function fetchReadable(url: string, max: number, signal?: AbortSignal): Promise<{ text: string; error?: string }> {
+  const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/json,text/plain,*/*' }, signal: withTimeout(20_000, signal), redirect: 'follow' });
+  if (!res.ok) {
+    return { text: '', error: `HTTP ${res.status} ${res.statusText}` };
+  }
+  const ct = res.headers.get('content-type') ?? '';
+  const raw = await res.text();
+  const text = ct.includes('html') ? htmlToText(raw) : raw;
+  return { text: text.length > max ? text.slice(0, max) + `\n\n[truncated ${text.length - max} chars]` : text };
+}
 
 async function duckduckgo(q: string, max: number, signal: AbortSignal): Promise<SearchHit[]> {
   const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {

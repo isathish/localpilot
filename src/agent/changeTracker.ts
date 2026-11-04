@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { deleteUri } from '../tools/fs';
 import { recordEditDecision } from '../telemetry/catalog';
+import { checkpointFile, CheckpointKind } from './checkpoints';
 
 export interface TrackedChange {
   sessionId: string;
@@ -56,7 +57,7 @@ export class ChangeTracker implements vscode.Disposable {
     });
     this.disposables.push(
       vscode.workspace.registerTextDocumentContentProvider(SCHEME, {
-        provideTextDocumentContent: (uri) => this.changes.get(`${decodeURIComponent(uri.query)}|${uri.path}`)?.original ?? '',
+        provideTextDocumentContent: (uri) => this.leftContent(uri),
       }),
       vscode.window.onDidChangeActiveTextEditor(() => this.decorateVisible()),
       vscode.workspace.onDidChangeTextDocument((e) => {
@@ -65,6 +66,36 @@ export class ChangeTracker implements vscode.Disposable {
         }
       })
     );
+  }
+
+  /**
+   * Left side of a diff: `sid=` the session's original, `sid=&turn=` the content before that turn, `ref=&root=&kind=`
+   * the file in a git checkpoint (a bare query is the session id, as older diff tabs used).
+   */
+  private leftContent(uri: vscode.Uri): string | Promise<string> {
+    if (!uri.query.includes('=')) {
+      return this.changes.get(`${decodeURIComponent(uri.query)}|${uri.path}`)?.original ?? '';
+    }
+    const q = new URLSearchParams(uri.query);
+    const ref = q.get('ref');
+    const root = q.get('root');
+    if (ref && root) {
+      return checkpointFile(root, ref, (q.get('kind') as CheckpointKind | null) ?? 'commit', uri.fsPath).catch(() => '');
+    }
+    const sid = q.get('sid') ?? '';
+    const turn = q.get('turn');
+    return (turn !== null ? this.turnOriginals(sid, Number(turn)).get(uri.path) : this.changes.get(`${sid}|${uri.path}`)?.original) ?? '';
+  }
+
+  /** Diff-editor URI for the content of `fsPath` before the session (no `turn`) or before `turn`. */
+  static originalUri(sessionId: string, fsPath: string, turn?: number): vscode.Uri {
+    const q = new URLSearchParams({ sid: ChangeTracker.rootSession(sessionId), ...(turn !== undefined ? { turn: String(turn) } : {}) });
+    return vscode.Uri.from({ scheme: SCHEME, path: fsPath, query: q.toString() });
+  }
+
+  /** Diff-editor URI for the content of `fsPath` in a git checkpoint. */
+  static checkpointUri(root: string, sha: string, kind: CheckpointKind, fsPath: string): vscode.Uri {
+    return vscode.Uri.from({ scheme: SCHEME, path: fsPath, query: new URLSearchParams({ ref: sha, root, kind }).toString() });
   }
 
   /** The root session id for a (possibly nested) subagent session id. */
@@ -291,26 +322,67 @@ export class ChangeTracker implements vscode.Disposable {
     }
   }
 
-  /** Revert every file touched in `turn` or later to its content at the start of the earliest such turn. */
-  async restoreToTurn(sessionId: string, turn: number): Promise<number> {
+  /** Every file touched in `turn` or later, with its content at the start of the earliest such turn (undefined = did not exist). */
+  turnOriginals(sessionId: string, turn: number): Map<string, string | undefined> {
     const sid = ChangeTracker.rootSession(sessionId);
     this.loadPersisted(sid);
     const byTurn = this.turns.get(sid);
-    if (!byTurn) {
-      return 0;
-    }
-    const turns = [...byTurn.keys()].filter((t) => t >= turn).sort((a, b) => a - b);
     const earliest = new Map<string, string | undefined>();
-    for (const t of turns) {
-      for (const [fsPath, content] of byTurn.get(t)!) {
+    for (const t of [...(byTurn?.keys() ?? [])].filter((k) => k >= turn).sort((a, b) => a - b)) {
+      for (const [fsPath, content] of byTurn!.get(t)!) {
         if (!earliest.has(fsPath)) {
           earliest.set(fsPath, content);
         }
       }
     }
+    return earliest;
+  }
+
+  /** After files were put back by other means (a git checkpoint): pending changes that now match their original are settled. */
+  async settle(sessionId: string): Promise<void> {
+    let n = 0;
+    for (const c of this.forSession(sessionId)) {
+      const now = await fs.promises.readFile(c.fsPath, 'utf8').then(
+        (t) => t.replace(/^\uFEFF/, ''),
+        () => undefined
+      );
+      if (now === c.original) {
+        this.changes.delete(`${c.sessionId}|${c.fsPath}`);
+        n++;
+      }
+    }
+    if (n) {
+      this._onDidChange.fire();
+      this.decorateVisible();
+    }
+  }
+
+  /** Revert every file touched in `turn` or later to its content at the start of the earliest such turn. */
+  async restoreToTurn(sessionId: string, turn: number): Promise<number> {
+    return (await this.restoreTurn(sessionId, turn)).restored;
+  }
+
+  /**
+   * {@link restoreToTurn}, also reporting how many files could not be restored (their snapshots are kept for a retry).
+   * With `only`, just the files it accepts are restored; the other snapshots are left as they are.
+   */
+  async restoreTurn(sessionId: string, turn: number, only?: (fsPath: string) => boolean): Promise<{ restored: number; failed: number }> {
+    const sid = ChangeTracker.rootSession(sessionId);
+    this.loadPersisted(sid);
+    const byTurn = this.turns.get(sid);
+    if (!byTurn) {
+      return { restored: 0, failed: 0 };
+    }
+    const turns = [...byTurn.keys()].filter((t) => t >= turn).sort((a, b) => a - b);
+    const earliest = this.turnOriginals(sid, turn);
     let n = 0;
     const failed = new Set<string>();
+    const kept = new Set<string>();
     for (const [fsPath, content] of earliest) {
+      if (only && !only(fsPath)) {
+        kept.add(fsPath);
+        continue;
+      }
       try {
         await restoreFile(vscode.Uri.file(fsPath), content);
         n++;
@@ -326,7 +398,7 @@ export class ChangeTracker implements vscode.Disposable {
     // Snapshots of files that could not be restored stay, so the checkpoint can be retried.
     for (const t of turns) {
       const files = byTurn.get(t)!;
-      const restored = [...files.keys()].filter((p) => !failed.has(p));
+      const restored = [...files.keys()].filter((p) => !failed.has(p) && !kept.has(p));
       restored.forEach((p) => files.delete(p));
       if (!files.size) {
         byTurn.delete(t);
@@ -337,7 +409,7 @@ export class ChangeTracker implements vscode.Disposable {
     }
     this._onDidChange.fire();
     this.decorateVisible();
-    return n;
+    return { restored: n, failed: failed.size };
   }
 
   forSession(sessionId: string): TrackedChange[] {
@@ -352,6 +424,11 @@ export class ChangeTracker implements vscode.Disposable {
     return this.changes.size;
   }
 
+  /** Changes paired with their unsaved editor text, so unsaved edits (Ctrl+I) are measured rather than the disk copy. */
+  private withLiveText(changes: TrackedChange[]): { fsPath: string; original?: string; live?: string }[] {
+    return changes.map((c) => ({ fsPath: c.fsPath, original: c.original, live: vscode.workspace.textDocuments.find((d) => d.isDirty && d.uri.fsPath === c.fsPath)?.getText() }));
+  }
+
   /** Accept the change: forget the snapshot. */
   keep(sessionId: string, fsPath?: string, record = true): void {
     const kept: TrackedChange[] = [];
@@ -362,7 +439,7 @@ export class ChangeTracker implements vscode.Disposable {
       }
     }
     if (record) {
-      void recordEditDecision('accepted', kept);
+      void recordEditDecision('accepted', this.withLiveText(kept));
     }
     this._onDidChange.fire();
     this.decorateVisible();
@@ -373,7 +450,7 @@ export class ChangeTracker implements vscode.Disposable {
     let n = 0;
     const undone = this.forSession(sessionId).filter((c) => !fsPath || c.fsPath === fsPath);
     // Measured before the files are rewritten.
-    await recordEditDecision('rejected', undone);
+    await recordEditDecision('rejected', this.withLiveText(undone));
     for (const c of undone) {
       try {
         await restoreFile(vscode.Uri.file(c.fsPath), c.original);
@@ -394,7 +471,7 @@ export class ChangeTracker implements vscode.Disposable {
     if (!c) {
       return;
     }
-    const left = vscode.Uri.from({ scheme: SCHEME, path: fsPath, query: encodeURIComponent(c.sessionId) });
+    const left = ChangeTracker.originalUri(c.sessionId, fsPath);
     const title = `${path.basename(fsPath)} (original ↔ LocalPilot)`;
     await vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(fsPath), title, { preview: true });
   }

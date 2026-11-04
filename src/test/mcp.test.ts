@@ -47,7 +47,7 @@ suite('LocalPilot MCP client', () => {
       assert.deepStrictEqual(mcp.status, [{ name: 'echo', tools: 1, transport: 'stdio' }]);
       const tool = tools.get('mcp_echo_echo');
       assert.ok(tool, 'MCP tool must be registered under mcp_<server>_<tool>');
-      assert.strictEqual(tool.approvalKind, 'network');
+      assert.strictEqual(tool.approvalKind, 'mcp');
       const res = await tool.execute({ text: 'hello' }, {
         sessionId: 't',
         signal: new AbortController().signal,

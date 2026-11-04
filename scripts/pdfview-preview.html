@@ -1,0 +1,120 @@
+<!doctype html>
+<!-- Dev harness for media/pdfview.js: needs a build first (dist/pdfjs) and an HTTP server at the repo root, because
+     module imports do not load from file:// (e.g. `python3 -m http.server` then open /scripts/pdfview-preview.html).
+     ?theme=light | hc | hcl switches the theme, ?pages=N sets the page count, ?colors=dark|sepia|original the page
+     colours, ?range=1 loads through the range transport. Messages the viewer posts land in window.__posted. -->
+<html><head><meta charset="utf-8"><title>LocalPilot PDF viewer preview</title>
+<style>
+:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-errorForeground:#f48771; --vscode-input-background:#3c3c3c; --vscode-input-foreground:#ccc; --vscode-button-background:#0e639c; --vscode-button-foreground:#fff; --vscode-button-hoverBackground:#1177bb; --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryForeground:#ccc; --vscode-editorWidget-background:#252526; --vscode-menu-background:#252526; --vscode-menu-selectionBackground:#04395e; --vscode-dropdown-background:#3c3c3c; --vscode-progressBar-background:#0e70c0; }
+.vscode-light { --vscode-editor-background:#ffffff; --vscode-editor-foreground:#1f1f1f; --vscode-foreground:#3b3b3b; --vscode-descriptionForeground:#717171; --vscode-widget-border:#d4d4d4; --vscode-errorForeground:#a1260d; --vscode-input-background:#fff; --vscode-input-foreground:#3b3b3b; --vscode-button-secondaryBackground:#e5e5e5; --vscode-button-secondaryForeground:#3b3b3b; --vscode-editorWidget-background:#f3f3f3; --vscode-menu-background:#fff; --vscode-menu-selectionBackground:#e8e8e8; --vscode-dropdown-background:#fff; }
+.vscode-high-contrast { --vscode-editor-background:#000; --vscode-editor-foreground:#fff; --vscode-foreground:#fff; --vscode-descriptionForeground:#fff; --vscode-contrastBorder:#6fc3df; --vscode-contrastActiveBorder:#f38518; }
+.vscode-high-contrast-light { --vscode-editor-background:#fff; --vscode-editor-foreground:#000; --vscode-foreground:#000; --vscode-descriptionForeground:#000; --vscode-contrastBorder:#0f4a85; --vscode-contrastActiveBorder:#b5200d; }
+</style>
+<link rel="stylesheet" href="../dist/pdfjs/pdf_viewer.css">
+<link rel="stylesheet" href="../media/pdfview.css">
+</head><body class="vscode-dark">
+<script type="application/json" id="pdf-config">{"worker":"../dist/pdfjs/pdf.worker.mjs","cmaps":"../dist/pdfjs/cmaps/","standardFonts":"../dist/pdfjs/standard_fonts/","wasm":"../dist/pdfjs/wasm/","iccs":"../dist/pdfjs/iccs/","images":"../dist/pdfjs/images/"}</script>
+<header id="bar" class="bar" role="toolbar" aria-label="PDF toolbar">
+  <button id="sidebarToggle" class="ib" title="Sidebar (outline and thumbnails)" aria-pressed="false"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></svg></button>
+  <span class="sep"></span>
+  <button id="prev" class="ib" title="Previous page (p)"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
+  <button id="next" class="ib" title="Next page (n)"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
+  <span class="pagebox"><input id="page" type="number" min="1" value="1" aria-label="Page" title="Page (Ctrl+G)" /><span id="total" class="muted">/ –</span></span>
+  <span class="sep"></span>
+  <button id="zoomOut" class="ib" title="Zoom out (Ctrl+-)"><svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg></button>
+  <select id="zoom" title="Zoom" aria-label="Zoom">
+    <option value="auto">Auto</option><option value="page-width">Page width</option><option value="page-fit">Page fit</option><option value="page-actual">Actual size</option>
+    <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option>
+    <option value="custom" id="zoomCustom" hidden></option>
+  </select>
+  <button id="zoomIn" class="ib" title="Zoom in (Ctrl+=)"><svg viewBox="0 0 16 16"><path d="M4 8h8M8 4v8"/></svg></button>
+  <button id="rotate" class="ib" title="Rotate clockwise (r)"><svg viewBox="0 0 16 16"><path d="M12.5 7.5A4.5 4.5 0 1 1 11 4.2M11.5 2v2.5H9"/></svg></button>
+  <span class="spacer"></span>
+  <button id="colors" class="ib" title="Page colours" aria-haspopup="menu"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
+  <button id="findToggle" class="ib" title="Find (Ctrl+F)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg></button>
+  <button id="ask" class="ask" title="Ask LocalPilot about this PDF"><svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg><span>Ask</span></button>
+  <button id="more" class="ib" title="More actions" aria-haspopup="menu"><svg viewBox="0 0 16 16"><path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2.2"/></svg></button>
+</header>
+<div id="findbar" class="findbar hidden" role="search">
+  <input id="findInput" type="search" placeholder="Find in document" aria-label="Find in document" />
+  <button id="findPrev" class="ib" title="Previous match (Shift+Enter)"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
+  <button id="findNext" class="ib" title="Next match (Enter)"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
+  <label><input id="findCase" type="checkbox" /> Match case</label>
+  <label><input id="findWord" type="checkbox" /> Whole words</label>
+  <label><input id="findAll" type="checkbox" checked /> Highlight all</label>
+  <span id="findCount" class="muted" aria-live="polite"></span>
+  <span class="spacer"></span>
+  <button id="findClose" class="ib" title="Close (Esc)"><svg viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button>
+</div>
+<div id="progress" class="progress hidden"><div></div></div>
+<div id="layout" class="layout">
+  <nav id="sidebar" class="sidebar hidden" aria-label="Document navigation">
+    <div class="tabs" role="tablist"><button id="tabOutline" role="tab">Outline</button><button id="tabThumbs" role="tab">Pages</button></div>
+    <div id="outlineView" class="outline" role="tree"></div>
+    <div id="thumbsView" class="thumbs hidden"></div>
+  </nav>
+  <div id="viewerContainer" class="viewer-container" tabindex="0"><div id="viewer" class="pdfViewer"></div></div>
+</div>
+<div id="panel" class="panel hidden" role="dialog" aria-live="polite"></div>
+<button id="askSel" class="ask-sel hidden" title="Ask LocalPilot about the selected text">Ask about selection</button>
+<div id="menu" class="menu hidden" role="menu"></div>
+<div id="toasts"></div>
+<script>
+const q = new URLSearchParams(location.search);
+// VS Code puts the theme colours on <html> and the theme class on <body>; the harness puts both on each.
+document.body.className = document.documentElement.className = { light: 'vscode-light', hc: 'vscode-high-contrast', hcl: 'vscode-high-contrast-light' }[q.get('theme')] || 'vscode-dark';
+/** A minimal PDF 1.4: Helvetica text pages with correct xref offsets and a two-entry outline. */
+function makePdf(pages) {
+  const objs = [];
+  const n = pages.length;
+  const fontId = 3, firstPage = 4, outlines = firstPage + 2 * n;
+  objs[1] = `<< /Type /Catalog /Pages 2 0 R /Outlines ${outlines} 0 R /PageMode /UseOutlines >>`;
+  objs[2] = `<< /Type /Pages /Count ${n} /Kids [${pages.map((_, i) => `${firstPage + 2 * i} 0 R`).join(' ')}] >>`;
+  objs[fontId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  pages.forEach((text, i) => {
+    const lines = text.split('\n').map((l) => `(${l.replace(/[()\\]/g, '\\$&')}) Tj T*`).join(' ');
+    const stream = `BT /F1 14 Tf 16 TL 72 720 Td ${lines} ET`;
+    objs[firstPage + 2 * i] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${firstPage + 2 * i + 1} 0 R >>`;
+    objs[firstPage + 2 * i + 1] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+  const last = Math.min(n, 3);
+  objs[outlines] = `<< /Type /Outlines /First ${outlines + 1} 0 R /Last ${outlines + 2} 0 R /Count 2 >>`;
+  objs[outlines + 1] = `<< /Title (Introduction) /Parent ${outlines} 0 R /Next ${outlines + 2} 0 R /Dest [${firstPage} 0 R /Fit] >>`;
+  objs[outlines + 2] = `<< /Title (Architecture) /Parent ${outlines} 0 R /Prev ${outlines + 1} 0 R /Dest [${firstPage + 2 * (last - 1)} 0 R /Fit] >>`;
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 1; i < objs.length; i++) { offsets[i] = out.length; out += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+  const xref = out.length;
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n${offsets.slice(1).map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(out);
+}
+const count = Math.max(1, Math.min(500, Number(q.get('pages')) || 12));
+const bytes = makePdf(Array.from({ length: count }, (_, i) => `Page ${i + 1} of the LocalPilot preview\n\nThe quick brown fox jumps over the lazy dog.\nFind me: needle ${i + 1}\nhttps://example.com/page/${i + 1}`));
+const prefs = { pageColors: q.get('colors') || 'auto', sidebar: q.get('sidebar') || 'auto', defaultZoom: 'auto' };
+window.__posted = [];
+window.__send = (m) => window.postMessage(m, '*');
+window.acquireVsCodeApi = () => ({
+  postMessage(m) {
+    window.__posted.push(m);
+    if (m.type === 'ready') {
+      window.__send(q.get('range')
+        ? { type: 'open', mode: 'range', length: bytes.length, initial: bytes.slice(0, 1024), name: 'preview.pdf', size: bytes.length, prefs }
+        : { type: 'open', mode: 'data', data: bytes.slice(), name: 'preview.pdf', size: bytes.length, prefs });
+    } else if (m.type === 'range') {
+      setTimeout(() => window.__send({ type: 'rangeData', id: m.id, begin: m.begin, data: bytes.slice(m.begin, m.end) }), 20);
+    } else if (m.type === 'clientError') {
+      console.error('[pdfview]', m.where, m.message, m.stack || '');
+    }
+  },
+  getState() { return undefined; },
+  setState() {},
+});
+</script>
+<script type="module">
+import * as pdfjsLib from '../dist/pdfjs/pdf.mjs';
+globalThis.pdfjsLib = pdfjsLib;
+globalThis.pdfjsViewer = await import('../dist/pdfjs/pdf_viewer.mjs');
+await import('../media/pdfview.js');
+</script>
+</body></html>

@@ -25,7 +25,7 @@ suite('PDF text (pure)', () => {
     assert.strictEqual(joinTextItems([at('one', 72, 720, 20), at('two', 72, 706, 20)]), 'one\ntwo', 'a baseline change is a newline');
     assert.strictEqual(joinTextItems([at('one', 72, 720, 20, true), at('two', 72, 706, 20)]), 'one\ntwo', 'hasEOL does not double the newline');
     assert.strictEqual(joinTextItems([at('inter-', 72, 720, 30, true), at('national', 72, 706, 40)]), 'inter-\nnational', 'hyphenation is left as it is');
-    assert.strictEqual(joinTextItems([{}, at('a\u0000b�', 72, 720, 20)]), 'ab', 'marked content skipped, junk stripped');
+    assert.strictEqual(joinTextItems([{}, at('a\u0000b\uFFFD', 72, 720, 20)]), 'ab', 'marked content skipped, junk stripped');
     assert.strictEqual(joinTextItems([at('a', 72, 720, 5, true), at('', 0, 0, 0, true), at('', 0, 0, 0, true), at('', 0, 0, 0, true), at('', 0, 0, 0, true), at('b', 72, 600, 5)]), 'a\n\n\nb', 'runs of blank lines collapse');
   });
 

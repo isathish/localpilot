@@ -4,6 +4,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { parseFrontMatter } from './frontMatter';
+import { ruleCondition } from '../context/ruleConditions';
 import { evaluatePermission } from './permissions';
 import { PluginSource } from './plugins';
 import { emptySettings } from './settings';
@@ -40,6 +41,8 @@ export interface CustomCommand {
   body: string;
   source: 'project' | 'user' | 'plugin' | 'builtin';
   plugin?: string;
+  /** Turned off with `disabled: true` (or `enabled: false`) front matter; only listed with `includeDisabled`. */
+  disabled?: boolean;
 }
 
 /** `Bash(git add:*), Bash(git status:*)` → two rules (commas inside parentheses do not split). */
@@ -91,6 +94,7 @@ export function parseCommandFile(file: string, raw: string, opts: { source: Cust
     body: body.trim(),
     source: opts.source,
     plugin: opts.plugin,
+    ...(ruleCondition(meta).disabled ? { disabled: true } : {}),
   };
 }
 
@@ -282,7 +286,7 @@ export function builtinCommands(): CustomCommand[] {
 }
 
 /** Distinct commands, highest-priority location first (project, user, plugins); the first with a given invocation wins. */
-export async function discoverCommands(roots: string[], opts: { home?: string; plugins?: PluginSource; log?: { warn(m: string): void } } = {}): Promise<CustomCommand[]> {
+export async function discoverCommands(roots: string[], opts: { home?: string; plugins?: PluginSource; log?: { warn(m: string): void }; includeDisabled?: boolean } = {}): Promise<CustomCommand[]> {
   const home = opts.home ?? os.homedir();
   const dirs: { dir: string; source: CustomCommand['source'] }[] = [];
   for (const r of roots) {
@@ -291,7 +295,8 @@ export async function discoverCommands(roots: string[], opts: { home?: string; p
   dirs.push({ dir: path.join(home, '.localpilot', 'commands'), source: 'user' }, { dir: path.join(home, '.claude', 'commands'), source: 'user' });
   const out: CustomCommand[] = [];
   const add = (c: CustomCommand) => {
-    if (!out.some((x) => x.invoke === c.invoke)) {
+    // Listing everything (Settings → Customize) keeps shadowed files too; otherwise the first per invocation wins.
+    if (opts.includeDisabled ? !out.some((x) => x.file === c.file) : !c.disabled && !out.some((x) => x.invoke === c.invoke)) {
       out.push(c);
     }
   };

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../config';
+import { checkReadOnlyCommand } from '../agent/commandGuard';
 import { shellInvocation } from '../terminal/shell';
 import { OutputCapture } from '../terminal/terminalManager';
 import { Tool } from '../types';
@@ -60,6 +61,13 @@ export const runCommandTool: Tool = {
     }
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
       return { content: `cwd does not exist or is not a directory: ${cwd}. Omit cwd to run in the workspace root (${root}).`, isError: true };
+    }
+    if (ctx.readOnly) {
+      // Plan/Ask: read-only commands only, refused before any approval card is shown.
+      const guard = checkReadOnlyCommand(command);
+      if (!guard.ok) {
+        return { content: `${ctx.mode === 'ask' ? 'Ask' : 'Plan'} mode: ${guard.reason}. Only read-only commands run in ${ctx.mode === 'ask' ? 'Ask' : 'Plan'} mode.`, isError: true };
+      }
     }
     const dangerous = DANGEROUS.test(command);
     const ok = await ctx.requestApproval(

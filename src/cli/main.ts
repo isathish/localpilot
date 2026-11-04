@@ -62,6 +62,9 @@ import { reposTool } from '../tools/repos';
 import { securityScanTool } from '../tools/security';
 import { formatFindings, ScanResult, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
 import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, removePlugin, scaffoldPlugin, searchPlugins, setPluginEnabled, validatePlugin } from '../agent/pluginInstaller';
+import { SessionStore } from '../sessions/sessionStore';
+import { cmdHistory, findSession, newestFirst, openCliStore, pickSession, resumeBanner } from './sessions';
+import { sessionSlash } from './slash/sessions';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -111,10 +114,16 @@ ${bold('Usage')}
   localpilot providers remove <id>        remove a provider added here (disables a VS Code one for the CLI)
   localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
   localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
+  localpilot -c | -r [id]                continue the last session / pick one to resume (with a task: run it there)
+  localpilot history                      saved sessions in this folder [--json] [--limit 50]; history delete <id>;
+                                          history export <id> [-o file.md|file.html]
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
   --ask | --plan | --agent     mode (default: agent); --multitask coordinates background workers, --debug fixes bugs
+  -c, --continue               continue the most recent session in this folder (sessions are saved after every turn)
+  -r, --resume [id]            resume a saved session by id or list number; without one, pick from a numbered list
+  --data-dir <dir>             where sessions are saved (default ~/.localpilot, or LOCALPILOT_DATA_DIR)
   -i, --isolate                work in an isolated git worktree (your checkout is untouched); the result is applied
                                back as uncommitted changes when the run ends — --no-apply keeps it in the worktree
   -m, --model <provider/model> model for this run (e.g. ollama/gemma4:e4b)
@@ -123,6 +132,7 @@ ${bold('Options')}
   -C, --cwd <dir>              workspace root (default: current directory)
   -p, --print                  print the final answer only (no tool log; implies non-interactive)
   --no-mcp                     do not start MCP servers
+  --compaction <strategy>      how a full context is compacted: agentic (model summary), basic (no model call) or off
   --trust-workspace            use providers, MCP servers, approvals and hooks from ./.vscode/settings.json
   -v, --verbose                show tool arguments and debug logs
   --settings | --setup         open LocalPilot Settings / the setup wizard in VS Code
@@ -130,6 +140,7 @@ ${bold('Options')}
 
 ${bold('In a session')}
   /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
+  /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins)   /permissions   /hooks   settings.json rules
   /skill <name> <task>   run a task with a skill preloaded   /agent <name> <task>   hand a task to a subagent (also as -p "/skill …")
@@ -154,7 +165,14 @@ interface Args {
   /** Apply security-sensitive settings from the workspace's .vscode/settings.json. */
   trustWorkspace?: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history';
+  /** `history [list|delete|export]`: JSON output, rows shown, export file. */
+  historyOpts: { json: boolean; limit: number; output?: string };
+  /** `-c`: continue the newest saved session. `-r [id]`: resume one (`true` = pick from a list). */
+  continue: boolean;
+  resume?: string | true;
+  /** `--data-dir`: root of the saved sessions instead of ~/.localpilot. */
+  dataDir?: string;
   /** `plugin <action>`: search, install, remove, enable, disable, list, new, validate, marketplaces. */
   pluginAction?: string;
   /** `plugin install --project`: into the workspace's .localpilot/plugins instead of ~/.localpilot/plugins. */
@@ -178,7 +196,7 @@ interface Args {
   error?: string;
 }
 function parseArgs(argv: string[]): Args {
-  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false }, project: false };
+  const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false }, project: false, historyOpts: { json: false, limit: 50 }, continue: false };
   const words: string[] = [];
   // `--name=value` is the same as `--name value` (up to a `--`, after which everything is prompt text).
   const end = argv.indexOf('--');
@@ -244,6 +262,15 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--suite') {a.evalOpts.suite = next();}
     else if (x === '--tasks') {a.evalOpts.tasks.push(...next().split(',').map((t) => t.trim()).filter(Boolean));}
     else if (x === '--keep') {a.evalOpts.keep = true;}
+    else if (x === '--json' && a.cmd === 'history') {a.historyOpts.json = true;}
+    else if (x === '--limit') {a.historyOpts.limit = Math.max(1, Math.floor(Number(next())) || 50);}
+    else if (x === '-o' || x === '--output') {a.historyOpts.output = next();}
+    else if (x === '-c' || x === '--continue') {a.continue = true;}
+    // `-r` takes an id (or list number) only when one follows; `-r "fix the bug"` is a picker plus a task.
+    else if (x === '-r' || x === '--resume') {a.resume = /^(?:cli-|s_)[0-9a-z]+$|^\d{1,4}$/i.test(argv[i + 1] ?? '') ? next() : true;}
+    else if (x === '--data-dir') {a.dataDir = path.resolve(next());}
+    else if (x === '--compaction') {const v = next(); if (/^(agentic|basic|off)$/.test(v)) {cliOverrides['compaction.strategy'] = v;} else {a.error = `--compaction takes agentic, basic or off (got "${v}")`;}}
+    else if (x === 'history' && !words.length && !a.cmd) {a.cmd = 'history';}
     else if (x === '--json') {a.evalOpts.json = next(); a.scanOpts.json = a.evalOpts.json;}
     else if (x === 'providers' && !words.length && !a.cmd) {a.cmd = 'providers';}
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
@@ -533,7 +560,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
   };
   switch (name) {
-    case 'read_file': return `Read ${s(a.path)}${a.start_line ? ` (lines ${a.start_line}–${a.end_line ?? ''})` : ''}`;
+    case 'read_file': return Array.isArray(a.files) ? `Read ${a.files.length} files: ${s(a.files.map((f: unknown) => (f && typeof f === 'object' ? (f as { path?: unknown }).path : f)).join(', '))}` : `Read ${s(a.path)}${a.start_line ? ` (lines ${a.start_line}–${a.end_line ?? ''})` : ''}`;
     case 'read_pdf': return `Read PDF ${s(a.path)}${a.pages ? ` (pages ${s(a.pages)})` : ''}`;
     case 'edit_file': return `Edit ${s(a.path)}`;
     case 'write_file': return `Write ${s(a.path)}`;
@@ -581,6 +608,8 @@ interface Core {
   log: vscode.LogOutputChannel;
   /** Live sessions, so gather_context can see the working set and recent turns. */
   sessions: Map<string, Session>;
+  /** Saved sessions of this folder (shared with VS Code's history); chats in it are written after every turn. */
+  store?: SessionStore;
   telemetry: Telemetry;
   /** Optional Redis store behind `telemetry`; its socket must be closed for the process to exit. */
   telemetryRemote?: RedisTelemetry;
@@ -704,7 +733,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp = new McpManager(tools, log, VERSION);
     mcp.extraServers = () => pluginMcp;
     mcp.projectFolders = () => roots;
-    mcp.trust = cliMcpTrust(args.cwd, () => !!args.trustWorkspace);
+    mcp.trust = cliMcpTrust(args.cwd, () => !!args.trustWorkspace, { prompt: (q) => withPromptLock(() => ask(`${yellow('?')} ${q}`)) });
     mcp.onFileProblems = (file, problems) => process.stderr.write(`${yellow('!')} invalid MCP configuration in ${file}:\n${problems.map((p) => `  ${p}`).join('\n')}\n`);
     await mcp.reload();
   }
@@ -729,7 +758,7 @@ let promptToStderr = false;
 let printMode = false;
 /** --yes was passed (an "always" answer does not stop ask_user from asking). */
 let yesMode = false;
-const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network' };
+const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network', mcp: 'MCP tool' };
 
 async function approval(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean> {
   // A prompt the organization's policy requires (a floor for this kind, or no bypassing at all) is never answered by --yes or an earlier "always".
@@ -866,6 +895,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
             break;
           }
           case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
+          case 'rules_applied': r.note(`Conditional rules applied: ${((p.files as string[]) ?? []).join(', ')}`); break;
           case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
           case 'nudge': r.note(p.reason === 'length' ? `↺ the reply was cut off at the output limit — ${p.continued ? 'asking the model to continue' : 'asking for a shorter call'}` : `↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
           case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
@@ -885,6 +915,11 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     }
     // Flush the stream filter even when the run rejects, so a dangling fence or <tool_call> does not leak into the next turn.
     r.end();
+    // Written now rather than debounced: one-shot runs exit right after, and `-c` must find this turn.
+    if (core.store?.has(session.id)) {
+      core.store.save(session);
+      await core.store.flush(session);
+    }
   }
   return final || result;
 }
@@ -1413,7 +1448,7 @@ async function cmdDoctor(core: Core): Promise<void> {
   console.log(`${BRAND} ${dim(`v${VERSION}`)} doctor\n`);
   console.log(`${bold('Settings')}\n  ${dim(userSettingsPath())}\n  ${dim(CLI_SETTINGS_PATH)}`);
   const cfg = getConfig();
-  console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network}`);
+  console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network} mcp=${cfg.approvals.mcp}`);
   const org = getManagedPolicy();
   console.log(`\n${bold('Organization policy')}\n  ${org.source ? `${org.source}${org.message ? dim(` — ${org.message}`) : ''}\n${describePolicy(org).map((l) => `  ${amber('●')} ${l}`).join('\n') || dim('  (no restrictions)')}` : dim(`none (${managedPolicyPath()})`)}`);
   console.log(`\n${bold('Providers')}`);
@@ -1554,6 +1589,15 @@ async function main(): Promise<void> {
     });
     return;
   }
+  if (args.cmd === 'history') {
+    const store = await openCliStore(args.cwd, args.dataDir, vscode.window.createOutputChannel('LocalPilot CLI', { log: true }));
+    process.exitCode = await cmdHistory(store, args.prompt.split(/\s+/).filter(Boolean), args.historyOpts, STYLE, args.cwd).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
+    store.dispose();
+    return;
+  }
 
   const quiet = args.print || (!args.prompt && !process.stdin.isTTY);
   if (quiet || !process.stdout.isTTY) {
@@ -1610,8 +1654,55 @@ async function main(): Promise<void> {
     console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}\n${dim('Run `localpilot doctor` to see which servers are reachable, or `localpilot --setup` to configure one in VS Code.')}`);
     process.exit(2);
   }
-  const session = newSession(args.mode, modelInfo.id);
+  const store = await openCliStore(args.cwd, args.dataDir, core.log);
+  core.store = store;
+  core.runner.archive = store;
+  const out = quiet ? process.stderr : process.stdout;
+  let resumed: Session | undefined;
+  if (args.continue || args.resume !== undefined) {
+    const list = newestFirst(store.list());
+    let pick = args.continue && args.resume === undefined ? list[0] : undefined;
+    if (args.resume === true) {
+      if (!process.stdin.isTTY) {
+        console.error(`${red('✖')} -r without an id needs a terminal to pick from; pass the id or number (localpilot history lists them)`);
+        process.exit(2);
+      }
+      pick = await pickSession(list, STYLE, (q) => ask(q), out);
+      if (!pick && list.length) {
+        process.exit(0);
+      }
+    } else if (typeof args.resume === 'string') {
+      const hit = findSession(list, args.resume);
+      if (!hit.session) {
+        console.error(`${red('✖')} ${hit.ambiguous ? `"${args.resume}" matches ${hit.ambiguous.length} sessions` : `no saved session "${args.resume}" in ${args.cwd}`}\n${dim('See: localpilot history')}`);
+        process.exit(2);
+      }
+      pick = hit.session;
+    }
+    resumed = pick && store.get(pick.id);
+    if (!resumed && !quiet) {
+      out.write(dim('No saved session in this folder yet — starting a new one.\n'));
+    }
+  }
+  if (resumed) {
+    // -m and a mode flag apply to the resumed chat; otherwise it keeps its own model (when it is still reachable).
+    if (args.model) {
+      resumed.model = modelInfo.id;
+    } else if (resumed.model !== modelInfo.id && !(await core.providers.resolve(resumed.model).then(() => true, () => false))) {
+      out.write(dim(`${resumed.model} is not available — continuing with ${modelInfo.id}\n`));
+      resumed.model = modelInfo.id;
+    }
+    if (args.mode !== 'agent') {
+      resumed.mode = args.mode;
+    }
+  }
+  let session: Session = resumed ?? store.create(modelInfo.id, args.mode);
   core.sessions.set(session.id, session);
+  if (!resumed) {
+    void store.prune(getConfig().sessionRetention, [session.id]).catch((e) => core.log.warn(`session prune: ${String(e)}`));
+  } else if (!quiet) {
+    out.write(`${resumeBanner(session, STYLE)}\n\n`);
+  }
   /** Where the agent works: the isolated copy of the start folder, or the start folder itself. */
   const runRoot = (): string => (session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : args.cwd);
   const notGit = `--isolate needs a git repository (${args.cwd} is not one)`;
@@ -1746,6 +1837,21 @@ async function main(): Promise<void> {
       deferred.unshift(...left);
     }
   };
+  /** /resume and /fork: the REPL continues in `next` (not while working in an isolated worktree, which belongs to this one). */
+  const switchTo = (next: Session, how: 'Resumed' | 'Forked'): boolean => {
+    if (isolated) {
+      console.log(yellow('this session works in an isolated worktree — /apply or /discard it first'));
+      return false;
+    }
+    store.save(session, true);
+    core.sessions.delete(session.id);
+    session = next;
+    core.sessions.set(session.id, session);
+    // "Always allow" answers were given for the chat being left.
+    alwaysKinds.clear();
+    console.log(resumeBanner(session, STYLE, how));
+    return true;
+  };
   rl.on('SIGINT', () => {
     if (current) {
       current.stop();
@@ -1774,7 +1880,9 @@ async function main(): Promise<void> {
     if (isolated) {
       process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — apply it with: git -C ${isolated.info.path} add -AN && git -C ${isolated.info.path} diff --binary ${isolated.info.base} | git -C ${isolated.info.repo} apply\n`));
     }
-    process.stdout.write(dim('bye\n'));
+    // Writes still waiting for their debounce (a /mode or /model change) land before the process ends.
+    store.dispose();
+    process.stdout.write(dim(session.messages.length ? `bye — continue with: localpilot -c  (or -r ${session.id})\n` : 'bye\n'));
     void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', runRoot()) : Promise.resolve())
       ?.then(() => core.telemetry.flush())
       .finally(() => {
@@ -1827,9 +1935,11 @@ async function main(): Promise<void> {
       }
       case 'clear':
         await core.runner.hooks?.sessionEnd(session.id, 'clear', runRoot());
-        session.messages = []; session.contextTokens = 0; session.todos = []; alwaysKinds.clear(); console.log(dim('conversation cleared')); return true;
+        session.messages = []; session.contextTokens = 0; session.compactions = 0; session.todos = []; alwaysKinds.clear(); await store.clearArchive(session.id); store.save(session); console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
+      case 'history': case 'resume': case 'fork':
+        return sessionSlash(cmd, arg, { store, current: () => session, switchTo, ask: (q) => ask(q), style: STYLE });
       case 'skill': case 'agent': {
         const task = taskCommand(core, cmd, arg);
         if (!task || 'error' in task) { console.log(task ? red(task.error) : dim(`usage: /${cmd} <name> <task>`)); return true; }

@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as http from 'http';
 import { AddressInfo } from 'net';
+import * as path from 'path';
 import { questionPolicy } from '../agent/prompts';
 import { thinkFor } from '../agent/thinking';
 import { ollamaThink, OllamaProvider } from '../providers/ollama';
@@ -115,5 +116,71 @@ suite('Conversation: questions before work and thinking per task', () => {
     c.sinks.add({ post() {} });
     assert.strictEqual(c.promptsNative('p1'), true);
     assert.strictEqual(c.promptsNative('other'), false);
+  });
+
+  test('rewinding a message: task refills the composer, workspace keeps the chat, both reverts files outside the repo too', async () => {
+    const root = path.resolve('/repo');
+    const make = (git: boolean) => {
+      const user = {
+        role: 'user',
+        content: 'fix it\n<attachment path="src/a.ts">\nx\n</attachment>',
+        images: ['aW1nMQ==', 'aW1nMg=='],
+        meta: { checkpoint: 3, display: 'fix it' },
+      };
+      const s: any = {
+        id: 's1',
+        messages: [{ role: 'user', content: 'first', meta: { checkpoint: 1 } }, { role: 'assistant', content: 'ok' }, user, { role: 'assistant', content: 'done' }],
+        checkpoints: git ? { history: [{ run: 3, kind: 'stash', sha: 'abc', root }] } : undefined,
+      };
+      const c = Object.create(ChatController.prototype) as any;
+      const calls = { restoreTurn: [] as any[], dropped: [] as number[], posted: [] as any[], broadcast: [] as any[] };
+      Object.assign(c, {
+        compacting: new Set(),
+        runs: new Map(),
+        replays: new Map(),
+        offers: new Map(),
+        store: { get: () => s, historyBefore: async (x: any, i: number) => x.messages.slice(0, i), save() {} },
+        tracker: {
+          restoreTurn: async (_sid: string, turn: number, only?: (p: string) => boolean) => {
+            calls.restoreTurn.push({ turn, only });
+            return { restored: only ? 1 : 2, failed: 0 };
+          },
+          dropTurnsFrom: (_sid: string, turn: number) => calls.dropped.push(turn),
+          settle: async () => undefined,
+        },
+        runner: { checkpoints: git ? { restoreWorkspace: async () => ({ ok: true, files: 2 }), dropFrom: async () => undefined } : undefined },
+        log: { warn() {} },
+        broadcast: (m: any) => calls.broadcast.push(m),
+        pushChanges() {},
+      });
+      return { c, s, calls, sink: { post: (m: any) => calls.posted.push(m) } };
+    };
+
+    const task = make(false);
+    await task.c.handle({ type: 'restoreCheckpoint', sessionId: 's1', messageIndex: 2, restoreType: 'task' }, task.sink);
+    assert.strictEqual(task.s.messages.length, 2, 'the message and everything after it are removed');
+    const draft = task.calls.posted.find((m) => m.type === 'draft');
+    assert.deepStrictEqual(draft, { type: 'draft', text: 'fix it', images: ['aW1nMQ==', 'aW1nMg=='], attachments: ['src/a.ts'] });
+    assert.strictEqual(task.calls.restoreTurn.length, 0, 'task keeps the files');
+
+    const ws = make(false);
+    const before = [...ws.s.messages];
+    await ws.c.handle({ type: 'restoreCheckpoint', sessionId: 's1', messageIndex: 2, restoreType: 'workspace' }, ws.sink);
+    assert.deepStrictEqual(ws.s.messages, before, 'a files-only restore keeps the chat');
+    assert.ok(!ws.calls.posted.some((m) => m.type === 'draft'));
+    assert.deepStrictEqual(
+      ws.calls.restoreTurn.map((r) => r.turn),
+      [3]
+    );
+
+    const both = make(true);
+    await both.c.handle({ type: 'restoreCheckpoint', sessionId: 's1', messageIndex: 2, restoreType: 'both' }, both.sink);
+    assert.strictEqual(both.s.messages.length, 2);
+    const only = both.calls.restoreTurn[0]?.only as (p: string) => boolean;
+    assert.ok(only, 'files outside the git root come back from the turn snapshots');
+    assert.strictEqual(only(path.join(root, 'a.ts')), false);
+    assert.strictEqual(only(path.resolve('/other/x.ts')), true);
+    assert.deepStrictEqual(both.calls.dropped, [3]);
+    assert.match(both.calls.broadcast.find((m) => m.type === 'toast')?.text ?? '', /reverted 3 files/);
   });
 });

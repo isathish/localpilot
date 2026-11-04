@@ -230,6 +230,17 @@ suite('LocalPilot settings & setup', () => {
     assert.throws(() => sanitizeMcpServers({ bad: { url: 'ftp://x' } }), /must start with http/);
   });
 
+  test('sanitizeMcpServers keeps timeout, autoApprove and the Streamable HTTP type on save', () => {
+    const out = sanitizeMcpServers({
+      gh: { url: 'https://api.example.com/mcp', type: 'streamableHttp', timeout: 90, autoApprove: ['list_issues', ' ', 3, 'list_issues'] },
+      fs: { command: 'npx', timeout: 99999, autoApprove: [] },
+      slow: { command: 'x', timeout: -1 },
+    });
+    assert.deepStrictEqual(out.gh, { url: 'https://api.example.com/mcp', type: 'streamableHttp', timeout: 90, autoApprove: ['list_issues'] });
+    assert.deepStrictEqual(out.fs, { command: 'npx', timeout: 3600 });
+    assert.deepStrictEqual(out.slow, { command: 'x' });
+  });
+
   test('settings written through the VS Code API are picked up by the extension', async function () {
     this.timeout(15_000);
     const cfg = vscode.workspace.getConfiguration('localpilot');

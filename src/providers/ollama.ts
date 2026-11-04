@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { completeViaChat, isCloudProvider, resolveApiKey } from './cloud';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
+import { modelFacts, outputLimit } from './modelFacts';
 import { ThinkTagSplitter } from './thinkTags';
 
 interface OllamaTag {
@@ -106,14 +107,16 @@ export class OllamaProvider implements LLMProvider {
         const ctx = ctxKey ? Number(show!.model_info![ctxKey]) : this.defaultCtx;
         // `*-cloud` tags on a local Ollama are proxied to ollama.com: they run remotely and take no local memory.
         const remote = this.remote || /[:-]cloud$/i.test(m.name);
+        const ctxWindow = Number.isFinite(ctx) && ctx > 0 ? ctx : this.defaultCtx;
         const info: ModelInfo = {
           id: `${this.id}/${m.name}`,
           providerId: this.id,
           modelId: m.name,
           name: m.name,
           family: show?.details?.family ?? m.details?.family,
-          contextWindow: Number.isFinite(ctx) && ctx > 0 ? ctx : this.defaultCtx,
-          maxOutputTokens: 8192,
+          contextWindow: ctxWindow,
+          // Only bounded by the context here; requests still send num_predict from LocalPilot's own settings.
+          maxOutputTokens: outputLimit(this.remote ? modelFacts(m.name, 'ollama-cloud') : undefined, ctxWindow, false),
           supportsTools: caps.includes('tools'),
           supportsVision: caps.includes('vision'),
           // Older Ollama versions list no capabilities at all: unknown, not "cannot think".

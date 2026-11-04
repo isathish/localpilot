@@ -1,5 +1,7 @@
 import { ChatMessage, LLMProvider, ModelInfo, ToolDefinition } from '../types';
+import { BASIC_KEEP_ASSISTANT, basicSummary } from './basicCompaction';
 import { estimateMessagesTokens, estimateMessageTokens, estimateTokens, estimateToolsTokens } from './tokenizer';
+import { toolResultCache, ToolResultCache } from './toolResultCache';
 
 export interface ContextBudget {
   contextWindow: number;
@@ -89,7 +91,9 @@ export function effectiveContextWindow(model: Pick<ModelInfo, 'contextWindow'>, 
  *  2. LLM compaction: the older half of the conversation is summarised into a structured memory note.
  *  3. Tighten and repeat: if the recent window alone still overflows, fewer messages are kept verbatim and the
  *     rest is folded into the summary — until the history fits.
- *  4. Hard truncation: drop oldest turns if the model is unavailable for summarisation.
+ *  4. Basic digest: when the model cannot summarise (error, or a transcript too large for it), every user message,
+ *     the last assistant replies and one line per tool call are kept without a model call.
+ * `localpilot.compaction.strategy` picks `agentic` (2, falling back to 4), `basic` (4 only) or `off` (1 only).
  */
 export class ContextManager {
   constructor(
@@ -102,8 +106,26 @@ export class ContextManager {
       keepAlive?: string;
       /** Real tokens per estimated token for the model in use (see TokenCalibration); read on every budget. */
       scale?: () => number;
+      /** When set, the full text of every cut tool output is kept in `cache` and the cut text points to it (lp-cache://). */
+      sessionId?: string;
+      cache?: ToolResultCache;
+      /** `localpilot.compaction.strategy`; default agentic. */
+      strategy?: 'agentic' | 'basic' | 'off';
     }
   ) {}
+
+  get strategy(): 'agentic' | 'basic' | 'off' {
+    return this.opts.strategy ?? 'agentic';
+  }
+
+  /** Keeps `full` for read_file and returns how to read it back from `line`; empty when no session is set. */
+  private cacheRef(full: string, line: number): string {
+    if (!this.opts.sessionId) {
+      return '';
+    }
+    const ref = (this.opts.cache ?? toolResultCache).put(this.opts.sessionId, full);
+    return ` Full text: ${ref} — read it with read_file path="${ref}" start_line=${line}`;
+  }
 
   /** An estimate in the model's real tokens. */
   private tokens(estimated: number): number {
@@ -159,6 +181,9 @@ export class ContextManager {
       messages = pruned.messages;
       budget = budgetOf(messages);
     }
+    if (this.strategy === 'off') {
+      return { messages, budget, compactions };
+    }
     const first = this.opts.keepRecent ?? 8;
     for (const keep of [first, Math.min(first, 4), 2]) {
       if (signal?.aborted || !this.needsCompaction(budget)) {
@@ -196,6 +221,10 @@ export class ContextManager {
     const head = Math.floor(max * 0.7);
     const tail = max - head;
     const omitted = text.length - max;
+    const ref = this.cacheRef(text, text.slice(0, head).split('\n').length);
+    if (ref) {
+      return `${text.slice(0, head)}\n\n[Output truncated: ${omitted.toLocaleString()} characters omitted.${ref}]\n\n${text.slice(-tail)}`;
+    }
     return `${text.slice(0, head)}\n\n... [${omitted.toLocaleString()} characters omitted — use offsets/filters to read more] ...\n\n${text.slice(-tail)}`;
   }
 
@@ -239,9 +268,10 @@ export class ContextManager {
       }
       const before = estimateMessageTokens(m);
       const firstLine = m.content.split('\n')[0].slice(0, 120);
+      const ref = this.cacheRef(m.content, 1);
       const pruned: ChatMessage = {
         ...m,
-        content: `[tool output pruned to save context — ${m.content.length.toLocaleString()} chars] ${firstLine}`,
+        content: `[tool output pruned to save context — ${m.content.length.toLocaleString()} chars${ref ? `.${ref}` : ''}] ${firstLine}`,
         meta: { ...m.meta, pruned: true },
       };
       saved += before - estimateMessageTokens(pruned);
@@ -297,14 +327,31 @@ export class ContextManager {
       .join('\n\n');
 
     let summary: string;
-    try {
-      summary = await this.summarise(provider, model, priorSummaries, transcript, signal);
-    } catch (e) {
-      if (!truncateOnFailure || signal?.aborted) {
-        throw e;
+    // The digest is the last resort, so it must fit: at most ~40% of the window, measured in the model's tokens.
+    const digest = () => {
+      const budget = Math.floor(model.contextWindow * 0.4);
+      let maxChars = budget * 4;
+      let out = basicSummary(older.filter((m) => m !== request), BASIC_KEEP_ASSISTANT, maxChars);
+      for (let i = 0; i < 8 && this.tokens(estimateTokens(out)) > budget; i++) {
+        maxChars = Math.floor(maxChars / 2);
+        out = basicSummary(older.filter((m) => m !== request), BASIC_KEEP_ASSISTANT, maxChars);
       }
-      // Strategy 3 fallback: hard truncation with a plain-text stub.
-      summary = `Earlier conversation (${older.length} messages) was truncated because the context window filled up.`;
+      return out;
+    };
+    // A transcript the model could not even read in one request would only fail (or be cut by the server): go basic.
+    const tooLarge = this.tokens(estimateTokens(transcript) + estimateTokens(priorSummaries.join('\n'))) + 2000 > model.contextWindow;
+    if (this.strategy === 'basic' || (tooLarge && truncateOnFailure)) {
+      summary = digest();
+    } else {
+      try {
+        summary = await this.summarise(provider, model, priorSummaries, transcript, signal);
+      } catch (e) {
+        if (!truncateOnFailure || signal?.aborted) {
+          throw e;
+        }
+        // Strategy 4 fallback: the deterministic digest instead of losing the older messages.
+        summary = digest();
+      }
     }
     const summaryMsg: ChatMessage = {
       role: 'user',

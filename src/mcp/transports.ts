@@ -7,7 +7,8 @@ import type { McpServerConfig } from '../config';
  * MCP transports. The client speaks JSON-RPC; a transport only moves messages:
  *  - stdio: a local process, newline-delimited JSON on stdin/stdout.
  *  - Streamable HTTP (MCP 2025-03-26 and later): each message is POSTed to one endpoint; the reply is JSON or an SSE
- *    stream of messages; the server may assign a session (`Mcp-Session-Id`) that every later request carries.
+ *    stream of messages; the server may assign a session (`Mcp-Session-Id`) that every later request carries. A
+ *    standalone GET stream, if the server offers one, carries notifications and requests nobody asked for.
  *  - HTTP+SSE (MCP 2024-11-05): a GET opens an event stream whose first `endpoint` event names the URL to POST
  *    messages to; replies arrive on the stream.
  */
@@ -21,6 +22,8 @@ export interface Transport {
   setProtocolVersion?(v: string): void;
   /** Forgets the server-assigned session (HTTP), so the next `initialize` starts a new one. */
   resetSession?(): void;
+  /** Called after the handshake: opens the stream on which the server sends unprompted messages (Streamable HTTP). */
+  listen?(): void;
   close(): void;
 }
 
@@ -235,10 +238,95 @@ export class StreamableHttpTransport implements Transport {
   private protocol?: string;
   private onMessage: (m: JsonRpcMessage) => void = () => undefined;
   private readonly ctl = new AbortController();
+  /** The standalone GET stream's own abort, so a new session can replace it. */
+  private stream?: AbortController;
+  /** Reconnect delays for the GET stream (ms); the last one repeats. */
+  streamBackoff = [1_000, 2_000, 5_000, 10_000, 30_000];
+  debug: (m: string) => void = () => undefined;
+  /** The GET stream found its session gone (404 with a session id): the client starts a new session, which listens again. */
+  onSessionExpired?: () => void;
   constructor(private readonly url: string, private readonly headers: Record<string, string>, private readonly fetchImpl: typeof fetch = fetch) {}
 
   async start(onMessage: (m: JsonRpcMessage) => void): Promise<void> {
     this.onMessage = onMessage;
+  }
+
+  listen(): void {
+    if (this.ctl.signal.aborted || (this.stream && !this.stream.signal.aborted)) {
+      return;
+    }
+    const stream = new AbortController();
+    this.stream = stream;
+    void this.runStream(stream.signal);
+  }
+
+  /**
+   * Holds the GET stream open and reconnects with backoff. 404/405 (or a reply that is not an event stream) means
+   * the server has none, which is fine; other 4xx answers stop it too. A 404 for a GET that carried a session id is an
+   * expired session instead (a restarted server), handed to `onSessionExpired`.
+   */
+  private async runStream(own: AbortSignal): Promise<void> {
+    const signal = AbortSignal.any([this.ctl.signal, own]);
+    let failures = 0;
+    while (!signal.aborted) {
+      let opened = 0;
+      const sid = this.session;
+      try {
+        const res = await this.fetchImpl(this.url, {
+          method: 'GET',
+          headers: { accept: 'text/event-stream', ...(sid ? { 'mcp-session-id': sid } : {}), ...(this.protocol ? { 'mcp-protocol-version': this.protocol } : {}), ...this.headers },
+          signal,
+        });
+        const type = res.headers.get('content-type') ?? '';
+        if (!res.ok || !type.includes('text/event-stream') || !res.body) {
+          await res.body?.cancel().catch(() => undefined);
+          if (res.status === 404 && sid && this.onSessionExpired) {
+            if (!signal.aborted && sid === this.session) {
+              this.debug('event stream: session expired');
+              this.onSessionExpired();
+            }
+            return;
+          }
+          if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429)) {
+            this.debug(res.status === 404 || res.status === 405 || res.ok ? 'no standalone event stream' : `event stream refused: ${res.status}`);
+            return;
+          }
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        opened = Date.now();
+        this.debug('event stream open');
+        await readStream(res.body, (e) => {
+          if (e.event === 'message') {
+            try {
+              dispatch(e.data, this.onMessage);
+            } catch {
+              /* malformed event */
+            }
+          }
+        }, signal);
+        if (!signal.aborted) {
+          this.debug('event stream closed');
+        }
+      } catch (e) {
+        if (signal.aborted) {
+          return;
+        }
+        this.debug(`event stream: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // A stream that stayed up a minute counts as healthy: the backoff starts again.
+      failures = opened && Date.now() - opened > 60_000 ? 0 : failures + 1;
+      const delay = this.streamBackoff[Math.min(failures - 1, this.streamBackoff.length - 1)] ?? 0;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(done, delay);
+        t.unref?.();
+        function done() {
+          clearTimeout(t);
+          signal.removeEventListener('abort', done);
+          resolve();
+        }
+        signal.addEventListener('abort', done, { once: true });
+      });
+    }
   }
 
   setProtocolVersion(v: string): void {
@@ -252,6 +340,7 @@ export class StreamableHttpTransport implements Transport {
   resetSession(): void {
     this.session = undefined;
     this.protocol = undefined;
+    this.stream?.abort();
   }
 
   async send(m: JsonRpcMessage): Promise<void> {

@@ -112,7 +112,8 @@ suite('Filesystem tools', () => {
     assert.match(all.content, /^ {4}1 \| line 1$/m);
     const part = await readFileTool.execute({ path: rel('read.txt'), start_line: 5, end_line: 7 }, c);
     assert.match(part.content, /showing 5-7\)/);
-    const body = part.content.split('\n').slice(1);
+    assert.match(part.content, /\[Showing lines 5-7 of 20\. Use start_line\/end_line to read more\.\]$/);
+    const body = part.content.split('\n').slice(1, -1);
     assert.deepStrictEqual(body.map((l) => l.replace(/^\s*\d+ \| /, '')), ['line 5', 'line 6', 'line 7']);
     const clamped = await readFileTool.execute({ path: rel('read.txt'), start_line: 0, end_line: 999 }, c);
     assert.match(clamped.content, /showing 1-20\)/);

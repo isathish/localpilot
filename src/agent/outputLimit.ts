@@ -41,3 +41,54 @@ export function joinContinuation(before: string, after: string): string {
   }
   return before + after;
 }
+
+/**
+ * True when a text-protocol tool call was cut off before it ended: an open `<tool_call>` without its closing tag, an
+ * unclosed ``` fence that starts a `{"name": "<known tool>"` object, or such a bare object whose braces never close.
+ */
+export function hasUnterminatedToolCall(text: string, known: ReadonlySet<string>): boolean {
+  if ((text.match(/<tool_call>/g) ?? []).length > (text.match(/<\/tool_call>/g) ?? []).length) {
+    return true;
+  }
+  const head = /\{\s*"name"\s*:\s*"([^"\\]+)"/g;
+  const fences = text.split('```');
+  if (fences.length % 2 === 0) {
+    const open = fences[fences.length - 1].replace(/^(tool_call|json)?\s*/, '');
+    head.lastIndex = 0;
+    const m = head.exec(open);
+    if (m && m.index === 0 && known.has(m[1])) {
+      return true;
+    }
+  }
+  head.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = head.exec(text))) {
+    if (known.has(m[1]) && !closes(text, m.index)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether the `{` at `from` has a matching `}` (string-aware). */
+function closes(text: string, from: number): boolean {
+  let depth = 0;
+  let inStr = false;
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (ch === '\\') {
+        i++;
+      } else if (ch === '"') {
+        inStr = false;
+      }
+    } else if (ch === '"') {
+      inStr = true;
+    } else if (ch === '{') {
+      depth++;
+    } else if (ch === '}' && --depth === 0) {
+      return true;
+    }
+  }
+  return false;
+}

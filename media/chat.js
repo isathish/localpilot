@@ -28,6 +28,7 @@
     open: '<svg viewBox="0 0 16 16"><path d="M6 3H3.5A.5.5 0 0 0 3 3.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10M9 3h4v4M13 3L7 9"/></svg>',
     undo: '<svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg>',
     restore: '<svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg>',
+    diff: '<svg viewBox="0 0 16 16"><path d="M5 2.5v6M2 5.5h6M8.5 12h5.5"/></svg>',
     bot: '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1" fill="currentColor"/><circle cx="15" cy="9.5" r="1" fill="currentColor"/></svg>',
     warn: '<svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.8v.2"/></svg>',
     sparkle: '<svg viewBox="0 0 16 16"><path d="M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4z"/></svg>',
@@ -87,6 +88,8 @@
   const state = {
     session: null, sessions: [], models: [], defaultModel: '', contextWindow: 0, running: new Set(), attachments: [], images: [], skills: [], agents: [], commands: [], openFiles: [],
     live: new Map(), changes: new Map(), checkpoints: new Map(), history: [], histIdx: -1,
+    // Per chat: turns with a git checkpoint, files changed since the latest message ({ key, files }); whether checkpoints are on.
+    gitCheckpoints: new Map(), lastTurn: new Map(), checkpointsOn: true,
     // Multi-tab bookkeeping: which chats are shown as tabs, the tab we are switching to, live status per running chat,
     // chats that finished while in the background (unread) and chats waiting on an approval (attention).
     openTabs: Array.isArray(persisted.openTabs) ? new Set(persisted.openTabs) : null, loadingTab: null, activeHint: null,
@@ -513,7 +516,7 @@
     a = a || {};
     const v = (past, now) => `<b>${running ? now : past}</b>`;
     switch (name) {
-      case 'read_file': return `${v('Read', 'Reading')} ${fchip(a.path, 'file', { line: a.start_line })}${a.start_line ? `, lines ${a.start_line} to ${a.end_line || '…'}` : ''}`;
+      case 'read_file': if (Array.isArray(a.files)) { return `${v('Read', 'Reading')} ${a.files.map((f) => fchip(f && typeof f === 'object' ? f.path : f, 'file', { line: f && f.start_line })).join(' ')}`; } return `${v('Read', 'Reading')} ${fchip(a.path, 'file', { line: a.start_line })}${a.start_line ? `, lines ${a.start_line} to ${a.end_line || '…'}` : ''}`;
       case 'list_dir': return `${v('Listed', 'Listing')} ${fchip(a.path || '.', 'folder')}`;
       case 'grep_search': return `${v('Searched', 'Searching')} for ${code(a.query)}${a.include_pattern ? ` in ${code(a.include_pattern, 24)}` : ''}`;
       case 'file_search': return `${v('Searched', 'Searching')} for files matching ${code(a.pattern)}`;
@@ -868,28 +871,47 @@
   }
 
   // ------------------------------------------------------------------ transcript rendering
-  /** "Restore checkpoint" only where it would revert something: not in worktree chats, and only if this turn or a later one has file snapshots. */
+  /** "Restore checkpoint" is enabled where there is something to restore: a git checkpoint taken before this turn, or file
+   *  snapshots of this turn or a later one. Hidden in worktree chats; with checkpoints off, a click opens the setting. */
   function syncRestoreButton(turn, sid) {
     const b = turn.querySelector('[data-act="restore"]'); if (!b) { return; }
+    const has = turn.dataset.checkpoint !== undefined;
     const key = Number(turn.dataset.checkpoint);
-    const ok = !!sid && !state.worktree.has(sid) && turn.dataset.checkpoint !== undefined && (state.checkpoints.get(sid) || []).some((t) => t >= key);
-    b.classList.toggle('hidden', !ok);
+    b.classList.toggle('hidden', !sid || state.worktree.has(sid) || !has);
+    const ok = has && ((state.gitCheckpoints.get(sid) || []).includes(key) || (state.checkpoints.get(sid) || []).some((t) => t >= key));
+    const off = !ok && !state.checkpointsOn;
+    b.disabled = !ok && !off; b.classList.toggle('off', off); b.setAttribute('aria-disabled', String(!ok));
+    b.title = ok ? 'Restore checkpoint: files only, the chat only, or both'
+      : off ? 'No checkpoint for this message: checkpoints are off (localpilot.checkpoints.enabled). Click to open the setting.'
+        : 'No checkpoint for this message: nothing was recorded before it ran, or it was already restored';
+  }
+  /** Files only / chat only / both, for the user message at `index`. */
+  function restoreMenu(btn, index) {
+    if (!state.session) { return; }
+    if (btn.classList.contains('off')) { post({ type: 'openCheckpointSetting' }); return; }
+    const sid = state.session.id;
+    const go = (restoreType) => post({ type: 'restoreCheckpoint', sessionId: sid, messageIndex: index, restoreType });
+    openMenu(btn, [
+      { label: 'Restore files only', desc: 'Put the files back as they were before this message; keep the chat', icon: I.file, onPick: () => go('workspace') },
+      { label: 'Restore chat only', desc: 'Remove this message and later turns; keep the files as they are', icon: I.edit, onPick: () => go('task') },
+      { label: 'Restore both', desc: 'Put the files back and rewind the chat to this message', icon: I.restore, onPick: () => go('both') },
+    ]);
   }
   function userTurn(m, index) {
     const d = el('div', 'turn user');
     d.dataset.index = index;
     const atts = [];
     const text = (m.meta && m.meta.display ? m.meta.display : m.content)
-      .replace(/<attachment[^>]*path="([^"]+)"(?:\s+lines="(\d+)[^"]*")?[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p, ln) => { atts.push(ln ? `${p}#L${ln}` : p); return ''; })
+      .replace(/<attachment[^>]*path="([^"]+)"(?:\s+kind="pdf"\s+pages="(\d+(?:-\d+)?) of (\d+)")?(?:\s+lines="(\d+)[^"]*")?[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p, pg, n, ln) => { atts.push(pg && pg !== `1-${n}` && !(n === '1' && pg === '1') ? `${p}#page=${pg}` : ln ? `${p}#L${ln}` : p); return ''; })
       .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
-    const act = el('div', 'actions', `<button data-act="copy" title="Copy">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit and resend: remove this message and later turns (files are kept), put the text back in the composer">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: revert files changed since this message and edit it">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
+    const act = el('div', 'actions', `<button data-act="copy" title="Copy">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit and resend: remove this message and later turns (files are kept), put the text back in the composer">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-haspopup="menu">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
     if (m.meta && m.meta.checkpoint !== undefined) { d.dataset.checkpoint = m.meta.checkpoint; }
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
       if (b.dataset.act === 'copy') { copyTo(b, text); }
       if (b.dataset.act === 'edit' && state.session) { post({ type: 'editMessage', sessionId: state.session.id, messageIndex: index }); }
-      if (b.dataset.act === 'restore' && state.session) { post({ type: 'restoreCheckpoint', sessionId: state.session.id, messageIndex: index }); }
+      if (b.dataset.act === 'restore') { restoreMenu(b, index); }
     };
     d.appendChild(act);
     syncRestoreButton(d, state.session && state.session.id);
@@ -940,6 +962,7 @@
       if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); }
       else if (b.dataset.act === 'copy') { copyTo(b, m.content); }
       else if (b.dataset.act === 'regen' && state.session && !state.running.has(state.session.id)) { b.disabled = true; post({ type: 'retry', sessionId: state.session.id }); }
+      else if (b.dataset.act === 'viewChanges' && state.session) { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'turn' }); }
     };
     return f;
   }
@@ -1035,6 +1058,7 @@
     if (failedBox) { errorActions(failedBox, s.id); }
     const foot = !failedBox && !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .afoot .acts');
     if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept)" aria-label="Regenerate">${I.refresh}</button>`); }
+    syncViewChanges(s.id);
     // Plan mode finished with a checklist: the "Prepared plan" card — title, summary, todos and one-click Build.
     if (s.mode === 'plan' && s.plan && (s.todos || []).length && !state.running.has(s.id)) { els.messages.appendChild(planCard(s)); }
     // Install / Create / Use offers from the last request outlive its live turn.
@@ -1493,6 +1517,7 @@
       case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
+      case 'rules_applied': { const files = (e.payload && e.payload.files) || []; if (files.length) { rotateBody(live); live.root.insertBefore(el('div', 'note rules', `Conditional rules applied: ${files.map((f) => `<code>${esc(f)}</code>`).join(', ')}`), live.body); } break; }
       case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
       case 'error': { rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
       case 'turn_end': noteStatus(sid, 'Finishing…'); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
@@ -1589,6 +1614,7 @@
   function autoModelId() { return state.autoModel || state.defaultModel || ''; }
   function currentModel() { const s = state.session; const want = (s && s.model) || autoModelId(); return state.models.find((m) => m.id === want) || null; }
   function syncModel() {
+    syncVision();
     els.modelBtn.classList.toggle('warn', !state.models.length && !state.modelsLoading);
     els.modelBtn.classList.toggle('finding', !state.models.length && !!state.modelsLoading);
     // No models yet: say what is happening (still looking) or what to do (set one up) — the picker offers the actions.
@@ -1904,13 +1930,14 @@
       const row = el('div', `hist-row${isActive ? ' current' : ''}${sel ? ' sel' : ''}${hist.confirm === s.id ? ' confirm' : ''}`);
       row.dataset.id = s.id; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(sel));
       const mode = MODES[s.mode] || MODES.agent;
-      const desc = running ? esc(state.status.get(s.id) || 'Working…') : hit && hit.snippet ? `${hit.role === 'user' ? '<b>You:</b> ' : ''}${highlightMatch(hit.snippet, q)}` : esc(`${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${timeAgo(s.updatedAt)}`);
-      const tag = state.unread.has(s.id) ? '<span class="tag">new</span>' : isActive ? '<span class="tag">open</span>' : '';
+      const parent = s.parentId ? (state.sessions.find((x) => x.id === s.parentId) || {}).title || s.parentTitle || 'a deleted chat' : '';
+      const desc = running ? esc(state.status.get(s.id) || 'Working…') : hit && hit.snippet ? `${hit.role === 'user' ? '<b>You:</b> ' : ''}${highlightMatch(hit.snippet, q)}` : esc(`${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${timeAgo(s.updatedAt)}${parent ? ` · forked from ${short(parent, 28)}` : ''}`);
+      const tag = (s.origin === 'cli' ? '<span class="tag" title="Started in the localpilot terminal CLI">CLI</span>' : '') + (state.unread.has(s.id) ? '<span class="tag">new</span>' : isActive ? '<span class="tag">open</span>' : '');
       const acts = hist.confirm === s.id
         ? `<span class="q">${running ? 'Stop and delete?' : 'Delete?'}</span><button data-a="confirm" class="danger">Delete</button><button data-a="cancel">Keep</button>`
         : `<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…">${I.list}</button><button data-a="delete" title="${running ? 'Stop the agent and delete this chat' : 'Delete this chat'}">${I.trash}</button>`;
       row.innerHTML = `<span class="ico">${running ? LIVE_DOT : s.pinned ? I.pin : mode.icon}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span></span>${tag}<span class="acts">${acts}</span>`;
-      row.title = `${s.title || 'New chat'}\n${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${new Date(s.updatedAt).toLocaleString()}${s.pinned ? '\nPinned' : ''}`;
+      row.title = `${s.title || 'New chat'}\n${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${new Date(s.updatedAt).toLocaleString()}${s.pinned ? '\nPinned' : ''}${s.origin === 'cli' ? '\nStarted in the terminal CLI' : ''}${parent ? `\nForked from ${parent}` : ''}`;
       // mousedown (not click) so the search box keeps focus, like the other menus.
       row.onmousedown = (e) => { if (e.button !== 0) { return; } e.preventDefault(); const b = e.target.closest('[data-a]'); if (b) { historyAction(b.dataset.a, s, row); } else { historyOpen(s.id); } };
       row.onmouseenter = () => { if (hist.sel !== i) { hist.sel = i; for (const r of list.querySelectorAll('.hist-row.sel')) { r.classList.remove('sel'); r.setAttribute('aria-selected', 'false'); } row.classList.add('sel'); row.setAttribute('aria-selected', 'true'); } };
@@ -1958,6 +1985,7 @@
         { label: s.pinned ? 'Unpin' : 'Pin', icon: I.pin, onPick: () => post({ type: 'pinSession', id: s.id }) },
         { label: 'Fork', desc: 'Branch into a new chat from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) },
         { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
+        { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id, format: 'html' }) },
         ...(running ? [{ label: 'Stop agent', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', desc: 'Keeps the chat, empties it', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
         { hr: true },
         { label: 'Delete chat…', desc: running ? 'Stops the agent first' : 'Cannot be undone', icon: I.trash, onPick: () => { openHistory(); hist.confirm = s.id; hist.sel = historyRows().findIndex((r) => r.s.id === s.id); hist.sig = ''; renderHistory(); } },
@@ -2179,6 +2207,18 @@
     }
     els.tasksList.scrollTop = y;
   }
+  /** "View changes" under the latest finished answer, when files changed since the last message (commands included). */
+  function syncViewChanges(sid) {
+    if (!state.session || state.session.id !== sid) { return; }
+    const last = els.messages.lastElementChild;
+    const foot = last && last.classList.contains('assistant') && !state.running.has(sid) ? last.querySelector(':scope > .afoot .acts') : null;
+    els.messages.querySelectorAll('.afoot [data-act="viewChanges"]').forEach((b) => { if (!foot || b.parentElement !== foot) { b.remove(); } });
+    const lt = state.lastTurn.get(sid); const n = lt ? lt.files : 0;
+    let b = foot && foot.querySelector('[data-act="viewChanges"]');
+    if (!foot || !n) { if (b) { b.remove(); } return; }
+    if (!b) { foot.insertAdjacentHTML('afterbegin', `<button data-act="viewChanges">${I.diff}</button>`); b = foot.firstElementChild; }
+    b.title = `View changes: ${n} file${n === 1 ? '' : 's'} changed since your last message, in one diff`; b.setAttribute('aria-label', b.title);
+  }
   let changesSig = '';
   function renderChanges() {
     const s = state.session; const files = s ? state.changes.get(s.id) || [] : [];
@@ -2191,6 +2231,7 @@
     const head = els.changes.querySelector('.panel-head');
     // The two buttons are relabelled in place as the session moves between a worktree and the workspace; look them up by either name.
     const undoAll = head.querySelector('[data-a="undoAll"], [data-a="discardWorktree"]'); const keepAll = head.querySelector('[data-a="keepAll"], [data-a="applyWorktree"]');
+    const review = head.querySelector('[data-a="reviewAll"]'); if (review) { review.classList.toggle('hidden', !!wt); }
     if (wt) {
       if (undoAll) { undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
       if (keepAll) { keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
@@ -2223,19 +2264,34 @@
   }
   function addImageFile(file) {
     if (!file || !/^image\//.test(file.type)) { return; }
-    if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); return; }
+    if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); return; }
+    const blind = visionBlocked(); if (blind) { toast(`${blind} cannot read images — pick a vision model`, 'error'); return; }
     const reader = new FileReader();
     reader.onload = () => addImageUrl(file.name || `pasted-${Date.now().toString(36)}.png`, reader.result);
     reader.readAsDataURL(file);
   }
   /** Downscales to 1568 px max and re-encodes as PNG, so the bytes always match the image/png label. */
   function addImageUrl(name, url) {
+    const blind = visionBlocked(); if (blind) { toast(`${blind} cannot read images — pick a vision model`, 'error'); return; }
     const img = new Image();
-    img.onload = () => { if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); return; } const MAX = 1568; const k = Math.min(1, MAX / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); state.images.push({ name, data: c.toDataURL('image/png').split(',')[1], mime: 'image/png' }); renderChips(); updateSendEnabled(); els.input.focus(); };
+    img.onload = () => { if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); return; } if (Math.max(img.width, img.height) > MAX_IMAGE_SIDE) { toast(`${name} is ${img.width}×${img.height} px; images may be at most ${MAX_IMAGE_SIDE} px on a side`, 'error'); return; } const MAX = 1568; const k = Math.min(1, MAX / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); state.images.push({ name, data: c.toDataURL('image/png').split(',')[1], mime: 'image/png' }); renderChips(); updateSendEnabled(); els.input.focus(); };
     img.onerror = () => toast(`Could not read image ${name}`, 'error');
     img.src = url;
   }
-  function addAttachment(ref) { if (!state.attachments.includes(ref)) { state.attachments.push(ref); renderChips(); } els.input.focus(); }
+  function addAttachment(ref) { if (!state.attachments.includes(ref)) { if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); return; } state.attachments.push(ref); renderChips(); } els.input.focus(); }
+  /** "Add to Chat": chips join the current draft and the text goes below it (once — a reloaded view gets it again). */
+  function appendDraft(text, refs) { for (const ref of refs || []) { if (state.attachments.includes(ref)) { continue; } if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); break; } state.attachments.push(ref); } renderChips(); const t = (text || '').trim(); const v = els.input.value; if (t && !v.includes(t)) { els.input.value = v.trim() ? `${v.replace(/\s+$/, '')}\n\n${t}\n` : `${t}\n`; } autoGrow(); updateSendEnabled(); els.input.focus(); els.input.selectionStart = els.input.selectionEnd = els.input.value.length; }
+  // Limits (the host checks them too): images plus files per message, and the longest side of an image.
+  const MAX_ATTACH = 20; const MAX_IMAGE_SIDE = 7680;
+  function attachCount() { return state.attachments.length + state.images.length; }
+  /** Refuses a send whose chips, @mentions and images together exceed the limit. */
+  function tooManyAttachments(attachments) { if (attachments.length + state.images.length <= MAX_ATTACH) { return false; } toast(`${attachments.length + state.images.length} attachments — up to ${MAX_ATTACH} images and files per message`, 'error'); return true; }
+  /** The selected model's name when it cannot read images and routing has no vision model to hand them to. */
+  function visionBlocked() { const m = currentModel(); if (!m || m.supportsVision || (state.visionRouting && state.models.some((x) => x.supportsVision))) { return ''; } return m.name; }
+  function syncVision() { const blind = visionBlocked(); els.image.classList.toggle('off', !!blind); els.image.setAttribute('aria-disabled', blind ? 'true' : 'false'); els.image.title = blind ? `${blind} cannot read images — pick a vision model to attach images or screenshots` : 'Attach image or take a screenshot (area, window, screen)'; }
+  /** Inserts text at the caret (dropped text, dropped files as @mentions). */
+  function insertAtCaret(text) { const v = els.input.value; const s = els.input.selectionStart; const e = els.input.selectionEnd; els.input.value = v.slice(0, s) + text + v.slice(e); els.input.selectionStart = els.input.selectionEnd = s + text.length; autoGrow(); updateSendEnabled(); els.input.focus(); }
+  function insertMention(ref) { const before = els.input.value.slice(0, els.input.selectionStart); insertAtCaret(`${before && !/\s$/.test(before) ? ' ' : ''}@${/^[\w./-]+$/.test(ref) ? ref : `"${ref}"`} `); }
 
   // ------------------------------------------------------------------ popover menus
   let menuState = null;
@@ -2337,6 +2393,14 @@
     syncSkills();
     post({ type: 'setSkills', sessionId: state.session.id, mode: next.mode || null, pinned: next.pinned || [] });
   }
+  // Rules, commands, hooks and skills: opens Settings → Customize.
+  const improveBtn = document.getElementById('btnImprove');
+  if (improveBtn) {
+    const rulesBtn = el('button', 'ib', '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>');
+    rulesBtn.id = 'btnRules'; rulesBtn.title = 'Rules, commands, hooks and skills — switch them on or off, edit or create them'; rulesBtn.setAttribute('aria-label', 'Customize rules, commands, hooks and skills');
+    rulesBtn.onclick = () => post({ type: 'openSettings', section: 'customize' });
+    improveBtn.before(rulesBtn);
+  }
   els.skillsBtn.onclick = () => {
     const ss = sessionSkills(); const pinned = new Set(ss.pinned || []); const g = state.skillsMode || 'auto';
     const items = [
@@ -2417,7 +2481,7 @@
     autoGrow(); updateSendEnabled(); els.input.focus();
   }
   if (els.improve) { els.improve.onclick = improvePrompt; }
-  els.image.onclick = () => openMenu(els.image, [
+  els.image.onclick = () => visionBlocked() ? toast(els.image.title, 'error') : openMenu(els.image, [
     { label: 'Image file…', desc: 'PNG, JPEG, GIF or WebP · or paste / drop onto the composer', icon: I.image, onPick: () => post({ type: 'pickImage' }) },
     { hr: true },
     ...screenshotItems(),
@@ -2443,25 +2507,27 @@
       const hits = mentionHits.query === t.tok ? mentionHits.items : mentionHits.items.filter((h) => subseq(q, h.desc));
       const files = hits.length ? hits.map((h) => ({ label: h.label, labelHtml: hlHtml(h.label, h.labelHl), desc: h.desc, descHtml: hlHtml(h.desc, h.hl), icon: h.kind === 'folder' ? I.folder : I.file, tag: h.open ? 'open' : h.recent ? 'recent' : '', onPick: () => applyMention(h.ref) }))
         : state.openFiles.filter((f) => f.toLowerCase().includes(q)).slice(0, 8).map((f) => ({ label: f.split('/').pop(), desc: f, icon: I.file, onPick: () => applyMention(f) }));
-      const items = (t.quoted ? [] : MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))).concat(files);
+      // Commits whose message matches (or the one a typed hash names) follow the files.
+      const commits = mentionHits.query === t.tok && !t.quoted ? mentionHits.commits.map((c) => ({ label: `Commit ${c.sha}`, desc: c.subject, icon: I.git, onPick: () => applyMention(c.sha) })) : [];
+      const items = (t.quoted ? [] : MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))).concat(files, commits);
       if (!items.length) { return closeMenu(); }
       openMenu(els.box, items); els.input.focus();
     }
   }
   // Workspace-wide @ search: the host ranks its file index (open editors, then recent attachments, then fuzzy score).
-  const mentionHits = { asked: null, query: null, items: [] };
+  const mentionHits = { asked: null, query: null, items: [], commits: [] };
   function subseq(q, s) { let i = 0; const l = s.toLowerCase(); for (let k = 0; k < l.length && i < q.length; k++) { if (l[k] === q[i]) { i++; } } return i === q.length; }
   function hlHtml(s, pos) { const on = new Set(pos || []); return s.split('').map((c, i) => (on.has(i) ? `<b class="hl">${esc(c)}</b>` : esc(c))).join(''); }
   function mentionResults(m) {
     if (m.query !== mentionHits.asked) { return; }
-    mentionHits.query = m.query; mentionHits.items = m.items || [];
+    mentionHits.query = m.query; mentionHits.items = m.items || []; mentionHits.commits = m.commits || [];
     const t = tokenAt();
     if (t && t.kind === '@' && t.tok === m.query && document.activeElement === els.input) { showInlineMenu(t); }
   }
   /** Paths outside the plain `@path` alphabet (spaces, brackets …) are quoted: `@"docs/my file.md"`. */
   function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); const token = /^[\w./-]+$/.test(name) ? name : `"${name}"`; els.input.value = `${before}@${token} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + token.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
-  /** `@path`, `@path#L3-L9` and `@"path with spaces"` in a draft; also what the composer highlights. */
-  const MENTION_RE = /(^|\s)(@(?:"([^"\n]+)"|([\w./-]+(?:#L\d+(?:-L?\d+)?)?)))/g;
+  /** `@path`, `@path#L3-L9`, `@"path with spaces"`, `@https://…` and `@<commit>` in a draft; also what the composer highlights. */
+  const MENTION_RE = /(^|\s)(@(?:"([^"\n]+)"|(https?:\/\/[^\s"<>]*[^\s"<>.,;:!?)\]]|[\w./-]+(?:#L\d+(?:-L?\d+)?|#page=\d+(?:-\d+)?)?)))/g;
   function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]); }
   /** Opens what a sent message's context chip names: a file, the Problems panel, the terminal, a URL. */
   function openMentionRef(ref, line) {
@@ -2472,8 +2538,10 @@
   /** A sent message's context chip; `a` is a path (`file#L3-L9`), a special mention (`problems`, `@git`) or a URL. */
   function attChip(a) {
     const n = String(a).replace(/^@/, '');
+    // A commit chip opens Source Control; its text stays the hash.
+    if (/^[0-9a-f]{7,40}$/i.test(n)) { return `<span class="chip link" data-ref="@git" title="Commit ${esc(n)}">${I.git}<span>${esc(n)}</span></span>`; }
     const special = MENTIONS.some(([k]) => k === n) || n === 'directory';
-    const m = /^(.*?)(?:#L(\d+)(?:-L?\d+)?)?$/.exec(a);
+    const m = /^(.*?)(?:#L(\d+)(?:-L?\d+)?|#page=\d+(?:-\d+)?)?$/.exec(a);
     const ref = special ? `@${n}` : /^https?:\/\//i.test(a) ? a : m[1];
     const open = ref !== '@directory';
     return `<span class="chip${open ? ' link' : ''}"${open ? ` data-ref="${esc(ref)}"${!special && m[2] ? ` data-line="${m[2]}"` : ''} title="Open ${esc(n)}"` : ''}>${special ? I.list : I.file}<span>${esc(special ? ref : a)}</span></span>`;
@@ -2504,6 +2572,7 @@
     if (!text) { return; }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
+    if (tooManyAttachments(attachments)) { return; }
     const images = state.images.map((i) => i.data);
     post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', text, attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
@@ -2516,6 +2585,7 @@
     if ((!text && !state.images.length) || !state.session) { return; }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
+    if (tooManyAttachments(attachments)) { return; }
     const images = state.images.map((i) => i.data);
     post({ type: 'steer', sessionId: state.session.id, text: text || 'Consider the attached image(s).', attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
@@ -2544,6 +2614,7 @@
     }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
+    if (tooManyAttachments(attachments)) { return; }
     const images = state.images.map((i) => i.data);
     const finalText = text || 'Describe what you see in the attached image(s).';
     post({ type: 'send', sessionId: state.session.id, text: finalText, attachments, images: images.length ? images : undefined });
@@ -2584,7 +2655,7 @@
     // Backspace right after "@mention " removes the whole mention: select it and let the native delete keep undo working.
     if (e.key === 'Backspace' && !e.altKey && !e.metaKey && !e.ctrlKey && els.input.selectionStart === els.input.selectionEnd) {
       const before = els.input.value.slice(0, els.input.selectionStart);
-      const mm = /(?:^|\s)(@(?:"[^"\n]+"|[\w./-]+(?:#L\d+(?:-L?\d+)?)?)) $/.exec(before);
+      const mm = /(?:^|\s)(@(?:"[^"\n]+"|[\w./-]+(?:#L\d+(?:-L?\d+)?|#page=\d+(?:-\d+)?)?)) $/.exec(before);
       if (mm) { els.input.selectionStart = before.length - mm[1].length - 1; }
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); improvePrompt(); return; }
@@ -2612,11 +2683,25 @@
     const a = e.target.closest('[data-a]'); if (!a || !state.session) { return; }
     const act = a.dataset.a;
     if (act === 'applyWorktree' || act === 'discardWorktree') { post({ type: act, sessionId: state.session.id }); return; }
+    if (act === 'reviewAll') { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'session' }); return; }
     post({ type: act === 'undoAll' ? 'undoChanges' : 'keepChanges', sessionId: state.session.id });
   };
   els.box.addEventListener('dragover', (e) => { e.preventDefault(); els.box.classList.add('drop'); });
   els.box.addEventListener('dragleave', () => els.box.classList.remove('drop'));
-  els.box.addEventListener('drop', (e) => { e.preventDefault(); els.box.classList.remove('drop'); const files = [...(e.dataTransfer.files || [])]; const imgs = files.filter((f) => /^image\//.test(f.type)); imgs.forEach(addImageFile); if (!imgs.length) { for (const u of (e.dataTransfer.getData('text/uri-list') || '').split(/\r?\n/).filter(Boolean)) { post({ type: 'attachUri', uri: u }); } } });
+  els.box.addEventListener('drop', (e) => {
+    e.preventDefault(); els.box.classList.remove('drop');
+    const dt = e.dataTransfer; const imgs = [...(dt.files || [])].filter((f) => /^image\//.test(f.type)); imgs.forEach(addImageFile);
+    if (imgs.length) { return; }
+    // Explorer and editor tabs (VS Code's resource lists) and OS files: each becomes an @mention, images an image chip.
+    const uris = droppedUris(dt);
+    if (uris.length) { for (const u of uris) { post({ type: 'attachUri', uri: u, insert: true }); } return; }
+    const text = dt.getData('text/plain'); if (text) { insertAtCaret(text); }
+  });
+  function droppedUris(dt) {
+    const list = (dt.getData('application/vnd.code.uri-list') || dt.getData('text/uri-list') || '').split(/\r?\n/).map((u) => u.trim()).filter((u) => u && !u.startsWith('#'));
+    if (!list.length) { try { const r = JSON.parse(dt.getData('resourceurls') || '[]'); if (Array.isArray(r)) { list.push(...r.map(String)); } } catch { /* not a resource list */ } }
+    return [...new Set(list)];
+  }
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
     if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { const pl = code.closest('.code').querySelector('.path-link'); post({ type: 'applyCodeToFile', code: text, path: pl ? pl.dataset.path : undefined }); } return; }
@@ -2738,9 +2823,9 @@
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
         break;
       }
-      case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); } break;
+      case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); state.gitCheckpoints.set(m.sessionId, m.gitCheckpoints || []); if (m.checkpointsEnabled !== undefined) { state.checkpointsOn = m.checkpointsEnabled; } if (m.lastTurn) { state.lastTurn.set(m.sessionId, m.lastTurn); } else { state.lastTurn.delete(m.sessionId); } if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); syncViewChanges(m.sessionId); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'skillInstall': {
         // The session redraw replaces a settled offer; this settles chips still inside a live turn.
@@ -2796,7 +2881,7 @@
         u.appendChild(correctionNote(m.fixes || []));
         break;
       }
-      case 'draft': els.input.value = m.text || ''; if (m.images && m.images.length) { state.images = m.images.map((data, i) => ({ name: `image-${i + 1}.png`, data: String(data).replace(/^data:[^,]*,/, ''), mime: 'image/png' })); renderChips(); } autoGrow(); updateSendEnabled(); els.input.focus(); break;
+      case 'draft': if (m.append) { appendDraft(m.text, m.attachments); break; } els.input.value = m.text || ''; if (m.images && m.images.length) { state.images = m.images.map((data, i) => ({ name: `image-${i + 1}.png`, data: String(data).replace(/^data:[^,]*,/, ''), mime: 'image/png' })); } if (m.attachments && m.attachments.length) { state.attachments = m.attachments.slice(); } if ((m.images && m.images.length) || (m.attachments && m.attachments.length)) { renderChips(); } autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
       case 'mentionResults': mentionResults(m); break;
@@ -2814,7 +2899,8 @@
         break;
       }
       case 'openLauncher': openParallelComposer(m.kind); break;
-      case 'image': if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); break; } addImageUrl(m.image.name, `data:${m.image.mime};base64,${m.image.data}`); break;
+      case 'insertMention': insertMention(m.ref); break;
+      case 'image': if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); break; } addImageUrl(m.image.name, `data:${m.image.mime};base64,${m.image.data}`); break;
       case 'replay': applyReplay(m); break;
     }
   }
@@ -2836,7 +2922,7 @@
   function renderApproval(a) {
     if (els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) { return; }
     const d = el('div', 'approval'); d.dataset.id = a.id;
-    const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network' }[a.kind] || a.kind;
+    const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network', mcp: 'MCP tool' }[a.kind] || a.kind;
     const other = !state.session || state.session.id !== a.sessionId; const sess = other ? state.sessions.find((s) => s.id === a.sessionId) : null;
     d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="actions"><button class="btn ghost" data-a="deny" title="Deny (N)">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
     d.querySelector('pre').textContent = a.detail;

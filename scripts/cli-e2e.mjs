@@ -31,7 +31,7 @@ const check = (name, cond, detail) => {
 };
 
 // ------------------------------------------------------------------ mock servers
-const seen = { claudeKeys: [], claudeBodies: [], localChats: 0, omniChats: 0 };
+const seen = { claudeKeys: [], claudeBodies: [], localChats: 0, omniChats: 0, localBodies: [] };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => r(b)); });
 const srv = http.createServer(async (req, res) => {
   const url = req.url ?? '';
@@ -68,7 +68,7 @@ const srv = http.createServer(async (req, res) => {
   }
   if (url.endsWith('/v1/chat/completions')) {
     const b = JSON.parse(await body(req));
-    omni ? seen.omniChats++ : seen.localChats++;
+    omni ? seen.omniChats++ : (seen.localChats++, seen.localBodies.push(b));
     res.setHeader('content-type', 'text/event-stream');
     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${omni ? 'Gateway' : 'Local'} model ${b.model} answered.` }, finish_reason: 'stop' }] })}\n\n`);
     return res.end('data: [DONE]\n\n');
@@ -155,6 +155,28 @@ try {
 
   r = await cli(['-y', '-p', '--no-mcp', '-m', 'omniroute/auto/coding', 'Say hi']);
   check('gateway model chosen explicitly answers through OmniRoute', /Gateway model auto\/coding answered/.test(r.out), r.out);
+
+  console.log('[saved sessions]');
+  r = await cli(['-y', '-p', '--no-mcp', '-m', 'local/qwen2.5-coder-7b', 'Remember the codeword mango']);
+  const firstRun = r;
+  r = await cli(['-y', '-p', '--no-mcp', '-m', 'local/qwen2.5-coder-7b', '-c', 'What was the codeword?']);
+  const resent = JSON.stringify(seen.localBodies.at(-1)?.messages ?? []);
+  check('-c continues the last session: the earlier turn goes to the model again', firstRun.code === 0 && r.code === 0 && resent.includes('mango') && resent.includes('What was the codeword?'), resent.slice(0, 600));
+  const sessionsDir = path.join(home, '.localpilot', 'workspaces');
+  const saved = fs.existsSync(sessionsDir) ? fs.readdirSync(sessionsDir).flatMap((h) => fs.readdirSync(path.join(sessionsDir, h, 'sessions')).filter((f) => f.endsWith('.json'))) : [];
+  check('sessions are saved under ~/.localpilot/workspaces/<hash>/sessions', saved.length >= 1, saved);
+  r = await cli(['history', '--json']);
+  const hist = JSON.parse(r.out.slice(r.out.indexOf('[')));
+  check('history --json: newest first, tagged cli, with both turns', r.code === 0 && hist[0]?.origin === 'cli' && hist[0].messages >= 4 && /mango/i.test(hist[0].title), hist[0]);
+  r = await cli(['history', 'export', hist[0].id, '-o', 'chat.html']);
+  const html = fs.existsSync(path.join(ws, 'chat.html')) ? fs.readFileSync(path.join(ws, 'chat.html'), 'utf8') : '';
+  check('history export -o file.html writes a standalone page', r.code === 0 && html.startsWith('<!DOCTYPE html>') && html.includes('<pre>') && html.includes('mango') && !/<script/i.test(html), r.out);
+  r = await cli(['-y', '-p', '--no-mcp', '-m', 'local/qwen2.5-coder-7b', '-r', hist[0].id, 'And again?']);
+  check('-r <id> resumes that session', r.code === 0 && JSON.stringify(seen.localBodies.at(-1)?.messages ?? []).includes('mango'), r.out);
+  r = await cli(['-p', '--no-mcp', '-r', 'cli-doesnotexist', 'x']);
+  check('-r with an unknown id: exit code 2', r.code === 2 && /no saved session/.test(r.out), r.out);
+  r = await cli(['history', 'delete', hist[0].id]);
+  check('history delete removes the session', r.code === 0 && !JSON.parse((await cli(['history', '--json'])).out.replace(/^[^[]*/, '')).some((s) => s.id === hist[0].id), r.out);
 
   console.log('[keys]');
   r = await cli(['providers', 'key', 'anthropic', '--remove-key']);

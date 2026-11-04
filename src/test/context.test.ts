@@ -162,7 +162,7 @@ suite('ContextManager', () => {
     assert.strictEqual(provider.calls, 0);
   });
 
-  test('compact folds a prior summary into the next one and falls back to a truncation note when the model fails', async () => {
+  test('compact folds a prior summary into the next one and falls back to the basic digest when the model fails', async () => {
     const cm = new ContextManager({ compactionThreshold: 0.8, maxToolOutputChars: 1000, keepRecent: 4 });
     const provider = fakeProvider('second summary');
     const history: ChatMessage[] = [{ role: 'user', content: 'FIRST SUMMARY', meta: { summary: true } }, ...turn(1), ...turn(2), ...turn(3)];
@@ -174,7 +174,38 @@ suite('ContextManager', () => {
     const broken = fakeProvider(new Error('server down'));
     const r2 = await cm.compact([...turn(1), ...turn(2), ...turn(3)], broken, model);
     assert.ok(r2.removed > 0, 'still shrinks the history');
-    assert.ok(/truncated because the context window filled up/.test(r2.summary), r2.summary);
+    assert.ok(/compacted without a model/.test(r2.summary), r2.summary);
+    assert.ok(r2.summary.includes('User: request 1: please look at file1.ts') && r2.summary.includes('• read_file file1.ts (ok)'), r2.summary);
+  });
+
+  test('basic strategy: no model call, every user message kept, one line per tool call', async () => {
+    const cm = new ContextManager({ compactionThreshold: 0.8, maxToolOutputChars: 1000, keepRecent: 4, strategy: 'basic' });
+    const provider = fakeProvider('never used');
+    const history: ChatMessage[] = [];
+    for (let i = 0; i < 50; i++) {
+      history.push(...turn(i, 200));
+    }
+    history.splice(6, 0, { role: 'assistant', content: '', toolCalls: [{ id: 'cmd', name: 'run_command', arguments: JSON.stringify({ command: 'npm test' }) }] }, { role: 'tool', toolCallId: 'cmd', toolName: 'run_command', content: '$ npm test\nFAIL a\nFAIL b\nexpected 1\n[exit code 1]', meta: { failed: true } });
+    const started = Date.now();
+    const r = await cm.compact(history, provider, model);
+    assert.ok(Date.now() - started < 50, `took ${Date.now() - started} ms`);
+    assert.strictEqual(provider.calls, 0);
+    assert.ok(r.removed > 0);
+    for (let i = 0; i < 49; i++) {
+      assert.ok(r.messages.some((m) => m.content.includes(`request ${i}: please look at file${i}.ts`)), `user message ${i} kept`);
+    }
+    assert.ok(r.summary.includes('• run_command npm test (exit 1, 3 lines of error)'), r.summary);
+    assert.ok(r.summary.includes('Assistant: done with 47') && !r.summary.includes('Assistant: done with 3\n'), 'only the last assistant replies verbatim');
+  });
+
+  test('off strategy: fit prunes but never summarises', async () => {
+    const cm = new ContextManager({ compactionThreshold: 0.3, maxToolOutputChars: 1000, keepRecent: 4, strategy: 'off' });
+    const provider = fakeProvider('summary');
+    const history = [...turn(1, 3000), ...turn(2, 3000), ...turn(3, 3000), ...turn(4, 3000)];
+    const r = await cm.fit(history, provider, model, (h) => cm.budget(model, 'sys', [], h, 1024));
+    assert.strictEqual(provider.calls, 0);
+    assert.strictEqual(r.compactions.length, 0);
+    assert.strictEqual(r.messages.length, history.length);
   });
 
   test('fit returns the history untouched below the threshold and prunes before it summarises', async () => {

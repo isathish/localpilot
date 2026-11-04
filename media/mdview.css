@@ -11,7 +11,7 @@
   --brand: #f2a33a;
   --mono: var(--vscode-editor-font-family, Menlo, monospace);
   --radius-sm: 6px; --radius: 8px;
-  --fs: 15px;
+  --fs: 15px; --measure: 80ch; --font: var(--vscode-font-family); --lh: 1.65;
   --shadow: 0 6px 24px rgba(0,0,0,.18);
 }
 * { box-sizing: border-box; }
@@ -39,6 +39,9 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 .outline .grp { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px 8px; }
 .outline a { display: block; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-left: 2px solid transparent; }
 .outline a.l2 { padding-left: 18px; } .outline a.l3 { padding-left: 28px; font-size: 11.5px; }
+.outline a.l4 { padding-left: 38px; font-size: 11.5px; } .outline a.l5 { padding-left: 48px; font-size: 11px; } .outline a.l6 { padding-left: 58px; font-size: 11px; }
+.outline .filter { width: 100%; margin: 0 0 10px; padding: 4px 8px; font: inherit; color: var(--vscode-input-foreground, var(--fg)); background: var(--vscode-input-background, var(--tint)); border: 1px solid var(--vscode-input-border, var(--border-soft)); border-radius: var(--radius-sm); }
+.outline .filter:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .outline a:hover { color: var(--fg); background: var(--tint); }
 .outline a.on { color: var(--fg); border-left-color: var(--brand); }
 .doc { flex: 1 1 auto; min-width: 0; overflow: auto; scroll-behavior: smooth; padding: 28px clamp(16px, 6vw, 72px) 96px; }
@@ -46,7 +49,7 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 @media (prefers-reduced-motion: reduce) { .doc { scroll-behavior: auto; } }
 
 /* reading column */
-.md { max-width: 76ch; margin: 0 auto; font-size: var(--fs); line-height: 1.6; overflow-wrap: anywhere; }
+.md { max-width: var(--measure); margin: 0 auto; font-family: var(--font); font-size: var(--fs); line-height: var(--lh); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-weight: 650; line-height: 1.25; margin: 1.6em 0 .5em; letter-spacing: -.01em; scroll-margin-top: 16px; }
 .md h1 { font-size: 1.85em; margin-top: .2em; padding-bottom: .3em; border-bottom: 1px solid var(--border-soft); }
@@ -63,9 +66,13 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 .md blockquote { padding: 2px 16px; border-left: 3px solid var(--brand); color: var(--muted); background: var(--tint); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .md blockquote > :last-child { margin-bottom: 0; }
 .md img { max-width: 100%; height: auto; border-radius: var(--radius); }
-.md table { border-collapse: collapse; font-size: .92em; display: block; overflow-x: auto; max-width: 100%; }
+.md .table-wrap { margin: 0 0 1em; max-width: 100%; max-height: 75vh; overflow: auto; }
+.md table { border-collapse: separate; border-spacing: 0; font-size: .92em; }
+.md .table-wrap > table { margin: 0; }
 .md th, .md td { border: 1px solid var(--border-soft); padding: 6px 10px; text-align: left; vertical-align: top; }
-.md th { background: var(--tint); font-weight: 600; }
+.md th { background: color-mix(in srgb, var(--bg) 94%, var(--fg)); font-weight: 600; }
+.md thead th { position: sticky; top: 0; z-index: 1; }
+.md th + th, .md td + td { border-left: 0; } .md tbody td, .md tbody th, .md tr + tr > * { border-top: 0; }
 .md tr:nth-child(even) td { background: color-mix(in srgb, var(--fg) 2.5%, transparent); }
 .md kbd { font-family: var(--mono); font-size: .85em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--tint); }
 .md code { font-family: var(--mono); font-size: .88em; background: var(--tint-2); padding: 1px 5px; border-radius: 4px; }
@@ -77,6 +84,50 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 .md .code-head .cp:hover { background: var(--tint-2); color: var(--fg); }
 .md .code-head .cp svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .md pre { margin: 0; padding: 12px 14px; overflow: auto; line-height: 1.5; tab-size: 2; }
+body.wrap-code .md pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.md .code-head .cp.ref { font-family: var(--mono); font-size: 10.5px; }
+
+/* GitHub alerts (> [!NOTE] …), also styling the engine's own .markdown-alert output */
+.md .markdown-alert { margin: 0 0 1em; padding: 8px 14px; border-left: 3px solid var(--alert); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: color-mix(in srgb, var(--alert) 8%, transparent); --alert: var(--vscode-editorInfo-foreground, #3794ff); }
+.md .markdown-alert > :last-child { margin-bottom: 0; }
+.md .markdown-alert-title { display: flex; align-items: center; gap: 6px; margin: 0 0 .35em; font-weight: 650; color: var(--alert); }
+.md .markdown-alert-tip { --alert: var(--vscode-testing-iconPassed, #73c991); }
+.md .markdown-alert-important { --alert: var(--vscode-charts-purple, #b180d7); }
+.md .markdown-alert-warning { --alert: var(--vscode-editorWarning-foreground, #cca700); }
+.md .markdown-alert-caution { --alert: var(--vscode-editorError-foreground, #f14c4c); }
+
+/* footnotes */
+.md sup.fn-ref { line-height: 0; } .md sup.fn-ref a { border: 0; padding: 0 1px; }
+.md .footnotes { margin-top: 2.5em; font-size: .9em; color: var(--muted); }
+.md .footnotes hr { margin: 0 0 1em; }
+.md .footnotes li:target { color: var(--fg); background: var(--tint); border-radius: var(--radius-sm); }
+.md .footnotes .fn-back { border: 0; margin-left: 2px; }
+
+/* front matter */
+.props { max-width: var(--measure); margin: 0 auto 1.4em; border: 1px solid var(--border-soft); border-radius: var(--radius); font-size: 12px; }
+.props summary { cursor: pointer; padding: 6px 12px; color: var(--muted); user-select: none; }
+.props[open] summary { border-bottom: 1px solid var(--border-soft); }
+.props table { width: 100%; border-collapse: collapse; }
+.props th, .props td { padding: 5px 12px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.props th { width: 1%; white-space: nowrap; color: var(--muted); font-weight: 500; font-family: var(--mono); }
+.props tr + tr > * { border-top: 1px solid var(--border-soft); }
+
+/* inline [[toc]] */
+.md .inline-toc { margin: 0 0 1.2em; padding: 10px 14px 10px 2em; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--tint); }
+.md .inline-toc ul { padding-left: 1.2em; margin: .1em 0; } .md .inline-toc li { margin: .15em 0; }
+
+/* Mermaid */
+.md figure.mermaid { position: relative; margin: 0 0 1em; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: auto; text-align: center; }
+.md .mermaid-svg svg { max-width: 100%; height: auto; }
+.md .fig-bar { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.md figure.mermaid:hover .fig-bar, .md .fig-bar:focus-within { opacity: 1; }
+.md .fig-bar button { height: 22px; padding: 0 7px; border-radius: 4px; font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border-soft); }
+.md .fig-bar button:hover { color: var(--fg); background: var(--tint-2); }
+.md .mermaid-error { margin: 0 0 8px; padding: 6px 10px; text-align: left; font-size: 12px; color: var(--vscode-errorForeground); background: var(--vscode-inputValidation-errorBackground, color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent)); border-radius: var(--radius-sm); }
+.md figure.mermaid .code { text-align: left; margin: 0; }
+
+/* images that did not load */
+.md .img-missing { display: inline-block; padding: 6px 10px; font-size: 12px; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius-sm); }
 
 /* highlight.js classes emitted by VS Code's Markdown engine → editor token colours */
 .hljs-comment, .hljs-quote { color: var(--vscode-descriptionForeground); font-style: italic; }
@@ -91,6 +142,24 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 .hljs-addition { background: var(--vscode-diffEditor-insertedLineBackground, rgba(115,201,145,.18)); }
 .hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: 600; }
 
+/* reading controls, ⋯ menu, Ask about selection */
+.ib.txt { width: auto; min-width: 28px; padding: 0 6px; font-size: 12px; font-weight: 600; letter-spacing: -.02em; }
+.pop { position: fixed; z-index: 20; min-width: 180px; padding: 6px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--bg))); color: var(--vscode-menu-foreground, var(--fg)); border: 1px solid var(--vscode-menu-border, var(--border)); border-radius: var(--radius); box-shadow: var(--shadow); font-size: 12px; }
+.pop .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 4px; }
+.pop .row > span { color: var(--muted); white-space: nowrap; }
+.pop .seg { display: inline-flex; align-items: center; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden; }
+.pop .seg button { padding: 3px 8px; color: var(--muted); }
+.pop .seg button + button, .pop .seg output + button { border-left: 1px solid var(--border-soft); }
+.pop .seg button:hover { background: var(--tint-2); color: var(--fg); }
+.pop .seg button[aria-pressed="true"] { color: var(--fg); background: var(--tint-2); box-shadow: inset 0 -2px 0 var(--brand); }
+.pop .seg output { min-width: 30px; padding: 3px 4px; text-align: center; border-left: 1px solid var(--border-soft); font-variant-numeric: tabular-nums; }
+.pop.menu { min-width: 160px; display: flex; flex-direction: column; }
+.pop.menu button { text-align: left; padding: 5px 10px; border-radius: 4px; }
+.pop.menu button:hover, .pop.menu button:focus-visible { background: var(--vscode-menu-selectionBackground, var(--tint-2)); color: var(--vscode-menu-selectionForeground, var(--fg)); outline: none; }
+.ask-sel { position: fixed; z-index: 15; padding: 4px 10px; font-size: 11.5px; border-radius: 999px; color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, var(--brand)); box-shadow: var(--shadow); }
+.ask-sel:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background, var(--brand))); }
+@media (max-width: 420px) { .pop .row { flex-direction: column; align-items: flex-start; gap: 4px; } }
+
 /* toasts */
 #toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 10; pointer-events: none; }
 .toast { background: var(--vscode-notifications-background, var(--bg)); color: var(--vscode-notifications-foreground, var(--fg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 12px; font-size: 12px; box-shadow: var(--shadow); animation: fadeUp .18s ease-out; }
@@ -98,3 +167,17 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--vscode-focusBor
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (max-width: 640px) { .outline { position: absolute; inset: 38px auto 0 0; background: var(--bg); box-shadow: var(--shadow); z-index: 5; } .doc { padding-left: 16px; padding-right: 16px; } }
 
+
+/* light and high-contrast themes */
+body.vscode-light .hljs-string, body.vscode-light .hljs-regexp, body.vscode-light .hljs-template-tag { color: var(--vscode-debugTokenExpression-string, #a31515); }
+body.vscode-light .hljs-number, body.vscode-light .hljs-literal, body.vscode-light .hljs-symbol, body.vscode-light .hljs-bullet { color: var(--vscode-debugTokenExpression-number, #098658); }
+body.vscode-light .hljs-keyword, body.vscode-light .hljs-selector-tag, body.vscode-light .hljs-section, body.vscode-light .hljs-doctag, body.vscode-light .hljs-tag { color: var(--vscode-symbolIcon-keywordForeground, #0000ff); }
+body.vscode-light .hljs-type, body.vscode-light .hljs-built_in, body.vscode-light .hljs-title.class_, body.vscode-light .hljs-selector-class { color: var(--vscode-symbolIcon-classForeground, #267f99); }
+body.vscode-light .hljs-title, body.vscode-light .hljs-title.function_ { color: var(--vscode-symbolIcon-functionForeground, #795e26); }
+body.vscode-light .hljs-attr, body.vscode-light .hljs-attribute, body.vscode-light .hljs-variable, body.vscode-light .hljs-property, body.vscode-light .hljs-name { color: var(--vscode-symbolIcon-propertyForeground, #001080); }
+body.vscode-light { --shadow: 0 6px 24px rgba(0,0,0,.12); }
+body.vscode-high-contrast, body.vscode-high-contrast-light { --border: var(--vscode-contrastBorder, currentColor); --border-soft: var(--vscode-contrastBorder, currentColor); --tint: transparent; --tint-2: transparent; --brand: var(--vscode-focusBorder); }
+body.vscode-high-contrast .md a, body.vscode-high-contrast-light .md a { text-decoration: underline; border-bottom: 0; }
+body.vscode-high-contrast .ib:hover, body.vscode-high-contrast-light .ib:hover, body.vscode-high-contrast .ib[aria-pressed="true"], body.vscode-high-contrast-light .ib[aria-pressed="true"] { outline: 1px dashed var(--vscode-contrastActiveBorder, currentColor); }
+body.vscode-high-contrast .md .markdown-alert, body.vscode-high-contrast-light .md .markdown-alert { background: transparent; border: 1px solid var(--alert); border-left-width: 3px; }
+@media (prefers-reduced-motion: reduce) { .md .fig-bar { transition: none; } }

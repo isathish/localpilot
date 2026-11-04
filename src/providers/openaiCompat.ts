@@ -15,6 +15,7 @@ import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colib
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
 import { fetchLmStudioContexts, isLmStudio } from './lmstudio';
+import { anyModelFacts, factsProvider, modelFacts, outputLimit, pricingOf } from './modelFacts';
 import { ThinkTagSplitter } from './thinkTags';
 import { pairToolCalls } from './toolPairing';
 
@@ -118,6 +119,8 @@ export class OpenAICompatProvider implements LLMProvider {
   private noNativeApi = false;
   /** Engine the server identified itself as on the last model listing. */
   engine?: 'colibri';
+  /** The cloud preset whose bundled model facts (limits, prices) apply; undefined for local servers and gateways. */
+  private readonly factsKey?: string;
 
   /** The configured name, unless it is the stock vLLM label on :8000 and the server turned out to be colibri. */
   get displayName(): string {
@@ -134,6 +137,7 @@ export class OpenAICompatProvider implements LLMProvider {
     this.configuredCtx = cfg.contextWindow;
     this.remote = isCloudProvider(cfg);
     this.lmStudio = isLmStudio(cfg);
+    this.factsKey = this.remote ? factsProvider(cfg) : undefined;
   }
 
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
@@ -182,8 +186,9 @@ export class OpenAICompatProvider implements LLMProvider {
       // colibri decision (System One) and picture models cannot chat.
       .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || !!capabilityList(m)?.includes('chat'))
       .map((m) => {
+        const facts = this.remote ? (modelFacts(m.id, this.factsKey) ?? anyModelFacts(m.id)) : undefined;
         const ctx =
-          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? native?.get(m.id) ?? this.configuredCtx ?? (this.remote ? knownContextWindow(m.id) : undefined) ?? 32768;
+          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? native?.get(m.id) ?? this.configuredCtx ?? (this.remote ? (facts?.contextWindow ?? knownContextWindow(m.id)) : undefined) ?? 32768;
         const caps = capabilityList(m);
         if (m.owned_by === COLIBRI_OWNER) {
           const spec = colibriSpec(m.id);
@@ -194,7 +199,7 @@ export class OpenAICompatProvider implements LLMProvider {
             name: m.id,
             family: COLIBRI_OWNER,
             contextWindow: ctx,
-            maxOutputTokens: 8192,
+            maxOutputTokens: ctx,
             supportsTools: spec?.tools ?? true,
             supportsVision: m.input_modalities ? m.input_modalities.includes('image') : !!spec?.vision,
             // colibri's /v1/completions has no `suffix`, so fill-in-the-middle is not available.
@@ -206,7 +211,7 @@ export class OpenAICompatProvider implements LLMProvider {
             parallelSlots: slots,
           } satisfies ModelInfo;
         }
-        const vision = caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? knownVision(m.id) : undefined));
+        const vision = caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? !!facts?.vision || knownVision(m.id) : undefined));
         const info: ModelInfo = {
           id: `${this.id}/${m.id}`,
           providerId: this.id,
@@ -214,13 +219,16 @@ export class OpenAICompatProvider implements LLMProvider {
           name: m.id,
           family: m.owned_by,
           contextWindow: ctx,
-          maxOutputTokens: 8192,
+          maxOutputTokens: outputLimit(facts, ctx, this.remote),
           // Most local OpenAI-compatible servers advertise tool support; we fall back to prompt-based tools otherwise.
           supportsTools: caps ? caps.includes('tool_use') || caps.includes('tools') || caps.includes('function_calling') : m.supported_parameters ? m.supported_parameters.includes('tools') : true,
           supportsVision: !!vision,
           // Cloud APIs have no `suffix`-style /completions (Mistral and DeepSeek use separate FIM endpoints).
           supportsFim: !this.remote && /coder|code|starcoder|codestral|deepseek/i.test(m.id),
+          supportsThinking: facts?.reasoning || undefined,
           remote: this.remote || undefined,
+          // Only the API the prices belong to is priced: a gateway's own prices are unknown.
+          pricing: pricingOf(modelFacts(m.id, this.factsKey), this.factsKey),
         };
         // Local servers (Docker Model Runner, LM Studio, llama.cpp) say nothing about vision: go by the catalog, then the name.
         if (vision === undefined) {

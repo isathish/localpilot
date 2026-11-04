@@ -15,7 +15,7 @@ import { evaluatePermission } from './permissions';
  *   Windows  %ProgramData%\LocalPilot\managed-settings.json
  *   any      $LOCALPILOT_MANAGED_SETTINGS (a path; for testing or a non-standard deployment)
  */
-export type ApprovalKind = 'terminal' | 'write' | 'delete' | 'network';
+export type ApprovalKind = 'terminal' | 'write' | 'delete' | 'network' | 'mcp';
 
 export interface ManagedPolicy {
   /** File the policy was read from; undefined when none is deployed. */
@@ -58,10 +58,14 @@ export function normalizePolicy(raw: unknown, source?: string): ManagedPolicy {
   const perm = (r.permissions && typeof r.permissions === 'object' ? r.permissions : {}) as Record<string, unknown>;
   const appr = (r.approvals && typeof r.approvals === 'object' ? r.approvals : {}) as Record<string, unknown>;
   const approvals: ManagedPolicy['approvals'] = {};
-  for (const k of ['terminal', 'write', 'delete', 'network'] as ApprovalKind[]) {
+  for (const k of ['terminal', 'write', 'delete', 'network', 'mcp'] as ApprovalKind[]) {
     if (appr[k] === 'ask' || appr[k] === 'never') {
       approvals[k] = appr[k] as 'ask' | 'never';
     }
+  }
+  // MCP tools were governed by the network floor before they had their own: a policy written then still covers them.
+  if (!approvals.mcp && approvals.network) {
+    approvals.mcp = approvals.network;
   }
   return {
     source,
@@ -107,7 +111,7 @@ export function getManagedPolicy(log?: { warn(m: string): void }): ManagedPolicy
     policy = normalizePolicy(parseJsonc(fs.readFileSync(file, 'utf8')), file);
   } catch (e) {
     log?.warn(`managed policy ${file} could not be read: ${e instanceof Error ? e.message : String(e)} — cloud providers, web access and skill downloads are blocked until it is fixed`);
-    policy = { ...NONE, source: file, allowCloudProviders: false, allowWebAccess: false, allowSkillInstall: false, disableBypassPermissions: true, approvals: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask' } };
+    policy = { ...NONE, source: file, allowCloudProviders: false, allowWebAccess: false, allowSkillInstall: false, disableBypassPermissions: true, approvals: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask', mcp: 'ask' } };
   }
   cached = { file, mtime, checkedAt: now, policy };
   return policy;
@@ -146,6 +150,14 @@ export function flooredApproval<M extends string>(p: ManagedPolicy, kind: Approv
   return mode;
 }
 
+/**
+ * A server's MCP autoApprove list turns an "ask" into "always", but only for the plain category prompt: never when the
+ * prompt is mandatory or the organisation set an approval floor for the kind.
+ */
+export function autoApprovedMode<M extends string>(p: ManagedPolicy, kind: ApprovalKind, mode: M, opts?: { autoApprove?: boolean; mandatory?: boolean }): M | 'always' {
+  return opts?.autoApprove && kind === 'mcp' && mode === 'ask' && !opts.mandatory && !p.approvals[kind] ? 'always' : mode;
+}
+
 /** Whether a provider at `baseUrl` may be used. */
 export function providerAllowed(p: ManagedPolicy, baseUrl: string, cloud: boolean): { ok: boolean; reason?: string } {
   if (!isManaged(p)) {
@@ -172,7 +184,8 @@ export function providerAllowed(p: ManagedPolicy, baseUrl: string, cloud: boolea
   return { ok: true };
 }
 
-const WEB_TOOLS = /^(web_search|web_fetch|browser_\w+|open_browser)$/;
+/** Tools that reach the internet: switched off by the policy's `allowWebAccess` or `localpilot.webSearch.enabled`. */
+export const WEB_TOOLS = /^(web_search|web_fetch|browser_\w+|open_browser)$/;
 /** Whether a tool is available under the policy (web access, MCP allowlist for `mcp__<server>__…` tools). */
 export function toolAllowed(p: ManagedPolicy, name: string): boolean {
   if (!isManaged(p)) {

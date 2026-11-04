@@ -49,8 +49,8 @@ function inlineMarkdown(s: string): string {
 
 /**
  * GitHub-style footnotes, which VS Code's engine does not render. `[^id]:` definitions become blank lines and the
- * list is emitted as one HTML line where the last definition was, so every other line keeps its number (scroll sync
- * and "open source at line" depend on that). References are numbered in order of first use; unknown ones stay as written.
+ * list is appended after a blank line at the end, so every source line keeps its number (scroll sync and "open source
+ * at line" depend on that) and the HTML block cannot swallow the Markdown that follows a definition. References are numbered in order of first use; unknown ones stay as written.
  */
 export function preprocessFootnotes(md: string): string {
   return footnotes(md).text;
@@ -60,13 +60,11 @@ export function footnotes(md: string): { text: string; count: number } {
   const lines = md.split('\n');
   const defs = new Map<string, string>();
   const code = codeLines(lines);
-  let lastDef = -1;
   lines.forEach((l, i) => {
     const m = code[i] ? null : /^\[\^([^\]\s]+)\]:\s?(.*?)\r?$/.exec(l);
     if (m) {
       defs.set(m[1], m[2]);
       lines[i] = l.endsWith('\r') ? '\r' : '';
-      lastDef = i;
     }
   });
   if (!defs.size) {
@@ -100,7 +98,7 @@ export function footnotes(md: string): { text: string; count: number } {
     const slug = encodeURIComponent(id);
     return `<li id="fn-${slug}">${inlineMarkdown(defs.get(id) ?? '')} <a href="#fnref-${slug}" class="fn-back" aria-label="Back to the reference">↩</a></li>`;
   });
-  lines[lastDef] = `<section class="footnotes"><hr><ol>${items.join('')}</ol></section>${lines[lastDef]}`;
+  lines.push('', `<section class="footnotes"><hr><ol>${items.join('')}</ol></section>`);
   return { text: lines.join('\n'), count: order.length };
 }
 
@@ -171,7 +169,7 @@ export function parseLinkTarget(href: string): LinkTarget | undefined {
     out.anchor = safeDecode(frag);
   }
   if (out.endLine !== undefined && out.line !== undefined && out.endLine < out.line) {
-    out.endLine = undefined;
+    delete out.endLine;
   }
   return out;
 }

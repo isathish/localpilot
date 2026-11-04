@@ -69,12 +69,21 @@ export function lineDelta(before: string | undefined, after: string | undefined)
 /** Files past this size count as decided but add no lines (reading them just for a metric is not worth it). */
 const MAX_MEASURED_BYTES = 4 * 1024 * 1024;
 
-/** Sums the line delta of agent-changed files: each file's snapshot against what is on disk now. */
-export async function measureEdits(changes: { fsPath: string; original?: string }[]): Promise<{ added: number; removed: number; files: number }> {
+/** A tracked change to measure; `live` is the text of an open (possibly unsaved) editor, which wins over the disk copy. */
+export type MeasuredChange = { fsPath: string; original?: string; live?: string };
+
+/** Sums the line delta of agent-changed files: each file's snapshot against its open editor text, or what is on disk now. */
+export async function measureEdits(changes: MeasuredChange[]): Promise<{ added: number; removed: number; files: number }> {
   let added = 0;
   let removed = 0;
   for (const c of changes) {
     let current: string | undefined;
+    if (c.live !== undefined) {
+      const d = lineDelta(c.original, c.live);
+      added += d.added;
+      removed += d.removed;
+      continue;
+    }
     try {
       const st = await fs.promises.stat(c.fsPath);
       if (!st.isFile() || st.size > MAX_MEASURED_BYTES || (c.original?.length ?? 0) > MAX_MEASURED_BYTES) {
@@ -91,8 +100,13 @@ export async function measureEdits(changes: { fsPath: string; original?: string 
   return { added, removed, files: changes.length };
 }
 
+/** The `edit_decision` for one in-buffer edit (Ctrl+I) that replaced `before` with `after`. */
+export function inlineEditDecision(decision: 'accepted' | 'rejected', before: string, after: string): TelemetryInput {
+  return { type: 'edit_decision', decision, ...lineDelta(before, after), files: 1 };
+}
+
 /** Records an `edit_decision` for the given agent changes (on the shared recorder by default). Await it before an undo rewrites the files. */
-export async function recordEditDecision(decision: 'accepted' | 'rejected', changes: { fsPath: string; original?: string }[], rec = recorder): Promise<void> {
+export async function recordEditDecision(decision: 'accepted' | 'rejected', changes: MeasuredChange[], rec = recorder): Promise<void> {
   if (!rec || !changes.length) {
     return;
   }

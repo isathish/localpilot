@@ -222,9 +222,40 @@ export function mcpFingerprint(cfg: McpServerConfig): string {
   return JSON.stringify([cfg.command ?? null, cfg.args ?? null, cfg.cwd ?? null, sorted(cfg.env), cfg.url ?? null, sorted(cfg.headers), cfg.type ?? null]);
 }
 
-/** A stable key for "this server, configured exactly so" (project trust is granted per key). */
+/** A server's request timeout in seconds: its `timeout`, clamped to 1–3600, else 60. */
+export function mcpTimeoutSeconds(timeout?: number): number {
+  return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0 ? Math.min(3600, Math.max(1, Math.round(timeout))) : 60;
+}
+
+/** The error for a request that ran out of time, naming where the server's timeout is set. */
+export function mcpTimeoutMessage(server: string, seconds: number, file?: string): string {
+  return `MCP request to "${server}" timed out after ${seconds}s. Raise "timeout" for this server in ${file ?? 'the localpilot.mcpServers setting'}.`;
+}
+
+/** The output-channel level for an MCP `notifications/message` level (RFC 5424 names). */
+export function mcpLogLevel(level: unknown): 'debug' | 'info' | 'warn' | 'error' {
+  switch (level) {
+    case 'debug':
+      return 'debug';
+    case 'info':
+    case 'notice':
+      return 'info';
+    case 'warning':
+      return 'warn';
+    case 'error':
+    case 'critical':
+    case 'alert':
+    case 'emergency':
+      return 'error';
+    default:
+      return 'info';
+  }
+}
+
+/** A stable key for "this server, configured exactly so" (project trust is granted per key); a new autoApprove list asks again. */
 export function mcpTrustKey(name: string, cfg: McpServerConfig): string {
-  return `${name}:${createHash('sha1').update(mcpFingerprint(cfg)).digest('hex').slice(0, 16)}`;
+  const approved = [...new Set(cfg.autoApprove ?? [])].sort();
+  return `${name}:${createHash('sha1').update(JSON.stringify([mcpFingerprint(cfg), approved])).digest('hex').slice(0, 16)}`;
 }
 
 const REF = /\$\{(?:(env|secret):)?([A-Za-z_][A-Za-z0-9_.-]*)(?::-([^}]*))?\}/g;

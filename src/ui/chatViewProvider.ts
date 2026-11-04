@@ -346,7 +346,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <div class="panel-head">
         <button id="changesToggle" class="panel-toggle"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span id="changesLabel">0 files changed</span></button>
         <span class="spacer"></span>
-        <button class="btn ghost" data-a="undoAll" title="Reject all changes">${svg('<path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/>')}<span class="long">Reject all</span></button><button class="btn primary" data-a="keepAll" title="Accept all changes">${svg('<path d="M3 8.5l3 3 7-7"/>')}<span class="long">Accept all</span></button>
+        <button class="btn ghost" data-a="reviewAll" title="Review all: every change of this chat in one multi-file diff">${svg('<path d="M5 2.5v6M2 5.5h6M8.5 12h5.5"/>')}<span class="long">Review all</span></button><button class="btn ghost" data-a="undoAll" title="Reject all changes">${svg('<path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/>')}<span class="long">Reject all</span></button><button class="btn primary" data-a="keepAll" title="Accept all changes">${svg('<path d="M3 8.5l3 3 7-7"/>')}<span class="long">Accept all</span></button>
       </div>
       <ul id="changesList" class="panel-body hidden"></ul>
     </div>

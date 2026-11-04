@@ -3,6 +3,7 @@ import { Tool, UserAnswer, UserQuestion } from '../types';
 import * as path from 'path';
 import { displayPath, resolveWorkspacePath } from './fs';
 import { currentEditor } from '../context/workspaceContext';
+import { isPdfPath, openPdf } from '../ui/pdf/open';
 
 /**
  * Resolves true when the language server publishes diagnostics for `uri` (after a short settle), false after `maxMs`
@@ -161,11 +162,16 @@ export const openEditorsTool: Tool = {
 export const openFileTool: Tool = {
   definition: {
     name: 'open_file',
-    description: 'Open a file in the editor for the user, optionally at a line.',
+    description: 'Open a file in the editor for the user, optionally at a line (for a PDF: the page).',
     parameters: { type: 'object', properties: { path: { type: 'string' }, line: { type: 'integer' } }, required: ['path'] },
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(String(args.path), ctx);
+    if (isPdfPath(uri.fsPath)) {
+      // A PDF opens in the PDF viewer; `line` is the page.
+      await openPdf(uri, Number(args.line) || undefined);
+      return { content: `Opened ${vscode.workspace.asRelativePath(uri)}${args.line ? ` at page ${Number(args.line)}` : ''}` };
+    }
     const doc = await vscode.workspace.openTextDocument(uri);
     const ed = await vscode.window.showTextDocument(doc, { preview: false });
     if (args.line) {

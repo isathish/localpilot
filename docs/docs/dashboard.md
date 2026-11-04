@@ -25,7 +25,7 @@ Pick a range: **Today**, **7 days**, **30 days**, **90 days** or **All**. While 
 | **Throughput** | Completion tokens per second of generation across all calls in the range, and the fastest model. |
 | **Turn time** | Median and 95th-percentile duration of an agent turn, and the median number of model steps. |
 | **Cache hits** | Share of tool calls answered from the per-turn read cache (identical reads in one turn run once). |
-| **Edits kept** | Share of agent-edited lines you kept, with lines added and removed in the edits you kept and in the ones you undid (Keep / Undo in the Changes panel, the chat or the CLI). |
+| **Edits kept** | Share of agent-edited lines you kept, with lines added and removed in the edits you kept and in the ones you undid (Keep / Undo in the Changes panel, the chat, the CLI or a Ctrl+I inline edit; unsaved edits count). |
 | **Hooks** | Hook commands run, how many failed or timed out, how many blocked an action, and their median duration. |
 
 Charts follow the cards. They are hidden for a single-day range, where the counters cover it. Hover any bar or point for the exact value. Colours come from your VS Code theme's chart palette.
@@ -54,12 +54,12 @@ Besides model calls, tool calls, runs, completions and provider checks, LocalPil
 
 | Event | Fields |
 |-------|--------|
-| `task` | Chat task created, completed, aborted (stopped), failed, or stopped at the mistake limit. |
+| `task` | Chat task created, then one outcome per turn: completed, aborted (stopped), failed, or stopped at the mistake limit. |
 | `mode_switch` / `model_selected` | The new mode or model, and whether you used the picker, a slash command, the CLI or **Build plan**. |
 | `slash` | The command name only, never its arguments. |
 | `mention` | The kind of context attached (file, line range, folder, URL, `@git`, `@problems`…), never the path. |
 | `mcp_call` | Server, tool, duration and success. Arguments and results are not recorded. |
-| `checkpoint` | Restore (files and conversation) or rewind (conversation only), the outcome and the number of files reverted. |
+| `checkpoint` | A git checkpoint taken before a turn, a restore (files and conversation) or a rewind (conversation only), the outcome (`failed` when some files could not be restored) and the number of files reverted. |
 | `hook` | The hook event, duration and outcome (ok, blocked, failed, timed out). The command line is not recorded. |
 | `edit_decision` | Kept or undone, lines added and removed, and the number of files. |
 

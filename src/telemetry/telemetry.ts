@@ -1211,6 +1211,8 @@ export class RunStats {
   /** Time spent generating (first token to end of stream) and the tokens produced then, summed over the run's steps. */
   genMs = 0;
   genTokens = 0;
+  /** The run stopped at the consecutive-mistake limit; its task outcome is `mistake_limit`, not `completed`. */
+  mistakeLimited = false;
   constructor(now = Date.now()) {
     this.startedAt = now;
   }

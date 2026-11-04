@@ -2,12 +2,15 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { runProcess } from '../tools/search';
 import { buildInstructions, InstructionFile } from './instructions';
+import { folderRelativePath, normalizeContextPath, pathsInText, ruleApplies } from './ruleConditions';
 import { identifiersIn, NameVocabulary } from '../agent/promptCorrector';
 import { mentionKind, recordTelemetry } from '../telemetry/catalog';
 import * as nodeFs from 'fs';
 import { getConfig } from '../config';
 import { AttachmentKind, attachmentKind, binaryNote, extractDocumentText, formatSize, looksBinary, splitAttachmentRef } from './extractors';
 import { describePdfError, extractPdfText, formatPdfText } from '../pdf/extract';
+import { isCommitRef, isUrlRef } from './mentionRefs';
+import { MAX_ATTACHMENT_BYTES, readCommit, readFolderContent, readUrl } from './mentionResolvers';
 
 async function readHead(fsPath: string, n = 8192): Promise<Uint8Array> {
   const fh = await nodeFs.promises.open(fsPath, 'r');
@@ -86,12 +89,19 @@ export function currentEditor(): EditorState | undefined {
   return document ? { document, selection: last.selections[0], selections: last.selections } : active;
 }
 
+/** Which conditional rules a set of context paths turns on: the rules cache is reused while this stays the same. */
+const appliedKey = (files: InstructionFile[], contextPaths: readonly string[]) =>
+  files
+    .filter((f) => f.paths && ruleApplies(f.paths, contextPaths))
+    .map((f) => f.file)
+    .join('\n');
+
 /** Lightweight workspace context: file tree snapshot, open editors, selections, diagnostics summary. */
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
   private mapCache?: { text: string; at: number };
   private namesCache?: { files: Set<string>; stems: Set<string>; at: number };
-  private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[] };
+  private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[]; applied: string; paths: readonly string[] };
   private readonly watcher: vscode.FileSystemWatcher;
   private readonly rulesWatcher: vscode.FileSystemWatcher;
   private readonly editorTracking = trackEditors();
@@ -126,17 +136,19 @@ export class WorkspaceContext implements vscode.Disposable {
   /**
    * Concatenated project instructions in Claude Code's order — user-level `~/.claude/CLAUDE.md`, ancestor folders'
    * CLAUDE.md, the project's AGENTS.md / CLAUDE.md / .claude/CLAUDE.md / .cursorrules / copilot-instructions and rule
-   * folders, then CLAUDE.local.md — with `@path` imports resolved; capped.
+   * folders, then CLAUDE.local.md — with `@path` imports resolved; capped. Conditional rules (`paths:` / `globs:`)
+   * are included when one of `contextPaths` matches.
    */
-  async loadInstructions(maxChars = 12000): Promise<string> {
+  async loadInstructions(maxChars = 12000, contextPaths: readonly string[] = []): Promise<string> {
     // Files outside the workspace (user level, ancestors, imports) have no watcher: refresh those on a short TTL.
-    if (this.rulesCache && this.rulesCache.max === maxChars && Date.now() - this.rulesCache.at < 60_000) {
-      return this.rulesCache.text;
+    const c = this.rulesCache;
+    if (c && c.max === maxChars && Date.now() - c.at < 60_000 && appliedKey(c.files, contextPaths) === c.applied) {
+      return c.text;
     }
     const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
     try {
-      const { text, files } = await buildInstructions(roots, { maxChars });
-      this.rulesCache = { text, max: maxChars, at: Date.now(), files };
+      const { text, files } = await buildInstructions(roots, { maxChars, contextPaths });
+      this.rulesCache = { text, max: maxChars, at: Date.now(), files, applied: appliedKey(files, contextPaths), paths: contextPaths };
       return text;
     } catch (e) {
       this.log.warn(`instructions: ${String(e)}`);
@@ -144,10 +156,46 @@ export class WorkspaceContext implements vscode.Disposable {
     }
   }
 
+  /** Re-read the instruction files on the next prompt (a rule was switched, created or deleted). */
+  invalidateInstructions(): void {
+    this.rulesCache = undefined;
+  }
+
   /** The instruction files currently in force (for `/memory` and the settings UI). */
   async instructionFiles(): Promise<InstructionFile[]> {
-    await this.loadInstructions(this.rulesCache?.max ?? 12000);
+    await this.loadInstructions(this.rulesCache?.max ?? 12000, this.rulesCache?.paths ?? []);
     return this.rulesCache?.files ?? [];
+  }
+
+  /** Conditional rules that `contextPaths` bring into the prompt (and that fit under the size cap). */
+  conditionalRulesFor(contextPaths: readonly string[]): InstructionFile[] {
+    return (this.rulesCache?.files ?? []).filter((f) => f.paths && f.note !== 'omitted' && ruleApplies(f.paths, contextPaths));
+  }
+
+  /**
+   * The files in context for conditional rules, workspace-relative and POSIX: paths in the user message (attachments
+   * included), open and visible editors, and the session's working set.
+   */
+  contextPaths(message: string, workingSet: readonly string[] = []): string[] {
+    const out = new Set(pathsInText(message));
+    const uris = [...vscode.window.visibleTextEditors.map((e) => e.document.uri), ...vscode.window.tabGroups.all.flatMap((g) => g.tabs).map((t) => (t.input instanceof vscode.TabInputText ? t.input.uri : undefined))];
+    for (const uri of uris) {
+      if (uri?.scheme === 'file') {
+        const rel = vscode.workspace.asRelativePath(uri, false);
+        const n = rel !== uri.fsPath ? normalizeContextPath(rel) : undefined;
+        if (n) {
+          out.add(n);
+        }
+      }
+    }
+    const folderNames = (vscode.workspace.workspaceFolders ?? []).map((f) => f.name);
+    for (const p of workingSet) {
+      const n = folderRelativePath(p, folderNames);
+      if (n) {
+        out.add(n);
+      }
+    }
+    return [...out];
   }
 
   /** `git status` + `git diff` for the @git mention. */
@@ -398,6 +446,9 @@ export class WorkspaceContext implements vscode.Disposable {
     }
     try {
       const r = await extractPdfText(uri.fsPath, { from, to: to ?? from, maxChars });
+      if (from !== undefined && from > r.numPages) {
+        return tag(' error="bad range"', `(Page ${from} is past the end: the PDF has ${r.numPages} page${r.numPages === 1 ? '' : 's'})`);
+      }
       const pages = r.pages.length ? `${r.from === r.to ? r.from : `${r.from}-${r.to}`} of ${r.numPages}` : `0 of ${r.numPages}`;
       return tag(` pages="${pages}"`, formatPdfText(r, rel));
     } catch (e) {
@@ -408,6 +459,9 @@ export class WorkspaceContext implements vscode.Disposable {
 
   /** Supplies the last terminal command + output for `@terminal` (set by the extension; absent in the CLI). */
   terminalContext?: () => string;
+
+  /** Asks whether an `@https://…` mention may be fetched when network approvals are `ask` (absent: refused). */
+  approveUrl?: (url: string) => Promise<boolean>;
 
   /**
    * Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. `root` (an
@@ -442,6 +496,16 @@ export class WorkspaceContext implements vscode.Disposable {
         return `<open_editors>\n${open.join('\n') || '(none)'}\n</open_editors>`;
       }
     }
+    if (isUrlRef(special)) {
+      return readUrl(special, this.approveUrl);
+    }
+    if (isCommitRef(special)) {
+      const roots = [root ?? this.root, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)].filter((r): r is string => !!r);
+      const commit = await readCommit(special, roots);
+      if (commit) {
+        return commit;
+      }
+    }
     const parts = splitAttachmentRef(ref);
     const p = parts.path;
     const start = parts.start !== undefined ? String(parts.start) : undefined;
@@ -455,11 +519,10 @@ export class WorkspaceContext implements vscode.Disposable {
       return r !== undefined && r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : vscode.workspace.asRelativePath(u);
     };
     try {
-      // Directories: attach a listing instead of failing.
+      // Directories: the tree and the direct child files instead of failing.
       const stat = await vscode.workspace.fs.stat(uri);
-      if (stat.type === vscode.FileType.Directory) {
-        const entries = await vscode.workspace.fs.readDirectory(uri);
-        return `<directory path="${label(uri)}">\n${entries.map(([n, t]) => (t === vscode.FileType.Directory ? `${n}/` : n)).join('\n')}\n</directory>`;
+      if (stat.type & vscode.FileType.Directory) {
+        return await readFolderContent(uri, label(uri), this.log);
       }
       // Documents and binaries by extension, before the editor gets a chance to refuse them (or open them as garbage).
       const kind = attachmentKind(uri.fsPath);
@@ -467,6 +530,9 @@ export class WorkspaceContext implements vscode.Disposable {
         return await this.pdfAttachment(uri, label(uri), parts.start, parts.end);
       }
       const name = path.basename(uri.fsPath);
+      if (kind !== 'image' && stat.size > MAX_ATTACHMENT_BYTES) {
+        return `<attachment path="${label(uri)}" error="too large">\n(${name} is ${formatSize(stat.size)}, over the ${formatSize(MAX_ATTACHMENT_BYTES)} attachment limit; read parts of it with read_file)\n</attachment>`;
+      }
       const binary = (k: AttachmentKind = 'binary') => `<attachment path="${label(uri)}" kind="${k}">\n${binaryNote(name, stat.size, k)}\n</attachment>`;
       if (kind === 'image' || kind === 'binary') {
         return binary(kind);

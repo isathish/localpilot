@@ -3,6 +3,7 @@ import * as cp from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { imageTooLarge } from './imageSize';
 
 export interface ImageAttachment {
   name: string;
@@ -11,7 +12,7 @@ export interface ImageAttachment {
   mime: string;
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+export const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
 
 export async function pickImages(): Promise<ImageAttachment[]> {
   const picked = await vscode.window.showOpenDialog({
@@ -37,6 +38,11 @@ export async function readImage(fsPath: string): Promise<ImageAttachment | undef
     const buf = await fs.readFile(fsPath);
     if (buf.byteLength > 12 * 1024 * 1024) {
       void vscode.window.showWarningMessage(`${path.basename(fsPath)} is larger than 12 MB; skipped.`);
+      return undefined;
+    }
+    const tooLarge = imageTooLarge(path.basename(fsPath), buf);
+    if (tooLarge) {
+      void vscode.window.showWarningMessage(`${tooLarge}; skipped.`);
       return undefined;
     }
     const ext = path.extname(fsPath).slice(1).toLowerCase();

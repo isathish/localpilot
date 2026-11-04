@@ -77,6 +77,83 @@ export function sessionCreatedAt(sessionId: string): number | undefined {
   return Number.isFinite(t) && t > 1_500_000_000_000 && t < 4_000_000_000_000 ? t : undefined;
 }
 
+/** What a restore brings back: the conversation (`task`), the files (`workspace`), or both. */
+export type RestoreType = 'task' | 'workspace' | 'both';
+
+export type ChangeStatus = 'A' | 'M' | 'D';
+
+export interface ChangedFile {
+  /** Relative to the checkpoint's root, `/`-separated. */
+  path: string;
+  status: ChangeStatus;
+}
+
+export interface WorkspaceRestore {
+  ok: boolean;
+  /** Files that differed from the checkpoint and were put back. */
+  files: number;
+  error?: string;
+  /** The `git stash` entry holding the state before the restore (absent when the tree was clean). */
+  safetyStash?: string;
+}
+
+/** Blobs bigger than this compare as empty in View changes. */
+export const MAX_DIFF_BLOB_BYTES = 50 * 1024 * 1024;
+
+/** The git checkpoint taken before `run`, if there is a restorable one. */
+export function gitCheckpoint(state: SessionCheckpoints | undefined, run: number): CheckpointEntry | undefined {
+  const e = state?.history.find((x) => x.run === run);
+  return e && e.kind !== 'files' && e.sha && e.root ? e : undefined;
+}
+
+/** Parses `git diff --name-status --no-renames -z` output. */
+export function parseNameStatus(out: string): Map<string, ChangeStatus> {
+  const parts = out.split('\0');
+  const m = new Map<string, ChangeStatus>();
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const st = parts[i].trim();
+    const p = parts[i + 1];
+    if (st && p) {
+      m.set(p, st[0] === 'A' ? 'A' : st[0] === 'D' ? 'D' : 'M');
+    }
+  }
+  return m;
+}
+
+/**
+ * Files that differ from a checkpoint. `tracked` is the diff of its commit against the working tree, `saved` the
+ * untracked files it captured (path → blob), `untrackedNow` the untracked files today and `currentBlob` the blob of
+ * each saved path as it is now (undefined = gone).
+ */
+export function checkpointChanges(tracked: Map<string, ChangeStatus>, saved: Map<string, string>, untrackedNow: string[], currentBlob: Map<string, string | undefined>): ChangedFile[] {
+  const out = new Map(tracked);
+  for (const p of untrackedNow) {
+    if (!out.has(p)) {
+      out.set(p, 'A');
+    }
+  }
+  for (const [p, blob] of saved) {
+    if (!currentBlob.has(p)) {
+      continue;
+    }
+    const now = currentBlob.get(p);
+    if (now === undefined) {
+      out.set(p, 'D');
+    } else if (now === blob) {
+      out.delete(p);
+    } else {
+      out.set(p, 'M');
+    }
+  }
+  return [...out].map(([p, status]) => ({ path: p, status })).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** A checkpoint-relative path, or undefined when `fsPath` is outside `root`. */
+export function relativeIn(root: string, fsPath: string): string | undefined {
+  const rel = path.relative(root, fsPath);
+  return rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : undefined;
+}
+
 interface GitResult {
   code: number;
   stdout: string;
@@ -99,22 +176,47 @@ function git(args: string[], cwd: string, opts: { env?: Record<string, string>; 
       resolve({ code: -1, stdout: '', stderr: String(e) });
       return;
     }
-    let stdout = '';
-    let stderr = '';
+    // Decoded once at the end: a multi-byte character split across two chunks must not turn into garbage.
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
     const timer = setTimeout(() => child.kill(), GIT_TIMEOUT_MS);
-    child.stdout?.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
-    child.stderr?.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
+    child.stdout?.on('data', (d: Buffer) => out.push(d));
+    child.stderr?.on('data', (d: Buffer) => err.push(d));
+    const text = (b: Buffer[]) => Buffer.concat(b).toString('utf8');
     child.on('error', (e) => {
       clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: stderr || String(e) });
+      resolve({ code: -1, stdout: text(out), stderr: text(err) || String(e) });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr });
+      resolve({ code: code ?? -1, stdout: text(out), stderr: text(err) });
     });
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(opts.input ?? '');
   });
+}
+
+/**
+ * A file's content in a checkpoint (`''` when it did not exist, is outside `root`, or is over the size limit); files
+ * that were untracked then are read from the stash commit's third parent.
+ */
+export async function checkpointFile(root: string, sha: string, kind: CheckpointKind, fsPath: string): Promise<string> {
+  const rel = relativeIn(root, fsPath);
+  if (!rel || !/^[0-9a-f]{7,64}$/i.test(sha)) {
+    return '';
+  }
+  for (const obj of kind === 'stash' ? [`${sha}:${rel}`, `${sha}^3:${rel}`] : [`${sha}:${rel}`]) {
+    const size = await git(['cat-file', '-s', obj], root);
+    if (size.code !== 0) {
+      continue;
+    }
+    if (Number(size.stdout.trim()) > MAX_DIFF_BLOB_BYTES) {
+      return '';
+    }
+    const blob = await git(['cat-file', 'blob', obj], root);
+    return blob.code === 0 ? blob.stdout : '';
+  }
+  return '';
 }
 
 export interface CheckpointServiceOptions {
@@ -181,8 +283,13 @@ export class CheckpointService {
       return { run, createdAt, kind: 'files', outcome: 'skipped', root: cwd };
     }
     const root = path.resolve(top.stdout.trim());
+    return this.serial(root, () => this.takeIn(root, sessionId, run, createdAt));
+  }
+
+  /** Runs `op` after every git operation already queued for `root`. */
+  private async serial<T>(root: string, op: () => Promise<T>): Promise<T> {
     const prev = this.chains.get(root) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => this.takeIn(root, sessionId, run, createdAt));
+    const next = prev.catch(() => undefined).then(op);
     this.chains.set(root, next);
     try {
       return await next;
@@ -284,6 +391,147 @@ export class CheckpointService {
     const commit = await git(['commit-tree', tree.stdout.trim(), '-m', `untracked files on ${message}`], root);
     fs.rmSync(index, { force: true });
     return commit.code === 0 ? commit.stdout.trim() || undefined : undefined;
+  }
+
+  /** Files that differ between a git checkpoint and the working tree, including those changed by shell commands. */
+  async changedFiles(entry: CheckpointEntry): Promise<ChangedFile[]> {
+    const root = entry.root;
+    const sha = entry.sha;
+    if (!root || !sha || entry.kind === 'files') {
+      return [];
+    }
+    const diff = await git(['diff', '--name-status', '--no-renames', '-z', sha, '--'], root);
+    if (diff.code !== 0) {
+      throw new Error(`git diff failed: ${firstLine(diff.stderr)}`);
+    }
+    const ls = await git(['ls-files', '--others', '--exclude-standard', '-z'], root);
+    let untrackedNow = ls.code === 0 ? ls.stdout.split('\0').filter(Boolean) : [];
+    if (untrackedNow.length > MAX_UNTRACKED_FILES) {
+      this.o.log?.warn(`checkpoint: ${untrackedNow.length} untracked files — left out of the change list`);
+      untrackedNow = [];
+    }
+    const saved = new Map<string, string>();
+    if (entry.kind === 'stash') {
+      // Fails when the checkpoint captured no untracked files (no third parent).
+      const t = await git(['ls-tree', '-r', '-z', `${sha}^3`], root);
+      for (const rec of t.code === 0 ? t.stdout.split('\0').filter(Boolean) : []) {
+        const tab = rec.indexOf('\t');
+        const [mode, , blob] = rec.slice(0, tab).split(' ');
+        if (tab > 0 && mode !== '120000') {
+          saved.set(rec.slice(tab + 1), blob);
+        }
+      }
+    }
+    const currentBlob = new Map<string, string | undefined>();
+    const present: string[] = [];
+    for (const p of saved.keys()) {
+      try {
+        if (fs.lstatSync(path.join(root, p)).isFile() && !p.includes('\n')) {
+          present.push(p);
+        }
+      } catch {
+        currentBlob.set(p, undefined);
+      }
+    }
+    if (present.length) {
+      const h = await git(['hash-object', '--stdin-paths'], root, { input: present.join('\n') + '\n' });
+      const hashes = h.stdout.split('\n');
+      if (h.code === 0) {
+        present.forEach((p, i) => currentBlob.set(p, hashes[i]?.trim()));
+      }
+    }
+    return checkpointChanges(parseNameStatus(diff.stdout), saved, untrackedNow, currentBlob);
+  }
+
+  /**
+   * Puts the files back as they were at a git checkpoint. Refuses when HEAD has moved past it (commits would be
+   * lost); the current state is first saved with `git stash push --include-untracked`, so nothing is thrown away.
+   */
+  async restoreWorkspace(entry: CheckpointEntry): Promise<WorkspaceRestore> {
+    if (!entry.root || !entry.sha || entry.kind === 'files') {
+      return { ok: false, files: 0, error: 'This checkpoint has no git snapshot' };
+    }
+    const root = entry.root;
+    return this.serial(root, () => this.restoreIn(root, entry));
+  }
+
+  private async restoreIn(root: string, entry: CheckpointEntry): Promise<WorkspaceRestore> {
+    const fail = (error: string, safetyStash?: string, files = 0): WorkspaceRestore => ({ ok: false, files, error, safetyStash });
+    const wt = await git(['rev-parse', '--is-inside-work-tree'], root);
+    if (wt.code !== 0 || wt.stdout.trim() !== 'true') {
+      return fail(`${root} is no longer a git work tree`);
+    }
+    let target = '';
+    for (const name of [entry.ref, entry.sha]) {
+      const r = name ? await git(['rev-parse', '--verify', '-q', `${name}^{commit}`], root) : undefined;
+      if (r?.code === 0 && r.stdout.trim()) {
+        target = r.stdout.trim();
+        break;
+      }
+    }
+    if (!target) {
+      return fail('The checkpoint commit no longer exists in this repository');
+    }
+    const base = entry.kind === 'stash' ? (await git(['rev-parse', '--verify', '-q', `${target}^1`], root)).stdout.trim() : target;
+    const head = (await git(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], root)).stdout.trim();
+    if (!base || !head) {
+      return fail('Could not read the checkpoint or HEAD');
+    }
+    // HEAD behind the checkpoint (a reset since) is fine to move forward; anything else would drop commits.
+    if (head !== base && (await git(['merge-base', '--is-ancestor', head, base], root)).code !== 0) {
+      return fail('HEAD moved since this checkpoint; restore would lose commits');
+    }
+    const files = (await this.changedFiles({ ...entry, sha: target }).catch(() => [])).length;
+    const status = await git(['status', '--porcelain', '--untracked-files=normal'], root);
+    if (status.code !== 0) {
+      return fail(`git status failed: ${firstLine(status.stderr)}`);
+    }
+    let safetyStash: string | undefined;
+    if (status.stdout.trim()) {
+      const push = await git(['stash', 'push', '--include-untracked', '-m', 'localpilot pre-restore'], root);
+      if (push.code !== 0) {
+        return fail(`Could not save the current state first (git stash push): ${firstLine(push.stderr)}`);
+      }
+      safetyStash = (await git(['rev-parse', '--verify', '-q', 'refs/stash'], root)).stdout.trim() || undefined;
+    }
+    if (head !== base) {
+      const mv = await git(['update-ref', '-m', 'localpilot: restore checkpoint', 'HEAD', base, head], root);
+      if (mv.code !== 0) {
+        return fail(`Could not move HEAD back: ${firstLine(mv.stderr)}`, safetyStash);
+      }
+    }
+    const reset = await git(['reset', '--hard', '-q', base], root);
+    if (reset.code !== 0) {
+      return fail(`git reset failed: ${firstLine(reset.stderr)}`, safetyStash);
+    }
+    if (entry.kind === 'stash') {
+      if ((await git(['rev-parse', '--verify', '-q', `${target}^3`], root)).code === 0) {
+        // Untracked files come back from the stash; anything untracked in the way would make the apply refuse. Ignored files stay.
+        await git(['clean', '-fdq'], root);
+      }
+      const apply = await git(['stash', 'apply', '-q', target], root);
+      if (apply.code !== 0) {
+        return fail(`git stash apply failed: ${firstLine(apply.stderr)}`, safetyStash, files);
+      }
+    }
+    this.o.log?.info(`checkpoint: restored ${entry.ref ?? target} in ${root}${safetyStash ? ` (previous state in stash ${safetyStash.slice(0, 10)})` : ''}`);
+    return { ok: true, files, safetyStash };
+  }
+
+  /** Forgets the checkpoints of `run` and later (their messages were removed) and deletes their refs. */
+  async dropFrom(session: Session, run: number): Promise<void> {
+    const st = session.checkpoints;
+    if (!st) {
+      return;
+    }
+    const gone = st.history.filter((e) => e.run >= run);
+    st.history = st.history.filter((e) => e.run < run);
+    st.latest = st.history[st.history.length - 1]?.run;
+    for (const e of gone) {
+      if (e.ref && e.root) {
+        await git(['update-ref', '-d', e.ref], e.root);
+      }
+    }
   }
 
   /** Checkpoint refs of a session in a repository. */
@@ -411,4 +659,8 @@ export function pruneSnapshotDirs(dir: string, orphan: (sessionId: string) => bo
     }
   }
   return n;
+}
+
+function firstLine(s: string): string {
+  return s.trim().split('\n')[0] ?? '';
 }

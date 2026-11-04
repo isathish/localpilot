@@ -13,6 +13,7 @@ permalink: /docs/images/
 | Drag and drop | Drop an image file onto the composer |
 | Pick a file | Image button, *LocalPilot: Attach Image to Chat…*, or right-click a PNG, JPEG, GIF or WebP file in the Explorer → *Attach Image to Chat* |
 | Screenshot a web page | Camera menu → **Screenshot a URL…**, or *LocalPilot: Screenshot a Web Page…*. See [below](#web-pages-and-the-browser-view) |
+| A PDF page | In the [PDF viewer]({{ '/docs/viewers/' | relative_url }}): **⋯ → Attach page as image**, or *LocalPilot: Attach Current PDF Page as Image*. The page is rendered as a PNG at most 2000 px wide; use it for scanned pages, which have no text |
 
 Screenshot capture offers these targets:
 
@@ -23,7 +24,9 @@ Screenshot capture offers these targets:
 
 Limits:
 
-- Up to four images per message.
+- Up to 20 images and files per message, together.
+- Images larger than 7,680 px on a side are refused (checked from the PNG, JPEG, GIF or WebP header); so are image files over 12 MB.
+- When the selected model cannot read images and routing has no vision model to hand them to, the image button is greyed out; its tooltip says why.
 - Images you paste or drop are scaled down to at most 1568 px on the long edge before sending.
 - Your message shows thumbnails; click an image in the transcript to zoom.
 

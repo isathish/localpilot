@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { localToolNames } from '../agent/builtinAgents';
 import { MistakeCounter, mistakeLimitMessage, mistakeReason } from '../agent/mistakes';
-import { joinContinuation, lengthAction, MAX_LENGTH_RETRIES } from '../agent/outputLimit';
+import { hasUnterminatedToolCall, joinContinuation, lengthAction, MAX_LENGTH_RETRIES } from '../agent/outputLimit';
 import { mapToolNames, toolDisabled } from '../agent/toolAliases';
 
 suite('Agent loop safety: mistake limit, output cut-offs, tool names', () => {
@@ -36,6 +36,15 @@ suite('Agent loop safety: mistake limit, output cut-offs, tool names', () => {
     assert.strictEqual(lengthAction({ ...base, truncatedCall: false, text: 'Here is the long explanation' }), 'continue');
     assert.strictEqual(lengthAction({ ...base, truncatedCall: false, text: 'more', continuing: true }), 'none', 'a continuation is not continued again');
     assert.strictEqual(lengthAction({ ...base, truncatedCall: false, text: '  ' }), 'none');
+  });
+
+  test('a text-protocol call cut off before it ends is detected', () => {
+    const known = new Set(['write_file']);
+    assert.ok(hasUnterminatedToolCall('<tool_call>\n{"name":"write_file","arguments":{"path":"a","content":"abc', known), 'open tag');
+    assert.ok(hasUnterminatedToolCall('```json\n{"name": "write_file", "arguments": {"path": "a"', known), 'unclosed fence');
+    assert.ok(hasUnterminatedToolCall('Writing: {"name":"write_file","arguments":{"path":"a","content":"x}', known), 'bare JSON');
+    assert.ok(!hasUnterminatedToolCall('<tool_call>{"name":"write_file","arguments":{}}</tool_call> then ```js\nconst a = 1;', known));
+    assert.ok(!hasUnterminatedToolCall('{"name":"Ada","age": 3', known), 'unknown names are prose');
   });
 
   test('a continuation is joined without repeating the overlap', () => {

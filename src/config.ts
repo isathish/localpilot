@@ -56,12 +56,18 @@ export interface LocalPilotConfig {
   /** Sampling temperature for agent turns; undefined = the model's own default (its Modelfile / server setting). */
   temperature?: number;
   compactionThreshold: number; // 0..1 fraction of context before compaction
+  /** How a full context is compacted: a model-written summary, a deterministic digest without a model call, or not at all. */
+  compactionStrategy: 'agentic' | 'basic' | 'off';
+  /** Tools that need the internet (web_search, web_fetch, browser_*) are offered and @url mentions fetched. */
+  webEnabled: boolean;
+  /** Language the agent answers in; `auto` adds no instruction. */
+  preferredLanguage: string;
   maxToolOutputChars: number;
   /** Tool steps in a row that may all fail before the run stops and asks for guidance; 0 = no limit. */
   maxConsecutiveMistakes: number;
   /** Tools never offered to the model: our names, Claude Code / Cline names, or globs (`mcp_*`, `browser_*`). */
   disabledTools: string[];
-  approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
+  approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode; mcp: ApprovalMode };
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
   /** Task queue: how many queued tasks run at once (1 = one after another). */
   queue: { concurrency: number };
@@ -107,6 +113,8 @@ export interface LocalPilotConfig {
   memoryLimits: { maxNoteChars: number; maxNotes: number };
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
   sessionRetention: number;
+  /** List the CLI's chats for the same folder in VS Code's history (`localpilot.history.includeCli`). */
+  historyIncludeCli: boolean;
   keepAlive: string;
   /** Load the chat's model when the composer is focused so the first token is not preceded by a weight load. */
   prewarm: boolean;
@@ -131,7 +139,9 @@ export interface LocalPilotConfig {
   /** Reading PDFs (read_pdf, read_file and attachments): the largest file in MB and the most characters per read. */
   pdf: { maxReadSizeMB: number; maxChars: number };
   /** Markdown reader: scroll sync with the source, outline depth (h2–h6), how front matter shows, Mermaid diagrams. */
-  markdownViewer: { scrollSync: boolean; outlineDepth: number; frontMatter: 'collapsed' | 'expanded' | 'hidden'; mermaid: boolean };
+  markdownViewer: { scrollSync: boolean; outlineDepth: number; frontMatter: 'collapsed' | 'expanded' | 'hidden'; mermaid: boolean; exportTheme: 'light' | 'match' };
+  /** PDF viewer: page colours, sidebar, initial zoom, and the sizes (MB) above which files load by range or need a confirmation. */
+  pdfViewer: { pageColors: 'auto' | 'original' | 'dark' | 'sepia'; sidebar: 'auto' | 'outline' | 'thumbnails' | 'hidden'; defaultZoom: 'auto' | 'page-width' | 'page-fit' | 'page-actual'; rangeThresholdMB: number; maxFileSizeMB: number };
 }
 
 const SECTION = 'localpilot';
@@ -165,6 +175,9 @@ export function getConfig(): LocalPilotConfig {
     // Negative (the default, -1) means: send none, so each model samples as its makers tuned it.
     temperature: (() => { const t = c.get<number>('temperature', -1); return typeof t === 'number' && t >= 0 ? Math.min(2, t) : undefined; })(),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
+    compactionStrategy: (['agentic', 'basic', 'off'] as const).find((m) => m === c.get<string>('compaction.strategy', 'agentic')) ?? 'agentic',
+    webEnabled: c.get<boolean>('webSearch.enabled', true) !== false,
+    preferredLanguage: (c.get<string>('preferredLanguage', 'auto') ?? 'auto').trim() || 'auto',
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
     maxConsecutiveMistakes: (() => { const n = Number(c.get<number>('maxConsecutiveMistakes', 6)); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6; })(),
     disabledTools: (c.get<string[]>('disabledTools', []) ?? []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()),
@@ -173,6 +186,7 @@ export function getConfig(): LocalPilotConfig {
       write: c.get<ApprovalMode>('approvals.write', 'always'),
       delete: c.get<ApprovalMode>('approvals.delete', 'ask'),
       network: c.get<ApprovalMode>('approvals.network', 'always'),
+      mcp: c.get<ApprovalMode>('approvals.mcp', 'always'),
     },
     worktrees: {
       mode: (['always', 'parallel', 'off'] as const).find((m) => m === c.get<string>('worktrees.mode', 'always')) ?? 'always',
@@ -233,6 +247,7 @@ export function getConfig(): LocalPilotConfig {
       maxNotes: Math.max(5, Math.floor(c.get<number>('memory.maxNotes', 200))),
     },
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
+    historyIncludeCli: c.get<boolean>('history.includeCli', true),
     keepAlive: c.get<string>('keepAlive', '30m'),
     prewarm: c.get<boolean>('prewarm', true),
     ollama: {
@@ -275,6 +290,14 @@ export function getConfig(): LocalPilotConfig {
       outlineDepth: Math.max(2, Math.min(6, Math.floor(Number(c.get<number>('markdownViewer.outlineDepth', 3)) || 3))),
       frontMatter: (['collapsed', 'expanded', 'hidden'] as const).find((m) => m === c.get<string>('markdownViewer.frontMatter', 'collapsed')) ?? 'collapsed',
       mermaid: c.get<boolean>('markdownViewer.mermaid', true),
+      exportTheme: c.get<string>('markdownViewer.exportTheme', 'light') === 'match' ? 'match' : 'light',
+    },
+    pdfViewer: {
+      pageColors: (['auto', 'original', 'dark', 'sepia'] as const).find((m) => m === c.get<string>('pdfViewer.pageColors', 'auto')) ?? 'auto',
+      sidebar: (['auto', 'outline', 'thumbnails', 'hidden'] as const).find((m) => m === c.get<string>('pdfViewer.sidebar', 'auto')) ?? 'auto',
+      defaultZoom: (['auto', 'page-width', 'page-fit', 'page-actual'] as const).find((m) => m === c.get<string>('pdfViewer.defaultZoom', 'auto')) ?? 'auto',
+      rangeThresholdMB: Math.max(1, Number(c.get<number>('pdfViewer.rangeThresholdMB', 16)) || 16),
+      maxFileSizeMB: Math.max(1, Number(c.get<number>('pdfViewer.maxFileSizeMB', 1024)) || 1024),
     },
   };
 }

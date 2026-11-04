@@ -2,6 +2,7 @@ import { ChatMessage, ChatRequestOptions, CompletionRequestOptions, LLMProvider,
 import { completeViaChat, isCloudProvider, knownContextWindow, resolveApiKey } from './cloud';
 import { getJson, HttpError, newId, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
+import { modelFacts, pricingOf } from './modelFacts';
 import { pairToolCalls } from './toolPairing';
 
 const API_VERSION = '2023-06-01';
@@ -21,7 +22,7 @@ type Block =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { type: 'tool_result'; tool_use_id: string; content: string | Block[] };
 
 type Turn = { role: 'user' | 'assistant'; content: Block[] };
 
@@ -125,20 +126,24 @@ export class AnthropicProvider implements LLMProvider {
         listed.push({ id });
       }
     }
-    return listed.map((m) => ({
-      id: `${this.id}/${m.id}`,
-      providerId: this.id,
-      modelId: m.id,
-      name: m.display_name ?? m.id,
-      family: 'claude',
-      contextWindow: m.max_input_tokens ?? this.configuredCtx ?? knownContextWindow(m.id) ?? 200_000,
-      maxOutputTokens: m.max_tokens ?? 8192,
-      supportsTools: true,
-      supportsVision: !/claude-(2|instant)/i.test(m.id),
-      supportsFim: false,
-      supportsThinking: thinkingStyle(m.id) !== 'none',
-      remote: this.remote || undefined,
-    }));
+    return listed.map((m) => {
+      const facts = modelFacts(m.id, 'anthropic');
+      return {
+        id: `${this.id}/${m.id}`,
+        providerId: this.id,
+        modelId: m.id,
+        name: m.display_name ?? m.id,
+        family: 'claude',
+        contextWindow: m.max_input_tokens ?? this.configuredCtx ?? facts?.contextWindow ?? knownContextWindow(m.id) ?? 200_000,
+        maxOutputTokens: m.max_tokens ?? facts?.maxOutput ?? 8192,
+        supportsTools: true,
+        supportsVision: !/claude-(2|instant)/i.test(m.id),
+        supportsFim: false,
+        supportsThinking: thinkingStyle(m.id) !== 'none',
+        remote: this.remote || undefined,
+        pricing: pricingOf(facts, 'anthropic'),
+      };
+    });
   }
 
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
@@ -396,7 +401,19 @@ export function toAnthropicMessages(input: ChatMessage[], thinkingFor?: (callId:
         push('assistant', blocks);
       }
     } else {
-      const blocks: Block[] = (m.images ?? []).map((data) => ({ type: 'image', source: { type: 'base64', media_type: imageMime(data), data } }));
+      // Images produced by tools (meta.toolImages: the call id of each image) go inside their tool_result.
+      const prev = out[out.length - 1];
+      const images = (m.images ?? []).filter((data, i) => {
+        const id = m.meta?.toolImages?.[i];
+        const target = id && prev?.role === 'user' ? prev.content.find((b) => b.type === 'tool_result' && b.tool_use_id === safeId(id)) : undefined;
+        if (target?.type !== 'tool_result') {
+          return true;
+        }
+        const image: Block = { type: 'image', source: { type: 'base64', media_type: imageMime(data), data } };
+        target.content = typeof target.content === 'string' ? [{ type: 'text', text: target.content }, image] : [...target.content, image];
+        return false;
+      });
+      const blocks: Block[] = images.map((data) => ({ type: 'image', source: { type: 'base64', media_type: imageMime(data), data } }));
       if (m.content?.trim()) {
         blocks.push({ type: 'text', text: m.content });
       }

@@ -26,12 +26,14 @@ import { ModelInfo, ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { toolDisabled } from '../agent/toolAliases';
+import { createItem, CustomizeData, CustomKind, deleteItem, listCustomizations, setItemEnabled } from './customize';
+import { FrontMatterError } from '../agent/frontMatterEdit';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'advanced';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'advanced' | 'customize';
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -114,7 +116,8 @@ type ToSettings =
   | { type: 'dashboard'; days: number; summary: TelemetrySummary; logFile: string; tuning?: TuneReport }
   | { type: 'logs'; entries: LogEntry[]; level?: LogLevel; q?: string }
   | { type: 'logLine'; entry: LogEntry }
-  | { type: 'toast'; level: 'info' | 'error'; text: string };
+  | { type: 'toast'; level: 'info' | 'error'; text: string }
+  | { type: 'customize'; data: CustomizeData };
 
 type FromSettings =
   | { type: 'ready' }
@@ -153,12 +156,17 @@ type FromSettings =
   | { type: 'exportTelemetry' }
   | { type: 'clearTelemetry' }
   | { type: 'openLogFile' }
-  | { type: 'openTelemetryFolder' };
+  | { type: 'openTelemetryFolder' }
+  | { type: 'loadCustomize' }
+  | { type: 'customToggle'; kind: CustomKind; file: string; enabled: boolean }
+  | { type: 'customOpen'; kind: CustomKind; file: string }
+  | { type: 'customDelete'; kind: CustomKind; file: string }
+  | { type: 'customCreate'; kind: CustomKind; name: string; scope: 'global' | 'workspace' };
 
 /** Keys (relative to `localpilot.`) that the UI may read and write. Anything else is rejected. */
 const SETTING_KEYS = [
   'providers', 'defaultModel', 'contextWindow', 'maxOutputTokens', 'temperature', 'thinking', 'keepAlive', 'prewarm', 'ollama.flashAttention', 'ollama.kvCacheType', 'prompts.autoCorrect', 'compactionThreshold', 'maxToolOutputChars',
-  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'clarify.questions', 'worktrees.mode', 'worktrees.location',
+  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'approvals.mcp', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'clarify.questions', 'worktrees.mode', 'worktrees.location',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
@@ -178,10 +186,10 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.setupRedis', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
 ]);
 
-const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network', 'ask' | 'always' | 'never'>> = {
-  safe: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask' },
-  balanced: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always' },
-  autonomous: { terminal: 'always', write: 'always', delete: 'ask', network: 'always' },
+const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network' | 'mcp', 'ask' | 'always' | 'never'>> = {
+  safe: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask', mcp: 'ask' },
+  balanced: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always', mcp: 'always' },
+  autonomous: { terminal: 'always', write: 'always', delete: 'ask', network: 'always', mcp: 'always' },
 };
 
 export const WELCOMED_KEY = 'localpilot.welcomed';
@@ -203,6 +211,8 @@ export class SettingsPanel implements vscode.Disposable {
   tuner?: ModelTuner;
   /** Skill registry (configured repositories), set by the extension host. */
   catalog?: SkillCatalog;
+  /** Called after a rule, command or hook file was switched, created or deleted (drops the hosts' caches). */
+  onCustomized?: () => void;
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
@@ -383,6 +393,12 @@ export class SettingsPanel implements vscode.Disposable {
         return this.installRegistrySkill(m.name, m.repo, m.scope);
       case 'removeSkill':
         return this.removeSkill(m.name);
+      case 'loadCustomize':
+      case 'customToggle':
+      case 'customOpen':
+      case 'customDelete':
+      case 'customCreate':
+        return this.customize(m);
       case 'toggleSkill': {
         const skill = this.skills.getSkill(m.name);
         if (!skill) {
@@ -713,6 +729,58 @@ export class SettingsPanel implements vscode.Disposable {
     await this.pushSkillRegistry(this.skillQuery);
   }
 
+  // ------------------------------------------------------------------ customize (rules, commands, hooks)
+  private async customize(m: Extract<FromSettings, { type: 'loadCustomize' | 'customToggle' | 'customOpen' | 'customDelete' | 'customCreate' }>): Promise<void> {
+    const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const KIND: Record<CustomKind, string> = { rule: 'rule', command: 'command', hook: 'hook' };
+    if (m.type !== 'loadCustomize' && !(m.kind in KIND)) {
+      throw new Error(`Unknown kind: ${String(m.kind)}`);
+    }
+    const changed = async () => {
+      this.onCustomized?.();
+      this.post({ type: 'customize', data: await listCustomizations(roots) });
+    };
+    switch (m.type) {
+      case 'loadCustomize':
+        return this.post({ type: 'customize', data: await listCustomizations(roots) });
+      case 'customToggle':
+        try {
+          await setItemEnabled(m.kind, m.file, !!m.enabled, roots);
+        } catch (e) {
+          await changed();
+          throw e instanceof FrontMatterError ? new Error(`${path.basename(m.file)} was not changed: ${e.message} Fix it in the editor, or add "disabled: true" yourself.`) : e;
+        }
+        this.post({ type: 'toast', level: 'info', text: m.enabled ? `${path.basename(m.file)} enabled` : `${path.basename(m.file)} disabled — the agent no longer sees it` });
+        return changed();
+      case 'customOpen': {
+        const data = await listCustomizations(roots);
+        const all = [...data.rules, ...data.commands, ...data.hooks];
+        if (!all.some((i) => path.resolve(i.file) === path.resolve(m.file))) {
+          throw new Error(`Not a listed ${KIND[m.kind]} file: ${m.file}`);
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(m.file), { preview: false });
+        return;
+      }
+      case 'customDelete': {
+        const ok = await vscode.window.showWarningMessage(`Delete the ${KIND[m.kind]} ${path.basename(m.file)}?`, { modal: true, detail: `Removes ${m.file} from disk.` }, 'Delete');
+        if (ok !== 'Delete') {
+          return;
+        }
+        await deleteItem(m.kind, m.file, roots);
+        this.post({ type: 'toast', level: 'info', text: `Deleted ${path.basename(m.file)}` });
+        return changed();
+      }
+      case 'customCreate': {
+        const r = await createItem(m.kind, String(m.name ?? ''), m.scope === 'global' ? 'global' : 'workspace', roots);
+        await vscode.window.showTextDocument(vscode.Uri.file(r.file), { preview: false });
+        if (!r.created) {
+          this.post({ type: 'toast', level: 'info', text: `${path.basename(r.file)} already exists — opened it` });
+        }
+        return changed();
+      }
+    }
+  }
+
   private async removeSkill(name: string): Promise<void> {
     const skill = this.skills.getSkill(name);
     if (!skill) {
@@ -956,7 +1024,7 @@ export function sanitizeMcpServers(value: unknown): Record<string, McpServerConf
       throw new Error(`MCP server "${name}": the URL must start with http:// or https://`);
     }
     const entry: McpServerConfig = url ? { url } : { command };
-    if (url && (c.type === 'http' || c.type === 'sse')) {
+    if (url && (c.type === 'http' || c.type === 'sse' || c.type === 'streamableHttp' || c.type === 'streamable-http')) {
       entry.type = c.type;
     }
     if (url && c.headers && typeof c.headers === 'object' && !Array.isArray(c.headers)) {
@@ -976,6 +1044,16 @@ export function sanitizeMcpServers(value: unknown): Record<string, McpServerConf
     }
     if (c.enabled === false) {
       entry.enabled = false;
+    }
+    // Fields the form does not edit (set in settings.json) survive a save from the form.
+    if (typeof c.timeout === 'number' && Number.isFinite(c.timeout) && c.timeout > 0) {
+      entry.timeout = Math.min(3600, Math.max(1, c.timeout));
+    }
+    if (Array.isArray(c.autoApprove)) {
+      const tools = c.autoApprove.filter((t): t is string => typeof t === 'string' && !!t.trim()).map((t) => t.trim());
+      if (tools.length) {
+        entry.autoApprove = [...new Set(tools)];
+      }
     }
     out[name] = entry;
   }

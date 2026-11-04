@@ -202,6 +202,23 @@ LocalPilot records the kind of each request (main verb plus key nouns, for examp
 
 The data is a small JSON file, `skill-learning.json`, in the extension's global storage (`~/.localpilot/` for the CLI). Entries expire after 60 days.
 
+## Customize: rules, commands, hooks and skills
+
+**Settings → Customize** lists what shapes the agent, in four tabs. Open it from the scale button in the chat composer, or with *LocalPilot: Open Settings*. Each tab shows the **Workspace** items first and then the **Global** ones (your home folder).
+
+| Tab | Lists | The switch |
+|---|---|---|
+| Rules | Every instruction file: `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.clinerules`, and the files in the rule folders | Writes `disabled: true` into the file's front matter (or removes it). A switched-off rule leaves the prompt and `/memory` |
+| Commands | Slash commands in `.localpilot/commands/` and `.claude/commands/`, in the workspace and in your home | Same as rules: `disabled: true` in the front matter |
+| Hooks | Hooks from `settings.json` (open the file to change them). Scripts in `.localpilot/hooks/`, `.clinerules/hooks/`, `.cline/hooks/` and their home-folder versions are listed with a **not run yet** badge: the agent does not run them, so add them to `settings.json` | No switch. **Run hooks** turns every `settings.json` hook off |
+| Skills | Installed skills | The same switch as in **Skills & subagents** |
+
+Each row also has **Open** (in the editor) and **Delete** (after a confirmation). Rules from a parent folder of the workspace, hooks and hook scripts can only be opened.
+
+**New rule…** and **New command…** take a name and create the file in `.localpilot/rules/` or `.localpilot/commands/` of the workspace, or of your home folder. Then they open it. Rules may end in `.md` or `.txt`, and commands in `.md`. A name without an extension gets `.md`, so "testing" becomes `.localpilot/rules/testing.md`. If the file already exists, it is opened, not overwritten. The Hooks tab has no create box: hooks are added in `settings.json`.
+
+Switching keeps the rest of the file exactly as it was: the other keys, the line endings and a byte-order mark. If the front matter cannot be read (no closing `---`, or a line that is not `key: value`), nothing is changed and you get an error. Edits only go to listed files whose real path, with symlinks resolved, is inside the workspace or your rule, command or hook folders.
+
 ## Subagents
 
 ### Write a subagent
@@ -247,9 +264,9 @@ LocalPilot ships 9 subagents. Every one can use `load_skill`.
 | `debugger` | Reproduce, trace, find the root cause, make a minimal fix, re-verify | all |
 | `reviewer` | Bugs ranked by severity, security (OWASP), error handling, conventions; no edits | read-only + `run_command` |
 | `docs` | README sections, doc comments and changelog entries in the project's tone | all |
-| `researcher` | Web research with cross-checked sources and citations | `web_search`, `web_fetch`, `read_file`, `gather_context` |
+| `researcher` | Web research with cross-checked sources and citations | `web_search`, `web_fetch`, `read_file`, `read_pdf`, `gather_context` |
 
-"Read-only" means `read_file`, `list_dir`, `file_search`, `grep_search`, `find_symbol`, `find_references`, `repo_graph`, `get_diagnostics`, `get_editor_state`, `gather_context` and `analyze_workspace`.
+"Read-only" means `read_file`, `read_pdf`, `list_dir`, `file_search`, `grep_search`, `find_symbol`, `find_references`, `repo_graph`, `get_diagnostics`, `get_editor_state`, `gather_context` and `analyze_workspace`.
 
 Rules that apply to every built-in:
 

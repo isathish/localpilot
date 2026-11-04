@@ -1,5 +1,7 @@
 /** Shared domain types used across providers, agent loop, tools and UI. */
 
+import type { ImageAttachment } from './ui/images';
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ToolCall {
@@ -58,6 +60,10 @@ export interface ChatMessage {
     corrections?: { from: string; to: string }[];
     /** On a user message: the change-tracker turn key that Restore checkpoint reverts to. */
     checkpoint?: number;
+    /** On a tool result: the call failed (compaction's one-line tool summaries report it). */
+    failed?: boolean;
+    /** Position of this message in the session's transcript archive (`<id>.archive.jsonl`), once a compaction archived it. */
+    archived?: number;
   };
 }
 
@@ -104,6 +110,16 @@ export interface ModelInfo {
   parallelSlots?: number;
   /** Served by a cloud API (not this machine or the private network): automatic routing prefers local models. */
   remote?: boolean;
+  /** Prices of a cloud model from the bundled model facts; absent for local models and unknown prices. */
+  pricing?: ModelPricing;
+}
+
+/** US dollars per 1M tokens. Cache prices default to the input price (reads) and 1.25 × input (writes). */
+export interface ModelPricing {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 export interface ChatRequestOptions {
@@ -235,7 +251,7 @@ export interface ToolContext {
   mainRoot?: string;
   signal: AbortSignal;
   /** Ask the user to approve a dangerous action. Resolves true when approved. */
-  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network', opts?: { mandatory?: boolean }): Promise<boolean>;
+  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network' | 'mcp', opts?: { mandatory?: boolean; autoApprove?: boolean }): Promise<boolean>;
   /** Stream progress text to the UI. */
   progress(text: string): void;
   /** Snapshot a file before modifying it so the user can review/undo the agent's changes. */
@@ -248,6 +264,8 @@ export interface ToolContext {
   modelRef?: string;
   /** True in Plan/Ask mode: subagents spawned from here must not mutate the workspace either. */
   readOnly?: boolean;
+  /** Mode of the run executing this tool; in Plan/Ask `run_command` only runs read-only commands. */
+  mode?: Session['mode'];
   /** Pause/stop/steer handle of the run executing this tool; subagents register their own control under it. */
   control?: import('./agent/runControl').RunControl;
   /** Skills in force for this run (preloaded, pinned or loaded with load_skill); subagents spawned from here inherit them. */
@@ -266,12 +284,14 @@ export interface ToolResult {
   isError?: boolean;
   /** Structured data for UI rendering (e.g. diffs). */
   data?: unknown;
+  /** Images for the model (read_file on a screenshot); sent with the tool results when the model has vision. */
+  images?: ImageAttachment[];
 }
 
 export interface Tool {
   definition: ToolDefinition;
   /** Which approval setting governs this tool. */
-  approvalKind?: 'terminal' | 'write' | 'delete' | 'network';
+  approvalKind?: 'terminal' | 'write' | 'delete' | 'network' | 'mcp';
   /** Safe to run concurrently with other tools (read-only). */
   parallelSafe?: boolean;
   /** Declared side-effect free (e.g. MCP readOnlyHint); allowed in Plan/Ask. */
@@ -349,6 +369,11 @@ export interface SessionSummary {
   usage?: SessionUsage;
   /** Size of the session file on disk (history list). */
   bytes?: number;
+  /** Where the chat was started: `cli` for the terminal (shown with a CLI badge in VS Code's history). */
+  origin?: 'cli';
+  /** The chat this one was forked from, and its title at the time (history shows "forked from …"). */
+  parentId?: string;
+  parentTitle?: string;
 }
 
 /** Running totals for a chat. `promptTokens` is the uncached input only; cached input is counted in the cache fields. */
@@ -439,6 +464,8 @@ export interface AgentEvent {
     | 'nudge'
     /** Queued steering messages were appended to the conversation. Payload: { ids: string[], count }. */
     | 'steer'
+    /** Conditional rules (front-matter `paths:` / `globs:`) matched the files in context this turn. Payload: { files: string[] }. */
+    | 'rules_applied'
     | 'todos'
     | 'turn_end';
   payload?: unknown;

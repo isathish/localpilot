@@ -42,16 +42,17 @@
     gauge: '<svg viewBox="0 0 16 16"><path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-4"/><path d="M2 13.5h12"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3M6 8h4M6 10.5h4"/></svg>',
     folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
+    scale: '<svg viewBox="0 0 16 16"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>',
   };
   const SECTIONS = [
-    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
+    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
     ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['advanced', 'Advanced', I.wrench],
   ];
   /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
   const NAV_HOME = ['dashboard'];
   const NAV_GROUPS = [
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
-    { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'completions'] },
+    { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'customize', 'completions'] },
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web'] },
     { id: 'data', label: 'Data & system', items: ['memory', 'advanced'] },
   ];
@@ -62,6 +63,7 @@
     models: 'installed download pull routing context temperature thinking memory budget default model',
     gallery: 'catalog library hugging face docker hub download pull install gguf',
     skills: 'skill playbook subagent registry install',
+    customize: 'rules commands hooks skills agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs',
     agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify',
     completions: 'ghost text fim autocomplete tab suggestion',
     web: 'searxng brave tavily duckduckgo browser screenshot fetch',
@@ -84,7 +86,7 @@
     ['advanced', 'supervisor.enabled', 'Keep local services running'], ['advanced', 'supervisor.intervalSeconds', 'Service check interval'], ['advanced', 'supervisor.autoInstall', 'Install Ollama without asking'],
     ['skills', 'skillsPaths', 'Skill folders'], ['skills', 'skills.repositories', 'Skill repositories'], ['skills', 'skills.disabled', 'Disabled skills'], ['skills', 'pluginPaths', 'Plugin folders'],
     ['agent', 'approvals.terminal', 'Terminal commands approval'], ['agent', 'approvals.write', 'File edits approval'], ['agent', 'approvals.delete', 'Deleting files approval'],
-    ['agent', 'approvals.network', 'Network & MCP approval'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
+    ['agent', 'approvals.network', 'Network approval'], ['agent', 'approvals.mcp', 'MCP tools approval'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
     ['agent', 'autoClarify', 'Interpret vague requests automatically'], ['agent', 'prompts.autoCorrect', 'Correct misspelled names in requests'], ['agent', 'clarify.questions', 'Questions before starting'],
     ['agent', 'hooks.enabled', 'Run hooks'], ['agent', 'worktrees.mode', 'Where agents work'], ['agent', 'worktrees.location', 'Worktree folder'],
     ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compactionThreshold', 'Compact context at'],
@@ -260,9 +262,9 @@
   const vendorMark = (vendor, fallback) => markSpan(VENDORS[String(vendor || '').toLowerCase()] || null, fallback || vendor);
   const APPROVAL = [['ask', 'Ask'], ['always', 'Allow'], ['never', 'Block']];
   const APPROVAL_PRESETS = {
-    safe: { title: 'Careful', desc: 'Ask before every command, edit, delete and network call.', v: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask' } },
-    balanced: { title: 'Balanced', desc: 'Edits and web are allowed; ask for terminal commands and deletes. (Default)', v: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always' } },
-    autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always' } },
+    safe: { title: 'Careful', desc: 'Ask before every command, edit, delete, network call and MCP tool.', v: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask', mcp: 'ask' } },
+    balanced: { title: 'Balanced', desc: 'Edits, web and MCP tools are allowed; ask for terminal commands and deletes. (Default)', v: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
+    autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
   };
 
   const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null,
@@ -592,7 +594,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, dashboard: secDashboard, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, dashboard: secDashboard, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -1375,9 +1377,9 @@
   // ------------------------------------------------------------------ agent & approvals
   function secAgent(sec) {
     head(sec, 'Agent & approvals', 'What the agent may do without asking: Ask shows an approval card in the chat, Allow proceeds, Block refuses.');
-    const APPROVAL_KEYS = ['approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network'];
+    const APPROVAL_KEYS = ['approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'approvals.mcp'];
     const presetsEl = () => {
-      const cur = { terminal: val('approvals.terminal'), write: val('approvals.write'), delete: val('approvals.delete'), network: val('approvals.network') };
+      const cur = { terminal: val('approvals.terminal'), write: val('approvals.write'), delete: val('approvals.delete'), network: val('approvals.network'), mcp: val('approvals.mcp') };
       const presets = el('div', 'approval-presets');
       for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
         const on = Object.keys(p.v).every((x) => p.v[x] === cur[x]);
@@ -1392,7 +1394,8 @@
       field('approvals.terminal', 'Terminal commands', '<code>run_command</code> — shell commands in the workspace.', 'seg', { options: APPROVAL }),
       field('approvals.write', 'File edits', '<code>edit_file</code>, <code>write_file</code>, <code>create_directory</code>. Every edit is tracked and can be undone from the Changes panel either way.', 'seg', { options: APPROVAL }),
       field('approvals.delete', 'Deleting files', '<code>delete_path</code> — moves to the OS trash when possible.', 'seg', { options: APPROVAL }),
-      field('approvals.network', 'Network & MCP', '<code>web_search</code>, <code>web_fetch</code> and tools from MCP servers.', 'seg', { options: APPROVAL })
+      field('approvals.network', 'Network', '<code>web_search</code>, <code>web_fetch</code> and the browser tools.', 'seg', { options: APPROVAL }),
+      field('approvals.mcp', 'MCP tools', 'Tools from MCP servers. A server\'s <code>autoApprove</code> list runs those tools without asking even when this is Ask.', 'seg', { options: APPROVAL })
     ));
     sec.appendChild(el('h2', 'sub', 'Tools'));
     // Each switch edits localpilot.disabledTools by exact name; a tool switched off by a glob or alias stays locked here.
@@ -1689,7 +1692,109 @@
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
     sec.appendChild(bar);
   }
-  const repoStatusText = (st) => (st ? (st.error ? `<span class="badge err" title="${esc(st.error)}">error</span> ${esc(st.error)}` : `${st.skills} skill${st.skills === 1 ? '' : 's'}${st.fetched ? ` · indexed ${fmtAgo(st.fetched)}` : ''}`) : 'not indexed yet');
+  // ------------------------------------------------------------------ customize (rules, commands, hooks, skills)
+  const CUSTOM_TABS = [
+    ['rule', 'Rules', 'Instruction files added to every prompt: <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursorrules</code>, <code>.clinerules</code> and the rule folders (<code>.localpilot/rules/</code>, <code>.cursor/rules/</code>, <code>.claude/rules/</code>, <code>.cline/rules/</code>). Switching one off writes <code>disabled: true</code> into its front matter; <code>paths:</code> or <code>globs:</code> there make a rule apply only while a matching file is in context.'],
+    ['command', 'Commands', 'Slash commands from <code>.localpilot/commands/</code> and <code>.claude/commands/</code> (and the same folders in your home). Switching one off writes <code>disabled: true</code> into its front matter.'],
+    ['hook', 'Hooks', 'Hooks configured in <code>settings.json</code> (open the file to change them). Scripts found in <code>.localpilot/hooks/</code> and the Cline hook folders are listed too, but the agent does not run them yet: add them to <code>settings.json</code> to run them.'],
+    ['skill', 'Skills', 'Playbooks the agent loads when a request matches. Install more from the registry in <b>Skills &amp; subagents</b>.'],
+  ];
+  function secCustomize(sec) {
+    const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });
+    head(sec, 'Customize', 'The rules, commands, hooks and skills in this workspace and in your home folder: switch them on or off, open, delete or create them.');
+    // Files change outside the panel too: re-list when the section is shown again after a while.
+    if ((!c.loading || Date.now() - c.loading > 10000) && (!c.data || Date.now() - (c.at || 0) > 5000)) { c.loading = Date.now(); post({ type: 'loadCustomize' }); }
+    const d = c.data;
+    const skills = (state.data && state.data.skills) || [];
+    const count = { rule: d ? d.rules.length : 0, command: d ? d.commands.length : 0, hook: d ? d.hooks.length : 0, skill: skills.length };
+    const tabs = el('div', 'chips cz-tabs'); tabs.setAttribute('role', 'tablist');
+    for (const [k, label] of CUSTOM_TABS) {
+      const b = el('button', `chip ${c.tab === k ? 'on' : ''}`, `${esc(label)} <i>${count[k]}</i>`); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(c.tab === k));
+      b.onclick = () => { c.tab = k; render(); };
+      tabs.appendChild(b);
+    }
+    sec.appendChild(tabs);
+    const tab = CUSTOM_TABS.find(([k]) => k === c.tab) || CUSTOM_TABS[0];
+    sec.appendChild(el('p', 'muted small', tab[2]));
+    if (c.tab === 'skill') { customSkills(sec, skills); return; }
+    if (!d) { sec.appendChild(skeleton('Looking for rules, commands and hooks…', 3)); return; }
+    if (c.tab === 'hook') { sec.appendChild(card(field('hooks.enabled', 'Run hooks', 'Turn off for a repository you do not trust: no hook (settings or script) runs.', 'toggle'))); }
+    const kind = c.tab; const noun = { rule: 'rule', command: 'command', hook: 'hook' }[kind];
+    const scope = c.scope || (d.hasWorkspace ? 'workspace' : 'global');
+    const add = el('div', 'row cz-new');
+    const listId = `cz-events-${kind}`;
+    add.innerHTML = `<input type="text" id="cz-name" placeholder="${kind === 'hook' ? 'New hook… (an event name, e.g. PreToolUse)' : `New ${noun}… (e.g. ${kind === 'rule' ? 'testing' : 'review'})`}" aria-label="Name of the new ${noun}"${kind === 'hook' ? ` list="${listId}"` : ''}>${kind === 'hook' ? `<datalist id="${listId}">${(d.events || []).map((e) => `<option value="${esc(e)}">`).join('')}</datalist>` : ''}<select aria-label="Create in">${d.hasWorkspace ? `<option value="workspace"${scope === 'workspace' ? ' selected' : ''}>.localpilot/${kind}s</option>` : ''}<option value="global"${scope === 'global' ? ' selected' : ''}>~/.localpilot/${kind}s</option></select><button class="btn sm">${I.plus}Create</button>`;
+    const input = add.querySelector('input'); const sel = add.querySelector('select');
+    sel.onchange = () => { c.scope = sel.value; };
+    const create = () => { const name = input.value.trim(); if (!name) { input.focus(); return; } if (!/^[\w][\w .-]*$/.test(name) || name.includes('..')) { toast('Use letters, digits, spaces, "-", "_" and "." only (no folders).', 'error'); return; } post({ type: 'customCreate', kind, name, scope: sel.value }); input.value = ''; };
+    add.querySelector('button').onclick = create;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { create(); } };
+    // ---- new item (hook scripts are not run yet, so none are created from here)
+    if (kind !== 'hook') { sec.appendChild(add); }
+    // ---- lists, workspace first
+    const items = kind === 'rule' ? d.rules : kind === 'command' ? d.commands : d.hooks;
+    for (const [sc, title] of [['workspace', 'Workspace'], ['global', 'Global']]) {
+      const group = items.filter((i) => i.scope === sc);
+      sec.appendChild(el('h2', 'sub', `${title}<span class="count">${group.length}</span>`));
+      const box = el('div', 'card');
+      if (!group.length) { box.appendChild(el('div', 'empty', sc === 'workspace' && !d.hasWorkspace ? 'Open a folder to see its items.' : `No ${noun}s here.`)); }
+      for (const it of group) { box.appendChild(customRow(it, d)); }
+      sec.appendChild(box);
+    }
+  }
+  function customRow(it, d) {
+    const row = el('div', `mrow sk ${it.disabled ? 'off' : ''}`);
+    const switchable = it.editable && !it.fromSettings && (it.kind !== 'hook' || d.canSwitchHooks);
+    if (switchable) {
+      const tg = el('button', `toggle ${it.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.setAttribute('aria-checked', String(!it.disabled)); tg.setAttribute('aria-label', `${it.disabled ? 'Enable' : 'Disable'} ${it.name}`);
+      tg.title = it.disabled ? 'Enable: the agent sees it again' : 'Disable: hidden from the agent, stays on disk';
+      tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'customToggle', kind: it.kind, file: it.file, enabled: !!it.disabled }); };
+      row.appendChild(tg);
+    }
+    row.appendChild(el('span', 'ic brand-mark sk-ic', it.kind === 'hook' ? I.bolt : it.kind === 'command' ? I.chat : I.file));
+    const sub = it.detail ? `<code>${esc(it.detail)}</code>` : esc(it.description || '');
+    row.appendChild(el('div', 't', `<b title="${esc(it.file)}">${esc(it.name)}</b><span>${esc(it.label)}${sub ? ` · ${sub}` : ''}</span>`));
+    const right = el('div', 'mrow-right');
+    const tags = [];
+    if (it.paths) { tags.push(`<span class="badge" title="Applies only while a file matching ${esc(it.paths.join(', ') || '(nothing)')} is in context">${it.paths.length ? `when ${esc(it.paths.slice(0, 2).join(', '))}${it.paths.length > 2 ? '…' : ''}` : 'never applies'}</span>`); }
+    if (it.fromSettings) { tags.push('<span class="badge">settings.json</span>'); }
+    if (it.notRun) { tags.push('<span class="badge warn" title="LocalPilot does not run hook scripts from this folder yet: configure the hook in settings.json">not run yet</span>'); }
+    if (!it.editable && !it.fromSettings && !it.notRun) { tags.push('<span class="badge" title="From a parent folder of the workspace: change it there">parent folder</span>'); }
+    if (it.disabled) { tags.push('<span class="badge warn">disabled</span>'); }
+    right.appendChild(el('div', 'tags', tags.join('')));
+    const acts = el('div', 'acts');
+    const open = el('button', 'btn ghost sm', I.external); open.title = it.fromSettings ? 'Open the settings file' : 'Open in editor'; open.setAttribute('aria-label', `Open ${it.name}`); open.onclick = () => post({ type: 'customOpen', kind: it.kind, file: it.file }); acts.appendChild(open);
+    if (it.editable && !it.fromSettings) {
+      const del = el('button', 'btn ghost sm danger', I.trash); del.title = 'Delete from disk (asks first)'; del.setAttribute('aria-label', `Delete ${it.name}`); del.onclick = () => post({ type: 'customDelete', kind: it.kind, file: it.file }); acts.appendChild(del);
+    }
+    right.appendChild(acts);
+    row.appendChild(right);
+    return row;
+  }
+  function customSkills(sec, skills) {
+    for (const [sc, title, match] of [['workspace', 'Workspace', (s) => s.source === 'workspace'], ['global', 'Global', (s) => s.source !== 'workspace']]) {
+      const group = skills.filter(match).sort((a, b) => a.name.localeCompare(b.name));
+      sec.appendChild(el('h2', 'sub', `${title}<span class="count">${group.length}</span>`));
+      const box = el('div', 'card'); box.dataset.deps = 'skills.disabled';
+      if (!group.length) { box.appendChild(el('div', 'empty', sc === 'workspace' ? 'No workspace skills. Create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code>.' : 'No user or built-in skills.')); }
+      for (const s of group) {
+        const row = el('div', `mrow sk ${s.disabled ? 'off' : ''}`);
+        const tg = el('button', `toggle ${s.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.setAttribute('aria-checked', String(!s.disabled)); tg.setAttribute('aria-label', `${s.disabled ? 'Enable' : 'Disable'} ${s.name}`);
+        tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleSkill', name: s.name, enabled: !!s.disabled }); };
+        row.appendChild(tg);
+        row.appendChild(el('span', 'ic brand-mark sk-ic', I.book));
+        row.appendChild(el('div', 't', `<b title="${esc(s.dir || '')}">${esc(s.name)}</b><span>${esc(s.description || '')}</span>`));
+        const right = el('div', 'mrow-right');
+        right.appendChild(el('div', 'tags', `<span class="badge">${esc(SOURCE_LABEL[s.source] || s.source)}</span>${s.disabled ? '<span class="badge warn">disabled</span>' : ''}`));
+        const acts = el('div', 'acts');
+        const open = el('button', 'btn ghost sm', I.external); open.title = 'Open SKILL.md'; open.onclick = () => post({ type: 'openSkill', name: s.name }); acts.appendChild(open);
+        if (s.removable) { const del = el('button', 'btn ghost sm danger', I.trash); del.title = 'Delete this skill from disk (asks first)'; del.onclick = () => post({ type: 'removeSkill', name: s.name }); acts.appendChild(del); }
+        right.appendChild(acts); row.appendChild(right); box.appendChild(row);
+      }
+      sec.appendChild(box);
+    }
+  }
+  const repoStatusText = (st) => (st ?(st.error ? `<span class="badge err" title="${esc(st.error)}">error</span> ${esc(st.error)}` : `${st.skills} skill${st.skills === 1 ? '' : 's'}${st.fetched ? ` · indexed ${fmtAgo(st.fetched)}` : ''}`) : 'not indexed yet');
   /** Refreshes the per-repository index status in place (the list itself is rebuilt only when the setting changes). */
   function renderSkillRepoStatus() {
     const status = new Map((state.skillReg.status || []).map((s) => [s.repo, s]));
@@ -1742,7 +1847,7 @@
   /** Inverse of splitArgs: an argument with whitespace is quoted so editing it round-trips. */
   const joinArgs = (args) => args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '')}"` : a)).join(' ');
   function secMcp(sec) {
-    head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the Network approval policy.');
+    head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the MCP tools approval policy.');
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
     // Shown merged; written from the selected scope's own map so the other scope's servers are never copied into it.
     const own = () => ({ ...((state.scope === 'workspace' ? S('mcpServers').workspaceValue : S('mcpServers').userValue) || {}) });
@@ -1811,6 +1916,13 @@
       body.appendChild(row('Working directory', '', cwd));
       body.appendChild(row('Environment', 'JSON object of extra environment variables.', env));
     }
+    const timeout = el('select');
+    const secs = [[30, '30 s'], [60, '1 min (default)'], [300, '5 min'], [600, '10 min'], [1800, '30 min'], [3600, '1 hour']];
+    if (s.timeout && !secs.some(([v]) => v === s.timeout)) { secs.push([s.timeout, `${s.timeout} s`]); }
+    timeout.innerHTML = secs.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+    timeout.value = String(s.timeout || 60);
+    timeout.onchange = () => { const v = Number(timeout.value); upd({ timeout: v === 60 ? undefined : v }); };
+    body.appendChild(row('Timeout', 'How long one request to this server may take before it fails.', timeout));
     body.appendChild(row('Enabled', '', en));
     const foot = el('div', 'prov-foot');
     foot.innerHTML = `<span class="spacer"></span><button class="btn danger">${I.trash}Remove</button>`;
@@ -2329,7 +2441,7 @@
         // A settings round-trip: find what actually changed and refresh only those components.
         const keys = new Set([...Object.keys(prev.settings || {}), ...Object.keys(m.settings || {})]);
         const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
-        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], customize: ['skills'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
         const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
         if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
         if (changed.length) { refreshComponents(changed); }
@@ -2423,6 +2535,12 @@
       case 'toast':
         toast(m.text, m.level);
         break;
+      case 'customize': {
+        const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });
+        c.data = m.data; c.loading = 0; c.at = Date.now();
+        if (state.page === 'settings' && state.section === 'customize') { render(); }
+        break;
+      }
     }
   }
   post({ type: 'ready' });

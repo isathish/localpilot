@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ContextManager, effectiveContextWindow, FitResult, tokenCalibration } from '../context/contextManager';
+import { toolResultCache } from '../context/toolResultCache';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
@@ -9,8 +10,9 @@ import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
+import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
 import { addUsage } from './usage';
+import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
@@ -28,18 +30,19 @@ import { HookRunner } from './hooks';
 import { AutoReviewer } from './autoReviewer';
 import { thinkFor } from './thinking';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
-import { audit, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed } from './managedPolicy';
+import { audit, autoApprovedMode, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed, WEB_TOOLS } from './managedPolicy';
 import { emptySettings, ProjectSettings } from './settings';
 import { runDigest, saveRunMemories } from './autoMemory';
 import { irrelevantTools } from './toolRelevance';
 import { MistakeCounter, mistakeLimitMessage } from './mistakes';
-import { CONTINUE_NUDGE, joinContinuation, LENGTH_NUDGE, lengthAction, lengthGiveUpMessage } from './outputLimit';
+import { CONTINUE_NUDGE, hasUnterminatedToolCall, joinContinuation, LENGTH_NUDGE, lengthAction, lengthGiveUpMessage } from './outputLimit';
 import { toolDisabled } from './toolAliases';
 import { listRepos } from './repos';
 import { markRepoGraphStale } from '../context/repoGraph';
+import { archiveCompaction, TranscriptArchive } from '../sessions/transcriptArchive';
 
 /** `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies. */
-export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: { mandatory?: boolean }) => Promise<boolean>;
+export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: { mandatory?: boolean; autoApprove?: boolean }) => Promise<boolean>;
 
 /** Per-run permission/hook policy handed to tool execution. */
 interface ToolPolicy {
@@ -180,6 +183,8 @@ export class AgentRunner {
   autoReviewer?: AutoReviewer;
   /** Git checkpoints before each user turn (`localpilot.checkpoints.enabled`); absent = file snapshots only. */
   checkpoints?: CheckpointService;
+  /** Keeps what compaction replaces (`<id>.archive.jsonl`); absent = compacted messages are gone. */
+  archive?: TranscriptArchive;
 
   async run(o: AgentRunOptions): Promise<string> {
     // The user is waiting on this run: background model work from earlier runs gives way.
@@ -218,7 +223,7 @@ export class AgentRunner {
         isolated: !!o.isolatedFrom,
       });
       if (topLevel) {
-        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? 'completed' : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.session.mode });
+        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? (stats.mistakeLimited ? 'mistake_limit' : 'completed') : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.session.mode });
       }
     }
   }
@@ -287,7 +292,7 @@ export class AgentRunner {
       session.model = model.id;
     }
 
-    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined, scale: () => tokenCalibration.scale(model.id) });
+    const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined, scale: () => tokenCalibration.scale(model.id), sessionId: session.id, strategy: cfg.compactionStrategy });
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
@@ -314,7 +319,10 @@ export class AgentRunner {
     const nativeTools = model.supportsTools;
     const toolDefs: ToolDefinition[] = toolsEnabled ? toolList.map((t) => t.definition) : [];
 
+    // Conditional rules (`paths:` / `globs:` front matter) follow the files in context this turn.
+    const contextPaths = o.scratch ? [] : this.workspace.contextPaths(o.userMessage.content, session.workingSet);
     const system = await buildSystemPrompt({
+      contextPaths,
       mode: session.mode,
       workspaceRoot: o.workspaceRoot,
       model,
@@ -330,10 +338,16 @@ export class AgentRunner {
       canScreenshot: toolDefs.some((t) => t.name === 'browser_screenshot'),
       canInspect: toolDefs.some((t) => t.name === 'browser_inspect'),
       canOpenBrowser: toolDefs.some((t) => t.name === 'open_browser'),
+      canSearchWeb: toolDefs.some((t) => t.name === 'web_search' || t.name === 'web_fetch'),
+      preferredLanguage: cfg.preferredLanguage,
       project: !o.scratch,
       // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
       memory: cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
     });
+    const conditional = depth === 0 && !o.scratch ? this.workspace.conditionalRulesFor(contextPaths) : [];
+    if (conditional.length) {
+      emit({ sessionId: session.id, type: 'rules_applied', payload: { files: conditional.map((f) => f.label) } });
+    }
     const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = !!o.isolatedFrom;
     const systemIsolated = isolated && !o.scratch
@@ -353,7 +367,10 @@ export class AgentRunner {
     if (depth === 0 && !o.scratch && this.checkpoints) {
       // Before hooks and the first model call, so everything this turn changes (shell commands included) can be rolled back.
       const run = o.userMessage.meta?.checkpoint ?? this.tracker?.currentTurnOf(session.id) ?? session.messages.length - 1;
-      await this.checkpoints.snapshot(session, run, o.workspaceRoot ?? this.workspace.root);
+      const taken = await this.checkpoints.snapshot(session, run, o.workspaceRoot ?? this.workspace.root);
+      if (taken && taken.outcome !== 'skipped') {
+        this.telemetry?.record({ type: 'checkpoint', action: 'create', outcome: 'ok' });
+      }
     }
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
@@ -587,6 +604,7 @@ export class AgentRunner {
       depth,
       modelRef: model.id,
       readOnly: !isWriteMode(session.mode),
+      mode: session.mode,
       progress: (t) => status(t),
       // Edits inside an isolated worktree need no undo snapshots: discarding the worktree is the undo, and the
       // tracker stays about files in the real workspace (those applied from the worktree).
@@ -598,7 +616,7 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'todos', payload: items });
         },
       },
-      requestApproval: (title, detail, kind, opts) => this.gateApproval(kind, cfg.approvals[kind], (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory }),
+      requestApproval: (title, detail, kind, opts) => this.gateApproval(kind, cfg.approvals[kind], (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory, autoApprove: opts?.autoApprove }),
       askUser: depth === 0 ? o.askUser : undefined,
       recordUsage: (u, m, p) => {
         // The chat's own last model stays the one it answers with; the subagent's model only travels upwards.
@@ -624,7 +642,7 @@ export class AgentRunner {
     const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
     // Read-only tool results are memoised for the turn (including in-flight calls, so identical
     // parallel requests run once); any mutating tool clears the cache.
-    const toolCache = new Map<string, Promise<ChatMessage>>();
+    const toolCache = new Map<string, Promise<{ msg: ChatMessage; isError: boolean }>>();
     // A model that cannot think gets no `think` at all (Ollama rejects any value but false for it).
     // Reassigned to false when the model spends a whole reply thinking (see the empty-completion retry below).
     let think = model.supportsThinking === false ? undefined : thinkFor(cfg.thinking, { mode: session.mode, depth });
@@ -645,9 +663,7 @@ export class AgentRunner {
     const stopForMistakes = () => {
       const note = mistakeLimitMessage(mistakes.count, mistakes.latest);
       stopError = { payload: { kind: 'mistake_limit', count: mistakes.count, latest: mistakes.latest, message: note }, note };
-      if (depth === 0) {
-        this.telemetry?.record({ type: 'task', sid: session.id, action: 'mistake_limit', mode: session.mode });
-      }
+      stats.mistakeLimited = true;
     };
     /** Cut-off tool calls retried in a row; reset by any reply that ends normally. */
     let lengthRetries = 0;
@@ -685,6 +701,7 @@ export class AgentRunner {
     };
 
     for (let iter = 0; iter < maxIter; iter++) {
+      toolResultCache.tick(session.id);
       await hold();
       if (o.signal.aborted || control.aborted) {
         break;
@@ -711,6 +728,9 @@ export class AgentRunner {
         // Stopped while compacting: keep the history as it was rather than a half-finished (or truncated) summary.
         if (!fit || o.signal.aborted || control.aborted) {
           break;
+        }
+        if (fit.compactions.length) {
+          archiveCompaction(depth === 0 ? this.archive : undefined, session.id, session.compactions, session.messages, fit.messages);
         }
         session.messages = fit.messages;
         budget = fit.budget;
@@ -746,7 +766,8 @@ export class AgentRunner {
       // Transient failures (connection drops, 5xx, a stalled server, an empty completion) are retried a
       // couple of times before the user sees an error; a context-overflow reply compacts once and retries.
       let attempt = 0;
-      let compactedForOverflow = false;
+      // compaction.strategy off: an overflow is reported, not compacted away.
+      let compactedForOverflow = ctxMgr.strategy === 'off';
       let aborted = false;
       while (true) {
         text = '';
@@ -767,8 +788,10 @@ export class AgentRunner {
         // Called exactly once per request, so it is also where the request is booked into the session's usage.
         const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) => {
           this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason });
-          session.usage = addUsage(session.usage, usage, model.modelId, model.providerId);
-          o.onUsage?.(usage, model.modelId, model.providerId);
+          // Priced from the bundled model facts unless the provider reported a cost; subagents pass theirs upwards.
+          const priced = withCost(usage, model);
+          session.usage = addUsage(session.usage, priced, model.modelId, model.providerId);
+          o.onUsage?.(priced, model.modelId, model.providerId);
         };
         stats.steps++;
         try {
@@ -887,6 +910,9 @@ export class AgentRunner {
               aborted = true;
               break;
             }
+            if (result.removed > 0) {
+              archiveCompaction(depth === 0 ? this.archive : undefined, session.id, session.compactions, session.messages, result.messages);
+            }
             session.messages = prunedForOverflow;
             if (result.removed > 0) {
               session.messages = result.messages;
@@ -961,6 +987,18 @@ export class AgentRunner {
 
       this.release(model.id, session.id);
 
+      // The reply continues one that stopped at the output limit: keep a single message, without the hidden request.
+      // Joined before parsing, so a text-protocol call that spans both halves is still found.
+      const joined = !!continuing;
+      if (continuing) {
+        const { message: before, nudge } = continuing;
+        continuing = undefined;
+        session.messages = session.messages.filter((m) => m !== before && m !== nudge);
+        text = joinContinuation(before.content, text);
+        thinking = [before.thinking, thinking].filter(Boolean).join('\n');
+        assistant.meta = before.meta ?? assistant.meta;
+      }
+
       // Models without native tool support emit tool calls as text. Small "tool-capable" models also
       // frequently print the call as bare JSON instead of using the tool channel, so fall back to
       // parsing text whenever no native call arrived — restricted to known tool names.
@@ -975,23 +1013,14 @@ export class AgentRunner {
         }
       }
 
-      // The reply continues one that stopped at the output limit: keep a single message, without the hidden request.
-      const joined = !!continuing;
-      if (continuing) {
-        const { message: before, nudge } = continuing;
-        continuing = undefined;
-        session.messages = session.messages.filter((m) => m !== before && m !== nudge);
-        text = joinContinuation(before.content, text);
-        thinking = [before.thinking, thinking].filter(Boolean).join('\n');
-        assistant.meta = before.meta ?? assistant.meta;
-      }
       assistant.content = text;
       assistant.thinking = thinking || undefined;
       assistant.toolCalls = calls.length ? calls : undefined;
       session.messages.push(assistant);
       finalText = text;
 
-      const cutOff = lengthAction({ finish, truncatedCall: calls.length > 0 || malformedCalls.length > 0, text, retries: lengthRetries, continuing: joined });
+      const truncatedCall = calls.length > 0 || malformedCalls.length > 0 || (finish === 'length' && toolDefs.length > 0 && hasUnterminatedToolCall(text, new Set(toolDefs.map((t) => t.name))));
+      const cutOff = lengthAction({ finish, truncatedCall, text, retries: lengthRetries, continuing: joined });
       if (finish !== 'length') {
         lengthRetries = 0;
       }
@@ -1167,7 +1196,7 @@ export class AgentRunner {
       // The run gave up: an error row now, and the reason kept in the transcript (meta.error) for the next turn and replays.
       this.log.warn(`session ${session.id}: ${stopError.note}`);
       emit({ sessionId: session.id, type: 'error', payload: stopError.payload });
-      session.messages.push({ role: 'assistant', content: stopError.note, meta: { timestamp: Date.now(), error: stopError.note } });
+      session.messages.push({ role: 'assistant', content: `(error: ${stopError.note})`, meta: { timestamp: Date.now(), error: stopError.note } });
       finalText = stopError.note;
     } else if (!completed && !o.signal.aborted) {
       // Ran out of steps with tool results pending: say so instead of ending on a dangling tool call.
@@ -1338,6 +1367,10 @@ export class AgentRunner {
     // Organisation policy: web access and other tool families it switched off are not offered at all.
     const managed = getManagedPolicy(this.log);
     list = list.filter((t) => toolAllowed(managed, t.definition.name));
+    // The user's own switch for the same family (localpilot.webSearch.enabled).
+    if (!getConfig().webEnabled) {
+      list = list.filter((t) => !WEB_TOOLS.test(t.definition.name));
+    }
     // Tools the user switched off (localpilot.disabledTools) are never sent to the model.
     const disabled = getConfig().disabledTools;
     if (disabled.length) {
@@ -1348,8 +1381,8 @@ export class AgentRunner {
       list = list.filter((t) => !t.definition.name.startsWith('memory_'));
     }
     if (!isWriteMode(mode)) {
-      // Read-only modes: strip mutating tools.
-      list = list.filter((t) => (!t.approvalKind || t.approvalKind === 'network') && (!t.definition.name.startsWith('mcp_') || t.readOnly));
+      // Read-only modes: strip mutating tools. run_command stays; its guard refuses commands that could write.
+      list = list.filter((t) => t.definition.name === 'run_command' || ((!t.approvalKind || t.approvalKind === 'network' || t.approvalKind === 'mcp') && (!t.definition.name.startsWith('mcp_') || t.readOnly)));
     } else if (mode === 'multitask') {
       // The coordinator reads, plans, delegates and verifies; only its workers edit files.
       list = list.filter((t) => t.approvalKind !== 'write' && t.approvalKind !== 'delete' && (!t.definition.name.startsWith('mcp_') || t.readOnly));
@@ -1386,7 +1419,7 @@ export class AgentRunner {
     emit: (e: AgentEvent) => void,
     sessionId: string,
     nativeTools: boolean,
-    cache: Map<string, Promise<ChatMessage>>,
+    cache: Map<string, Promise<{ msg: ChatMessage; isError: boolean }>>,
     vision = false,
     callCounts?: Map<string, number>,
     mode = 'agent',
@@ -1399,16 +1432,16 @@ export class AgentRunner {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
-    const toolMsg = (call: ToolCall, content: string): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } });
+    const toolMsg = (call: ToolCall, content: string, isError = false): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now(), ...(isError ? { failed: true } : {}) } });
     const notRun = 'Not run: the user stopped the run. Nothing was done.';
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
         failed.add(call.id);
-        return { msg: toolMsg(call, notRun), isError: true };
+        return { msg: toolMsg(call, notRun, true), isError: true };
       }
       const started = Date.now();
-      let result: { content: string; isError?: boolean; data?: unknown } | undefined;
+      let result: ToolResult | undefined;
       let callCtx = ctx;
       if (coordinatorFirst && call.name === 'run_command') {
         result = { content: 'Nothing was run. In Multitask mode you coordinate and workers do the work: call run_todos_parallel now with each piece in "tasks" (title, agent, complete prompt). Use run_command only to verify after the workers report.', isError: true };
@@ -1497,6 +1530,16 @@ export class AgentRunner {
           text += ' Note: the current model cannot see images — the screenshot is shown to the user only. Switch to a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl) to inspect it, or use web_fetch for the page text.';
         }
       }
+      if (result.images?.length && !result.isError) {
+        if (vision) {
+          captured.push(...result.images.map((im) => ({ callId: call.id, caption: `Image ${im.name} from ${call.name}`, data: im.data })));
+        } else {
+          // Without vision an image read is an error, unless the same call also returned text (other files of a batch).
+          const onlyImages = !text.replace(/^\[image [^\n]*$/gm, '').trim();
+          text += `\n\nError: ${result.images.map((im) => im.name).join(', ')} ${result.images.length > 1 ? 'are images' : 'is an image'} and the current model cannot see images. Switch to a vision model (gemma4, qwen2.5vl) to inspect ${result.images.length > 1 ? 'them' : 'it'}.`;
+          result = { ...result, isError: result.isError || onlyImages };
+        }
+      }
       let content = ctxMgr.clampToolOutput(text);
       if (tool && policy?.hooks?.has('PostToolUse') && !ctx.signal.aborted) {
         const r = await policy.hooks.run(
@@ -1518,7 +1561,7 @@ export class AgentRunner {
       if (result.isError) {
         failed.add(call.id);
       }
-      return { msg: toolMsg(call, content), isError: !!result.isError };
+      return { msg: toolMsg(call, content, !!result.isError), isError: !!result.isError };
     };
     const runOne = async (call: ToolCall): Promise<ChatMessage> => {
       const args = parseArgs(call.arguments);
@@ -1551,18 +1594,21 @@ export class AgentRunner {
         const inflight = cache.get(cacheKey);
         if (inflight) {
           const hit = await inflight;
-          this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: 0, error: false, cached: true });
-          emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: false, durationMs: 0, content: hit.content, cached: true } });
-          return { ...hit, toolCallId: call.id, meta: { timestamp: Date.now() } };
+          if (hit.isError) {
+            failed.add(call.id);
+          }
+          this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: 0, error: hit.isError, cached: true });
+          emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: hit.isError, durationMs: 0, content: hit.msg.content, cached: true } });
+          return { ...hit.msg, toolCallId: call.id, meta: { timestamp: Date.now() } };
         }
         const p = execute(call, tool, args).then(afterEdit).then((r) => {
           if (r.isError) {
             cache.delete(cacheKey);
           }
-          return r.msg;
+          return r;
         });
         cache.set(cacheKey, p);
-        return p;
+        return (await p).msg;
       }
       cache.clear();
       try {
@@ -1597,7 +1643,7 @@ export class AgentRunner {
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args: parseArgs(call.arguments) } });
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
-        results.set(call.id, toolMsg(call, notRun));
+        results.set(call.id, toolMsg(call, notRun, true));
         continue;
       }
       results.set(call.id, await runOne(call));
@@ -1622,11 +1668,11 @@ export class AgentRunner {
     ask: (mandatory: boolean) => Promise<boolean>,
     emit: (e: AgentEvent) => void,
     sessionId: string,
-    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal; mandatory?: boolean }
+    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal; mandatory?: boolean; autoApprove?: boolean }
   ): Promise<boolean> {
     const managed = getManagedPolicy(this.log);
     const base = flooredApproval(managed, kind, mode);
-    const floored = info?.mandatory && base === 'always' ? 'ask' : base;
+    const floored = autoApprovedMode(managed, kind, info?.mandatory && base === 'always' ? 'ask' : base, info);
     const mandatory = !!info?.mandatory || managed.approvals[kind] === 'ask';
     const decided = (ok: boolean, by: string) => {
       audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: ok, by }, info?.root, this.log);

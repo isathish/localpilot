@@ -16,6 +16,7 @@ To change a binding, open **Preferences → Keyboard Shortcuts** in VS Code and 
 | Edit with LocalPilot (inline) | <kbd>⌘⌥K</kbd> | <kbd>Ctrl+Alt+K</kbd> | editor focused and not read-only |
 | Generate terminal command | <kbd>⌘⌥K</kbd> | <kbd>Ctrl+Alt+K</kbd> | terminal focused |
 | Capture screenshot to chat | <kbd>⌘⌥⇧S</kbd> | <kbd>Ctrl+Alt+Shift+S</kbd> | always |
+| Add selection to chat (focuses the chat input when nothing is selected) | <kbd>⌘'</kbd> | <kbd>Ctrl+'</kbd> | editor focused |
 
 <kbd>⌘⇧L</kbd> / <kbd>Ctrl+Shift+L</kbd> replaces VS Code's **Select All Occurrences**, and <kbd>⌘⇧⌥L</kbd> replaces **Open Quick Chat**. To get those back, open **Keyboard Shortcuts**, search for "LocalPilot: Open Chat" or "LocalPilot: New Chat", and change or remove the binding.
 
@@ -75,14 +76,14 @@ Open the Command Palette and type "LocalPilot" to see these.
 
 | Area | Commands |
 |---|---|
-| Chat | Open Chat · Open Chat in Editor · Move Chat To… · LocalPilot Menu… · New Chat · Show Chats… · Chat Actions… · Open in Markdown Reader |
+| Chat | Open Chat · Open Chat in Editor · Move Chat To… · LocalPilot Menu… · New Chat · Show Chats… · Chat Actions… · Open in Markdown Reader · Open Markdown Reader to the Side · Ask LocalPilot About This Document · Export Markdown as HTML · Export Markdown as PDF |
 | Agents | Run Tasks in Parallel… · Stop All Agents · Pause or Resume Agent · Pause All Agents · Resume All Agents |
 | Best-of-N and worktrees | Best of N: Run One Task on Several Models… · Compare Best-of-N Results… · Apply Agent's Changes to Workspace · Discard Agent's Isolated Changes |
 | Changes | Keep All Agent Changes · Undo All Agent Changes |
 | Models | Select Model · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start colibri (stream huge MoE models from disk) |
 | Skills | Install Skill… · Browse Skill Registry (Quick Pick)… · Manage Skills · Reload Skills, Subagents & MCP Servers |
-| Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… |
-| Editor | Edit with LocalPilot (inline) · Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File · Toggle Inline Completions · Generate Commit Message |
+| Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… · Add File/Folder to Chat |
+| Editor | Add Selection to Chat · Edit with LocalPilot (inline) · Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File · Toggle Inline Completions · Generate Commit Message |
 | Terminal and CLI | Open LocalPilot Terminal · Generate Terminal Command… · Explain Terminal Output · Fix Failed Command · Add Terminal Output to Chat · Install 'localpilot' CLI in PATH |
 | Settings and data | Settings · Welcome / Setup · Open Dashboard · Open Memory Notes · Clear Memory Notes… · Clear Chat History… · Show Logs |
 

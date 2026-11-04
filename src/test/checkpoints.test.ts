@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ChangeTracker } from '../agent/changeTracker';
-import { checkpointRef, CheckpointService, isOrphanCheckpoint, pickOutcome, pruneSnapshotDirs, recordCheckpoint, refSafe, scratchKey, SessionCheckpoints } from '../agent/checkpoints';
+import { checkpointRef, CheckpointService, isOrphanCheckpoint, lastCheckpointAt, pickOutcome, pruneSnapshotDirs, recordCheckpoint, refSafe, scratchKey, SessionCheckpoints } from '../agent/checkpoints';
 import { Session } from '../types';
 
 const git = (cwd: string, ...args: string[]) =>
@@ -51,6 +51,16 @@ suite('checkpoints (pure)', () => {
     assert.ok(!isOrphanCheckpoint(`s_${old}ab12`, new Set([`s_${old}ab12`]), now));
     assert.ok(!isOrphanCheckpoint(`s_${old}ab12`, undefined, now), 'the CLI never prunes VS Code chats');
     assert.ok(!isOrphanCheckpoint(`s_${fresh}ab12`, new Set(), now));
+    assert.ok(!isOrphanCheckpoint(`s_${old}ab12`, new Set(), now, now - 60_000), 'an old chat still used in another window is kept');
+    assert.ok(isOrphanCheckpoint(`s_${old}ab12`, new Set(), now, now - 15 * 86_400_000));
+  });
+
+  test('last checkpoint time comes from the run key or the commit date', () => {
+    const t = 1_750_000_000_000;
+    assert.strictEqual(lastCheckpointAt(t, 1_700_000_000), t);
+    assert.strictEqual(lastCheckpointAt(3, 1_700_000_000), 1_700_000_000_000);
+    assert.strictEqual(lastCheckpointAt(t, 1_760_000_000), 1_760_000_000_000);
+    assert.strictEqual(lastCheckpointAt(3, NaN), undefined);
   });
 });
 
@@ -143,6 +153,28 @@ suite('checkpoints (git)', function () {
     assert.strictEqual(s.checkpoints?.history.length, 1);
   });
 
+  test('an old chat with a fresh checkpoint is not pruned when missing from the store', async () => {
+    const now = Date.now();
+    const oldChat = `s_${(now - 30 * 86_400_000).toString(36)}ab12`;
+    const goneChat = `s_${(now - 40 * 86_400_000).toString(36)}cd34`;
+    const head = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'update-ref', checkpointRef(oldChat, now - 60_000), head);
+    git(repo, 'update-ref', checkpointRef(oldChat, now - 30 * 86_400_000), head);
+    // A clean-tree checkpoint with a small run (CLI style) dated by an old commit.
+    const oldCommit = cp
+      .execFileSync('git', ['commit-tree', `${head}^{tree}`, '-m', 'old'], {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_COMMITTER_DATE: `${Math.floor((now - 40 * 86_400_000) / 1000)} +0000` },
+      })
+      .trim();
+    git(repo, 'update-ref', checkpointRef(goneChat, 2), oldCommit);
+    const n = await svc.pruneRefs(repo, (sid, last) => isOrphanCheckpoint(sid, new Set(), now, last));
+    assert.strictEqual(n, 1);
+    assert.strictEqual((await svc.refs(oldChat, repo)).length, 2, 'every ref of the chat still in use is kept');
+    assert.strictEqual((await svc.refs(goneChat, repo)).length, 0);
+  });
+
   test('stale scratch folders and orphaned snapshot folders are pruned', () => {
     const dir = path.join(tmp, 'global', 'checkpoint-scratch', 'x');
     fs.mkdirSync(dir, { recursive: true });
@@ -163,6 +195,7 @@ suite('checkpoints (persisted file snapshots)', () => {
     const log = vscode.window.createOutputChannel('lp-ckpt-test', { log: true });
     const sid = 's_persist';
     const f = path.join(dir, 'p.txt');
+    const g = path.join(dir, 'q.txt');
     try {
       fs.writeFileSync(f, 'P0');
       const t1 = new ChangeTracker(log);
@@ -170,23 +203,47 @@ suite('checkpoints (persisted file snapshots)', () => {
       t1.beginTurn(sid, 7);
       await t1.beforeChange(f, sid);
       fs.writeFileSync(f, 'P1');
+      fs.writeFileSync(g, 'Q0');
+      await t1.beforeChange(g, sid);
+      fs.writeFileSync(g, 'Q1');
+      await t1.flush();
+      assert.strictEqual(fs.readdirSync(path.join(store, sid, '7')).length, 2, 'one file per snapshot');
       t1.dispose();
 
       const t2 = new ChangeTracker(log);
       t2.persistDir = store;
       assert.deepStrictEqual(t2.checkpoints(sid), [7]);
-      assert.strictEqual(await t2.restoreToTurn(sid, 7), 1);
+      assert.strictEqual(await t2.restoreToTurn(sid, 7), 2);
       assert.strictEqual(fs.readFileSync(f, 'utf8'), 'P0');
+      assert.strictEqual(fs.readFileSync(g, 'utf8'), 'Q0');
       assert.deepStrictEqual(t2.checkpoints(sid), []);
-      assert.ok(!fs.existsSync(path.join(store, sid, '7.json')), 'a restored turn is gone from disk too');
+      await t2.flush();
+      assert.ok(!fs.existsSync(path.join(store, sid, '7')), 'a restored turn is gone from disk too');
 
       t2.beginTurn(sid, 8);
       await t2.beforeChange(f, sid);
-      assert.ok(fs.existsSync(path.join(store, sid, '8.json')));
+      await t2.flush();
+      assert.strictEqual(fs.readdirSync(path.join(store, sid, '8')).length, 1);
+      t2.dropTurnsFrom(sid, 8);
+      await t2.flush();
+      assert.ok(!fs.existsSync(path.join(store, sid, '8')));
+      t2.beginTurn(sid, 9);
+      await t2.beforeChange(f, sid);
       t2.forget(sid);
-      await new Promise((r) => setTimeout(r, 200));
+      await t2.flush();
       assert.ok(!fs.existsSync(path.join(store, sid)));
       t2.dispose();
+
+      // Snapshots written in the earlier one-JSON-per-turn layout still load, and move to the new one.
+      fs.mkdirSync(path.join(store, sid), { recursive: true });
+      fs.writeFileSync(path.join(store, sid, '5.json'), JSON.stringify({ turn: 5, files: [[f, 'L0'], [g, null]] }));
+      const t3 = new ChangeTracker(log);
+      t3.persistDir = store;
+      assert.deepStrictEqual(t3.checkpoints(sid), [5]);
+      await t3.flush();
+      assert.ok(!fs.existsSync(path.join(store, sid, '5.json')));
+      assert.strictEqual(fs.readdirSync(path.join(store, sid, '5')).length, 2);
+      t3.dispose();
     } finally {
       log.dispose();
       fs.rmSync(dir, { recursive: true, force: true });

@@ -81,6 +81,8 @@ nav:
     url: /docs/context/
   - title: Screenshots & images
     url: /docs/images/
+  - title: Markdown & PDF viewers
+    url: /docs/viewers/
   - title: MCP servers
     url: /docs/mcp/
   - title: Configuration

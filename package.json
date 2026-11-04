@@ -71,7 +71,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:localpilot.chatPanel"
+    "onWebviewPanel:localpilot.chatPanel",
+    "onWebviewPanel:localpilot.markdown"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -88,6 +89,16 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "localpilot.pdfViewer",
+        "displayName": "LocalPilot PDF Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.pdf"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "viewsContainers": {
@@ -609,6 +620,28 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "localpilot.openMarkdownViewerToSide",
+        "title": "Open Markdown Reader to the Side",
+        "category": "LocalPilot",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "localpilot.askAboutDocument",
+        "title": "Ask LocalPilot About This Document",
+        "category": "LocalPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "localpilot.exportMarkdownHtml",
+        "title": "Export Markdown as HTML",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.exportMarkdownPdf",
+        "title": "Export Markdown as PDF",
+        "category": "LocalPilot"
+      },
+      {
         "command": "localpilot.inlineEdit",
         "title": "Edit with LocalPilot (inline)",
         "category": "LocalPilot",
@@ -634,9 +667,27 @@
       },
       {
         "command": "localpilot.attachFile",
-        "title": "Add File to Chat",
+        "title": "Add File/Folder to Chat",
         "category": "LocalPilot",
         "icon": "$(attach)"
+      },
+      {
+        "command": "localpilot.addToChat",
+        "title": "Add Selection to Chat",
+        "category": "LocalPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "localpilot.openPdf",
+        "title": "Open in PDF Viewer",
+        "category": "LocalPilot",
+        "icon": "$(file-pdf)"
+      },
+      {
+        "command": "localpilot.pdf.attachPageImage",
+        "title": "Attach Current PDF Page as Image",
+        "category": "LocalPilot",
+        "icon": "$(file-media)"
       },
       {
         "command": "localpilot.fixDiagnosticAt",
@@ -1031,6 +1082,18 @@
           "when": "false"
         },
         {
+          "command": "localpilot.pdf.attachPageImage",
+          "when": "activeCustomEditorId == localpilot.pdfViewer"
+        },
+        {
+          "command": "localpilot.exportMarkdownHtml",
+          "when": "resourceLangId == markdown || activeCustomEditorId == localpilot.markdownEditor || activeWebviewPanelId == localpilot.markdown"
+        },
+        {
+          "command": "localpilot.exportMarkdownPdf",
+          "when": "resourceLangId == markdown || activeCustomEditorId == localpilot.markdownEditor || activeWebviewPanelId == localpilot.markdown"
+        },
+        {
           "command": "localpilot.createSkill",
           "when": "false"
         },
@@ -1129,9 +1192,19 @@
           "command": "localpilot.openMarkdownViewer",
           "when": "resourceLangId == markdown",
           "group": "navigation@-1"
+        },
+        {
+          "command": "localpilot.askAboutDocument",
+          "when": "activeCustomEditorId == localpilot.markdownEditor || activeCustomEditorId == localpilot.pdfViewer || activeWebviewPanelId == localpilot.markdown",
+          "group": "navigation@0"
         }
       ],
       "editor/context": [
+        {
+          "command": "localpilot.addToChat",
+          "when": "editorHasSelection",
+          "group": "0_localpilot@0"
+        },
         {
           "submenu": "localpilot.editorSubmenu",
           "group": "0_localpilot"
@@ -1210,6 +1283,16 @@
           "command": "localpilot.openMarkdownViewer",
           "when": "resourceExtname =~ /\\.(md|markdown)$/",
           "group": "localpilot"
+        },
+        {
+          "command": "localpilot.openPdf",
+          "when": "resourceExtname == .pdf",
+          "group": "navigation@9"
+        },
+        {
+          "command": "localpilot.askAboutDocument",
+          "when": "resourceExtname =~ /\\.(md|markdown|pdf)$/",
+          "group": "localpilot@2"
         }
       ]
     },
@@ -1245,6 +1328,12 @@
         "command": "localpilot.captureScreenshot",
         "key": "ctrl+alt+shift+s",
         "mac": "cmd+alt+shift+s"
+      },
+      {
+        "command": "localpilot.addToChat",
+        "key": "ctrl+'",
+        "mac": "cmd+'",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {
@@ -1438,12 +1527,32 @@
           "minimum": 0,
           "description": "Maximum number of chats kept in this workspace's history. The oldest idle chats are removed automatically when a new one is created; pinned and running chats are never removed. 0 keeps everything."
         },
+        "localpilot.history.includeCli": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show chats from the `localpilot` terminal CLI for the same folder in the chat history (marked **CLI**). They are read from `~/.localpilot/workspaces/` (or `LOCALPILOT_DATA_DIR`); continuing one here saves it with this workspace's chats. Takes effect after a window reload."
+        },
         "localpilot.compactionThreshold": {
           "type": "number",
           "default": 0.75,
           "minimum": 0.3,
           "maximum": 0.95,
           "description": "Fraction of the context window at which older messages are pruned and summarised."
+        },
+        "localpilot.compaction.strategy": {
+          "type": "string",
+          "enum": [
+            "agentic",
+            "basic",
+            "off"
+          ],
+          "enumDescriptions": [
+            "The model writes a structured summary of the older messages. Falls back to basic when the summary fails or the transcript is too large for the model.",
+            "No model call: keeps every user message, the last few assistant replies verbatim and one line per earlier tool call. Instant and predictable.",
+            "Never compact automatically. Old tool outputs are still shortened; a conversation that outgrows the context window fails until you start a new chat or run /compact."
+          ],
+          "default": "agentic",
+          "markdownDescription": "How the conversation is compacted when it fills the context window (at `#localpilot.compactionThreshold#`). Before any compaction the full transcript is archived beside the chat, so editing or restoring an earlier message brings the original messages back."
         },
         "localpilot.maxToolOutputChars": {
           "type": "number",
@@ -1476,6 +1585,57 @@
           "minimum": 1000,
           "markdownDescription": "Most characters of PDF text returned per read (the tool output is still subject to `#localpilot.maxToolOutputChars#`)."
         },
+        "localpilot.pdfViewer.pageColors": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "original",
+            "dark",
+            "sepia"
+          ],
+          "enumDescriptions": [
+            "Darken pages in dark themes, follow high-contrast themes exactly, original colours otherwise",
+            "Pages as printed",
+            "Inverted pages for dark rooms (photos look inverted too)",
+            "Warm paper tone"
+          ],
+          "default": "auto",
+          "markdownDescription": "Page colours in the PDF viewer. `auto` darkens pages in dark themes and follows high-contrast themes exactly."
+        },
+        "localpilot.pdfViewer.sidebar": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "outline",
+            "thumbnails",
+            "hidden"
+          ],
+          "default": "auto",
+          "markdownDescription": "What the PDF viewer's sidebar shows when a file opens. `auto` shows the outline when the PDF has one, otherwise page thumbnails, and hides the sidebar when the view is narrower than 640 px."
+        },
+        "localpilot.pdfViewer.defaultZoom": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "page-width",
+            "page-fit",
+            "page-actual"
+          ],
+          "default": "auto",
+          "markdownDescription": "Zoom for PDFs opened for the first time. Files you have read before reopen at their last page and zoom."
+        },
+        "localpilot.pdfViewer.rangeThresholdMB": {
+          "type": "number",
+          "default": 16,
+          "minimum": 1,
+          "markdownDescription": "PDFs larger than this load on demand, page by page, instead of all at once."
+        },
+        "localpilot.pdfViewer.maxFileSizeMB": {
+          "type": "number",
+          "default": 1024,
+          "minimum": 1,
+          "markdownDescription": "Ask before opening PDFs larger than this."
+        },
         "localpilot.markdownViewer.scrollSync": {
           "type": "boolean",
           "default": true,
@@ -1507,6 +1667,19 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Render ```` ```mermaid ```` code blocks as diagrams in the Markdown reader. Mermaid is bundled and works offline."
+        },
+        "localpilot.markdownViewer.exportTheme": {
+          "type": "string",
+          "enum": [
+            "light",
+            "match"
+          ],
+          "enumDescriptions": [
+            "Light colours, whatever the editor theme",
+            "The colours of the current VS Code theme"
+          ],
+          "default": "light",
+          "markdownDescription": "Colours used by **Export as HTML / PDF** in the Markdown reader."
         },
         "localpilot.approvals.terminal": {
           "scope": "application",
@@ -1549,7 +1722,18 @@
             "never"
           ],
           "default": "always",
-          "description": "Approval policy for web search / fetch and MCP tools."
+          "description": "Approval policy for web search / fetch and the browser tools."
+        },
+        "localpilot.approvals.mcp": {
+          "scope": "application",
+          "type": "string",
+          "enum": [
+            "always",
+            "ask",
+            "never"
+          ],
+          "default": "always",
+          "markdownDescription": "Approval policy for tools from MCP servers. A server's `autoApprove` list runs those tools without asking even when this is `ask`; `never` blocks every MCP tool."
         },
         "localpilot.autoMode.enabled": {
           "scope": "application",
@@ -1668,6 +1852,37 @@
           "default": "smart",
           "markdownDescription": "When the agent asks you questions before it starts. Questions appear as a card in the chat: each option explains what choosing it means, one is marked recommended, some allow several picks, and you can always answer in your own words or **Skip** (the agent then goes with its recommendations)."
         },
+        "localpilot.webSearch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Let the agent use the internet: `web_search`, `web_fetch` and the browser tools are offered and `@https://…` mentions are fetched. Off: those tools are removed from every request and URL mentions are refused. Model providers are not affected."
+        },
+        "localpilot.preferredLanguage": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "English",
+            "Arabic",
+            "Portuguese (Brazil)",
+            "Czech",
+            "French",
+            "German",
+            "Hindi",
+            "Hungarian",
+            "Italian",
+            "Japanese",
+            "Korean",
+            "Polish",
+            "Portuguese (Portugal)",
+            "Russian",
+            "Simplified Chinese",
+            "Spanish",
+            "Traditional Chinese",
+            "Turkish"
+          ],
+          "default": "auto",
+          "markdownDescription": "Language the agent answers in, in the chat and the CLI. `auto` adds no instruction (the model usually follows your language). Code, identifiers and commands stay as they are."
+        },
         "localpilot.webSearch.provider": {
           "type": "string",
           "enum": [
@@ -1767,7 +1982,7 @@
                 "type": "number",
                 "minimum": 1,
                 "maximum": 3600,
-                "markdownDescription": "Seconds a tool call to this server may take before it fails."
+                "markdownDescription": "Seconds a request to this server (a tool call, a listing) may take before it fails. Default 60."
               },
               "autoApprove": {
                 "type": "array",

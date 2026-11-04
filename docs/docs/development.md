@@ -24,6 +24,7 @@ npm install
 | `npm test` | Compiles, then runs the Mocha suites in `src/test/` inside a real Extension Development Host (`vscode-test` downloads VS Code on first run). See below. |
 | `npm run check:version` | Checks that `package.json`, `package-lock.json`, `docs/_config.yml` and the `CHANGELOG.md` section agree on the version. |
 | `npm run icons` | Rebuilds the `localpilot.woff` icon font. |
+| `node scripts/update-model-facts.mjs` | Regenerates `src/providers/modelFacts.json` (cloud model limits, capabilities and prices) from models.dev. Run it by hand and commit the result; pass a saved `api.json` to work offline. |
 | `npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md` | Builds the VSIX the same way CI does. |
 
 `npm test` includes end-to-end runs against a real local model (`src/test/e2e.test.ts`). They need Ollama on `localhost:11434` with a tool-capable model: a real tool call writes a file, two sessions run in parallel, and `stop()` aborts a run. Without Ollama they skip themselves, which is what happens in CI. Set `LOCALPILOT_E2E_MODEL=ollama/<tag>` to force a model. The test runner points `LOCALPILOT_TELEMETRY_DIR` at a scratch folder, so the made-up providers the tests create never appear on your real Dashboard.
@@ -85,6 +86,7 @@ The full surface (`LocalPilotApi` in `src/extension.ts`):
 | `screenshotUrl(url, opts?)` | Renders a URL in a local headless Chromium and returns the PNG (base64) with its size. |
 | `inspectUrl(url, opts?)` | DevTools report for a URL — screenshot, console, network, performance and layout checks, optionally after scripted actions. |
 | `chatHost` | `{ viewId, visible, ready }` for the chat view wherever VS Code currently places it (undefined before first shown). |
+| `observeChat(post)` | Receives every message the chat surfaces are sent (drafts, session lists, run events) until the returned disposable is disposed. |
 | `telemetry` | `summary(days)`, `logs(filter)` and `dir` — the local-only metrics behind the Dashboard. |
 
 ## Architecture

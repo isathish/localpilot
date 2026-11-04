@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { resolveWorkspacePath } from '../tools/fs';
 import { Tool } from '../types';
-import { MarkdownViewSession, Source } from './markdown/viewSession';
+import { MarkdownViewSession, ReaderChat, Source } from './markdown/viewSession';
 
 /** Test hooks. */
 export const __test = { serializerRegistered: false };
@@ -25,7 +25,8 @@ export class MarkdownViewer implements vscode.Disposable {
 
   constructor(
     private readonly ctx: vscode.ExtensionContext,
-    private readonly log: vscode.LogOutputChannel
+    private readonly log: vscode.LogOutputChannel,
+    private readonly chat?: ReaderChat
   ) {
     MarkdownViewer.instance = this;
     const r = MarkdownViewer.restored;
@@ -103,6 +104,8 @@ export class MarkdownViewer implements vscode.Disposable {
       ctx: this.ctx,
       log: this.log,
       isCustomEditor: false,
+      panel,
+      chat: this.chat,
       onTitle: (t) => (panel.title = t),
       openMarkdown: (uri, anchor) => this.showFile(uri, panel.viewColumn ?? vscode.ViewColumn.Beside, anchor),
     });

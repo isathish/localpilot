@@ -377,6 +377,7 @@ The model then appears under the matching provider.
 - **Vision:** enables image attachments.
 - **FIM:** used for inline completions (`insert` capability, or coder-model name heuristics).
 - **Context window:** read from model metadata and capped by `localpilot.contextWindow`. LM Studio's `/v1/models` has no context lengths, so for LM Studio (and any local server whose listing has none) LocalPilot asks its native `/api/v0/models`: the length a model is loaded with, else the most it supports. The provider's `contextWindow` is the fallback after that.
+- **Cloud model limits and prices:** when a cloud API's listing does not say, the context window, output limit, vision and reasoning support come from a table of model facts bundled with LocalPilot (taken from [models.dev](https://models.dev), never fetched at runtime). The same table gives prices per million tokens for the cloud presets (OpenAI, Anthropic, Gemini, OpenRouter, Groq, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Moonshot, Alibaba Qwen), so each request's cost is added to the chat's usage: input not served from the cache, output, cache reads (the cache price, else the input price) and cache writes (the cache price, else 1.25 × input). A cost the provider reports itself (OpenRouter) is used instead. Local models are free, and gateways (LiteLLM, OmniRoute, custom endpoints) have no known prices. A local model's output limit is its context window; the request still sends `localpilot.maxOutputTokens`.
 
 ## Recommended models
 

@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
+import { normalizeReadArgs } from '../tools/readArgs';
 import { PermissionSettings } from './settings';
 
 /**
@@ -52,6 +53,7 @@ export const TOOL_ALIASES: Record<string, string[]> = {
   ask_user: ['AskUserQuestion'],
   manage_todos: ['TodoWrite'],
   show_markdown: ['Read'],
+  read_pdf: ['Read'],
   open_browser: ['WebFetch'],
   browser_inspect: ['WebFetch'],
   browser_screenshot: ['WebFetch'],
@@ -397,6 +399,12 @@ export interface MatchContext {
   home?: string;
 }
 
+/** Every path a read_file call will read; undefined when the arguments name none. */
+function readPaths(args: Record<string, unknown>): string[] | undefined {
+  const reqs = normalizeReadArgs(args);
+  return typeof reqs === 'string' ? undefined : reqs.map((r) => r.path);
+}
+
 /** Does one rule apply to this call? `mode` decides how a chained command is judged (every part for allow, any for deny/ask). */
 export function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, ctx: MatchContext, mode: Decision): boolean {
   const names = toolNames(toolName);
@@ -412,6 +420,12 @@ export function ruleMatches(rule: PermissionRule, toolName: string, args: Record
     const agents = (args.tasks as unknown[]).map((t) => (t && typeof t === 'object' && typeof (t as { agent?: unknown }).agent === 'string' ? (t as { agent: string }).agent : ''));
     const one = (a: string) => matchCommandRule(rule.specifier!, a);
     return mode === 'allow' ? agents.length > 0 && agents.every(one) : agents.some(one);
+  }
+  const reads = toolName === 'read_file' ? readPaths(args) : undefined;
+  if (reads) {
+    // A batched read is judged on every file it reads: deny/ask if any matches, allow only if all do.
+    const one = (p: string) => matchPathRule(rule.specifier!, p, ctx.root, ctx.home);
+    return mode === 'allow' ? reads.every(one) : reads.some(one);
   }
   const target = specifierTarget(toolName, args);
   if (!target) {
@@ -489,6 +503,13 @@ export function claudeToolInput(toolName: string, args: Record<string, unknown>)
   const p = args.path;
   if (typeof p === 'string' && out.file_path === undefined) {
     out.file_path = p;
+  }
+  if (toolName === 'read_file') {
+    const reads = readPaths(args);
+    if (reads) {
+      out.file_path ??= reads[0];
+      out.file_paths ??= reads;
+    }
   }
   if (toolName === 'edit_file') {
     out.old_string ??= args.old_text;

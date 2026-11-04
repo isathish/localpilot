@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { parseFrontMatter } from '../agent/frontMatter';
+import { ParsedRule, parseRule, ruleApplies } from './ruleConditions';
 
 /**
  * Project instruction ("memory") files, resolved the way Claude Code does:
@@ -18,6 +18,9 @@ import { parseFrontMatter } from '../agent/frontMatter';
  * `@path` on a line of its own or inside a sentence imports another file (relative to the importing file, `~/` for
  * home), recursively up to IMPORT_DEPTH levels; code blocks and spans are left alone. Imports from repository files
  * must stay inside the workspace (or ~/.claude, ~/.localpilot); credential files are never imported.
+ *
+ * Front matter (see ruleConditions): `disabled: true` / `enabled: false` leaves a file out; `paths:` / `globs:` make it
+ * conditional, injected only when a file in context (message, open editors, working set, attachments) matches.
  */
 
 export const PROJECT_RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules', '.clinerules'];
@@ -38,6 +41,36 @@ export interface InstructionFile {
   name?: string;
   /** Set by buildInstructions when the size cap cut this file short or left it out. */
   note?: 'truncated' | 'omitted';
+  /** Conditional rule: the globs from `paths:` / `globs:` ([] = never applies). */
+  paths?: string[];
+  /** Conditional rule: whether the last build's context paths matched it. */
+  applied?: boolean;
+  /** Turned off with `disabled: true` (only listed with `includeDisabled`). */
+  disabled?: boolean;
+}
+
+/** Parsed rule files, re-read only when their mtime or size changes. */
+const ruleCache = new Map<string, { mtimeMs: number; size: number; rule: ParsedRule }>();
+
+async function readRule(file: string): Promise<ParsedRule | undefined> {
+  try {
+    const st = await fs.stat(file);
+    if (!st.isFile()) {
+      return undefined;
+    }
+    const hit = ruleCache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+      return hit.rule;
+    }
+    const rule = parseRule(await fs.readFile(file, 'utf8'));
+    if (ruleCache.size > 1000) {
+      ruleCache.clear();
+    }
+    ruleCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, rule });
+    return rule;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readIfFile(file: string): Promise<string | undefined> {
@@ -60,8 +93,8 @@ const key = (p: string) => {
 
 const tilde = (p: string, home: string) => (p.startsWith(home) ? `~${p.slice(home.length).replace(/\\/g, '/')}` : p);
 
-/** Every instruction file that exists, in prompt order. */
-export async function collectInstructionFiles(roots: string[], home = os.homedir()): Promise<InstructionFile[]> {
+/** Every instruction file that exists, in prompt order; turned-off files only with `includeDisabled`. */
+export async function collectInstructionFiles(roots: string[], home = os.homedir(), opts: { includeDisabled?: boolean } = {}): Promise<InstructionFile[]> {
   const out: InstructionFile[] = [];
   const seen = new Set<string>();
   const push = async (file: string, label: string, scope: InstructionFile['scope'], name?: string) => {
@@ -70,10 +103,12 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
     if (seen.has(id)) {
       return;
     }
-    if ((await readIfFile(file)) !== undefined) {
-      seen.add(id);
-      out.push(name ? { file, label, scope, name } : { file, label, scope });
+    const rule = await readRule(file);
+    if (rule === undefined || (rule.condition.disabled && !opts.includeDisabled)) {
+      return;
     }
+    seen.add(id);
+    out.push({ file, label, scope, ...(name ? { name } : {}), ...(rule.condition.paths ? { paths: rule.condition.paths } : {}), ...(rule.condition.disabled ? { disabled: true } : {}) });
   };
   /** The rule files of one folder (not recursive), by rule name; files with an empty body are left out. */
   const pushDir = async (dir: string, labelDir: string, scope: InstructionFile['scope']) => {
@@ -85,11 +120,11 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
     }
     const rules: { n: string; name: string }[] = [];
     for (const n of entries) {
-      const raw = await readIfFile(path.join(dir, n));
-      if (raw === undefined) {
+      const rule = await readRule(path.join(dir, n));
+      if (rule === undefined) {
         continue;
       }
-      const { meta, body } = parseFrontMatter(raw);
+      const { meta, body } = rule;
       if (body.trim()) {
         rules.push({ n, name: (typeof meta.name === 'string' && meta.name.trim()) || n.replace(RULE_EXT, '') });
       }
@@ -200,25 +235,27 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
   return restore(out);
 }
 
-/** Front-matter of .mdc / rule files is metadata, not instructions. */
-const stripFrontMatter = (s: string) => s.replace(/^---[\s\S]*?\n---\s*/, '');
-
 /**
  * The concatenated instruction text for the prompt, capped at `maxChars`. The budget goes to the highest-precedence
  * files first (local, then project, ancestors, user), so an oversized user file cannot crowd out the project's rules.
+ * Conditional rules are included only when one of `contextPaths` (workspace-relative, POSIX) matches their globs.
  */
-export async function buildInstructions(roots: string[], opts: { home?: string; maxChars?: number } = {}): Promise<{ text: string; files: InstructionFile[] }> {
+export async function buildInstructions(roots: string[], opts: { home?: string; maxChars?: number; contextPaths?: readonly string[] } = {}): Promise<{ text: string; files: InstructionFile[] }> {
   const home = opts.home ?? os.homedir();
-  const files = await collectInstructionFiles(roots, home);
+  const collected = await collectInstructionFiles(roots, home);
+  const files = collected.map((f) => (f.paths ? { ...f, applied: ruleApplies(f.paths, opts.contextPaths ?? []) } : f));
   const parts: { file: InstructionFile; text: string }[] = [];
   for (const f of files) {
-    const raw = await readIfFile(f.file);
-    if (raw === undefined) {
+    if (f.applied === false) {
+      continue;
+    }
+    const rule = await readRule(f.file);
+    if (rule === undefined) {
       continue;
     }
     // An ancestor (e.g. the monorepo root above an opened package) may also import from its own folder tree.
     const own = f.scope === 'ancestor' ? path.dirname(f.file).replace(/[\\/]\.(claude|localpilot)$/, '') : undefined;
-    const text = (await resolveImports(stripFrontMatter(raw), f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
+    const text = (await resolveImports(rule.body, f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
     if (text) {
       parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${f.name ? `## ${f.name}\n` : ''}${text}` });
     }

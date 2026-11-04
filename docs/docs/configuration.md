@@ -91,10 +91,24 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.compactionThreshold` | `0.75` | Fraction of the context window (0.3–0.95) at which pruning and summarising start |
+| `localpilot.compaction.strategy` | `agentic` | `agentic`: the model summarises older messages (falls back to `basic` when it fails or the transcript is too big for it). `basic`: no model call — every user message, the last 3 assistant replies and one line per tool call are kept. `off`: never compact automatically. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}) |
 | `localpilot.maxToolOutputChars` | `24000` | Maximum characters per tool output; the head and tail are kept |
+| `localpilot.pdf.maxReadSizeMB` | `100` | Largest PDF the agent may read with `read_pdf`, `read_file` or as an attachment |
+| `localpilot.pdf.maxChars` | `60000` | Most characters of PDF text returned per read |
+| `localpilot.pdfViewer.pageColors` | `auto` | Page colours in the [PDF viewer]({{ '/docs/viewers/' | relative_url }}): `auto` (dark pages in dark themes, exact colours in high contrast), `original`, `dark` or `sepia` |
+| `localpilot.pdfViewer.sidebar` | `auto` | PDF viewer sidebar: `auto` (outline if the PDF has one, else thumbnails), `outline`, `thumbnails` or `hidden` |
+| `localpilot.pdfViewer.defaultZoom` | `auto` | Zoom for PDFs opened for the first time: `auto`, `page-width`, `page-fit` or `page-actual` |
+| `localpilot.pdfViewer.rangeThresholdMB` | `16` | PDFs larger than this load page by page instead of all at once |
+| `localpilot.pdfViewer.maxFileSizeMB` | `1024` | Ask before opening PDFs larger than this |
+| `localpilot.markdownViewer.scrollSync` | `true` | Keep the [Markdown reader]({{ '/docs/viewers/' | relative_url }}) and the source editor scrolled together; double-click a block to open its source line |
+| `localpilot.markdownViewer.outlineDepth` | `3` | Deepest heading level (2–6) in the reader's outline and in an inline `[[toc]]` |
+| `localpilot.markdownViewer.frontMatter` | `collapsed` | How YAML front matter shows above a document: `collapsed`, `expanded` or `hidden` |
+| `localpilot.markdownViewer.mermaid` | `true` | Draw ```` ```mermaid ```` blocks as diagrams (bundled, works offline) |
+| `localpilot.markdownViewer.exportTheme` | `light` | Colours of **Export HTML / PDF** from the reader: `light`, or `match` for the current VS Code theme |
 | `localpilot.maxConsecutiveMistakes` | `6` | Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired) and ask for guidance. Any successful tool call resets the count; `0` = no limit |
 | `localpilot.disabledTools` | `[]` | Tools never offered to the model: LocalPilot names (`web_fetch`), Claude Code or Cline names (`Bash`, `execute_command`) or globs (`mcp_*`, `browser_*`). Also under **Settings → Agent & approvals → Tools** |
 | `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
+| `localpilot.preferredLanguage` | `auto` | Language the agent answers in, in the chat and the CLI: English, Arabic, Czech, French, German, Hindi, Hungarian, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Portuguese (Portugal), Russian, Simplified Chinese, Spanish, Traditional Chinese or Turkish. Code, identifiers and commands stay as they are. `auto` adds no instruction |
 | `localpilot.prompts.autoCorrect` | `true` | Correct misspelled file names and code identifiers in your requests against the names in the workspace (`dicee.py` → `dice.py`) before the agent starts. Plain words are never changed; corrections are shown under your message |
 
 ## Skills, plugins & hooks
@@ -122,6 +136,7 @@ See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 | `localpilot.approvals.write` | `always` |
 | `localpilot.approvals.delete` | `ask` |
 | `localpilot.approvals.network` | `always` |
+| `localpilot.approvals.mcp` | `always` |
 
 Values: `always`, `ask`, `never`.
 
@@ -152,7 +167,7 @@ The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, f
     "deny": ["Bash(curl:*)", "Read(.env)", "Read(**/*.pem)"], // always blocked, whatever settings.json allows
     "ask":  ["Bash(git push:*)"]                              // always asks, even if a project allows it
   },
-  "approvals": { "terminal": "ask", "delete": "never" },     // floor: "ask" = never auto-approved, "never" = refused
+  "approvals": { "terminal": "ask", "delete": "never" },     // floor per kind (terminal, write, delete, network, mcp): "ask" = never auto-approved, "never" = refused; mcp falls back to network
   "disableBypassPermissions": true,   // no bypassPermissions/acceptEdits default mode, no Auto mode
   "allowCloudProviders": false,       // only providers on this machine or the private network load
   "allowedProviderHosts": ["localhost", "127.0.0.1", "*.corp.example"],
@@ -209,6 +224,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 |---|---|---|
 | `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). The Chat view moves the same way as with drag-and-drop, so **Move View** and **Reset Location** in the view's context menu keep working. The Agents view and the activity bar icon stay in the Primary Side Bar. Also available as **LocalPilot: Move Chat To…** |
 | `localpilot.sessions.retention` | `50` | Maximum chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats do not count. `0` keeps everything |
+| `localpilot.history.includeCli` | `true` | List sessions from the `localpilot` CLI for the same folder in the chat history, marked **CLI**. They are read from `~/.localpilot/workspaces/` (or `LOCALPILOT_DATA_DIR`). Takes effect after a window reload |
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
 | `localpilot.memory.autoSave` | `true` | After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable project facts (build and test commands, conventions, pitfalls) and append at most three short notes to project memory. Runs after the answer; anything that looks like a credential is dropped. Needs `localpilot.memory.enabled` |
 | `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
@@ -219,6 +235,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 
 | Setting | Default | Description |
 |---|---|---|
+| `localpilot.webSearch.enabled` | `true` | Web access for the agent. `false` removes `web_search`, `web_fetch` and the browser tools from every request and refuses `@https://…` mentions. Model providers are not affected |
 | `localpilot.webSearch.provider` | `duckduckgo` | `duckduckgo` (no key), `searxng`, `brave` or `tavily` |
 | `localpilot.webSearch.searxngUrl` | `http://localhost:8888` | Self-hosted SearXNG URL |
 | `localpilot.webSearch.apiKey` | `""` | Brave or Tavily API key |

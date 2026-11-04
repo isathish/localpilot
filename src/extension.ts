@@ -40,6 +40,8 @@ import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
 import { deleteUri, fsTools } from './tools/fs';
 import { pdfTools } from './tools/pdf';
+import { PdfEditorProvider } from './ui/pdf/pdfEditor';
+import { openPdf } from './ui/pdf/open';
 import { createAnalyzeWorkspaceTool } from './tools/workspace';
 import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
@@ -47,18 +49,21 @@ import { terminalTools } from './tools/terminal';
 import { webTools } from './tools/web';
 import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
-import { ChatController } from './ui/chatController';
+import { ChatController, ToWebview } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { AGENTS_VIEW_ID, ATTACH_FILTERS, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { WorktreeManager } from './agent/worktrees';
+import { cliSessionsDir } from './sessions/cliStorage';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
+import { problemsDraft, readTerminalSelection, selectionLines, selectionRef, terminalSelectionDraft } from './ui/addToChat';
 import { LocalModelChatProvider } from './ui/lmProvider';
 import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { MarkdownCustomEditor } from './ui/markdown/customEditor';
+import { registerMarkdownCommands } from './ui/markdown/commands';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
@@ -159,6 +164,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const workspace = new WorkspaceContext(log);
   const store = new SessionStore(context, log);
   store.maxInMemory = () => getConfig().storage.sessionsInMemory;
+  // Chats started with the `localpilot` CLI in the same folder show up in the history (read-only source).
+  if (getConfig().historyIncludeCli) {
+    store.extraDirs = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => vscode.Uri.file(cliSessionsDir(f.uri.fsPath)));
+    context.subscriptions.push(store.watchExternal(), vscode.window.onDidChangeWindowState((s) => s.focused && store.loadedOk && void store.refreshExternal().catch(() => undefined)));
+  }
   context.subscriptions.push(onConfigChange(() => store.trim()));
   const tracker = new ChangeTracker(log);
   const memory = new MemoryStore(context.globalStorageUri, log, () => getConfig().memoryLimits);
@@ -171,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
   runner.telemetry = telemetry;
+  runner.archive = store;
   runner.autoReviewer = new AutoReviewer(providers, log);
   tracker.persistDir = path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'checkpoints');
   const checkpoints = new CheckpointService({
@@ -321,6 +332,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(terminals, new vscode.Disposable(() => setIntegratedTerminalRunner(undefined)));
   setIntegratedTerminalRunner(terminals);
   workspace.terminalContext = () => terminals.format(terminals.lastExecution());
+  workspace.approveUrl = async (url) => (await vscode.window.showWarningMessage(`Fetch ${url} for the chat?`, { modal: true, detail: 'The page is attached to your message (localpilot.approvals.network is "ask").' }, 'Fetch')) === 'Fetch';
   // A private bin dir with the `localpilot` shim so LocalPilot terminals have the CLI on PATH without installing it.
   void (async () => {
     try {
@@ -347,11 +359,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   tools.registerAll([...fsTools, ...pdfTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
-  const markdownViewer = new MarkdownViewer(context, log);
+  const markdownViewer = new MarkdownViewer(context, log, controller);
   controller.markdownViewer = markdownViewer;
   // Before any awaited work, so readers restored with the window resolve.
-  context.subscriptions.push(markdownViewer, MarkdownViewer.registerSerializer(context), MarkdownCustomEditor.register(context, log));
+  context.subscriptions.push(markdownViewer, MarkdownViewer.registerSerializer(context), MarkdownCustomEditor.register(context, log, controller), ...registerMarkdownCommands(markdownViewer, controller));
   tools.register(createShowMarkdownTool(markdownViewer));
+  const pdfViewer = PdfEditorProvider.register(context, log, {
+    attachRef: (ref) => {
+      view.reveal();
+      return controller.handle({ type: 'attachRef', ref });
+    },
+    draft: (text) => controller.draft(text),
+    attachImage: (img) => {
+      view.reveal();
+      controller.attachImage(img);
+    },
+  });
+  context.subscriptions.push(
+    pdfViewer.disposable,
+    vscode.commands.registerCommand('localpilot.openPdf', async (arg?: unknown) => {
+      const uri = arg instanceof vscode.Uri ? arg : (await vscode.window.showOpenDialog({ canSelectMany: false, openLabel: 'Open PDF', filters: { PDF: ['pdf'] }, defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri }))?.[0];
+      if (uri) {
+        await openPdf(uri);
+      }
+    }),
+    vscode.commands.registerCommand('localpilot.pdf.attachPageImage', () => {
+      if (!pdfViewer.provider.attachActivePageImage()) {
+        void vscode.window.showInformationMessage('Open a PDF in the LocalPilot PDF Viewer first.');
+      }
+    })
+  );
 
   await controller.loaded;
   // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start —
@@ -435,6 +472,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(tuner);
   settingsPanel.tuner = tuner;
   settingsPanel.catalog = catalog;
+  // Settings → Customize switched, created or deleted a rule or command: user-level files have no watcher.
+  settingsPanel.onCustomized = () => {
+    workspace.invalidateInstructions();
+    void commands.refresh();
+  };
   context.subscriptions.push(settingsPanel);
   const lmProvider = new LocalModelChatProvider(providers, log);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', lmProvider), lmProvider);
@@ -1747,8 +1789,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.fixTerminal', terminalAction('Fix', 'This command failed. Find the cause in the workspace, fix it (edit files or suggest the corrected command), then re-run the command with run_command to verify.', 'agent', true));
   cmd('localpilot.attachTerminal', async (terminal?: unknown) => {
     const t = terminal && typeof terminal === 'object' && 'name' in terminal ? (terminal as vscode.Terminal) : vscode.window.activeTerminal;
+    // Selected text wins; `copySelection` only sees the active terminal, so a different clicked one falls back.
+    const selection = !t || t === vscode.window.activeTerminal ? await readTerminalSelection({ readText: () => vscode.env.clipboard.readText(), writeText: (v) => vscode.env.clipboard.writeText(v), copySelection: () => vscode.commands.executeCommand('workbench.action.terminal.copySelection') }) : '';
+    if (selection.trim()) {
+      view.reveal();
+      return controller.addToComposer(terminalSelectionDraft(selection));
+    }
     if (!terminals.lastExecution(t)) {
-      return void vscode.window.showWarningMessage('No terminal command captured yet in this terminal.');
+      return void vscode.window.showWarningMessage('No terminal text selected and no command captured yet in this terminal.');
     }
     view.reveal();
     await controller.handle({ type: 'attachRef', ref: 'terminal' });
@@ -1848,21 +1896,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.fixDiagnosticAt', diagnosticAction('Fix these problems with edit_file, then re-run get_diagnostics on the file to confirm:', 'agent'));
   cmd('localpilot.explainDiagnosticAt', diagnosticAction('Explain these problems and how to fix them:', 'ask'));
 
-  // Editor context-menu actions: send the selection to a fresh session with a task template.
-  const editorAction = (title: string, template: (lang: string) => string, mode: 'agent' | 'ask' = 'ask') => async () => {
+  // The code an editor command acts on: a code action's (uri, range), else the active editor's selection (none when empty).
+  const editorTarget = async (uri?: unknown, range?: unknown): Promise<{ doc: vscode.TextDocument; range?: vscode.Range } | undefined> => {
+    if (uri instanceof vscode.Uri && range instanceof vscode.Range) {
+      return { doc: await vscode.workspace.openTextDocument(uri), range };
+    }
     const ed = vscode.window.activeTextEditor;
-    if (!ed) {
+    return ed && { doc: ed.document, range: ed.selection.isEmpty ? undefined : ed.selection };
+  };
+  const rangeRef = (doc: vscode.TextDocument, range?: vscode.Range): string => {
+    const rel = vscode.workspace.asRelativePath(doc.uri);
+    return range ? selectionRef(rel, selectionLines(range.start.line, range.end.line, range.end.character)) : rel;
+  };
+  // Editor context-menu actions: send the selection to a fresh session with a task template.
+  const editorAction = (title: string, template: (lang: string) => string, mode: 'agent' | 'ask' = 'ask') => async (uri?: unknown, range?: unknown) => {
+    const target = await editorTarget(uri, range);
+    if (!target) {
       return;
     }
-    const rel = vscode.workspace.asRelativePath(ed.document.uri);
-    const sel = ed.selection.isEmpty ? undefined : ed.selection;
-    const ref = sel ? `${rel}#L${sel.start.line + 1}-L${sel.end.line + 1}` : rel;
+    const rel = vscode.workspace.asRelativePath(target.doc.uri);
     view.reveal();
     const s = store.create(getConfig().defaultModel, mode);
     s.title = `${title}: ${rel.split('/').pop()}`;
     await controller.handle({ type: 'selectSession', id: s.id });
-    void controller.send(s.id, template(ed.document.languageId), [ref]);
+    void controller.send(s.id, template(target.doc.languageId), [rangeRef(target.doc, target.range)]);
   };
+  // Cmd/Ctrl+': the selection becomes a chip in the current chat, with the problems inside it drafted below; nothing is sent.
+  cmd('localpilot.addToChat', async (uri?: unknown, range?: unknown) => {
+    const target = await editorTarget(uri, range);
+    view.reveal();
+    if (!target?.range) {
+      return controller.addToComposer('');
+    }
+    const span = selectionLines(target.range.start.line, target.range.end.line, target.range.end.character);
+    const problems = vscode.languages
+      .getDiagnostics(target.doc.uri)
+      .filter((d) => d.range.end.line >= span.start && d.range.start.line <= span.end)
+      .map((d) => ({ line: d.range.start.line, severity: d.severity, message: d.message, source: d.source }));
+    controller.addToComposer(problemsDraft(vscode.workspace.asRelativePath(target.doc.uri), problems), [rangeRef(target.doc, target.range)]);
+  });
   cmd('localpilot.explainSelection', editorAction('Explain', () => 'Explain what this code does, how it fits into the codebase, and point out anything surprising.'));
   cmd('localpilot.fixSelection', editorAction('Fix', () => 'Find and fix bugs or problems in this code. Apply the fix with edit_file and explain the change.', 'agent'));
   cmd('localpilot.refactorSelection', editorAction('Refactor', () => 'Refactor this code for clarity and maintainability without changing behaviour. Apply the changes with edit_file.', 'agent'));
@@ -1914,6 +1986,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     get chatHost() {
       return view.host;
     },
+    observeChat: (post) => controller.attach({ post, visible: () => false }),
     telemetry: { summary: (days) => telemetry.summary(days), logs: (filter) => telemetry.logs(filter), dir: telemetry.dir },
   };
 }
@@ -1949,6 +2022,8 @@ export interface LocalPilotApi {
   inspectUrl(url: string, opts?: { width?: number; height?: number; fullPage?: boolean; mobile?: boolean; waitMs?: number; includeText?: boolean; actions?: { click?: string; type?: { selector: string; text: string }; scroll?: 'top' | 'bottom' | number; eval?: string; wait?: number }[] }): Promise<InspectReport>;
   /** The chat view (`localpilot.chatView`, wherever VS Code currently places it), whether it is visible and whether its UI has booted; undefined before the view is first shown or when the chat lives in an editor tab. */
   readonly chatHost: { viewId: string; visible: boolean; ready: boolean } | undefined;
+  /** Receives every message the chat surfaces are sent (drafts, sessions, run events) until disposed. */
+  observeChat(post: (msg: ToWebview) => void): vscode.Disposable;
   /** Local-only metrics and log mirror behind the Dashboard (nothing leaves the machine). */
   readonly telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: LogLevel; q?: string; limit?: number }): LogEntry[]; readonly dir: string };
 }

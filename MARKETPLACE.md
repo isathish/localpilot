@@ -130,6 +130,7 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 | **Web search & MCP** | DuckDuckGo / SearXNG / Brave / Tavily, readable page fetch, and any MCP server's tools. |
 | **Inline completions** | Ghost text from FIM models such as `qwen2.5-coder` or `codestral`. |
 | **Markdown reader & movable chat** | A distraction-free reader for specs and plans; chat in the Primary or Secondary Side Bar, the Panel or an editor tab. |
+| **PDF viewer** | Offline PDF viewer with find, outline and thumbnails; ask about a page or attach it as an image for a vision model. |
 | **Fits your setup** | Reads `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.claude/skills` and `.claude/agents` as they are. |
 | **Also in VS Code** | `@localpilot` in the built-in Chat view, local models in Copilot's model picker, light-bulb fixes, right-click Explain / Fix / Refactor / Tests / Docs, commit-message generator. |
 

@@ -1,11 +1,13 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ChangeTracker } from '../agent/changeTracker';
+import { inlineEditDecision, recordTelemetry } from '../telemetry/catalog';
 import { getConfig } from '../config';
 import { effectiveContextWindow } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { ChatMessage } from '../types';
+import { expandAroundLine } from './addToChat';
 
 /** One-shot model call without tools; streams text into `onDelta`. */
 export async function quickPrompt(
@@ -101,7 +103,8 @@ export async function inlineEdit(providers: ProviderRegistry, tracker: ChangeTra
   const before = doc.getText(new vscode.Range(new vscode.Position(Math.max(0, range.start.line - 40), 0), range.start));
   const afterLine = Math.min(doc.lineCount - 1, range.end.line + 40);
   const after = doc.getText(new vscode.Range(range.end, doc.lineAt(afterLine).range.end));
-  const rules = await workspace.loadInstructions(4000);
+  // The edited file brings in its conditional rules (`paths:` / `globs:` front matter).
+  const rules = await workspace.loadInstructions(4000, workspace.contextPaths('', [vscode.workspace.asRelativePath(doc.uri, false)]));
   const messages: ChatMessage[] = [
     {
       role: 'system',
@@ -179,7 +182,7 @@ Return the replacement code in a single fenced code block and nothing else — n
   }
   if (!ok) {
     if (isFile) {
-      tracker.keep(sid);
+      tracker.keep(sid, undefined, false);
     }
     return;
   }
@@ -195,7 +198,8 @@ Return the replacement code in a single fenced code block and nothing else — n
       back.replace(doc.uri, inserted, target);
       await vscode.workspace.applyEdit(back);
       if (isFile) {
-        tracker.keep(sid);
+        tracker.keep(sid, undefined, false);
+        recordTelemetry(inlineEditDecision('rejected', target, code));
       }
     } else if (isFile) {
       await tracker.undo(sid);
@@ -267,23 +271,39 @@ export function singleLine(block: string, sep: string): string | undefined {
 
 /** Quick-fix / refactor light-bulb actions. */
 export class LocalPilotCodeActions implements vscode.CodeActionProvider {
-  static readonly kinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.RefactorRewrite];
+  static readonly kinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.RefactorExtract, vscode.CodeActionKind.RefactorRewrite];
 
   provideCodeActions(doc: vscode.TextDocument, range: vscode.Range | vscode.Selection, ctx: vscode.CodeActionContext): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
+    const wanted = (kind: vscode.CodeActionKind) => !ctx.only || ctx.only.contains(kind);
     const diags = ctx.diagnostics.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
-    if (diags.length) {
+    if (diags.length && wanted(vscode.CodeActionKind.QuickFix)) {
       const fix = new vscode.CodeAction(`Fix with LocalPilot: ${diags[0].message.slice(0, 50)}${diags[0].message.length > 50 ? '…' : ''}`, vscode.CodeActionKind.QuickFix);
       fix.command = { command: 'localpilot.fixDiagnosticAt', title: 'Fix with LocalPilot', arguments: [doc.uri, diags.map((d) => ({ line: d.range.start.line + 1, message: d.message }))] };
       fix.diagnostics = diags;
-      fix.isPreferred = false;
+      fix.isPreferred = true;
       actions.push(fix);
-      const explain = new vscode.CodeAction('Explain with LocalPilot', vscode.CodeActionKind.QuickFix);
+      const explain = new vscode.CodeAction('Explain Problem with LocalPilot', vscode.CodeActionKind.QuickFix);
       explain.command = { command: 'localpilot.explainDiagnosticAt', title: 'Explain with LocalPilot', arguments: [doc.uri, diags.map((d) => ({ line: d.range.start.line + 1, message: d.message }))] };
       explain.diagnostics = diags;
       actions.push(explain);
     }
-    if (!range.isEmpty) {
+    // An empty selection stands for the code around the cursor, but only when asked for (Cmd/Ctrl+. or the Refactor menu):
+    // answering the automatic request on every cursor move would put a light bulb on every line.
+    const span = range.isEmpty ? expandAroundLine(range.start.line, doc.lineCount) : undefined;
+    const target = span ? new vscode.Range(span.start, 0, span.end, doc.lineAt(span.end).text.length) : range;
+    const offer = !range.isEmpty || ctx.triggerKind === vscode.CodeActionTriggerKind.Invoke;
+    const action = (title: string, kind: vscode.CodeActionKind, command: string) => {
+      if (offer && wanted(kind)) {
+        const a = new vscode.CodeAction(title, kind);
+        a.command = { command, title, arguments: [doc.uri, target] };
+        actions.push(a);
+      }
+    };
+    action('Add to LocalPilot Chat', vscode.CodeActionKind.QuickFix, 'localpilot.addToChat');
+    action('Explain with LocalPilot', vscode.CodeActionKind.RefactorExtract, 'localpilot.explainSelection');
+    action('Improve with LocalPilot', vscode.CodeActionKind.RefactorRewrite, 'localpilot.refactorSelection');
+    if (!range.isEmpty && wanted(vscode.CodeActionKind.RefactorRewrite)) {
       const edit = new vscode.CodeAction('Edit with LocalPilot…', vscode.CodeActionKind.RefactorRewrite);
       edit.command = { command: 'localpilot.inlineEdit', title: 'Edit with LocalPilot' };
       actions.push(edit);

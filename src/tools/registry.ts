@@ -83,8 +83,9 @@ export function parseArgs(raw: string): Record<string, unknown> {
     return {};
   }
   try {
-    const v = JSON.parse(raw);
-    return typeof v === 'object' && v ? (v as Record<string, unknown>) : {};
+    const v: unknown = JSON.parse(raw);
+    // A bare JSON string ("src/a.ts") is kept as `_raw`, like unquoted text, for tools that accept a single argument.
+    return typeof v === 'string' ? { _raw: v } : typeof v === 'object' && v ? (v as Record<string, unknown>) : {};
   } catch {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
