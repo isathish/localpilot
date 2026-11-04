@@ -27,7 +27,7 @@ export function normalizeWorkspacePath(root: string): string {
  */
 export function cliWorkspaceDir(root: string, dataDir = cliDataDir()): string {
   const hash = crypto.createHash('sha256').update(normalizeWorkspacePath(root)).digest('hex').slice(0, 16);
-  return path.join(dataDir, 'workspaces', hash);
+  return path.join(path.resolve(dataDir), 'workspaces', hash);
 }
 
 /** The CLI's saved chats for a folder (what VS Code lists in its history when `localpilot.history.includeCli` is on). */

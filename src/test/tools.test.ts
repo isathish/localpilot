@@ -299,7 +299,7 @@ suite('Search tools', () => {
     const c = ctx();
     const r = await grepSearchTool.execute({ query: 'greetUser', include_pattern: `${base()}/**` }, c);
     const lines = r.content.split('\n');
-    assert.ok(lines.some((l) => /src\/alpha\.ts:1: ?.*function greetUser/.test(l)), r.content);
+    assert.ok(lines.some((l) => /src[\\/]alpha\.ts:1: ?.*function greetUser/.test(l)), r.content);
     assert.ok(lines.some((l) => /notes\.md:2:/.test(l)), 'case-insensitive: GreetUser in notes.md');
     assert.ok(!lines.some((l) => /node_modules/.test(l)), 'node_modules excluded');
 
@@ -322,7 +322,7 @@ suite('Search tools', () => {
     await fs.mkdir(path.join(sdir, '.github/workflows'), { recursive: true });
     await fs.writeFile(path.join(sdir, '.github/workflows/x.yml'), 'name: ci\n# lp-dotfolder-marker-7731\n');
     const r = await grepSearchTool.execute({ query: 'lp-dotfolder-marker-7731', include_pattern: `${base()}/**` }, ctx());
-    assert.ok(!r.isError && /\.github\/workflows\/x\.yml:2:/.test(r.content), r.content);
+    assert.ok(!r.isError && /\.github[\\/]workflows[\\/]x\.yml:2:/.test(r.content), r.content);
   });
 
   test('findRipgrep finds the ripgrep VS Code ships', async function () {

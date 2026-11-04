@@ -135,7 +135,8 @@ suite('Hook scripts: templates and the Customize Hooks tab', () => {
     const before = await listCustomizations([root], home);
     assert.ok(before.events.includes('Stop'));
     const r = await createItem('hook', 'Stop.sh', 'workspace', [root], home);
-    assert.ok(r.created && r.file === path.join(root, '.localpilot', 'hooks', 'Stop.sh'));
+    // Compare the tail: on Windows the temp folder may come back as its short (RUNNER~1) or long name.
+    assert.ok(r.created && r.file.endsWith(path.join('.localpilot', 'hooks', 'Stop.sh')), r.file);
     const after = await listCustomizations([root], home);
     assert.ok(!after.events.includes('Stop'));
     const item = after.hooks.find((h) => h.file === r.file);

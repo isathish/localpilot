@@ -53,7 +53,7 @@ suite('gateways: terminal commands per shell', () => {
 suite('gateways: Start / Stop Gateway end to end (fake omniroute on PATH)', function () {
   this.timeout(120_000);
   let bin = '';
-  let savedPath = '';
+  let savedPath: string | undefined;
   let savedProviders: unknown;
 
   suiteSetup(async function () {
@@ -69,6 +69,9 @@ suite('gateways: Start / Stop Gateway end to end (fake omniroute on PATH)', func
   });
 
   suiteTeardown(async () => {
+    if (savedPath === undefined) {
+      return; // skipped before anything was changed (Windows): restoring would wipe PATH for every later suite
+    }
     process.env.PATH = savedPath;
     await vscode.workspace.getConfiguration('localpilot').update('providers', savedProviders, vscode.ConfigurationTarget.Global);
     if (bin) {

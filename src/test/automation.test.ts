@@ -113,7 +113,7 @@ suite('Automation and interop', () => {
       } else {
         process.env.LOCALPILOT_SCHEDULER = prev;
       }
-      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   });
 
@@ -142,8 +142,8 @@ suite('Automation and interop', () => {
       assert.deepStrictEqual(reopened.list().map((s) => s.origin).sort(), ['claude-code', 'codex']);
       reopened.dispose();
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-      fs.rmSync(data, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      fs.rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   });
 
@@ -171,7 +171,7 @@ suite('Automation and interop', () => {
       assert.match(watched.pendingSteers()[0]?.content ?? '', /please also update the docs/);
       watched.stop();
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   });
 });

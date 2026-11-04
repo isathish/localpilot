@@ -30,7 +30,7 @@ suite('Proceed While Running (detached commands)', () => {
   });
   teardown(() => {
     setCommandLogDir(prevDir);
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   test('a finished command answers with its full output and exit code', async () => {
@@ -143,7 +143,7 @@ suite('Proceed While Running (detached commands)', () => {
     } finally {
       await cfg.update('terminal.runInIntegratedTerminal', prevIntegrated, vscode.ConfigurationTarget.Global);
       await cfg.update('terminal.autoDetachSeconds', prevDetach, vscode.ConfigurationTarget.Global);
-      fs.rmSync(ws, { recursive: true, force: true });
+      fs.rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   });
 });

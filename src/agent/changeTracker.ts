@@ -7,6 +7,9 @@ import { recordEditDecision } from '../telemetry/catalog';
 import { checkpointFile, CheckpointKind } from './checkpoints';
 import { registerProposedContent } from '../ui/editPreview';
 
+/** Same file: VS Code reports Windows drive letters in lower case and Windows paths are case-insensitive. */
+const samePath = (a: string, b: string): boolean => (process.platform === 'win32' ? vscode.Uri.file(a).fsPath.toLowerCase() === vscode.Uri.file(b).fsPath.toLowerCase() : a === b);
+
 export interface TrackedChange {
   sessionId: string;
   fsPath: string;
@@ -122,7 +125,7 @@ export class ChangeTracker implements vscode.Disposable {
       return;
     }
     let current: string | undefined;
-    const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fsPath);
+    const open = vscode.workspace.textDocuments.find((d) => samePath(d.uri.fsPath, fsPath));
     if (open) {
       current = open.getText();
     } else {
@@ -429,7 +432,7 @@ export class ChangeTracker implements vscode.Disposable {
 
   /** Changes paired with their unsaved editor text, so unsaved edits (Ctrl+I) are measured rather than the disk copy. */
   private withLiveText(changes: TrackedChange[]): { fsPath: string; original?: string; live?: string }[] {
-    return changes.map((c) => ({ fsPath: c.fsPath, original: c.original, live: vscode.workspace.textDocuments.find((d) => d.isDirty && d.uri.fsPath === c.fsPath)?.getText() }));
+    return changes.map((c) => ({ fsPath: c.fsPath, original: c.original, live: vscode.workspace.textDocuments.find((d) => d.isDirty && samePath(d.uri.fsPath, c.fsPath))?.getText() }));
   }
 
   /** Accept the change: forget the snapshot. */
@@ -482,7 +485,7 @@ export class ChangeTracker implements vscode.Disposable {
   /** Highlight lines that differ from the snapshot in all visible editors. */
   private decorateVisible(): void {
     for (const ed of vscode.window.visibleTextEditors) {
-      const tracked = [...this.changes.values()].find((c) => c.fsPath === ed.document.uri.fsPath);
+      const tracked = [...this.changes.values()].find((c) => samePath(c.fsPath, ed.document.uri.fsPath));
       if (!tracked) {
         ed.setDecorations(this.addedDeco, []);
         ed.setDecorations(this.modifiedDeco, []);

@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Reading PDFs works on Windows.** `read_pdf`, PDF attachments and password-protected PDFs failed on Windows because the pdf.js data folders were passed with backslashes, which pdf.js rejects.
+- **Unsaved edits are measured correctly on Windows.** Keeping or undoing an agent's change in a file with unsaved editor edits counted the disk copy instead of the editor's text, because VS Code reports drive letters in lower case and the paths never matched; the editor highlights for tracked changes had the same mismatch.
+
 ## 1.5.3 — 2026-11-04
 
 ### Added
