@@ -19,6 +19,7 @@ import * as nodeFs from 'fs';
 import * as nodeOs from 'os';
 import * as nodePath from 'path';
 import { ModelInfo } from '../src/types';
+import { launchOllama, ollamaModelsOnDisk, ollamaParallelSlots, ollamaServerEnv } from '../src/providers/ollamaLauncher';
 import { claimsChange, extractTextToolCalls, looksLikeBareClaim, looksLikeStaleDelegation, looksLikeUnfulfilledIntent, showsToolCallAsText } from '../src/agent/agentLoop';
 import { postProcess, shouldTrigger } from '../src/ui/inlineCompletion';
 import { ContextManager, effectiveContextWindow, TokenCalibration } from '../src/context/contextManager';
@@ -529,6 +530,29 @@ async function cloudResilience() {
 }
 
 /** Start colibri: finding it, the commands it gets on each platform, prerequisites, port conflicts, model ranking. */
+async function ollamaLauncherChecks() {
+  console.log('\n[Ollama launcher]');
+  const tmp = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-ollama-'));
+  try {
+    const empty = nodePath.join(tmp, 'empty');
+    nodeFs.mkdirSync(nodePath.join(empty, 'manifests', 'registry.ollama.ai', 'library'), { recursive: true });
+    const withModel = nodePath.join(tmp, 'models');
+    nodeFs.mkdirSync(nodePath.join(withModel, 'manifests', 'registry.ollama.ai', 'library', 'gemma4'), { recursive: true });
+    nodeFs.writeFileSync(nodePath.join(withModel, 'manifests', 'registry.ollama.ai', 'library', 'gemma4', '12b'), '{}');
+    check('models on disk: none in an empty manifest tree or a missing folder', !(await ollamaModelsOnDisk([empty, nodePath.join(tmp, 'nope')])));
+    check('models on disk: a manifest file counts (manifests/<registry>/<ns>/<model>/<tag>)', await ollamaModelsOnDisk([empty, withModel]));
+    let spawnedAnything = false;
+    const r = await launchOllama({ baseUrl: 'http://localhost:11434', up: async () => true, onWait: () => (spawnedAnything = true) });
+    check('launch: a server that already answers is left alone', r.ok && r.pid === undefined && !spawnedAnything, r);
+    check('server env: parallel slots follow concurrency, clamped to 1..4', ollamaParallelSlots(0) === 1 && ollamaParallelSlots(3) === 3 && ollamaParallelSlots(16) === 4);
+    const env = ollamaServerEnv({ maxConcurrency: 2, flashAttention: true, kvCacheType: 'q8_0' });
+    const off = ollamaServerEnv({ maxConcurrency: 2, flashAttention: false, kvCacheType: 'q8_0' });
+    check('server env: flash attention brings its KV cache type; off drops it', env.OLLAMA_NUM_PARALLEL === '2' && env.OLLAMA_FLASH_ATTENTION === '1' && env.OLLAMA_KV_CACHE_TYPE === 'q8_0' && off.OLLAMA_FLASH_ATTENTION === '0' && !('OLLAMA_KV_CACHE_TYPE' in off));
+  } finally {
+    nodeFs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function colibriSetupChecks() {
   console.log('\n[colibri setup]');
   const has = (...files: string[]) => (p: string) => files.includes(p);
@@ -2374,6 +2398,7 @@ async function redisStorage() {
   await cloudProviders();
   await cloudAgentE2E();
   await cloudResilience();
+  await ollamaLauncherChecks();
   await colibriSetupChecks();
   await gatewayChecks();
   await pureLogic();

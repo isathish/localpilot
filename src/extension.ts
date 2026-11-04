@@ -22,7 +22,7 @@ import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
 import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
 import { autoDetectProviders } from './providers/discovery';
-import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaUp } from './providers/modelManager';
+import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ollamaUp } from './providers/modelManager';
 import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
 import { secretRefs } from './providers/cloud';
@@ -192,6 +192,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // Keeps the local model server and (when enabled) Redis running while VS Code is open; see ServiceSupervisor.
   const isLocalUrl = (u: string) => /^\w+:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(u);
   const ollamaCfg = () => getConfig().providers.find((p) => p.type === 'ollama' && isLocalUrl(p.baseUrl));
+  // A stopped Ollama that has models downloaded is one the user works with: keep it running from the start.
+  let ollamaHasModels = false;
+  void ollamaModelsOnDisk().then((v) => (ollamaHasModels = v));
+  // A run that needs a model on a local Ollama that is installed but stopped starts it instead of failing.
+  providers.startLocalServer = async (p) => {
+    if (p.type !== 'ollama' || !isLocalUrl(p.baseUrl) || !(await findOllamaBinary())) {
+      return false;
+    }
+    const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'LocalPilot: starting Ollama…' }, () => modelManager.startOllama());
+    if (job.status !== 'done') {
+      log.warn(`Could not start Ollama: ${job.error ?? job.status}`);
+      return false;
+    }
+    log.info('Started Ollama for a request that needed it');
+    return true;
+  };
   const supervisor = new ServiceSupervisor(
     [
       {
@@ -200,8 +216,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         wanted: (seenUp) => {
           const cfg = getConfig();
           const o = ollamaCfg();
-          // Only a local Ollama LocalPilot actually uses: seen running this session, or serving the default model.
-          return cfg.supervisor.enabled && !!o && isLocalUrl(o.baseUrl) && (seenUp || cfg.defaultModel.startsWith(`${o.id}/`));
+          // Only a local Ollama LocalPilot actually uses: seen running this session, serving the default model, or
+          // holding downloaded models (so a machine where it is stopped gets it back without a manual start).
+          return cfg.supervisor.enabled && !!o && isLocalUrl(o.baseUrl) && (seenUp || cfg.defaultModel.startsWith(`${o.id}/`) || ollamaHasModels);
         },
         isUp: async () => {
           const o = ollamaCfg();
@@ -1073,6 +1090,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const r = await runAutoSetup(o);
     switch (r.status) {
       case 'already':
+        if (r.started) {
+          void vscode.window.showInformationMessage(`Started Ollama: ${plural(r.models, 'local model')} ready.`, 'Open chat').then((p) => p && view.reveal());
+          return r;
+        }
         void vscode.window.showInformationMessage(`LocalPilot already has ${plural(r.models, 'local model')}. Install more from the catalog in Settings → Models.`, 'Open Models').then((p) => p && settingsPanel.show('settings', 'models'));
         return r;
       case 'installed':

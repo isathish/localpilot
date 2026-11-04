@@ -78,6 +78,9 @@ Downloads run through the runtime (`ollama pull`, `docker model pull`, `lms get`
 
 ## "Ollama did not answer" after automatic setup
 
+LocalPilot starts an installed Ollama by itself (when VS Code opens, and whenever a request needs it). If it still reports Ollama as down:
+
+
 - **macOS and Windows:** the Ollama app has to finish starting (menu-bar or tray icon). A first launch on Windows can take a minute and may show a welcome window; close it. LocalPilot waits up to 30 seconds (90 seconds on Windows). After that, press **Start** in Settings → Models, or run `ollama serve` in a terminal.
 - **Ollama runs but shows as down:** Ollama may listen on `127.0.0.1` while `localhost` resolves to IPv6. LocalPilot retries on the IPv4 loopback automatically. Setting the provider URL to `http://127.0.0.1:11434` makes it explicit.
 - **Linux:** the official installer registers a `systemd` service. `systemctl status ollama` shows whether it is up.

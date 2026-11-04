@@ -67,6 +67,8 @@ localpilot skill install anthropics/skills/skills/pdf
 localpilot skill search "write a plan" --install
 ```
 
+An installed Ollama that is not running is started by the CLI when a run or `localpilot models` needs it (`Starting Ollama at http://localhost:11434…` on stderr); it keeps running afterwards, as it does when VS Code starts it.
+
 ### Subcommands
 
 | Command | What it does |

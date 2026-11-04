@@ -2060,7 +2060,7 @@
     ));
     sec.appendChild(el('h2', 'sub', 'Background services'));
     sec.appendChild(card(
-      field('supervisor.enabled', 'Keep local services running', 'While VS Code is open, <b>Ollama</b> is restarted if it stops after having run this session (or serves the default model), and <b>Redis</b> when Redis storage is on.', 'toggle'),
+      field('supervisor.enabled', 'Keep local services running', 'While VS Code is open, <b>Ollama</b> is started and kept running when it has models downloaded, serves the default model or has run this session, and <b>Redis</b> when Redis storage is on. A request that needs a stopped Ollama starts it either way.', 'toggle'),
       field('supervisor.intervalSeconds', 'Check every', 'Seconds between checks.', 'number', { min: 15, max: 3600, step: 15 }),
       field('supervisor.autoInstall', 'Install Ollama without asking', 'When no model server is found at startup, install Ollama and a starter model that fits this machine (several GB, shown in a cancellable notification). Off: the one-click setup is offered instead.', 'toggle')
     ));

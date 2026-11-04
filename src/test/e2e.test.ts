@@ -62,11 +62,24 @@ suite('LocalPilot end-to-end (real local model)', () => {
     root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
     assert.ok(root, 'tests need a workspace folder (see .vscode-test.mjs)');
 
+    // Ollama not running: start it the way users get it started (Set Up Models Automatically starts an installed
+    // Ollama and keeps its models). With LOCALPILOT_E2E_INSTALL=1 a missing Ollama is installed with a starter model
+    // too. The suite skips only when there is nothing to start.
+    const install = process.env.LOCALPILOT_E2E_INSTALL === '1';
     if (!(await ollamaUp())) {
-      this.skip();
+      const r = await api.autoSetupModels({ installRuntime: install });
+      console.log(`      e2e: Ollama was not running; setup → ${JSON.stringify(r)}`);
+      if (!(await ollamaUp())) {
+        this.skip();
+      }
     }
-    const models = await api.listModels();
+    let models = await api.listModels();
     const forced = process.env.LOCALPILOT_E2E_MODEL;
+    if (forced?.startsWith('ollama/') && !models.some((m) => m.id === forced) && install) {
+      // The requested test model is not downloaded yet: pull it.
+      assert.ok(await api.installModel('ollama', forced.slice('ollama/'.length)), `could not pull ${forced}`);
+      models = await api.listModels();
+    }
     // Prefer the largest tool-capable Ollama model (parameter count parsed from the tag, e.g. ":7b").
     const size = (id: string) => Number(/(\d+(?:\.\d+)?)b\b/i.exec(id)?.[1] ?? 0);
     const candidates = models.filter((m) => m.providerId === 'ollama').sort((a, b) => Number(b.supportsTools) - Number(a.supportsTools) || size(b.id) - size(a.id));

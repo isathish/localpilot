@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as http from 'http';
+import * as net from 'net';
 import { AddressInfo } from 'net';
 import * as vscode from 'vscode';
 import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFootprintGb, starterPlan } from '../providers/catalog';
@@ -718,6 +719,84 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       oldSrv.close();
       newSrv.close();
       await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('a stopped local Ollama is started when a run needs it, once; a local model never silently becomes a cloud one', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    // A port where nothing listens yet: "Ollama is installed but stopped". Starting it opens a proxy to the fake server.
+    const port = await new Promise<number>((resolve) => {
+      const s = net.createServer().listen(0, '127.0.0.1', () => {
+        const p = (s.address() as AddressInfo).port;
+        s.close(() => resolve(p));
+      });
+    });
+    const sockets = new Set<net.Socket>();
+    let proxy: net.Server | undefined;
+    const target = Number(new URL(srv.url).port);
+    const startProxy = () =>
+      new Promise<void>((resolve) => {
+        proxy = net.createServer((c) => {
+          const up = net.connect(target, '127.0.0.1');
+          sockets.add(c).add(up);
+          c.on('error', () => undefined);
+          up.on('error', () => undefined);
+          c.pipe(up).pipe(c);
+        });
+        proxy.listen(port, '127.0.0.1', () => resolve());
+      });
+    const stopProxy = () => new Promise<void>((resolve) => (proxy ? (sockets.forEach((x) => x.destroy()), proxy.close(() => resolve())) : resolve()));
+    // A stand-in cloud model, so a fallback off the machine would be possible.
+    const cloud = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ data: req.url?.startsWith('/v1/models') ? [{ id: 'cloud-model', object: 'model' }] : [] }));
+    });
+    await new Promise<void>((r) => cloud.listen(0, '127.0.0.1', () => r()));
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    let starts = 0;
+    reg.startLocalServer = async (p) => {
+      assert.strictEqual(p.id, 'fake', 'the provider of the wanted model is started');
+      starts++;
+      await new Promise((r) => setTimeout(r, 200));
+      await startProxy();
+      return true;
+    };
+    try {
+      await cfg.update(
+        'providers',
+        [
+          { id: 'fake', type: 'ollama', baseUrl: `http://127.0.0.1:${port}` },
+          { id: 'cloudy', type: 'openai', baseUrl: `http://127.0.0.1:${(cloud.address() as AddressInfo).port}/v1`, cloud: true },
+        ],
+        vscode.ConfigurationTarget.Global
+      );
+      await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.ok(!(await reg.listModels(true)).some((m) => m.providerId === 'fake'), 'the local server starts out stopped');
+      const [a, b] = await Promise.all([reg.route({}), reg.route({})]);
+      assert.strictEqual(starts, 1, 'two runs at once start it once');
+      assert.strictEqual(a.model.id, 'fake/qwen2.5-coder:14b');
+      assert.ok(!a.fallback && b.model.id === a.model.id, 'both runs get the model they asked for');
+
+      // Stopped again, and this time it cannot be started: the run says so instead of moving to the cloud model.
+      await stopProxy();
+      reg.startLocalServer = async () => false;
+      await reg.listModels(true);
+      await assert.rejects(reg.route({}), (e: Error) => /qwen2\.5-coder:14b runs on fake/.test(e.message) && /could not be started/.test(e.message) && /does not switch a local model to a cloud one/.test(e.message));
+      // Auto (no default) may still use the cloud model when nothing local can run: that is documented behaviour.
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.strictEqual((await reg.route({})).model.id, 'cloudy/cloud-model');
+    } finally {
+      reg.dispose();
+      await stopProxy();
+      srv.close();
+      cloud.close();
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
     }
   });
 });

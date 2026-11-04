@@ -31,7 +31,9 @@ import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { McpManager } from '../mcp/mcpManager';
-import { ProviderRegistry } from '../providers/registry';
+import { createProvider, ProviderRegistry } from '../providers/registry';
+import { findOllamaBinary, launchOllama, ollamaServerEnv } from '../providers/ollamaLauncher';
+import { isRemoteUrl } from '../providers/cloud';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
@@ -540,6 +542,22 @@ interface Core {
 async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string) => Promise<boolean>): Promise<Core> {
   const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
   const providers = new ProviderRegistry(log);
+  // A run that needs a model on a local Ollama that is installed but stopped starts it (same as in VS Code).
+  providers.startLocalServer = async (p) => {
+    if (p.type !== 'ollama' || isRemoteUrl(p.baseUrl) || !(await findOllamaBinary())) {
+      return false;
+    }
+    const base = p.baseUrl.replace(/\/+$/, '');
+    process.stderr.write(dim(`Starting Ollama at ${base}…\n`));
+    const cfg = getConfig();
+    const r = await launchOllama({
+      baseUrl: base,
+      up: () => createProvider({ id: 'probe', type: 'ollama', baseUrl: base }).healthCheck().catch(() => false),
+      env: ollamaServerEnv({ maxConcurrency: cfg.parallel.maxConcurrency, flashAttention: cfg.ollama.flashAttention, kvCacheType: cfg.ollama.kvCacheType }),
+    });
+    process.stderr.write(r.ok ? dim('Ollama is running.\n') : `${red('✖')} Could not start Ollama: ${r.error ?? 'unknown error'}\n`);
+    return r.ok;
+  };
   const tools = new ToolRegistry();
   const skills = new SkillManager(log, path.join(__dirname, '..', 'skills'));
   const workspace = new WorkspaceContext(log);
@@ -760,7 +778,8 @@ function modelLine(m: ModelInfo, def: string): string {
 }
 
 async function cmdModels(core: Core): Promise<void> {
-  const models = await core.providers.listModels(true);
+  await core.providers.listModels(true);
+  const models = await core.providers.listModelsStartingLocal();
   const def = getConfig().defaultModel;
   if (!models.length) {
     console.log(`${red('✖')} No models found. Start Ollama (ollama serve), LM Studio, llama.cpp or vLLM, or add a cloud API: localpilot providers add openai --key <key>   (all: localpilot providers presets)`);
@@ -1061,6 +1080,8 @@ async function cmdDoctor(core: Core): Promise<void> {
   const org = getManagedPolicy();
   console.log(`\n${bold('Organization policy')}\n  ${org.source ? `${org.source}${org.message ? dim(` — ${org.message}`) : ''}\n${describePolicy(org).map((l) => `  ${amber('●')} ${l}`).join('\n') || dim('  (no restrictions)')}` : dim(`none (${managedPolicyPath()})`)}`);
   console.log(`\n${bold('Providers')}`);
+  // An installed Ollama that is stopped is started here too, so the list shows what runs will actually get.
+  await core.providers.listModelsStartingLocal().catch(() => undefined);
   await listProviders(STYLE, (l) => console.log(`  ${l}`), { compact: true });
   console.log(`\n${bold('Workspace')}\n  ${core.workspace.root ?? dim('(none)')}`);
   console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);

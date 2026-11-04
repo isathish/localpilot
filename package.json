@@ -1551,7 +1551,7 @@
         "localpilot.supervisor.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Keep local support services running while VS Code is open. **Ollama** (local only) is restarted if it stops after having run this session, or if it serves `#localpilot.defaultModel#`. **Redis** is restarted when `#localpilot.storage.redis.enabled#` is on, using its Docker container or a native `redis-server`. After 4 failed restarts in a row LocalPilot stops trying and tells you. See **LocalPilot: Show Background Services**."
+          "markdownDescription": "Keep local support services running while VS Code is open. **Ollama** (local only) is started when it has models downloaded, serves `#localpilot.defaultModel#` or has run this session, and restarted if it stops. A run that needs a stopped local Ollama also starts it, whatever this setting. **Redis** is restarted when `#localpilot.storage.redis.enabled#` is on, using its Docker container or a native `redis-server`. After 4 failed restarts in a row LocalPilot stops trying and tells you. See **LocalPilot: Show Background Services**."
         },
         "localpilot.supervisor.intervalSeconds": {
           "type": "number",

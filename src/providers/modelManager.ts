@@ -13,6 +13,9 @@ import { isRemoteUrl, resolveApiKey } from './cloud';
 import { withTimeout } from './http';
 import { createProvider, ProviderRegistry } from './registry';
 import { getSystemProfile, SystemProfile } from './system';
+import { findOllamaBinary, findOllamaTrayApp, launchOllama, ollamaModelsOnDisk, ollamaParallelSlots, ollamaServerEnv, runQuiet, USER_OLLAMA_DIR } from './ollamaLauncher';
+
+export { findOllamaBinary, ollamaModelsOnDisk, USER_OLLAMA_DIR };
 
 export interface RuntimeStatus {
   target: InstallTarget;
@@ -49,7 +52,7 @@ export interface ModelJob {
 }
 
 export type AutoSetupResult =
-  | { status: 'already'; models: number }
+  | { status: 'already'; models: number; /** A stopped runtime was started and already had models. */ started?: boolean }
   | { status: 'installed'; target: InstallTarget; agent: string; completion?: string; vision?: string }
   | { status: 'needs-runtime'; runtimes: RuntimeStatus[] }
   | { status: 'cancelled' }
@@ -57,40 +60,7 @@ export type AutoSetupResult =
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function which(cmd: string, args: string[] = ['--version'], timeoutMs = 4000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let child: cp.ChildProcess;
-    try {
-      child = cp.spawn(cmd, args, { stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
-    } catch {
-      return resolve(false);
-    }
-    const t = setTimeout(() => {
-      child.kill();
-      resolve(false);
-    }, timeoutMs);
-    child.on('error', () => {
-      clearTimeout(t);
-      resolve(false);
-    });
-    child.on('close', (code) => {
-      clearTimeout(t);
-      resolve(code === 0);
-    });
-  });
-}
-
-/** Where LocalPilot installs Ollama itself when no package manager / root is available (user-space, no sudo). */
-export const USER_OLLAMA_DIR = path.join(os.homedir(), '.local', 'share', 'localpilot', 'ollama');
-
-const OLLAMA_LOCATIONS: Record<string, string[]> = {
-  win32: [
-    `${process.env['LOCALAPPDATA'] ?? ''}\\Programs\\Ollama\\ollama.exe`,
-    `${process.env['PROGRAMFILES'] ?? 'C:\\Program Files'}\\Ollama\\ollama.exe`,
-  ],
-  darwin: ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama', path.join(os.homedir(), 'Applications/Ollama.app/Contents/Resources/ollama')],
-  linux: ['/usr/local/bin/ollama', '/usr/bin/ollama', '/snap/bin/ollama', path.join(USER_OLLAMA_DIR, 'bin', 'ollama')],
-};
+const which = runQuiet;
 
 /** Streams a download to disk with byte progress; follows redirects (ollama.com → GitHub releases). */
 async function downloadFile(url: string, dest: string, onProgress: (done: number, total?: number) => void, signal?: AbortSignal): Promise<void> {
@@ -138,39 +108,6 @@ function runProcess(cmd: string, args: string[], opts: { timeoutMs?: number; sig
       resolve({ code, out });
     });
   });
-}
-
-/** `ollama` on PATH, or its well-known install location (a just-installed binary is not on this process's PATH yet). */
-export async function findOllamaBinary(): Promise<string | undefined> {
-  if (await which('ollama')) {
-    return 'ollama';
-  }
-  for (const p of OLLAMA_LOCATIONS[process.platform] ?? OLLAMA_LOCATIONS.linux) {
-    try {
-      await fs.access(p);
-      return p;
-    } catch {
-      /* next */
-    }
-  }
-  return undefined;
-}
-
-/** Windows tray app ("ollama app.exe") that owns the server; looked up next to each known CLI location, PATH or not. */
-async function findOllamaTrayApp(): Promise<string | undefined> {
-  if (process.platform !== 'win32') {
-    return undefined;
-  }
-  for (const p of OLLAMA_LOCATIONS.win32) {
-    const app = path.join(path.dirname(p), 'ollama app.exe');
-    try {
-      await fs.access(app);
-      return app;
-    } catch {
-      /* next */
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -275,6 +212,21 @@ export class ModelManager implements vscode.Disposable {
 
   cancel(jobId: string): void {
     this.aborts.get(jobId)?.abort();
+  }
+
+  /** Resolves with the job once it is no longer running. */
+  private waitFor(jobId: string): Promise<ModelJob> {
+    return new Promise((resolve) => {
+      const check = () => {
+        const job = this.jobs.get(jobId);
+        if (!job || job.status !== 'running') {
+          sub.dispose();
+          resolve(job ?? ({ id: jobId, kind: 'start', target: 'ollama', model: 'Ollama', status: 'error', progress: -1, detail: 'Failed', error: 'The job was cleared', startedAt: Date.now() } satisfies ModelJob));
+        }
+      };
+      const sub = this._onDidChange.event(check);
+      check();
+    });
   }
 
   // ------------------------------------------------------------------ runtimes
@@ -526,80 +478,35 @@ export class ModelManager implements vscode.Disposable {
    * flash attention on, so without it the cache type is left to the server.
    */
   static ollamaServerEnv(): Record<string, string> {
-    const { flashAttention, kvCacheType } = getConfig().ollama;
-    return {
-      OLLAMA_NUM_PARALLEL: String(ModelManager.ollamaParallelSlots()),
-      OLLAMA_FLASH_ATTENTION: flashAttention ? '1' : '0',
-      ...(flashAttention ? { OLLAMA_KV_CACHE_TYPE: kvCacheType } : {}),
-    };
+    const cfg = getConfig();
+    return ollamaServerEnv({ maxConcurrency: cfg.parallel.maxConcurrency, flashAttention: cfg.ollama.flashAttention, kvCacheType: cfg.ollama.kvCacheType });
   }
 
   /** Parallel slots to ask Ollama for: the configured subagent concurrency, clamped to what a local machine can hold. */
   static ollamaParallelSlots(): number {
-    return Math.max(1, Math.min(4, Math.round(getConfig().parallel.maxConcurrency || 1)));
+    return ollamaParallelSlots(getConfig().parallel.maxConcurrency);
   }
 
   /** Starts the Ollama server (menu-bar app on macOS/Windows, `ollama serve` otherwise) with parallel slots and waits until it answers. */
   async startOllama(): Promise<ModelJob> {
+    // One start at a time: the router, the supervisor and a setup can all ask for it within a second.
+    const running = this.activeJobs.find((j) => j.kind === 'start' && j.target === 'ollama');
+    if (running) {
+      return this.waitFor(running.id);
+    }
     const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…');
     const { baseUrl } = this.ollamaBase();
-    const up = () => ollamaUp(baseUrl);
-    try {
-      if (await up()) {
-        return this.finish(job, 'done');
-      }
-      const env = { ...process.env, ...ModelManager.ollamaServerEnv() };
-      const bin = await findOllamaBinary();
-      let launched = false;
-      if (process.platform === 'darwin') {
-        // The menu-bar app reads its environment from launchd, not from `open`.
-        for (const [k, v] of Object.entries(ModelManager.ollamaServerEnv())) {
-          await which('launchctl', ['setenv', k, v], 4000);
-        }
-        launched = await which('open', ['-a', 'Ollama'], 6000);
-      } else if (process.platform === 'win32') {
-        // The tray app owns the server on Windows. Prefer it even when `ollama` is on PATH — a bare `ollama serve`
-        // next to a running tray app fails with "address already in use" and leaves a console window behind.
-        const app = (bin && bin !== 'ollama' ? path.join(path.dirname(bin), 'ollama app.exe') : undefined) ?? (await findOllamaTrayApp());
-        if (app) {
-          launched = await fs.access(app).then(() => {
-            const child = cp.spawn(app, [], { detached: true, stdio: 'ignore', env, windowsHide: true });
-            child.on('error', () => undefined);
-            child.unref();
-            return true;
-          }, () => false);
-        }
-      }
-      if (!launched && bin) {
-        try {
-          const child = cp.spawn(bin, ['serve'], { detached: true, stdio: 'ignore', env, shell: process.platform === 'win32' && bin === 'ollama', windowsHide: true });
-          child.on('error', () => undefined);
-          child.unref();
-          this.servePid = child.pid;
-          launched = true;
-        } catch {
-          launched = false;
-        }
-      }
-      if (!launched) {
-        throw new Error('Could not launch Ollama. Install it from https://ollama.com/download');
-      }
-      // A first launch on Windows unpacks runtimes and may show a welcome window before the server listens.
-      const waitMs = process.platform === 'win32' ? 90_000 : 30_000;
-      for (let i = 0; i * 500 < waitMs; i++) {
-        if (this.aborts.get(job.id)?.signal.aborted) {
-          return this.finish(job, 'cancelled');
-        }
-        await sleep(500);
-        if (await up()) {
-          return this.finish(job, 'done');
-        }
-        this.update(job, { detail: `Waiting for Ollama at ${baseUrl}… (${((i + 1) / 2).toFixed(0)}s)` });
-      }
-      throw new Error(`Ollama did not answer at ${baseUrl} within ${waitMs / 1000}s${process.platform === 'win32' ? ' — check the Ollama tray icon; if a welcome window is open, close it and try Start again' : ''}`);
-    } catch (e) {
-      return this.finish(job, 'error', e instanceof Error ? e.message : String(e));
+    const r = await launchOllama({
+      baseUrl,
+      up: () => ollamaUp(baseUrl),
+      env: ModelManager.ollamaServerEnv(),
+      signal: this.aborts.get(job.id)?.signal,
+      onWait: (sec) => this.update(job, { detail: `Waiting for Ollama at ${baseUrl}… (${sec.toFixed(0)}s)` }),
+    });
+    if (r.pid) {
+      this.servePid = r.pid;
     }
+    return r.ok ? this.finish(job, 'done') : this.finish(job, r.cancelled ? 'cancelled' : 'error', r.error);
   }
 
   /** pid of an `ollama serve` LocalPilot spawned itself, so it can be restarted with new settings. */
@@ -847,6 +754,7 @@ export class ModelManager implements vscode.Disposable {
       }
       this.update(job, { detail: 'Looking for Ollama, Docker Model Runner and LM Studio…' });
       let runtimes = await this.detectRuntimes();
+      let startedNow = false;
       let target: InstallTarget | undefined = opts.target && runtimes.find((r) => r.target === opts.target && r.running) ? opts.target : undefined;
       target ??= runtimes.find((r) => r.target === 'ollama' && r.running)?.target ?? runtimes.find((r) => r.running && r.target !== 'lmstudio')?.target;
       if (!target) {
@@ -856,6 +764,7 @@ export class ModelManager implements vscode.Disposable {
           const started = await this.startOllama();
           if (started.status === 'done') {
             target = 'ollama';
+            startedNow = true;
           }
         } else if (opts.installRuntime) {
           this.update(job, { detail: 'Installing Ollama…' });
@@ -877,6 +786,14 @@ export class ModelManager implements vscode.Disposable {
         return { status: 'needs-runtime', runtimes };
       }
       await this.ensureProvider(target, runtimes);
+      // A runtime that was only stopped may already hold models: starting it was all that was missing.
+      if (startedNow && !opts.force) {
+        const ready = (await this.registry.listModels(true)).filter((m) => !m.remote);
+        if (ready.length) {
+          this.finish(job, 'done');
+          return { status: 'already', models: ready.length, started: true };
+        }
+      }
       const plan = await this.plan(target);
       const providerId = runtimes.find((r) => r.target === target)?.providerId ?? (await this.detectRuntimes()).find((r) => r.target === target)?.providerId;
       const installed = await this.registry.listModels(true);

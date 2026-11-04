@@ -12,7 +12,7 @@ LocalPilot is a coding agent for VS Code. It reads your project, edits files, ru
 
 - **First-run setup.** A three-step welcome checks the usual local ports, lists the servers it found and their models, recommends a model, and sets an approval preset. No server running? It links to adding a custom endpoint or a cloud API. See [Getting started]({{ '/docs/getting-started/' | relative_url }}).
 - **Automatic model setup.** With no model anywhere, one click installs or starts Ollama, without admin rights, and downloads a starter model sized for your RAM and GPU, smallest first.
-- **Background services.** LocalPilot keeps a local Ollama running while VS Code is open, and Redis when Redis storage is on. Failed restarts back off. *LocalPilot: Show Background Services* shows their state. Opt in to `localpilot.supervisor.autoInstall` to install Ollama and a starter model without being asked.
+- **Background services.** LocalPilot starts a local Ollama that is installed but stopped and keeps it running while VS Code is open, and Redis when Redis storage is on. A request that needs a stopped Ollama starts it first, in VS Code and in the CLI, and a chat set to a local model is never moved to a cloud model because its server is down. Failed restarts back off. *LocalPilot: Show Background Services* shows their state. Opt in to `localpilot.supervisor.autoInstall` to install Ollama and a starter model without being asked.
 - **Models are picked up as they appear.** Servers are re-checked in the background, so a model you pull or a server you start shows up within seconds.
 
 ## 2. Pick your models

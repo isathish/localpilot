@@ -60,7 +60,9 @@ If `defaultModel` is empty, **Auto** picks the best tool-capable coder model tha
 
 ## Automatic setup
 
-If no model is reachable anywhere (a fresh machine, a stopped server, deleted models), LocalPilot offers to fix it in one click. The setup wizard shows one button that fits your situation: *Install Ollama & starter model*, *Start Ollama & download starter model* or *Download starter model*. The button names the models and the download size, then runs without further prompts. The same flow is behind *Set up automatically* in the chat, **Settings → Models** and the *LocalPilot: Set Up Models Automatically* command.
+A stopped Ollama needs nothing from you: when it has models downloaded, LocalPilot starts it when VS Code opens, and any request (chat, CLI, subagent) that needs a model on it starts it first. Setup then keeps the models it already has instead of downloading a starter model.
+
+If no model is reachable anywhere (a fresh machine, deleted models, nothing installed), LocalPilot offers to fix it in one click. The setup wizard shows one button that fits your situation: *Install Ollama & starter model*, *Start Ollama & download starter model* or *Download starter model*. The button names the models and the download size, then runs without further prompts. The same flow is behind *Set up automatically* in the chat, **Settings → Models** and the *LocalPilot: Set Up Models Automatically* command.
 
 1. **Find a runtime.** A running Ollama or Docker Model Runner is used as it is. An installed but stopped Ollama is started (the menu-bar or tray app, or `ollama serve`). If nothing is installed, LocalPilot installs Ollama in the background, without admin rights, and shows download progress:
 

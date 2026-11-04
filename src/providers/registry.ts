@@ -6,7 +6,7 @@ import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
-import { isCloudProvider, onSecretsChanged, resolveApiKey } from './cloud';
+import { isCloudProvider, isRemoteUrl, onSecretsChanged, resolveApiKey } from './cloud';
 import { getManagedPolicy, providerAllowed } from '../agent/managedPolicy';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
@@ -73,6 +73,13 @@ export class ProviderRegistry implements vscode.Disposable {
   telemetry?: Pick<Telemetry, 'record'>;
   /** Learned per-model adjustments from local usage, applied to automatic picks (never to explicit choices). */
   usageBonus?: UsageBonus;
+  /**
+   * Starts a configured local model server that is installed but not running (Ollama), resolving true once it
+   * answers. Set by the extension and the CLI; without it a stopped server is reported, not started.
+   */
+  startLocalServer?: (provider: ProviderConfig) => Promise<boolean>;
+  private readonly starting = new Map<string, Promise<boolean>>();
+  private readonly startFailedAt = new Map<string, number>();
   private lastRefresh = 0;
   /** Bumped when the provider set changes, so a discovery round started before the change cannot fill the cache with the old providers' models. */
   private generation = 0;
@@ -417,6 +424,70 @@ export class ProviderRegistry implements vscode.Disposable {
   /** Models that stalled or could not be reached recently: skipped by the automatic picks until the entry expires. */
   private readonly unresponsive = new Map<string, number>();
 
+  /**
+   * The configured local Ollama a pick needs that did not answer the last discovery: the wanted model's own provider,
+   * or (for Auto, or a wanted model nobody serves) the first one when no local model is available at all.
+   */
+  private stoppedLocalServer(wanted: string | undefined, models: ModelInfo[]): ProviderConfig | undefined {
+    const providers = getConfig().providers;
+    const stopped = providers.filter((p) => p.enabled !== false && p.type === 'ollama' && !isRemoteUrl(p.baseUrl) && !this.reachable.has(p.id));
+    if (!stopped.length) {
+      return undefined;
+    }
+    const pid = wanted && wanted.includes('/') ? wanted.slice(0, wanted.indexOf('/')) : undefined;
+    const own = pid ? stopped.find((p) => p.id === pid) : undefined;
+    if (own) {
+      return own;
+    }
+    if (pid && providers.some((p) => p.id === pid && this.reachable.has(p.id))) {
+      return undefined; // the wanted model's provider is up; it just does not have that model
+    }
+    return models.some((m) => !m.remote) ? undefined : stopped[0];
+  }
+
+  /**
+   * When no local model is available because a configured local server is stopped, starts it and lists again.
+   * For the places that list models for the user (`localpilot models`, the model picker); routing does this itself.
+   */
+  async listModelsStartingLocal(): Promise<ModelInfo[]> {
+    const models = await this.listModels();
+    const stopped = this.stoppedLocalServer(undefined, models);
+    return stopped && (await this.startServer(stopped)) ? this.listModels(true) : models;
+  }
+
+  /** Starts a stopped local server once at a time; after a failure it is not tried again for a minute. */
+  private startServer(p: ProviderConfig): Promise<boolean> {
+    const start = this.startLocalServer;
+    if (!start) {
+      return Promise.resolve(false);
+    }
+    const failedAt = this.startFailedAt.get(p.id);
+    if (failedAt && Date.now() - failedAt < 60_000) {
+      return Promise.resolve(false);
+    }
+    let run = this.starting.get(p.id);
+    if (!run) {
+      this.log.info(`route: ${p.id} (${p.baseUrl}) is not answering — starting it`);
+      run = start(p)
+        .catch((e: unknown) => {
+          this.log.warn(`route: could not start ${p.id}: ${e instanceof Error ? e.message : String(e)}`);
+          return false;
+        })
+        .then((ok) => {
+          this.starting.delete(p.id);
+          if (ok) {
+            this.startFailedAt.delete(p.id);
+            this.invalidate();
+          } else {
+            this.startFailedAt.set(p.id, Date.now());
+          }
+          return ok;
+        });
+      this.starting.set(p.id, run);
+    }
+    return run;
+  }
+
   /** Keep the router away from `modelId` for a while (a subagent fell back from it). Explicit choices still work. */
   markUnresponsive(modelId: string, ms = 10 * 60_000): void {
     this.unresponsive.set(modelId, Date.now() + ms);
@@ -436,7 +507,18 @@ export class ProviderRegistry implements vscode.Disposable {
   async route(req: RouteRequest): Promise<Route> {
     const cfg = getConfig();
     const role = req.role ?? 'agent';
-    const models = await this.listModels(req.fresh && (await this.installedChanged()));
+    let models = await this.listModels(req.fresh && (await this.installedChanged()));
+    const roleOverride =
+      role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
+    const wanted = req.modelRef || roleOverride || cfg.defaultModel;
+    // A local server that is installed but stopped is started, rather than failing the run or quietly falling back
+    // to another model, which may be a cloud one.
+    if (!models.some((m) => m.id === wanted || m.modelId === wanted)) {
+      const stopped = this.stoppedLocalServer(wanted, models);
+      if (stopped && (await this.startServer(stopped))) {
+        models = await this.listModels(true);
+      }
+    }
     const healthy = this.responsive(models);
     const [profile, resident] = await Promise.all([getSystemProfile().catch(() => undefined), cfg.routing.enabled ? this.residentModels() : Promise.resolve(new Set<string>() as ReadonlySet<string>)]);
     const usage = cfg.routing.enabled ? this.usageBonus : undefined;
@@ -444,9 +526,6 @@ export class ProviderRegistry implements vscode.Disposable {
     const bonus: UsageBonus | undefined = cfg.routing.enabled ? (m, r) => (usage ? clampBonus(usage(m, r)) : 0) + (resident.has(m.id) ? RESIDENT_BONUS : 0) : undefined;
     const find = (ref?: string) => (ref ? models.find((m) => m.id === ref || m.modelId === ref) : undefined);
 
-    const roleOverride =
-      role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
-    const wanted = req.modelRef || roleOverride || cfg.defaultModel;
     let model = find(wanted);
     let reason: string | undefined;
     let fallback = false;
@@ -505,6 +584,16 @@ export class ProviderRegistry implements vscode.Disposable {
     if (!model) {
       throw new Error(
         'No local models found. Run "LocalPilot: Set up models automatically", start Ollama (`ollama serve`), LM Studio, llama.cpp or vLLM, or configure `localpilot.providers`.'
+      );
+    }
+    // A model on this machine was asked for: when its server is down, falling back to a cloud model would send the
+    // code off the machine without the user choosing that. Say what is wrong instead.
+    const wantedPid = wanted && wanted.includes('/') ? wanted.slice(0, wanted.indexOf('/')) : undefined;
+    const wantedCfg = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
+    if (fallback && model.remote && wantedCfg && !isCloudProvider(wantedCfg)) {
+      const failed = this.startFailedAt.has(wantedCfg.id);
+      throw new Error(
+        `${wanted.slice(wantedPid!.length + 1)} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
       );
     }
     // Parallel work: a saturated model makes every extra run queue behind the others, so Auto picks and workers
