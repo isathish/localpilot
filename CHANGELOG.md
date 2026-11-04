@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.1 — 2026-11-04
+
 ### Fixed
 - **A stopped Ollama is started for you.** When Ollama was installed but not running, a chat or `localpilot -p` run failed with "No local models found", and with the default Auto model nothing ever started it. LocalPilot now starts Ollama when VS Code opens if it has models downloaded, and any request that needs a model on it (chat, subagents, inline completions, the CLI, `localpilot models`) starts it first and then continues. Concurrent requests share one start, and a failed start is not retried for a minute.
 - **A local model is never switched to a cloud model behind your back.** When the local model a chat uses could not be reached and a cloud provider was configured, the run quietly moved to the cloud model and sent your code off the machine. It now says which server is down and how to fix it. Auto still uses a cloud model when no local model can run, as documented.
