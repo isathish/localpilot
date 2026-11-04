@@ -467,6 +467,18 @@
         "category": "LocalPilot"
       },
       {
+        "command": "localpilot.editMcpConfig",
+        "title": "Edit MCP Configuration…",
+        "category": "LocalPilot",
+        "icon": "$(json)"
+      },
+      {
+        "command": "localpilot.authenticateMcpServer",
+        "title": "Sign In to MCP Server…",
+        "category": "LocalPilot",
+        "icon": "$(key)"
+      },
+      {
         "command": "localpilot.createSkill",
         "title": "Create Skill from Recurring Request…",
         "category": "LocalPilot"
@@ -492,6 +504,11 @@
         "title": "Set Up Redis Storage (optional, saves memory)",
         "category": "LocalPilot",
         "icon": "$(database)"
+      },
+      {
+        "command": "localpilot.telemetry.testOtlp",
+        "title": "Test OTLP Connection",
+        "category": "LocalPilot"
       },
       {
         "command": "localpilot.tuneModels",
@@ -554,6 +571,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "localpilot.importSessions",
+        "title": "Import Claude Code / Codex Sessions…",
+        "category": "LocalPilot",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "localpilot.installCli",
         "title": "Install 'localpilot' CLI in PATH",
         "category": "LocalPilot",
@@ -588,6 +611,12 @@
         "title": "Open LocalPilot Terminal",
         "category": "LocalPilot",
         "icon": "$(localpilot-logo)"
+      },
+      {
+        "command": "localpilot.selectTerminalProfile",
+        "title": "Select Agent Terminal Profile…",
+        "category": "LocalPilot",
+        "icon": "$(terminal)"
       },
       {
         "command": "localpilot.explainTerminal",
@@ -736,6 +765,35 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "localpilot.commitMessage.stop",
+        "title": "Stop Generating Commit Message",
+        "category": "LocalPilot",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "localpilot.commitWithAgent",
+        "title": "Commit with Agent…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.notebook.generateCell",
+        "title": "Generate Cell with LocalPilot",
+        "category": "LocalPilot",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "localpilot.notebook.explainCell",
+        "title": "Explain Cell with LocalPilot",
+        "category": "LocalPilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "localpilot.notebook.improveCell",
+        "title": "Improve Cell with LocalPilot",
+        "category": "LocalPilot",
+        "icon": "$(wand)"
+      },
+      {
         "command": "localpilot.queue.add",
         "title": "Queue Agent Task…",
         "category": "LocalPilot",
@@ -860,6 +918,11 @@
         },
         {
           "command": "localpilot.clearHistory",
+          "when": "view =~ /^localpilot\\.chatView/",
+          "group": "2_manage"
+        },
+        {
+          "command": "localpilot.importSessions",
           "when": "view =~ /^localpilot\\.chatView/",
           "group": "2_manage"
         },
@@ -1086,6 +1149,10 @@
           "when": "activeCustomEditorId == localpilot.pdfViewer"
         },
         {
+          "command": "localpilot.commitMessage.stop",
+          "when": "localpilot.generatingCommit"
+        },
+        {
           "command": "localpilot.exportMarkdownHtml",
           "when": "resourceLangId == markdown || activeCustomEditorId == localpilot.markdownEditor || activeWebviewPanelId == localpilot.markdown"
         },
@@ -1248,7 +1315,36 @@
       "scm/title": [
         {
           "command": "localpilot.commitMessage",
-          "group": "navigation"
+          "group": "navigation",
+          "when": "!localpilot.generatingCommit"
+        },
+        {
+          "command": "localpilot.commitMessage.stop",
+          "group": "navigation",
+          "when": "localpilot.generatingCommit"
+        },
+        {
+          "command": "localpilot.commitWithAgent",
+          "group": "localpilot"
+        }
+      ],
+      "notebook/toolbar": [
+        {
+          "command": "localpilot.notebook.generateCell",
+          "group": "navigation/add@10",
+          "when": "notebookType == 'jupyter-notebook'"
+        }
+      ],
+      "notebook/cell/title": [
+        {
+          "command": "localpilot.notebook.explainCell",
+          "group": "inline@20",
+          "when": "notebookType == 'jupyter-notebook'"
+        },
+        {
+          "command": "localpilot.notebook.improveCell",
+          "group": "inline@21",
+          "when": "notebookType == 'jupyter-notebook'"
         }
       ],
       "terminal/context": [
@@ -1341,14 +1437,25 @@
       "properties": {
         "localpilot.providers": {
           "type": "array",
-          "markdownDescription": "Local and cloud model servers. `type` is `ollama` (native API, local or Ollama Cloud), `openai` (any OpenAI-compatible API: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenAI, Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Azure OpenAI…) or `anthropic` (Claude). Models are referenced as `<id>/<model>`. Automatic model picks prefer local models; cloud models are used when you choose them or nothing local fits.",
+          "markdownDescription": "Local and cloud model servers. `type` is `ollama` (native API, local or Ollama Cloud), `openai` (any OpenAI-compatible API: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, OpenAI, Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Azure OpenAI…), `anthropic` (Claude) or `vscode-lm` (models VS Code offers through its Language Model API, such as GitHub Copilot; VS Code only, no `baseUrl` needed). Models are referenced as `<id>/<model>`. Automatic model picks prefer local models; cloud models are used when you choose them or nothing local fits.",
           "items": {
             "type": "object",
             "required": [
               "id",
-              "type",
-              "baseUrl"
+              "type"
             ],
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "vscode-lm"
+                }
+              }
+            },
+            "else": {
+              "required": [
+                "baseUrl"
+              ]
+            },
             "properties": {
               "id": {
                 "type": "string",
@@ -1359,7 +1466,8 @@
                 "enum": [
                   "ollama",
                   "openai",
-                  "anthropic"
+                  "anthropic",
+                  "vscode-lm"
                 ]
               },
               "baseUrl": {
@@ -1391,6 +1499,50 @@
               "enabled": {
                 "type": "boolean",
                 "default": true
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "markdownDescription": "Extra request headers, e.g. `{ \"X-Org\": \"${env:ORG_ID}\" }`. Values may use `${env:NAME}` and `${secret:NAME}`."
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1000,
+                "description": "Least time to wait for the first token, in milliseconds (slow gateways, models that load on demand)"
+              },
+              "apiVersion": {
+                "type": "string",
+                "markdownDescription": "Azure OpenAI `api-version` for deployment-style endpoints, e.g. `2024-10-21`. Not needed for the `/openai/v1` endpoint."
+              },
+              "defaultModel": {
+                "type": "string",
+                "markdownDescription": "Model used when only the provider id is given (`-m openrouter`, `localpilot.defaultModel: \"openrouter\"`)."
+              },
+              "modelsUrl": {
+                "type": "string",
+                "description": "Where to read the model list when it is not <baseUrl>/models"
+              },
+              "extraBody": {
+                "type": "object",
+                "markdownDescription": "Fields merged into every chat request, e.g. OpenRouter's `{ \"provider\": { \"sort\": \"price\" } }`."
+              },
+              "modelOverrides": {
+                "type": "object",
+                "markdownDescription": "Per-model settings by model id: `contextWindow`, `maxOutput`, `vision`, `reasoning`, `inputPrice` and `outputPrice` (US dollars per 1M tokens) and `temperature`.",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "contextWindow": { "type": "number" },
+                    "maxOutput": { "type": "number" },
+                    "vision": { "type": "boolean" },
+                    "reasoning": { "type": "boolean" },
+                    "inputPrice": { "type": "number" },
+                    "outputPrice": { "type": "number" },
+                    "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+                  }
+                }
               }
             }
           },
@@ -1451,7 +1603,8 @@
             "on",
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
           ],
           "enumDescriptions": [
             "Per task: high for Plan and Debug, medium for the agent and Multitask, low for Ask and subagents, none for quick helpers (auto-mode reviewer, inline edits, compaction summaries).",
@@ -1459,10 +1612,11 @@
             "The model's default amount of thinking for every agent run.",
             "Low effort for every agent run.",
             "Medium effort for every agent run.",
-            "High effort for every agent run."
+            "High effort for every agent run.",
+            "The most thinking the model offers (Claude's largest budget or max effort; high elsewhere)."
           ],
           "default": "auto",
-          "markdownDescription": "Extended thinking for reasoning models (Ollama `think`, OpenAI-compatible `reasoning_effort`). Models that cannot think are never sent it. Quick helpers never think. Reasoning is shown as a collapsible step."
+          "markdownDescription": "Extended thinking for reasoning models (Ollama `think`, OpenAI-compatible `reasoning_effort`, OpenRouter `reasoning`, Claude's thinking budget or effort). Models that cannot think are never sent it. Quick helpers never think. Reasoning is shown as a collapsible step. A chat can choose its own level with the **Think** chip in the composer (`/thinking` in the CLI)."
         },
         "localpilot.keepAlive": {
           "type": "string",
@@ -1539,6 +1693,11 @@
           "maximum": 0.95,
           "description": "Fraction of the context window at which older messages are pruned and summarised."
         },
+        "localpilot.showTips": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While the agent has been thinking for more than a few seconds, show short feature tips (steering, `@` mentions, `/compact`, checkpoints, …) in the chat's status row. Tips are built in; nothing is fetched."
+        },
         "localpilot.compaction.strategy": {
           "type": "string",
           "enum": [
@@ -1564,6 +1723,36 @@
           "default": 6,
           "minimum": 0,
           "markdownDescription": "Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired), and ask you for guidance. Any successful tool call resets the count; your next message continues normally. `0` = no limit."
+        },
+        "localpilot.editTool": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "edit_file",
+            "apply_patch"
+          ],
+          "enumDescriptions": [
+            "GPT, Codex and gpt-oss models get apply_patch (the `*** Begin Patch` format they were trained on); other models get edit_file and write_file.",
+            "Always offer edit_file and write_file.",
+            "Always offer apply_patch instead of edit_file and write_file."
+          ],
+          "default": "auto",
+          "markdownDescription": "Which file-editing tool the agent gets. `apply_patch` changes, adds, moves and deletes several files in one call with a single approval."
+        },
+        "localpilot.diffPreview": {
+          "type": "string",
+          "enum": [
+            "onApproval",
+            "always",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Open a side-by-side diff of a proposed edit while its approval is pending; it closes when you approve or deny.",
+            "Also open the diff for edits that are approved automatically.",
+            "Never open a diff tab; edits happen in the background."
+          ],
+          "default": "onApproval",
+          "markdownDescription": "Side-by-side diff (`Original ↔ LocalPilot (proposed)`) of what `edit_file`, `write_file` and `apply_patch` are about to write."
         },
         "localpilot.disabledTools": {
           "type": "array",
@@ -1686,11 +1875,24 @@
           "type": "string",
           "enum": [
             "always",
+            "safe",
             "ask",
             "never"
           ],
+          "enumDescriptions": [
+            "Run every command without asking (destructive ones still ask, see `#localpilot.approvals.dangerousAlwaysAsk#`).",
+            "Run read-only commands (`ls`, `git status`, `grep`…) and routine test, lint and build commands (`npm test`, `tsc`, `pytest`, `cargo test`, `go vet`, `make test`) without asking; ask for everything else.",
+            "Ask before every command.",
+            "Never run commands."
+          ],
           "default": "ask",
-          "description": "Approval policy for running shell commands."
+          "markdownDescription": "Approval policy for running shell commands. The model can mark a command `requires_approval`; such a command asks even under `always` or `safe`."
+        },
+        "localpilot.approvals.dangerousAlwaysAsk": {
+          "scope": "application",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Ask before a destructive-looking command (`rm -rf /…`, `sudo`, `git push --force`, `git reset --hard`, `mkfs`…) even when `#localpilot.approvals.terminal#` is `always`. Such a prompt is never answered by **Allow for session** or auto mode."
         },
         "localpilot.approvals.write": {
           "scope": "application",
@@ -1747,6 +1949,21 @@
           "default": "",
           "markdownDescription": "Model that reviews actions in auto mode (`provider/model`). Empty = the fastest suitable installed model."
         },
+        "localpilot.notifications": {
+          "type": "string",
+          "enum": [
+            "whenHidden",
+            "always",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Notify only while the chat view is hidden or the VS Code window is not focused.",
+            "Always notify.",
+            "Never notify."
+          ],
+          "default": "whenHidden",
+          "markdownDescription": "Native notifications: a chat run finished, or an auto-approved command is still running after 30 seconds (also shown in the status bar). The terminal CLI rings the terminal bell when a run longer than 10 seconds finishes, unless this is `off`."
+        },
         "localpilot.parallel.maxConcurrency": {
           "type": "number",
           "default": 4,
@@ -1798,6 +2015,61 @@
           "default": 30,
           "minimum": 0,
           "markdownDescription": "Days of metrics and log files to keep on disk; older files are deleted automatically. `0` keeps everything."
+        },
+        "localpilot.telemetry.otlp.enabled": {
+          "scope": "application",
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also send telemetry to **your own OpenTelemetry collector** (otel-collector, Grafana Alloy, Langfuse, Phoenix…) over OTLP/HTTP JSON: events and log lines as logs, usage as metrics, and with `traces` in `#localpilot.telemetry.otlp.exporters#` run/model/tool spans. The standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL` (only `http/json`) and `OTEL_METRIC_EXPORT_INTERVAL` variables override these settings. Run **LocalPilot: Test OTLP Connection** to check the endpoint."
+        },
+        "localpilot.telemetry.otlp.endpoint": {
+          "scope": "application",
+          "type": "string",
+          "default": "http://localhost:4318",
+          "markdownDescription": "Base URL of the OTLP/HTTP receiver; `/v1/logs`, `/v1/metrics` and `/v1/traces` are appended."
+        },
+        "localpilot.telemetry.otlp.headers": {
+          "scope": "application",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "markdownDescription": "Extra HTTP headers for every export, e.g. `{ \"Authorization\": \"Basic …\" }` for Langfuse. `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`) adds to and overrides these."
+        },
+        "localpilot.telemetry.otlp.metricsInterval": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "Seconds between metric exports (cumulative counters and histograms)."
+        },
+        "localpilot.telemetry.otlp.exporters": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "otlp",
+              "console",
+              "traces"
+            ]
+          },
+          "default": [
+            "otlp"
+          ],
+          "markdownDescription": "What to export: `otlp` sends logs and metrics to the endpoint, `traces` sends run, model-call and tool-call spans (`gen_ai.*` attributes) to `/v1/traces`, and `console` also prints every export to the LocalPilot log."
+        },
+        "localpilot.telemetry.otlp.traceSamplePercent": {
+          "type": "number",
+          "default": 100,
+          "minimum": 0,
+          "maximum": 100,
+          "markdownDescription": "Share of agent runs traced when `traces` is exported (a run's model and tool spans are kept or dropped together)."
+        },
+        "localpilot.telemetry.otlp.recordContent": {
+          "scope": "application",
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Put prompts, replies, tool arguments and tool results on trace spans. Off by default: spans then carry only names, timings, token counts and outcomes."
         },
         "localpilot.storage.sessionsInMemory": {
           "type": "number",
@@ -1990,9 +2262,29 @@
                   "type": "string"
                 },
                 "markdownDescription": "Tools of this server (as the server names them) that run without asking."
+              },
+              "oauthClient": {
+                "type": "object",
+                "properties": {
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "clientSecret": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "clientId"
+                ],
+                "markdownDescription": "A client you registered with this remote server's OAuth authorization server (redirect URIs `http://127.0.0.1:1456/mcp/oauth/callback` … port 1461). Without it LocalPilot registers itself when the server asks you to sign in. `clientSecret` accepts `${secret:NAME}`."
               }
             }
           }
+        },
+        "localpilot.mcp.watchServerFiles": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Restart a local (stdio) MCP server 500 ms after its script changes: a workspace `.js`, `.mjs`, `.cjs` or `.py` file named in its command or arguments, or a file under `build/` or `dist/`. Handy while you develop a server."
         },
         "localpilot.repos": {
           "type": "object",
@@ -2245,6 +2537,28 @@
           "type": "boolean",
           "default": true,
           "description": "Show the LocalPilot Agent terminal (without stealing focus) when the agent runs a command."
+        },
+        "localpilot.terminal.autoDetachSeconds": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 0,
+          "markdownDescription": "Seconds a `run_command` call may run before the agent proceeds while it keeps running (its later output goes to a log the agent can read). `0` = never detach: the command is stopped at its timeout instead."
+        },
+        "localpilot.terminal.shellIntegrationTimeout": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 500,
+          "markdownDescription": "How long (ms) to wait for shell integration in the **LocalPilot Agent** terminal before running the command in a hidden process instead. Raise it when a slow shell startup (large `.zshrc`, conda) makes the agent fall back."
+        },
+        "localpilot.terminal.profile": {
+          "type": "string",
+          "default": "default",
+          "markdownDescription": "Shell the agent's commands run in: `default` (VS Code's default shell) or the name of a profile from `terminal.integrated.profiles` for this OS. Used by the LocalPilot Agent terminal, background commands and the hidden fallback process. Pick one with **LocalPilot: Select Agent Terminal Profile…**."
+        },
+        "localpilot.edit.reportNewErrors": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "After the agent edits or writes a file, wait up to 1.5 s for the language server and append the **new** errors in that file (at most 10) to the tool result, so the agent fixes what it broke. No effect in the CLI, which has no language servers."
         }
       }
     },

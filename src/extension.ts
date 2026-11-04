@@ -12,6 +12,8 @@ import { CatalogEntry, SkillCatalog, sourceFor } from './agent/skillCatalog';
 import { createMemoryTools, manageTodosTool, MemoryStore } from './agent/memory';
 import { gitTools } from './tools/git';
 import { teamBoardTool } from './tools/teamBoard';
+import { createScheduleTool } from './tools/schedule';
+import { extensionLauncher, registerSessionImport } from './ui/automation';
 import { repoGraphTool } from './tools/repoGraph';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
@@ -27,6 +29,7 @@ import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './pro
 import { autoDetectProviders, recommendModel } from './providers/discovery';
 import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ollamaUp } from './providers/modelManager';
 import { ServiceSupervisor } from './providers/supervisor';
+import { onLmModelsChanged } from './providers/vscodeLm';
 import { ProviderRegistry } from './providers/registry';
 import { isCloudProvider, resolveApiKey, secretEnvName, secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
@@ -39,6 +42,10 @@ import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/bro
 import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
 import { deleteUri, fsTools } from './tools/fs';
+import { notebookTools } from './tools/notebook';
+import { registerNotebookCommands } from './ui/notebook';
+import { generateCommitMessage, stopCommitMessage } from './ui/commitMessage';
+import { applyPatchTool } from './tools/applyPatchTool';
 import { pdfTools } from './tools/pdf';
 import { PdfEditorProvider } from './ui/pdf/pdfEditor';
 import { openPdf } from './ui/pdf/open';
@@ -50,6 +57,7 @@ import { webTools } from './tools/web';
 import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController, ToWebview } from './ui/chatController';
+import { WhatsNew } from './ui/whatsNew';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { AGENTS_VIEW_ID, ATTACH_FILTERS, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { WorktreeManager } from './agent/worktrees';
@@ -57,6 +65,7 @@ import { cliSessionsDir } from './sessions/cliStorage';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
 import { setIntegratedTerminalRunner } from './tools/terminal';
+import { deleteCommandLogs, pruneCommandLogs, setCommandLogDir, stopAllCommands } from './terminal/commandRun';
 import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { problemsDraft, readTerminalSelection, selectionLines, selectionRef, terminalSelectionDraft } from './ui/addToChat';
@@ -69,12 +78,16 @@ import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 import { RedisTelemetry } from './storage/redisTelemetry';
 import { setTelemetryRecorder } from './telemetry/catalog';
+import { attachOtlp } from './telemetry/otlpSetup';
 import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
 import { TaskQueue } from './agent/taskQueue';
 import { AutoReviewer } from './agent/autoReviewer';
 import { reposTool } from './tools/repos';
 import { securityScanTool } from './tools/security';
+import { selectTerminalProfile } from './terminal/profileSetting';
 import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, searchPlugins, setPluginEnabled } from './agent/pluginInstaller';
+import { McpOAuth } from './mcp/oauth';
+import { editMcpConfiguration } from './ui/mcpConfigEditor';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -121,9 +134,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const log = mirrorLog(channel, telemetry);
   context.subscriptions.push(telemetry);
   setTelemetryRecorder(telemetry);
+  // Straight to the channel again: an export report mirrored into telemetry would be exported, and reported, forever.
+  const otlp = attachOtlp(telemetry, { settings: () => getConfig().telemetry.otlp, version: String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'), out: (l) => channel.info(l), warn: (m) => channel.warn(m) });
   context.subscriptions.push(new vscode.Disposable(() => redisTelemetry?.dispose()));
   context.subscriptions.push(
     onConfigChange(() => {
+      void otlp.sync().then((changed) => changed && log.info(otlp.sink ? `Telemetry: exporting over OTLP to ${otlp.config.endpoint}` : 'Telemetry: OTLP export off'));
       if (syncRedis()) {
         // A new target deserves a fresh try, not the old one's back-off.
         telemetry.resetRemote();
@@ -178,6 +194,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const worktrees = new WorktreeManager(() => process.env.LOCALPILOT_WORKTREES_DIR || getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
+  controller.modelPrefs = context.globalState;
+  // After an update the empty chat shows the top bullets of the bundled CHANGELOG section once.
+  controller.whatsNew = WhatsNew.forExtension(context.globalState, String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'), context.extensionPath);
   // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
   runner.telemetry = telemetry;
@@ -193,7 +212,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     warn: (m) => void vscode.window.showWarningMessage(m),
   });
   runner.checkpoints = checkpoints;
-  context.subscriptions.push(store.onDidDelete((id) => void checkpoints.deleteSession(id).catch((e) => log.warn(`checkpoint cleanup: ${String(e)}`))));
+  let checkpointCleanup: Promise<unknown> = Promise.resolve();
+  context.subscriptions.push(store.onDidDelete((id) => {
+    const done = checkpoints.deleteSession(id).catch((e) => log.warn(`checkpoint cleanup: ${String(e)}`));
+    checkpointCleanup = Promise.all([checkpointCleanup, done]);
+  }));
+  // The logs of its detached commands go with a deleted chat too (the store removes its transcript archive).
+  context.subscriptions.push(store.onDidDelete((id) => deleteCommandLogs(id)));
   controller.telemetry = telemetry;
   // Claude Code-compatible project configuration: settings.json (permission rules, hooks), plugins and custom
   // slash commands from both `.claude/` and `.localpilot/`.
@@ -239,6 +264,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   mcp.extraServers = () => plugins.mcpServers();
   mcp.trust = workspaceMcpTrust(context.workspaceState);
   mcp.onFileProblems = showMcpFileProblems;
+  mcp.loadSecrets = (names) => providerSecrets.loadNames(names);
+  // OAuth tokens of remote MCP servers live in the OS keychain, keyed by server URL so every window shares them.
+  const mcpOAuth = new McpOAuth(context.secrets, { openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)), log: (m) => log.info(m) });
+  mcp.oauth = mcpOAuth;
+  context.subscriptions.push(mcpOAuth);
+  controller.mcp = mcp;
   const modelManager = new ModelManager(providers, log);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
 
@@ -331,6 +362,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const terminals = new TerminalManager(context, log);
   context.subscriptions.push(terminals, new vscode.Disposable(() => setIntegratedTerminalRunner(undefined)));
   setIntegratedTerminalRunner(terminals);
+  // Detached commands log under global storage; a day-old log is of no use to anyone. They die with the window.
+  setCommandLogDir(path.join(context.globalStorageUri.fsPath, 'cmd-logs'));
+  setTimeout(() => pruneCommandLogs(), 5_000).unref?.();
+  context.subscriptions.push(new vscode.Disposable(() => stopAllCommands()));
   workspace.terminalContext = () => terminals.format(terminals.lastExecution());
   workspace.approveUrl = async (url) => (await vscode.window.showWarningMessage(`Fetch ${url} for the chat?`, { modal: true, detail: 'The page is attached to your message (localpilot.approvals.network is "ask").' }, 'Fetch')) === 'Fetch';
   // A private bin dir with the `localpilot` shim so LocalPilot terminals have the CLI on PATH without installing it.
@@ -357,19 +392,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...pdfTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
+  tools.registerAll([...fsTools, ...notebookTools, applyPatchTool, ...pdfTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
+  tools.registerAll([createScheduleTool(() => extensionLauncher(context))]);
+  registerSessionImport(context, store);
   const markdownViewer = new MarkdownViewer(context, log, controller);
   controller.markdownViewer = markdownViewer;
   // Before any awaited work, so readers restored with the window resolve.
   context.subscriptions.push(markdownViewer, MarkdownViewer.registerSerializer(context), MarkdownCustomEditor.register(context, log, controller), ...registerMarkdownCommands(markdownViewer, controller));
   tools.register(createShowMarkdownTool(markdownViewer));
   const pdfViewer = PdfEditorProvider.register(context, log, {
-    attachRef: (ref) => {
+    addToComposer: (text, refs) => {
       view.reveal();
-      return controller.handle({ type: 'attachRef', ref });
+      controller.addToComposer(text, refs);
     },
-    draft: (text) => controller.draft(text),
     attachImage: (img) => {
       view.reveal();
       controller.attachImage(img);
@@ -472,14 +508,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(tuner);
   settingsPanel.tuner = tuner;
   settingsPanel.catalog = catalog;
-  // Settings → Customize switched, created or deleted a rule or command: user-level files have no watcher.
+  // Settings pushes state on every change; the git walk behind the checkpoint size is cached for a minute.
+  let checkpointSize: { at: number; bytes: Promise<number> } | undefined;
+  settingsPanel.checkpointBytes = () => {
+    if (!checkpointSize || Date.now() - checkpointSize.at > 60_000) {
+      checkpointSize = { at: Date.now(), bytes: checkpoints.diskUsage({ snapshotDir: tracker.persistDir }).then((u) => u.total) };
+    }
+    return checkpointSize.bytes;
+  };
+  // Deleted chats free their checkpoints: drop the cached size once the cleanup is done and show the new figure.
+  let sizeRefresh: ReturnType<typeof setTimeout> | undefined;
+  context.subscriptions.push(
+    store.onDidDelete(() => {
+      checkpointSize = undefined;
+      clearTimeout(sizeRefresh);
+      sizeRefresh = setTimeout(() => void checkpointCleanup.then(() => {
+        checkpointSize = undefined;
+        settingsPanel.refresh();
+      }), 200);
+    }),
+    { dispose: () => clearTimeout(sizeRefresh) }
+  );
+  // Settings → Customize switched, created or deleted a rule, command, hook or plugin: user-level files have no watcher.
   settingsPanel.onCustomized = () => {
     workspace.invalidateInstructions();
     void commands.refresh();
+    // Hook scripts are switched with chmod, which file watchers do not report; a plugin switch is read from settings.json.
+    refresh('customize', projectSettings.reload().then(() => plugins.refresh()));
   };
   context.subscriptions.push(settingsPanel);
   const lmProvider = new LocalModelChatProvider(providers, log);
   context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('localpilot', lmProvider), lmProvider);
+  // Copilot (or another model extension) signed in or out: list the `vscode-lm` provider's models again.
+  context.subscriptions.push(
+    onLmModelsChanged(() => {
+      if (getConfig().providers.some((p) => p.type === 'vscode-lm')) {
+        providers.invalidate();
+        void providers.listModels().catch(() => undefined);
+      }
+    })
+  );
   const inline = new InlineCompletionProvider(providers, log);
   inline.telemetry = telemetry;
   context.subscriptions.push(
@@ -1185,6 +1253,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.manageSkills', () => settingsPanel.show('settings', 'skills'));
   cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
   cmd('localpilot.setupRedis', () => setupRedis(log));
+  cmd('localpilot.telemetry.testOtlp', async () => {
+    const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: sending a test record to the OTLP endpoint…' }, () => otlp.test());
+    const where = `${r.url}${otlp.offBecause ? ` (export is off: ${otlp.offBecause})` : ''}`;
+    if (r.error === undefined) {
+      log.info(`OTLP test: HTTP ${r.status} from ${r.url}`);
+      void vscode.window.showInformationMessage(`OTLP collector answered HTTP ${r.status} — ${where}`);
+    } else {
+      log.warn(`OTLP test to ${r.url} failed: ${r.error}`);
+      void vscode.window.showErrorMessage(`OTLP test failed: ${r.error} — ${where}`, 'Open Settings').then((a) => a && vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.telemetry.otlp'));
+    }
+  });
   cmd('localpilot.tuneModels', () => tuner.runCommand());
   // colibri: install, configure and start through its own `coli setup`; reuse a server that already runs.
   const colibri = new ColibriLauncher({
@@ -1637,6 +1716,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     await mcp.reload();
     vscode.window.showInformationMessage(`LocalPilot: ${skills.allSkills.length} skills, ${skills.allAgents.length} subagents, ${mcp.status.reduce((n, s) => n + s.tools, 0)} MCP tools`);
   });
+  cmd('localpilot.editMcpConfig', (kind?: unknown) => editMcpConfiguration(kind === 'user' || kind === 'project' || kind === 'settings' ? kind : undefined));
+  cmd('localpilot.authenticateMcpServer', async (name?: unknown) => {
+    const waiting = mcp.status.filter((s) => s.state === 'auth_required').map((s) => s.name);
+    const target = typeof name === 'string' ? name : waiting.length === 1 ? waiting[0] : await vscode.window.showQuickPick(waiting, { title: 'Sign in to an MCP server', placeHolder: waiting.length ? 'Servers waiting for you to sign in' : 'No server is waiting for a sign-in' });
+    if (!target) {
+      return;
+    }
+    try {
+      const ok = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Signing in to ${target} in your browser…`, cancellable: true }, (_p, token) => {
+        const ctl = new AbortController();
+        token.onCancellationRequested(() => ctl.abort());
+        return mcp.authenticate(target, ctl.signal);
+      });
+      void vscode.window.showInformationMessage(ok ? `LocalPilot: signed in to ${target}.` : `LocalPilot: signed in to ${target}, but it did not start: ${mcp.status.find((s) => s.name === target)?.error ?? 'see the log'}`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`LocalPilot: signing in to ${target} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
   cmd('localpilot.showLogs', () => log.show());
   cmd('localpilot.installCli', () => installCli(context));
   // Plugins from marketplaces (Claude Code's format): browse, show what a plugin runs, install, then reload.
@@ -1768,6 +1865,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     return term;
   });
+  cmd('localpilot.selectTerminalProfile', () => selectTerminalProfile());
   // Terminal context-menu actions: hand the last command + output of the clicked terminal to a new chat.
   const terminalAction = (title: string, instruction: string, mode: 'agent' | 'ask', preferFailure: boolean) => async (terminal?: unknown) => {
     const t = terminal && typeof terminal === 'object' && 'name' in terminal ? (terminal as vscode.Terminal) : vscode.window.activeTerminal;
@@ -1952,14 +2050,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     await controller.handle({ type: 'selectSession', id: s.id });
     void controller.send(s.id, `Run get_diagnostics for ${rel}, fix every error with edit_file, then re-run get_diagnostics to confirm.`);
   });
-  cmd('localpilot.commitMessage', async () => {
+  const commitWithAgent = async () => {
     view.reveal();
     const s = store.create(getConfig().defaultModel, 'agent');
     s.title = 'Commit message';
     s.direct = true;
     await controller.handle({ type: 'selectSession', id: s.id });
     void controller.send(s.id, 'Run `git diff --cached` (fall back to `git diff` if nothing is staged) and write a conventional commit message for the changes. Output only the message in a code block.');
+  };
+  // One model call straight into the Source Control input box; the agent session is the fallback without the Git extension.
+  cmd('localpilot.commitMessage', async (sourceControl?: unknown) => {
+    if (!(await generateCommitMessage(providers, sourceControl))) {
+      await commitWithAgent();
+    }
   });
+  cmd('localpilot.commitMessage.stop', () => stopCommitMessage());
+  cmd('localpilot.commitWithAgent', commitWithAgent);
+  context.subscriptions.push(
+    ...registerNotebookCommands(async (title, prompt, mode) => {
+      view.reveal();
+      const s = store.create(getConfig().defaultModel, mode);
+      s.title = title;
+      await controller.handle({ type: 'selectSession', id: s.id });
+      void controller.send(s.id, prompt);
+    })
+  );
 
   log.info('LocalPilot activated');
 

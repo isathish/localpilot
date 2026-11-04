@@ -8,7 +8,9 @@ import { skillsDestination } from '../agent/skillInstaller';
 import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
 import { editableProviders, getConfig, isUserOnlySetting, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
-import { McpManager } from '../mcp/mcpManager';
+import { McpManager, McpServerStatus } from '../mcp/mcpManager';
+import type { McpCatalogEntry } from '../mcp/catalog';
+import { installCatalogServer, installedMessage, McpCatalogService } from './mcpCatalogInstall';
 import { isRemoteUrl, keyStatus, KeyStatus, secretRefs } from '../providers/cloud';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { ProviderSecrets } from '../providers/secrets';
@@ -24,7 +26,7 @@ import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/te
 import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
-import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
+import { describePolicy, getManagedPolicy, mergeManagedProviders, policyLocks } from '../agent/managedPolicy';
 import { toolDisabled } from '../agent/toolAliases';
 import { createItem, CustomizeData, CustomKind, deleteItem, listCustomizations, setItemEnabled } from './customize';
 import { FrontMatterError } from '../agent/frontMatterEdit';
@@ -103,7 +105,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -117,7 +119,8 @@ type ToSettings =
   | { type: 'logs'; entries: LogEntry[]; level?: LogLevel; q?: string }
   | { type: 'logLine'; entry: LogEntry }
   | { type: 'toast'; level: 'info' | 'error'; text: string }
-  | { type: 'customize'; data: CustomizeData };
+  | { type: 'customize'; data: CustomizeData }
+  | { type: 'mcpCatalog'; entries: McpCatalogEntry[]; registry: boolean; loading?: boolean; error?: string; installed?: string };
 
 type FromSettings =
   | { type: 'ready' }
@@ -149,6 +152,11 @@ type FromSettings =
   | { type: 'leaveSetup' }
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
   | { type: 'openExternal'; url: string }
+  | { type: 'restartMcp'; name: string }
+  | { type: 'toggleMcp'; name: string; enabled: boolean }
+  | { type: 'authMcp'; name: string }
+  | { type: 'mcpCatalog'; refresh?: boolean }
+  | { type: 'installMcpCatalog'; id: string }
   | { type: 'dashboard'; days?: number }
   | { type: 'applyTune'; role: string; model: string }
   | { type: 'retune' }
@@ -166,7 +174,7 @@ type FromSettings =
 /** Keys (relative to `localpilot.`) that the UI may read and write. Anything else is rejected. */
 const SETTING_KEYS = [
   'providers', 'defaultModel', 'contextWindow', 'maxOutputTokens', 'temperature', 'thinking', 'keepAlive', 'prewarm', 'ollama.flashAttention', 'ollama.kvCacheType', 'prompts.autoCorrect', 'compactionThreshold', 'maxToolOutputChars',
-  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'approvals.mcp', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'clarify.questions', 'worktrees.mode', 'worktrees.location',
+  'approvals.terminal', 'approvals.write', 'approvals.delete', 'approvals.network', 'approvals.mcp', 'approvals.dangerousAlwaysAsk', 'notifications', 'parallel.maxConcurrency', 'parallel.maxSubagentDepth', 'autoClarify', 'clarify.questions', 'worktrees.mode', 'worktrees.location',
   'webSearch.provider', 'webSearch.searxngUrl', 'webSearch.apiKey', 'webSearch.maxResults',
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
@@ -183,7 +191,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
-  'localpilot.setupRedis', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
+  'localpilot.editMcpConfig', 'localpilot.setupRedis', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network' | 'mcp', 'ask' | 'always' | 'never'>> = {
@@ -213,6 +221,8 @@ export class SettingsPanel implements vscode.Disposable {
   catalog?: SkillCatalog;
   /** Called after a rule, command or hook file was switched, created or deleted (drops the hosts' caches). */
   onCustomized?: () => void;
+  /** Bytes held by chat checkpoints (file snapshots and git objects only checkpoint refs keep), for Memory & history. */
+  checkpointBytes?: () => Promise<number>;
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
@@ -226,6 +236,10 @@ export class SettingsPanel implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   /** Dashboard log viewer is open with "follow" on: new lines are streamed to it. */
   private following = false;
+  private _mcpCatalog?: McpCatalogService;
+  private get mcpCatalog(): McpCatalogService {
+    return (this._mcpCatalog ??= new McpCatalogService(this.ctx.extensionUri, this.log));
+  }
 
   constructor(
     private readonly ctx: vscode.ExtensionContext,
@@ -404,6 +418,9 @@ export class SettingsPanel implements vscode.Disposable {
         if (!skill) {
           throw new Error(`Unknown skill "${m.name}"`);
         }
+        if (!m.enabled && skill.alwaysEnabled) {
+          throw new Error(`“${skill.name}” is always on: your organization requires it`);
+        }
         await setSkillEnabled(skill.name, !!m.enabled);
         await this.skills.refresh();
         this.post({ type: 'toast', level: 'info', text: m.enabled ? `“${skill.name}” enabled` : `“${skill.name}” disabled — the agent no longer sees it` });
@@ -499,6 +516,39 @@ export class SettingsPanel implements vscode.Disposable {
           this.panel.title = this.title();
         }
         return;
+      case 'restartMcp':
+        if (!(await this.mcp.restart(m.name))) {
+          const st = this.mcp.status.find((x) => x.name === m.name);
+          this.post({ type: 'toast', level: 'error', text: `${m.name}: ${st?.error ?? 'could not be started'}` });
+        }
+        return;
+      case 'toggleMcp':
+        await this.mcp.setEnabled(m.name, m.enabled).catch((e) => this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) }));
+        return;
+      case 'authMcp':
+        await vscode.commands.executeCommand('localpilot.authenticateMcpServer', m.name);
+        return;
+      case 'mcpCatalog': {
+        if (m.refresh) {
+          this.post({ type: 'mcpCatalog', ...(await this.mcpCatalog.entries()), loading: true });
+          await this.mcpCatalog.refreshRegistry().catch(() => undefined);
+        }
+        this.post({ type: 'mcpCatalog', ...(await this.mcpCatalog.entries()) });
+        return;
+      }
+      case 'installMcpCatalog': {
+        const entry = await this.mcpCatalog.find(m.id);
+        if (!entry) {
+          throw new Error(`“${m.id}” is not in the catalog`);
+        }
+        const name = await installCatalogServer(entry, [...Object.keys(getConfig().mcpServers ?? {}), ...this.mcp.status.map((s) => s.name)], this.secrets);
+        if (name) {
+          this.post({ type: 'toast', level: 'info', text: installedMessage(name) });
+          await this.mcp.reload();
+          this.post({ type: 'mcpCatalog', ...(await this.mcpCatalog.entries()), installed: name });
+        }
+        return;
+      }
       case 'openExternal':
         if (/^https?:\/\//i.test(m.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(m.url));
@@ -729,44 +779,49 @@ export class SettingsPanel implements vscode.Disposable {
     await this.pushSkillRegistry(this.skillQuery);
   }
 
-  // ------------------------------------------------------------------ customize (rules, commands, hooks)
+  // ------------------------------------------------------------------ customize (rules, commands, hooks, plugins)
   private async customize(m: Extract<FromSettings, { type: 'loadCustomize' | 'customToggle' | 'customOpen' | 'customDelete' | 'customCreate' }>): Promise<void> {
     const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-    const KIND: Record<CustomKind, string> = { rule: 'rule', command: 'command', hook: 'hook' };
+    const pluginDirs = getConfig().pluginPaths;
+    const KIND: Record<CustomKind, string> = { rule: 'rule', command: 'command', hook: 'hook', plugin: 'plugin' };
     if (m.type !== 'loadCustomize' && !(m.kind in KIND)) {
       throw new Error(`Unknown kind: ${String(m.kind)}`);
     }
+    const list = () => listCustomizations(roots, os.homedir(), { pluginDirs });
     const changed = async () => {
       this.onCustomized?.();
-      this.post({ type: 'customize', data: await listCustomizations(roots) });
+      this.post({ type: 'customize', data: await list() });
     };
     switch (m.type) {
       case 'loadCustomize':
-        return this.post({ type: 'customize', data: await listCustomizations(roots) });
+        return this.post({ type: 'customize', data: await list() });
       case 'customToggle':
         try {
-          await setItemEnabled(m.kind, m.file, !!m.enabled, roots);
+          await setItemEnabled(m.kind, m.file, !!m.enabled, roots, os.homedir(), pluginDirs);
         } catch (e) {
           await changed();
           throw e instanceof FrontMatterError ? new Error(`${path.basename(m.file)} was not changed: ${e.message} Fix it in the editor, or add "disabled: true" yourself.`) : e;
         }
-        this.post({ type: 'toast', level: 'info', text: m.enabled ? `${path.basename(m.file)} enabled` : `${path.basename(m.file)} disabled — the agent no longer sees it` });
+        this.post({ type: 'toast', level: 'info', text: m.enabled ? `${path.basename(m.file)} enabled` : m.kind === 'hook' ? `${path.basename(m.file)} disabled — it no longer runs` : `${path.basename(m.file)} disabled — the agent no longer sees it` });
         return changed();
       case 'customOpen': {
-        const data = await listCustomizations(roots);
-        const all = [...data.rules, ...data.commands, ...data.hooks];
-        if (!all.some((i) => path.resolve(i.file) === path.resolve(m.file))) {
-          throw new Error(`Not a listed ${KIND[m.kind]} file: ${m.file}`);
+        const data = await list();
+        const all = [...data.rules, ...data.commands, ...data.hooks, ...data.plugins];
+        if (!all.some((i) => i.kind === m.kind && path.resolve(i.file) === path.resolve(m.file))) {
+          throw new Error(`Not a listed ${KIND[m.kind]}: ${m.file}`);
         }
-        await vscode.window.showTextDocument(vscode.Uri.file(m.file), { preview: false });
+        // A plugin is a folder: open its manifest.
+        const file = m.kind === 'plugin' ? path.join(m.file, '.claude-plugin', 'plugin.json') : m.file;
+        await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
         return;
       }
       case 'customDelete': {
-        const ok = await vscode.window.showWarningMessage(`Delete the ${KIND[m.kind]} ${path.basename(m.file)}?`, { modal: true, detail: `Removes ${m.file} from disk.` }, 'Delete');
+        const what = m.kind === 'plugin' ? `the plugin ${path.basename(m.file)} and its folder` : `the ${KIND[m.kind]} ${path.basename(m.file)}`;
+        const ok = await vscode.window.showWarningMessage(`Delete ${what}?`, { modal: true, detail: `Removes ${m.file} from disk.` }, 'Delete');
         if (ok !== 'Delete') {
           return;
         }
-        await deleteItem(m.kind, m.file, roots);
+        await deleteItem(m.kind, m.file, roots, os.homedir(), pluginDirs);
         this.post({ type: 'toast', level: 'info', text: `Deleted ${path.basename(m.file)}` });
         return changed();
       }
@@ -775,6 +830,8 @@ export class SettingsPanel implements vscode.Disposable {
         await vscode.window.showTextDocument(vscode.Uri.file(r.file), { preview: false });
         if (!r.created) {
           this.post({ type: 'toast', level: 'info', text: `${path.basename(r.file)} already exists — opened it` });
+        } else if (m.kind === 'hook') {
+          this.post({ type: 'toast', level: 'info', text: `${path.basename(r.file)} created switched off — edit it, then switch it on to run it` });
         }
         return changed();
       }
@@ -785,6 +842,9 @@ export class SettingsPanel implements vscode.Disposable {
     const skill = this.skills.getSkill(name);
     if (!skill) {
       throw new Error(`Unknown skill "${name}"`);
+    }
+    if (skill.source === 'managed') {
+      throw new Error(`“${skill.name}” is provided by your organization and cannot be deleted here`);
     }
     if (skill.source === 'builtin') {
       throw new Error('Bundled skills cannot be deleted — disable them instead');
@@ -927,6 +987,11 @@ export class SettingsPanel implements vscode.Disposable {
     }
   }
 
+  /** Re-sends the panel state (when open), e.g. after chats were deleted outside the panel. */
+  refresh(): void {
+    void this.pushState();
+  }
+
   private async pushState(): Promise<void> {
     if (!this.panel) {
       return;
@@ -936,6 +1001,7 @@ export class SettingsPanel implements vscode.Disposable {
     const notes = await this.memory.list().catch(() => []);
     const learning = await this.learner?.usage(this.skills.enabledSkills).catch(() => undefined);
     const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
+    const checkpointBytes = this.page === 'settings' ? await this.checkpointBytes?.().catch(() => undefined) : undefined;
     // A newer push started while this one awaited: only the newest snapshot may reach the webview.
     if (seq !== this.pushSeq) {
       return;
@@ -958,8 +1024,8 @@ export class SettingsPanel implements vscode.Disposable {
       settings,
       models,
       // Key source and presence per provider, so cards can say "key in keychain" or "OPENAI_API_KEY not set".
-      keys: Object.fromEntries((cfg.get<ProviderConfig[]>('providers', []) ?? []).map((p) => [p.id, keyStatus(p)])),
-      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, dir: s.dir, removable: s.source !== 'builtin' })),
+      keys: Object.fromEntries(mergeManagedProviders(cfg.get<ProviderConfig[]>('providers', []) ?? [], getManagedPolicy(this.log)).map((p) => [p.id, keyStatus(p)])),
+      skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, alwaysEnabled: s.alwaysEnabled, dir: s.dir, removable: s.source !== 'builtin' && s.source !== 'managed' })),
       learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
       tools: (() => {
@@ -968,8 +1034,10 @@ export class SettingsPanel implements vscode.Disposable {
       })(),
       mcp: this.mcp.status,
       managed: (() => { const p = getManagedPolicy(this.log); return p.source ? { source: p.source, message: p.message, lines: describePolicy(p) } : undefined; })(),
+      // Per control: what Settings shows locked (keys, approval floors, allowlists, the organisation's providers and servers).
+      policy: policyLocks(getManagedPolicy(this.log)),
       memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length, notes: notes.slice(0, 200).map((n) => ({ name: n.name, scope: n.scope, summary: n.summary, updatedAt: n.updatedAt, chars: n.chars })) },
-      sessions: { ...stats, running: this.running().length, pinned: this.store.list().filter((x) => x.pinned).length },
+      sessions: { ...stats, checkpointBytes, running: this.running().length, pinned: this.store.list().filter((x) => x.pinned).length },
       welcomed: !!this.ctx.globalState.get(WELCOMED_KEY),
     });
     this.section = undefined;

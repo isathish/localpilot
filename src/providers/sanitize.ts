@@ -1,15 +1,21 @@
 import { ProviderConfig } from '../types';
+import { cleanProviderOptions } from './providerOptions';
+import { VSCODE_LM_BASE_URL } from './vscodeLmMessages';
 
 /** Keep only known fields and normalise URLs/ids so a malformed form can't produce a broken provider. */
 export function sanitizeProviderConfig(p: ProviderConfig): ProviderConfig {
   const id = String(p.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'provider';
-  const type: ProviderConfig['type'] = p.type === 'ollama' || p.type === 'anthropic' ? p.type : 'openai';
-  let baseUrl = String(p.baseUrl || '').trim();
+  const type: ProviderConfig['type'] = p.type === 'ollama' || p.type === 'anthropic' || p.type === 'vscode-lm' ? p.type : 'openai';
+  // VS Code's language models have no server: the placeholder URL keeps the required field meaningful.
+  let baseUrl = type === 'vscode-lm' ? VSCODE_LM_BASE_URL : String(p.baseUrl || '').trim();
+  if (type !== 'vscode-lm' && baseUrl === VSCODE_LM_BASE_URL) {
+    baseUrl = '';
+  }
   if (/^https?:\/*$/i.test(baseUrl)) {
     baseUrl = '';
   }
   baseUrl = baseUrl.replace(/\/+$/, '');
-  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+  if (baseUrl && type !== 'vscode-lm' && !/^https?:\/\//i.test(baseUrl)) {
     baseUrl = `http://${baseUrl}`;
   }
   const out: ProviderConfig = { id, type, baseUrl };
@@ -31,5 +37,5 @@ export function sanitizeProviderConfig(p: ProviderConfig): ProviderConfig {
   if (p.enabled === false) {
     out.enabled = false;
   }
-  return out;
+  return { ...out, ...cleanProviderOptions(p) };
 }

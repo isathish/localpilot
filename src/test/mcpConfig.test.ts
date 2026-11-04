@@ -145,7 +145,7 @@ suite('LocalPilot MCP configuration files', () => {
     try {
       await mcp.reload();
       assert.deepStrictEqual(asked, [['alpha', 'beta']]);
-      assert.ok(!tools.get('mcp_alpha_echo'), 'declined servers do not start');
+      assert.ok(!tools.get('mcp_alpha__echo'), 'declined servers do not start');
       assert.ok(mcp.status.every((s) => /trust|chose not/.test(s.error ?? '')), JSON.stringify(mcp.status));
       await mcp.reload();
       assert.strictEqual(asked.length, 1, 'a "Not now" is not asked again in the same session');
@@ -159,7 +159,7 @@ suite('LocalPilot MCP configuration files', () => {
       try {
         await fresh.reload();
         assert.deepStrictEqual(fresh.status.map((s) => [s.name, s.tools]).sort(), [['alpha', 1], ['beta', 1]]);
-        assert.strictEqual((await tools.get('mcp_beta_echo')!.execute({}, ctx)).content, 'tag=b1');
+        assert.strictEqual((await tools.get('mcp_beta__echo')!.execute({}, ctx)).content, 'tag=b1');
         const alpha = fc().get('alpha');
         const beta = fc().get('beta');
         await fs.writeFile(file, JSON.stringify({ mcpServers: { alpha: { ...server('a'), timeout: 30 }, beta: server('b2') } }));
@@ -168,10 +168,10 @@ suite('LocalPilot MCP configuration files', () => {
         assert.deepStrictEqual(asked[2], ['beta']);
         assert.strictEqual(fc().get('alpha'), alpha, 'editing server beta (and only the timeout of alpha) leaves alpha running');
         assert.notStrictEqual(fc().get('beta'), beta, 'beta is restarted with its new configuration');
-        assert.strictEqual((await tools.get('mcp_beta_echo')!.execute({}, ctx)).content, 'tag=b2');
+        assert.strictEqual((await tools.get('mcp_beta__echo')!.execute({}, ctx)).content, 'tag=b2');
         await fs.writeFile(file, JSON.stringify({ mcpServers: { alpha: { ...server('a'), timeout: 30 } } }));
         await fresh.reloadIfChanged();
-        assert.ok(!fc().has('beta') && !tools.get('mcp_beta_echo'), 'a removed server is stopped and its tools withdrawn');
+        assert.ok(!fc().has('beta') && !tools.get('mcp_beta__echo'), 'a removed server is stopped and its tools withdrawn');
         assert.strictEqual(fc().get('alpha'), alpha);
       } finally {
         fresh.dispose();

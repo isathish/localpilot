@@ -281,6 +281,11 @@ export class WorkspaceEdit {
   createFile(uri: Uri, options?: { overwrite?: boolean; ignoreIfExists?: boolean; contents?: Uint8Array }): void {
     this.creates.set(uri.fsPath, { contents: options?.contents ?? new Uint8Array(), overwrite: !!options?.overwrite || !options?.ignoreIfExists });
   }
+  /** Files to delete (apply_patch); applied last, to ~/.localpilot/trash like delete_path. */
+  readonly deletes = new Set<string>();
+  deleteFile(uri: Uri, _options?: { recursive?: boolean; ignoreIfNotExists?: boolean }): void {
+    this.deletes.add(uri.fsPath);
+  }
 }
 
 // ------------------------------------------------------------------ configuration
@@ -350,7 +355,7 @@ export const cliOverrides: Record<string, unknown> = {};
 function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, prefix = ''): void {
   for (const [k, v] of Object.entries(obj)) {
     const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos'].includes(key.split('.').pop()!)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos', 'headers'].includes(key.split('.').pop()!)) {
       flatten(v as Record<string, unknown>, into, key);
     } else {
       into[key] = v;
@@ -371,7 +376,7 @@ const isSensitive = (key: string) => SENSITIVE_WORKSPACE_KEYS.some((p) => {
   return key === base || key.startsWith(`${base}.`);
 });
 /** Read only from user settings or ~/.localpilot/config.json, never from a workspace, trusted or not (`scope: application` in VS Code). */
-const isUserOnly = (key: string) => key === 'hooks.enabled' || key === 'approvals' || key.startsWith('approvals.') || key === 'autoMode' || key.startsWith('autoMode.');
+const isUserOnly = (key: string) => key === 'hooks.enabled' || key === 'approvals' || key.startsWith('approvals.') || key === 'autoMode' || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
 
 export function loadSettings(workspaceRoot?: string): void {
   for (const k of Object.keys(settings)) {
@@ -407,6 +412,11 @@ export function loadSettings(workspaceRoot?: string): void {
     settings[key] = key === 'providers' ? mergeProviders(settings.providers ?? DEFAULT_PROVIDERS, v) : v;
   }
   Object.assign(settings, cliOverrides);
+}
+
+/** The merged `localpilot.*` settings the CLI runs with, by flattened key (`/settings`, `localpilot config`). */
+export function effectiveSettings(): Record<string, unknown> {
+  return { ...settings };
 }
 
 /** `over` entries replace or extend same-id entries of `base` field by field; new ids are appended (patches of unknown ids are dropped). */
@@ -686,6 +696,12 @@ export const workspace = {
       }
       doc._apply(edits);
     }
+    for (const fsPath of edit.deletes) {
+      if (fs.existsSync(fsPath)) {
+        await workspace.fs.delete(Uri.file(fsPath), { useTrash: true });
+      }
+      docs.delete(fsPath);
+    }
     return true;
   },
   async findFiles(include: string | RelativePattern, exclude?: string | RelativePattern | null, maxResults = 10_000): Promise<Uri[]> {
@@ -771,8 +787,9 @@ export interface LogOutputChannel {
 }
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error'] as const;
 let stderrLevel = 3;
-export function setLogLevel(level: (typeof LEVELS)[number]): void {
-  stderrLevel = LEVELS.indexOf(level);
+/** The least severe level also shown on stderr (`off`: the log file only, e.g. `--json` runs). */
+export function setLogLevel(level: (typeof LEVELS)[number] | 'off'): void {
+  stderrLevel = level === 'off' ? LEVELS.length : LEVELS.indexOf(level);
 }
 export const LOG_FILE = path.join(os.homedir(), '.localpilot', 'cli.log');
 function writeLog(level: number, name: string, m: string): void {

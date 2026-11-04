@@ -99,12 +99,13 @@ export async function gatherRequestContext(workspace: WorkspaceContext, session?
   const parts: string[] = [];
   const editor = workspace.activeEditorContext();
   parts.push(`## Editor\n${editor || 'No active editor.'}`);
-  const open = workspace.openEditors();
+  const open = workspace.contextEditors?.() ?? workspace.openEditors();
   if (open.length) {
     parts.push(`## Open editors\n${open.slice(0, 15).join('\n')}`);
   }
-  if (session?.workingSet?.length) {
-    parts.push(`## Files touched in this session (most recent last)\n${session.workingSet.slice(-10).join('\n')}`);
+  const touched = (session?.workingSet ?? []).filter((p) => !workspace.excludedFile?.(p));
+  if (touched.length) {
+    parts.push(`## Files touched in this session (most recent last)\n${touched.slice(-10).join('\n')}`);
   }
   const todos = session?.todos?.filter((t) => t.status !== 'done') ?? [];
   if (todos.length) {

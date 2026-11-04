@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SessionStore } from '../sessions/sessionStore';
 import { cliDataDir, cliWorkspaceDir } from '../sessions/cliStorage';
 import { userText } from '../agent/clarify';
+import { formatBytes } from '../agent/checkpoints';
 import { Session, SessionSummary } from '../types';
 import { Style } from './providers';
 
@@ -112,6 +113,8 @@ export interface HistoryOpts {
   json: boolean;
   limit: number;
   output?: string;
+  /** Removes a deleted chat's checkpoints (git refs, file snapshots) and command logs; resolves to the bytes each held. */
+  deleteCheckpoints?: (s: Session) => Promise<{ checkpoints: number; logs: number }>;
 }
 
 /**
@@ -162,8 +165,11 @@ export async function cmdHistory(store: SessionStore, words: string[], opts: His
     console.log(`${st.green('✔')} Exported "${s.title}" to ${file}`);
     return 0;
   }
+  const full = store.get(s.id);
   await store.delete(s.id);
-  console.log(`${st.green('✔')} Deleted "${s.title}" ${st.dim(`(${s.id})`)}`);
+  const freed = full && opts.deleteCheckpoints ? await opts.deleteCheckpoints(full).catch(() => undefined) : undefined;
+  const sizes = `${freed?.checkpoints ? `; checkpoints ${formatBytes(freed.checkpoints)}` : ''}${freed?.logs ? `; command logs ${formatBytes(freed.logs)}` : ''}`;
+  console.log(`${st.green('✔')} Deleted "${s.title}" ${st.dim(`(${s.id}${sizes})`)}`);
   return 0;
 }
 

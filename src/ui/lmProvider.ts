@@ -35,7 +35,8 @@ export class LocalModelChatProvider implements vscode.LanguageModelChatProvider,
     if (token.isCancellationRequested) {
       return [];
     }
-    return models.map((m) => {
+    // Models LocalPilot itself takes from VS Code (`vscode-lm`) are not offered back to it.
+    return models.filter((m) => this.providers.get(m.providerId)?.type !== 'vscode-lm').map((m) => {
       const { win, out } = tokenBudget(m);
       return {
         id: m.id,

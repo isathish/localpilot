@@ -113,7 +113,7 @@ suite('LocalPilot terminal integration', () => {
     const fail = await tm.run('test-session', process.platform === 'win32' ? 'cmd /c "exit 3"' : '(exit 3)', EXT_ROOT, new AbortController().signal, 20_000, false);
     // Headless CI shells (Linux and macOS runners) often attach shell integration but report no exit code for the
     // second command; the tool then falls back to a child process. Only assert the code when the shell provided one.
-    if (fail?.exitCode !== undefined) {
+    if (fail?.exitCode !== undefined && fail.exitCode !== null) {
       // PowerShell on Windows runners surfaces a generic 1 for a failing child; POSIX shells report the real code.
       const expected = process.platform === 'win32' ? [1, 3] : [3];
       assert.ok(expected.includes(fail.exitCode), `exit code ${fail.exitCode} not in ${expected.join('/')}`);

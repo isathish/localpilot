@@ -102,21 +102,21 @@ suite('LocalPilot MCP timeouts and server notifications', () => {
       await cfg.update('mcpServers', { a: server, b: server }, vscode.ConfigurationTarget.Global);
       await mcp.reload();
       assert.deepStrictEqual(mcp.status.map((s) => [s.name, s.tools]).sort(), [['a', 2], ['b', 2]]);
-      const bTool = tools.get('mcp_b_grow');
-      const aTool = tools.get('mcp_a_grow');
+      const bTool = tools.get('mcp_b__grow');
+      const aTool = tools.get('mcp_a__grow');
       assert.ok(aTool && bTool);
       let changes = 0;
       const sub = mcp.onDidChange(() => changes++);
       const r = await aTool.execute({}, ctx());
       assert.strictEqual(r.content, 'lists 1');
-      assert.ok(await until(() => !!tools.get('mcp_a_extra2')), 'the new tool of server a is registered');
+      assert.ok(await until(() => !!tools.get('mcp_a__extra2')), 'the new tool of server a is registered');
       sub.dispose();
       assert.ok(changes >= 1, 'status listeners hear about the new tool count');
-      assert.strictEqual(tools.get('mcp_b_grow'), bTool, "server b's tools are not re-registered");
-      assert.ok(!tools.get('mcp_b_extra2'));
-      assert.notStrictEqual(tools.get('mcp_a_grow'), aTool, "server a's tools are registered again");
+      assert.strictEqual(tools.get('mcp_b__grow'), bTool, "server b's tools are not re-registered");
+      assert.ok(!tools.get('mcp_b__extra2'));
+      assert.notStrictEqual(tools.get('mcp_a__grow'), aTool, "server a's tools are registered again");
       assert.strictEqual(mcp.status.find((s) => s.name === 'a')?.tools, 3);
-      const after = await tools.get('mcp_a_extra2')!.execute({}, ctx());
+      const after = await tools.get('mcp_a__extra2')!.execute({}, ctx());
       assert.strictEqual(after.content, 'lists 2', 'three list_changed notifications in a burst cost one tools/list');
     } finally {
       mcp.dispose();

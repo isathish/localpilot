@@ -2,7 +2,11 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { WorkspaceContext } from '../context/workspaceContext';
 import { loadOptionsBlock, pdfLoadOptions } from '../pdf/options';
+import { openFileTool } from '../tools/editor';
+import { ToolContext } from '../types';
+import { ChatController } from '../ui/chatController';
 import { isAllowedExternalLink, isBase64, MAX_RANGE_BYTES, pageFromFragment, rangeAllowed, rememberPosition, selectionDraft, validatePdfViewerMessage } from '../pdf/viewerMessages';
 import { livePdfViews, openPdf } from '../ui/pdf/open';
 import { makePdf } from './fixtures/makePdf';
@@ -28,6 +32,47 @@ suite('PDF viewer: pure rules', () => {
     assert.strictEqual(loadOptionsBlock(view), a);
     assert.ok(!/enableScripting:\s*true/.test(view));
     assert.ok(/AnnotationMode\.ENABLE\b/.test(view) && !/ENABLE_FORMS/.test(view), 'forms render flat');
+  });
+
+  test('range mode: a request split into 4 MB parts reaches pdf.js once, at its own begin, with every byte', () => {
+    const view = fs.readFileSync(path.join(__dirname, '..', '..', 'media', 'pdfview.js'), 'utf8');
+    const block = /\/\/ pdf-range-split:begin([\s\S]*?)\/\/ pdf-range-split:end/.exec(view);
+    assert.ok(block, 'pdfview.js marks splitRange');
+    type Split = { parts: { begin: number; end: number }[]; fill(part: { begin: number; end: number }, data: Uint8Array): void };
+    const splitRange = new Function(`${block[1]}; return splitRange;`)() as (b: number, e: number, max: number, deliver: (b: number, d: Uint8Array) => void) => Split;
+    const MB = 1024 * 1024;
+    const begin = 3 * 262144;
+    const end = begin + 9 * MB;
+    const calls: { begin: number; data: Uint8Array }[] = [];
+    const split = splitRange(begin, end, 4 * MB, (b, data) => calls.push({ begin: b, data }));
+    assert.deepStrictEqual(split.parts.map((p) => p.end - p.begin), [4 * MB, 4 * MB, MB]);
+    const bytes = (p: { begin: number; end: number }) => Uint8Array.from({ length: p.end - p.begin }, (_, i) => (p.begin + i) % 251);
+    // Replies arrive out of order, one twice (a retry racing a late answer).
+    for (const p of [split.parts[2], split.parts[0], split.parts[0], split.parts[1]]) {
+      assert.strictEqual(calls.length, 0, 'nothing reaches pdf.js before every part is in');
+      split.fill(p, bytes(p));
+    }
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].begin, begin);
+    assert.strictEqual(calls[0].data.length, end - begin);
+    assert.ok(calls[0].data.every((v, i) => v === (begin + i) % 251), 'bytes land at their offsets');
+    const small: number[] = [];
+    const one = splitRange(0, 262144, 4 * MB, (b) => small.push(b));
+    one.fill(one.parts[0], new Uint8Array(262144));
+    assert.deepStrictEqual(small, [0]);
+  });
+
+  test('a page image attached before any chat view exists is kept until one boots', () => {
+    const c = Object.create(ChatController.prototype) as any;
+    const sent: unknown[] = [];
+    Object.assign(c, { sinks: new Set(), pendingImages: [], broadcast: (m: unknown) => sent.push(m) });
+    const img = { name: 'doc-p2.png', data: png, mime: 'image/png' };
+    c.attachImage(img);
+    assert.deepStrictEqual(c.pendingImages.map((p: { img: unknown }) => p.img), [img]);
+    c.sinks.add({ post() {} });
+    c.attachImage(img);
+    assert.strictEqual(c.pendingImages.length, 1, 'a live chat view gets the broadcast; nothing more is queued');
+    assert.strictEqual(sent.length, 2);
   });
 
   test('attachImage: PNG only, valid base64, size-capped', () => {
@@ -137,5 +182,44 @@ suite('PDF viewer: VS Code integration', () => {
     const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
     assert.strictEqual(tabs.filter((t) => t.input instanceof vscode.TabInputCustom && /viewer-link\.pdf$/.test(t.input.uri.path)).length, 1);
     assert.ok(!tabs.some((t) => t.input instanceof vscode.TabInputText && /viewer-link\.pdf$/.test(t.input.uri.path)), 'not as text');
+  });
+
+  const noTextTab = (name: string) =>
+    !vscode.window.tabGroups.all.flatMap((g) => g.tabs).some((t) => t.input instanceof vscode.TabInputText && t.input.uri.path.endsWith(`/${name}`));
+
+  test('a doc.pdf:2 link in chat opens the PDF viewer, not the text editor', async () => {
+    await workspaceFile('viewer-chat.pdf', makePdf(['One', 'Two']));
+    const log = vscode.window.createOutputChannel('LocalPilot PDF test', { log: true });
+    const workspace = new WorkspaceContext(log);
+    try {
+      const c = Object.create(ChatController.prototype) as any;
+      const sent: { type: string; text?: string }[] = [];
+      Object.assign(c, { workspace, store: { peek: () => undefined }, broadcast: (m: { type: string }) => sent.push(m) });
+      await c.handle({ type: 'openFile', path: 'viewer-chat.pdf', line: 2 });
+      assert.ok(await waitFor(() => !!pdfTab() && /viewer-chat\.pdf$/.test((pdfTab()!.input as vscode.TabInputCustom).uri.path)), 'custom editor tab');
+      assert.ok(noTextTab('viewer-chat.pdf'), 'not as text');
+      assert.ok(!sent.some((m) => m.type === 'toast' && /Cannot open/.test(m.text ?? '')), 'no "Cannot open" toast');
+    } finally {
+      workspace.dispose();
+      log.dispose();
+    }
+  });
+
+  test('the open_file tool opens a PDF in the viewer at a page', async () => {
+    await workspaceFile('viewer-tool.pdf', makePdf(['One', 'Two']));
+    const ctx = {
+      sessionId: 'test',
+      workspaceRoot: vscode.workspace.workspaceFolders![0].uri.fsPath,
+      signal: new AbortController().signal,
+      depth: 0,
+      requestApproval: async () => true,
+      progress() {},
+      async trackChange() {},
+    } as unknown as ToolContext;
+    const r = await openFileTool.execute({ path: 'viewer-tool.pdf', line: 2 }, ctx);
+    assert.ok(!r.isError, r.content);
+    assert.match(r.content, /at page 2/);
+    assert.ok(await waitFor(() => !!pdfTab() && /viewer-tool\.pdf$/.test((pdfTab()!.input as vscode.TabInputCustom).uri.path)), 'custom editor tab');
+    assert.ok(noTextTab('viewer-tool.pdf'), 'not as text');
   });
 });

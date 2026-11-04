@@ -56,6 +56,8 @@ export interface ChatMessage {
     error?: string;
     /** What the transcript shows instead of the content (a slash command whose expanded prompt is the content). */
     display?: string;
+    /** An `/mcp:` prompt turn: how many of `images` (the last ones) came from the prompt rather than the user. */
+    mcpPromptImages?: number;
     /** Misspelled names in the request that were corrected to real workspace names before it was sent. */
     corrections?: { from: string; to: string }[];
     /** On a user message: the change-tracker turn key that Restore checkpoint reverts to. */
@@ -112,6 +114,8 @@ export interface ModelInfo {
   remote?: boolean;
   /** Prices of a cloud model from the bundled model facts; absent for local models and unknown prices. */
   pricing?: ModelPricing;
+  /** Sampling temperature for this model from the provider's `modelOverrides`; wins over `localpilot.temperature`. */
+  temperature?: number;
 }
 
 /** US dollars per 1M tokens. Cache prices default to the input price (reads) and 1.25 × input (writes). */
@@ -133,7 +137,7 @@ export interface ChatRequestOptions {
   stop?: string[];
   jsonSchema?: Record<string, unknown>;
   /** Thinking: false/true or an effort level for reasoning models. */
-  think?: boolean | 'low' | 'medium' | 'high';
+  think?: boolean | 'low' | 'medium' | 'high' | 'max';
   /** Keep the model loaded between turns (Ollama keep_alive). */
   keepAlive?: string;
   signal?: AbortSignal;
@@ -202,8 +206,8 @@ export interface LLMProvider {
 
 export interface ProviderConfig {
   id: string;
-  /** `ollama` native API, `openai` any OpenAI-compatible `/v1` API (local servers and most clouds), `anthropic` Claude's Messages API. */
-  type: 'ollama' | 'openai' | 'anthropic';
+  /** `ollama` native API, `openai` any OpenAI-compatible `/v1` API (local servers and most clouds), `anthropic` Claude's Messages API, `vscode-lm` VS Code's language models (Copilot; VS Code only). */
+  type: 'ollama' | 'openai' | 'anthropic' | 'vscode-lm';
   baseUrl: string;
   /** Literal key, an environment reference (`${env:OPENAI_API_KEY}`) or a key kept in VS Code's secret storage (`${secret:openai}`). */
   apiKey?: string;
@@ -218,9 +222,69 @@ export interface ProviderConfig {
   /** Default context window if the server does not report one. */
   contextWindow?: number;
   enabled?: boolean;
+  /** Extra request headers; values may use `${env:NAME}` and `${secret:NAME}` like the API key. */
+  headers?: Record<string, string>;
+  /** Least time to wait for the first token, in milliseconds (slow gateways, cold starts). */
+  timeoutMs?: number;
+  /** Azure OpenAI `api-version` query parameter (deployment-style endpoints). */
+  apiVersion?: string;
+  /** Per-model facts and settings that win over what the server and the bundled facts say. */
+  modelOverrides?: Record<string, ModelOverride>;
+  /** The model `<id>` alone refers to (`-m openrouter`, `defaultModel: "openrouter"`). */
+  defaultModel?: string;
+  /** Where the model list is read from when it is not `<baseUrl>/models`. */
+  modelsUrl?: string;
+  /** Fields merged into every chat request body (OpenRouter `provider.sort`, vendor options). */
+  extraBody?: Record<string, unknown>;
+}
+
+/** One model's overrides in a provider's `modelOverrides`. Prices are US dollars per 1M tokens. */
+export interface ModelOverride {
+  contextWindow?: number;
+  maxOutput?: number;
+  vision?: boolean;
+  reasoning?: boolean;
+  inputPrice?: number;
+  outputPrice?: number;
+  temperature?: number;
 }
 
 export type ApprovalMode = 'always' | 'never' | 'ask';
+/** `approvals.terminal` also has `safe`: read-only, test and build commands run without asking. */
+export type TerminalApprovalMode = ApprovalMode | 'safe';
+
+/** The user's answer to an approval prompt; `feedback` is the reason given with a denial. */
+export interface ApprovalDecision {
+  ok: boolean;
+  feedback?: string;
+  /** Set by the agent loop when a person answered the prompt (not a setting, policy, stop or non-interactive refusal). */
+  byUser?: boolean;
+}
+
+/** Extra facts a tool passes with an approval request. */
+export interface ApprovalOptions {
+  /** The organization's policy requires this prompt. */
+  mandatory?: boolean;
+  /** An MCP server's autoApprove list covers this tool. */
+  autoApprove?: boolean;
+  /** run_command: the command is read-only or a known test/build command (`approvals.terminal = safe` runs it). */
+  safeCommand?: boolean;
+  /** run_command: the command looks destructive; it asks even under `always` (`approvals.dangerousAlwaysAsk`). */
+  dangerous?: boolean;
+  /** The model asked for confirmation (`requires_approval`): the user is asked even under `always` or `safe`. */
+  confirm?: boolean;
+  /** File edits: the proposed contents, shown as side-by-side diffs while the approval waits (`localpilot.diffPreview`). */
+  preview?: ProposedEdit[];
+}
+
+/** A file's content as an edit tool is about to write it. */
+export interface ProposedEdit {
+  fsPath: string;
+  /** The file's current text (of a move's source); undefined when it does not exist yet. */
+  before?: string;
+  /** The text the tool will write; undefined when it deletes the file. */
+  proposed?: string;
+}
 
 /** One question the agent asks the user (ask_user), shown as a card in the chat. */
 export interface UserQuestion {
@@ -251,9 +315,15 @@ export interface ToolContext {
   mainRoot?: string;
   signal: AbortSignal;
   /** Ask the user to approve a dangerous action. Resolves true when approved. */
-  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network' | 'mcp', opts?: { mandatory?: boolean; autoApprove?: boolean }): Promise<boolean>;
+  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network' | 'mcp', opts?: ApprovalOptions): Promise<boolean>;
+  /** Like `requestApproval`, with the reason the user gave for a denial (set by the agent loop). */
+  approve?(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network' | 'mcp', opts?: ApprovalOptions): Promise<ApprovalDecision>;
   /** Stream progress text to the UI. */
   progress(text: string): void;
+  /** Id of the tool call being executed (set per call by the agent loop). */
+  callId?: string;
+  /** Live output of the running call (run_command), shown under its row as a `tool_progress` event. */
+  output?(chunk: string): void;
   /** Snapshot a file before modifying it so the user can review/undo the agent's changes. */
   trackChange(fsPath: string): Promise<void>;
   /** Read/replace the session's todo list (undefined for subagents without a session). */
@@ -308,9 +378,12 @@ export interface Skill {
   dir: string;
   /** Lazily loaded body. */
   body?: string;
-  source: 'workspace' | 'user' | 'builtin';
+  /** `managed`: the organisation's skills folder next to managed-settings.json. */
+  source: 'managed' | 'workspace' | 'user' | 'builtin';
   /** Listed in `localpilot.skills.disabled`: kept on disk, hidden from the agent. */
   disabled?: boolean;
+  /** `alwaysEnabled: true` front matter: `localpilot.skills.disabled` cannot switch it off. */
+  alwaysEnabled?: boolean;
 }
 
 /** How a chat uses skills; `mode` undefined inherits `localpilot.skills.autoInstall`. */
@@ -369,11 +442,13 @@ export interface SessionSummary {
   usage?: SessionUsage;
   /** Size of the session file on disk (history list). */
   bytes?: number;
-  /** Where the chat was started: `cli` for the terminal (shown with a CLI badge in VS Code's history). */
-  origin?: 'cli';
+  /** Where the chat was started: `cli` for the terminal (shown with a CLI badge in VS Code's history), or the agent it was imported from. */
+  origin?: 'cli' | 'claude-code' | 'codex';
   /** The chat this one was forked from, and its title at the time (history shows "forked from …"). */
   parentId?: string;
   parentTitle?: string;
+  /** How hard the model thinks in this chat; unset follows `localpilot.thinking`. */
+  think?: ThinkingLevel;
 }
 
 /** Running totals for a chat. `promptTokens` is the uncached input only; cached input is counted in the cache fields. */
@@ -427,7 +502,7 @@ export interface TodoItem {
 }
 
 /** `auto` picks per task: deeper for Plan/Debug, medium for the main agent, light for subagents, none for helpers. */
-export type ThinkingLevel = 'off' | 'auto' | 'on' | 'low' | 'medium' | 'high';
+export type ThinkingLevel = 'off' | 'auto' | 'on' | 'low' | 'medium' | 'high' | 'max';
 
 export interface AgentEvent {
   sessionId: string;
@@ -436,6 +511,8 @@ export interface AgentEvent {
     | 'thinking_delta'
     | 'tool_start'
     | 'tool_end'
+    /** Live output of a running tool call (run_command). Payload: { id, chunk }. */
+    | 'tool_progress'
     | 'approval_request'
     | 'model_request'
     | 'status'
@@ -466,6 +543,8 @@ export interface AgentEvent {
     | 'steer'
     /** Conditional rules (front-matter `paths:` / `globs:`) matched the files in context this turn. Payload: { files: string[] }. */
     | 'rules_applied'
+    /** A hook started or finished. Payload: { id, event, name, tool?, status: running|ok|failed|blocked, ms? }. */
+    | 'hook'
     | 'todos'
     | 'turn_end';
   payload?: unknown;

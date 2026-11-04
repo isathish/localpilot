@@ -45,6 +45,30 @@ export interface HookRunOptions {
   signal?: AbortSignal;
   /** Additional environment for the hook process. */
   env?: Record<string, string>;
+  /** Told when each hook starts and how it ended (the chat's hook rows). */
+  onRun?: (info: HookRunInfo) => void;
+}
+
+/** One hook run, as shown in the chat: "⚙ PreToolUse lint-guard → blocked". */
+export interface HookRunInfo {
+  id: string;
+  event: HookEvent;
+  name: string;
+  tool?: string;
+  status: 'running' | 'ok' | 'failed' | 'blocked';
+  ms?: number;
+}
+
+let hookRunSeq = 0;
+
+/** A hook's row label: its own name, else the start of its command. */
+export const hookLabel = (h: HookCommand) => h.name ?? h.command.split(/\s+/).slice(0, 3).join(' ');
+
+/** How one finished hook reads in the chat: blocked when it blocked or denied, failed when it errored or timed out. */
+export function hookRunStatus(event: HookEvent, r: HookExecResult): 'ok' | 'failed' | 'blocked' {
+  const one: HookOutcome = { block: false, reasons: [], context: [], messages: [], ran: 0 };
+  applyHookResult(one, event, r, '');
+  return one.block || one.permission === 'deny' ? 'blocked' : r.timedOut || r.code !== 0 ? 'failed' : 'ok';
 }
 
 const DEFAULT_TIMEOUT_S = 60;
@@ -320,15 +344,19 @@ export class HookRunner {
     const env: Record<string, string> = { ...this.settings().env, ...(opts.env ?? {}), CLAUDE_PROJECT_DIR: cwd, LOCALPILOT_PROJECT_DIR: cwd };
     const payload = { hook_event_name: event, cwd, ...input };
     this.log.debug(`hooks: ${event} → ${hooks.length} hook(s)${keys.length ? ` for ${keys[0]}` : ''}`);
+    const tool = typeof input.localpilot_tool_name === 'string' ? input.localpilot_tool_name : undefined;
     const results = await Promise.all(
       hooks.map(async (h) => {
         const started = Date.now();
+        const info = { id: `hook${++hookRunSeq}`, event, name: hookLabel(h), ...(tool ? { tool } : {}) };
+        opts.onRun?.({ ...info, status: 'running' });
         const r = await execHook(h, payload, { cwd, env, signal: opts.signal });
         recordTelemetry({ type: 'hook', event, durationMs: Date.now() - started, outcome: hookRunOutcome(r) });
+        opts.onRun?.({ ...info, status: hookRunStatus(event, r), ms: Date.now() - started });
         return r;
       })
     );
-    results.forEach((r, i) => applyHookResult(out, event, r, hooks[i].command.split(/\s+/).slice(0, 3).join(' '), this.log));
+    results.forEach((r, i) => applyHookResult(out, event, r, hookLabel(hooks[i]), this.log));
     for (const m of out.messages) {
       this.onMessage?.(m, event);
     }

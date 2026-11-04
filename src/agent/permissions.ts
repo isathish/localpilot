@@ -1,6 +1,8 @@
 import * as os from 'os';
 import * as path from 'path';
+import { legacyMcpToolName, mcpToolName, splitMcpToolName } from '../mcp/toolNames';
 import { normalizeReadArgs } from '../tools/readArgs';
+import { patchArg, patchPaths } from '../tools/applyPatch';
 import { PermissionSettings } from './settings';
 
 /**
@@ -33,9 +35,11 @@ export interface PermissionRule {
 export const TOOL_ALIASES: Record<string, string[]> = {
   run_command: ['Bash'],
   edit_file: ['Edit', 'MultiEdit'],
+  apply_patch: ['Edit', 'Write'],
   write_file: ['Write', 'Edit'],
   create_directory: ['Write', 'Edit'],
   delete_path: ['Delete', 'Edit'],
+  notebook_edit: ['NotebookEdit', 'Edit'],
   read_file: ['Read'],
   open_file: ['Read'],
   list_dir: ['LS', 'Read'],
@@ -57,6 +61,7 @@ export const TOOL_ALIASES: Record<string, string[]> = {
   open_browser: ['WebFetch'],
   browser_inspect: ['WebFetch'],
   browser_screenshot: ['WebFetch'],
+  mcp_read_resource: ['ReadMcpResourceTool'],
 };
 
 /** Tools whose specifier is a file path pattern. */
@@ -89,6 +94,10 @@ export function canonicalToolName(name: string): string {
   if (origin) {
     return `mcp__${origin.server}__${origin.tool}`;
   }
+  const split = splitMcpToolName(name);
+  if (split) {
+    return `mcp__${split.server}__${split.tool}`;
+  }
   const mcp = /^mcp_(.+)$/.exec(name);
   if (mcp) {
     return `mcp__${mcp[1].replace(/_/, '__')}`;
@@ -98,7 +107,7 @@ export function canonicalToolName(name: string): string {
 
 /**
  * A Claude Code agent's `tools:` list in our tool names: `Read` → read_file, open_file, …; `Bash(git:*)` → run_command;
- * `mcp__server__tool` → `mcp_server_tool`. Our own names and unknown names are kept as written.
+ * `mcp__server__tool` → `mcp_server__tool`. Our own names and unknown names are kept as written.
  */
 export function expandAgentTools(list: string[]): string[] {
   const out = new Set<string>();
@@ -109,7 +118,7 @@ export function expandAgentTools(list: string[]): string[] {
     }
     const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(name);
     if (mcp) {
-      out.add(`mcp_${`${mcp[1]}_${mcp[2]}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60)}`);
+      out.add(mcpToolName(mcp[1], mcp[2]));
       continue;
     }
     const mapped = TOOL_ALIASES[name] ? [] : Object.keys(TOOL_ALIASES).filter((t) => TOOL_ALIASES[t].includes(name));
@@ -118,13 +127,30 @@ export function expandAgentTools(list: string[]): string[] {
   return [...out];
 }
 
+/** The Claude-style names of an MCP server (`mcp__<server>`, and for a plugin's `plugin:server` the sanitised and `mcp__plugin_…` forms). */
+export function mcpServerNames(server: string): string[] {
+  const names = [`mcp__${server}`];
+  const colon = server.indexOf(':');
+  if (colon > 0) {
+    const safe = (s: string) => s.replace(/[^\w-]/g, '_');
+    names.push(`mcp__${safe(server)}`, `mcp__plugin_${safe(server.slice(0, colon))}_${safe(server.slice(colon + 1))}`);
+  }
+  return names;
+}
+
 /** Every name a rule may use for this tool: our own, the Claude aliases, and `mcp__server` / `mcp__server__tool`. */
 export function toolNames(name: string): string[] {
   const names = [name, ...(TOOL_ALIASES[name] ?? [])];
+  if (TOOL_ALIASES[name]) {
+    // Our own tools (mcp_read_resource) are not `mcp_<server>_<tool>` names.
+    return names;
+  }
   const origin = mcpOrigins.get(name);
-  const mcp = /^mcp_([^_]+)_(.+)$/.exec(name);
+  const split = splitMcpToolName(name);
+  const mcp = split ? ([name, split.server, split.tool] as const) : /^mcp_([^_]+)_(.+)$/.exec(name);
   if (origin) {
-    names.push(`mcp__${origin.server}__${origin.tool}`, `mcp__${origin.server}`);
+    // Rules written against the names earlier versions registered (`mcp_<server>_<tool>`) keep matching.
+    names.push(`mcp__${origin.server}__${origin.tool}`, `mcp__${origin.server}`, legacyMcpToolName(origin.server, origin.tool));
     const colon = origin.server.indexOf(':');
     if (colon > 0) {
       // Plugin servers are keyed `plugin:server`; Claude Code names them `mcp__plugin_<plugin>_<server>`.
@@ -408,6 +434,10 @@ function readPaths(args: Record<string, unknown>): string[] | undefined {
 /** Does one rule apply to this call? `mode` decides how a chained command is judged (every part for allow, any for deny/ask). */
 export function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, ctx: MatchContext, mode: Decision): boolean {
   const names = toolNames(toolName);
+  if (toolName === 'mcp_read_resource' && typeof args.server === 'string' && args.server.trim()) {
+    // Reading a server's resources answers to that server's rules (`mcp__secrets` denies both).
+    names.push(...mcpServerNames(args.server.trim()));
+  }
   const ruleTool = rule.tool;
   const nameMatches = names.includes(ruleTool) || (ruleTool.startsWith('mcp__') && names.some((n) => n === ruleTool || n.startsWith(`${ruleTool}__`)));
   if (!nameMatches) {
@@ -421,11 +451,15 @@ export function ruleMatches(rule: PermissionRule, toolName: string, args: Record
     const one = (a: string) => matchCommandRule(rule.specifier!, a);
     return mode === 'allow' ? agents.length > 0 && agents.every(one) : agents.some(one);
   }
-  const reads = toolName === 'read_file' ? readPaths(args) : undefined;
+  const reads = toolName === 'read_file' ? readPaths(args) : toolName === 'apply_patch' ? patchPaths(patchArg(args)) : undefined;
   if (reads) {
-    // A batched read is judged on every file it reads: deny/ask if any matches, allow only if all do.
+    if (toolName === 'apply_patch' && !reads.length) {
+      // No file found in the patch: fail closed for deny/ask rather than let a path rule miss.
+      return mode !== 'allow';
+    }
+    // A batched read (or a patch over several files) is judged on every file it reads: deny/ask if any matches, allow only if all do.
     const one = (p: string) => matchPathRule(rule.specifier!, p, ctx.root, ctx.home);
-    return mode === 'allow' ? reads.every(one) : reads.some(one);
+    return mode === 'allow' ? reads.length > 0 && reads.every(one) : reads.some(one);
   }
   const target = specifierTarget(toolName, args);
   if (!target) {

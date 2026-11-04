@@ -30,6 +30,8 @@ export interface PromptOptions {
   canOpenBrowser?: boolean;
   /** Whether web_search / web_fetch are offered (off with `localpilot.webSearch.enabled` or the org policy). */
   canSearchWeb?: boolean;
+  /** apply_patch is offered instead of edit_file / write_file (`localpilot.editTool`). */
+  patchEdits?: boolean;
   /** `localpilot.preferredLanguage`; `auto` or unset adds no instruction. */
   preferredLanguage?: string;
   /** Files touched so far in this session. */
@@ -67,9 +69,9 @@ You have no file-editing tools in this mode — every change goes through a work
 - Form one hypothesis at a time, check it against the code (add a focused log or a small test if needed), then fix the root cause with the smallest change that makes the reproduction pass. Do not paper over symptoms.
 - Re-run the reproduction and the related tests; remove temporary logging. Add a regression test when the project has a test suite.
 - Report: what was wrong, why, what changed (files), and how it was verified.`);
-    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false));
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false, !!o.patchEdits));
   } else if (o.mode === 'agent') {
-    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false));
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false, !!o.patchEdits));
   } else if (o.mode === 'plan') {
     parts.push(`# Plan mode
 You are in read-only planning mode. Investigate the codebase with read/search tools (analyze_workspace first for anything repository-wide, then fan out explore subagents per shard with run_parallel_subagents), then produce the plan BOTH as a manage_todos checklist AND as a short numbered explanation with the files to change and the rationale.
@@ -99,6 +101,11 @@ ${
 - Workspace root: ${root ?? '(no folder open)'}
 - Date: ${new Date().toISOString().slice(0, 10)}
 - Model context window: ~${o.model.contextWindow.toLocaleString()} tokens. Keep tool outputs focused (use line ranges, max_results) to conserve context.`);
+
+  const roots = o.project === false ? '' : (await o.workspace.rootsOverview?.()) ?? '';
+  if (roots) {
+    parts.push(`# Workspace folders\nThis is a multi-root workspace. Relative paths resolve against the workspace root above; name a file in another folder as "<folder>:<path>" (e.g. "${roots.split(' — ')[0]}:src/index.ts"). grep_search and file_search cover every folder; the git, security_scan and repo_graph tools take "root": "<folder>".\n${roots}`);
+  }
 
   const map = o.project === false ? undefined : await o.workspace.projectMap();
   if (map) {
@@ -190,8 +197,9 @@ export function buildTurnContext(o: Pick<PromptOptions, 'mode' | 'workspace' | '
     parts.push(`# Editor state\n${editor}`);
   }
 
-  if (o.workingSet?.length) {
-    parts.push(`# Working set\nFiles already read or edited in this session (most recent last): ${o.workingSet.slice(-25).join(', ')}`);
+  const workingSet = (o.workingSet ?? []).filter((p) => !o.workspace.excludedFile?.(p));
+  if (workingSet.length) {
+    parts.push(`# Working set\nFiles already read or edited in this session (most recent last): ${workingSet.slice(-25).join(', ')}`);
   }
 
   if (o.todos?.length) {
@@ -209,13 +217,13 @@ export function buildTurnContext(o: Pick<PromptOptions, 'mode' | 'workspace' | '
 }
 
 /** The autonomous working style shared by Agent and Debug mode. */
-function agentWorkingStyle(canSaveMemory: boolean, canInspect: boolean, canOpenBrowser: boolean): string {
+function agentWorkingStyle(canSaveMemory: boolean, canInspect: boolean, canOpenBrowser: boolean, patchEdits = false): string {
   return `# Working style
 - Work autonomously to complete the task. Gather context with tools before editing; read a file before you modify it.
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
 - Large tasks: split the work into independent pieces (by file, module or concern) and put the plan in manage_todos — every item gets an "agent" (coder, tester, docs, explore…) and a self-contained "prompt"; use "dependsOn" for items that need another item's result. Then call run_todos_parallel ONCE: independent items run concurrently and dependent ones follow automatically in later waves, with their prerequisites' reports attached. Keep only the final integration (combined diagnostics/tests, summary) for yourself. Never give two parallel items the same file to edit. Do not delegate tiny edits — a single-file, few-line change is faster done directly.
 - Whole-workspace analysis, audits or reviews: call analyze_workspace first (fast, no model call — layout, stacks, manifests and suggested shards), then fan out one explore/reviewer subagent per shard with run_parallel_subagents and merge their reports. Do not read a large repository file by file yourself.
-- Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase. For several changes (in one file or many), send several edit_file calls in one response.
+${patchEdits ? '- Edit files with apply_patch: one patch can update, add, move and delete several files. Keep changes minimal and idiomatic to the codebase, with 3 lines of context around each change.' : '- Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase. For several changes (in one file or many), send several edit_file calls in one response.'}
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
 ${canInspect ? `- For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports${canOpenBrowser ? ', re-inspect, and use open_browser to show the user' : ' and re-inspect'}.\n` : ''}- When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
 - Work in visible phases: understand (read, search) → plan (manage_todos for anything with more than two steps) → change (edits) → verify (diagnostics, tests, a browser check for UI) → report. Do not skip verification because the edit looked right.

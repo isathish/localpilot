@@ -12,6 +12,7 @@ const TOPICS: { tools: string[]; words: RegExp; workspace?: (root: string, repos
   { tools: ['team_board'], words: /\b(board|team_board|backlog|hand ?off|handoff|claim|split (it|this|the work)|for others|teammates?|workers?)\b/i, workspace: (root) => !!root && fs.existsSync(path.join(root, '.localpilot', 'board')) },
   { tools: ['repos'], words: /\b(repos|repositories|repository|multi[- ]?repo|monorepo|across (the )?projects)\b/i, workspace: (_root, repos) => repos > 1 },
   { tools: ['read_pdf'], words: /\.pdf\b|\bpdfs?\b|read_pdf/i, workspace: (root) => !!root && hasPdf(root) },
+  { tools: ['notebook_edit'], words: /\.ipynb\b|\bnotebooks?\b|\bjupyter\b|notebook_edit/i },
   { tools: ['security_scan'], words: /\b(security|secure|vulnerab\w*|cves?|ghsa|advisor(y|ies)|secrets?|leak\w*|credentials?|audit|scan|sast|owasp|injection|dependenc(y|ies) (check|update|upgrade))\b/i },
 ];
 
@@ -56,4 +57,22 @@ export function irrelevantTools(recentText: string, root: string | undefined, re
     }
   }
   return out;
+}
+
+/** True when the model was trained on the `*** Begin Patch` format (GPT, Codex, gpt-oss). */
+export function prefersApplyPatch(modelId: string): boolean {
+  return /gpt|codex|gpt-oss/i.test(modelId);
+}
+
+/**
+ * File-editing tools to leave out for this model (`localpilot.editTool`): apply_patch replaces edit_file and write_file
+ * for models that prefer it, and is not offered to the others. Nothing is dropped when its replacement is unavailable.
+ */
+export function editToolsToOmit(available: string[], modelId: string, setting: 'auto' | 'edit_file' | 'apply_patch'): Set<string> {
+  const has = new Set(available);
+  const patch = setting === 'apply_patch' || (setting === 'auto' && prefersApplyPatch(modelId));
+  if (patch) {
+    return has.has('apply_patch') ? new Set(['edit_file', 'write_file']) : new Set();
+  }
+  return has.has('edit_file') ? new Set(['apply_patch']) : new Set();
 }

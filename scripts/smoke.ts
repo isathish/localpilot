@@ -13,6 +13,9 @@ import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
 import { buildProfile } from '../src/providers/system';
 import { bedrockRegion, bedrockUrl, PROVIDER_PRESETS, withRegion } from '../src/providers/presets';
+import { rankPresets } from '../src/providers/presetSearch';
+import { applyModelOverrides, expandProviderRef, withExtraBody } from '../src/providers/providerOptions';
+import { anthropicBudget } from '../src/providers/thinkingParams';
 import { lmStudioContexts, lmStudioRoot } from '../src/providers/lmstudio';
 import { checkGatewayPrereqs, classifyGatewayModels, gatewayEnv, gatewayModels, installCommand as gatewayInstall, needsProviders, nodeVersionOk, startCommand as gatewayStart } from '../src/providers/gatewaySetup';
 import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
@@ -29,7 +32,8 @@ import { buildRepoGraph, findCycles, parseSource } from '../src/context/repoGrap
 import { describePolicy, flooredApproval, getManagedPolicy, managedPolicyPath, mcpServerAllowed, normalizePolicy, policyVerdict, providerAllowed, resetManagedPolicyCache, toolAllowed } from '../src/agent/managedPolicy';
 import { answerRepoGraph } from '../src/tools/repoGraph';
 import { formatPr, gitCommitTool, gitPushTool, gitStatusTool, runCmd, summarizeFailedLog, validBranch } from '../src/tools/git';
-import { builtinCommands } from '../src/agent/commands';
+import { builtinCommands, parseCommandFile, resolveSlashMessage } from '../src/agent/commands';
+import { findSlashToken, normalizeCommandName, spliceSlashToken } from '../src/agent/slashNames';
 import { BUILTIN_SUITE } from '../src/eval/suite';
 import { parseMemoryNotes, runDigest } from '../src/agent/autoMemory';
 import { irrelevantTools } from '../src/agent/toolRelevance';
@@ -63,10 +67,22 @@ import { documents } from './smokeDocuments';
 import { agentModes } from './smokeAgentModes';
 import { pdfViewer } from './smokePdfViewer';
 import { rules } from './smokeRules';
+import { hookScripts } from './smokeHookScripts';
 import { markdownExport } from './smokeMarkdownExport';
+import { approvals } from './smokeApprovals';
 import { readTools } from './smokeReadTools';
+import { applyPatchChecks } from './smokeApplyPatch';
+import { toolsExtras } from './smokeToolsExtras';
+import { historySmoke } from './smokeHistory';
+import { cliParity } from './smokeCliParity';
+import { editorIntegration } from './smokeEditorIntegration';
+import { commandRuns } from './smokeCommandRun';
 import { mentions } from './smokeMentions';
+import { workspaceRoots } from './smokeWorkspaceRoots';
 import { pricing } from './smokePricing';
+import { vscodeLm } from './smokeVscodeLm';
+import { cliSlash } from './smokeCliSlash';
+import { cliMcp } from './smokeCliMcp';
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
 import { WorktreeManager } from '../src/agent/worktrees';
@@ -452,6 +468,8 @@ async function cloudAgentE2E() {
   const webKeys = [...webview.matchAll(/\[\s*'([a-z0-9-]+)',\s*'[^']+',\s*'[^']*',\s*'(?:ollama|openai|anthropic)'/g)].map((m) => m[1]);
   check('Bedrock preset: region rewrites only Bedrock endpoints', withRegion(bedrockUrl('us-east-1'), 'eu-west-1') === bedrockUrl('eu-west-1') && bedrockRegion(withRegion(bedrockUrl('us-east-1'), 'bogus')) === 'us-east-1' && withRegion('https://api.openai.com/v1', 'eu-west-1') === 'https://api.openai.com/v1' && !!PROVIDER_PRESETS.find((p) => p.key === 'bedrock')?.cfg.models?.length);
   check('LM Studio native context: loaded length, else the maximum', lmStudioContexts([{ id: 'a', loaded_context_length: 8192, max_context_length: 32768 }, { id: 'b', max_context_length: 4096 }]).get('a') === 8192 && lmStudioContexts([{ id: 'b', max_context_length: 4096 }]).get('b') === 4096 && lmStudioRoot('http://localhost:1234/v1') === 'http://localhost:1234');
+  check('provider search ranks by name, key and host (hf → Hugging Face, open → OpenAI first)', rankPresets('hf', PROVIDER_PRESETS)[0]?.preset.key === 'huggingface' && rankPresets('open', PROVIDER_PRESETS)[0]?.preset.key === 'openai' && !rankPresets('zzqx', PROVIDER_PRESETS).length);
+  check('provider options: overrides, extraBody, bare provider id, Claude budget', applyModelOverrides([{ id: 'p/m', providerId: 'p', modelId: 'm', name: 'm', contextWindow: 8192, maxOutputTokens: 4096, supportsTools: true, supportsVision: false }], { m: { contextWindow: 65536, vision: true } })[0].supportsVision && withExtraBody({ model: 'a' } as Record<string, unknown>, { model: 'b', provider: { sort: 'price' } }).model === 'a' && expandProviderRef('or', [{ id: 'or', defaultModel: 'x/y' }]) === 'or/x/y' && anthropicBudget('max', 8192) === 4096 && anthropicBudget('low') >= 1024);
   check('CLI and Settings provider presets are the same list', !drift.length && webKeys.every((k) => PROVIDER_PRESETS.some((p) => p.key === k)), { drift: drift.map((p) => p.key), extra: webKeys.filter((k) => !PROVIDER_PRESETS.some((p) => p.key === k)) });
   check('thinking style per Claude model', thinkingStyle('claude-opus-5-5') === 'always' && thinkingStyle('claude-fable-5-1') === 'always' && thinkingStyle('claude-sonnet-4-6') === 'adaptive' && thinkingStyle('claude-haiku-5-5') === 'adaptive' && thinkingStyle('claude-sonnet-4-5') === 'budget' && thinkingStyle('claude-3-7-sonnet-latest') === 'budget' && thinkingStyle('claude-3-5-haiku-latest') === 'none');
   check('local gateways marked cloud count as cloud; URLs decide otherwise', isCloudProvider({ baseUrl: 'http://localhost:20128/v1', cloud: true }) && !isCloudProvider({ baseUrl: 'http://localhost:1234/v1' }) && isCloudProvider({ baseUrl: 'https://api.openai.com/v1' }));
@@ -1006,6 +1024,22 @@ async function pureLogic() {
     check('CI log summary keeps the failure and its context, not passing lines that say "error"', /✖ Auto routes/.test(sum) && /##\[error\]/.test(sum) && /^## build › Run tests/m.test(sum) && !/2026-11-02T/.test(sum), sum);
     const cmds = builtinCommands();
     check('built-in /pr and /fix-ci commands', cmds.some((c) => c.invoke === '/pr' && /pull_request "create"/.test(c.body)) && cmds.some((c) => c.invoke === '/fix-ci' && /ci_status "logs"/.test(c.body)) && cmds.every((c) => c.source === 'builtin'));
+    check('built-in /newrule and /init write a rule file', cmds.some((c) => c.invoke === '/newrule' && /\.localpilot\/rules\/<name>\.md/.test(c.body)) && cmds.some((c) => c.invoke === '/init'));
+    {
+      const review = parseCommandFile('/w/.clinerules/workflows/Code Review.md', 'Review the diff.', { source: 'project' });
+      const tok = findSlashToken('fix it, then /code-review\nkeep it short', (n) => n === 'code-review');
+      const inline = resolveSlashMessage('fix it, then /code-review', [review, ...cmds], []);
+      check(
+        'slash names normalise; a workflow named mid-message expands, a skill beats it when typed first',
+        normalizeCommandName('Code Review.md') === 'code-review' &&
+          review.invoke === '/code-review' &&
+          !!tok &&
+          spliceSlashToken('fix it, then /code-review\nkeep it short', tok, 'BODY') === 'fix it, then BODY\nkeep it short' &&
+          !!inline && 'inline' in inline && !!inline.inline &&
+          resolveSlashMessage('please /pr it', cmds, []) === undefined &&
+          JSON.stringify(resolveSlashMessage('/code-review x', [review], [{ name: 'Code Review' }])) === JSON.stringify({ skill: 'Code Review', task: 'x' })
+      );
+    }
     if ((await runCmd('git', ['--version'], undefined)).code === 0) {
       const base = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-git-'));
       const ws = nodePath.join(base, 'ws');
@@ -1389,14 +1423,14 @@ rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdou
     const mlog2 = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as import('vscode').LogOutputChannel;
     const mgr = new McpManager(reg, mlog2, '1');
     await mgr.reload();
-    const before = reg.list().some((t) => t.definition.name === 'mcp_crashy_boom');
-    const call = await reg.execute('mcp_crashy_boom', {}, { sessionId: 's', signal: new AbortController().signal, requestApproval: async () => true, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext);
+    const before = reg.list().some((t) => t.definition.name === 'mcp_crashy__boom');
+    const call = await reg.execute('mcp_crashy__boom', {}, { sessionId: 's', signal: new AbortController().signal, requestApproval: async () => true, progress() {}, trackChange: async () => {}, depth: 0 } as unknown as import('../src/types').ToolContext);
     await new Promise((r) => setTimeout(r, 300));
     const down = mgr.status.find((x) => x.name === 'crashy');
-    const toolsGone = !reg.list().some((t) => t.definition.name === 'mcp_crashy_boom');
+    const toolsGone = !reg.list().some((t) => t.definition.name === 'mcp_crashy__boom');
     await new Promise((r) => setTimeout(r, 2_800));
     const back = mgr.status.find((x) => x.name === 'crashy');
-    check('a crashed MCP server: the call fails, its tools are withdrawn, it is restarted and its tools return', before && !!call.isError && /restarting/.test(String(down?.error)) && toolsGone && back?.tools === 1 && !back.error && reg.list().some((t) => t.definition.name === 'mcp_crashy_boom'), { before, call: call.content.slice(0, 80), down, toolsGone, back });
+    check('a crashed MCP server: the call fails, its tools are withdrawn, it is restarted and its tools return', before && !!call.isError && /restarting/.test(String(down?.error)) && toolsGone && back?.tools === 1 && !back.error && reg.list().some((t) => t.definition.name === 'mcp_crashy__boom'), { before, call: call.content.slice(0, 80), down, toolsGone, back });
     mgr.dispose();
     if (prevCfg === undefined) {
       delete process.env.LP_CONFIG;
@@ -1404,6 +1438,21 @@ rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdou
       process.env.LP_CONFIG = prevCfg;
     }
     nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  console.log('\n[MCP tool names, rich content and prompt arguments]');
+  {
+    const { mcpToolName, legacyMcpToolName } = await import('../src/mcp/toolNames');
+    const { mcpContentToResult, mcpToolVisibleToModel } = await import('../src/mcp/content');
+    const { mapPromptArgs, parseMcpSlash } = await import('../src/mcp/prompts');
+    const long = mcpToolName('my_db', 'x'.repeat(80));
+    check('MCP tool names: mcp_<server>__<tool>; sanitised or long names get a hash and stay ≤ 64', mcpToolName('my_db', 'run_query') === 'mcp_my_db__run_query' && /^mcp_kit_db__q_[0-9a-f]{8}$/.test(mcpToolName('kit:db', 'q')) && long.length === 64 && long !== mcpToolName('my_db', `${'x'.repeat(80)}y`) && legacyMcpToolName('my_db', 'run_query') === 'mcp_my_db_run_query', long);
+    const rich = mcpContentToResult([{ type: 'text', text: 'hi' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }, { type: 'resource', resource: { uri: 'file:///a.md', mimeType: 'text/markdown', text: '# A' } }, { type: 'resource_link', uri: 'file:///b' }], undefined, 's');
+    check('MCP content: images become attachments, resources a [resource …] line plus embedded text', rich.images.length === 1 && rich.images[0].mime === 'image/png' && rich.text === 'hi\n[image s-image-1.png (image/png)]\n[resource file:///a.md (text/markdown)]\n# A\n[resource file:///b]', rich.text);
+    check('MCP visibility: app-only tools are hidden from the model', !mcpToolVisibleToModel({ _meta: { ui: { visibility: ['app'] } } }) && mcpToolVisibleToModel({ _meta: { ui: { visibility: ['model', 'app'] } } }) && mcpToolVisibleToModel({}));
+    const mapped = mapPromptArgs('main key=x fix the "login bug"', [{ name: 'branch', required: true }, { name: 'key' }, { name: 'task' }]);
+    check('MCP prompt arguments: key=value, then by position; extra words join the last', JSON.stringify(mapped) === JSON.stringify({ args: { key: 'x', branch: 'main', task: 'fix the login bug' }, missing: [] }) && mapPromptArgs('', [{ name: 'a', required: true }]).missing[0] === 'a', mapped);
+    check('/mcp:<server>:<prompt> parses plugin servers with a colon', JSON.stringify(parseMcpSlash('/mcp:kit:db:review a b')) === JSON.stringify({ server: 'kit:db', prompt: 'review', args: 'a b' }) && parseMcpSlash('/mcp review') === undefined);
   }
 
   console.log('\n[MCP server files: .mcp.json normalizer, merge, expansion]');
@@ -1737,6 +1786,11 @@ async function pauseAndSteer() {
     const kid2 = root.child('kid2');
     root.stop();
     check('control: parent stop aborts children', kid2.aborted && root.aborted);
+    const sc = new RunControl('steers');
+    sc.steer({ role: 'user', content: 'KEEP', meta: { steerId: 's1' } });
+    sc.steer({ role: 'user', content: 'DROP', meta: { steerId: 's2' } });
+    const dropped = sc.removeSteer('s2');
+    check('control: a cancelled steer is never taken by the loop', dropped?.content === 'DROP' && !sc.removeSteer('s2') && sc.takeSteering().map((m) => m.content).join() === 'KEEP');
     kid2.dispose();
     check('control: dispose unregisters the child', !root.children.has('kid2') && root.find('kid2') === undefined);
   }
@@ -2523,10 +2577,22 @@ async function redisStorage() {
   await agentModes(check);
   pdfViewer(check);
   await rules(check);
+  await hookScripts(check);
   markdownExport(check);
+  approvals(check);
   await readTools(check);
+  await applyPatchChecks(check);
+  toolsExtras(check);
+  historySmoke(check);
+  cliParity(check);
+  editorIntegration(check);
+  await commandRuns(check);
   await mentions(check);
+  await workspaceRoots(check);
   await pricing(check);
+  vscodeLm(check);
+  await cliSlash(check);
+  await cliMcp(check);
   await pauseAndSteer();
   await reopenReplay();
   await skillsInHarness();

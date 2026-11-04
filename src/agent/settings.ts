@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { parseJsonc } from './jsonc';
+import { discoverHookScripts, hookScriptHooks } from './hookScripts';
 
 /**
  * Project / user settings files in the Claude Code format (`settings.json`), read from both the `.claude` and the
@@ -17,9 +18,10 @@ import { parseJsonc } from './jsonc';
  * higher layer winning; scalars take the highest layer.
  */
 
-export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'SubagentStop' | 'SessionStart' | 'SessionEnd' | 'PreCompact' | 'Notification';
+/** `TaskCancel` fires when a run is stopped, `TaskError` when a run ends with an error. */
+export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'SubagentStop' | 'SessionStart' | 'SessionEnd' | 'PreCompact' | 'Notification' | 'TaskCancel' | 'TaskError';
 
-export const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact', 'Notification'];
+export const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact', 'Notification', 'TaskCancel', 'TaskError'];
 
 export interface HookCommand {
   type: 'command';
@@ -28,6 +30,8 @@ export interface HookCommand {
   timeout?: number;
   /** Set for hooks contributed by a plugin: `${CLAUDE_PLUGIN_ROOT}` in the command resolves to this folder. */
   pluginRoot?: string;
+  /** Shown in the chat's hook rows; defaults to the start of the command (hook scripts use their file name). */
+  name?: string;
 }
 
 export interface HookMatcher {
@@ -195,11 +199,14 @@ export async function readSettingsFile(file: string, log?: { warn(m: string): vo
 }
 
 /** Reads and merges every settings layer for the given workspace roots. */
-export async function loadProjectSettings(roots: string[], opts: { home?: string; log?: { warn(m: string): void }; extra?: ProjectSettings[] } = {}): Promise<ProjectSettings> {
+export async function loadProjectSettings(roots: string[], opts: { home?: string; log?: { warn(m: string): void }; extra?: ProjectSettings[]; hookDirs?: string[] } = {}): Promise<ProjectSettings> {
   const files = [...userSettingsFiles(opts.home), ...roots.flatMap((r) => settingsFilesFor(r))];
   const layers = (await Promise.all(files.map((f) => readSettingsFile(f, opts.log)))).filter((l): l is ProjectSettings => !!l);
+  // Hook scripts in the hook folders (.localpilot/hooks, the Cline folders, --hooks-dir) run like settings hooks.
+  const scripts = await discoverHookScripts(roots, { home: opts.home, extraDirs: opts.hookDirs });
+  const scriptLayer: ProjectSettings = { ...emptySettings(), hooks: hookScriptHooks(scripts) };
   // Plugin contributions sit below every settings file, so a project can still deny what a plugin allows.
-  return mergeSettings([...(opts.extra ?? []), ...layers]);
+  return mergeSettings([...(opts.extra ?? []), scriptLayer, ...layers]);
 }
 
 /**
@@ -211,6 +218,7 @@ export class ProjectSettingsManager implements vscode.Disposable {
   private readonly _onDidChange = new vscode.EventEmitter<ProjectSettings>();
   readonly onDidChange = this._onDidChange.event;
   private readonly watcher: vscode.FileSystemWatcher;
+  private readonly hookWatcher: vscode.FileSystemWatcher;
   private loadedAt = 0;
   private loading?: Promise<ProjectSettings>;
   /** Settings contributed by plugins (hooks, mcp are handled by their own managers); refreshed by the plugin manager. */
@@ -222,6 +230,10 @@ export class ProjectSettingsManager implements vscode.Disposable {
     this.watcher.onDidChange(reload);
     this.watcher.onDidCreate(reload);
     this.watcher.onDidDelete(reload);
+    this.hookWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot,.clinerules,.cline}/hooks/*');
+    this.hookWatcher.onDidChange(reload);
+    this.hookWatcher.onDidCreate(reload);
+    this.hookWatcher.onDidDelete(reload);
   }
 
   get current(): ProjectSettings {
@@ -262,6 +274,7 @@ export class ProjectSettingsManager implements vscode.Disposable {
 
   dispose(): void {
     this.watcher.dispose();
+    this.hookWatcher.dispose();
     this._onDidChange.dispose();
   }
 }

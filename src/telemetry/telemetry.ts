@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { SpanData, Tracer } from './tracing';
 
 /**
  * Where events and logs live: `~/.localpilot/telemetry`, shared by the extension and the CLI. `LOCALPILOT_TELEMETRY_DIR`
@@ -19,10 +20,13 @@ export type CompletionAction = 'requested' | 'shown' | 'accepted' | 'cached' | '
 interface Base {
   /** Epoch ms. */
   t: number;
+  /** The trace span the event happened in (only while trace export is on). */
+  traceId?: string;
+  spanId?: string;
 }
 export type TelemetryEvent =
   /** One model request (an attempt; retries record their own event). */
-  | (Base & { type: 'model'; sid: string; model: string; provider: string; mode: string; depth: number; promptTokens?: number; completionTokens?: number; ttftMs?: number; durationMs: number; outcome: ModelOutcome; reason?: string })
+  | (Base & { type: 'model'; sid: string; model: string; provider: string; mode: string; depth: number; promptTokens?: number; completionTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; /** Priced from the bundled model facts or reported by the provider; absent for local models. */ costUsd?: number; ttftMs?: number; durationMs: number; outcome: ModelOutcome; reason?: string })
   /** One tool execution. */
   | (Base & { type: 'tool'; sid: string; name: string; mode: string; durationMs: number; error: boolean; cached?: boolean })
   /** One agent turn (depth > 0 is a subagent). */
@@ -119,6 +123,8 @@ export interface TelemetrySummary {
     retries: number;
     promptTokens: number;
     completionTokens: number;
+    /** US dollars spent on priced (cloud) model calls; 0 when every call ran locally. */
+    costUsd: number;
     toolCalls: number;
     toolErrors: number;
     /** Read-only tool calls served from the per-turn cache. */
@@ -137,7 +143,7 @@ export interface TelemetrySummary {
   hourly: number[];
   /** Subagent runs grouped by agent persona. */
   agents: { agent: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; toolCalls: number }[];
-  models: { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; tokPerSec: number; ttft: Percentiles; duration: Percentiles; errors: number; last: number }[];
+  models: { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; /** Absent when no call of this model had a price. */ costUsd?: number; tokPerSec: number; ttft: Percentiles; duration: Percentiles; errors: number; last: number }[];
   tools: { name: string; calls: number; errors: number; cached: number; duration: Percentiles; last: number }[];
   modes: { mode: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; steps: Percentiles; toolCalls: number }[];
   completions: { requested: number; shown: number; accepted: number; cached: number; empty: number; error: number; acceptanceRate: number; latency: Percentiles; byLanguage: { language: string; shown: number; accepted: number }[] };
@@ -186,6 +192,8 @@ export interface TelemetrySink {
   shutdown(): Promise<void>;
   counter?(name: string, value: number, attributes?: MetricAttributes): void;
   histogram?(name: string, value: number, attributes?: MetricAttributes): void;
+  /** A finished, sampled trace span. */
+  span?(span: SpanData): void;
 }
 
 /** Name of the built-in sink (files, or the external store with files as the fallback). It cannot be removed or replaced. */
@@ -372,6 +380,8 @@ export class Telemetry {
   private remoteDownUntil = 0;
   private lastRemoteError: string | undefined;
   readonly dir: string;
+  /** Run, model and tool spans; off until an exporter turns it on. Finished spans go to the sinks that take them. */
+  readonly tracing = new Tracer((s) => this.metric((sink) => sink.span?.(s)));
 
   constructor(private readonly opts: TelemetryOptions) {
     this.dir = opts.dir;
@@ -385,7 +395,8 @@ export class Telemetry {
   private get now(): number {
     return (this.opts.now ?? Date.now)();
   }
-  private get enabled(): boolean {
+  /** False while `localpilot.telemetry.enabled` is off: nothing is recorded or exported then. */
+  get enabled(): boolean {
     return this.opts.enabled ? this.opts.enabled() : true;
   }
 
@@ -395,6 +406,11 @@ export class Telemetry {
       return;
     }
     const ev = { ...e, t: e.t ?? this.now } as TelemetryEvent;
+    const active = ev.traceId ? undefined : this.tracing.active();
+    if (active) {
+      ev.traceId = active.traceId;
+      ev.spanId = active.spanId;
+    }
     this.pendingEvents.push(ev);
     capPending(this.pendingEvents);
     this.schedule();
@@ -846,7 +862,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
     }
   }
 
-  type ModelAgg = { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; genMs: number; ttft: Samples; dur: Samples; errors: number; last: number };
+  type ModelAgg = { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; costUsd?: number; genMs: number; ttft: Samples; dur: Samples; errors: number; last: number };
   const models = new Map<string, ModelAgg>();
   type ToolAgg = { name: string; calls: number; errors: number; cached: number; dur: Samples; last: number };
   const tools = new Map<string, ToolAgg>();
@@ -865,7 +881,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
       errors.sort((a, b) => b.t - a.t).length = 25;
     }
   };
-  const totals = { runs: 0, done: 0, stopped: 0, failed: 0, subagentRuns: 0, modelCalls: 0, modelErrors: 0, retries: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, isolatedRuns: 0 };
+  const totals = { runs: 0, done: 0, stopped: 0, failed: 0, subagentRuns: 0, modelCalls: 0, modelErrors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, isolatedRuns: 0 };
   const runTimes = new Samples();
   const runSteps = new Samples();
   const hourly = new Array<number>(24).fill(0);
@@ -912,6 +928,10 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
           m.completionTokens += e.completionTokens ?? 0;
           totals.promptTokens += e.promptTokens ?? 0;
           totals.completionTokens += e.completionTokens ?? 0;
+          if (typeof e.costUsd === 'number' && Number.isFinite(e.costUsd)) {
+            m.costUsd = (m.costUsd ?? 0) + e.costUsd;
+            totals.costUsd += e.costUsd;
+          }
           day.tokens += (e.promptTokens ?? 0) + (e.completionTokens ?? 0);
           day.promptTokens += e.promptTokens ?? 0;
           day.completionTokens += e.completionTokens ?? 0;
@@ -1161,7 +1181,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
       hourly,
       agents: [...agents.values()].map((a) => ({ agent: a.agent, runs: a.runs, done: a.done, stopped: a.stopped, failed: a.failed, duration: percentiles(a.dur), toolCalls: a.toolCalls })).sort((a, b) => b.runs - a.runs),
       models: [...models.values()]
-        .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
+        .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, costUsd: m.costUsd, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
         .sort((a, b) => b.calls - a.calls),
       tools: [...tools.values()].map((t) => ({ name: t.name, calls: t.calls, errors: t.errors, cached: t.cached, duration: percentiles(t.dur), last: t.last })).sort((a, b) => b.calls - a.calls),
       modes: [...modes.values()].map((m) => ({ mode: m.mode, runs: m.runs, done: m.done, stopped: m.stopped, failed: m.failed, duration: percentiles(m.dur), steps: percentiles(m.steps), toolCalls: m.toolCalls })).sort((a, b) => b.runs - a.runs),

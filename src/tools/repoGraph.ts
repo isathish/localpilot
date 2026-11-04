@@ -1,6 +1,7 @@
-import * as vscode from 'vscode';
 import { buildRepoGraph, fileKey, findCycles, hubs, reach, RepoGraph } from '../context/repoGraph';
 import { Tool } from '../types';
+import { rootArg } from './fs';
+import { ROOT_PARAM } from './rootPaths';
 
 const ACTIONS = ['overview', 'dependents', 'dependencies', 'impact', 'hubs', 'cycles', 'external', 'symbol'] as const;
 
@@ -129,12 +130,13 @@ export const repoGraphTool: Tool = {
         action: { type: 'string', enum: [...ACTIONS] },
         path: { type: 'string', description: 'File (for dependents/dependencies/impact), package (external) or symbol name (symbol)' },
         depth: { type: 'integer', description: 'Levels for impact (default 4)' },
+        root: ROOT_PARAM,
       },
       required: ['action'],
     },
   },
   async execute(args, ctx) {
-    const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const root = rootArg(args.root, ctx);
     if (!root) {
       return { content: 'No workspace folder open.', isError: true };
     }

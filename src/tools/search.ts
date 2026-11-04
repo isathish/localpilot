@@ -2,14 +2,27 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 import { Tool, ToolContext } from '../types';
-import { displayPath, resolveWorkspacePath } from './fs';
+import { displayPath, excludedPath, resolveWorkspacePath, toolRoots } from './fs';
 import { onAbort } from '../agent/resilience';
+import { IGNORE_FILES } from '../agent/ignoreFile';
+import * as nodeFs from 'fs';
 
 /** `findFiles` scoped to the agent's root: the workspace by default, its isolated worktree when it has one. */
 function findIn(ctx: ToolContext, pattern: string, max: number): Thenable<vscode.Uri[]> {
   const root = ctx.workspaceRoot;
   const inWorkspace = !root || vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === root);
   return inWorkspace ? vscode.workspace.findFiles(pattern, EXCLUDES, max) : vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(root), pattern), new vscode.RelativePattern(vscode.Uri.file(root), EXCLUDES), max);
+}
+
+/** The other workspace folders grep_search covers besides `root`: not `root` itself nor folders inside it. */
+function otherSearchRoots(root: string, ctx: ToolContext): string[] {
+  const folders = new Set((vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath));
+  return toolRoots(ctx)
+    .map((r) => r.path)
+    .filter((p) => {
+      const rel = path.relative(root, p);
+      return (folders.has(p) || p === ctx.workspaceRoot) && rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel));
+    });
 }
 
 const EXCLUDES =
@@ -30,14 +43,18 @@ export const fileSearchTool: Tool = {
     const pattern = String(args.pattern ?? '**/*');
     const max = Number(args.max_results ?? 50);
     const found = await findIn(ctx, pattern, max + 1);
-    const files = found.slice(0, max);
+    const visible = found.filter((f) => !excludedPath(f, ctx));
+    const files = visible.slice(0, max);
+    if (!files.length && found.length) {
+      return { content: `Every file matching ${pattern} is excluded by the agent ignore file (.localpilotignore).` };
+    }
     if (!files.length) {
       // A bare identifier in a glob almost always means the model wanted a content search.
       const looksLikeSymbol = /^(\*\*\/)?[\w.-]+\*?$/.test(pattern) && !/\.[a-z]{1,5}$/i.test(pattern.replace(/\*$/, ''));
       return { content: `No files match ${pattern}.${looksLikeSymbol ? ` file_search only matches file names — to find "${pattern.replace(/^\*\*\//, '').replace(/\*$/, '')}" inside files use grep_search with that text as the query (or find_symbol for definitions).` : ''}` };
     }
     const list = files.map((f) => displayPath(f, ctx)).sort().join('\n');
-    return { content: found.length > max ? `${list}\n(more than ${max} files match; narrow the pattern)` : list };
+    return { content: visible.length > max ? `${list}\n(more than ${max} files match; narrow the pattern)` : list };
   },
 };
 
@@ -46,7 +63,7 @@ export const grepSearchTool: Tool = {
   definition: {
     name: 'grep_search',
     description:
-      'Search INSIDE file contents with a regex or literal string (uses ripgrep when available) — the right tool to find where a function, class, variable or message is defined or used. Returns `path:line: text` matches. Use include_pattern to restrict to a glob.',
+      'Search INSIDE file contents with a regex or literal string (uses ripgrep when available) — the right tool to find where a function, class, variable or message is defined or used. Returns `path:line: text` matches from every workspace folder. Use include_pattern to restrict to a glob.',
     parameters: {
       type: 'object',
       properties: {
@@ -89,16 +106,35 @@ export const grepSearchTool: Tool = {
         for (const g of ['!node_modules', '!.git', '!.hg', '!.svn', '!dist', '!out', '!build']) {
           rgArgs.push('--glob', g);
         }
-        rgArgs.push('-e', query, '.');
-        // Exit 2 also means "some files could not be read" alongside real matches: keep them.
+        // Every workspace folder is searched, each from its own folder so a path-scoped include_pattern
+        // ("src/**/*.ts") applies inside it. Hits of the others are shown relative to the agent's root (`../api/src/x.ts`),
+        // which the file tools resolve back. A folder inside the root is already covered by the root's search.
+        const runs = [root, ...otherSearchRoots(root, ctx)];
         let stderr: string | undefined;
-        const out = await runProcess(rg, rgArgs, root, ctx.signal, 60_000, [0, 1, 2], (code, err) => {
-          if (code === 2) {
-            stderr = err.trim();
-          }
+        const outs = await Promise.all(
+          runs.map((dir) => {
+            const ignore = IGNORE_FILES.map((name) => path.join(dir, name)).filter((f) => nodeFs.existsSync(f));
+            // Exit 2 also means "some files could not be read" alongside real matches: keep them.
+            return runProcess(rg, [...rgArgs, ...ignore.flatMap((f) => ['--ignore-file', f]), '-e', query, '.'], dir, ctx.signal, 60_000, [0, 1, 2], (code, err) => {
+              if (code === 2) {
+                stderr = [stderr, err.trim()].filter(Boolean).join('\n');
+              }
+            });
+          })
+        );
+        // The ignore files are applied here as well: `!include` and per-folder files are beyond --ignore-file.
+        const all = outs.flatMap((out, i) => {
+          const rel = i ? path.relative(root, runs[i]) : '';
+          return out.split('\n').flatMap((l) => {
+            const m = /^(?:\.[\\/])?(.+?)(:\d+:)/.exec(l);
+            if (!m) {
+              return l ? [l] : [];
+            }
+            const file = rel ? path.join(rel, m[1]) : m[1];
+            return excludedPath(vscode.Uri.file(path.resolve(root, file)), ctx) ? [] : [file + l.slice(m[0].length - m[2].length)];
+          });
         });
-        const all = out.split('\n').filter(Boolean);
-        const found = all.slice(0, max).map((l) => l.replace(/^\.\//, ''));
+        const found = all.slice(0, max);
         if (stderr !== undefined && !found.length) {
           throw new Error(stderr || 'ripgrep exited with code 2');
         }
@@ -114,7 +150,7 @@ export const grepSearchTool: Tool = {
       // This runs the model's pattern in-process, where nothing can interrupt one regex test: a nested quantifier such
       // as (a+)+ can backtrack for minutes and freeze the extension host. Such patterns are searched as plain text, very
       // long lines (minified code) are skipped, and the whole search stops after 10 s.
-      const files = await findIn(ctx, include ? (include.includes('/') ? include : `**/${include}`) : '**/*', 2000);
+      const files = (await findIn(ctx, include ? (include.includes('/') ? include : `**/${include}`) : '**/*', 2000)).filter((f) => !excludedPath(f, ctx));
       const pattern = isRegex ? safeRegex(query) : query;
       const risky = isRegex && riskyRegex(pattern);
       const re = new RegExp(isRegex && !risky ? pattern : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');

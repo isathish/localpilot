@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { McpServerConfig } from '../config';
 import { parseJsonc } from '../agent/jsonc';
+import { setJsoncDisabled } from './jsoncEdit';
 
 /**
  * MCP server files: `{ "mcpServers": { name: {...} } }` as written by Claude Code (`.mcp.json`), Cline
@@ -11,7 +12,7 @@ import { parseJsonc } from '../agent/jsonc';
  * the `localpilot.mcpServers` setting, `<workspace>/.mcp.json`, the user file, then plugin `.mcp.json` files.
  */
 
-export type McpSource = 'settings' | 'project' | 'user' | 'plugin';
+export type McpSource = 'managed' | 'settings' | 'project' | 'user' | 'plugin';
 
 export interface McpLayer {
   source: McpSource;
@@ -136,6 +137,17 @@ export function normalizeMcpServers(raw: unknown, opts: { root?: string; default
         own.push('"autoApprove" must be an array of tool names');
       }
     }
+    // `oauthClient` (LocalPilot) or Claude Code's `oauth`: a client registered with the server's authorization server.
+    let oauthClient: McpServerConfig['oauthClient'];
+    const oauthRaw = c.oauthClient ?? c.oauth;
+    if (oauthRaw !== undefined && oauthRaw !== null) {
+      const o = oauthRaw as { clientId?: unknown; clientSecret?: unknown };
+      if (typeof oauthRaw === 'object' && !Array.isArray(oauthRaw) && typeof o.clientId === 'string' && o.clientId.trim() && (o.clientSecret === undefined || typeof o.clientSecret === 'string')) {
+        oauthClient = { clientId: map(o.clientId.trim()), ...(typeof o.clientSecret === 'string' && o.clientSecret ? { clientSecret: map(o.clientSecret) } : {}) };
+      } else if (!(typeof oauthRaw === 'object' && !Array.isArray(oauthRaw) && o.clientId === undefined)) {
+        own.push('"oauthClient" must be { "clientId": "…", "clientSecret"?: "…" }');
+      }
+    }
     if (!own.length) {
       if (type === 'stdio' && !command) {
         own.push('"type": "stdio" needs a "command"');
@@ -159,6 +171,9 @@ export function normalizeMcpServers(raw: unknown, opts: { root?: string; default
     }
     if (autoApprove) {
       cfg.autoApprove = autoApprove;
+    }
+    if (oauthClient && remote) {
+      cfg.oauthClient = oauthClient;
     }
     for (const k of Object.keys(cfg) as (keyof McpServerConfig)[]) {
       if (cfg[k] === undefined) {
@@ -201,6 +216,38 @@ export async function readMcpFile(file: string, source: McpSource): Promise<McpL
 export async function loadMcpFiles(folders: string[], userFile = userMcpFile()): Promise<McpLayer[]> {
   const project = await Promise.all(folders.map((f) => readMcpFile(path.join(f, '.mcp.json'), 'project')));
   return [...project, await readMcpFile(userFile, 'user')];
+}
+
+/**
+ * The organisation's servers and the `localpilot.mcpServers` setting as two layers, the policy's first so no user or
+ * project server can take their names. A `{ "enabled": false }` entry under a policy server's name in the setting
+ * switches it off (unless it is always enabled) and is not a server of its own.
+ */
+export function policyAndSettingsLayers(org: { servers: Record<string, Record<string, unknown>>; alwaysEnabled: string[] }, setting: Record<string, unknown>): McpLayer[] {
+  const own: Record<string, unknown> = { ...setting };
+  const orgRaw: Record<string, unknown> = {};
+  for (const [name, c] of Object.entries(org.servers)) {
+    const off = (own[name] as { enabled?: unknown } | undefined)?.enabled === false && !org.alwaysEnabled.includes(name);
+    delete own[name];
+    orgRaw[name] = off ? { ...c, enabled: false } : c;
+  }
+  const managed = normalizeMcpServers({ mcpServers: orgRaw });
+  const settings = normalizeMcpServers({ mcpServers: own });
+  return [
+    { source: 'managed', servers: managed.servers, problems: managed.problems.map((x) => `organization policy ${x}`) },
+    { source: 'settings', servers: settings.servers, problems: settings.problems },
+  ];
+}
+
+/** A `localpilot.mcpServers` entry switched on or off: both `enabled` and Cline's `disabled` are cleared before the switch is set. */
+export function withMcpEnabled<T extends Record<string, unknown>>(entry: T, enabled: boolean): T {
+  const next: Record<string, unknown> = { ...entry };
+  delete next.enabled;
+  delete next.disabled;
+  if (!enabled) {
+    next.enabled = false;
+  }
+  return next as T;
 }
 
 /** Merges layers given highest priority first: a name defined in an earlier layer hides the later definitions. */
@@ -297,10 +344,14 @@ export function expandMcpServer(cfg: McpServerConfig, lookup: (kind: 'env' | 'se
 
 /** Writes JSON through a temporary file and a rename, so a crash never leaves a half-written file behind. */
 export async function writeJsonAtomic(file: string, data: unknown): Promise<void> {
+  await writeTextAtomic(file, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+async function writeTextAtomic(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
   try {
-    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    await fs.writeFile(tmp, text, 'utf8');
     await fs.rename(tmp, file);
   } catch (e) {
     await fs.rm(tmp, { force: true }).catch(() => undefined);
@@ -320,4 +371,52 @@ export async function writeMcpFile(file: string, servers: Record<string, McpServ
     /* new or unreadable: replaced */
   }
   await writeJsonAtomic(file, { ...existing, mcpServers: servers });
+}
+
+/** Switches one server of a server file on or off by its `disabled` field, leaving every other field as written. */
+export async function setMcpFileServerEnabled(file: string, name: string, enabled: boolean): Promise<void> {
+  const text = await fs.readFile(file, 'utf8');
+  const raw = parseJsonc(text) as Record<string, unknown> | undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${file} is not a server file`);
+  }
+  const nested = raw.mcpServers && typeof raw.mcpServers === 'object' && !Array.isArray(raw.mcpServers);
+  const servers = (nested ? raw.mcpServers : raw) as Record<string, Record<string, unknown>>;
+  const entry = servers[name];
+  if (!entry || typeof entry !== 'object') {
+    throw new Error(`"${name}" is not defined in ${file}`);
+  }
+  // Edited in place: the comments and layout of a (often committed) .mcp.json are kept.
+  let edited: string | undefined;
+  try {
+    edited = setJsoncDisabled(text, nested ? ['mcpServers', name] : [name], !enabled);
+    const check = (parseJsonc(edited) as Record<string, Record<string, Record<string, unknown>>>) ?? {};
+    const after = (nested ? check.mcpServers : check)?.[name];
+    if (!after || after.enabled !== undefined || !!after.disabled === enabled) {
+      edited = undefined;
+    }
+  } catch {
+    edited = undefined;
+  }
+  if (edited !== undefined) {
+    await writeTextAtomic(file, edited);
+    return;
+  }
+  if (/\/[/*]/.test(stripJsonStrings(text))) {
+    throw new Error(`${file} has comments that rewriting it would lose: set "disabled": ${!enabled} on "${name}" by hand`);
+  }
+  const next = { ...entry };
+  delete next.enabled;
+  if (enabled) {
+    delete next.disabled;
+  } else {
+    next.disabled = true;
+  }
+  servers[name] = next;
+  await writeJsonAtomic(file, raw);
+}
+
+/** The text with every string's contents removed (`//` inside a URL is not a comment). */
+function stripJsonStrings(text: string): string {
+  return text.replace(/"(?:[^"\\]|\\.)*"/g, '""');
 }

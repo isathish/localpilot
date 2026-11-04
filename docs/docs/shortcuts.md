@@ -31,7 +31,7 @@ These keys work in the chat view. On Windows and Linux, read <kbd>⌘</kbd> as <
 | <kbd>Enter</kbd> | Send |
 | <kbd>⇧Enter</kbd> | New line |
 | <kbd>⌘⇧Enter</kbd> | Send in a new tab (another agent, running in parallel) |
-| <kbd>Enter</kbd> while the agent runs | Choose **Add to this agent** (queued for its next step) or **Send in a new tab**. If the agent is paused, the message goes to it directly |
+| <kbd>Enter</kbd> while the agent runs | Choose **Add to this agent** (queued for its next step), **Send after this turn** or **Send in a new tab**. If the agent is paused, the message goes to it directly |
 | <kbd>↑</kbd> / <kbd>↓</kbd> in an empty input | Previous / next prompt from history |
 | <kbd>⇧Tab</kbd> | Rotate the mode: Agent → Multitask → Debug → Plan → Ask (not while the agent runs) |
 | <kbd>⌘Enter</kbd> in an empty input | **Build** the prepared plan shown in the chat |
@@ -83,7 +83,7 @@ Open the Command Palette and type "LocalPilot" to see these.
 | Models | Select Model · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start colibri (stream huge MoE models from disk) |
 | Skills | Install Skill… · Browse Skill Registry (Quick Pick)… · Manage Skills · Reload Skills, Subagents & MCP Servers |
 | Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… · Add File/Folder to Chat |
-| Editor | Add Selection to Chat · Edit with LocalPilot (inline) · Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File · Toggle Inline Completions · Generate Commit Message |
+| Editor | Add Selection to Chat · Edit with LocalPilot (inline) · Explain · Fix · Refactor · Generate Tests · Add Documentation · Fix Errors in File · Toggle Inline Completions · Generate Commit Message · Stop Generating Commit Message · Commit with Agent… · Generate / Explain / Improve Cell with LocalPilot |
 | Terminal and CLI | Open LocalPilot Terminal · Generate Terminal Command… · Explain Terminal Output · Fix Failed Command · Add Terminal Output to Chat · Install 'localpilot' CLI in PATH |
 | Settings and data | Settings · Welcome / Setup · Open Dashboard · Open Memory Notes · Clear Memory Notes… · Clear Chat History… · Show Logs |
 

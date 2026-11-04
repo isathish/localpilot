@@ -2,7 +2,9 @@ import * as assert from 'assert';
 import * as http from 'http';
 import { AddressInfo } from 'net';
 import * as path from 'path';
+import { MessageQueue } from '../agent/messageQueue';
 import { questionPolicy } from '../agent/prompts';
+import { RunControl } from '../agent/runControl';
 import { thinkFor } from '../agent/thinking';
 import { ollamaThink, OllamaProvider } from '../providers/ollama';
 import { askUserTool, formatAnswers, parseQuestions } from '../tools/editor';
@@ -182,5 +184,140 @@ suite('Conversation: questions before work and thinking per task', () => {
     assert.strictEqual(only(path.resolve('/other/x.ts')), true);
     assert.deepStrictEqual(both.calls.dropped, [3]);
     assert.match(both.calls.broadcast.find((m) => m.type === 'toast')?.text ?? '', /reverted 3 files/);
+  });
+});
+
+suite('Conversation: queued and steering messages', () => {
+  /** A ChatController whose turns are fake runs held open until `release()`; each turn reads pending steers at its next step. */
+  const harness = () => {
+    const sid = 's1';
+    const session: any = { id: sid, messages: [] };
+    let alive = true;
+    const turns: string[] = [];
+    const received: string[] = [];
+    const posted: any[] = [];
+    const gates: (() => void)[] = [];
+    const c = Object.create(ChatController.prototype) as any;
+    Object.assign(c, {
+      runs: new Map(),
+      starting: new Set(),
+      compacting: new Map(),
+      replays: new Map(),
+      steerDrafts: new Map(),
+      afterTurn: new MessageQueue(),
+      stoppedByUser: new Set(),
+      approvals: new Map(),
+      questions: new Map(),
+      runStatus: new Map(),
+      pushState: new Map(),
+      activeSessionId: 'other',
+      _onDidChangeRuns: { fire() {} },
+      store: { get: (id: string) => (alive && id === sid ? session : undefined), delete: async () => void (alive = false), list: () => [] },
+      tracker: { forget() {} },
+      runner: {},
+      sessionRoot: () => '/repo',
+      // Deleting takes a moment (hooks, worktree); the stopped run finishes in between.
+      dropWorktree: () => new Promise((r) => setTimeout(r, 20)),
+      correctNames: async (_s: string, text: string) => ({ text, fixes: [] }),
+      readAttachments: async () => [],
+      broadcast: (m: any) => posted.push(m),
+      async startRun(this: any, _s: unknown, id: string, text: string) {
+        const control = new RunControl(id);
+        this.runs.set(id, control);
+        turns.push(text);
+        await new Promise<void>((r) => {
+          gates.push(r);
+          control.signal.addEventListener('abort', () => r());
+        });
+        if (!control.aborted) {
+          received.push(...control.takeSteering().map((m) => m.content));
+        }
+        this.runs.delete(id);
+        this.deliverLeftovers(id, control);
+        return 'done';
+      },
+    });
+    const until = async (cond: () => boolean, what: string) => {
+      for (let i = 0; i < 200 && !cond(); i++) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.ok(cond(), `timed out waiting for ${what}`);
+    };
+    const release = async (n: number) => {
+      await until(() => gates.length >= n, `turn ${n}`);
+      gates[n - 1]();
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 60));
+    return { c, sid, turns, received, posted, until, release, settle };
+  };
+
+  test('messages sent after the turn each run exactly once, in order', async () => {
+    const h = harness();
+    void h.c.handle({ type: 'send', sessionId: h.sid, text: 'first' });
+    await h.until(() => h.c.runs.has(h.sid), 'the first run');
+    await h.c.handle({ type: 'queueAfterTurn', sessionId: h.sid, text: 'second' });
+    await h.c.handle({ type: 'queueAfterTurn', sessionId: h.sid, text: 'third' });
+    assert.deepStrictEqual(h.posted.filter((m) => m.type === 'queue').pop().items.map((r: any) => r.text), ['second', 'third']);
+    await h.release(1);
+    await h.release(2);
+    await h.release(3);
+    await h.settle();
+    assert.deepStrictEqual(h.turns, ['first', 'second', 'third']);
+    assert.strictEqual(h.c.afterTurn.list(h.sid).length, 0);
+    assert.ok(!h.c.runs.has(h.sid));
+  });
+
+  test('a queued message still runs once when the turn ahead of it is stopped', async () => {
+    const h = harness();
+    void h.c.handle({ type: 'send', sessionId: h.sid, text: 'first' });
+    await h.until(() => h.c.runs.has(h.sid), 'the first run');
+    await h.c.handle({ type: 'queueAfterTurn', sessionId: h.sid, text: 'next' });
+    h.c.stop(h.sid);
+    await h.release(2);
+    await h.settle();
+    assert.deepStrictEqual(h.turns, ['first', 'next']);
+  });
+
+  test('a cancelled steer never reaches the model and leaves the banner', async () => {
+    const h = harness();
+    void h.c.handle({ type: 'send', sessionId: h.sid, text: 'first' });
+    await h.until(() => h.c.runs.has(h.sid), 'the first run');
+    await h.c.handle({ type: 'send', sessionId: h.sid, text: 'use tabs' });
+    await h.c.handle({ type: 'send', sessionId: h.sid, text: 'keep it short' });
+    const ids = h.posted.filter((m) => m.type === 'steerQueued').map((m) => m.id);
+    assert.strictEqual(ids.length, 2);
+    await h.c.handle({ type: 'cancelQueued', sessionId: h.sid, id: ids[0] });
+    const q = h.posted.filter((m) => m.type === 'queue').pop();
+    assert.deepStrictEqual(q.removed, [ids[0]]);
+    assert.deepStrictEqual(q.items.map((r: any) => r.text), ['keep it short']);
+    assert.ok(!h.posted.some((m) => m.type === 'draft'), 'no edit asked: nothing goes back to the composer');
+    await h.release(1);
+    await h.settle();
+    assert.deepStrictEqual(h.received, ['keep it short']);
+    assert.deepStrictEqual(h.turns, ['first']);
+  });
+
+  test('editing a queued message brings back its text, attachments and images, merged into the composer', async () => {
+    const h = harness();
+    void h.c.handle({ type: 'send', sessionId: h.sid, text: 'first' });
+    await h.until(() => h.c.runs.has(h.sid), 'the first run');
+    await h.c.handle({ type: 'queueAfterTurn', sessionId: h.sid, text: 'later', attachments: ['src/a.ts'], images: ['aW1n'] });
+    const id = h.posted.filter((m) => m.type === 'queue').pop().items[0].id;
+    await h.c.handle({ type: 'cancelQueued', sessionId: h.sid, id, edit: true });
+    assert.deepStrictEqual(h.posted.find((m) => m.type === 'draft'), { type: 'draft', text: 'later', images: ['aW1n'], attachments: ['src/a.ts'], merge: true });
+    assert.strictEqual(h.c.afterTurn.list(h.sid).length, 0);
+    await h.release(1);
+    await h.settle();
+    assert.deepStrictEqual(h.turns, ['first'], 'the edited message is not sent');
+  });
+
+  test('deleting a running chat drops its queue instead of starting the next turn', async () => {
+    const h = harness();
+    void h.c.handle({ type: 'send', sessionId: h.sid, text: 'first' });
+    await h.until(() => h.c.runs.has(h.sid), 'the first run');
+    await h.c.handle({ type: 'queueAfterTurn', sessionId: h.sid, text: 'next' });
+    await h.c.handle({ type: 'deleteSession', id: h.sid });
+    await h.settle();
+    assert.deepStrictEqual(h.turns, ['first']);
   });
 });

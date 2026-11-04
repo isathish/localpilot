@@ -34,8 +34,9 @@ export interface ProviderFlags {
 const GROUP_LABEL: Record<PresetGroup, string> = { local: 'On this machine', gateway: 'Gateways (local, forward to cloud models)', cloud: 'Cloud APIs (your key)' };
 
 /** Every configured provider, disabled ones included (getConfig() drops those). */
-function configured(): ProviderConfig[] {
-  return vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? [];
+export function configured(): ProviderConfig[] {
+  // VS Code's language models (`vscode-lm`) exist only inside VS Code.
+  return (vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? []).filter((p) => p.type !== 'vscode-lm');
 }
 
 /** Providers written by the CLI itself (~/.localpilot/config.json), as stored. */
@@ -168,10 +169,13 @@ export async function addProvider(target: string, flags: ProviderFlags, st: Styl
     return 2;
   }
   const isUrl = /^https?:\/\//i.test(target) || /^[\w.-]+:\d+/.test(target);
-  const preset = isUrl ? undefined : findPreset(target);
+  const preset = isUrl ? undefined : findPreset(target, { fuzzy: true });
   if (!isUrl && !preset) {
     out(`${st.red('✖')} Unknown provider "${target}". See: localpilot providers presets — or pass a URL.`);
     return 2;
+  }
+  if (preset && !findPreset(target)) {
+    out(st.dim(`Using preset ${preset.label} for '${target}'`));
   }
   const base: ProviderConfig = preset
     ? { ...preset.cfg }

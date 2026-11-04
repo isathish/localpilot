@@ -1,5 +1,7 @@
 import { ChatMessage, CompletionRequestOptions, LLMProvider } from '../types';
 import { ProviderConfig } from '../types';
+import { expandMcpServer } from '../mcp/config';
+import { cleanHeaders } from './providerOptions';
 
 /** Keys from VS Code's secret storage by name, loaded by ProviderSecrets so key resolution stays synchronous. */
 const secretValues = new Map<string, string>();
@@ -53,6 +55,28 @@ export function resolveApiKey(cfg: Pick<ProviderConfig, 'apiKey'>): string | und
   return key || undefined;
 }
 
+/**
+ * The provider's custom headers with `${env:NAME}` / `${secret:NAME}` expanded the way MCP server headers are. A header
+ * whose reference resolves to nothing is left out rather than sent with the placeholder in it.
+ */
+export function resolveHeaders(cfg: Pick<ProviderConfig, 'headers'>): Record<string, string> {
+  const headers = cleanHeaders(cfg.headers);
+  if (!headers) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const { cfg: expanded, missing } = expandMcpServer({ headers: { [name]: value } }, (kind, ref) =>
+      kind === 'secret' ? secretValues.get(ref) ?? process.env[secretEnvName(ref)] : process.env[ref]
+    );
+    const v = expanded.headers?.[name]?.trim();
+    if (v && !missing.length) {
+      out[name] = v;
+    }
+  }
+  return out;
+}
+
 /** Environment variable the CLI reads for a `${secret:NAME}` key, e.g. `LOCALPILOT_KEY_OPENAI`. */
 export function secretEnvName(name: string): string {
   return `LOCALPILOT_KEY_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
@@ -93,7 +117,7 @@ export function keyStatus(cfg: Pick<ProviderConfig, 'apiKey'>): KeyStatus {
 /** Prompts sent to this provider leave the machine: a cloud URL, or a local gateway marked `cloud`. */
 export function isCloudProvider(cfg: Pick<ProviderConfig, 'baseUrl' | 'cloud'> & { type?: ProviderConfig['type'] }): boolean {
   // An Anthropic-type provider always ends at Anthropic's API, even behind a proxy on this machine.
-  return cfg.cloud ?? (cfg.type === 'anthropic' || isRemoteUrl(cfg.baseUrl));
+  return cfg.cloud ?? (cfg.type === 'anthropic' || cfg.type === 'vscode-lm' || isRemoteUrl(cfg.baseUrl));
 }
 
 /** True for a server on this machine (localhost, 127.0.0.0/8, ::1): one LocalPilot can start itself. */

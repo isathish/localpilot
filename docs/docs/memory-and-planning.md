@@ -31,6 +31,8 @@ The checklist is saved with the session and included in every request, so the ag
 
 **Plan mode** writes the checklist and a plan file without touching your files. Click **Build**, or switch to **Agent** and say *implement the plan*. See [Agent modes → Plan]({{ '/docs/agent-modes/#plan' | relative_url }}) and [Plans that execute themselves]({{ '/docs/parallel-agents/#plans-that-execute-themselves' | relative_url }}).
 
+`/deep-planning <task>` runs one turn in Plan mode, whatever mode the chat is in: the agent investigates the code without narrating, asks up to four questions if the code leaves design choices open, and writes a plan (overview, files, functions, implementation order, testing, risks) that is saved as `implementation_plan.md` in the workspace. Only a finished answer is saved: an error, the step limit or a stop leaves an existing plan file as it was. `/deep-planning` is built in, so a custom command or skill of the same name does not replace it. The chat then returns to its mode; say *implement the plan* to carry it out. It also works in the CLI.
+
 ## Chat history
 
 Chats are stored per workspace in VS Code's workspace storage on your machine. See [Privacy]({{ '/privacy/' | relative_url }}) for what leaves your machine.
@@ -38,9 +40,15 @@ Chats are stored per workspace in VS Code's workspace storage on your machine. S
 Open the history with **All chats** in the tab bar (or **+N** when there are more chats than tabs):
 
 - Chats are grouped by Running, Pinned, Today, Yesterday, Previous 7 / 30 days and Older.
-- Search matches titles and message text. Type two or more characters to see matching lines.
+- Each row also shows the model, the tokens in and out, the cost when it is known, and the chat's size on disk.
+- **Sort** by Newest, Oldest, Most tokens, Most expensive, Largest or Relevance. **Pinned** shows pinned chats only.
+- Search matches titles and message text. Title matching is fuzzy and tolerates a typo or two. Typing switches the sort to Relevance; clearing the search restores the previous sort.
+- A history of more than 200 chats loads 50 at a time as you scroll.
 - Each row has pin, rename, delete (with confirmation) and **more…** (open, fork, export as Markdown, clear messages).
-- Keys: <kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>F2</kbd> and <kbd>Delete</kbd> act on the selected row.
+- **Select** deletes several chats at once: tick rows (or use **Select all** / **Select none**), then **Delete N selected**, which shows their total size.
+- Keys: <kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>F2</kbd> and <kbd>Delete</kbd> act on the selected row. In selection mode <kbd>Enter</kbd> ticks the selected row, <kbd>Delete</kbd> deletes the ticked ones (after a confirmation) and <kbd>Esc</kbd> leaves selection mode.
+
+Deleting a chat also removes its transcript archive, its checkpoints and the logs of its detached commands.
 
 Each chat also records its token usage: uncached input, output, prompt-cache reads and writes, the number of model requests, and the cost when the provider reports one (OpenRouter). Subagent requests count towards the chat that started them and are also kept as a separate breakdown. The totals are saved in the chat's session file. Anthropic and OpenAI-compatible servers report cache tokens. Ollama does not.
 
@@ -50,7 +58,7 @@ A chat's title is your first message until you rename it. Empty chats you never 
 
 - set **Keep at most** (`localpilot.sessions.retention`, default 50). The oldest idle chats are removed when a new chat starts. Pinned and running chats do not count.
 - set **Transcripts in memory** (`localpilot.storage.sessionsInMemory`, default 16). Every chat stays in the list, but only the most recently used transcripts are held in RAM; the others load from disk when you open or search them. The page shows how many are loaded.
-- run **Clear chat history…** (also in the All chats menu and the Command Palette). It deletes idle chats and can keep pinned ones. Running agents keep going.
+- run **Clear chat history…** (also in the All chats menu and the Command Palette). It deletes idle chats, shows how much disk they take, and can keep pinned ones. Running agents keep going.
 
 ## Compaction
 
@@ -59,16 +67,18 @@ When a conversation fills `localpilot.compactionThreshold` of the context window
 | Strategy | What happens |
 |---|---|
 | `agentic` (default) | The chat's model writes a structured summary: goals, decisions, files touched, findings, next steps. When the model fails, or the transcript is too big for it to read, LocalPilot uses `basic` instead of dropping the messages |
-| `basic` | No model call, so it finishes instantly and always gives the same result. It keeps every message you wrote, the last 3 assistant replies word for word, and one line per earlier tool call, such as `• read_file src/a.ts (ok)` or `• run_command npm test (exit 1, 3 lines of error)` |
+| `basic` | No model call, so it finishes instantly and always gives the same result. It keeps every message you wrote, the last 3 assistant replies word for word, and one line per earlier tool call, such as `• read_file src/a.ts (ok)` or `• run_command npm test (exit 1, 3 lines of error)`. The digest takes at most about 40% of the context window: a very long message keeps its start and end, and when that is not enough the oldest entries are left out |
 | `off` | Never compacts automatically. A conversation that outgrows the window ends with an error; start a new chat or run `/compact` |
 
-`/compact` (or a click on the context meter) uses `basic` when that is the setting, and the model otherwise. In the CLI, `--compaction agentic|basic|off` overrides the setting for one run.
+`/compact` (also `/smol`, or a click on the context meter) uses `basic` when that is the setting, and the model otherwise. `/newtask [note]` summarises the whole chat the same way and opens a new chat that starts from that summary (plus your note), linked to the old one as its parent, so long work can go on in a fresh context. If the model cannot write the summary (the chat is too long for it, or the call fails or times out), the new chat starts from the size-capped `basic` digest instead. In the CLI, `--compaction agentic|basic|off` overrides the setting for one run.
 
-**Nothing is lost.** Before a compaction replaces messages, the full transcript is appended to `<chat id>.archive.jsonl` next to the chat's session file. When you **Edit** or **Restore checkpoint** on a message from before a compaction, LocalPilot rebuilds the conversation from the archive, so the model sees the original messages again instead of the summary. Deleting a chat deletes its archive. **Settings → Memory & history** counts archives in the disk usage.
+**Nothing is lost.** Before a compaction replaces messages, the full transcript is appended to `<chat id>.archive.jsonl` next to the chat's session file. When you **Edit** or **Restore checkpoint** on a message from before a compaction, LocalPilot rebuilds the conversation from the archive, so the model sees the original messages again instead of the summary. Deleting a chat deletes its archive. **Settings → Memory & history** counts archives and checkpoints in the disk usage.
 
 ## Thinking
 
-`localpilot.thinking` sets reasoning effort: `auto` (default), `off`, `on`, `low`, `medium` or `high`. `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. It maps to Ollama's `think` and to `reasoning_effort` on OpenAI-compatible servers. Only reasoning models use it.
+`localpilot.thinking` sets reasoning effort: `auto` (default), `off`, `on`, `low`, `medium`, `high` or `max`. `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. It maps to Ollama's `think`, to `reasoning_effort` on OpenAI-compatible servers, to OpenRouter's `reasoning` object and, for Claude, to the effort level or a thinking budget (a share of 32,000 tokens, at least 1,024 and within the model's output limit). `max` is the largest Claude budget or effort and `high` elsewhere. Only reasoning models use it.
+
+**Per chat.** When the selected model reports that it reasons, the composer shows a **Think** chip. Pick `Auto`, `Off`, `Low`, `Medium`, `High` or `Max` for this chat, or **Inherit global** to follow the setting again. In the CLI, `--thinking [level]` sets it for the run (a bare `--thinking` means `medium`) and `/thinking <level>` changes it in a session; the last choice is remembered in `~/.localpilot/config.json`.
 
 Reasoning streams into a collapsed **Thinking…** step with a timer. It becomes *Thought for Ns* when the answer starts.
 

@@ -1,8 +1,9 @@
 import * as cp from 'child_process';
-import * as vscode from 'vscode';
 import { Tool, ToolContext } from '../types';
 import { onAbort } from '../agent/resilience';
 import { killTree } from './terminal';
+import { rootArg } from './fs';
+import { ROOT_PARAM } from './rootPaths';
 
 /**
  * Source control and CI for the agent: inspect and commit with `git`, push, open and follow pull requests and read CI
@@ -66,7 +67,8 @@ export function runCmd(cmd: string, args: string[], cwd: string | undefined, sig
   });
 }
 
-const rootOf = (ctx: ToolContext) => ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+/** The repository a call runs in: its `root` argument (a workspace folder or repository name), else the agent's root. */
+const rootOf = (ctx: ToolContext, args: Record<string, unknown> = {}) => rootArg(args.root, ctx);
 const clip = (s: string, max = 12_000) => (s.length > max ? `${s.slice(0, max)}\n… (${(s.length - max).toLocaleString()} more characters)` : s);
 const fail = (r: Run, what: string) => ({ content: `${what} failed (exit ${r.code}): ${(r.err || r.out).trim().slice(0, 2000)}`, isError: true });
 
@@ -139,12 +141,13 @@ export const gitStatusTool: Tool = {
         path: { type: 'string', description: 'Limit diff/log to this path' },
         staged: { type: 'boolean', description: 'diff: show what is staged for commit' },
         count: { type: 'integer', description: 'log: number of commits (default 15)' },
+        root: ROOT_PARAM,
       },
       required: ['action'],
     },
   },
   async execute(args, ctx) {
-    const cwd = rootOf(ctx);
+    const cwd = rootOf(ctx, args);
     if (!cwd) {
       return { content: 'No workspace folder open.', isError: true };
     }
@@ -188,12 +191,13 @@ export const gitCommitTool: Tool = {
         message: { type: 'string', description: 'Commit message (first line ≤ 72 chars, blank line, then details)' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Files to stage; omit to stage all changes' },
         branch: { type: 'string', description: 'Create and switch to this new branch before committing' },
+        root: ROOT_PARAM,
       },
       required: ['message'],
     },
   },
   async execute(args, ctx) {
-    const cwd = rootOf(ctx);
+    const cwd = rootOf(ctx, args);
     const message = String(args.message ?? '').trim();
     if (!cwd || !message) {
       return { content: cwd ? 'message is required.' : 'No workspace folder open.', isError: true };
@@ -241,11 +245,11 @@ export const gitPushTool: Tool = {
     description: 'Push the current branch to its upstream, or to the remote (origin by default) under the same name and set the upstream. Never force-pushes. Pushing the default branch (main/master) directly is refused unless allow_default_branch is true and the user asked for it — push a feature branch and open a pull request instead.',
     parameters: {
       type: 'object',
-      properties: { remote: { type: 'string', description: 'Default origin' }, allow_default_branch: { type: 'boolean' } },
+      properties: { remote: { type: 'string', description: 'Default origin' }, allow_default_branch: { type: 'boolean' }, root: ROOT_PARAM },
     },
   },
   async execute(args, ctx) {
-    const cwd = rootOf(ctx);
+    const cwd = rootOf(ctx, args);
     if (!cwd) {
       return { content: 'No workspace folder open.', isError: true };
     }
@@ -290,8 +294,8 @@ export const gitPushTool: Tool = {
 
 const ghMissing = 'The GitHub CLI (gh) is not installed or not signed in. Install it from https://cli.github.com and run `gh auth login`, then try again.';
 
-async function gh(args: string[], ctx: ToolContext, input?: string): Promise<Run> {
-  return runCmd('gh', args, rootOf(ctx), ctx.signal, 120_000, input);
+async function gh(args: string[], ctx: ToolContext, cwd: string | undefined, input?: string): Promise<Run> {
+  return runCmd('gh', args, cwd, ctx.signal, 120_000, input);
 }
 const ghFailed = (r: Run, what: string) =>
   // gh's "no known GitHub host" error also says `gh auth login`; it means a GitLab/Bitbucket remote or an unknown Enterprise host.
@@ -317,24 +321,26 @@ export const pullRequestTool: Tool = {
         draft: { type: 'boolean' },
         number: { type: 'integer', description: 'PR number for view/comment (default: the current branch\'s PR)' },
         branch: { type: 'string', description: 'view/comment: the PR of this head branch (when number is not given)' },
+        root: ROOT_PARAM,
       },
       required: ['action'],
     },
   },
   async execute(args, ctx) {
+    const cwd = rootOf(ctx, args);
     const action = String(args.action ?? 'view');
     const prBranch = typeof args.branch === 'string' && validBranch(args.branch.trim()) ? args.branch.trim() : '';
     const num = Number(args.number) > 0 ? [String(Math.floor(Number(args.number)))] : prBranch ? [prBranch] : [];
     const detachedMsg = { content: 'This workspace is on a detached HEAD (isolated copy), so the current branch and its pull request are unknown. Pass number=<PR number> or branch="<name>".', isError: true };
-    if ((action === 'view' || action === 'comment') && !num.length && !(await runCmd('git', ['branch', '--show-current'], rootOf(ctx))).out.trim()) {
+    if ((action === 'view' || action === 'comment') && !num.length && !(await runCmd('git', ['branch', '--show-current'], cwd)).out.trim()) {
       return detachedMsg;
     }
     if (action === 'list') {
-      const r = await gh(['pr', 'list', '--limit', '20', '--json', 'number,title,headRefName,author,isDraft,reviewDecision', '--template', '{{range .}}#{{.number}} {{.title}} ({{.headRefName}}, {{.author.login}}{{if .isDraft}}, draft{{end}}{{if .reviewDecision}}, {{.reviewDecision}}{{end}})\n{{end}}'], ctx);
+      const r = await gh(['pr', 'list', '--limit', '20', '--json', 'number,title,headRefName,author,isDraft,reviewDecision', '--template', '{{range .}}#{{.number}} {{.title}} ({{.headRefName}}, {{.author.login}}{{if .isDraft}}, draft{{end}}{{if .reviewDecision}}, {{.reviewDecision}}{{end}})\n{{end}}'], ctx, cwd);
       return r.code === 0 ? { content: r.out.trim() || 'No open pull requests.' } : ghFailed(r, 'gh pr list');
     }
     if (action === 'view') {
-      const r = await gh(['pr', 'view', ...num, '--json', 'number,title,state,isDraft,url,headRefName,baseRefName,reviewDecision,mergeable,statusCheckRollup,comments,reviews'], ctx);
+      const r = await gh(['pr', 'view', ...num, '--json', 'number,title,state,isDraft,url,headRefName,baseRefName,reviewDecision,mergeable,statusCheckRollup,comments,reviews'], ctx, cwd);
       if (r.code !== 0) {
         if (/not on any branch/i.test(r.err)) {
           return detachedMsg;
@@ -354,7 +360,7 @@ export const pullRequestTool: Tool = {
       if (!(await ctx.requestApproval(`Comment on pull request ${num[0] ? (prBranch && num[0] === prBranch ? `of ${prBranch}` : `#${num[0]}`) : 'for this branch'}`, body.slice(0, 600), 'terminal'))) {
         return { content: 'The user declined the comment.', isError: true };
       }
-      const r = await gh(['pr', 'comment', ...num, '--body-file', '-'], ctx, body);
+      const r = await gh(['pr', 'comment', ...num, '--body-file', '-'], ctx, cwd, body);
       return r.code === 0 ? { content: `Commented: ${r.out.trim()}` } : /not on any branch/i.test(r.err) ? detachedMsg : ghFailed(r, 'gh pr comment');
     }
     if (action === 'create') {
@@ -367,7 +373,7 @@ export const pullRequestTool: Tool = {
       if (!(await ctx.requestApproval(`Open pull request: ${title.slice(0, 70)}`, body.slice(0, 800) || '(no description)', 'terminal'))) {
         return { content: 'The user declined opening the pull request.', isError: true };
       }
-      const r = await gh(['pr', 'create', '--title', title, '--body-file', '-', ...base, ...(args.draft ? ['--draft'] : [])], ctx, body || ' ');
+      const r = await gh(['pr', 'create', '--title', title, '--body-file', '-', ...base, ...(args.draft ? ['--draft'] : [])], ctx, cwd, body || ' ');
       if (r.code !== 0) {
         return /must first push|no commits between|has no upstream/i.test(r.err) ? { content: `${r.err.trim()}\nPush the branch with git_push first (and make sure it has commits the base does not).`, isError: true } : ghFailed(r, 'gh pr create');
       }
@@ -425,12 +431,13 @@ export const ciStatusTool: Tool = {
         action: { type: 'string', enum: ['runs', 'logs', 'rerun'] },
         branch: { type: 'string' },
         run_id: { type: 'integer' },
+        root: ROOT_PARAM,
       },
       required: ['action'],
     },
   },
   async execute(args, ctx) {
-    const cwd = rootOf(ctx);
+    const cwd = rootOf(ctx, args);
     const action = String(args.action ?? 'runs');
     const branch = typeof args.branch === 'string' && validBranch(args.branch.trim()) ? args.branch.trim() : (await runCmd('git', ['branch', '--show-current'], cwd)).out.trim();
     let runId = Number(args.run_id) > 0 ? String(Math.floor(Number(args.run_id))) : '';
@@ -441,7 +448,7 @@ export const ciStatusTool: Tool = {
       return { content: 'This workspace is on a detached HEAD (isolated copy), so the current branch is unknown. Pass branch="<name>" or run_id.', isError: true };
     }
     if (action === 'runs' || !runId) {
-      const r = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,workflowName,status,conclusion,headSha,headBranch,displayTitle,createdAt,event'], ctx);
+      const r = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,workflowName,status,conclusion,headSha,headBranch,displayTitle,createdAt,event'], ctx, cwd);
       if (r.code !== 0) {
         return ghFailed(r, 'gh run list');
       }
@@ -460,7 +467,7 @@ export const ciStatusTool: Tool = {
           break;
         }
         if (x.status !== 'completed') {
-          const v = await gh(['run', 'view', String(x.databaseId), '--json', 'jobs'], ctx);
+          const v = await gh(['run', 'view', String(x.databaseId), '--json', 'jobs'], ctx, cwd);
           const jobs = v.code === 0 ? ((JSON.parse(v.out) as { jobs?: { databaseId: number; conclusion?: string }[] }).jobs ?? []) : [];
           const bad = jobs.filter((j) => isFailed(j.conclusion)).map((j) => j.databaseId);
           if (bad.length) {
@@ -490,11 +497,11 @@ export const ciStatusTool: Tool = {
       if (!(await ctx.requestApproval(`Re-run failed jobs of run ${runId}`, `gh run rerun ${runId} --failed`, 'terminal'))) {
         return { content: 'The user declined the re-run.', isError: true };
       }
-      const r = await gh(['run', 'rerun', runId, '--failed'], ctx);
+      const r = await gh(['run', 'rerun', runId, '--failed'], ctx, cwd);
       return r.code === 0 ? { content: `Re-running the failed jobs of run ${runId}. Check again with ci_status "runs" in a few minutes.` } : ghFailed(r, 'gh run rerun');
     }
     // An unfinished run has no run-level log yet; its finished failed jobs do.
-    const logs = await Promise.all((failedJobs.length ? failedJobs.slice(0, 3).map((j) => ['--job', String(j)]) : [[runId]]).map((sel) => gh(['run', 'view', ...sel, '--log-failed'], ctx)));
+    const logs = await Promise.all((failedJobs.length ? failedJobs.slice(0, 3).map((j) => ['--job', String(j)]) : [[runId]]).map((sel) => gh(['run', 'view', ...sel, '--log-failed'], ctx, cwd)));
     const r = logs.find((x) => x.code !== 0);
     if (r) {
       return ghFailed(r, 'gh run view --log-failed');

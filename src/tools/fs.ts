@@ -5,9 +5,16 @@ import { Tool, ToolContext, ToolResult } from '../types';
 import { listRepos } from '../agent/repos';
 import { getConfig } from '../config';
 import { readPdf } from './pdf';
-import { unifiedDiff } from './lineDiff';
+import { unifiedDiff, writePreview } from './lineDiff';
+import { afterEditWritten } from '../ui/editPreview';
 import { lenientMatch, looksBinary, normalizeReadArgs, ReadRequest, renderWindow, windowBudget } from './readArgs';
 import { CACHE_EXPIRED, isCacheRef, toolResultCache } from '../context/toolResultCache';
+import { watchNewErrors } from './editDiagnostics';
+import { findRoot, NamedRoot, resolveRootPath } from './rootPaths';
+import { excludedBy, excludedMessage, IGNORE_FILES, invalidateIgnore } from '../agent/ignoreFile';
+import * as nodeFs from 'fs';
+import { notebookToCompactText } from '../context/extractors';
+import { commandLogDir } from '../terminal/commandRun';
 
 // Windows paths are case-insensitive and VS Code lowercases drive letters (`c:\`) while models and users write `C:\`.
 const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
@@ -35,22 +42,104 @@ export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
   return vscode.workspace.asRelativePath(uri, false);
 }
 
-let repoCache: { root: string; at: number; paths: string[] } | undefined;
+let repoCache: { root: string; at: number; repos: NamedRoot[] } | undefined;
 /** Registered repositories of `root`, cached for a few seconds: paths are resolved on every file tool call. */
-function registeredRepoPaths(root: string): string[] {
+function registeredRepos(root: string): NamedRoot[] {
   if (!repoCache || repoCache.root !== root || Date.now() - repoCache.at > 5_000) {
     const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-    repoCache = { root, at: Date.now(), paths: listRepos(root, folders, getConfig().repos).map((r) => r.path) };
+    repoCache = { root, at: Date.now(), repos: listRepos(root, folders, getConfig().repos).map((r) => ({ name: r.name, path: r.path })) };
   }
-  return repoCache.paths;
+  return repoCache.repos;
+}
+
+const registeredRepoPaths = (root: string): string[] => registeredRepos(root).map((r) => r.path);
+
+/**
+ * The folders a tool path may name (`name:rel`) or fall back to: the workspace folders — an isolated agent's own folder
+ * replaced by its copy — then the registered repositories.
+ */
+export function toolRoots(ctx: ToolContext): NamedRoot[] {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const primary = ctx.workspaceRoot ?? folders[0]?.uri.fsPath;
+  const out: NamedRoot[] = folders.map((f) => ({
+    name: f.name,
+    path: ctx.isolatedFrom && ctx.workspaceRoot && foldCase(f.uri.fsPath) === foldCase(ctx.isolatedFrom) ? ctx.workspaceRoot : f.uri.fsPath,
+  }));
+  for (const r of primary ? registeredRepos(ctx.mainRoot ?? primary) : []) {
+    if (!out.some((o) => foldCase(o.path) === foldCase(r.path) || o.name === r.name)) {
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+/** The folder of a tool's optional `root` argument (a workspace folder or repository name); the agent's root without one. */
+export function rootArg(value: unknown, ctx: ToolContext): string | undefined {
+  const primary = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (typeof value !== 'string' || !value.trim()) {
+    return primary;
+  }
+  const roots = toolRoots(ctx);
+  const hit = findRoot(roots, value);
+  if (!hit) {
+    throw new Error(`Unknown root "${value}". Use one of: ${roots.map((r) => r.name).join(', ') || '(no folders open)'}.`);
+  }
+  return hit.path;
+}
+
+let ignoreWatcher: vscode.Disposable | undefined;
+/** The ignore file that excludes `uri` from the agent (see agent/ignoreFile), or undefined. */
+export function excludedPath(uri: vscode.Uri, ctx: ToolContext, isDir = false): string | undefined {
+  if (!ignoreWatcher) {
+    try {
+      const w = vscode.workspace.createFileSystemWatcher(`**/{${IGNORE_FILES.join(',')}}`);
+      w.onDidChange(invalidateIgnore);
+      w.onDidCreate(invalidateIgnore);
+      w.onDidDelete(invalidateIgnore);
+      ignoreWatcher = w;
+    } catch {
+      ignoreWatcher = { dispose() {} };
+    }
+  }
+  const roots = [...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...toolRoots(ctx).map((r) => r.path)];
+  return excludedBy(uri.fsPath, roots, isDir);
+}
+
+/**
+ * A refusal when `p` names a file the agent ignore file excludes; undefined otherwise (also when `p` does not resolve).
+ * `resolved` is the file `p` already resolved to, when the caller resolved it differently (a file to create).
+ */
+export function excludedRefusal(p: unknown, ctx: ToolContext, resolved?: vscode.Uri): ToolResult | undefined {
+  if (typeof p !== 'string' || !p) {
+    return undefined;
+  }
+  try {
+    const uri = resolved ?? resolveWorkspacePath(p, ctx);
+    const source = excludedPath(uri, ctx);
+    return source ? { content: excludedMessage(displayPath(uri, ctx), source), isError: true } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
+  return resolveToolPath(p, ctx).uri;
+}
+
+/**
+ * {@link resolveWorkspacePath} plus a note when a bare relative path was found in another workspace folder. With
+ * `create` (the file is about to be written) a bare path stays in the primary folder instead.
+ */
+export function resolveToolPath(p: string, ctx: ToolContext, create = false): { uri: vscode.Uri; note?: string } {
   const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
     throw new Error('No workspace folder open');
   }
-  let abs = path.isAbsolute(p) ? p : path.join(root, p);
+  const resolved = resolveRootPath(p, root, toolRoots(ctx), (a) => nodeFs.existsSync(a), create);
+  if ('error' in resolved) {
+    throw new Error(resolved.error);
+  }
+  let abs = resolved.abs;
   // Isolated worktree: an absolute path into the real folder it mirrors (the model may have seen it in context) is
   // the same file inside the copy — never let the agent reach around its isolation. Other folders are left alone.
   if (ctx.isolatedFrom && ctx.workspaceRoot && path.isAbsolute(p) && isWithin(abs, ctx.isolatedFrom) && !isWithin(abs, ctx.workspaceRoot)) {
@@ -60,12 +149,13 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   // Prevent path traversal outside the workspace unless the user opened that folder — or outside the agent's
   // isolated copy of it when it works in a worktree.
   // Repositories the user registered for multi-repository work (.localpilot/repos.json, localpilot.repos) are in reach too.
-  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...registeredRepoPaths(ctx.mainRoot ?? root)];
+  // So are the logs of detached commands, which the agent is told to read with read_file.
+  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...registeredRepoPaths(ctx.mainRoot ?? root), commandLogDir()];
   const inside = roots.some((r) => isWithin(normalized, r));
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);
   }
-  return vscode.Uri.file(normalized);
+  return { uri: vscode.Uri.file(normalized), note: resolved.note };
 }
 
 function str(v: unknown, name: string): string {
@@ -116,6 +206,19 @@ async function headBytes(fsPath: string, n = 8192): Promise<Uint8Array> {
 /** One file (or cached tool output) of a read_file call. Throws when the file cannot be found. */
 async function readOne(req: ReadRequest, ctx: ToolContext, maxChars: number): Promise<ToolResult> {
   if (isCacheRef(req.path)) {
+    return readOneFile(req, ctx, maxChars);
+  }
+  const { note } = resolveToolPath(req.path, ctx);
+  const refused = excludedRefusal(req.path, ctx);
+  if (refused) {
+    return refused;
+  }
+  const r = await readOneFile(req, ctx, maxChars);
+  return note ? { ...r, content: `${note}\n${r.content}` } : r;
+}
+
+async function readOneFile(req: ReadRequest, ctx: ToolContext, maxChars: number): Promise<ToolResult> {
+  if (isCacheRef(req.path)) {
     const text = toolResultCache.get(req.path);
     if (text === undefined) {
       return { content: `${req.path}: ${CACHE_EXPIRED}`, isError: true };
@@ -148,6 +251,12 @@ async function readOne(req: ReadRequest, ctx: ToolContext, maxChars: number): Pr
   }
   // An open editor holds text (maybe unsaved); otherwise check the first bytes on disk before decoding the file as text.
   const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (/\.ipynb$/i.test(uri.fsPath)) {
+    const nb = await readNotebook(uri, open, shown, req, maxChars);
+    if (nb) {
+      return nb;
+    }
+  }
   if (!open && uri.scheme === 'file' && looksBinary(await headBytes(uri.fsPath))) {
     return { content: `${shown}: binary file, ${stat.size.toLocaleString()} bytes. It cannot be shown as text.`, isError: true };
   }
@@ -165,6 +274,19 @@ async function readOne(req: ReadRequest, ctx: ToolContext, maxChars: number): Pr
   }
   const w = renderWindow(line, total, req.start, req.end, maxChars);
   return { content: `File: ${shown} (${total} lines total, showing ${w.start}-${w.end})\n${w.text}` };
+}
+
+/** A notebook as compact cells (line numbers index that text); undefined when it is not notebook JSON, so it reads as text. */
+async function readNotebook(uri: vscode.Uri, open: vscode.TextDocument | undefined, shown: string, req: ReadRequest, maxChars: number): Promise<ToolResult | undefined> {
+  let nb: { text: string; cells: number };
+  try {
+    nb = notebookToCompactText(open ? open.getText() : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  const lines = nb.text.split('\n');
+  const w = renderWindow((i) => lines[i], lines.length, req.start, req.end, maxChars);
+  return { content: `Notebook: ${shown} (${nb.cells} cells as ${lines.length} lines; line numbers count this view, not the .ipynb JSON (edit cells with notebook_edit by cell number); showing ${w.start}-${w.end})\n${w.text}` };
 }
 
 export const readFileTool: Tool = {
@@ -224,7 +346,12 @@ export const writeFileTool: Tool = {
     },
   },
   async execute(args, ctx) {
-    const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
+    // Create-or-overwrite: a bare path never falls back to another folder's file of the same name.
+    const { uri } = resolveToolPath(str(args.path, 'path'), ctx, true);
+    const refused = excludedRefusal(args.path, ctx, uri);
+    if (refused) {
+      return refused;
+    }
     let content: string;
     let note = '';
     if (typeof args.content === 'string') {
@@ -247,7 +374,9 @@ export const writeFileTool: Tool = {
     } catch {
       exists = false;
     }
-    const ok = await ctx.requestApproval(`${exists ? 'Overwrite' : 'Create'} ${displayPath(uri, ctx)}`, `${content.length} characters`, 'write');
+    const current = exists ? await Promise.resolve(vscode.workspace.openTextDocument(uri)).then((d) => d.getText(), () => undefined) : undefined;
+    const proposal = [{ fsPath: uri.fsPath, before: current, proposed: content }];
+    const ok = await ctx.requestApproval(`${exists ? 'Overwrite' : 'Create'} ${displayPath(uri, ctx)}`, writePreview(current, content), 'write', { preview: proposal });
     if (!ok) {
       return { content: 'User declined the write.', isError: true };
     }
@@ -260,13 +389,16 @@ export const writeFileTool: Tool = {
     } else {
       edit.createFile(uri, { overwrite: true, contents: Buffer.from(content, 'utf8') });
     }
+    const errors = watchNewErrors(uri);
     const applied = await vscode.workspace.applyEdit(edit);
     if (!applied) {
+      errors.dispose();
       return { content: 'Failed to apply edit.', isError: true };
     }
     const doc = await vscode.workspace.openTextDocument(uri);
     await doc.save();
-    return { content: `${exists ? 'Updated' : 'Created'} ${displayPath(uri, ctx)} (${doc.lineCount} lines).${note}`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
+    await afterEditWritten(proposal).catch(() => undefined);
+    return { content: `${exists ? 'Updated' : 'Created'} ${displayPath(uri, ctx)} (${doc.lineCount} lines).${note}${await errors.report()}`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
   },
 };
 
@@ -288,124 +420,142 @@ export const editFileTool: Tool = {
     },
   },
   async execute(args, ctx) {
-    const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const rawInsert = args.insert_line ?? args.insertLine;
-    const insertAt = rawInsert === undefined || rawInsert === null || rawInsert === '' ? undefined : Number(rawInsert);
-    const rawOld = args.old_text ?? args.old_string ?? (insertAt !== undefined ? '' : undefined);
-    const rawNew = args.new_text ?? args.new_string;
-    if (insertAt !== undefined && !Number.isInteger(insertAt)) {
-      return { content: `insert_line must be a whole line number (got ${JSON.stringify(rawInsert)}). Nothing was changed.`, isError: true };
+    const { uri, note: rootNote } = resolveToolPath(str(args.path, 'path'), ctx);
+    const refused = excludedRefusal(args.path, ctx, uri);
+    if (refused) {
+      return refused;
     }
-    if (typeof rawOld !== 'string' || typeof rawNew !== 'string') {
-      return { content: 'edit_file needs "old_text" (exact text to replace, "" to append) and "new_text" (replacement) as strings. Nothing was changed.', isError: true };
-    }
-    let oldText = rawOld;
-    let newText = rawNew;
-    let note = '';
-    let doc: vscode.TextDocument;
-    try {
-      doc = await vscode.workspace.openTextDocument(uri);
-    } catch {
-      // Models routinely "append to" a file that does not exist yet; with nothing to match that is a create.
-      if (!oldText && (insertAt === undefined || insertAt === 1)) {
-        return writeFileTool.execute({ path: args.path, content: newText }, ctx);
-      }
-      return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
-    }
-    const tooBig = [['old_text', oldText], ['new_text', newText]].find(([, t]) => t.length > MAX_EDIT_CHARS);
-    if (tooBig) {
-      return { content: `${tooBig[0]} is ${tooBig[1].length.toLocaleString()} characters (limit ${MAX_EDIT_CHARS.toLocaleString()}). Split the edit into several smaller edit_file calls (send them in one response), or use write_file to replace the whole file. Nothing was changed.`, isError: true };
-    }
-    const text = doc.getText();
-    // Models write "\n"; keep the file's own line endings (CRLF or LF) and convert the model's text to match.
-    const crlf = text.includes('\r\n');
-    const lf = (s: string) => s.replace(/\r\n/g, '\n');
-    const eol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : lf(s));
-    if (insertAt !== undefined) {
-      return insertLines(uri, doc, insertAt, eol(lf(newText).replace(/\n$/, '')), crlf ? '\r\n' : '\n', ctx);
-    }
-    // Small models copy read_file's line-number gutter ("   12 | ") into old_text/new_text; take it off before matching.
-    const bare = !text.includes(eol(oldText)) ? stripGutter(lf(oldText)) : undefined;
-    if (bare !== undefined && text.includes(eol(bare))) {
-      oldText = bare;
-      newText = stripGutter(lf(newText)) ?? newText;
-      note = ' (the "NN | " line-number prefixes from read_file were removed from old_text/new_text — leave them out next time)';
-    }
-    oldText = eol(oldText);
-    newText = eol(newText);
-    const baseNew = newText;
-    // Finds old_text in `t` (exactly once, else whitespace-insensitively); a string is the error to report.
-    const locate = (t: string): { start: number; end: number; replaced: string; newText: string; fuzzy: boolean } | string => {
-      const first = t.indexOf(oldText);
-      if (first < 0) {
-        // Try a whitespace-insensitive match to tolerate indentation drift from the model.
-        const loose = fuzzyFind(t, oldText);
-        if (!loose) {
-          return `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`;
-        }
-        // The match starts after the line's indentation; replace from the line start and give new_text the file's indentation.
-        const lineStart = t.lastIndexOf('\n', loose.start - 1) + 1;
-        const start = /^[ \t]*$/.test(t.slice(lineStart, loose.start)) ? lineStart : loose.start;
-        const replaced = t.slice(start, loose.end);
-        return { start, end: loose.end, replaced, newText: start === lineStart ? eol(reindent(lf(oldText), lf(replaced), lf(baseNew))) : baseNew, fuzzy: true };
-      }
-      if (t.indexOf(oldText, first + 1) >= 0) {
-        return 'old_text matches more than once; include more surrounding context to make it unique.';
-      }
-      return { start: first, end: first + oldText.length, replaced: oldText, newText: baseNew, fuzzy: false };
-    };
-    let replaced = oldText;
-    let range: vscode.Range;
-    let expected = '';
-    if (!oldText) {
-      range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
-    } else {
-      const m = locate(text);
-      if (typeof m === 'string') {
-        return { content: m, isError: true };
-      }
-      replaced = m.replaced;
-      newText = m.newText;
-      if (m.fuzzy) {
-        note = ' (matched ignoring whitespace; indentation adapted to the file — re-read and check)';
-      }
-      range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
-      expected = doc.getText(range);
-    }
-    const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview(lf(replaced), lf(newText)), 'write');
-    if (!ok) {
-      return { content: 'User declined the edit.', isError: true };
-    }
-    await ctx.trackChange(uri.fsPath);
-    // The file may have changed while the approval prompt was open: never apply a stale range. Re-opening gets the
-    // live document in the editor and a fresh read from disk in the CLI.
-    try {
-      doc = await vscode.workspace.openTextDocument(uri);
-    } catch {
-      return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
-    }
-    if (!oldText) {
-      range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
-    } else if (doc.getText(range) !== expected) {
-      const m = locate(doc.getText());
-      if (typeof m === 'string' || m.replaced !== replaced) {
-        return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
-      }
-      newText = m.newText;
-      range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
-    }
-    const before = doc.getText();
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(uri, range, oldText ? newText : `${crlf ? '\r\n' : '\n'}${newText}`);
-    if (!(await vscode.workspace.applyEdit(edit))) {
-      return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
-    }
-    if (!(await doc.save())) {
-      return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
-    }
-    return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.${note}${await diffSection(uri, before)}`, data: { path: uri.fsPath, line: range.start.line + 1 } };
+    const r = await editResolved(uri, args, ctx, rootNote);
+    return rootNote ? { ...r, content: `${rootNote}\n${r.content}` } : r;
   },
 };
+
+/** edit_file on the file `args.path` resolved to; `rootNote` says when that is in another workspace folder. */
+async function editResolved(uri: vscode.Uri, args: Record<string, unknown>, ctx: ToolContext, rootNote?: string): Promise<ToolResult> {
+  const rawInsert = args.insert_line ?? args.insertLine;
+  const insertAt = rawInsert === undefined || rawInsert === null || rawInsert === '' ? undefined : Number(rawInsert);
+  const rawOld = args.old_text ?? args.old_string ?? (insertAt !== undefined ? '' : undefined);
+  const rawNew = args.new_text ?? args.new_string;
+  if (insertAt !== undefined && !Number.isInteger(insertAt)) {
+    return { content: `insert_line must be a whole line number (got ${JSON.stringify(rawInsert)}). Nothing was changed.`, isError: true };
+  }
+  if (typeof rawOld !== 'string' || typeof rawNew !== 'string') {
+    return { content: 'edit_file needs "old_text" (exact text to replace, "" to append) and "new_text" (replacement) as strings. Nothing was changed.', isError: true };
+  }
+  let oldText = rawOld;
+  let newText = rawNew;
+  let note = '';
+  let doc: vscode.TextDocument;
+  try {
+    doc = await vscode.workspace.openTextDocument(uri);
+  } catch {
+    // Models routinely "append to" a file that does not exist yet; with nothing to match that is a create.
+    if (!oldText && (insertAt === undefined || insertAt === 1)) {
+      return writeFileTool.execute({ path: args.path, content: newText }, ctx);
+    }
+    return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
+  }
+  const tooBig = [['old_text', oldText], ['new_text', newText]].find(([, t]) => t.length > MAX_EDIT_CHARS);
+  if (tooBig) {
+    return { content: `${tooBig[0]} is ${tooBig[1].length.toLocaleString()} characters (limit ${MAX_EDIT_CHARS.toLocaleString()}). Split the edit into several smaller edit_file calls (send them in one response), or use write_file to replace the whole file. Nothing was changed.`, isError: true };
+  }
+  const text = doc.getText();
+  // Models write "\n"; keep the file's own line endings (CRLF or LF) and convert the model's text to match.
+  const crlf = text.includes('\r\n');
+  const lf = (s: string) => s.replace(/\r\n/g, '\n');
+  const eol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : lf(s));
+  if (insertAt !== undefined) {
+    return insertLines(uri, doc, insertAt, eol(lf(newText).replace(/\n$/, '')), crlf ? '\r\n' : '\n', ctx, rootNote);
+  }
+  // Small models copy read_file's line-number gutter ("   12 | ") into old_text/new_text; take it off before matching.
+  const bare = !text.includes(eol(oldText)) ? stripGutter(lf(oldText)) : undefined;
+  if (bare !== undefined && text.includes(eol(bare))) {
+    oldText = bare;
+    newText = stripGutter(lf(newText)) ?? newText;
+    note = ' (the "NN | " line-number prefixes from read_file were removed from old_text/new_text — leave them out next time)';
+  }
+  oldText = eol(oldText);
+  newText = eol(newText);
+  const baseNew = newText;
+  // Finds old_text in `t` (exactly once, else whitespace-insensitively); a string is the error to report.
+  const locate = (t: string): { start: number; end: number; replaced: string; newText: string; fuzzy: boolean } | string => {
+    const first = t.indexOf(oldText);
+    if (first < 0) {
+      // Try a whitespace-insensitive match to tolerate indentation drift from the model.
+      const loose = fuzzyFind(t, oldText);
+      if (!loose) {
+        return `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`;
+      }
+      // The match starts after the line's indentation; replace from the line start and give new_text the file's indentation.
+      const lineStart = t.lastIndexOf('\n', loose.start - 1) + 1;
+      const start = /^[ \t]*$/.test(t.slice(lineStart, loose.start)) ? lineStart : loose.start;
+      const replaced = t.slice(start, loose.end);
+      return { start, end: loose.end, replaced, newText: start === lineStart ? eol(reindent(lf(oldText), lf(replaced), lf(baseNew))) : baseNew, fuzzy: true };
+    }
+    if (t.indexOf(oldText, first + 1) >= 0) {
+      return 'old_text matches more than once; include more surrounding context to make it unique.';
+    }
+    return { start: first, end: first + oldText.length, replaced: oldText, newText: baseNew, fuzzy: false };
+  };
+  let replaced = oldText;
+  let range: vscode.Range;
+  let expected = '';
+  // The file as the edit below will leave it, for the diff preview.
+  let proposed = `${text}${crlf ? '\r\n' : '\n'}${newText}`;
+  if (!oldText) {
+    range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
+  } else {
+    const m = locate(text);
+    if (typeof m === 'string') {
+      return { content: m, isError: true };
+    }
+    replaced = m.replaced;
+    newText = m.newText;
+    if (m.fuzzy) {
+      note = ' (matched ignoring whitespace; indentation adapted to the file — re-read and check)';
+    }
+    range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
+    expected = doc.getText(range);
+    proposed = text.slice(0, m.start) + newText + text.slice(m.end);
+  }
+  const proposal = [{ fsPath: uri.fsPath, before: text, proposed }];
+  const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}${rootNote ? ` ${rootNote}` : ''}`, diffPreview(lf(replaced), lf(newText)), 'write', { preview: proposal });
+  if (!ok) {
+    return { content: 'User declined the edit.', isError: true };
+  }
+  await ctx.trackChange(uri.fsPath);
+  // The file may have changed while the approval prompt was open: never apply a stale range. Re-opening gets the
+  // live document in the editor and a fresh read from disk in the CLI.
+  try {
+    doc = await vscode.workspace.openTextDocument(uri);
+  } catch {
+    return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+  }
+  if (!oldText) {
+    range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
+  } else if (doc.getText(range) !== expected) {
+    const m = locate(doc.getText());
+    if (typeof m === 'string' || m.replaced !== replaced) {
+      return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+    }
+    newText = m.newText;
+    range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
+  }
+  const before = doc.getText();
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(uri, range, oldText ? newText : `${crlf ? '\r\n' : '\n'}${newText}`);
+  const errors = watchNewErrors(uri);
+  if (!(await vscode.workspace.applyEdit(edit))) {
+    errors.dispose();
+    return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
+  }
+  if (!(await doc.save())) {
+    errors.dispose();
+    return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
+  }
+  await afterEditWritten(proposal).catch(() => undefined);
+  return { content: `Edited ${displayPath(uri, ctx)} at line ${range.start.line + 1}.${note}${await diffSection(uri, before)}${await errors.report()}`, data: { path: uri.fsPath, line: range.start.line + 1 } };
+}
 
 /** Larger old_text/new_text is refused: small models garble long verbatim copies, and one bad character fails the match. */
 const MAX_EDIT_CHARS = 6000;
@@ -418,13 +568,17 @@ async function diffSection(uri: vscode.Uri, before: string): Promise<string> {
 }
 
 /** edit_file with insert_line: `text` (already in the file's line endings, no trailing newline) goes before line `at`. */
-async function insertLines(uri: vscode.Uri, doc: vscode.TextDocument, at: number, text: string, eolStr: string, ctx: ToolContext): Promise<ToolResult> {
+async function insertLines(uri: vscode.Uri, doc: vscode.TextDocument, at: number, text: string, eolStr: string, ctx: ToolContext, rootNote?: string): Promise<ToolResult> {
   const count = (t: string) => (t === '' ? 0 : t.split(/\r?\n/).length - (/\n$/.test(t) ? 1 : 0));
   const total = count(doc.getText());
   if (at < 1 || at > total + 1) {
     return { content: `insert_line ${at} is out of range: ${displayPath(uri, ctx)} has ${total} lines, so use 1-${total + 1} (${total + 1} appends). Nothing was changed.`, isError: true };
   }
-  const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview('', text.replace(/\r\n/g, '\n')), 'write');
+  const current = doc.getText();
+  const at0 = at <= total ? doc.offsetAt(new vscode.Position(at - 1, 0)) : current.length;
+  const inserted = at <= total || current === '' || /\n$/.test(current) ? `${text}${eolStr}` : `${eolStr}${text}`;
+  const proposal = [{ fsPath: uri.fsPath, before: current, proposed: current.slice(0, at0) + inserted + current.slice(at0) }];
+  const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}${rootNote ? ` ${rootNote}` : ''}`, diffPreview('', text.replace(/\r\n/g, '\n')), 'write', { preview: proposal });
   if (!ok) {
     return { content: 'User declined the edit.', isError: true };
   }
@@ -445,14 +599,18 @@ async function insertLines(uri: vscode.Uri, doc: vscode.TextDocument, at: number
   } else {
     edit.insert(uri, end, before === '' || /\n$/.test(before) ? `${text}${eolStr}` : `${eolStr}${text}`);
   }
+  const errors = watchNewErrors(uri);
   if (!(await vscode.workspace.applyEdit(edit))) {
+    errors.dispose();
     return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
   }
   if (!(await doc.save())) {
+    errors.dispose();
     return { content: `Edited ${displayPath(uri, ctx)} in the editor but could not save it to disk.`, isError: true };
   }
+  await afterEditWritten(proposal).catch(() => undefined);
   const n = text.split('\n').length;
-  return { content: `Inserted ${n} line${n === 1 ? '' : 's'} at line ${at} of ${displayPath(uri, ctx)}.${await diffSection(uri, before)}`, data: { path: uri.fsPath, line: at } };
+  return { content: `Inserted ${n} line${n === 1 ? '' : 's'} at line ${at} of ${displayPath(uri, ctx)}.${await diffSection(uri, before)}${await errors.report()}`, data: { path: uri.fsPath, line: at } };
 }
 
 export const listDirTool: Tool = {
@@ -463,13 +621,23 @@ export const listDirTool: Tool = {
     parameters: { type: 'object', properties: { path: { type: 'string', description: 'Directory path, "." for workspace root' } }, required: ['path'] },
   },
   async execute(args, ctx) {
-    const uri = resolveWorkspacePath(typeof args.path === 'string' && args.path ? args.path : '.', ctx);
+    const { uri, note } = resolveToolPath(typeof args.path === 'string' && args.path ? args.path : '.', ctx);
     const entries = await vscode.workspace.fs.readDirectory(uri);
+    // Entries the agent ignore file excludes stay visible, marked, so the model knows not to reach for them.
+    const sources = new Set<string>();
     const lines = entries
       .filter(([n]) => n !== '.git' && n !== 'node_modules')
       .sort((a, b) => (a[1] === b[1] ? a[0].localeCompare(b[0]) : a[1] === vscode.FileType.Directory ? -1 : 1))
-      .map(([n, t]) => (t === vscode.FileType.Directory ? `${n}/` : n));
-    return { content: lines.length ? lines.join('\n') : '(empty directory)' };
+      .map(([n, t]) => {
+        const dir = t === vscode.FileType.Directory;
+        const source = excludedPath(vscode.Uri.joinPath(uri, n), ctx, dir);
+        if (source) {
+          sources.add(source);
+        }
+        return `${n}${dir ? '/' : ''}${source ? ' 🔒' : ''}`;
+      });
+    const locked = sources.size ? `\n(🔒 excluded by ${[...sources].join(', ')}: the file tools will not read or change these)` : '';
+    return { content: `${note ? `${note}\n` : ''}${lines.length ? lines.join('\n') : '(empty directory)'}${locked}` };
   },
 };
 

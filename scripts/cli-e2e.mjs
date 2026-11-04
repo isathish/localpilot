@@ -31,7 +31,7 @@ const check = (name, cond, detail) => {
 };
 
 // ------------------------------------------------------------------ mock servers
-const seen = { claudeKeys: [], claudeBodies: [], localChats: 0, omniChats: 0, localBodies: [] };
+const seen = { claudeKeys: [], claudeBodies: [], localChats: 0, omniChats: 0, localBodies: [], localAuth: [] };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => r(b)); });
 const srv = http.createServer(async (req, res) => {
   const url = req.url ?? '';
@@ -68,8 +68,17 @@ const srv = http.createServer(async (req, res) => {
   }
   if (url.endsWith('/v1/chat/completions')) {
     const b = JSON.parse(await body(req));
-    omni ? seen.omniChats++ : (seen.localChats++, seen.localBodies.push(b));
+    omni ? seen.omniChats++ : (seen.localChats++, seen.localBodies.push(b), seen.localAuth.push(req.headers.authorization));
     res.setHeader('content-type', 'text/event-stream');
+    // Headless checks: E2E_SLOW answers too late for --timeout; E2E_FAILTOOL keeps calling a tool that fails.
+    const asked = JSON.stringify(b.messages.filter((m) => m.role === 'user').slice(0, 1));
+    if (asked.includes('E2E_SLOW')) {
+      await new Promise((r) => setTimeout(r, 6000));
+    }
+    if (asked.includes('E2E_FAILTOOL')) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${seen.localChats}`, type: 'function', function: { name: 'read_file', arguments: '{"path":"no-such-file.txt"}' } }] }, finish_reason: 'tool_calls' }] })}\n\n`);
+      return res.end('data: [DONE]\n\n');
+    }
     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${omni ? 'Gateway' : 'Local'} model ${b.model} answered.` }, finish_reason: 'stop' }] })}\n\n`);
     return res.end('data: [DONE]\n\n');
   }
@@ -84,21 +93,23 @@ const vsSettings = process.platform === 'darwin'
   ? path.join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json')
   : process.platform === 'win32' ? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json') : path.join(home, '.config', 'Code', 'User', 'settings.json');
 fs.mkdirSync(path.dirname(vsSettings), { recursive: true });
-fs.writeFileSync(vsSettings, JSON.stringify({ 'localpilot.providers': [{ id: 'vsc', type: 'openai', baseUrl: `${base}/local/v1`, displayName: 'From VS Code' }], 'localpilot.telemetry.enabled': false, 'localpilot.skills.autoInstall': 'off', 'localpilot.autoClarify': false }, null, 2));
+fs.writeFileSync(vsSettings, JSON.stringify({ 'localpilot.providers': [{ id: 'vsc', type: 'openai', baseUrl: `${base}/local/v1`, displayName: 'From VS Code' }, { id: 'vslm', type: 'vscode-lm', baseUrl: 'vscode://lm' }], 'localpilot.telemetry.enabled': false, 'localpilot.skills.autoInstall': 'off', 'localpilot.autoClarify': false }, null, 2));
 
 /** Runs the CLI with a fresh environment (no real keys leak in) and returns its exit code and output. */
-function cli(args, { input, env = {} } = {}) {
+function cli(args, { input, env = {}, cwd = ws } = {}) {
   return new Promise((resolve) => {
     const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/API_KEY|_TOKEN$|^LOCALPILOT_KEY_/.test(k)));
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ws, env: { ...clean, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...clean, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (out += d));
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => ((out += d), (stdout += d)));
+    child.stderr.on('data', (d) => ((out += d), (stderr += d)));
     child.stdin.end(input ?? '');
     const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
     child.on('exit', (code) => {
       clearTimeout(timer);
-      resolve({ code, out });
+      resolve({ code, out, stdout, stderr });
     });
   });
 }
@@ -177,6 +188,80 @@ try {
   check('-r with an unknown id: exit code 2', r.code === 2 && /no saved session/.test(r.out), r.out);
   r = await cli(['history', 'delete', hist[0].id]);
   check('history delete removes the session', r.code === 0 && !JSON.parse((await cli(['history', '--json'])).out.replace(/^[^[]*/, '')).some((s) => s.id === hist[0].id), r.out);
+
+  console.log('[isolated sessions]');
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-repo-'));
+  const git = (...a) => new Promise((res) => spawn('git', ['-C', repo, ...a], { stdio: 'ignore' }).on('exit', res).on('error', () => res(-1)));
+  if ((await git('init', '-q')) === 0) {
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    await git('add', '-A');
+    await git('-c', 'user.name=e2e', '-c', 'user.email=e2e@example.com', 'commit', '-qm', 'init');
+    const repoSessions = () => {
+      const dir = path.join(home, '.localpilot', 'workspaces');
+      return fs.readdirSync(dir).flatMap((h) => {
+        const d = path.join(dir, h, 'sessions');
+        return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => path.join(d, f)) : [];
+      }).map((f) => ({ f, s: JSON.parse(fs.readFileSync(f, 'utf8')) })).filter((x) => JSON.stringify(x.s).includes('isolated codeword'));
+    };
+    const iso = await cli(['-y', '-p', '--no-mcp', '-m', 'local/qwen2.5-coder-7b', '--isolate', 'Remember the isolated codeword kiwi'], { cwd: repo });
+    const afterIso = repoSessions();
+    check('--isolate run: the saved session no longer names the removed worktree', iso.code === 0 && afterIso.length === 1 && !afterIso[0].s.worktree, iso.out);
+    // A session saved by an older build still pointing at a worktree that is gone: -c works in the checkout again.
+    if (afterIso[0]) {
+      fs.writeFileSync(afterIso[0].f, JSON.stringify({ ...afterIso[0].s, worktree: { path: path.join(repo, 'gone-worktree'), repo, base: 'HEAD', createdAt: Date.now(), owner: 'cli' } }));
+    }
+    r = await cli(['-y', '-p', '--no-mcp', '-m', 'local/qwen2.5-coder-7b', '-c', 'What was the isolated codeword?'], { cwd: repo });
+    const afterResume = repoSessions();
+    check('-c after --isolate: continues in the checkout and drops the stale worktree', r.code === 0 && /Local model/.test(r.out) && afterResume.length === 1 && !afterResume[0].s.worktree && JSON.stringify(seen.localBodies.at(-1)?.messages ?? []).includes('kiwi'), r.out);
+  } else {
+    console.log('  - git not available; skipped');
+  }
+  fs.rmSync(repo, { recursive: true, force: true });
+
+  console.log('[headless runs]');
+  const local = ['--no-mcp', '-m', 'local/qwen2.5-coder-7b'];
+  r = await cli(['-y', ...local, '--json', 'Say hi']);
+  const lines = r.stdout.split('\n').filter(Boolean);
+  const records = lines.map((l) => { try { return JSON.parse(l); } catch { return undefined; } });
+  check('--json: every stdout line is a JSON event, ending with run_result', r.code === 0 && records.length > 1 && records.every((x) => x && typeof x.type === 'string' && typeof x.ts === 'number') && records.at(-1).type === 'run_result' && records.at(-1).finishReason === 'completed' && /Local model/.test(records.at(-1).text) && records.some((x) => x.type === 'assistant_delta'), r.out);
+  r = await cli(['-y', ...local, 'Review the piped text'], { input: 'piped-line-42\n' });
+  check('piped stdin plus a prompt: sent as <stdin> context, answer only on a non-TTY stdout', r.code === 0 && JSON.stringify(seen.localBodies.at(-1)?.messages ?? []).includes('<stdin>\\npiped-line-42') && r.stdout.trim().startsWith('Local model'), r.out);
+  r = await cli(['-y', ...local, '--timeout', '2', 'E2E_SLOW answer late']);
+  check('--timeout: the run stops and exits with 124', r.code === 124 && /timed out/.test(r.stderr), r.out);
+  r = await cli(['-y', ...local, '--retries', '2', 'E2E_FAILTOOL read it']);
+  check('--retries 2: two failed steps in a row stop the run with exit code 3', r.code === 3 && /2 errors in a row/.test(r.out), r.out);
+  r = await cli(['--yolo', '-m', 'local/qwen2.5-coder-7b', '--json', 'E2E_FAILTOOL again']);
+  // The run's own requests (an automatic memory save after it sends no tools).
+  const yoloTools = (seen.localBodies.filter((b) => Array.isArray(b.tools) && JSON.stringify(b.messages).includes('E2E_FAILTOOL again')).at(-1)?.tools ?? []).map((t) => t.function?.name).sort();
+  const errLine = r.stderr.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return undefined; } }).find((x) => x?.type === 'error');
+  check('--yolo: core tools only, mistake limit 3 (exit 3), error as JSON on stderr', r.code === 3 && yoloTools.length > 0 && yoloTools.every((n) => ['read_file', 'edit_file', 'apply_patch', 'write_file', 'run_command', 'grep_search', 'file_search', 'list_dir'].includes(n)) && errLine?.kind === 'mistake_limit' && errLine.count === 3, { code: r.code, yoloTools, stderr: r.stderr.slice(0, 400) });
+  // A home whose only provider is not listening: the run fails before it starts, still as JSON on stderr.
+  const deadHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-dead-'));
+  const deadSettings = vsSettings.replace(home, deadHome);
+  fs.mkdirSync(path.dirname(deadSettings), { recursive: true });
+  fs.writeFileSync(deadSettings, JSON.stringify({ 'localpilot.providers': [{ id: 'dead', type: 'openai', baseUrl: 'http://127.0.0.1:9/v1' }], 'localpilot.telemetry.enabled': false }));
+  const jsonErrs = [];
+  for (const args of [['--json', '--no-mcp', '-m', 'dead/x', 'Say hi'], ['--json', '-k', 'sk-x', 'Say hi'], ['--json', '-P', 'no-such-provider', 'Say hi']]) {
+    const d = await cli(args, { env: { HOME: deadHome, USERPROFILE: deadHome, APPDATA: path.join(deadHome, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(deadHome, '.config') } });
+    const errLines = d.stderr.split('\n').filter(Boolean);
+    const parsed = errLines.map((l) => { try { return JSON.parse(l); } catch { return undefined; } });
+    jsonErrs.push({ args: args.join(' '), code: d.code, ok: d.code === 2 && errLines.length > 0 && parsed.every((x) => x && typeof x.type === 'string') && parsed.some((x) => x.type === 'error' && typeof x.message === 'string' && x.kind), stderr: d.stderr.slice(0, 300) });
+  }
+  fs.rmSync(deadHome, { recursive: true, force: true });
+  check('--json: failures before the run (unreachable provider, -k without -P, unknown -P) are JSON error lines on stderr, exit 2', jsonErrs.every((x) => x.ok), jsonErrs);
+  r = await cli(['-y', '--no-mcp', '-P', 'local', '-k', 'sk-run-only', '-p', 'Say hi']);
+  check('-P/-k: the key is used for this run and not saved', r.code === 0 && seen.localAuth.at(-1) === 'Bearer sk-run-only' && !fs.readFileSync(cfgFile, 'utf8').includes('sk-run-only') && !(fs.existsSync(keysFile) && fs.readFileSync(keysFile, 'utf8').includes('sk-run-only')), r.out);
+  r = await cli(['-y', ...local, '-s', 'E2E-SYSTEM-APPEND', '-p', 'Say hi']);
+  check('-s appends to the system prompt', r.code === 0 && String(seen.localBodies.at(-1)?.messages?.[0]?.content ?? '').includes('E2E-SYSTEM-APPEND'), r.out);
+  r = await cli(['config', 'tools', '--json']);
+  const tools = JSON.parse(r.stdout.slice(r.stdout.indexOf('[')));
+  check('config tools --json: tools with their approval kind', r.code === 0 && tools.some((t) => t.name === 'run_command' && t.approval === 'terminal') && tools.some((t) => t.name === 'read_file' && t.approval === 'none'), r.out.slice(0, 600));
+  r = await cli(['config', 'nope']);
+  check('config with an unknown kind: exit code 2', r.code === 2, r.out);
+  r = await cli(['doctor', '--json']);
+  const doc = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
+  check('doctor --json: providers with key state, never the key', r.code === 0 && Array.isArray(doc.providers) && doc.providers.some((p) => p.id === 'local' && p.reachable) && !r.stdout.includes('sk-e2e-claude') && typeof doc.log === 'string', r.out.slice(0, 600));
+  check('doctor --json: the VS Code-only vscode-lm provider is hidden', !doc.providers.some((p) => p.type === 'vscode-lm'), doc.providers);
 
   console.log('[keys]');
   r = await cli(['providers', 'key', 'anthropic', '--remove-key']);

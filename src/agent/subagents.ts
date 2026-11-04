@@ -7,7 +7,7 @@ import { SkillManager } from './skills';
 import { newId } from '../providers/http';
 import { classifyModelError } from './resilience';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
-import { mapToolNames } from './toolAliases';
+import { agentToolFilter } from './toolAliases';
 import { findRepo } from './repos';
 import { reposFor } from '../tools/repos';
 import { releaseIntegratedTerminal } from '../tools/terminal';
@@ -26,7 +26,7 @@ const SUBAGENT_CONTRACT = `# You are a subagent
 export type ScopedApprovalHandler = (sessionId: string, ...args: Parameters<ApprovalHandler>) => ReturnType<ApprovalHandler>;
 
 /** Tools whose effects a from-scratch rerun on another model would repeat. */
-const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path', 'run_command', 'git_commit', 'run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
+const MUTATING_TOOLS = new Set(['edit_file', 'apply_patch', 'write_file', 'notebook_edit', 'create_directory', 'delete_path', 'run_command', 'git_commit', 'run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
 
 const strList = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map(String).map((x) => x.trim()).filter(Boolean) : typeof v === 'string' && v.trim() ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
 
@@ -220,7 +220,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         role,
         spreadModels: spreadable && !fellBack,
         // Agents registered from other sources may still name Claude Code or Cline tools.
-        toolFilter: def.tools && mapToolNames(def.tools),
+        // Claude `mcp__…` entries are also kept as written: they are matched against the names MCP tools were registered under.
+        toolFilter: def.tools && agentToolFilter(def.tools),
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
         // The parent's active skills, the agent file's `skills:` and anything the task named: the swarm follows one playbook.
         skills: [...new Set([...(ctx.skills ?? []), ...(def.skills ?? []), ...(extraSkills ?? [])])],

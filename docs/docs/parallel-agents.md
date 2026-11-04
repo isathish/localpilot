@@ -117,7 +117,9 @@ A running agent has two buttons next to the composer:
 **Steering.** You can type while an agent is paused or running:
 
 - While paused, a message you send appears as a *queued* row. It is added to the conversation when the agent resumes. Use it to correct course, for example "use the existing helper instead".
-- While running, pressing <kbd>Enter</kbd> offers *Add to this agent* (read at its next step), *Send in a new tab* or *Stop this agent first*.
+- While running, pressing <kbd>Enter</kbd> offers *Add to this agent* (read at its next step), *Send after this turn*, *Send in a new tab* or *Stop this agent first*.
+- *Send after this turn* keeps the message in the chat's queue. When the run ends, even after **Stop**, it starts a new turn. Several queued messages run one turn each, in order.
+- A banner above the input lists what is waiting, for example *2 queued · 1 steering*. On each row, ✕ cancels the message and ✎ moves its text, files and images back into the composer, in front of anything you have already typed. Deleting the chat drops its queue. A cancelled steer is never sent to the model.
 - <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl+Shift+Enter</kbd>) sends the draft in a new tab.
 
 **Stop** cancels the run. Files already changed stay in the changes bar for you to accept or reject.

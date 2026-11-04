@@ -44,9 +44,12 @@ suite('LocalPilot MCP client', () => {
     try {
       await cfg.update('mcpServers', { echo: { command: process.execPath, args: [path.join(dir, 'server.js')] } }, vscode.ConfigurationTarget.Global);
       await mcp.reload();
-      assert.deepStrictEqual(mcp.status, [{ name: 'echo', tools: 1, transport: 'stdio' }]);
-      const tool = tools.get('mcp_echo_echo');
-      assert.ok(tool, 'MCP tool must be registered under mcp_<server>_<tool>');
+      const st = mcp.status;
+      assert.deepStrictEqual(st.map((s) => [s.name, s.state, s.tools, s.transport]), [['echo', 'connected', 1, 'stdio']]);
+      assert.deepStrictEqual(st[0].toolList, [{ name: 'echo', description: 'Echoes text back', params: [{ name: 'text', type: 'string', description: undefined, required: true }] }]);
+      assert.deepStrictEqual([st[0].resources, st[0].prompts], [[], []], 'undeclared capabilities are empty lists');
+      const tool = tools.get('mcp_echo__echo');
+      assert.ok(tool, 'MCP tool must be registered under mcp_<server>__<tool>');
       assert.strictEqual(tool.approvalKind, 'mcp');
       const res = await tool.execute({ text: 'hello' }, {
         sessionId: 't',

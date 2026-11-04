@@ -332,7 +332,7 @@ export async function scaffoldPlugin(dir: string, name: string): Promise<string[
 /** A path inside the plugin as authors write it: relative, with `/` on every platform. */
 const rel = (dir: string, p: string) => path.relative(dir, p).split(path.sep).join('/');
 
-const HOOK_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact', 'Notification']);
+const HOOK_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact', 'Notification', 'TaskCancel', 'TaskError']);
 
 /** Problems a plugin author should fix (errors) or look at (warnings), for `localpilot plugin validate`. */
 export async function validatePlugin(dir: string): Promise<{ errors: string[]; warnings: string[]; plugin?: PluginInfo }> {

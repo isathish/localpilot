@@ -38,7 +38,8 @@ export interface ProbeResult {
 /** Health-check one provider and list its models, with a hard timeout so an unreachable host never hangs the UI. */
 export async function probeProvider(cfg: ProviderConfig, configured: boolean, source?: ProbeResult['source']): Promise<ProbeResult> {
   const base: ProbeResult = { id: cfg.id, displayName: cfg.displayName || cfg.id, type: cfg.type, baseUrl: cfg.baseUrl, configured, enabled: cfg.enabled !== false, ok: false, latencyMs: 0, models: [], source };
-  if (!/^https?:\/\//i.test(cfg.baseUrl)) {
+  const lm = cfg.type === 'vscode-lm';
+  if (!lm && !/^https?:\/\//i.test(cfg.baseUrl)) {
     return { ...base, error: 'Base URL must start with http:// or https://' };
   }
   const started = Date.now();
@@ -47,14 +48,14 @@ export async function probeProvider(cfg: ProviderConfig, configured: boolean, so
   try {
     const provider = createProvider(cfg);
     const remote = isRemoteUrl(cfg.baseUrl);
-    // Cloud URLs and Claude's API always need a key; a local gateway may not.
-    if ((remote || cfg.type === 'anthropic') && !resolveApiKey(cfg)) {
+    // Cloud URLs and Claude's API always need a key; a local gateway may not, nor VS Code's models (it signs in for them).
+    if (!lm && (remote || cfg.type === 'anthropic') && !resolveApiKey(cfg)) {
       return { ...base, error: missingKeyReason(cfg) };
     }
     // A cloud API is always up; skipping the bare health check surfaces its real error (invalid key, no access).
     const ok = remote || (await provider.healthCheck(ctl.signal));
     if (!ok) {
-      return { ...base, latencyMs: Date.now() - started, error: 'No response — is the server running?' };
+      return { ...base, latencyMs: Date.now() - started, error: lm ? 'No language models in VS Code — install and sign in to GitHub Copilot or another model extension' : 'No response — is the server running?' };
     }
     const models = await provider.listModels(ctl.signal);
     return {

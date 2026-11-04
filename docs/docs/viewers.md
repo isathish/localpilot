@@ -114,11 +114,11 @@ The colour button switches between **Auto**, **Original**, **Dark** and **Sepia*
 
 ### Large and protected files
 
-PDFs up to `localpilot.pdfViewer.rangeThresholdMB` (16 MB) load at once. Larger ones load page by page as you read, so a 500-page, 200 MB file opens quickly and memory stays bounded. Above `localpilot.pdfViewer.maxFileSizeMB` (1024 MB) the viewer asks first. For a password-protected PDF it asks for the password; the password stays in the viewer and is never stored. A damaged file shows **Not a valid PDF** with **Open with system viewer**. The viewer reloads when the file changes on disk.
+PDFs up to `localpilot.pdfViewer.rangeThresholdMB` (16 MB) load at once. Larger ones load page by page as you read, so a 500-page, 200 MB file opens quickly and memory stays bounded. Above `localpilot.pdfViewer.maxFileSizeMB` (1024 MB) the viewer asks first. For a password-protected PDF it asks for the password; the password stays in the viewer and is never stored. A damaged file shows **Not a valid PDF** with **Open with system viewer**. If part of a large file cannot be read (after one retry), the viewer says so and offers **Reload**. The viewer reloads when the file changes on disk.
 
 ### Using a PDF with the agent
 
-- **Ask** in the toolbar attaches the PDF to the chat and starts a question. Select text and click **Ask about selection** to attach that page (`docs/spec.pdf#page=3`) and quote the selection.
+- **Ask** in the toolbar attaches the PDF to the chat and starts a question. Select text and click **Ask about selection** to attach that page (`docs/spec.pdf#page=3`) and quote the selection. Both add to what you have already typed in the chat instead of replacing it, and work even when the chat was not open yet.
 - **⋯ → Attach page as image** (or **LocalPilot: Attach Current PDF Page as Image**) renders the current page as a PNG (at most 2000 px wide and 12 MB) and adds it to the chat. Use it for scanned pages, which have no text, and for diagrams, with a vision model.
 - **⋯ → Copy page text**, **Document properties**, **Open with system viewer** and **Reveal in file manager**.
 - The agent reads PDFs itself with `read_pdf`; see [Context]({{ '/docs/context/' | relative_url }}).

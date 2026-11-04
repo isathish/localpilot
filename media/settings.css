@@ -177,6 +177,17 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .prov-body { border-top: 1px solid var(--border); padding: 6px 0 12px; background: var(--bg); }
 .prov-body .field { padding: 10px 16px; }
 .prov-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; flex-wrap: wrap; }
+/* Provider extras: header pairs, per-model settings */
+.prov-more { padding: 8px 16px 2px; margin: 0; }
+.prov-more .chev { display: inline-grid; transition: transform .15s; } .prov-more .chev svg { width: 11px; height: 11px; }
+.kv { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.kv-row { display: flex; gap: 6px; width: 100%; } .kv-row input { flex: 1; min-width: 0; }
+.ovr-list { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.ovr { width: 100%; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; background: var(--card); }
+.ovr-head { display: flex; gap: 6px; margin-bottom: 8px; } .ovr-head input { flex: 1; min-width: 0; }
+.ovr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px 8px; }
+.ovr-f { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); } .ovr-f input, .ovr-f select { width: 100%; }
+.mrow .price { color: var(--fg); opacity: .85; }
 .prov-result { margin: 8px 16px 0; padding: 8px 10px; border-radius: 6px; font-size: 12px; background: var(--code-bg); }
 .prov-result.ok { color: var(--ok-text); } .prov-result.err { color: var(--error-text); }
 .prov-result .models { color: var(--fg); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
@@ -198,6 +209,8 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .preset .ic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-weight: 700; font-size: 12px; flex: none; }
 .preset .ic:not(.brand-mark) { background: var(--code-bg); }
 .preset b { display: block; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .preset > div > span { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset b b.hl { display: inline; font-size: inherit; color: var(--link, var(--focus)); }
+.preset.kbd, .preset:focus-visible { border-color: var(--focus); background: var(--hover); outline: none; }
 /* Brand marks: monogram on a tint of the vendor colour; the colour is kept on disabled "already added" cards too. */
 .brand-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 11px; letter-spacing: .02em; line-height: 1; font-family: inherit; --mark: var(--brand); color: var(--mark); background: color-mix(in srgb, var(--mark) 16%, var(--code-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 28%, transparent); }
 .brand-mark.plain { color: var(--muted); background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--border-soft); }
@@ -907,3 +920,14 @@ body.vscode-light .toggle:not(.on), html.light body .toggle:not(.on) { backgroun
 body.vscode-light .seg button.on, html.light body .seg button.on { background: var(--input-bg); box-shadow: inset 0 0 0 1px var(--border); }
 /* Thin strokes antialias to grey on white; draw icons a little heavier. */
 body.vscode-light svg[viewBox="0 0 16 16"], html.light body svg[viewBox="0 0 16 16"] { stroke-width: 1.65; }
+
+/* MCP server inspection (Settings → MCP) */
+.mcp-err { display: flex; align-items: center; gap: 8px; } .mcp-err > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mcp-inspect { padding: 12px 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.mcp-list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.mcp-list .empty { padding: 10px 12px; }
+.mcp-item { padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 12px; } .mcp-item:last-child { border-bottom: none; }
+.mcp-item > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; } .mcp-item code { overflow-wrap: anywhere; }
+.mcp-item .desc { margin-top: 2px; }
+.mcp-params { display: inline-flex; flex-wrap: wrap; gap: 4px; } .mcp-params span { font-family: var(--mono); font-size: 11px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
+.mcp-params b { color: var(--error-text); font-weight: 600; } .mcp-params i { font-style: normal; opacity: .75; }

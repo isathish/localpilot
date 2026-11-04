@@ -1,4 +1,7 @@
 import * as crypto from 'crypto';
+import { promises as fsp } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProviderConfig } from '../types';
 import { secretRefs, setSecretValues } from './cloud';
@@ -37,7 +40,7 @@ export class ProviderSecrets implements vscode.Disposable {
 
   /** Loads every key the configured providers reference (all settings scopes). */
   async load(): Promise<void> {
-    const names = [...new Set([...configuredProviders().flatMap((p) => secretRefs(p.apiKey)), ...webSearchRefs()])];
+    const names = [...new Set([...configuredProviders().flatMap(providerRefs), ...webSearchRefs()])];
     if (!names.length) {
       return;
     }
@@ -63,7 +66,7 @@ export class ProviderSecrets implements vscode.Disposable {
     const taken = new Set([
       ...Object.keys(this.state.get<Record<string, string>>(OWNERS_KEY, {})),
       ...this.state.get<string[]>(LEGACY_NAMES_KEY, []),
-      ...[...configuredProviders(), ...providers].flatMap((p) => secretRefs(p.apiKey)),
+      ...[...configuredProviders(), ...providers].flatMap(providerRefs),
     ]);
     const out: ProviderConfig[] = [];
     for (const p of providers) {
@@ -89,7 +92,7 @@ export class ProviderSecrets implements vscode.Disposable {
    * (the references a settings write dropped) are candidates.
    */
   async prune(providers: ProviderConfig[] = configuredProviders(), only?: string[]): Promise<void> {
-    const used = new Set([...[...providers, ...configuredProviders()].flatMap((p) => secretRefs(p.apiKey)), ...webSearchRefs()]);
+    const used = new Set([...[...providers, ...configuredProviders()].flatMap(providerRefs), ...webSearchRefs()]);
     const owners = this.state.get<Record<string, string>>(OWNERS_KEY, {});
     const here = this.workspaceOwner();
     const stale = [...new Set(only ?? Object.keys(owners))].filter((n) => n in owners && !used.has(n) && (owners[n] === 'user' || owners[n] === here));
@@ -103,6 +106,26 @@ export class ProviderSecrets implements vscode.Disposable {
     }
     await this.state.update(OWNERS_KEY, kept);
     setSecretValues(Object.fromEntries(stale.map((n) => [n, undefined])));
+  }
+
+  /** Loads the named keys (those MCP server configurations reference) that are not loaded yet. */
+  async loadNames(names: string[]): Promise<void> {
+    const want = [...new Set(names)];
+    if (!want.length) {
+      return;
+    }
+    const values = await Promise.all(want.map((n) => this.storage.get(PREFIX + n)));
+    setSecretValues(Object.fromEntries(want.map((n, i) => [n, values[i]]).filter(([, v]) => v)));
+  }
+
+  /**
+   * Stores a value an MCP server file references (`${secret:<name>}`). It has no owner, so `prune` (which only knows
+   * provider and web search references) never deletes it.
+   */
+  async storeUnowned(name: string, value: string): Promise<string> {
+    await this.storage.store(PREFIX + name, value);
+    setSecretValues({ [name]: value });
+    return `\${secret:${name}}`;
   }
 
   private async remember(name: string, owner: string): Promise<void> {
@@ -131,8 +154,73 @@ function configuredProviders(): ProviderConfig[] {
   return [...(i?.globalValue ?? []), ...(i?.workspaceValue ?? []), ...(i?.workspaceFolderValue ?? [])].filter((p) => p && typeof p === 'object');
 }
 
+/** Secret names a provider references, in its API key or its header values. */
+function providerRefs(p: ProviderConfig): string[] {
+  const headers = p.headers && typeof p.headers === 'object' ? Object.values(p.headers) : [];
+  return [...secretRefs(p.apiKey), ...headers.flatMap((v) => secretRefs(String(v)))];
+}
+
 /** The web search API key's references in every settings scope; it shares the keychain with provider keys. */
 function webSearchRefs(): string[] {
   const i = vscode.workspace.getConfiguration('localpilot').inspect<string>('webSearch.apiKey');
   return [i?.globalValue, i?.workspaceValue, i?.workspaceFolderValue].flatMap((v) => (typeof v === 'string' ? secretRefs(v) : []));
+}
+
+/**
+ * Secret storage for the CLI, which has no OS keychain: one JSON object in `~/.localpilot/secrets.json`, readable by
+ * the user only (0600). Same shape as `vscode.SecretStorage`, so the MCP sign-in code uses either.
+ */
+export class FileSecretStorage {
+  private listeners = new Set<(e: { key: string }) => unknown>();
+  private chain: Promise<unknown> = Promise.resolve();
+
+  constructor(readonly file = path.join(os.homedir(), '.localpilot', 'secrets.json')) {}
+
+  private async read(): Promise<Record<string, string>> {
+    try {
+      const raw = JSON.parse(await fsp.readFile(this.file, 'utf8')) as unknown;
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private async write(all: Record<string, string>): Promise<void> {
+    await fsp.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    await fsp.writeFile(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+    await fsp.rename(tmp, this.file);
+    await fsp.chmod(this.file, 0o600).catch(() => undefined);
+  }
+
+  /** Writes run one at a time so two stores never drop each other's key. */
+  private update(fn: (all: Record<string, string>) => void, key: string): Promise<void> {
+    const next = this.chain.then(async () => {
+      const all = await this.read();
+      fn(all);
+      await this.write(all);
+      this.listeners.forEach((l) => l({ key }));
+    });
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  async get(key: string): Promise<string | undefined> {
+    await this.chain;
+    const v = (await this.read())[key];
+    return typeof v === 'string' ? v : undefined;
+  }
+
+  store(key: string, value: string): Promise<void> {
+    return this.update((all) => (all[key] = value), key);
+  }
+
+  delete(key: string): Promise<void> {
+    return this.update((all) => delete all[key], key);
+  }
+
+  onDidChange = (listener: (e: { key: string }) => unknown): { dispose(): void } => {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  };
 }

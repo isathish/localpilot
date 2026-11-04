@@ -117,14 +117,44 @@
       post({ type: 'range', id: r.id, begin: r.begin, end: r.end });
     }
   }
+  // pdf.js matches each reply to its request by `begin` and completes the request on the first reply, so a split
+  // request must come back as one onDataRange(begin, bytes) with the original begin. Tested in pdfViewer.test.ts.
+  // pdf-range-split:begin
+  function splitRange(begin, end, max, deliver) {
+    const parts = [];
+    for (let b = begin; b < end; b += max) { parts.push({ begin: b, end: Math.min(end, b + max), done: false }); }
+    if (parts.length === 1) { return { parts, fill: (part, data) => { if (!part.done) { part.done = true; deliver(begin, data); } } }; }
+    const buffer = new Uint8Array(end - begin);
+    let left = parts.length;
+    return {
+      parts,
+      fill(part, data) {
+        if (part.done) { return; }
+        part.done = true;
+        buffer.set(data.subarray(0, part.end - part.begin), part.begin - begin);
+        if (--left === 0) { deliver(begin, buffer); }
+      },
+    };
+  }
+  // pdf-range-split:end
   class HostRangeTransport extends pdfjsLib.PDFDataRangeTransport {
     requestDataRange(begin, end) {
       // Larger requests are split on 4 MB boundaries, a multiple of the 256 KB chunk size pdf.js aligns to.
-      for (let b = begin; b < end; b += MAX_RANGE) {
-        queue.push({ id: ++rangeSeq, gen: generation, transport: this, begin: b, end: Math.min(end, b + MAX_RANGE) });
+      const split = splitRange(begin, end, MAX_RANGE, (b, data) => this.onDataRange(b, data));
+      for (const part of split.parts) {
+        queue.push({ id: ++rangeSeq, gen: generation, split, part, begin: part.begin, end: part.end, tries: 0 });
       }
       pump();
     }
+  }
+  function rangeFailed(r, message) {
+    if (r.tries < 1) {
+      // One retry, a moment later: the host may be refusing because an earlier generation's reads are still pending.
+      setTimeout(() => { if (r.gen === generation) { queue.push({ ...r, id: ++rangeSeq, tries: r.tries + 1 }); pump(); } }, 400);
+      return;
+    }
+    setProgress(null);
+    showPanel(`Could not read part of ${esc(fileName)}: ${esc(message)}`, [{ label: 'Reload', primary: true, run: () => reload() }, systemViewer]);
   }
 
   // ------------------------------------------------------------------ loading
@@ -665,13 +695,13 @@
       case 'open': void open(m); break;
       case 'rangeData': {
         const r = inflight.get(m.id); inflight.delete(m.id);
-        if (r && r.gen === generation) { r.transport.onDataRange(m.begin, m.data); }
+        if (r && r.gen === generation) { r.split.fill(r.part, m.data); }
         pump();
         break;
       }
       case 'rangeError': {
         const r = inflight.get(m.id); inflight.delete(m.id);
-        if (r && r.gen === generation) { toast(`Could not read part of the file: ${m.message}`, 'error'); }
+        if (r && r.gen === generation) { rangeFailed(r, m.message); }
         pump();
         break;
       }

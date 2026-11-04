@@ -15,6 +15,7 @@ LocalPilot talks to model servers that run on your machine or your network, and 
 | `ollama` | Ollama native API (`/api/chat`, `/api/generate`, `/api/tags`, `/api/show`) | Ollama, local or [Ollama Cloud](https://ollama.com) (`https://ollama.com`). Full support for tools, thinking, FIM `suffix`, vision and `num_ctx`. |
 | `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, colibri. Gateways to cloud models: OmniRoute, LiteLLM. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI, Amazon Bedrock… |
 | `anthropic` | Anthropic Messages API (`/v1/messages`, `/v1/models`) | Claude models: tools, images, streaming, thinking and prompt caching. |
+| `vscode-lm` | VS Code's Language Model API (`vscode.lm`) | Models other extensions offer in VS Code, such as GitHub Copilot. VS Code only; see [VS Code language models](#vs-code-language-models-copilot). |
 
 You refer to a model as **`<providerId>/<modelId>`**, for example `ollama/qwen2.5-coder:14b` or `lmstudio/qwen2.5-coder-14b-instruct`.
 
@@ -91,6 +92,8 @@ If no model is reachable anywhere (a fresh machine, deleted models, nothing inst
 Models you already have are skipped, so you can re-run setup safely. To stop the startup offer, set `localpilot.models.autoSetup` to `false`.
 
 ## Managing models
+
+The chat's model menu searches as you type, best match first with the matched letters highlighted. Hover a model and click its star to pin it under **Starred** at the top (kept across windows). Text that matches no model offers **Use '<text>' as a model id with <provider>** for OpenAI-compatible and Claude providers: **Enter** adds the id to that provider's **Models** list and switches the chat to it. Type `<provider>/<id>` to pick the provider.
 
 Open **Settings → Models** (*LocalPilot: Manage Models*) to manage models.
 
@@ -293,7 +296,7 @@ Containers appear as providers named `docker-<container>`, for example *vLLM (Do
 
 The quickest way is **Settings → Providers** (gear icon in the chat toolbar):
 
-1. Under **Add a provider**, choose **On this machine**, **Cloud APIs** or **Gateways** and click a preset. **Find a provider…** searches all three. For anything else, use **Custom endpoint**.
+1. Under **Add a provider**, choose **On this machine**, **Cloud APIs** or **Gateways** and click a preset. **Find a provider…** searches all three, best match first (`hf` finds Hugging Face, `vercel` the Vercel AI Gateway). Use the arrow keys to move through the presets, **Enter** to add one and **Esc** to clear the search. For anything else, use **Custom endpoint**. The cloud presets include SambaNova, MiniMax, Z.AI, Baseten, Nebius AI Studio, Requesty and Vercel AI Gateway, each reading its key from the provider's usual environment variable.
 2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). If you paste the key itself instead, LocalPilot stores it in VS Code secret storage (your OS keychain) and writes only `${secret:<id>}` to settings.json. **LocalPilot: Set Provider API Key…** does the same from the Command Palette.
 3. Press **Test connection** to confirm the server answers and see which models it exposes.
 
@@ -335,7 +338,31 @@ Ways to give a key:
 | `${env:NAME}` | An environment variable in VS Code's environment. Launch VS Code from a shell that exports it, or set it in your shell profile. |
 | the key itself | settings.json, in plain text. Avoid this if you sync settings. |
 
-Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`.
+Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`. For a deployment-style URL (`…/openai/deployments/<name>`), set **Azure api-version** (`apiVersion`) and it is added to every request.
+
+### Provider options
+
+A provider card's **Default model** lists the models the server reported (with a loading state, and the error when listing failed); type any id that is not listed. The provider id alone then means that model: `-m openrouter` or `-P openrouter` in the CLI, or `"localpilot.defaultModel": "openrouter"`. **Headers, timeout and model settings** opens the rest:
+
+| Field | Setting | What it does |
+|---|---|---|
+| Custom headers | `headers` | Sent with every request, after the API key, so a header can replace it. Values take `${env:NAME}` and `${secret:NAME}`; a header whose reference is not set is left out. OpenRouter also gets `HTTP-Referer` and `X-Title` unless you set them. |
+| First-token timeout | `timeoutMs` | The least time to wait for a reply to start before it counts as stalled, for gateways that load models on demand. |
+| Route requests by | `extraBody` | OpenRouter only: `provider.sort` by `price`, `throughput` or `latency`. `extraBody` merges any other fields into each chat request. |
+| Model list URL | `modelsUrl` | Where to read the model list when it is not `<baseUrl>/models`. |
+| Model settings | `modelOverrides` | Per model id: `contextWindow`, `maxOutput`, `vision`, `reasoning`, `inputPrice` and `outputPrice` (US dollars per 1M tokens) and `temperature`. They win over what the server and the bundled model facts say. |
+
+```jsonc
+{
+  "id": "openrouter", "type": "openai", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "${env:OPENROUTER_API_KEY}",
+  "defaultModel": "qwen/qwen3-coder",
+  "timeoutMs": 90000,
+  "extraBody": { "provider": { "sort": "throughput" } },
+  "modelOverrides": { "qwen/qwen3-coder": { "contextWindow": 262144, "inputPrice": 0.22, "outputPrice": 0.95 } }
+}
+```
+
+**Settings → Models** shows each model's input and output price per 1M tokens (and the cache price when known), or *local · free* for models on this machine.
 
 Amazon Bedrock uses its OpenAI-compatible endpoint, `https://bedrock-runtime.<region>.amazonaws.com/openai/v1`, with a [Bedrock API key](https://console.aws.amazon.com/bedrock/home#/api-keys) sent as a Bearer token (read from `AWS_BEARER_TOKEN_BEDROCK` until you paste one). Pick the region in the provider card's **AWS region** field, or with `localpilot providers add bedrock --region eu-central-1`. The endpoint has no model listing, so the preset lists the models it serves (`openai.gpt-oss-120b-1:0`, `openai.gpt-oss-20b-1:0`); add others under **Models**. IAM credentials, AWS profiles and SigV4 signing are not supported directly: run a [LiteLLM proxy](https://docs.litellm.ai/docs/providers/bedrock) and add it as a gateway.
 
@@ -347,6 +374,23 @@ The `anthropic` type talks to the Messages API directly:
 - **Reasoning is kept within a tool loop.** Thinking blocks are sent back with their signatures in the tool loop that produced them. If LocalPilot has since pruned or compacted the conversation, the API rejects the old blocks. LocalPilot then resends the request once without them and stops replaying them.
 - **Prompt caching** is on, so the system prompt, tools and earlier turns are billed at cache rates on the next request.
 - No `temperature` is sent, because current Claude models reject sampling parameters.
+
+### VS Code language models (Copilot)
+
+The `vscode-lm` type uses the chat models that other extensions provide to VS Code, such as GitHub Copilot. It needs no URL or key:
+
+```jsonc
+{ "id": "copilot", "type": "vscode-lm" }
+```
+
+- Models appear as `copilot/<model id>` (for example `copilot/gpt-4o`), named with their vendor. Add `"models": ["gpt-4o", "claude-sonnet-4"]` to list only some of them (by id or family).
+- VS Code asks you once to allow LocalPilot to use the models. If you decline, the request fails with a message saying so.
+- Tool calls work. Images are not sent, because the stable API has no image input.
+- No price or cost is shown: the extension that provides the model handles billing and quotas.
+- The models are treated as cloud models, so automatic picks prefer local models.
+- The list updates when you sign in or out of the providing extension. LocalPilot's own models, which it offers to other extensions, are never listed here.
+- The CLI has no `vscode.lm`, so it leaves this provider out, including from `localpilot doctor`.
+- In **Settings → Providers** the card shows only the fields that apply: name, ID, type, Models and Default model. Switching the type to another API clears the placeholder URL so you can enter a real one.
 
 ### Gateways (OmniRoute, LiteLLM)
 
@@ -375,6 +419,7 @@ The model then appears under the matching provider.
 
 - **Tool calling:** read from Ollama's `/api/show` capabilities or the server's model metadata. Models without native tools fall back to a prompt-based protocol.
 - **Vision:** enables image attachments.
+- **Edit tool:** GPT, Codex and gpt-oss models (any id matching `gpt` or `codex`) are trained on the `*** Begin Patch` format, so they get `apply_patch` instead of `edit_file` and `write_file`; other models get `edit_file` and `write_file`. Override with `localpilot.editTool` (`auto`, `edit_file`, `apply_patch`).
 - **FIM:** used for inline completions (`insert` capability, or coder-model name heuristics).
 - **Context window:** read from model metadata and capped by `localpilot.contextWindow`. LM Studio's `/v1/models` has no context lengths, so for LM Studio (and any local server whose listing has none) LocalPilot asks its native `/api/v0/models`: the length a model is loaded with, else the most it supports. The provider's `contextWindow` is the fallback after that.
 - **Cloud model limits and prices:** when a cloud API's listing does not say, the context window, output limit, vision and reasoning support come from a table of model facts bundled with LocalPilot (taken from [models.dev](https://models.dev), never fetched at runtime). The same table gives prices per million tokens for the cloud presets (OpenAI, Anthropic, Gemini, OpenRouter, Groq, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Moonshot, Alibaba Qwen), so each request's cost is added to the chat's usage: input not served from the cache, output, cache reads (the cache price, else the input price) and cache writes (the cache price, else 1.25 × input). A cost the provider reports itself (OpenRouter) is used instead. Local models are free, and gateways (LiteLLM, OmniRoute, custom endpoints) have no known prices. A local model's output limit is its context window; the request still sends `localpilot.maxOutputTokens`.

@@ -8,9 +8,11 @@ import {
   StreamEvent,
   WarmOptions,
 } from '../types';
-import { completeViaChat, isCloudProvider, resolveApiKey } from './cloud';
+import { completeViaChat, isCloudProvider, resolveApiKey, resolveHeaders } from './cloud';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 import { modelFacts, outputLimit } from './modelFacts';
+import { applyModelOverrides, mergeHeaders, withExtraBody } from './providerOptions';
+import { effortOf } from './thinkingParams';
 import { ThinkTagSplitter } from './thinkTags';
 
 interface OllamaTag {
@@ -52,13 +54,15 @@ export class OllamaProvider implements LLMProvider {
   private infoCache = new Map<string, ModelInfo>();
   /** Models that answered a `suffix` with "does not support insert": their FIM goes through chat. */
   private readonly noInsert = new Set<string>();
+  private readonly cfg: ProviderConfig;
 
   constructor(cfg: ProviderConfig) {
+    this.cfg = cfg;
     this.id = cfg.id;
     this.displayName = cfg.displayName ?? 'Ollama';
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
     const key = resolveApiKey(cfg);
-    this.headers = key ? { authorization: `Bearer ${key}` } : {};
+    this.headers = mergeHeaders(key ? { authorization: `Bearer ${key}` } : {}, resolveHeaders(cfg));
     this.remote = isCloudProvider(cfg);
     this.defaultCtx = cfg.contextWindow ?? 32768;
   }
@@ -132,7 +136,7 @@ export class OllamaProvider implements LLMProvider {
         }
         return info;
       });
-    return infos.filter((i) => !/embed/i.test(i.modelId));
+    return applyModelOverrides(infos.filter((i) => !/embed/i.test(i.modelId)), this.cfg.modelOverrides);
   }
 
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
@@ -161,6 +165,7 @@ export class OllamaProvider implements LLMProvider {
     if (opts.keepAlive) {
       body.keep_alive = opts.keepAlive;
     }
+    withExtraBody(body, this.cfg.extraBody);
     try {
       yield* this.streamChat(body, opts.signal);
     } catch (e) {
@@ -312,9 +317,12 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
  * Ollama documents effort levels for gpt-oss only; other thinking models take true/false. A level becomes a switch
  * there: "low" (light work: Ask, subagents) skips the reasoning pass, "medium"/"high" turn it on.
  */
-export function ollamaThink(model: string, think: boolean | 'low' | 'medium' | 'high'): boolean | 'low' | 'medium' | 'high' {
-  if (typeof think === 'boolean' || /gpt-oss/i.test(model)) {
+export function ollamaThink(model: string, think: boolean | 'low' | 'medium' | 'high' | 'max'): boolean | 'low' | 'medium' | 'high' {
+  if (typeof think === 'boolean') {
     return think;
+  }
+  if (/gpt-oss/i.test(model)) {
+    return effortOf(think);
   }
   return think !== 'low';
 }

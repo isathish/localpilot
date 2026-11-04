@@ -4,7 +4,13 @@ description: Add local or remote Model Context Protocol servers to give the agen
 permalink: /docs/mcp/
 ---
 
-LocalPilot includes an [MCP](https://modelcontextprotocol.io) client for local servers (a process started from a command, the **stdio** transport) and remote servers (a `url`, over **Streamable HTTP** or the older **HTTP+SSE** transport). Every tool a server exposes becomes an agent tool named `mcp_<server>_<tool>`. Characters other than letters, digits, `_` and `-` are replaced with `_`, and the name is cut at 64 characters.
+LocalPilot includes an [MCP](https://modelcontextprotocol.io) client for local servers (a process started from a command, the **stdio** transport) and remote servers (a `url`, over **Streamable HTTP** or the older **HTTP+SSE** transport). Every tool a server exposes becomes an agent tool named `mcp_<server>__<tool>` (two underscores between server and tool). When a name contains characters other than letters, digits, `_` and `-`, or is longer than 64 characters, those characters become `_`, the name is cut, and it ends in an 8-character hash of the real server and tool, so two tools never share a name. Permission rules and `localpilot.disabledTools` entries written with the older `mcp_<server>_<tool>` names still match. Tools a server marks as app-only (`_meta.ui.visibility` without `"model"`) are not offered to the model.
+
+## Results, resources and prompts
+
+- **Images** a tool returns are shown in the chat and sent to the model when it can see images. **Embedded resources** appear as `[resource <uri> (<mime type>)]` followed by their text; **resource links** as the same line. Results are rendered as Markdown; results longer than 20 lines start collapsed. Very long results are cut like other tool output, and the model can read the rest with `read_file`.
+- When a connected server offers **resources**, the agent gets an `mcp_read_resource` tool (`server`, `uri`) that reads one. It is read-only, so it also works in Plan and Ask modes, and it follows the MCP tools approval setting. Permission rules call it `ReadMcpResourceTool`, and a rule or `localpilot.disabledTools` entry naming a whole server (`mcp__<server>`) also covers reading that server's resources.
+- A server's **prompts** run as slash commands: `/mcp:<server>:<prompt> args…`. Arguments are matched to the prompt's declared arguments by position or as `key=value`; extra words join the last argument, and quotes keep spaces. The messages the server returns become your turn. The prompts are listed in an **MCP** section of the `/` menu, and in `/commands` in the CLI.
 
 ## Configuration
 
@@ -49,7 +55,7 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
 | `headers` | no | Remote servers: headers sent with every request, typically `Authorization` |
 | `env` | no | Extra environment variables, added to the environment VS Code was started with |
 | `cwd` | no | Working directory. Default: the first workspace folder |
-| `enabled` | no | Set `false` to keep the entry without starting the server (`"disabled": true` also works) |
+| `enabled` | no | Set `false` to keep the entry without starting the server (`"disabled": true` also works). Turning a server off or on from Settings or the chat writes `"disabled"` into its file and keeps the file's comments and layout |
 | `timeout` | no | Seconds a request to the server (a tool call, a listing) may take before it fails: 1 to 3600, default 60 |
 | `autoApprove` | no | Tool names (as the server names them) that run without asking, even when `localpilot.approvals.mcp` is `ask`; not when it is `never`, your organization's policy sets an MCP approval, or a permission rule or hook asks for that tool |
 
@@ -67,6 +73,8 @@ LocalPilot also reads servers from files in the `{ "mcpServers": { "name": { …
 4. plugin `.mcp.json` files.
 
 Besides the fields above, these files accept Cline's and Claude Code's spellings: `transportType` or a nested `transport: { "type": … }` instead of `type`, `disabled`, and `alwaysAllow` for `autoApprove`. A relative `cwd` is resolved against the file's folder.
+
+From a terminal, `localpilot mcp add <name> -- <command> [args…]` (or `localpilot mcp add <name> <url>`) writes a server to `~/.localpilot/mcp.json`, or to `./.mcp.json` with `--scope project`. `localpilot mcp list`, `remove`, `enable` and `disable` manage them, and `localpilot mcp` alone opens a menu. The file is written through a temporary file and a rename. A file with comments is not rewritten, so its comments are not lost; edit that one by hand. See the [CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) page for the flags.
 
 A workspace's `.mcp.json` runs commands from the repository, so LocalPilot asks once before starting its servers ("This workspace defines MCP servers … Start them?"). The answer is remembered for that workspace. If a server's command, arguments, environment, URL, headers or `autoApprove` list change, you are asked again for that server. If you choose **Not now**, the servers stay stopped until you reload the window. The CLI asks in the terminal and remembers the answer in `~/.localpilot/mcp-trust.json`. Only a typed `y` starts them: `-y` does not answer this question. With `--trust-workspace` it starts them without asking, and with no terminal to ask in it leaves them stopped.
 
@@ -87,6 +95,8 @@ After the handshake LocalPilot also opens the server's standalone event stream (
 - Log messages a server sends (`notifications/message`) appear in the LocalPilot log under `[mcp:<name>]`, at the matching level.
 - A request that runs longer than the server's `timeout` fails with `MCP request to "<server>" timed out after Ns. Raise "timeout" for this server in <file>.` The server form in **Settings → MCP** has a **Timeout** list (30 s to 1 hour).
 - To restart them yourself, run **LocalPilot: Reload Skills, Subagents & MCP Servers**. The notification shows how many MCP tools were registered.
+- **Settings → MCP** shows every server, including those from `.mcp.json` files and plugins, with a status dot (yellow while connecting or restarting), a **Restart** button and, when a server fails, its error with **Retry**. Expand a connected server to see its **Tools** (parameters, with required ones marked `*`), **Resources** (URI, name and MIME type, plus templates) and **Prompts** (name and arguments).
+- The server button in the chat composer opens a list of servers with a switch to turn each on or off (written where the server is defined: the setting or its `.mcp.json` / `mcp.json` file), a status dot, a restart button and a link to **Settings → MCP**. It shows how many MCP tools are offered to the model, since each one adds to the prompt.
 - The [CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) starts the same servers. Pass `--no-mcp` to skip them.
 
 ## Approvals

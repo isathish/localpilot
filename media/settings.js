@@ -63,7 +63,7 @@
     models: 'installed download pull routing context temperature thinking memory budget default model',
     gallery: 'catalog library hugging face docker hub download pull install gguf',
     skills: 'skill playbook subagent registry install',
-    customize: 'rules commands hooks skills agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs',
+    customize: 'rules commands hooks skills plugins agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs hook scripts pretooluse taskstart taskcancel taskerror',
     agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify',
     completions: 'ghost text fim autocomplete tab suggestion',
     web: 'searxng brave tavily duckduckgo browser screenshot fetch',
@@ -86,7 +86,7 @@
     ['advanced', 'supervisor.enabled', 'Keep local services running'], ['advanced', 'supervisor.intervalSeconds', 'Service check interval'], ['advanced', 'supervisor.autoInstall', 'Install Ollama without asking'],
     ['skills', 'skillsPaths', 'Skill folders'], ['skills', 'skills.repositories', 'Skill repositories'], ['skills', 'skills.disabled', 'Disabled skills'], ['skills', 'pluginPaths', 'Plugin folders'],
     ['agent', 'approvals.terminal', 'Terminal commands approval'], ['agent', 'approvals.write', 'File edits approval'], ['agent', 'approvals.delete', 'Deleting files approval'],
-    ['agent', 'approvals.network', 'Network approval'], ['agent', 'approvals.mcp', 'MCP tools approval'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
+    ['agent', 'approvals.network', 'Network approval'], ['agent', 'approvals.mcp', 'MCP tools approval'], ['agent', 'approvals.dangerousAlwaysAsk', 'Always ask before destructive commands'], ['agent', 'notifications', 'Notifications'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
     ['agent', 'autoClarify', 'Interpret vague requests automatically'], ['agent', 'prompts.autoCorrect', 'Correct misspelled names in requests'], ['agent', 'clarify.questions', 'Questions before starting'],
     ['agent', 'hooks.enabled', 'Run hooks'], ['agent', 'worktrees.mode', 'Where agents work'], ['agent', 'worktrees.location', 'Worktree folder'],
     ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compactionThreshold', 'Compact context at'],
@@ -152,6 +152,13 @@
       ['moonshot', 'Moonshot (Kimi)', 'api.moonshot.ai', 'openai', 'https://api.moonshot.ai/v1', 'MOONSHOT_API_KEY', 'https://platform.moonshot.ai/console/api-keys'],
       ['dashscope', 'Alibaba Qwen', 'dashscope-intl.aliyuncs.com', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
       ['ollama-cloud', 'Ollama Cloud', 'ollama.com', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY', 'https://ollama.com/settings/keys'],
+      ['sambanova', 'SambaNova', 'api.sambanova.ai', 'openai', 'https://api.sambanova.ai/v1', 'SAMBANOVA_API_KEY', 'https://cloud.sambanova.ai/apis'],
+      ['minimax', 'MiniMax', 'api.minimax.io', 'openai', 'https://api.minimax.io/v1', 'MINIMAX_API_KEY', 'https://www.minimax.io/platform/user-center/basic-information/interface-key'],
+      ['zai', 'Z.AI (GLM)', 'api.z.ai', 'openai', 'https://api.z.ai/api/paas/v4', 'ZAI_API_KEY', 'https://z.ai/manage-apikey/apikey-list'],
+      ['baseten', 'Baseten', 'inference.baseten.co', 'openai', 'https://inference.baseten.co/v1', 'BASETEN_API_KEY', 'https://app.baseten.co/settings/api_keys'],
+      ['nebius', 'Nebius AI Studio', 'api.studio.nebius.com', 'openai', 'https://api.studio.nebius.com/v1', 'NEBIUS_API_KEY', 'https://studio.nebius.com/settings/api-keys'],
+      ['requesty', 'Requesty', 'router.requesty.ai · gateway', 'openai', 'https://router.requesty.ai/v1', 'REQUESTY_API_KEY', 'https://app.requesty.ai/api-keys'],
+      ['vercel', 'Vercel AI Gateway', 'ai-gateway.vercel.sh · gateway', 'openai', 'https://ai-gateway.vercel.sh/v1', 'AI_GATEWAY_API_KEY', 'https://vercel.com/dashboard/ai-gateway/api-keys'],
       ['azure', 'Azure OpenAI', 'your-resource.openai.azure.com', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'],
       // Bedrock's OpenAI-compatible endpoint has no /models, so its models are listed. IAM / SigV4 auth goes through LiteLLM.
       ['bedrock', 'Amazon Bedrock', 'bedrock-runtime · API key', 'openai', 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1', 'AWS_BEARER_TOKEN_BEDROCK', 'https://console.aws.amazon.com/bedrock/home#/api-keys', ['openai.gpt-oss-120b-1:0', 'openai.gpt-oss-20b-1:0']],
@@ -163,6 +170,47 @@
     ['cloud', 'Cloud APIs', 'Hosted models. Needs an API key; prompts and code are sent to the provider.'],
     ['gateway', 'Gateways', 'Run here and forward to cloud models: one endpoint for many providers.'],
   ];
+  /** Mirrors fuzzyMatch in src/context/mentionSearch.ts: a case-insensitive subsequence match favouring word starts and runs. */
+  function fuzzyMatch(query, text) {
+    const q = String(query).toLowerCase(); if (!q) { return { score: 0, positions: [] }; }
+    const t = String(text).toLowerCase(); let qi = 0; let end = -1;
+    const isSep = (c) => '/\\._- :'.includes(c);
+    const boundary = (i) => i === 0 || isSep(text[i - 1]) || (/[a-z]/.test(text[i - 1]) && /[A-Z]/.test(text[i])) || (/[a-zA-Z]/.test(text[i - 1]) && /[0-9]/.test(text[i]));
+    for (let i = 0; i < t.length; i++) { if (t[i] === q[qi] && ++qi === q.length) { end = i; break; } }
+    if (end < 0) { return null; }
+    qi = q.length - 1; let start = end;
+    for (let i = end; i >= 0; i--) { if (t[i] === q[qi]) { start = i; if (--qi < 0) { break; } } }
+    const fits = (from, at) => { let k = from; for (let i = at; i <= end && k < q.length; i++) { if (t[i] === q[k]) { k++; } } return k === q.length; };
+    const positions = []; qi = 0;
+    for (let i = start; i <= end && qi < q.length; i++) {
+      if (t[i] !== q[qi]) { continue; }
+      if (!(positions.length && positions[positions.length - 1] === i - 1) && !boundary(i) && q.length - qi <= end - i) {
+        const later = t.indexOf(q[qi], i + 1);
+        if (later > 0 && later <= end && boundary(later) && fits(qi + 1, later + 1)) { continue; }
+      }
+      positions.push(i); qi++;
+    }
+    if (qi < q.length) { return null; }
+    let score = 0;
+    positions.forEach((i, k) => { score += 1 + (boundary(i) ? 8 : 0); if (k > 0) { const gap = i - positions[k - 1] - 1; score += gap === 0 ? 6 : -Math.min(gap, 6); } if (text[i] === query[k]) { score += 0.5; } });
+    return { score: score - Math.min(positions[0], 10) * 0.5, positions };
+  }
+  /** Mirrors rankPresets in src/providers/presetSearch.ts: name first, then key, host and the key's environment variable. */
+  function rankPresets(query, presets) {
+    const q = query.trim().toLowerCase(); if (!q) { return presets.map((preset) => ({ preset, score: 0, labelHl: [] })); }
+    const hits = [];
+    presets.forEach((preset, i) => {
+      const env = (/\$\{env:([^}]+)\}/.exec(preset.cfg.apiKey || '') || [])[1];
+      const label = fuzzyMatch(q, preset.label); const key = fuzzyMatch(q, preset.key); const host = fuzzyMatch(q, preset.sub || preset.cfg.baseUrl); const ev = env ? fuzzyMatch(q, env) : null;
+      let score = Math.max(label ? label.score : -Infinity, key ? key.score - 1 : -Infinity, host ? host.score - 6 : -Infinity, ev ? ev.score - 8 : -Infinity);
+      if (score === -Infinity) { return; }
+      const name = preset.label.toLowerCase();
+      if (name === q || preset.key === q) { score += 100; } else if (name.startsWith(q) || preset.key.startsWith(q)) { score += 20; }
+      hits.push({ preset, score, labelHl: label ? label.positions : [], i });
+    });
+    return hits.sort((a, b) => b.score - a.score || a.i - b.i);
+  }
+  const hlText = (s, pos) => { const on = new Set(pos || []); return [...String(s)].map((c, i) => (on.has(i) ? `<b class="hl">${esc(c)}</b>` : esc(c))).join(''); };
   /** The preset a configured provider came from (id such as "openai-2", else the same base URL), for its key link. */
   const presetOf = (p) => PRESET_PROVIDERS.find((pr) => pr.cfg.id === String(p.id || '').replace(/-\d+$/, '')) || PRESET_PROVIDERS.find((pr) => pr.cfg.baseUrl === p.baseUrl);
   /** Mirrors isRemoteUrl in src/providers/cloud.ts: anything off this machine and the private network is a cloud API. */
@@ -171,9 +219,9 @@
     return !(h === 'localhost' || /\.(localhost|local|internal)$/.test(h) || h === '::1' || /^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || !h.includes('.'));
   };
   /** Mirrors isCloudProvider: a cloud URL, or a local gateway marked `cloud`. */
-  const isCloud = (p) => (typeof p.cloud === 'boolean' ? p.cloud : p.type === 'anthropic' || isRemoteUrl(p.baseUrl));
+  const isCloud = (p) => (typeof p.cloud === 'boolean' ? p.cloud : p.type === 'anthropic' || p.type === 'vscode-lm' || isRemoteUrl(p.baseUrl));
   const isSecretRef = (v) => /^\$\{secret:[^}]+\}$/.test(String(v || '').trim());
-  const API_LABEL = { ollama: 'Ollama API', openai: 'OpenAI API', anthropic: 'Anthropic API' };
+  const API_LABEL = { ollama: 'Ollama API', openai: 'OpenAI API', anthropic: 'Anthropic API', 'vscode-lm': 'VS Code language models' };
   /** Vendor logos, single-colour: Simple Icons (CC0 1.0 — https://simpleicons.org) and, for vendors Simple Icons does not carry
    *  (OpenAI, Groq, Together, Fireworks, xAI, Cerebras, Azure, Microsoft, Kimi), LobeHub Icons (MIT — https://github.com/lobehub/lobe-icons).
    *  Local servers with no published vector mark (Jan, LocalAI, SGLang…) keep a monogram below. */
@@ -675,23 +723,54 @@
       saveProviders([...list, cfg]);
       render();
     };
+    // A query ranks every category with the fuzzy scorer (best match first, letters highlighted); without one the
+    // tab's presets show in list order. Arrow keys move through the grid, Enter adds, Esc clears the query.
+    let cursor = 0;
+    const tiles = () => [...presets.querySelectorAll('button.preset')];
+    const mark = (i, focus) => {
+      const all = tiles(); if (!all.length) { return; }
+      cursor = Math.max(0, Math.min(all.length - 1, i));
+      all.forEach((b, k) => { b.classList.toggle('kbd', k === cursor && !!q.value.trim()); b.tabIndex = k === cursor ? 0 : -1; });
+      if (focus) { all[cursor].focus(); }
+    };
     const fill = () => {
       presets.innerHTML = '';
-      const needle = q.value.trim().toLowerCase();
-      blurb.textContent = needle ? 'Matches in every category.' : PRESET_GROUPS.find((g) => g[0] === tab)[2];
-      const pool = PRESET_PROVIDERS.filter((pr) => (needle ? `${pr.label} ${pr.sub} ${pr.key}`.toLowerCase().includes(needle) : pr.group === tab));
+      const needle = q.value.trim();
+      blurb.textContent = needle ? 'Best matches from every category.' : PRESET_GROUPS.find((g) => g[0] === tab)[2];
       const taken = (pr) => list.some((p) => p.id === pr.cfg.id);
       // Already-added ones sink to the end so the grid leads with what can still be added.
-      for (const pr of [...pool.filter((x) => !taken(x)), ...pool.filter(taken)]) {
+      const ranked = needle ? rankPresets(needle, PRESET_PROVIDERS) : PRESET_PROVIDERS.filter((pr) => pr.group === tab).map((preset) => ({ preset, labelHl: [] }));
+      for (const { preset: pr, labelHl } of [...ranked.filter((x) => !taken(x.preset)), ...ranked.filter((x) => taken(x.preset))]) {
         const added = taken(pr);
-        const b = el('button', `preset ${added ? 'added' : ''}`, `${brandMark(pr.key, pr.label)}<div><b title="${esc(pr.label)}">${esc(pr.label)}</b><span title="${esc(pr.sub)}">${added ? 'added' : esc(pr.sub)}</span></div>`);
+        const b = el('button', `preset ${added ? 'added' : ''}`, `${brandMark(pr.key, pr.label)}<div><b title="${esc(pr.label)}">${hlText(pr.label, labelHl)}</b><span title="${esc(pr.sub)}">${added ? 'added' : esc(pr.sub)}</span></div>`);
         b.title = added ? `${pr.label} is already configured — add it again for a second endpoint` : `Add ${pr.label}`;
         b.onclick = () => addPreset(pr);
         presets.appendChild(b);
       }
-      if (!pool.length) { presets.appendChild(el('div', 'empty', 'Nothing matches. Any OpenAI-compatible server works as a custom endpoint.')); }
+      if (!ranked.length) { presets.appendChild(el('div', 'empty', 'Nothing matches. Any OpenAI-compatible server works as a custom endpoint.')); }
+      mark(0, false);
     };
+    /** Tiles per row, from the layout (the grid wraps with the window width). */
+    const perRow = () => { const all = tiles(); const top = all.length ? all[0].offsetTop : 0; const n = all.filter((b) => b.offsetTop === top).length; return Math.max(1, n); };
+    const clearQuery = () => { q.value = ''; state.addQuery = ''; fill(); q.focus(); };
     q.oninput = () => { state.addQuery = q.value; fill(); };
+    q.onkeydown = (e) => {
+      if (e.isComposing) { return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); mark(cursor, true); }
+      else if (e.key === 'Enter') { const b = tiles()[cursor]; if (b && q.value.trim()) { e.preventDefault(); b.click(); } }
+      else if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); clearQuery(); }
+    };
+    presets.onkeydown = (e) => {
+      const all = tiles(); const i = all.indexOf(document.activeElement); if (i < 0) { return; }
+      const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: perRow(), ArrowUp: -perRow(), Home: -i, End: all.length - 1 - i }[e.key];
+      if (step !== undefined) {
+        e.preventDefault();
+        // Up from the first row goes back to the search box.
+        if (e.key === 'ArrowUp' && i + step < 0) { q.focus(); return; }
+        mark(i + step, true);
+      } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); clearQuery(); }
+    };
+    presets.onfocusin = (e) => { const i = tiles().indexOf(e.target); if (i >= 0) { cursor = i; } };
     fill();
     add.appendChild(blurb);
     add.appendChild(presets);
@@ -739,6 +818,127 @@
     if (!k.ok) { return { warn: k.source === 'env' ? `${k.env} not set` : k.source === 'keychain' ? 'key missing' : 'no API key', note: '' }; }
     return { warn: '', note: k.source === 'keychain' ? 'Saved in your OS keychain.' : k.source === 'env' ? `Read from <code>$${esc(k.env)}</code>.` : 'Stored in settings.json.' };
   }
+  /** Model ids the provider's last check listed (without the `provider/` prefix). */
+  const listedIds = (p, probe) => (probe && probe.ok ? probe.models.map((m) => (String(m.id).startsWith(`${p.id}/`) ? String(m.id).slice(p.id.length + 1) : String(m.id))) : []);
+  const datalist = (id, values) => { const dl = el('datalist'); dl.id = id; dl.innerHTML = values.map((v) => `<option value="${esc(v)}">`).join(''); return dl; };
+  /** The provider's default model: a dropdown of what the server lists, with loading and error states, or any typed id. */
+  function defaultModelCtl(p, probe, upd) {
+    const wrap = el('div', 'btnrow'); wrap.style.margin = '0';
+    const ids = listedIds(p, probe);
+    const loading = state.tests[p.id] === null || (!probe && state.busy);
+    const i = el('input'); i.type = 'text'; i.value = p.defaultModel || ''; i.setAttribute('list', `dm-${p.id}`); i.setAttribute('aria-label', 'Default model');
+    i.placeholder = loading ? 'Loading models…' : probe && !probe.ok ? 'type a model id' : ids.length ? `one of ${ids.length} listed, or any id` : 'type a model id';
+    const commit = () => { const v = i.value.trim(); if ((p.defaultModel || '') !== v) { upd({ defaultModel: v || undefined }); } };
+    i.onchange = commit; i.onblur = commit;
+    wrap.append(i, datalist(`dm-${p.id}`, ids));
+    if (loading) { wrap.appendChild(el('span', 'muted small', '<span class="spinner"></span>Loading models…')); }
+    else if (!probe || !probe.ok) {
+      const load = el('button', 'btn sm', `${I.refresh}${probe ? 'Retry' : 'Load models'}`);
+      if (probe) { load.title = `Could not list models: ${probe.error || 'unreachable'}`; wrap.appendChild(el('span', 'err-text', esc(probe.error || 'Could not list models'))); }
+      load.onclick = () => { state.tests[p.id] = null; render(); post({ type: 'test', provider: p }); };
+      wrap.appendChild(load);
+    }
+    return wrap;
+  }
+  /** Mirrors cleanHeaders in src/providers/providerOptions.ts: an HTTP header name. */
+  const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  /** The "Headers, timeout and model settings" rows of a provider card. */
+  function providerMore(p, probe, upd, row) {
+    const out = [];
+    // Custom headers: name / value pairs; values may use ${env:NAME} and ${secret:NAME} like the key.
+    const hdrBox = el('div', 'kv');
+    let pairs = Object.entries(p.headers || {});
+    const saveHeaders = () => { const o = {}; for (const [k, v] of pairs) { if (HEADER_NAME.test(k.trim())) { o[k.trim()] = v; } } upd({ headers: Object.keys(o).length ? o : undefined }); };
+    const drawHeaders = () => {
+      hdrBox.innerHTML = '';
+      pairs.forEach(([k, v], idx) => {
+        const r = el('div', 'kv-row');
+        const ki = el('input'); ki.type = 'text'; ki.value = k; ki.placeholder = 'Header-Name'; ki.setAttribute('aria-label', 'Header name');
+        const vi = el('input'); vi.type = 'text'; vi.value = v; vi.placeholder = 'value or ${env:NAME}'; vi.setAttribute('aria-label', `Value of ${k || 'the header'}`);
+        const rm = el('button', 'btn sm', I.x); rm.title = 'Remove this header'; rm.setAttribute('aria-label', 'Remove this header');
+        const change = () => { ki.classList.toggle('invalid', !!ki.value.trim() && !HEADER_NAME.test(ki.value.trim())); pairs[idx] = [ki.value, vi.value]; saveHeaders(); };
+        ki.onchange = change; vi.onchange = change;
+        rm.onclick = () => { pairs = pairs.filter((_, j) => j !== idx); saveHeaders(); drawHeaders(); };
+        r.append(ki, vi, rm); hdrBox.appendChild(r);
+      });
+      const addH = el('button', 'btn sm', `${I.plus}Add header`);
+      addH.onclick = () => { pairs = [...pairs, ['', '']]; drawHeaders(); const last = hdrBox.querySelectorAll('.kv-row input'); if (last.length) { last[last.length - 2].focus(); } };
+      hdrBox.appendChild(addH);
+    };
+    drawHeaders();
+    out.push(row('Custom headers', `Sent with every request, after the key (so they can replace it). Use <code>\${env:NAME}</code> or <code>\${secret:NAME}</code> for tokens.${isOpenRouter(p) ? ' OpenRouter gets <code>HTTP-Referer</code> and <code>X-Title</code> unless you set them.' : ''}`, hdrBox));
+    const to = el('input'); to.type = 'number'; to.min = 1; to.max = 1800; to.step = 1; to.value = p.timeoutMs ? Math.round(p.timeoutMs / 1000) : ''; to.placeholder = 'auto';
+    to.onchange = () => { const s = Number(to.value); upd({ timeoutMs: s > 0 ? Math.round(Math.min(1800, s) * 1000) : undefined }); };
+    out.push(row('First-token timeout (s)', 'Wait at least this long for a reply to start before calling it stalled, e.g. for a gateway that loads models on demand. Empty = automatic.', to));
+    if (/\.(openai\.azure\.com|cognitiveservices\.azure\.com)$/i.test(hostOfUrl(p.baseUrl)) || p.apiVersion) {
+      const av = el('input'); av.type = 'text'; av.value = p.apiVersion || ''; av.placeholder = '2024-10-21';
+      av.onchange = () => { const v = av.value.trim(); if (v && !/^[\w.-]+$/.test(v)) { av.classList.add('invalid'); return; } av.classList.remove('invalid'); upd({ apiVersion: v || undefined }); };
+      out.push(row('Azure api-version', 'Only for deployment URLs (<code>…/openai/deployments/&lt;name&gt;</code>); the <code>/openai/v1</code> endpoint needs none.', av));
+    }
+    if (isOpenRouter(p)) {
+      const sort = ((p.extraBody || {}).provider || {}).sort || '';
+      const sel = el('select', '', [['', 'OpenRouter default (balanced)'], ['price', 'Lowest price'], ['throughput', 'Highest throughput'], ['latency', 'Lowest latency']].map(([v, l]) => `<option value="${v}">${l}</option>`).join(''));
+      sel.value = sort;
+      sel.onchange = () => {
+        const eb = JSON.parse(JSON.stringify(p.extraBody || {})); const prov = { ...(eb.provider || {}) };
+        if (sel.value) { prov.sort = sel.value; } else { delete prov.sort; }
+        if (Object.keys(prov).length) { eb.provider = prov; } else { delete eb.provider; }
+        upd({ extraBody: Object.keys(eb).length ? eb : undefined });
+      };
+      out.push(row('Route requests by', 'Which upstream provider OpenRouter prefers for each model (<code>provider.sort</code>).', sel));
+    }
+    if (p.type !== 'ollama') {
+      const mu = el('input'); mu.type = 'url'; mu.value = p.modelsUrl || ''; mu.placeholder = `${String(p.baseUrl || '').replace(/\/+$/, '')}/models`;
+      mu.onchange = () => { const v = mu.value.trim(); if (v && !/^https?:\/\/\S+$/i.test(v)) { mu.classList.add('invalid'); return; } mu.classList.remove('invalid'); upd({ modelsUrl: v || undefined }); };
+      out.push(row('Model list URL', 'Where the model list is read from, when it is not under the base URL.', mu));
+    }
+    out.push(modelOverridesEditor(p, probe, upd));
+    return out;
+  }
+  const isOpenRouter = (p) => hostOfUrl(p.baseUrl) === 'openrouter.ai';
+  const hostOfUrl = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } };
+  /** Per-model settings (`modelOverrides`): limits, capabilities, prices and temperature that win over what the server says. */
+  function modelOverridesEditor(p, probe, upd) {
+    const box = el('div', 'field wide ovr-wrap');
+    box.innerHTML = '<div><div class="lbl">Model settings</div><div class="desc">Correct what the server or the bundled model facts get wrong, or price a model LocalPilot does not know (US dollars per 1M tokens).</div></div>';
+    const list = el('div', 'ovr-list'); box.appendChild(list);
+    let entries = Object.entries(p.modelOverrides || {}).map(([id, o]) => [id, { ...o }]);
+    const ids = listedIds(p, probe);
+    const save = () => { const o = {}; for (const [id, v] of entries) { const clean = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined && x !== '')); if (id.trim() && Object.keys(clean).length) { o[id.trim()] = clean; } } upd({ modelOverrides: Object.keys(o).length ? o : undefined }); };
+    const num = (label, key, o, step, max) => {
+      const w = el('label', 'ovr-f', `<span>${esc(label)}</span>`); const i = el('input'); i.type = 'number'; i.min = 0; i.step = step; if (max) { i.max = max; } i.value = o[key] ?? ''; i.placeholder = 'auto';
+      i.onchange = () => { const n = Number(i.value); o[key] = i.value === '' || !Number.isFinite(n) || n < 0 ? undefined : n; save(); };
+      w.appendChild(i); return w;
+    };
+    const tri = (label, key, o) => {
+      const w = el('label', 'ovr-f', `<span>${esc(label)}</span>`); const s = el('select', '', '<option value="">auto</option><option value="yes">yes</option><option value="no">no</option>');
+      s.value = o[key] === true ? 'yes' : o[key] === false ? 'no' : '';
+      s.onchange = () => { o[key] = s.value === 'yes' ? true : s.value === 'no' ? false : undefined; save(); };
+      w.appendChild(s); return w;
+    };
+    const draw = () => {
+      list.innerHTML = '';
+      entries.forEach((e, idx) => {
+        const [id, o] = e;
+        const card = el('div', 'ovr');
+        const head = el('div', 'ovr-head');
+        const mi = el('input'); mi.type = 'text'; mi.value = id; mi.placeholder = 'model id'; mi.setAttribute('list', `ov-${p.id}`); mi.setAttribute('aria-label', 'Model id');
+        mi.onchange = () => { e[0] = mi.value.trim(); save(); };
+        const rm = el('button', 'btn sm', I.trash); rm.title = 'Remove these model settings'; rm.setAttribute('aria-label', 'Remove these model settings');
+        rm.onclick = () => { entries = entries.filter((_, j) => j !== idx); save(); draw(); };
+        head.append(mi, rm); card.appendChild(head);
+        const grid = el('div', 'ovr-grid');
+        grid.append(num('Context window', 'contextWindow', o, 1024), num('Max output', 'maxOutput', o, 256), tri('Vision', 'vision', o), tri('Reasoning', 'reasoning', o), num('Input $/1M', 'inputPrice', o, 0.01), num('Output $/1M', 'outputPrice', o, 0.01), num('Temperature', 'temperature', o, 0.05, 2));
+        card.appendChild(grid); list.appendChild(card);
+      });
+      const add = el('button', 'btn sm', `${I.plus}Add model settings`);
+      add.onclick = () => { entries = [...entries, ['', {}]]; draw(); const inputs = list.querySelectorAll('.ovr-head input'); if (inputs.length) { inputs[inputs.length - 1].focus(); } };
+      list.appendChild(add);
+    };
+    box.appendChild(datalist(`ov-${p.id}`, ids));
+    draw();
+    return box;
+  }
   function providerCard(p, list) {
     const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
     const open = state.expanded === p.id;
@@ -769,13 +969,16 @@
       i.onchange = commit; i.onblur = commit;
       return i;
     };
-    const typeSel = el('select', '', `<option value="ollama">Ollama (native API)</option><option value="openai">OpenAI-compatible (/v1)</option><option value="anthropic">Anthropic (Claude Messages API)</option>`);
+    const typeSel = el('select', '', `<option value="ollama">Ollama (native API)</option><option value="openai">OpenAI-compatible (/v1)</option><option value="anthropic">Anthropic (Claude Messages API)</option><option value="vscode-lm">VS Code language models (Copilot)</option>`);
     typeSel.value = p.type; typeSel.onchange = () => upd({ type: typeSel.value });
     body.appendChild(row('Display name', '', text('displayName', p.id)));
     body.appendChild(row('ID', 'Used in model ids as <code>id/model</code>. Lowercase letters, digits, - and _.', text('id', 'ollama', 'text', (v) => /^[a-z0-9_-]+$/.test(v) && !list.some((o) => o !== p && o.id === v))));
     body.appendChild(row('API type', '', typeSel));
+    // VS Code's own models: no URL, key, cloud switch or context window to set (VS Code decides all four).
+    const lm = p.type === 'vscode-lm';
+    if (lm) { body.appendChild(el('div', 'desc', 'Uses the chat models VS Code offers (GitHub Copilot and other extensions). VS Code asks for consent on the first request; no URL or key needed.')); }
     const urlIn = text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v));
-    body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', urlIn));
+    if (!lm) { body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', urlIn)); }
     // A pasted key is moved to VS Code secret storage by the extension; the field then stays empty and says so.
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password';
     const stored = isSecretRef(p.apiKey);
@@ -787,12 +990,12 @@
     if (p.apiKey) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
     const pr = presetOf(p);
     const getKey = pr && pr.keyUrl ? ` <a data-url="${esc(pr.keyUrl)}">${pr.group === 'gateway' ? 'Setup guide' : 'Get an API key'} ↗</a>` : '';
-    const keyRow = body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>\${env:NAME}</code> to read it from an environment variable.${getKey}`, keyCtl));
+    const keyRow = lm ? null : body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>\${env:NAME}</code> to read it from an environment variable.${getKey}`, keyCtl));
     // For a cloud API the key is the one field that matters: right under the name, before ID / API type / URL.
-    if (isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
+    if (keyRow && isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
     // Mirrors bedrockRegion / withRegion in src/providers/presets.ts: the region is part of a Bedrock endpoint URL.
     const bedrock = /^(https:\/\/bedrock-runtime\.)([a-z0-9-]+)(\.amazonaws\.com)/i.exec(String(p.baseUrl || ''));
-    if (bedrock) {
+    if (bedrock && keyRow) {
       const reg = el('input'); reg.type = 'text'; reg.value = bedrock[2]; reg.placeholder = 'us-east-1'; reg.setAttribute('aria-label', 'AWS region');
       const commitRegion = () => { const v = reg.value.trim().toLowerCase(); if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(v)) { reg.classList.toggle('invalid', !!v); return; } reg.classList.remove('invalid'); if (v !== bedrock[2].toLowerCase()) { upd({ baseUrl: p.baseUrl.replace(bedrock[0], `${bedrock[1]}${v}${bedrock[3]}`) }); render(); } };
       reg.onchange = commitRegion; reg.onblur = commitRegion;
@@ -800,17 +1003,25 @@
     }
     if (state.focusKey === p.id) { state.focusKey = null; setTimeout(() => keyIn.focus(), 0); }
     if (state.focusUrl === p.id) { state.focusUrl = null; setTimeout(() => urlIn.focus(), 0); }
-    if (!isRemoteUrl(p.baseUrl)) {
+    if (!lm && !isRemoteUrl(p.baseUrl)) {
       const cl = el('button', `toggle ${isCloud(p) ? 'on' : ''}`); cl.setAttribute('role', 'switch');
       cl.onclick = () => upd({ cloud: isCloud(p) ? undefined : true });
       body.appendChild(row('Sends prompts to cloud models', 'Turn on for gateways such as OmniRoute or LiteLLM that run here but forward to cloud APIs. Automatic model picks then prefer local models over this one.', cl));
     }
     const cw = el('input'); cw.type = 'number'; cw.min = 1024; cw.step = 1024; cw.value = p.contextWindow ?? ''; cw.placeholder = 'auto';
     cw.onchange = () => upd({ contextWindow: cw.value ? Number(cw.value) : undefined });
-    body.appendChild(row('Context window', 'Fallback when the server does not report one.', cw));
+    if (!lm) { body.appendChild(row('Context window', 'Fallback when the server does not report one.', cw)); }
     const models = el('input'); models.type = 'text'; models.value = (p.models || []).join(', '); models.placeholder = 'auto-discover';
     models.onchange = () => upd({ models: models.value.split(',').map((s) => s.trim()).filter(Boolean) });
-    body.appendChild(row('Models', 'Comma-separated list for servers whose <code>/models</code> endpoint is empty (some llama.cpp builds).', models));
+    body.appendChild(row('Models', lm ? 'Comma-separated model ids or families to offer, e.g. <code>gpt-4o</code>. Empty offers every model VS Code lists.' : 'Comma-separated list for servers whose <code>/models</code> endpoint is empty (some llama.cpp builds).', models));
+    body.appendChild(row('Default model', `What <code>${esc(p.id)}</code> alone means as a model (<code>-m ${esc(p.id)}</code>). Pick one the server lists or type any id.`, defaultModelCtl(p, probe, upd)));
+    const more = state.provMore === p.id;
+    const moreRow = el('div', 'btnrow prov-more');
+    const moreBtn = el('button', 'btn sm', `<span class="chev" style="transform:rotate(${more ? 90 : 0}deg)">${I.chev}</span>Headers, timeout and model settings`);
+    moreBtn.setAttribute('aria-expanded', String(more));
+    moreBtn.onclick = () => { state.provMore = more ? null : p.id; render(); };
+    moreRow.appendChild(moreBtn); body.appendChild(moreRow);
+    if (more) { for (const r of providerMore(p, probe, upd, row)) { body.appendChild(r); } }
     const en = el('button', `toggle ${p.enabled !== false ? 'on' : ''}`); en.setAttribute('role', 'switch');
     en.onclick = () => upd({ enabled: p.enabled === false ? undefined : false });
     body.appendChild(row('Enabled', 'Disabled providers are kept in settings but never contacted.', en));
@@ -835,6 +1046,19 @@
   const TARGET_LABEL = { ollama: 'Ollama', docker: 'Docker Model Runner', lmstudio: 'LM Studio' };
   const fitBadge = (fit) => fit === 'ok' ? '<span class="badge ok">fits</span>' : fit === 'tight' ? '<span class="badge warn">tight</span>' : fit === 'over' ? '<span class="badge err">too big</span>' : '';
   const gbText = (gb) => (gb === undefined || gb === null ? '' : gb >= 10 ? `${Math.round(gb)} GB` : `${Number(gb).toFixed(1)} GB`);
+  /** US dollars per 1M tokens, short: $3, $0.15, $0.075. */
+  const usd = (n) => `$${n >= 1 ? Number(n.toFixed(2)) : Number(n.toFixed(4))}`;
+  /** Model card price: input / output per 1M tokens (cache reads when known), `local · free` on this machine, nothing when a cloud price is unknown. */
+  const priceText = (m) => {
+    const p = m.pricing;
+    if (!p) { return m.remote ? '' : 'local · free'; }
+    return `${usd(p.input)} in · ${usd(p.output)} out /1M${p.cacheRead !== undefined ? ` · cache ${usd(p.cacheRead)}` : ''}`;
+  };
+  const priceTitle = (m) => {
+    const p = m.pricing;
+    if (!p) { return 'Runs on this machine or your network: no per-token cost'; }
+    return `Per 1M tokens: input ${usd(p.input)}, output ${usd(p.output)}${p.cacheRead !== undefined ? `, cache read ${usd(p.cacheRead)}` : ''}${p.cacheWrite !== undefined ? `, cache write ${usd(p.cacheWrite)}` : ''}. Set your own in the provider's model settings.`;
+  };
   const activeJob = (kind, target, model) => state.jobs.find((j) => j.status === 'running' && j.kind === kind && (!target || j.target === target) && (!model || j.model === model));
   const pctText = (job) => (job.progress >= 0 ? `${Math.round(job.progress * 100)}%` : '');
   const barWidth = (job) => `${Math.max(2, Math.round((job.progress < 0 ? 0.3 : job.progress) * 100))}%`;
@@ -944,7 +1168,7 @@
       const caps = [m.supportsTools ? 'tools' : 'prompt tools', m.supportsVision ? 'vision' : '', m.supportsFim ? 'FIM' : ''].filter(Boolean).join(' · ');
       // Cloud models: say so where the model is listed, since picking one sends code off the machine.
       if (m.remote) { row.classList.add('cloud'); }
-      const t = el('div', 't', `<b title="${esc(m.id)}">${esc(m.name)}</b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}</span>`);
+      const t = el('div', 't', `<b title="${esc(m.id)}">${esc(m.name)}</b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}${priceText(m) ? ` · <span class="price" title="${esc(priceTitle(m))}">${esc(priceText(m))}</span>` : ''}</span>`);
       row.appendChild(t);
       const right = el('div', 'mrow-right');
       const tags = el('div', 'tags');
@@ -999,7 +1223,7 @@
       field('contextWindow', 'Context window', 'Requested context size in tokens (<code>num_ctx</code> for Ollama), capped by the model. <b>Model maximum</b> asks for the largest window the model supports. Larger = more memory and slower prompts; the conversation is compacted before it fills up.', 'select', { options: [[0, 'Model maximum', 'largest the model supports'], [8192, '8k'], [16384, '16k'], [32768, '32k'], [65536, '64k'], [131072, '128k'], [262144, '256k']], cast: Number }),
       field('maxOutputTokens', 'Max output tokens', 'Upper bound per response.', 'number', { min: 256, max: 65536, step: 256 }),
       field('temperature', 'Temperature', '<b>Model default</b> (far left) uses each model’s own setting, as its makers tuned it; thinking models such as Gemma 4 and Qwen 3 tend to repeat themselves at low temperatures. Move it right to force one value for every model.', 'range', { min: -0.05, max: 1.5, step: 0.05, fmt: (v) => (Number(v) < 0 ? 'Model default' : Number(v).toFixed(2)) }),
-      field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>). <b>Auto</b> thinks hard for Plan and Debug, medium for the agent, lightly for subagents and not at all for quick helpers (reviewer, inline edits, summaries). Models without thinking are left alone. Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['auto', 'Auto'], ['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] }),
+      field('thinking', 'Extended thinking', 'For reasoning models (Ollama <code>think</code>, OpenAI <code>reasoning_effort</code>, Claude’s thinking budget). A chat can pick its own level with the <b>Think</b> chip in the composer. <b>Auto</b> thinks hard for Plan and Debug, medium for the agent, lightly for subagents and not at all for quick helpers (reviewer, inline edits, summaries). Models without thinking are left alone. Shows a collapsible “Thought for Ns” step.', 'seg', { options: [['auto', 'Auto'], ['off', 'Off'], ['on', 'On'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['max', 'Max']] }),
       field('keepAlive', 'Keep model loaded', 'How long Ollama keeps the model in memory after a request (e.g. <code>5m</code>, <code>30m</code>, <code>-1</code> = forever).', 'text', { placeholder: '30m', validate: (v) => /^(-1|0|\d+(ms|s|m|h))$/.test(v) }),
       field('prewarm', 'Pre-load the model while you type', 'Loads the chat’s model as soon as you focus the composer or switch models, so the first token is not preceded by a weight load. Ollama only; at most once every few minutes per model.', 'toggle'),
       field('ollama.flashAttention', 'Ollama flash attention', 'Starts Ollama with <code>OLLAMA_FLASH_ATTENTION</code>: faster prompt processing and a smaller KV cache. Applies when LocalPilot starts or restarts Ollama.', 'toggle'),
@@ -1391,7 +1615,8 @@
     };
     sec.appendChild(presetsEl());
     sec.appendChild(card(
-      field('approvals.terminal', 'Terminal commands', '<code>run_command</code> — shell commands in the workspace.', 'seg', { options: APPROVAL }),
+      field('approvals.terminal', 'Terminal commands', '<code>run_command</code> — shell commands in the workspace. <b>Safe only</b> runs read-only commands and routine test, lint and build commands (<code>npm test</code>, <code>tsc</code>, <code>pytest</code>, <code>cargo test</code>) and asks for the rest.', 'seg', { options: [['ask', 'Ask'], ['safe', 'Safe only'], ['always', 'Allow'], ['never', 'Block']] }),
+      field('approvals.dangerousAlwaysAsk', 'Always ask before destructive commands', '<code>sudo</code>, <code>rm -rf /…</code>, <code>git push --force</code>, <code>git reset --hard</code> and similar ask even when commands are allowed.', 'toggle'),
       field('approvals.write', 'File edits', '<code>edit_file</code>, <code>write_file</code>, <code>create_directory</code>. Every edit is tracked and can be undone from the Changes panel either way.', 'seg', { options: APPROVAL }),
       field('approvals.delete', 'Deleting files', '<code>delete_path</code> — moves to the OS trash when possible.', 'seg', { options: APPROVAL }),
       field('approvals.network', 'Network', '<code>web_search</code>, <code>web_fetch</code> and the browser tools.', 'seg', { options: APPROVAL }),
@@ -1429,7 +1654,8 @@
     sec.appendChild(el('h2', 'sub', 'Terminal'));
     sec.appendChild(card(
       field('terminal.runInIntegratedTerminal', 'Run commands in a visible terminal', 'The agent\'s <code>run_command</code> calls run in a branded <b>LocalPilot Agent</b> terminal through shell integration, so you can watch them live. Falls back to a hidden process when the shell has no integration.', 'toggle'),
-      field('terminal.reveal', 'Reveal the terminal when a command runs', 'Shows the panel without stealing focus from the editor.', 'toggle')
+      field('terminal.reveal', 'Reveal the terminal when a command runs', 'Shows the panel without stealing focus from the editor.', 'toggle'),
+      field('notifications', 'Notifications', 'A native notification when a chat finishes, or when an auto-approved command is still running after 30 seconds. The terminal CLI rings the bell after runs longer than 10 seconds.', 'seg', { options: [['whenHidden', 'When hidden'], ['always', 'Always'], ['off', 'Off']] })
     ));
     sec.appendChild(el('h2', 'sub', 'Understanding requests'));
     sec.appendChild(card(
@@ -1498,7 +1724,7 @@
     sec.appendChild(el('h2', 'sub', 'Chat history'));
     const hist = el('div', 'card');
     const kv = el('div', 'field wide');
-    kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes)}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd>${ss.inMemory !== undefined ? `<dt>In memory</dt><dd>${ss.inMemory} of ${ss.count} transcript${ss.count === 1 ? '' : 's'} — the rest are read from disk when opened</dd>` : ''}<dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
+    kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes + (ss.checkpointBytes || 0))}${ss.checkpointBytes ? ` <span class="muted" title="File snapshots and git objects only checkpoint refs keep (freed by git gc once the chats are deleted)">(checkpoints ${fmtBytes(ss.checkpointBytes)})</span>` : ''}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd>${ss.inMemory !== undefined ? `<dt>In memory</dt><dd>${ss.inMemory} of ${ss.count} transcript${ss.count === 1 ? '' : 's'} — the rest are read from disk when opened</dd>` : ''}<dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
     hist.appendChild(kv);
     const retention = field('sessions.retention', 'Keep at most', 'Oldest idle chats are removed automatically when a new chat starts. Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
     hist.appendChild(retention);
@@ -1696,17 +1922,18 @@
   const CUSTOM_TABS = [
     ['rule', 'Rules', 'Instruction files added to every prompt: <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursorrules</code>, <code>.clinerules</code> and the rule folders (<code>.localpilot/rules/</code>, <code>.cursor/rules/</code>, <code>.claude/rules/</code>, <code>.cline/rules/</code>). Switching one off writes <code>disabled: true</code> into its front matter; <code>paths:</code> or <code>globs:</code> there make a rule apply only while a matching file is in context.'],
     ['command', 'Commands', 'Slash commands from <code>.localpilot/commands/</code> and <code>.claude/commands/</code> (and the same folders in your home). Switching one off writes <code>disabled: true</code> into its front matter.'],
-    ['hook', 'Hooks', 'Hooks configured in <code>settings.json</code> (open the file to change them). Scripts found in <code>.localpilot/hooks/</code> and the Cline hook folders are listed too, but the agent does not run them yet: add them to <code>settings.json</code> to run them.'],
+    ['hook', 'Hooks', 'Scripts named after their event (<code>PreToolUse.sh</code>, <code>TaskStart.py</code>…) in <code>.localpilot/hooks/</code>, <code>.clinerules/hooks/</code>, <code>.cline/hooks/</code> and the same folders in your home, plus the hooks configured in <code>settings.json</code> (open the file to change those). A script runs while it is switched on (executable).'],
     ['skill', 'Skills', 'Playbooks the agent loads when a request matches. Install more from the registry in <b>Skills &amp; subagents</b>.'],
+    ['plugin', 'Plugins', 'Installed plugins (Claude Code format) and what they add. Switching one off writes <code>enabledPlugins</code> in <code>.localpilot/settings.json</code>. Find more with <b>LocalPilot: Browse Plugins…</b>.'],
   ];
   function secCustomize(sec) {
     const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });
-    head(sec, 'Customize', 'The rules, commands, hooks and skills in this workspace and in your home folder: switch them on or off, open, delete or create them.');
+    head(sec, 'Customize', 'The rules, commands, hooks, skills and plugins in this workspace and in your home folder: switch them on or off, open, delete or create them.');
     // Files change outside the panel too: re-list when the section is shown again after a while.
     if ((!c.loading || Date.now() - c.loading > 10000) && (!c.data || Date.now() - (c.at || 0) > 5000)) { c.loading = Date.now(); post({ type: 'loadCustomize' }); }
     const d = c.data;
     const skills = (state.data && state.data.skills) || [];
-    const count = { rule: d ? d.rules.length : 0, command: d ? d.commands.length : 0, hook: d ? d.hooks.length : 0, skill: skills.length };
+    const count = { rule: d ? d.rules.length : 0, command: d ? d.commands.length : 0, hook: d ? d.hooks.length : 0, skill: skills.length, plugin: d && d.plugins ? d.plugins.length : 0 };
     const tabs = el('div', 'chips cz-tabs'); tabs.setAttribute('role', 'tablist');
     for (const [k, label] of CUSTOM_TABS) {
       const b = el('button', `chip ${c.tab === k ? 'on' : ''}`, `${esc(label)} <i>${count[k]}</i>`); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(c.tab === k));
@@ -1717,22 +1944,23 @@
     const tab = CUSTOM_TABS.find(([k]) => k === c.tab) || CUSTOM_TABS[0];
     sec.appendChild(el('p', 'muted small', tab[2]));
     if (c.tab === 'skill') { customSkills(sec, skills); return; }
-    if (!d) { sec.appendChild(skeleton('Looking for rules, commands and hooks…', 3)); return; }
+    if (!d) { sec.appendChild(skeleton('Looking for rules, commands, hooks and plugins…', 3)); return; }
     if (c.tab === 'hook') { sec.appendChild(card(field('hooks.enabled', 'Run hooks', 'Turn off for a repository you do not trust: no hook (settings or script) runs.', 'toggle'))); }
-    const kind = c.tab; const noun = { rule: 'rule', command: 'command', hook: 'hook' }[kind];
+    const kind = c.tab; const noun = { rule: 'rule', command: 'command', hook: 'hook', plugin: 'plugin' }[kind];
     const scope = c.scope || (d.hasWorkspace ? 'workspace' : 'global');
     const add = el('div', 'row cz-new');
-    const listId = `cz-events-${kind}`;
-    add.innerHTML = `<input type="text" id="cz-name" placeholder="${kind === 'hook' ? 'New hook… (an event name, e.g. PreToolUse)' : `New ${noun}… (e.g. ${kind === 'rule' ? 'testing' : 'review'})`}" aria-label="Name of the new ${noun}"${kind === 'hook' ? ` list="${listId}"` : ''}>${kind === 'hook' ? `<datalist id="${listId}">${(d.events || []).map((e) => `<option value="${esc(e)}">`).join('')}</datalist>` : ''}<select aria-label="Create in">${d.hasWorkspace ? `<option value="workspace"${scope === 'workspace' ? ' selected' : ''}>.localpilot/${kind}s</option>` : ''}<option value="global"${scope === 'global' ? ' selected' : ''}>~/.localpilot/${kind}s</option></select><button class="btn sm">${I.plus}Create</button>`;
-    const input = add.querySelector('input'); const sel = add.querySelector('select');
+    // A new hook is a template for an event that has no hook yet.
+    const nameField = kind === 'hook' ? `<select id="cz-name" aria-label="Event of the new hook"><option value="">New hook… (pick an event)</option>${(d.events || []).map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join('')}</select>` : `<input type="text" id="cz-name" placeholder="New ${noun}… (e.g. ${kind === 'rule' ? 'testing' : 'review'})" aria-label="Name of the new ${noun}">`;
+    add.innerHTML = `${nameField}<select aria-label="Create in">${d.hasWorkspace ? `<option value="workspace"${scope === 'workspace' ? ' selected' : ''}>.localpilot/${kind}s</option>` : ''}<option value="global"${scope === 'global' ? ' selected' : ''}>~/.localpilot/${kind}s</option></select><button class="btn sm">${I.plus}Create</button>`;
+    const input = add.querySelector('#cz-name'); const sel = add.querySelector('select[aria-label="Create in"]');
     sel.onchange = () => { c.scope = sel.value; };
     const create = () => { const name = input.value.trim(); if (!name) { input.focus(); return; } if (!/^[\w][\w .-]*$/.test(name) || name.includes('..')) { toast('Use letters, digits, spaces, "-", "_" and "." only (no folders).', 'error'); return; } post({ type: 'customCreate', kind, name, scope: sel.value }); input.value = ''; };
     add.querySelector('button').onclick = create;
     input.onkeydown = (e) => { if (e.key === 'Enter') { create(); } };
-    // ---- new item (hook scripts are not run yet, so none are created from here)
-    if (kind !== 'hook') { sec.appendChild(add); }
+    // ---- new item (plugins are installed, not created)
+    if (kind === 'hook' && !(d.events || []).length) { sec.appendChild(el('p', 'muted small', 'Every event has a hook already.')); } else if (kind !== 'plugin') { sec.appendChild(add); }
     // ---- lists, workspace first
-    const items = kind === 'rule' ? d.rules : kind === 'command' ? d.commands : d.hooks;
+    const items = kind === 'rule' ? d.rules : kind === 'command' ? d.commands : kind === 'plugin' ? (d.plugins || []) : d.hooks;
     for (const [sc, title] of [['workspace', 'Workspace'], ['global', 'Global']]) {
       const group = items.filter((i) => i.scope === sc);
       sec.appendChild(el('h2', 'sub', `${title}<span class="count">${group.length}</span>`));
@@ -1751,20 +1979,21 @@
       tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'customToggle', kind: it.kind, file: it.file, enabled: !!it.disabled }); };
       row.appendChild(tg);
     }
-    row.appendChild(el('span', 'ic brand-mark sk-ic', it.kind === 'hook' ? I.bolt : it.kind === 'command' ? I.chat : I.file));
+    row.appendChild(el('span', 'ic brand-mark sk-ic', it.kind === 'hook' ? I.bolt : it.kind === 'command' ? I.chat : it.kind === 'plugin' ? I.plug : I.file));
     const sub = it.detail ? `<code>${esc(it.detail)}</code>` : esc(it.description || '');
     row.appendChild(el('div', 't', `<b title="${esc(it.file)}">${esc(it.name)}</b><span>${esc(it.label)}${sub ? ` · ${sub}` : ''}</span>`));
     const right = el('div', 'mrow-right');
     const tags = [];
     if (it.paths) { tags.push(`<span class="badge" title="Applies only while a file matching ${esc(it.paths.join(', ') || '(nothing)')} is in context">${it.paths.length ? `when ${esc(it.paths.slice(0, 2).join(', '))}${it.paths.length > 2 ? '…' : ''}` : 'never applies'}</span>`); }
     if (it.fromSettings) { tags.push('<span class="badge">settings.json</span>'); }
-    if (it.notRun) { tags.push('<span class="badge warn" title="LocalPilot does not run hook scripts from this folder yet: configure the hook in settings.json">not run yet</span>'); }
-    if (!it.editable && !it.fromSettings && !it.notRun) { tags.push('<span class="badge" title="From a parent folder of the workspace: change it there">parent folder</span>'); }
+    if (it.notRun) { tags.push('<span class="badge warn" title="Hook scripts are named after the event they hook (PreToolUse.sh, TaskStart.py…): this one never runs">not an event</span>'); }
+    if (it.version) { tags.push(`<span class="badge">${esc(it.version)}</span>`); }
+    if (!it.editable && !it.fromSettings) { tags.push('<span class="badge" title="From a parent folder of the workspace: change it there">parent folder</span>'); }
     if (it.disabled) { tags.push('<span class="badge warn">disabled</span>'); }
     right.appendChild(el('div', 'tags', tags.join('')));
     const acts = el('div', 'acts');
-    const open = el('button', 'btn ghost sm', I.external); open.title = it.fromSettings ? 'Open the settings file' : 'Open in editor'; open.setAttribute('aria-label', `Open ${it.name}`); open.onclick = () => post({ type: 'customOpen', kind: it.kind, file: it.file }); acts.appendChild(open);
-    if (it.editable && !it.fromSettings) {
+    const open = el('button', 'btn ghost sm', I.external); open.title = it.fromSettings ? 'Open the settings file' : it.kind === 'plugin' ? 'Open the plugin manifest' : 'Open in editor'; open.setAttribute('aria-label', `Open ${it.name}`); open.onclick = () => post({ type: 'customOpen', kind: it.kind, file: it.file }); acts.appendChild(open);
+    if (it.editable && !it.fromSettings && (it.kind !== 'plugin' || it.removable)) {
       const del = el('button', 'btn ghost sm danger', I.trash); del.title = 'Delete from disk (asks first)'; del.setAttribute('aria-label', `Delete ${it.name}`); del.onclick = () => post({ type: 'customDelete', kind: it.kind, file: it.file }); acts.appendChild(del);
     }
     right.appendChild(acts);
@@ -1852,20 +2081,39 @@
     // Shown merged; written from the selected scope's own map so the other scope's servers are never copied into it.
     const own = () => ({ ...((state.scope === 'workspace' ? S('mcpServers').workspaceValue : S('mcpServers').userValue) || {}) });
     const status = new Map((state.data.mcp || []).map((s) => [s.name, s]));
-    const names = Object.keys(servers);
+    // Servers from .mcp.json files and plugins are listed too (read-only here: edit them in their file).
+    const names = [...new Set([...Object.keys(servers), ...status.keys()])];
     const list = el('div');
     if (!names.length) { list.appendChild(el('div', 'empty', 'No MCP servers configured. Add one below — for example the filesystem or GitHub server from <code>@modelcontextprotocol</code>.')); }
     for (const name of names) {
-      const s = servers[name] || {};
-      const open = state.expanded === `mcp:${name}`;
-      const c = el('div', `prov ${s.enabled === false ? 'off' : ''}`);
       const st = status.get(name);
-      const tools = st && !st.error ? st.tools : undefined;
+      const inSettings = name in servers;
+      const s = servers[name] || {};
+      const off = inSettings ? s.enabled === false : !!st && st.state === 'disabled';
+      const open = state.expanded === `mcp:${name}`;
+      const c = el('div', `prov ${off ? 'off' : ''}`);
+      const tools = st && st.state === 'connected' ? st.tools : undefined;
       const err = st && st.error;
-      c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
-      if (err && s.enabled !== false) { c.appendChild(el('div', 'prov-result err', `${I.x} ${esc(err)}`)); }
+      const busy = st && (st.state === 'connecting' || st.state === 'restarting');
+      const where = inSettings ? (s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' ')) : `from ${({ project: "the workspace's .mcp.json", user: 'your mcp.json', plugin: 'a plugin' })[st && st.source] || 'a server file'}`;
+      const badge = tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : off ? '<span class="badge">disabled</span>' : busy ? `<span class="badge warn">${st.state === 'restarting' ? 'restarting…' : 'connecting…'}</span>` : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`;
+      c.innerHTML = `<div class="prov-head"><span class="dot ${off ? '' : tools !== undefined ? 'ok' : busy ? 'busy' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(where)}</span></div><div class="prov-meta">${badge}${off ? '' : `<button class="btn sm ghost" data-restart title="Stop and start ${esc(name)} again">${I.refresh}Restart</button>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+      const restart = () => { post({ type: 'restartMcp', name }); toast(`Restarting ${name}…`); };
+      const rb = c.querySelector('[data-restart]'); if (rb) { rb.onclick = (e) => { e.stopPropagation(); restart(); }; rb.onkeydown = (e) => e.stopPropagation(); }
+      if (err && !off && !busy) {
+        const box = el('div', 'prov-result err mcp-err', `<span>${I.x} ${esc(err)}</span><button class="btn sm">Retry</button>`);
+        box.querySelector('button').onclick = restart;
+        c.appendChild(box);
+      }
       disclosure(c.querySelector('.prov-head'), open, `${name} server settings`, () => { state.expanded = open ? null : `mcp:${name}`; render(); });
-      if (open) { c.appendChild(mcpForm(name, s, servers, own)); }
+      if (open) {
+        if (st && st.state === 'connected') { c.appendChild(mcpInspect(name, st)); }
+        if (inSettings) { c.appendChild(mcpForm(name, s, servers, own)); } else {
+          const note = el('div', 'prov-result mcp-err', `<span>Defined in ${esc(({ project: "the workspace's .mcp.json", user: 'your mcp.json (~/.localpilot/mcp.json)', plugin: 'a plugin' })[st && st.source] || 'a server file')}. Edit it there; it reloads on save.</span>${st && st.source !== 'plugin' ? `<button class="btn sm">${off ? 'Turn on' : 'Turn off'}</button>` : ''}`);
+          const tb = note.querySelector('button'); if (tb) { tb.onclick = () => post({ type: 'toggleMcp', name, enabled: off }); }
+          c.appendChild(note);
+        }
+      }
       list.appendChild(c);
     }
     sec.appendChild(list);
@@ -1890,6 +2138,26 @@
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reconnect servers</button><span class="muted small">Servers start when LocalPilot activates and after you reload.</span>`;
     sec.appendChild(bar);
+  }
+  /** Tabs listing what a connected server offers: its tools (required parameters marked *), resources and prompts. */
+  function mcpInspect(name, st) {
+    const box = el('div', 'mcp-inspect');
+    const tabs = [['tools', 'Tools', (st.toolList || []).length], ['resources', 'Resources', (st.resources || []).length + (st.resourceTemplates || []).length], ['prompts', 'Prompts', (st.prompts || []).length]];
+    const cur = state.mcpTab && state.mcpTab[name] || 'tools';
+    const seg = el('div', 'seg'); seg.setAttribute('role', 'tablist');
+    seg.innerHTML = tabs.map(([k, l, n]) => `<button role="tab" aria-selected="${k === cur}" class="${k === cur ? 'on' : ''}" data-k="${k}">${l} <span class="muted">${n}</span></button>`).join('');
+    seg.onclick = (e) => { const b = e.target.closest('button'); if (!b) { return; } state.mcpTab = { ...(state.mcpTab || {}), [name]: b.dataset.k }; render(); };
+    const body = el('div', 'mcp-list');
+    const row = (title, sub, extra) => `<div class="mcp-item"><div><code>${esc(title)}</code>${extra || ''}</div>${sub ? `<div class="desc">${esc(sub)}</div>` : ''}</div>`;
+    if (cur === 'tools') {
+      body.innerHTML = (st.toolList || []).map((t) => row(t.name, t.description, t.params.length ? `<span class="mcp-params">${t.params.map((p) => `<span title="${esc(p.description || '')}">${esc(p.name)}${p.required ? '<b>*</b>' : ''}${p.type ? `<i>: ${esc(p.type)}</i>` : ''}</span>`).join('')}</span>` : '')).join('') || '<div class="empty">This server offers no tools.</div>';
+    } else if (cur === 'resources') {
+      body.innerHTML = [...(st.resources || []).map((r) => row(r.uri, [r.name !== r.uri ? r.name : '', r.description].filter(Boolean).join(' — '), r.mimeType ? `<span class="badge">${esc(r.mimeType)}</span>` : '')), ...(st.resourceTemplates || []).map((r) => row(r.uriTemplate, [r.name, r.description].filter(Boolean).join(' — '), '<span class="badge">template</span>'))].join('') || '<div class="empty">This server offers no resources.</div>';
+    } else {
+      body.innerHTML = (st.prompts || []).map((p) => row(`/mcp:${name}:${p.name}`, p.description, (p.arguments || []).length ? `<span class="mcp-params">${p.arguments.map((a) => `<span title="${esc(a.description || '')}">${esc(a.name)}${a.required ? '<b>*</b>' : ''}</span>`).join('')}</span>` : '')).join('') || '<div class="empty">This server offers no prompts.</div>';
+    }
+    box.append(seg, body);
+    return box;
   }
   function mcpForm(name, s, servers, own) {
     const body = el('div', 'prov-body');
@@ -1941,6 +2209,8 @@
   const fmtN = (n) => { n = Number(n) || 0; return n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n); };
   const fmtMs = (ms) => { ms = Number(ms) || 0; return ms >= 60e3 ? `${(ms / 60e3).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10e3 ? 0 : 1)} s` : `${Math.round(ms)} ms`; };
   const pct = (p) => `${Math.round(Number(p) || 0)}%`;
+  /** Dollars as the chat shows them: `$0.0123`, `<$0.0001`, or a dash when nothing was priced (local models are free). */
+  const fmtUsd = (v) => (typeof v !== 'number' || !Number.isFinite(v) ? '—' : v > 0 && v < 0.0001 ? '&lt;$0.0001' : `$${v >= 1 ? v.toFixed(2) : v.toFixed(4)}`);
   const fmtTime = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
   /** Tiny inline SVG bar chart; `pick` maps a day point to a number. Bars are titled with day + value. */
   function spark(series, pick, cls) {
@@ -2153,7 +2423,7 @@
     const kpis = el('div', 'kpis');
     kpis.innerHTML = [
       kpi('Agent runs', fmtN(t.runs), `${t.done} done · ${t.stopped} stopped · <span class="${t.failed ? 'err-text' : ''}">${t.failed} failed</span>${t.subagentRuns ? ` · ${t.subagentRuns} subagent` : ''}`, spark(s.series, (d) => d.runs), t.failed && okRate < 70 ? 'warn' : ''),
-      kpi('Tokens', fmtN(tokens), `${fmtN(t.promptTokens)} in · ${fmtN(t.completionTokens)} out${topTps ? ` · best <b>${topTps.tokPerSec}</b> tok/s` : ''}`, spark(s.series, (d) => d.tokens)),
+      kpi('Tokens', fmtN(tokens), `${fmtN(t.promptTokens)} in · ${fmtN(t.completionTokens)} out${t.costUsd ? ` · <b>${fmtUsd(t.costUsd)}</b>` : ''}${topTps ? ` · best <b>${topTps.tokPerSec}</b> tok/s` : ''}`, spark(s.series, (d) => d.tokens)),
       kpi('Model calls', fmtN(t.modelCalls), `${t.retries} retr${t.retries === 1 ? 'y' : 'ies'} · <span class="${t.modelErrors ? 'err-text' : ''}">${t.modelErrors} error${t.modelErrors === 1 ? '' : 's'}</span>`, spark(s.series, (d) => d.modelCalls)),
       kpi('Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, spark(s.series, (d) => d.toolCalls)),
       kpi('Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', c.requested ? `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}` : 'no inline completions yet', spark(s.series, (d) => d.completionsShown)),
@@ -2203,7 +2473,7 @@
     // Models
     const cols = el('div', 'dash-cols');
     const models = el('div', 'card tblwrap');
-    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(provName(m.provider))}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
+    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="provider-reported cost, or the bundled prices; local models are free">Cost</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(provName(m.provider))}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td class="${m.costUsd ? '' : 'muted'}"${m.costUsd === undefined ? ' title="local · free"' : ''}>${fmtUsd(m.costUsd)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
     cols.appendChild(models);
     // Modes
     const modes = el('div', 'card tblwrap');

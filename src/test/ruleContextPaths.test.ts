@@ -22,17 +22,20 @@ suite('Conditional rules: multi-root working set', () => {
   });
 });
 
-suite('Customize: hook scripts are listed but not run', () => {
-  test('folder hook scripts are read-only and marked not run; new hook scripts are refused', async () => {
+suite('Customize: hook scripts are listed and switchable', () => {
+  test('folder hook scripts are editable, switched by the executable bit; new hooks are templates named after the event', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'localpilot-hhome-'));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'localpilot-hroot-'));
     const script = path.join(root, '.localpilot', 'hooks', 'PreToolUse.sh');
     await fs.mkdir(path.dirname(script), { recursive: true });
     await fs.writeFile(script, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const hook = (await listCustomizations([root], home)).hooks.find((h) => h.file === script);
-    assert.ok(hook && hook.notRun && !hook.editable && !hook.disabled, JSON.stringify(hook));
-    await assert.rejects(setItemEnabled('hook', script, false, [root], home));
-    await assert.rejects(createItem('hook', 'Stop', 'workspace', [root], home), /not run yet/);
-    await assert.rejects(fs.stat(path.join(root, '.localpilot', 'hooks', 'Stop')));
+    assert.ok(hook && !hook.notRun && hook.editable && !hook.disabled, JSON.stringify(hook));
+    if (process.platform !== 'win32') {
+      await setItemEnabled('hook', script, false, [root], home);
+      assert.strictEqual((await fs.stat(script)).mode & 0o111, 0);
+    }
+    const r = await createItem('hook', 'Stop', 'workspace', [root], home);
+    assert.ok(r.created && /[\\/]Stop\.(sh|ps1(\.disabled)?)$/.test(r.file), r.file);
   });
 });

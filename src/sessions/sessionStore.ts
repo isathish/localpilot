@@ -4,6 +4,9 @@ import * as vscode from 'vscode';
 import { ChatMessage, Session, SessionSummary } from '../types';
 import { userText } from '../agent/clarify';
 import { ArchiveRecord, parseArchive, rebuildBefore } from './transcriptArchive';
+import { HistoryPage, HistoryQuery, queryHistory } from './historyQuery';
+
+const ARCHIVE_SUFFIX = '.archive.jsonl';
 
 /** A chat with nothing in it yet: no messages, no plan, not pinned — nothing would be lost by removing it. */
 export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>): boolean {
@@ -115,6 +118,10 @@ export class SessionStore implements vscode.Disposable {
       await vscode.workspace.fs.createDirectory(this.dir);
       const entries = await vscode.workspace.fs.readDirectory(this.dir);
       for (const [name, type] of entries) {
+        if (type === vscode.FileType.File && name.endsWith(ARCHIVE_SUFFIX) && this.dir.scheme === 'file') {
+          this.archiveSize.set(name.slice(0, -ARCHIVE_SUFFIX.length), await fs.promises.stat(path.join(this.dir.fsPath, name)).then((st) => st.size, () => 0));
+          continue;
+        }
         if (type !== vscode.FileType.File || !name.endsWith('.json')) {
           continue;
         }
@@ -262,8 +269,17 @@ export class SessionStore implements vscode.Disposable {
     });
   }
 
+  /** Every chat's list row; `bytes` is what it takes on disk, its transcript archive included. */
   list(): SessionSummary[] {
-    return [...this.index.values()].map((s) => ({ ...s })).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt);
+    return [...this.index.values()]
+      .map((s) => ({ ...s, bytes: s.bytes === undefined && !this.archiveSize.get(s.id) ? undefined : (s.bytes ?? 0) + (this.archiveSize.get(s.id) ?? 0) }))
+      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt);
+  }
+
+  /** One page of the history list: sorted, filtered by pinned and by a fuzzy title match or what was said. */
+  listSessions(q: HistoryQuery = {}): HistoryPage {
+    const query = (q.query ?? '').trim();
+    return queryHistory(this.list(), q, query.length >= 2 ? this.search(query, Number.MAX_SAFE_INTEGER) : []);
   }
 
   /** The full session, read back from disk if it was dropped from memory. */
@@ -422,6 +438,7 @@ export class SessionStore implements vscode.Disposable {
     s.parentTitle = src.title;
     s.messages = structuredClone(uptoIndex === undefined ? src.messages : src.messages.slice(0, uptoIndex + 1));
     s.attachments = [...src.attachments];
+    s.think = src.think;
     this.forkArchive(src.id, s);
     this.save(s, true);
     return s;
@@ -451,7 +468,9 @@ export class SessionStore implements vscode.Disposable {
       const text = await fs.promises.readFile(this.archiveFile(parentId), 'utf8').catch(() => '');
       const kept = parseArchive(text).filter((r) => r.seq <= last).sort((a, b) => a.seq - b.seq);
       if (kept.length) {
-        await fs.promises.writeFile(this.archiveFile(s.id), `${kept.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+        const out = `${kept.map((r) => JSON.stringify(r)).join('\n')}\n`;
+        await fs.promises.writeFile(this.archiveFile(s.id), out, 'utf8');
+        this.archiveSize.set(s.id, Buffer.byteLength(out));
       }
     });
   }
@@ -507,6 +526,7 @@ export class SessionStore implements vscode.Disposable {
     if (this.dir.scheme === 'file') {
       await fs.promises.rm(this.archiveFile(id), { force: true }).catch(() => undefined);
     }
+    this.archiveSize.delete(id);
     this._onDidDelete.fire(id);
     if (notify) {
       this._onDidChange.fire();
@@ -575,9 +595,11 @@ export class SessionStore implements vscode.Disposable {
   private archiveNext = new Map<string, number>();
   /** One write chain per archive: appends and truncations land in order. */
   private archiveChains = new Map<string, Promise<void>>();
+  /** Bytes of each chat's archive file, for the sizes in the history list. */
+  private archiveSize = new Map<string, number>();
 
   private archiveFile(id: string): string {
-    return path.join(this.dir.fsPath, `${id}.archive.jsonl`);
+    return path.join(this.dir.fsPath, `${id}${ARCHIVE_SUFFIX}`);
   }
 
   private queueArchive(id: string, op: () => Promise<void>): Promise<void> {
@@ -618,7 +640,9 @@ export class SessionStore implements vscode.Disposable {
     this.archiveNext.set(id, next);
     void this.queueArchive(id, async () => {
       await fs.promises.mkdir(this.dir.fsPath, { recursive: true });
-      await fs.promises.appendFile(this.archiveFile(id), `${lines.join('\n')}\n`, 'utf8');
+      const text = `${lines.join('\n')}\n`;
+      await fs.promises.appendFile(this.archiveFile(id), text, 'utf8');
+      this.archiveSize.set(id, (this.archiveSize.get(id) ?? 0) + Buffer.byteLength(text));
     });
   }
 
@@ -644,10 +668,13 @@ export class SessionStore implements vscode.Disposable {
       const kept = parseArchive(text).filter((r) => r.seq < seq);
       if (!kept.length) {
         await fs.promises.rm(file, { force: true });
+        this.archiveSize.delete(id);
         return;
       }
-      await fs.promises.writeFile(`${file}.tmp`, `${kept.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+      const out = `${kept.map((r) => JSON.stringify(r)).join('\n')}\n`;
+      await fs.promises.writeFile(`${file}.tmp`, out, 'utf8');
       await fs.promises.rename(`${file}.tmp`, file);
+      this.archiveSize.set(id, Buffer.byteLength(out));
     });
   }
 

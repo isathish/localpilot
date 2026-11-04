@@ -10,7 +10,9 @@ import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
+import { deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
+import { isReadOnlyOrSafe } from './commandGuard';
+import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
 import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
@@ -26,23 +28,31 @@ import { ChangeTracker } from './changeTracker';
 import { CheckpointService } from './checkpoints';
 import { MemoryStore } from './memory';
 import { RunStats, Telemetry } from '../telemetry/telemetry';
-import { HookRunner } from './hooks';
+import { endRunSpan, recordModelSpan, spanIds, startRunSpan, traceTool } from '../telemetry/tracing';
+import { HookRunInfo, HookRunner } from './hooks';
 import { AutoReviewer } from './autoReviewer';
-import { thinkFor } from './thinking';
+import { thinkFor, thinkingLevel } from './thinking';
+import { firstTokenFloor } from '../providers/providerOptions';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
 import { audit, autoApprovedMode, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed, WEB_TOOLS } from './managedPolicy';
 import { emptySettings, ProjectSettings } from './settings';
 import { runDigest, saveRunMemories } from './autoMemory';
-import { irrelevantTools } from './toolRelevance';
+import { editToolsToOmit, irrelevantTools } from './toolRelevance';
+import { withEditPreview } from '../ui/editPreview';
 import { MistakeCounter, mistakeLimitMessage } from './mistakes';
 import { CONTINUE_NUDGE, hasUnterminatedToolCall, joinContinuation, LENGTH_NUDGE, lengthAction, lengthGiveUpMessage } from './outputLimit';
-import { toolDisabled } from './toolAliases';
+import { toolDisabled, toolInFilter } from './toolAliases';
 import { listRepos } from './repos';
 import { markRepoGraphStale } from '../context/repoGraph';
 import { archiveCompaction, TranscriptArchive } from '../sessions/transcriptArchive';
 
-/** `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies. */
-export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: { mandatory?: boolean; autoApprove?: boolean }) => Promise<boolean>;
+/**
+ * `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies.
+ * A person's answer is an `ApprovalDecision` (or `true`); a bare `false` is a refusal nobody gave (non-interactive, no TTY).
+ */
+export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: ApprovalOptions) => Promise<boolean | ApprovalDecision>;
+/** An approval gate that also reports the reason given with a denial. */
+type DecisionHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: ApprovalOptions) => Promise<ApprovalDecision>;
 
 /** Per-run permission/hook policy handed to tool execution. */
 interface ToolPolicy {
@@ -53,9 +63,9 @@ interface ToolPolicy {
   root?: string;
   sessionId: string;
   /** Asks the user regardless of the approval settings (an `ask` rule or hook verdict). */
-  ask: ApprovalHandler;
+  ask: DecisionHandler;
   /** Like `ask`, for a prompt the organization's policy requires. */
-  askMandatory: ApprovalHandler;
+  askMandatory: DecisionHandler;
   signal: AbortSignal;
 }
 
@@ -82,6 +92,8 @@ export interface AgentRunOptions {
   emit: (e: AgentEvent) => void;
   signal: AbortSignal;
   requestApproval: ApprovalHandler;
+  /** False when `requestApproval` will answer this kind without showing a prompt (allowed for the session): no edit preview then. */
+  willPrompt?: (kind: NonNullable<Tool['approvalKind']>, mandatory: boolean) => boolean;
   /** Shows ask_user questions in the chat; absent = native pickers. Only the main agent gets it. */
   askUser?: ToolContext['askUser'];
   /** Nobody is watching this run (task queue): no question round before work starts. */
@@ -197,15 +209,25 @@ export class AgentRunner {
     if (topLevel && !o.session.messages.some((m) => m.role === 'user')) {
       this.telemetry?.record({ type: 'task', sid: o.session.id, action: 'created', mode: o.session.mode });
     }
+    let error: string | undefined;
+    let reply: string | undefined;
+    const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
     try {
-      const text = await this.runTurn(o, stats);
+      const text = await (this.telemetry ? this.telemetry.tracing.with(span, () => this.runTurn(o, stats)) : this.runTurn(o, stats));
       outcome = o.signal.aborted ? 'stopped' : 'done';
+      const last = o.session.messages[o.session.messages.length - 1];
+      error = last?.role === 'assistant' ? last.meta?.error : undefined;
+      reply = text;
       return text;
     } catch (e) {
       outcome = o.signal.aborted ? 'stopped' : 'failed';
+      error = e instanceof Error ? e.message : String(e);
       throw e;
     } finally {
       this.unassign(o.session.id);
+      if (topLevel && !o.scratch && (outcome === 'stopped' || error)) {
+        this.endHook(o, outcome === 'stopped' ? 'TaskCancel' : 'TaskError', error);
+      }
       this.telemetry?.record({
         type: 'run',
         sid: o.session.id,
@@ -221,11 +243,43 @@ export class AgentRunner {
         promptTokens: stats.promptTokens,
         completionTokens: stats.completionTokens,
         isolated: !!o.isolatedFrom,
+        ...spanIds(span),
       });
+      endRunSpan(span, { model: stats.model || o.session.model, outcome, error, steps: stats.steps, toolCalls: stats.toolCalls, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens, output: reply });
       if (topLevel) {
         this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? (stats.mistakeLimited ? 'mistake_limit' : 'completed') : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.session.mode });
       }
     }
+  }
+
+  /**
+   * TaskCancel / TaskError hooks: not awaited by the run, since it is already over (and a stopped run's signal is
+   * aborted). A process about to exit waits for them with `hooksSettled()`; `idle()` waits for them too.
+   */
+  private endHook(o: AgentRunOptions, event: 'TaskCancel' | 'TaskError', error?: string): void {
+    if (!this.hooks?.has(event)) {
+      return;
+    }
+    const sessionId = o.session.id;
+    const p = this.hooks
+      .run(event, { session_id: sessionId, ...(event === 'TaskError' ? { error: error ?? '' } : {}) }, { cwd: o.workspaceRoot ?? this.workspace.root, onRun: (h) => o.emit({ sessionId, type: 'hook', payload: h }) })
+      .catch((e) => this.log.warn(`hooks: ${event} failed: ${e instanceof Error ? e.message : String(e)}`));
+    this.pendingHooks.add(p);
+    void p.finally(() => this.pendingHooks.delete(p));
+    this.track(p);
+  }
+
+  /** TaskCancel / TaskError hooks still running. */
+  private readonly pendingHooks = new Set<Promise<unknown>>();
+  /** Resolves when the TaskCancel / TaskError hooks have finished, or after `timeoutMs`; true when some were still running. */
+  async hooksSettled(timeoutMs = 5_000): Promise<boolean> {
+    if (!this.pendingHooks.size) {
+      return false;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.allSettled([...this.pendingHooks]), new Promise((r) => (timer = setTimeout(r, timeoutMs)))]);
+    clearTimeout(timer);
+    return true;
   }
 
   private async runTurn(o: AgentRunOptions, stats: RunStats): Promise<string> {
@@ -234,6 +288,7 @@ export class AgentRunner {
     const session = o.session;
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
+    const hookRow = (h: HookRunInfo) => emit({ sessionId: session.id, type: 'hook', payload: h });
 
     // Captured before routing: the user may pick another model while the route is resolved, and that pick must stand.
     const requested = o.modelRef ?? session.model;
@@ -306,7 +361,10 @@ export class AgentRunner {
     const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath), getConfig().repos).length : 0);
     offered.forEach((n) => omit?.delete(n));
     // Scratch runs (benchmark) work in throwaway folders: this project's memory is neither shown nor written.
-    const toolList = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.scratch || !t.definition.name.startsWith('memory_'));
+    const selected = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.scratch || !t.definition.name.startsWith('memory_'));
+    // GPT/Codex/gpt-oss models edit with apply_patch, the rest with edit_file/write_file (localpilot.editTool).
+    const editOmit = editToolsToOmit(selected.map((t) => t.definition.name), model.id, getConfig().editTool);
+    const toolList = selected.filter((t) => !editOmit.has(t.definition.name));
     if (!o.toolFilter && depth === 0) {
       toolList.forEach((t) => offered.add(t.definition.name));
       this.offeredTools.delete(session.id);
@@ -339,6 +397,7 @@ export class AgentRunner {
       canInspect: toolDefs.some((t) => t.name === 'browser_inspect'),
       canOpenBrowser: toolDefs.some((t) => t.name === 'open_browser'),
       canSearchWeb: toolDefs.some((t) => t.name === 'web_search' || t.name === 'web_fetch'),
+      patchEdits: toolDefs.some((t) => t.name === 'apply_patch') && !toolDefs.some((t) => t.name === 'edit_file'),
       preferredLanguage: cfg.preferredLanguage,
       project: !o.scratch,
       // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
@@ -356,6 +415,11 @@ export class AgentRunner {
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
 
     const wasEmpty = session.messages.length === 0;
+    // A chat with earlier messages that this runner has not run yet was reopened (history, `--resume`): SessionStart `resume`.
+    const resumed = depth === 0 && !o.scratch && !wasEmpty && !this.startedSessions.has(session.id);
+    if (depth === 0 && !o.scratch) {
+      this.startedSessions.add(session.id);
+    }
     const turnMessage: ChatMessage = { ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } };
     if (nativeTools) {
       closeDanglingToolCalls(session.messages);
@@ -373,12 +437,13 @@ export class AgentRunner {
       }
     }
 
-    // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
+    // Hooks: SessionStart (first turn of a chat, or of a resumed one) and UserPromptSubmit may add context or block the prompt.
     const hookRoot = o.workspaceRoot ?? this.workspace.root;
     if (depth === 0 && !o.scratch && this.hooks && (this.hooks.has('SessionStart') || this.hooks.has('UserPromptSubmit'))) {
       const hookContext: string[] = [];
-      if (wasEmpty && this.hooks.has('SessionStart')) {
-        const r = await this.hooks.run('SessionStart', { session_id: session.id, source: 'startup' }, { cwd: hookRoot, matchKey: 'startup', signal: o.signal });
+      if ((wasEmpty || resumed) && this.hooks.has('SessionStart')) {
+        const source = wasEmpty ? 'startup' : 'resume';
+        const r = await this.hooks.run('SessionStart', { session_id: session.id, source }, { cwd: hookRoot, matchKey: source, signal: o.signal, onRun: hookRow });
         if (r.stop) {
           const note = `Stopped by a hook: ${r.stop}`;
           session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
@@ -390,7 +455,7 @@ export class AgentRunner {
       }
       if (this.hooks.has('UserPromptSubmit')) {
         status('Running prompt hooks…');
-        const r = await this.hooks.run('UserPromptSubmit', { session_id: session.id, prompt: userText(o.userMessage.content) }, { cwd: hookRoot, signal: o.signal });
+        const r = await this.hooks.run('UserPromptSubmit', { session_id: session.id, prompt: userText(o.userMessage.content) }, { cwd: hookRoot, signal: o.signal, onRun: hookRow });
         if (r.block || r.stop) {
           const reason = r.reasons.join('\n') || r.stop || 'A UserPromptSubmit hook blocked this prompt.';
           const note = `Prompt blocked by a hook: ${reason}`;
@@ -593,6 +658,11 @@ export class AgentRunner {
     }
 
     const control = o.control ?? new RunControl(session.id, undefined, o.signal);
+    // The diff preview opens only beside a real prompt; an edit allowed for the session is left to afterEditWritten.
+    const prompt = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, mandatory: boolean, opts?: ApprovalOptions) => {
+      const ask = () => o.requestApproval(title, detail, kind, { mandatory });
+      return o.willPrompt?.(kind, mandatory) === false ? ask() : withEditPreview(opts?.preview, ask);
+    };
     const toolCtx: ToolContext = {
       sessionId: session.id,
       skills: [...activeSkills],
@@ -616,7 +686,9 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'todos', payload: items });
         },
       },
-      requestApproval: (title, detail, kind, opts) => this.gateApproval(kind, cfg.approvals[kind], (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory, autoApprove: opts?.autoApprove }),
+      // The approval setting is read at each request, so a change in the composer's auto-approve bar applies mid-run.
+      approve: (title, detail, kind, opts) => this.gateApproval(kind, getConfig().approvals[kind], (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { ...opts, title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal }),
+      requestApproval: async (title, detail, kind, opts) => (await toolCtx.approve!(title, detail, kind, opts)).ok,
       askUser: depth === 0 ? o.askUser : undefined,
       recordUsage: (u, m, p) => {
         // The chat's own last model stays the one it answers with; the subagent's model only travels upwards.
@@ -631,8 +703,8 @@ export class AgentRunner {
       root: hookRoot,
       sessionId: session.id,
       // An `ask` rule still goes through auto mode's reviewer; only an explicit `deny` skips the model.
-      ask: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory }),
-      askMandatory: (title, detail, kind) => this.gateApproval(kind, 'ask', (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: true }),
+      ask: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory, dangerous: opts?.dangerous, confirm: opts?.confirm }),
+      askMandatory: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: true }),
       signal: o.signal,
     };
     /** Times a Stop / SubagentStop hook sent the agent back to work this turn. */
@@ -645,7 +717,7 @@ export class AgentRunner {
     const toolCache = new Map<string, Promise<{ msg: ChatMessage; isError: boolean }>>();
     // A model that cannot think gets no `think` at all (Ollama rejects any value but false for it).
     // Reassigned to false when the model spends a whole reply thinking (see the empty-completion retry below).
-    let think = model.supportsThinking === false ? undefined : thinkFor(cfg.thinking, { mode: session.mode, depth });
+    let think = model.supportsThinking === false ? undefined : thinkFor(thinkingLevel(session, cfg.thinking), { mode: session.mode, depth });
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
@@ -717,7 +789,7 @@ export class AgentRunner {
         let fit: FitResult | undefined;
         try {
           if (this.hooks?.has('PreCompact')) {
-            await this.hooks.run('PreCompact', { session_id: session.id, trigger: 'auto', custom_instructions: '' }, { cwd: hookRoot, matchKey: 'auto', signal: o.signal });
+            await this.hooks.run('PreCompact', { session_id: session.id, trigger: 'auto', custom_instructions: '' }, { cwd: hookRoot, matchKey: 'auto', signal: o.signal, onRun: hookRow });
           }
           fit = await ctxMgr.fit(session.messages, provider, model, budgetOf, o.signal, () => status('Compacting conversation to fit the context window…'));
         } catch (e) {
@@ -787,9 +859,10 @@ export class AgentRunner {
         let usage: ProviderUsage | undefined;
         // Called exactly once per request, so it is also where the request is booked into the session's usage.
         const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) => {
-          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason });
           // Priced from the bundled model facts unless the provider reported a cost; subagents pass theirs upwards.
           const priced = withCost(usage, model);
+          const traced = recordModelSpan(this.telemetry?.tracing, { sid: session.id, model: model.modelId, provider: model.providerId, startMs: requestedAt, outcome, reason, finishReason: finish, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, maxTokens: cfg.maxOutputTokens, temperature: cfg.temperature, input: () => session.messages, output: calls.length ? `${text}\n${calls.map((c) => `[tool call] ${c.name} ${c.arguments}`).join('\n')}` : text });
+          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, cacheReadTokens: usage?.cacheReadTokens, cacheWriteTokens: usage?.cacheWriteTokens, costUsd: priced?.costUsd, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason, ...traced });
           session.usage = addUsage(session.usage, priced, model.modelId, model.providerId);
           o.onUsage?.(priced, model.modelId, model.providerId);
         };
@@ -799,7 +872,7 @@ export class AgentRunner {
             model: model.modelId,
             messages: withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext, !model.supportsVision),
             tools: nativeTools && toolDefs.length ? toolDefs : undefined,
-            temperature: cfg.temperature,
+            temperature: model.temperature ?? cfg.temperature,
             maxTokens: cfg.maxOutputTokens,
             contextWindow: model.contextWindow,
             think,
@@ -812,7 +885,11 @@ export class AgentRunner {
           // Ollama sends nothing while it buffers a tool call: a measured-slow model gets time for a max-length one.
           const measured = stats.genMs && stats.genTokens ? (cfg.maxOutputTokens / (stats.genTokens / (stats.genMs / 1000))) * 1.5 * 1000 : 0;
           const guarded = withWatchdog(stream, {
-            firstTokenMs: Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
+            // The provider's own timeout is a floor: a slow gateway or cold start is not called a stall before it.
+            firstTokenMs: Math.max(
+              firstTokenFloor(cfg.providers.find((p) => p.id === model.providerId)),
+              Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first)
+            ),
             idleMs: Math.max(IDLE_TIMEOUT_MS * patience.idle, measured),
             abort: () => ac.abort(),
             onWaiting: (s) => status(`${waitingFor} · ${s}s…`),
@@ -1115,7 +1192,7 @@ export class AgentRunner {
         const stopEvent = depth === 0 ? 'Stop' : 'SubagentStop';
         if (this.hooks?.has(stopEvent) && !o.scratch && !o.signal.aborted) {
           status('Running stop hooks…');
-          const r = await this.hooks.run(stopEvent, { session_id: session.id, stop_hook_active: stopHookContinues > 0, last_assistant_message: text }, { cwd: hookRoot, signal: o.signal });
+          const r = await this.hooks.run(stopEvent, { session_id: session.id, stop_hook_active: stopHookContinues > 0, last_assistant_message: text }, { cwd: hookRoot, signal: o.signal, onRun: hookRow });
           if (r.block && stopHookContinues < MAX_STOP_HOOK_CONTINUES && !r.stop) {
             stopHookContinues++;
             const reason = r.reasons.join('\n') || 'A stop hook asked you to continue.';
@@ -1236,6 +1313,9 @@ export class AgentRunner {
     }
     return finalText;
   }
+
+  /** Chats this runner has run a top-level turn of; a chat with history not in here is being resumed. */
+  private readonly startedSessions = new Set<string>();
 
   /** Tools offered so far per chat (see the tool gating in run): the list only grows, so the prompt prefix stays cacheable. */
   private readonly offeredTools = new Map<string, Set<string>>();
@@ -1362,7 +1442,7 @@ export class AgentRunner {
     }
     if (filter) {
       const allowed = new Set(filter);
-      list = list.filter((t) => allowed.has(t.definition.name));
+      list = list.filter((t) => toolInFilter(t.definition.name, allowed));
     }
     // Organisation policy: web access and other tool families it switched off are not offered at all.
     const managed = getManagedPolicy(this.log);
@@ -1434,6 +1514,7 @@ export class AgentRunner {
     const captured: { callId: string; caption: string; data: string }[] = [];
     const toolMsg = (call: ToolCall, content: string, isError = false): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now(), ...(isError ? { failed: true } : {}) } });
     const notRun = 'Not run: the user stopped the run. Nothing was done.';
+    const hookRow = (h: HookRunInfo) => emit({ sessionId, type: 'hook', payload: h });
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
@@ -1442,7 +1523,9 @@ export class AgentRunner {
       }
       const started = Date.now();
       let result: ToolResult | undefined;
-      let callCtx = ctx;
+      let callCtx: ToolContext = { ...ctx, callId: call.id, output: (chunk) => emit({ sessionId, type: 'tool_progress', payload: { id: call.id, chunk } }) };
+      /** Set when the user denied an approval of this call: the reason they gave, or '' for none. */
+      let denial: string | undefined;
       if (coordinatorFirst && call.name === 'run_command') {
         result = { content: 'Nothing was run. In Multitask mode you coordinate and workers do the work: call run_todos_parallel now with each piece in "tasks" (title, agent, complete prompt). Use run_command only to verify after the workers report.', isError: true };
       }
@@ -1460,7 +1543,7 @@ export class AgentRunner {
         if (decision === 'deny') {
           result = { content: `Blocked by ${reason} in settings.json. Do not retry this exact action; choose another approach or ask the user to change the rule.`, isError: true };
         } else if (policy.hooks?.has('PreToolUse')) {
-          const r = await policy.hooks.run('PreToolUse', { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), localpilot_tool_name: call.name }, { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal });
+          const r = await policy.hooks.run('PreToolUse', { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), localpilot_tool_name: call.name }, { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal, onRun: hookRow });
           if (r.block || r.permission === 'deny') {
             result = { content: `Blocked by a PreToolUse hook: ${r.reasons.join('\n') || 'no reason given'}. Nothing was done.`, isError: true };
           } else {
@@ -1481,7 +1564,10 @@ export class AgentRunner {
         if (!result) {
           const defaultMode = policy.settings.permissions.defaultMode;
           if (decision === 'none' && !(managed.disableBypassPermissions && (defaultMode === 'bypassPermissions' || defaultMode === 'acceptEdits'))) {
-            const effective = tool.approvalKind ? flooredApproval(managed, tool.approvalKind, getConfig().approvals[tool.approvalKind]) : undefined;
+            const configured = tool.approvalKind ? getConfig().approvals[tool.approvalKind] : undefined;
+            // `safe` runs a read-only or routine test/build command as if it were `always`.
+            const level = configured === 'safe' ? (call.name === 'run_command' && isReadOnlyOrSafe(String(args.command ?? '')).ok && args.requires_approval !== true ? 'always' : 'ask') : configured;
+            const effective = tool.approvalKind && level ? flooredApproval(managed, tool.approvalKind, level) : undefined;
             decision = defaultModeDecision(defaultMode, call.name, tool.approvalKind, effective);
             reason = decision === 'none' ? '' : `permissions.defaultMode = ${defaultMode}`;
           } else if (decision === 'ask' && defaultMode === 'dontAsk') {
@@ -1493,17 +1579,21 @@ export class AgentRunner {
             result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
           } else if (decision === 'allow' && !(tool.approvalKind && managed.approvals[tool.approvalKind])) {
             // A project allow skips the prompt, unless the organisation set an approval floor for this kind of action.
-            callCtx = { ...ctx, requestApproval: async () => !ctx.signal.aborted };
+            callCtx = { ...callCtx, requestApproval: async () => !ctx.signal.aborted, approve: async () => ({ ok: !ctx.signal.aborted }) };
           } else if (decision === 'ask') {
             // An organization `ask` must reach the user every time.
             const ask = org.decision === 'ask' ? policy.askMandatory : policy.ask;
-            callCtx = { ...ctx, requestApproval: ask };
+            callCtx = { ...callCtx, requestApproval: async (t, d, k, opts) => (await ask(t, d, k, opts)).ok, approve: ask };
             // Tools that never ask for approval themselves (reads, searches) would run straight through an `ask`
             // rule (`Read(.env)`): prompt here, before the call.
             if (!tool.approvalKind) {
               const target = Object.values(args).find((v) => typeof v === 'string') as string | undefined;
-              if (!(await ask(`${call.name}${target ? ` ${target.slice(0, 80)}` : ''}`, `Requires approval: ${reason}`, 'write'))) {
+              const d = await ask(`${call.name}${target ? ` ${target.slice(0, 80)}` : ''}`, `Requires approval: ${reason}`, 'write');
+              if (!d.ok && d.byUser) {
+                denial = d.feedback ?? '';
                 result = { content: `The user declined ${call.name} (${reason}). Nothing was done.`, isError: true };
+              } else if (!d.ok) {
+                result = { content: `${call.name} was not approved (${reason}). Nothing was done.`, isError: true };
               }
             }
           }
@@ -1513,9 +1603,26 @@ export class AgentRunner {
         }
       }
       if (!result) {
+        const approve = callCtx.approve;
+        if (approve && tool) {
+          // Tools see a yes/no answer; a denial's reason goes to the model in place of the tool's fixed refusal text.
+          callCtx = {
+            ...callCtx,
+            requestApproval: async (t, d, k, opts) => {
+              const v = await approve(t, d, k, opts);
+              if (!v.ok && v.byUser) {
+                denial = v.feedback ?? denial ?? '';
+              }
+              return v.ok;
+            },
+          };
+        }
         result = tool
           ? await this.tools.execute(call.name, args, callCtx)
           : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+      }
+      if (denial !== undefined && result.isError) {
+        result = { ...result, content: deniedResultText(result.content, denial) };
       }
       if (ctx.signal.aborted && !result.isError) {
         // The step really ran; keep its result so the model knows what changed.
@@ -1545,7 +1652,7 @@ export class AgentRunner {
         const r = await policy.hooks.run(
           'PostToolUse',
           { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), tool_response: { content, is_error: !!result.isError }, localpilot_tool_name: call.name },
-          { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal }
+          { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal, onRun: hookRow }
         );
         if (r.stop) {
           hookStop = r.stop;
@@ -1557,8 +1664,9 @@ export class AgentRunner {
       }
       this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: Date.now() - started, error: !!result.isError });
       audit(managed, { event: 'tool', session: sessionId, tool: call.name, args: JSON.stringify(args).slice(0, 2000), outcome: result.isError ? 'error' : 'ok', blocked: /^Blocked by /.test(result.content ?? '') || undefined, durationMs: Date.now() - started }, policy?.root ?? ctx.workspaceRoot, this.log);
-      emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
-      if (result.isError) {
+      emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data, denied: (denial !== undefined && result.isError) || undefined } });
+      // A user's denial is guidance, not a mistake of the model.
+      if (result.isError && denial === undefined) {
         failed.add(call.id);
       }
       return { msg: toolMsg(call, content, !!result.isError), isError: !!result.isError };
@@ -1601,7 +1709,7 @@ export class AgentRunner {
           emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: hit.isError, durationMs: 0, content: hit.msg.content, cached: true } });
           return { ...hit.msg, toolCallId: call.id, meta: { timestamp: Date.now() } };
         }
-        const p = execute(call, tool, args).then(afterEdit).then((r) => {
+        const p = traceTool(this.telemetry?.tracing, call, args, () => execute(call, tool, args)).then(afterEdit).then((r) => {
           if (r.isError) {
             cache.delete(cacheKey);
           }
@@ -1612,7 +1720,7 @@ export class AgentRunner {
       }
       cache.clear();
       try {
-        return (await execute(call, tool, args).then(afterEdit)).msg;
+        return (await traceTool(this.telemetry?.tracing, call, args, () => execute(call, tool, args)).then(afterEdit)).msg;
       } finally {
         markRepoGraphStale(ctx.workspaceRoot);
       }
@@ -1664,19 +1772,24 @@ export class AgentRunner {
 
   private async gateApproval(
     kind: NonNullable<Tool['approvalKind']>,
-    mode: ApprovalMode,
-    ask: (mandatory: boolean) => Promise<boolean>,
+    mode: TerminalApprovalMode,
+    ask: (mandatory: boolean) => Promise<boolean | ApprovalDecision>,
     emit: (e: AgentEvent) => void,
     sessionId: string,
-    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal; mandatory?: boolean; autoApprove?: boolean }
-  ): Promise<boolean> {
+    info?: ApprovalOptions & { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal }
+  ): Promise<ApprovalDecision> {
     const managed = getManagedPolicy(this.log);
-    const base = flooredApproval(managed, kind, mode);
-    const floored = autoApprovedMode(managed, kind, info?.mandatory && base === 'always' ? 'ask' : base, info);
-    const mandatory = !!info?.mandatory || managed.approvals[kind] === 'ask';
-    const decided = (ok: boolean, by: string) => {
-      audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: ok, by }, info?.root, this.log);
-      return ok;
+    // `safe` resolves per command; a destructive command or the model's requires_approval makes this one prompt mandatory.
+    const level = effectiveApproval(mode, info, getConfig().dangerousAlwaysAsk);
+    const strict = !!info?.mandatory || level.mustAsk;
+    const base = flooredApproval(managed, kind, level.mode);
+    const floored = autoApprovedMode(managed, kind, strict && base === 'always' ? 'ask' : base, { autoApprove: info?.autoApprove, mandatory: strict });
+    const mandatory = strict || managed.approvals[kind] === 'ask';
+    const decided = (ok: boolean | ApprovalDecision, by: string): ApprovalDecision => {
+      const d = toDecision(ok);
+      const byUser = by === 'user' && ok !== false;
+      audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: d.ok, by: by === 'user' && !byUser ? 'non-interactive' : by }, info?.root, this.log);
+      return byUser ? { ...d, byUser } : d;
     };
     // A stopped run (or a single stopped subagent lane) must not approve anything or hang on a prompt nobody will answer now.
     const sig = info?.signal;
@@ -1708,13 +1821,13 @@ export class AgentRunner {
     emit({ sessionId, type: 'approval_request', payload: { kind } });
     if (info && this.hooks?.has('Notification')) {
       // Fire-and-forget: a Notification hook may ping the user (desktop notification, sound) while the prompt waits.
-      void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt' });
+      void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt', onRun: (h) => emit({ sessionId, type: 'hook', payload: h }) });
     }
     if (sig?.aborted) {
       return decided(false, 'stopped');
     }
     const asked = ask(mandatory);
-    const stopped = new Promise<boolean>((r) => {
+    const stopped = new Promise<boolean | ApprovalDecision>((r) => {
       const off = onAbort(sig, () => r(false));
       void asked.finally(off).catch(() => undefined);
     });

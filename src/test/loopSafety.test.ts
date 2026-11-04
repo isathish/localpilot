@@ -57,7 +57,7 @@ suite('Agent loop safety: mistake limit, output cut-offs, tool names', () => {
     assert.deepStrictEqual(mapToolNames(['Read', 'Grep']), ['read_file', 'grep_search']);
     assert.deepStrictEqual(mapToolNames(['Glob', 'Edit', 'MultiEdit', 'Write', 'Bash(git:*)', 'LS', 'WebFetch', 'WebSearch', 'NotebookRead', 'Task']), ['file_search', 'edit_file', 'write_file', 'run_command', 'list_dir', 'web_fetch', 'web_search', 'read_file', 'run_subagent']);
     assert.deepStrictEqual(mapToolNames(['read_files', 'editor', 'run_commands', 'search_codebase']), ['read_file', 'edit_file', 'write_file', 'run_command', 'grep_search', 'file_search']);
-    assert.deepStrictEqual(mapToolNames(['read_file', 'mcp__github__get_issue', 'custom_tool']), ['read_file', 'mcp_github_get_issue', 'custom_tool']);
+    assert.deepStrictEqual(mapToolNames(['read_file', 'mcp__github__get_issue', 'custom_tool']), ['read_file', 'mcp_github__get_issue', 'custom_tool']);
     const agent = localToolNames(['Read', 'Grep']);
     assert.ok(agent.includes('read_file') && agent.includes('grep_search'), agent.join());
     assert.ok(!agent.includes('edit_file') && !agent.includes('NotebookRead'));

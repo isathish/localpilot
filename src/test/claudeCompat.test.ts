@@ -233,6 +233,15 @@ suite('Claude Code compatibility: permission rules', () => {
     assert.strictEqual(defaultModeDecision(undefined, 'run_command'), 'none');
   });
 
+  test('notebook_edit answers to NotebookEdit and Edit', () => {
+    const perm = { ...emptySettings().permissions, deny: ['Edit(**/*.ipynb)'] };
+    assert.strictEqual(evaluatePermission(perm, 'notebook_edit', { path: 'nb/a.ipynb', action: 'insert', cell: 1 }, { root }).decision, 'deny');
+    assert.strictEqual(evaluatePermission(perm, 'notebook_edit', { path: 'nb/a.py' }, { root }).decision, 'none');
+    assert.strictEqual(defaultModeDecision('acceptEdits', 'notebook_edit'), 'allow');
+    assert.strictEqual(canonicalToolName('notebook_edit'), 'NotebookEdit');
+    assert.ok(expandAgentTools(['NotebookEdit']).includes('notebook_edit'));
+  });
+
   test('WebFetch domain rules', () => {
     const perm = { ...emptySettings().permissions, allow: ['WebFetch(domain:github.com)'], deny: ['WebFetch(domain:evil.example)'] };
     assert.strictEqual(evaluatePermission(perm, 'web_fetch', { url: 'https://api.github.com/repos' }).decision, 'allow');
@@ -256,7 +265,7 @@ suite('Claude Code compatibility: permission rules', () => {
       assert.ok(tools.includes(t), t);
     }
     assert.ok(!tools.includes('edit_file'));
-    assert.deepStrictEqual(expandAgentTools(['read_file', 'mcp__github__get_issue', 'custom_tool', 'read_file']), ['read_file', 'mcp_github_get_issue', 'custom_tool']);
+    assert.deepStrictEqual(expandAgentTools(['read_file', 'mcp__github__get_issue', 'custom_tool', 'read_file']), ['read_file', 'mcp_github__get_issue', 'custom_tool']);
   });
 });
 

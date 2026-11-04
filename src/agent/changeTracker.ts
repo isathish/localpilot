@@ -5,6 +5,7 @@ import * as path from 'path';
 import { deleteUri } from '../tools/fs';
 import { recordEditDecision } from '../telemetry/catalog';
 import { checkpointFile, CheckpointKind } from './checkpoints';
+import { registerProposedContent } from '../ui/editPreview';
 
 export interface TrackedChange {
   sessionId: string;
@@ -59,6 +60,8 @@ export class ChangeTracker implements vscode.Disposable {
       vscode.workspace.registerTextDocumentContentProvider(SCHEME, {
         provideTextDocumentContent: (uri) => this.leftContent(uri),
       }),
+      // Both sides of the diff an edit tool opens before its approval (localpilot.diffPreview).
+      registerProposedContent(),
       vscode.window.onDidChangeActiveTextEditor(() => this.decorateVisible()),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (vscode.window.visibleTextEditors.some((ed) => ed.document === e.document)) {

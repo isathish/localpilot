@@ -518,6 +518,19 @@ export class CheckpointService {
     return { ok: true, files, safetyStash };
   }
 
+  /** True when a git checkpoint's commit is still in its repository (the ref, or failing that the recorded sha). */
+  async exists(entry: CheckpointEntry): Promise<boolean> {
+    if (!entry.root || !entry.sha || entry.kind === 'files' || !fs.existsSync(entry.root)) {
+      return false;
+    }
+    for (const name of [entry.ref, entry.sha]) {
+      if (name && (await git(['rev-parse', '--verify', '-q', `${name}^{commit}`], entry.root)).code === 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Forgets the checkpoints of `run` and later (their messages were removed) and deletes their refs. */
   async dropFrom(session: Session, run: number): Promise<void> {
     const st = session.checkpoints;
@@ -594,6 +607,39 @@ export class CheckpointService {
     return doomed.length;
   }
 
+  /**
+   * Disk space held by checkpoints: the persisted file snapshots under `snapshotDir` plus the git objects only the
+   * checkpoint refs keep alive (what deleting them frees after `git gc`). With `sessionId`, that chat's share only;
+   * objects another chat's checkpoint also needs are not counted for it.
+   */
+  async diskUsage(opts: { snapshotDir?: string; sessionId?: string; roots?: (string | undefined)[] } = {}): Promise<CheckpointUsage> {
+    const sid = opts.sessionId === undefined ? undefined : refSafe(opts.sessionId);
+    const snapshots = opts.snapshotDir ? dirBytes(opts.sessionId === undefined ? opts.snapshotDir : path.join(opts.snapshotDir, snapshotFolder(opts.sessionId))) : 0;
+    const roots = new Set<string>(opts.roots?.filter((r): r is string => !!r) ?? []);
+    for (const [k, set] of this.roots) {
+      if (sid === undefined || k === sid) {
+        set.forEach((r) => roots.add(r));
+      }
+    }
+    const def = this.o.defaultRoot?.();
+    if (def) {
+      roots.add(def);
+    }
+    const tops = new Set<string>();
+    for (const r of roots) {
+      const top = await git(['rev-parse', '--show-toplevel'], r);
+      if (top.code === 0 && top.stdout.trim()) {
+        tops.add(path.resolve(top.stdout.trim()));
+      }
+    }
+    let gitBytes = 0;
+    for (const top of tops) {
+      const r = await git(['rev-list', '--objects', '--disk-usage', ...diskUsageRevs(sid)], top);
+      gitBytes += r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
+    }
+    return { snapshots, git: gitBytes, total: snapshots + gitBytes };
+  }
+
   /** Removes private index folders untouched for `maxAgeMs` (left by crashes or chats deleted elsewhere). */
   pruneScratch(maxAgeMs = SCRATCH_MAX_AGE_MS, now = Date.now()): number {
     let n = 0;
@@ -656,6 +702,65 @@ export function pruneSnapshotDirs(dir: string, orphan: (sessionId: string) => bo
     if (orphan(name)) {
       fs.rmSync(path.join(dir, name), { recursive: true, force: true });
       n++;
+    }
+  }
+  return n;
+}
+
+export interface CheckpointUsage {
+  /** Bytes of persisted file snapshots. */
+  snapshots: number;
+  /** Bytes of git objects kept alive only by checkpoint refs. */
+  git: number;
+  total: number;
+}
+
+/** `git rev-list` arguments selecting the objects only checkpoint refs (of one chat, with `sid`) reach. */
+export function diskUsageRevs(sid?: string): string[] {
+  const all = `${CHECKPOINT_REF_PREFIX}/*`;
+  const own = sid === undefined ? all : `${CHECKPOINT_REF_PREFIX}/${refSafe(sid)}/*`;
+  return [`--glob=${own}`, '--not', ...(sid === undefined ? [] : [`--exclude=${own}`, `--glob=${all}`]), '--branches', '--tags', '--remotes', 'HEAD'];
+}
+
+/** Folder of a chat's persisted file snapshots (as the change tracker names it). */
+export function snapshotFolder(sessionId: string): string {
+  return sessionId.split('::')[0].replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+/** "820 B", "12 KB", "3.4 MB", "1.2 GB". */
+export function formatBytes(b: number): string {
+  if (b < 1024) {
+    return `${Math.max(0, Math.round(b))} B`;
+  }
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = b / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/** Total size of the files under `dir` (0 when it does not exist). */
+export function dirBytes(dir: string): number {
+  let n = 0;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      n += dirBytes(p);
+    } else if (e.isFile()) {
+      try {
+        n += fs.statSync(p).size;
+      } catch {
+        /* removed meanwhile */
+      }
     }
   }
   return n;

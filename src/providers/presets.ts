@@ -1,4 +1,5 @@
 import { ProviderConfig } from '../types';
+import { bestPreset } from './presetSearch';
 
 /** Where a preset runs: servers on this machine, local gateways to cloud models, or cloud APIs. */
 export type PresetGroup = 'local' | 'gateway' | 'cloud';
@@ -61,6 +62,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   cloud('moonshot', 'Moonshot (Kimi)', 'openai', 'https://api.moonshot.ai/v1', 'MOONSHOT_API_KEY', 'https://platform.moonshot.ai/console/api-keys'),
   cloud('dashscope', 'Alibaba Qwen', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'),
   cloud('ollama-cloud', 'Ollama Cloud', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY', 'https://ollama.com/settings/keys'),
+  cloud('sambanova', 'SambaNova', 'openai', 'https://api.sambanova.ai/v1', 'SAMBANOVA_API_KEY', 'https://cloud.sambanova.ai/apis'),
+  cloud('minimax', 'MiniMax', 'openai', 'https://api.minimax.io/v1', 'MINIMAX_API_KEY', 'https://www.minimax.io/platform/user-center/basic-information/interface-key'),
+  cloud('zai', 'Z.AI (GLM)', 'openai', 'https://api.z.ai/api/paas/v4', 'ZAI_API_KEY', 'https://z.ai/manage-apikey/apikey-list'),
+  cloud('baseten', 'Baseten', 'openai', 'https://inference.baseten.co/v1', 'BASETEN_API_KEY', 'https://app.baseten.co/settings/api_keys'),
+  cloud('nebius', 'Nebius AI Studio', 'openai', 'https://api.studio.nebius.com/v1', 'NEBIUS_API_KEY', 'https://studio.nebius.com/settings/api-keys'),
+  cloud('requesty', 'Requesty', 'openai', 'https://router.requesty.ai/v1', 'REQUESTY_API_KEY', 'https://app.requesty.ai/api-keys'),
+  cloud('vercel', 'Vercel AI Gateway', 'openai', 'https://ai-gateway.vercel.sh/v1', 'AI_GATEWAY_API_KEY', 'https://vercel.com/dashboard/ai-gateway/api-keys'),
   cloud('azure', 'Azure OpenAI', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'),
   // Bedrock's OpenAI-compatible endpoint takes a Bedrock API key as a Bearer token and has no /models, so its models are listed.
   // IAM credentials, profiles and SigV4 go through a LiteLLM proxy instead.
@@ -86,9 +94,18 @@ export function withRegion(baseUrl: string, region: string): string {
   return bedrockRegion(baseUrl) && /^[a-z]{2}(-[a-z]+)+-\d+$/.test(r) ? baseUrl.replace(/^(https:\/\/bedrock-runtime\.)[a-z0-9-]+(\.amazonaws\.com)/i, `$1${r}$2`) : baseUrl;
 }
 
-export function findPreset(key: string): ProviderPreset | undefined {
+/**
+ * Exact, then a name prefix; with `fuzzy`, then a close fuzzy match ("hf" → Hugging Face, "vercel gw" → Vercel AI
+ * Gateway). Only `providers add` (which names the preset it picked) is fuzzy: `-P <id> -k <key>` must never send a
+ * key to a provider the user did not name.
+ */
+export function findPreset(key: string, opts: { fuzzy?: boolean } = {}): ProviderPreset | undefined {
   const k = key.trim().toLowerCase();
-  return PROVIDER_PRESETS.find((p) => p.key === k || p.label.toLowerCase() === k) ?? PROVIDER_PRESETS.find((p) => p.label.toLowerCase().startsWith(k));
+  if (!k) {
+    return undefined;
+  }
+  const hit = PROVIDER_PRESETS.find((p) => p.key === k || p.label.toLowerCase() === k) ?? PROVIDER_PRESETS.find((p) => p.label.toLowerCase().startsWith(k));
+  return hit ?? (opts.fuzzy ? bestPreset(k, PROVIDER_PRESETS) : undefined);
 }
 
 /** The preset a configured provider came from (`openai-2` → openai, else the same base URL). */

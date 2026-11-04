@@ -98,3 +98,13 @@ export function unifiedDiff(before: string, after: string, opts: { context?: num
   }
   return out.join('\n');
 }
+
+/** write_file's approval detail: the diff against the current file, or the first `maxLines` lines of a new one. */
+export function writePreview(before: string | undefined, after: string, maxLines = 200): string {
+  if (before !== undefined) {
+    return unifiedDiff(before, after, { maxLines }) || '(no changes: the content is the same as the file)';
+  }
+  const lines = after.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+  const shown = lines.slice(0, maxLines).map((l) => `+${l}`);
+  return lines.length > maxLines ? `${shown.join('\n')}\n… ${(lines.length - maxLines).toLocaleString()} more lines` : shown.join('\n');
+}

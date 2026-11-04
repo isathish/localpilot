@@ -19,9 +19,12 @@ import { livePdfViews, PDF_VIEW_TYPE } from './open';
 
 /** What the viewer hands to the chat: the file to attach, a page reference, a draft and page images. */
 export interface PdfChatHooks {
-  /** Shows the chat and adds `ref` (workspace-relative path, optionally `#page=N`) as an attachment chip. */
-  attachRef(ref: string): Promise<unknown>;
-  draft(text: string): void;
+  /**
+   * Shows the chat and appends `text` plus the `refs` chips (workspace-relative path, optionally `#page=N`) to the
+   * composer; a chat view that is still loading picks both up when it boots.
+   */
+  addToComposer(text: string, refs: string[]): void;
+  /** Shows the chat and adds the image to its composer, also once a still-loading view boots. */
   attachImage(img: ImageAttachment): void;
 }
 
@@ -236,12 +239,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
           await vscode.commands.executeCommand('revealFileInOS', doc.uri);
           return;
         case 'ask':
-          await this.hooks.attachRef(vscode.workspace.asRelativePath(doc.uri));
-          this.hooks.draft('About this PDF: ');
+          this.hooks.addToComposer('About this PDF: ', [vscode.workspace.asRelativePath(doc.uri)]);
           return;
         case 'askSelection':
-          await this.hooks.attachRef(`${vscode.workspace.asRelativePath(doc.uri)}#page=${m.page}`);
-          this.hooks.draft(selectionDraft(m.text));
+          this.hooks.addToComposer(selectionDraft(m.text), [`${vscode.workspace.asRelativePath(doc.uri)}#page=${m.page}`]);
           return;
         case 'attachImage':
           this.hooks.attachImage({ name: m.name, data: m.data, mime: m.mime });

@@ -33,7 +33,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs. Per provider: `type` (`ollama`, `openai`, `anthropic`), `baseUrl`, `apiKey` (`${secret:id}`, `${env:NAME}` or the key), `cloud`, `models`, `contextWindow`, `enabled`. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
+| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs. Per provider: `type` (`ollama`, `openai`, `anthropic`, or `vscode-lm` for VS Code's language models such as Copilot), `baseUrl` (not needed for `vscode-lm`), `apiKey` (`${secret:id}`, `${env:NAME}` or the key), `cloud`, `models`, `contextWindow`, `enabled`, and optionally `headers`, `timeoutMs`, `apiVersion`, `defaultModel`, `modelsUrl`, `extraBody` and `modelOverrides`. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
 | `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model that fits this machine |
 | `localpilot.models.disabled` | `[]` | `provider/model` ids hidden from pickers, routing and the status bar. Toggle them in **Settings → Models** |
 | `localpilot.models.autoSetup` | `true` | Offer to install Ollama and a starter model when no local model is found |
@@ -41,7 +41,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 | `localpilot.contextWindow` | `32768` | Requested context in tokens (Ollama `num_ctx`), capped by the model's maximum. `0` = the model's full native window, which needs enough RAM/VRAM. Compaction is budgeted against the same number |
 | `localpilot.maxOutputTokens` | `4096` | Maximum tokens per response |
 | `localpilot.temperature` | `-1` | Sampling temperature. `-1` uses each model's own setting (Gemma 4 and Qwen 3 ship 1.0 and repeat themselves at low temperatures); 0–2 forces one value for every model |
-| `localpilot.thinking` | `auto` | Extended thinking for reasoning models: `auto`, `off`, `on`, `low`, `medium` or `high`. `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. Sent as Ollama `think` or OpenAI-compatible `reasoning_effort`; Ollama models other than gpt-oss take only on or off, so `low` skips the reasoning and `medium` or `high` send `think: true`. Reasoning shows as a collapsible step |
+| `localpilot.thinking` | `auto` | Extended thinking for reasoning models: `auto`, `off`, `on`, `low`, `medium`, `high` or `max`. A chat can override it with the composer's **Think** chip (CLI: `--thinking`, `/thinking`). `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. Sent as Ollama `think` or OpenAI-compatible `reasoning_effort`; Ollama models other than gpt-oss take only on or off, so `low` skips the reasoning and `medium` or `high` send `think: true`. Reasoning shows as a collapsible step |
 | `localpilot.keepAlive` | `30m` | How long Ollama keeps the model loaded after a request (for example `5m`, `30m`, or `-1` for forever). Avoids reload delays between turns |
 | `localpilot.prewarm` | `true` | Load the chat's model as soon as you focus the composer or switch models, so the first reply does not wait for a weight load. Ollama only; at most once every few minutes per model |
 | `localpilot.ollama.flashAttention` | `true` | Start Ollama with flash attention (`OLLAMA_FLASH_ATTENTION`): faster prompt processing and a smaller KV cache on supported models. Applies when LocalPilot starts or restarts Ollama |
@@ -106,6 +106,8 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.markdownViewer.mermaid` | `true` | Draw ```` ```mermaid ```` blocks as diagrams (bundled, works offline) |
 | `localpilot.markdownViewer.exportTheme` | `light` | Colours of **Export HTML / PDF** from the reader: `light`, or `match` for the current VS Code theme |
 | `localpilot.maxConsecutiveMistakes` | `6` | Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired) and ask for guidance. Any successful tool call resets the count; `0` = no limit |
+| `localpilot.editTool` | `auto` | File-editing tool the agent gets. `auto`: GPT, Codex and gpt-oss models get `apply_patch` (one patch updates, adds, moves and deletes several files after a single approval), other models get `edit_file` and `write_file`. `edit_file` or `apply_patch` forces one of them |
+| `localpilot.diffPreview` | `onApproval` | Side-by-side diff (`Original ↔ LocalPilot (proposed)`) of what `edit_file`, `write_file` or `apply_patch` will write. `onApproval`: opens next to the approval card and closes when you approve or deny. `always`: also for edits approved automatically (including by *Allow for session*). `off`: never (edits happen in the background) |
 | `localpilot.disabledTools` | `[]` | Tools never offered to the model: LocalPilot names (`web_fetch`), Claude Code or Cline names (`Bash`, `execute_command`) or globs (`mcp_*`, `browser_*`). Also under **Settings → Agent & approvals → Tools** |
 | `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
 | `localpilot.preferredLanguage` | `auto` | Language the agent answers in, in the chat and the CLI: English, Arabic, Czech, French, German, Hindi, Hungarian, Italian, Japanese, Korean, Polish, Portuguese (Brazil), Portuguese (Portugal), Russian, Simplified Chinese, Spanish, Traditional Chinese or Turkish. Code, identifiers and commands stay as they are. `auto` adds no instruction |
@@ -137,8 +139,12 @@ See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 | `localpilot.approvals.delete` | `ask` |
 | `localpilot.approvals.network` | `always` |
 | `localpilot.approvals.mcp` | `always` |
+| `localpilot.approvals.dangerousAlwaysAsk` | `true` |
+| `localpilot.notifications` | `whenHidden` |
 
-Values: `always`, `ask`, `never`.
+Values: `always`, `ask`, `never`. `approvals.terminal` also takes `safe`: read-only commands and routine test, lint and build commands (`npm test`, `tsc`, `pytest`, `cargo test`, `go vet`, `make test`) run without asking, everything else asks. With `approvals.dangerousAlwaysAsk` on, a destructive-looking command (`sudo`, `rm -rf /…`, `git push --force`, `git reset --hard`) asks even under `always`. The model can mark a command `requires_approval` so it asks under `always` or `safe` too. The **Auto-approve** bar above the chat input changes these settings for all chats, and the change also applies to a run in progress.
+
+`localpilot.notifications` (`whenHidden`, `always`, `off`): a native notification when a chat finishes, or when an auto-approved command is still running after 30 seconds. With `whenHidden` this happens only while the chat view is hidden or the window is not focused. The terminal CLI rings the bell after runs longer than 10 seconds unless this is `off`.
 
 **Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Toggle Auto Mode**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
 
@@ -188,6 +194,10 @@ Users see the policy in **Settings** (a note on the Agent & approvals, Providers
 |---|---|---|
 | `localpilot.terminal.runInIntegratedTerminal` | `true` | Run the agent's `run_command` calls in a visible **LocalPilot Agent** terminal so you can watch them. Falls back to a hidden process when the shell has no shell integration or this is off |
 | `localpilot.terminal.reveal` | `true` | Show the LocalPilot Agent terminal, without taking focus, when the agent runs a command |
+| `localpilot.terminal.shellIntegrationTimeout` | `4000` | Milliseconds to wait for shell integration in the agent terminal before running the command in a hidden process (minimum 500) |
+| `localpilot.terminal.profile` | `default` | Shell for agent commands: `default` or a profile name from `terminal.integrated.profiles.<os>`. Pick one with **LocalPilot: Select Agent Terminal Profile…** |
+| `localpilot.edit.reportNewErrors` | `true` | After `edit_file`, `write_file` or `apply_patch`, wait up to 1.5 s for the language server and append the new errors in that file (at most 10) to the tool result. No effect in the CLI |
+| `localpilot.terminal.autoDetachSeconds` | `300` | Seconds a `run_command` call may run before the agent proceeds while it keeps running; later output goes to a log the agent can read. `0` = never detach (the command is stopped at its timeout) |
 
 ## Parallelism & worktrees
 
@@ -203,12 +213,19 @@ Users see the policy in **Settings** (a note on the Agent & approvals, Providers
 
 ## Telemetry & storage
 
-These settings control the local metrics behind the [Dashboard]({{ '/docs/dashboard/' | relative_url }}). The extension does not upload them. See [Privacy]({{ '/privacy/' | relative_url }}).
+These settings control the local metrics behind the [Dashboard]({{ '/docs/dashboard/' | relative_url }}). The extension does not upload them unless you turn on OTLP export to your own collector. See [Privacy]({{ '/privacy/' | relative_url }}).
 
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.telemetry.enabled` | `true` | Record local usage metrics (model calls, tokens and latency, tool runs, agent turns, inline completions, provider health) to daily JSONL files in `~/.localpilot/telemetry`. Also needed by `localpilot.models.autoTune` |
 | `localpilot.telemetry.retentionDays` | `30` | Days of metrics and log files to keep. Older files are deleted automatically. `0` keeps everything |
+| `localpilot.telemetry.otlp.enabled` | `false` | Opt-in. Also send telemetry to your own OpenTelemetry collector over OTLP/HTTP JSON (see [Dashboard]({{ '/docs/dashboard/#export-to-opentelemetry' | relative_url }})). Needs `localpilot.telemetry.enabled`; nothing is exported while it is off. User settings only |
+| `localpilot.telemetry.otlp.endpoint` | `http://localhost:4318` | Base URL of the OTLP/HTTP receiver; `/v1/logs`, `/v1/metrics` and `/v1/traces` are appended. `OTEL_EXPORTER_OTLP_ENDPOINT` overrides it |
+| `localpilot.telemetry.otlp.headers` | `{}` | Extra HTTP headers (e.g. `Authorization`). `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`) adds to and overrides them |
+| `localpilot.telemetry.otlp.metricsInterval` | `60` | Seconds between metric exports. `OTEL_METRIC_EXPORT_INTERVAL` (milliseconds) overrides it |
+| `localpilot.telemetry.otlp.exporters` | `["otlp"]` | `otlp`: logs and metrics to the endpoint; `traces`: run, model-call and tool-call spans; `console`: also print every export to the log |
+| `localpilot.telemetry.otlp.traceSamplePercent` | `100` | Share of agent runs traced (0–100); a run's spans are kept or dropped together |
+| `localpilot.telemetry.otlp.recordContent` | `false` | Put prompts, replies, tool arguments and results on spans. Off: spans carry only names, timings, tokens and outcomes (a failure's status message is a fixed `tool error` or the run outcome, not the error text) |
 | `localpilot.storage.sessionsInMemory` | `16` | Chat transcripts held in memory (2–500). Every chat stays in the history; older transcripts are read from disk when you open or search them. Running chats and the one on screen always stay loaded |
 | `localpilot.storage.redis.enabled` | `false` | Optional. Store telemetry events and the log in Redis streams instead of daily files; with Redis Stack, metrics also become time series (`localpilot:ts:*`, label `app=localpilot`) for Grafana or RedisInsight. Writes fall back to files while Redis is unreachable. Telemetry then goes to the server in `storage.redis.url`. **LocalPilot: Set Up Redis Storage** connects one or starts it (Docker, or without Docker: Homebrew, apt/dnf, WSL, Memurai) |
 | `localpilot.storage.redis.url` | `redis://127.0.0.1:6379` | `redis://[user:password@]host:port[/db]`, or `rediss://` for TLS. Keep it on `127.0.0.1` unless the server is protected |
@@ -223,6 +240,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). The Chat view moves the same way as with drag-and-drop, so **Move View** and **Reset Location** in the view's context menu keep working. The Agents view and the activity bar icon stay in the Primary Side Bar. Also available as **LocalPilot: Move Chat To…** |
+| `localpilot.showTips` | `true` | While the agent has been thinking for more than 4 seconds, rotate short feature tips (steering, `@` mentions, `/compact`, checkpoints, quoting, …) in the chat's status row. The tips are built in |
 | `localpilot.sessions.retention` | `50` | Maximum chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats do not count. `0` keeps everything |
 | `localpilot.history.includeCli` | `true` | List sessions from the `localpilot` CLI for the same folder in the chat history, marked **CLI**. They are read from `~/.localpilot/workspaces/` (or `LOCALPILOT_DATA_DIR`). Takes effect after a window reload |
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |

@@ -17,7 +17,7 @@ Pick a range: **Today**, **7 days**, **30 days**, **90 days** or **All**. While 
 | Card | What it tells you |
 |------|-------------------|
 | **Agent runs** | Turns finished, stopped and failed, how many were subagents, and a per-day bar chart. |
-| **Tokens** | Prompt and completion tokens as reported by the server, plus the fastest model's **tok/s**. |
+| **Tokens** | Prompt and completion tokens as reported by the server, the cost of priced cloud calls when there were any, plus the fastest model's **tok/s**. |
 | **Model calls** | Requests made, retries (stalls, connection drops, empty replies) and hard errors. |
 | **Tool calls** | Tool executions and their failure rate. |
 | **Completions** | Inline-completion acceptance rate (accepted ÷ shown), requests and median latency. |
@@ -39,7 +39,7 @@ Charts follow the cards. They are hidden for a single-day range, where the count
 
 Tables follow the charts:
 
-- **Models:** calls, tokens in and out, generation speed (**tok/s**), time to first token and whole-request time (median and 95th percentile), and errors.
+- **Models:** calls, tokens in and out, cost (the provider's reported cost, or the bundled prices; a dash for local models, which are free), generation speed (**tok/s**), time to first token and whole-request time (median and 95th percentile), and errors.
 - **Runs by mode:** Agent, Multitask, Debug, Ask and Plan, with outcomes, steps per run, duration and tool calls.
 - **Tools:** per tool, calls, failures, cached hits, duration and share of all calls.
 - **Provider health:** up or down, last error, uptime % and probe latency. LocalPilot checks providers whenever it discovers models: at start-up, on refresh, and every 30 s while the model picker is open.
@@ -95,6 +95,16 @@ The CLI writes its own log to `~/.localpilot/cli.log` (add `-v` for debug lines)
 | `localpilot.storage.redis.enabled` | `false` | Keep events and the log in Redis instead of files (see [Configuration]({{ '/docs/configuration/#telemetry--storage' | relative_url }})). The storage line under the settings says which backend is in use, and shows *Redis unreachable — using files* while it falls back. |
 
 With Redis on, the data goes to the server you configured rather than staying in local files. With Redis Stack, every model, tool, run, health and completion metric is also a time series; the event stream keeps every event, while a series keeps one value per millisecond.
+
+## Export to OpenTelemetry
+
+Turn on `localpilot.telemetry.otlp.enabled` to also send telemetry to your own collector (otel-collector, Grafana Alloy, or a self-hosted Langfuse or Phoenix through their OTLP endpoints). It is plain OTLP/HTTP with JSON bodies, works in VS Code and the CLI, and carries the resource attributes `service.name=localpilot` and `service.version`. Export needs `localpilot.telemetry.enabled`: while local recording is off nothing is exported, not even log lines, and a warning in the log says so.
+
+- **Logs** (`/v1/logs`): every event above as a record named `localpilot.<type>` with its fields as attributes, plus the LocalPilot log lines.
+- **Metrics** (`/v1/metrics`, every `metricsInterval` seconds, cumulative): `localpilot.events`, `localpilot.model.requests`, `localpilot.model.duration`, `localpilot.model.ttft`, `localpilot.tokens`, `localpilot.tool.calls`, `localpilot.tool.duration`, `localpilot.runs`, `localpilot.run.duration`, and counters for completions, tasks, hooks, MCP calls and accepted/rejected edit lines.
+- **Traces** (`/v1/traces`, add `traces` to `localpilot.telemetry.otlp.exporters`): an `invoke_agent` span per run (subagents nest under the tool call that started them), a `chat <model>` span per model request and an `execute_tool <name>` span per tool call, with `gen_ai.*` attributes (model, provider, token usage, finish reason, tool name and call id). `traceSamplePercent` keeps that share of runs. Prompts, replies, tool input/output and error text are added only with `recordContent: true`; without it a failed span's status message is just `tool error` or the run outcome. Events recorded during a span get its `traceId` and `spanId`, so logs and traces link up.
+
+Exports are batched (up to 512 items, at least every 5 seconds); at most 2048 wait while the collector is unreachable, and the oldest are dropped first. The standard variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL` (only `http/json`; other values log a warning) and `OTEL_METRIC_EXPORT_INTERVAL` override the settings. Set `LOCALPILOT_OTEL_DEBUG=1` to log the resolved configuration and the result of every export. **LocalPilot: Test OTLP Connection** sends one `localpilot.test.connection` record and shows the HTTP status.
 
 **Export…** writes every recorded event plus the current log buffer to a JSON file you choose. **Delete all recorded data…** removes the folder's contents after you confirm.
 

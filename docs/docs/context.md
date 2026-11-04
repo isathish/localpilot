@@ -40,6 +40,8 @@ Mentions in the input are highlighted. <kbd>Backspace</kbd> right after a mentio
 
 The ring at the bottom right of the composer shows how much of the model's context window is in use. It turns amber above 65% and red above 85%. Click it to compact the conversation now; `/compact` does the same. `/context` prints the token count, window size, message count and number of compactions.
 
+Next to the ring, `↑12.3k ↓1.1k` shows the tokens this chat has sent (cached input included) and received, and `$0.0123` its cost on a cloud model with a known price. Hover the ring or the pill for the breakdown: cache reads and writes, requests, subagents' share, or *local · free* for models on your machine. The CLI prints the same after each turn, for example `(13.4k tok · $0.0100)`.
+
 ## What every request includes
 
 Besides your message and the conversation, each request carries short sections that help the model orient itself before its first tool call:
@@ -53,6 +55,30 @@ Besides your message and the conversation, each request carries short sections t
 - the one-line index of available skills.
 
 The full file list is only included when you add `@workspace`.
+
+## Multi-root workspaces
+
+In a workspace with several folders, each request lists them as `name — path — git <branch>@<short sha>`. Relative paths in tool calls resolve against the agent's folder (the first one, or its isolated worktree). To reach another folder, prefix the path with its name: `read_file backend:src/x.ts`. A bare relative path that is missing from the first folder but exists in exactly one other folder resolves there, and the tool result (and the approval prompt of an edit) says so; if several folders have it, the tool returns an error listing `name:path` candidates. Files being created (`write_file`, an added file or move target in `apply_patch`) never fall back: a bare path stays in the first folder, so use `name:path` to create one elsewhere. `grep_search` and `file_search` search every folder (an `include_pattern` such as `src/**/*.ts` applies inside each folder), and `git_status`, `git_commit`, `git_push`, `pull_request`, `ci_status`, `security_scan` and `repo_graph` take an optional `root` argument naming the folder (or a registered repository) to run in.
+
+## Keeping files out of the agent's context
+
+A `.localpilotignore` file at the root of a workspace folder lists files the agent should leave alone. LocalPilot also reads Cline's `.clineignore` and Cursor's `.cursorignore`. The syntax is that of `.gitignore`: one pattern per line, `#` comments, `!` to re-include, a trailing `/` for folders and a leading `/` to anchor to the folder. A line `!include <file>` adds the patterns of another file, for example `!include .gitignore`. Changes apply right away.
+
+```gitignore
+.env*
+!.env.example
+secrets/
+!include .gitignore
+```
+
+For matching files:
+
+- `list_dir` and the `@workspace` tree mark them with 🔒; `file_search` and `grep_search` leave them out.
+- `read_file`, `edit_file`, `write_file` and `apply_patch` refuse with "*path* is excluded by .localpilotignore".
+- Automatic context skips them: the active file and selection, open editors and the working set.
+- An explicit `@` mention still attaches the file, with a note that it is excluded.
+
+The ignore file is not a security boundary. Shell commands run by `run_command` are not checked against it, so the agent could still print an excluded file with `cat`. Keep real secrets out of the workspace or use [permission rules]({{ '/docs/claude-code-compatibility/' | relative_url }}#permission-rules) to deny commands.
 
 ## Automatic context management
 

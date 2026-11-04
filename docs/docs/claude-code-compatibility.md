@@ -141,6 +141,8 @@ Hooks run arbitrary commands. Before you open a repository you do not trust, set
 | `SessionEnd` | When a session ends | `clear` (*Clear conversation* or `/clear`), `prompt_input_exit` (CLI REPL exits), `other` (chat deleted, or a one-shot CLI run finished) |
 | `PreCompact` | Before automatic compaction | `auto` |
 | `Notification` | When a permission prompt appears | `permission_prompt` |
+| `TaskCancel` | When you stop a run (adds nothing to the input) | (none) |
+| `TaskError` | When a run ends with an error (adds `error`) | (none) |
 
 `matcher` is a regular expression. For tool events it matches both Claude's names (`Bash`, `Edit`, `Write`, `Read`, `Glob`, `Grep`, `WebFetch`, `Task`, `mcp__server__tool`) and LocalPilot's (`run_command`, `edit_file`, …). An empty matcher or `*` matches everything.
 
@@ -184,6 +186,20 @@ JSON fields read on exit 0:
 A `Stop` hook can send the agent back at most five times per turn. Check `stop_hook_active` in your script to avoid loops.
 
 Hooks for the same event run in parallel. The default timeout is 60 seconds; set `timeout` (in seconds) per hook to change it.
+
+Each hook run shows as a compact row in the chat (and a line in the CLI), for example `⚙ PreToolUse lint-guard.sh → blocked`, with how long it took.
+
+### Hook scripts in hook folders
+
+A script named after its event runs as a hook without any `settings.json` entry (the Cline layout). LocalPilot looks in:
+
+- the workspace: `.localpilot/hooks/`, `.clinerules/hooks/`, `.cline/hooks/`;
+- your home: `~/.localpilot/hooks/`, `~/.cline/hooks/`, `~/Documents/Cline/Hooks/`;
+- the folders in `LOCALPILOT_HOOKS_DIR` (separated like `PATH`) and, in the CLI, `--hooks-dir <dir>`.
+
+The name is matched without case and may have an extension: `PreToolUse.sh`, `stop.py`, `UserPromptSubmit`. Cline's names map to these events: `TaskStart` is `SessionStart` (`startup`), `TaskResume` is `SessionStart` (`resume`: the first prompt in a chat reopened from history, or in the CLI after `--resume`, `-c` or `/resume`), `TaskComplete` is `Stop`; `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `PreCompact`, `TaskCancel` and `TaskError` keep their names. The script gets the same JSON input and answers the same way as a `settings.json` hook.
+
+The program that runs it comes from its `#!` line, else from its extension (`.js`, `.mjs`, `.cjs`: `node`; `.ts`: `node --experimental-strip-types`; `.py`: `python3`; `.ps1`: `pwsh`), else `bash`. On macOS and Linux a script runs only while it is executable: one without the executable bit is listed in **Settings → Customize → Hooks** as switched off, and the switch there sets the bit (755) or clears it (644). A script whose name ends in `.disabled` (`PreToolUse.ps1.disabled`) never runs; Windows has no executable bit, so there the switch adds or removes that suffix. `localpilot.hooks.enabled: false` turns these off too.
 
 ## Custom slash commands
 
@@ -232,6 +248,9 @@ Typing `/fix-issue 123` sends the expanded body. The transcript shows what you t
 - Subfolders become namespaces: `.claude/commands/frontend/component.md` is `/frontend:component`, and also `/component` while no other command uses that name.
 - Plugin commands are `/plugin-name:command`.
 - Project commands win over user commands (`~/.claude/commands`, `~/.localpilot/commands`).
+- Names are normalised the way Cline does it: lowercase, spaces become `-`, and only letters, digits and `_ . : @ -` are kept. `My Review.md` is `/my-review`; typing `/Review` or `/review.md` runs it too.
+- `/name` runs a built-in command first, then an enabled skill with that name (`/pdf fill the form` works like `/skill pdf fill the form`), then a custom command or workflow.
+- A custom command or workflow named in the middle of a message (`fix the failing test, then /review`) is replaced by its prompt where it stands; the rest of the message stays as context. Only the first one is expanded, and built-in commands such as `/compact` or `/pr` only run when they start the message.
 
 Custom commands appear in the composer's `/` autocomplete, in `/help` and in `/commands`. The CLI runs them as well: `localpilot "/fix-issue 123"`, or `/fix-issue 123` in the REPL.
 
@@ -282,7 +301,7 @@ Use function components and hooks.
 
 When conditional rules are added, the chat shows *Conditional rules applied: …* under the turn, and `/memory` marks them as conditional. Front matter that cannot be read is ignored and the whole file is used as it is.
 
-Switch rules, commands, hooks and skills on or off in **Settings → Customize** (see [Customize]({{ '/docs/skills-and-agents/' | relative_url }}#customize-rules-commands-hooks-and-skills)).
+Switch rules, commands, hooks, skills and plugins on or off in **Settings → Customize** (see [Customize]({{ '/docs/skills-and-agents/' | relative_url }}#customize-rules-commands-hooks-skills-and-plugins)).
 
 ### Cline and Cursor compatibility
 
@@ -291,6 +310,7 @@ Rules written for Cline and Cursor work without changes:
 - **Rule folders.** `.clinerules/`, `.cline/rules/` and `.cursor/rules/` in the workspace, and `~/.cline/rules/`, `~/Documents/Cline/Rules/` and `~/Cline/Rules/` for your own rules. A folder is read one level deep. Files ending in `.md`, `.mdc`, `.markdown` and `.txt` are rules.
 - **Single files.** The legacy `.clinerules` file and `.cursorrules` are read as project rules. `~/.agents/AGENTS.md` is read as a user rule.
 - **Order and labels.** Within a folder, rules are sorted by name and each one gets a `## <name>` heading in the prompt. The name is the front-matter `name`, or the file name without its extension. Rules with an empty body are skipped.
+- **Workflows.** Cline workflows in `.clinerules/workflows/` and `.cline/workflows/` in the workspace, and `~/.cline/workflows/` and `~/Documents/Cline/Workflows/` for your own, are slash commands: `release.md` runs as `/release`. Files ending in `.md`, `.markdown` and `.txt` are read, `disabled: true` hides one, and a workspace workflow replaces a global one with the same name.
 - **Skills.** Skills in `.cline/skills/`, `.clinerules/skills/`, `.agents/skills/` and `~/.cline/skills/` are loaded like any other [skill]({{ '/docs/skills-and-agents/' | relative_url }}).
 
 Changes to rule and skill files in the workspace are picked up without a reload; changes to user-level rules are picked up within a minute.

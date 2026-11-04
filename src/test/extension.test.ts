@@ -21,6 +21,7 @@ suite('LocalPilot activation', () => {
       'localpilot.fixDiagnostics',
       'localpilot.commitMessage',
       'localpilot.reloadSkills',
+      'localpilot.telemetry.testOtlp',
     ]) {
       assert.ok(commands.includes(id), `missing command ${id}`);
     }

@@ -8,9 +8,11 @@ import { ruleCondition } from '../context/ruleConditions';
 import { evaluatePermission } from './permissions';
 import { PluginSource } from './plugins';
 import { emptySettings } from './settings';
+import { alwaysEnabled, managedDir } from './managedPolicy';
 import { onAbort } from './resilience';
 import { killTree } from '../tools/terminal';
 import { shellInvocation } from '../terminal/shell';
+import { COMMAND_FILE, findSlashToken, normalizeCommandName, pickSlashTarget, SlashToken } from './slashNames';
 
 /**
  * Custom slash commands in the Claude Code format: a markdown file whose body is the prompt, with optional
@@ -19,6 +21,10 @@ import { shellInvocation } from '../terminal/shell';
  *   <workspace>/.localpilot/commands/*.md, <workspace>/.claude/commands/*.md   (project; subfolders namespace)
  *   ~/.localpilot/commands/*.md, ~/.claude/commands/*.md                       (user)
  *   <plugin>/commands/*.md                                                    (/plugin-name:command)
+ *   <workspace>/.clinerules/workflows, .cline/workflows, ~/.cline/workflows, ~/Documents/Cline/Workflows (Cline workflows)
+ *
+ * `.md`, `.markdown` and `.txt` files are read; names are normalised (`My Review.md` → `/my-review`) and `disabled: true`
+ * front matter hides a file.
  *
  * The prompt is expanded before it is sent: `$ARGUMENTS` / `$1`…`$9` take the text typed after the command,
  * `` !`cmd` `` runs a shell command (only when `allowed-tools` permits it) and inlines its output, and `@path`
@@ -39,10 +45,13 @@ export interface CustomCommand {
   disableModelInvocation?: boolean;
   file: string;
   body: string;
-  source: 'project' | 'user' | 'plugin' | 'builtin';
+  /** `managed`: the organisation's commands folder next to managed-settings.json. */
+  source: 'managed' | 'project' | 'user' | 'plugin' | 'builtin';
   plugin?: string;
   /** Turned off with `disabled: true` (or `enabled: false`) front matter; only listed with `includeDisabled`. */
   disabled?: boolean;
+  /** `alwaysEnabled: true` front matter: cannot be switched off. */
+  alwaysEnabled?: boolean;
 }
 
 /** `Bash(git add:*), Bash(git status:*)` → two rules (commas inside parentheses do not split). */
@@ -75,8 +84,8 @@ export function splitRules(v: unknown): string[] {
 
 export function parseCommandFile(file: string, raw: string, opts: { source: CustomCommand['source']; namespace?: string; plugin?: string }): CustomCommand {
   const { meta, body } = parseFrontMatter(raw);
-  const name = (typeof meta.name === 'string' && meta.name.trim()) || path.basename(file, '.md');
-  const ns = opts.namespace;
+  const name = normalizeCommandName((typeof meta.name === 'string' && meta.name.trim()) || path.basename(file)) || 'command';
+  const ns = opts.namespace?.split(':').map(normalizeCommandName).filter(Boolean).join(':') || undefined;
   const dmi = meta['disable-model-invocation'];
   // `argument-hint: [issue-number]` is literal text, which the front-matter parser reads as a list.
   const hint = meta['argument-hint'];
@@ -94,7 +103,7 @@ export function parseCommandFile(file: string, raw: string, opts: { source: Cust
     body: body.trim(),
     source: opts.source,
     plugin: opts.plugin,
-    ...(ruleCondition(meta).disabled ? { disabled: true } : {}),
+    ...(alwaysEnabled(meta) ? { alwaysEnabled: true } : ruleCondition(meta).disabled ? { disabled: true } : {}),
   };
 }
 
@@ -229,7 +238,7 @@ async function listMarkdown(dir: string, depth = 2): Promise<{ file: string; sub
     const p = path.join(dir, e.name);
     // A symlink counts as what it points to (the depth limit stops link loops).
     const st = e.isSymbolicLink() ? await fs.stat(p).catch(() => undefined) : e;
-    if (st?.isFile() && e.name.endsWith('.md')) {
+    if (st?.isFile() && COMMAND_FILE.test(e.name)) {
       out.push({ file: p, sub: [] });
     } else if (st?.isDirectory() && depth > 1 && !e.name.startsWith('.')) {
       for (const x of await listMarkdown(p, depth - 1)) {
@@ -238,6 +247,29 @@ async function listMarkdown(dir: string, depth = 2): Promise<{ file: string; sub
     }
   }
   return out;
+}
+
+const NEW_RULE = `---
+description: Inspect this project and write a rule file the agent follows in every chat
+argument-hint: [what the rule should cover]
+---
+Write a project rule for this workspace. $ARGUMENTS
+
+1. Inspect the repository first, without asking: the README, the package/build files, the lint and format configs, the test setup, a few representative source files, and the instruction files already in force (AGENTS.md, CLAUDE.md, .localpilot/rules/, .clinerules, .cursor/rules). Note the conventions the code actually follows.
+2. Then ask at most 4 short questions in ONE ask_user call, each with options and your recommendation, only about what the code cannot tell you (what the rule should focus on, team preferences, things to avoid). Skip the questions when the request above already answers them.
+3. Write the rule with write_file to \`.localpilot/rules/<name>.md\` (a short kebab-case name for the topic). If the user asked for AGENTS.md instead, read it and update it with edit_file, keeping what is there. Use front matter \`description: <one line>\`, plus \`paths: [<globs>]\` only when the rule applies to some files alone.
+4. The body is terse, imperative Markdown: the build, test and lint commands, code style, naming, architecture boundaries, testing expectations and the pitfalls you found, each as a bullet a coding agent can follow. No generic advice, nothing the tools enforce on their own, no secrets.
+5. Report the file you wrote and a one-line summary of each section.`;
+
+/** `/deep-planning <task>`: the prompt of the Plan-mode turn it starts. */
+export function deepPlanningPrompt(task: string): string {
+  return `Deep planning for this task: ${task.trim()}
+
+Work in four phases and do not change any files:
+1. Investigate silently: read the code this touches (analyze_workspace or repo_graph for anything repository-wide, grep_search and read_file for the details, explore subagents for large areas). Do not narrate every file; gather what the plan needs — the entry points, the data flow, the tests, the conventions.
+2. Ask: if anything that decides the design is still unclear, ask up to 4 focused questions in ONE ask_user call, each with options and your recommendation. Skip this when the code answers everything.
+3. Write the plan with the heading "# Implementation plan: <short title>" and the sections Overview, Types and interfaces, Files (each file to create, change or delete and why), Functions (new and changed, with signatures), Implementation order (numbered, each step small and verifiable), Testing (what to add and the commands that verify it) and Risks. Also record the implementation order as a manage_todos checklist (one item per step, with "agent", a self-contained "prompt" and "dependsOn").
+4. Hand off: end with one line telling the user the plan is saved and that switching to Agent mode and saying "implement the plan" will carry it out.`;
 }
 
 /**
@@ -256,6 +288,8 @@ Check this workspace for security problems and fix them. $ARGUMENTS
 3. Secrets: move each value to an environment variable (and .env.example with a placeholder), make the code read it, and tell the user which credentials to rotate — a committed secret must be considered leaked even after removal.
 4. Risky code: fix the high-severity patterns (parameterised SQL, argument lists instead of shell strings, TLS verification back on) when the intent is clear; otherwise explain the risk.
 5. Run security_scan again and report what was fixed, what is left and why.`,
+  newrule: NEW_RULE,
+  init: NEW_RULE.replace('description: Inspect', 'description: (alias of /newrule) Inspect'),
   pr: `---
 description: Commit the current changes on a branch, push it and open a pull request
 argument-hint: [title or what the change is about]
@@ -286,13 +320,28 @@ export function builtinCommands(): CustomCommand[] {
 }
 
 /** Distinct commands, highest-priority location first (project, user, plugins); the first with a given invocation wins. */
-export async function discoverCommands(roots: string[], opts: { home?: string; plugins?: PluginSource; log?: { warn(m: string): void }; includeDisabled?: boolean } = {}): Promise<CustomCommand[]> {
+export async function discoverCommands(roots: string[], opts: { home?: string; plugins?: PluginSource; log?: { warn(m: string): void }; includeDisabled?: boolean; /** The organisation's commands folder; null for none. */ managedDir?: string | null } = {}): Promise<CustomCommand[]> {
   const home = opts.home ?? os.homedir();
   const dirs: { dir: string; source: CustomCommand['source'] }[] = [];
-  for (const r of roots) {
-    dirs.push({ dir: path.join(r, '.localpilot', 'commands'), source: 'project' }, { dir: path.join(r, '.claude', 'commands'), source: 'project' });
+  // The organisation's commands come first, so a project or user file cannot take their names.
+  const orgDir = opts.managedDir === undefined ? managedDir('commands') : opts.managedDir;
+  if (orgDir) {
+    dirs.push({ dir: orgDir, source: 'managed' });
   }
-  dirs.push({ dir: path.join(home, '.localpilot', 'commands'), source: 'user' }, { dir: path.join(home, '.claude', 'commands'), source: 'user' });
+  for (const r of roots) {
+    dirs.push(
+      { dir: path.join(r, '.localpilot', 'commands'), source: 'project' },
+      { dir: path.join(r, '.claude', 'commands'), source: 'project' },
+      { dir: path.join(r, '.clinerules', 'workflows'), source: 'project' },
+      { dir: path.join(r, '.cline', 'workflows'), source: 'project' }
+    );
+  }
+  dirs.push(
+    { dir: path.join(home, '.localpilot', 'commands'), source: 'user' },
+    { dir: path.join(home, '.claude', 'commands'), source: 'user' },
+    { dir: path.join(home, '.cline', 'workflows'), source: 'user' },
+    { dir: path.join(home, 'Documents', 'Cline', 'Workflows'), source: 'user' }
+  );
   const out: CustomCommand[] = [];
   const add = (c: CustomCommand) => {
     // Listing everything (Settings → Customize) keeps shadowed files too; otherwise the first per invocation wins.
@@ -352,6 +401,29 @@ export function indexCommands(list: CustomCommand[]): Map<string, CustomCommand>
   return byInvoke;
 }
 
+/**
+ * What a typed message runs besides the built-in commands: `/name args` reaches a LocalPilot command, then an enabled
+ * skill of that name, then a custom command or workflow; without one, the first custom command or workflow named
+ * inside the message is expanded where it stands (`inline`).
+ */
+export function resolveSlashMessage(text: string, commands: CustomCommand[], skills: { name: string }[]): { skill: string; task: string } | { command: CustomCommand; args: string; inline?: SlashToken } | undefined {
+  const byInvoke = indexCommands(commands);
+  const m = /^\/([\w.:@-]+)\s*([\s\S]*)$/.exec(text.trim());
+  if (m) {
+    const name = normalizeCommandName(m[1]);
+    const target = pickSlashTarget(byInvoke.get(`/${name}`), skills.find((s) => normalizeCommandName(s.name) === name));
+    if (target) {
+      return 'skill' in target ? { skill: target.skill.name, task: m[2].trim() } : { command: target.command, args: m[2] };
+    }
+  }
+  const tok = findSlashToken(text, (n) => {
+    const c = byInvoke.get(`/${n}`);
+    return !!c && c.source !== 'builtin';
+  });
+  const command = tok && byInvoke.get(`/${tok.name}`);
+  return tok && command ? { command, args: '', inline: tok } : undefined;
+}
+
 export class CommandManager implements vscode.Disposable {
   private list: CustomCommand[] = [];
   private byInvoke = new Map<string, CustomCommand>();
@@ -360,7 +432,7 @@ export class CommandManager implements vscode.Disposable {
   private readonly watcher: vscode.FileSystemWatcher;
 
   constructor(private readonly log: vscode.LogOutputChannel, private readonly plugins?: PluginSource, private readonly homeDir = os.homedir()) {
-    this.watcher = vscode.workspace.createFileSystemWatcher('**/{.claude,.localpilot}/commands/**/*.md');
+    this.watcher = vscode.workspace.createFileSystemWatcher('**/{.claude/commands,.localpilot/commands,.clinerules/workflows,.cline/workflows}/**/*.{md,markdown,txt}');
     const reload = () => void this.refresh();
     this.watcher.onDidChange(reload);
     this.watcher.onDidCreate(reload);
@@ -372,10 +444,9 @@ export class CommandManager implements vscode.Disposable {
     return [...this.list].sort((a, b) => a.invoke.localeCompare(b.invoke));
   }
 
-  /** Looks a command up by `/name` or `/ns:name` (leading slash optional). */
+  /** Looks a command up by `/name` or `/ns:name` (leading slash and a `.md` suffix optional, any case). */
   get(invoke: string): CustomCommand | undefined {
-    const key = invoke.startsWith('/') ? invoke : `/${invoke}`;
-    return this.byInvoke.get(key);
+    return this.byInvoke.get(`/${normalizeCommandName(invoke)}`);
   }
 
   async refresh(): Promise<void> {

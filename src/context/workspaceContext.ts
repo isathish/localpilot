@@ -11,6 +11,8 @@ import { AttachmentKind, attachmentKind, binaryNote, extractDocumentText, format
 import { describePdfError, extractPdfText, formatPdfText } from '../pdf/extract';
 import { isCommitRef, isUrlRef } from './mentionRefs';
 import { MAX_ATTACHMENT_BYTES, readCommit, readFolderContent, readUrl } from './mentionResolvers';
+import { formatRootsOverview } from '../tools/rootPaths';
+import { excludedBy } from '../agent/ignoreFile';
 
 async function readHead(fsPath: string, n = 8192): Promise<Uint8Array> {
   const fh = await nodeFs.promises.open(fsPath, 'r');
@@ -236,6 +238,34 @@ export class WorkspaceContext implements vscode.Disposable {
     }
   }
 
+  /**
+   * The workspace folders of a multi-root workspace, one `name — path — git <branch>@<sha>` line each (empty with a
+   * single folder).
+   */
+  async rootsOverview(): Promise<string> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length < 2) {
+      return '';
+    }
+    const key = folders.map((f) => `${f.name}=${f.uri.fsPath}`).join('\0');
+    if (this.rootsCache?.key === key && Date.now() - this.rootsCache.at < 30_000) {
+      return this.rootsCache.text;
+    }
+    const git = async (cwd: string) => {
+      try {
+        const [branch, sha] = await Promise.all([runProcess('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd, undefined, 3000, [0]), runProcess('git', ['rev-parse', '--short', 'HEAD'], cwd, undefined, 3000, [0])]);
+        return sha.trim() ? { branch: branch.trim() === 'HEAD' ? '' : branch.trim(), sha: sha.trim() } : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const roots = await Promise.all(folders.map(async (f) => ({ name: f.name, path: f.uri.fsPath, git: await git(f.uri.fsPath) })));
+    const text = formatRootsOverview(roots);
+    this.rootsCache = { key, at: Date.now(), text };
+    return text;
+  }
+  private rootsCache?: { key: string; at: number; text: string };
+
   /** `root` lists another folder (an isolated worktree) instead of the workspace; those listings are not cached. */
   async fileTree(maxEntries = 400, root?: string): Promise<string> {
     if (!root && this.treeCache && this.treeCache.max === maxEntries && Date.now() - this.treeCache.at < 5 * 60_000) {
@@ -243,7 +273,8 @@ export class WorkspaceContext implements vscode.Disposable {
     }
     const files = await vscode.workspace.findFiles(root ? new vscode.RelativePattern(vscode.Uri.file(root), '**/*') : '**/*', TREE_EXCLUDE, maxEntries);
     const base = root ?? this.root;
-    const rel = files.map((f) => (base ? path.relative(base, f.fsPath) : f.fsPath)).sort();
+    // Files the agent ignore file excludes stay listed, lock-marked.
+    const rel = files.map((f) => `${base ? path.relative(base, f.fsPath) : f.fsPath}${excludedBy(f.fsPath, [...(base ? [base] : []), ...(vscode.workspace.workspaceFolders ?? []).map((w) => w.uri.fsPath)]) ? ' 🔒' : ''}`).sort();
     const truncated = files.length >= maxEntries ? `\n... (truncated at ${maxEntries} entries; use file_search/grep_search for more)` : '';
     const text = rel.join('\n') + truncated;
     if (!root) {
@@ -351,9 +382,10 @@ export class WorkspaceContext implements vscode.Disposable {
     return { files: this.namesCache.files, identifiers };
   }
 
+  /** Automatic context: the active file and selection, unless the agent ignore file excludes the file. */
   activeEditorContext(): string {
     const ed = currentEditor();
-    if (!ed) {
+    if (!ed || (ed.document.uri.scheme === 'file' && this.excludedFile(ed.document.uri.fsPath))) {
       return '';
     }
     const doc = ed.document;
@@ -378,6 +410,27 @@ export class WorkspaceContext implements vscode.Disposable {
       .flatMap((g) => g.tabs)
       .map((t) => (t.input instanceof vscode.TabInputText ? vscode.workspace.asRelativePath(t.input.uri) : undefined))
       .filter((x): x is string => !!x);
+  }
+
+  /** Open editors for automatic context: without files the agent ignore file excludes. */
+  contextEditors(): string[] {
+    return this.openEditors().filter((p) => !this.excludedFile(p));
+  }
+
+  /** The agent ignore file (.localpilotignore …) excluding `p` — absolute, or relative as `asRelativePath` writes it. */
+  excludedFile(p: string): string | undefined {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
+    let abs = p;
+    if (!path.isAbsolute(p)) {
+      const [head, ...rest] = p.split('/');
+      const named = folders.length > 1 && rest.length ? folders.find((f) => f.name === head) : undefined;
+      const base = this.root ?? folders[0]?.path;
+      if (!named && !base) {
+        return undefined;
+      }
+      abs = named ? path.join(named.path, ...rest) : path.join(base!, p);
+    }
+    return excludedBy(abs, [...(this.root ? [this.root] : []), ...folders.map((f) => f.path)]);
   }
 
   /** Diagnostics at `minSeverity` or worse; with warnings included each line is tagged and errors come first. */
@@ -468,6 +521,14 @@ export class WorkspaceContext implements vscode.Disposable {
    * isolated chat's worktree folder) replaces the main checkout for relative paths, @git and @workspace.
    */
   async readAttachment(ref: string, root?: string): Promise<string> {
+    const out = await this.readAttachmentBody(ref, root);
+    // An explicit mention overrides the agent ignore file; the note keeps the model from reaching for the file itself.
+    const shown = /^<attachment path="([^"]+)"(?![^>]*\berror=)/.exec(out)?.[1]?.replace(/&quot;/g, '"');
+    const source = shown && (root && !path.isAbsolute(shown) ? excludedBy(path.join(root, shown), [root]) : this.excludedFile(shown));
+    return source ? `(Note: ${shown} is excluded by ${source}; it is attached because the user mentioned it, but the file tools will not read or change it.)\n${out}` : out;
+  }
+
+  private async readAttachmentBody(ref: string, root?: string): Promise<string> {
     recordTelemetry({ type: 'mention', kind: mentionKind(ref) });
     const special = ref.replace(/^@/, '');
     switch (special) {

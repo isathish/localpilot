@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { ParsedRule, parseRule, ruleApplies } from './ruleConditions';
+import { alwaysEnabled, managedDir } from '../agent/managedPolicy';
 
 /**
  * Project instruction ("memory") files, resolved the way Claude Code does:
@@ -13,7 +14,9 @@ import { ParsedRule, parseRule, ruleApplies } from './ruleConditions';
  *   3. project  .localpilot/rules.md, AGENTS.md, CLAUDE.md, .claude/CLAUDE.md, .cursorrules,
  *               .github/copilot-instructions.md, .windsurfrules, .clinerules (file), then RULE_DIRS
  *               (.cursor/rules/, .localpilot/rules/, .claude/rules/, .clinerules/, .cline/rules/), each sorted by rule name
- *   4. local    CLAUDE.local.md (personal, git-ignored) — highest precedence, so it comes last
+ *   4. local    CLAUDE.local.md (personal, git-ignored)
+ *   5. managed  the organisation's rules folder next to managed-settings.json (`<policyDir>/rules/`) — highest
+ *               precedence, so it comes last and is the last to be cut by the size cap
  *
  * `@path` on a line of its own or inside a sentence imports another file (relative to the importing file, `~/` for
  * home), recursively up to IMPORT_DEPTH levels; code blocks and spans are left alone. Imports from repository files
@@ -36,7 +39,7 @@ export interface InstructionFile {
   file: string;
   /** Shown in the prompt as the section label, e.g. `CLAUDE.md`, `../CLAUDE.md`, `~/.claude/CLAUDE.md`. */
   label: string;
-  scope: 'user' | 'ancestor' | 'project' | 'local';
+  scope: 'user' | 'ancestor' | 'project' | 'local' | 'managed';
   /** For files from a rules folder: the front-matter `name` or the file's basename, used as the `## ` heading. */
   name?: string;
   /** Set by buildInstructions when the size cap cut this file short or left it out. */
@@ -47,6 +50,8 @@ export interface InstructionFile {
   applied?: boolean;
   /** Turned off with `disabled: true` (only listed with `includeDisabled`). */
   disabled?: boolean;
+  /** `alwaysEnabled: true` front matter: cannot be switched off. */
+  alwaysEnabled?: boolean;
 }
 
 /** Parsed rule files, re-read only when their mtime or size changes. */
@@ -94,7 +99,7 @@ const key = (p: string) => {
 const tilde = (p: string, home: string) => (p.startsWith(home) ? `~${p.slice(home.length).replace(/\\/g, '/')}` : p);
 
 /** Every instruction file that exists, in prompt order; turned-off files only with `includeDisabled`. */
-export async function collectInstructionFiles(roots: string[], home = os.homedir(), opts: { includeDisabled?: boolean } = {}): Promise<InstructionFile[]> {
+export async function collectInstructionFiles(roots: string[], home = os.homedir(), opts: { includeDisabled?: boolean; /** The organisation's rules folder; null for none. */ managedDir?: string | null } = {}): Promise<InstructionFile[]> {
   const out: InstructionFile[] = [];
   const seen = new Set<string>();
   const push = async (file: string, label: string, scope: InstructionFile['scope'], name?: string) => {
@@ -104,11 +109,13 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
       return;
     }
     const rule = await readRule(file);
-    if (rule === undefined || (rule.condition.disabled && !opts.includeDisabled)) {
+    const always = rule !== undefined && alwaysEnabled(rule.meta);
+    const disabled = !!rule?.condition.disabled && !always;
+    if (rule === undefined || (disabled && !opts.includeDisabled)) {
       return;
     }
     seen.add(id);
-    out.push({ file, label, scope, ...(name ? { name } : {}), ...(rule.condition.paths ? { paths: rule.condition.paths } : {}), ...(rule.condition.disabled ? { disabled: true } : {}) });
+    out.push({ file, label, scope, ...(name ? { name } : {}), ...(rule.condition.paths ? { paths: rule.condition.paths } : {}), ...(disabled ? { disabled: true } : {}), ...(always ? { alwaysEnabled: true } : {}) });
   };
   /** The rule files of one folder (not recursive), by rule name; files with an empty body are left out. */
   const pushDir = async (dir: string, labelDir: string, scope: InstructionFile['scope']) => {
@@ -160,6 +167,10 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
     for (const rel of LOCAL_RULE_FILES) {
       await push(path.join(root, rel), rel, 'local');
     }
+  }
+  const orgDir = opts.managedDir === undefined ? managedDir('rules') : opts.managedDir;
+  if (orgDir) {
+    await pushDir(orgDir, 'organization/rules', 'managed');
   }
   return out.map((f) => ({ ...f, label: f.scope === 'user' ? tilde(f.file, home) : f.label }));
 }
@@ -240,9 +251,9 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
  * files first (local, then project, ancestors, user), so an oversized user file cannot crowd out the project's rules.
  * Conditional rules are included only when one of `contextPaths` (workspace-relative, POSIX) matches their globs.
  */
-export async function buildInstructions(roots: string[], opts: { home?: string; maxChars?: number; contextPaths?: readonly string[] } = {}): Promise<{ text: string; files: InstructionFile[] }> {
+export async function buildInstructions(roots: string[], opts: { home?: string; maxChars?: number; contextPaths?: readonly string[]; managedDir?: string | null } = {}): Promise<{ text: string; files: InstructionFile[] }> {
   const home = opts.home ?? os.homedir();
-  const collected = await collectInstructionFiles(roots, home);
+  const collected = await collectInstructionFiles(roots, home, { managedDir: opts.managedDir });
   const files = collected.map((f) => (f.paths ? { ...f, applied: ruleApplies(f.paths, opts.contextPaths ?? []) } : f));
   const parts: { file: InstructionFile; text: string }[] = [];
   for (const f of files) {
@@ -255,9 +266,10 @@ export async function buildInstructions(roots: string[], opts: { home?: string; 
     }
     // An ancestor (e.g. the monorepo root above an opened package) may also import from its own folder tree.
     const own = f.scope === 'ancestor' ? path.dirname(f.file).replace(/[\\/]\.(claude|localpilot)$/, '') : undefined;
-    const text = (await resolveImports(rule.body, f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
+    // An organisation rule imports only from its own folder.
+    const text = (await resolveImports(rule.body, f.file, { home, scope: f.scope, roots: f.scope === 'managed' ? [path.dirname(f.file)] : own ? [...roots, own] : roots })).trim();
     if (text) {
-      parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${f.name ? `## ${f.name}\n` : ''}${text}` });
+      parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : f.scope === 'managed' ? ' (your organization)' : ''} -->\n${f.name ? `## ${f.name}\n` : ''}${text}` });
     }
   }
   const marker = '\n…(truncated)';

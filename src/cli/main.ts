@@ -14,9 +14,11 @@ import * as os from 'os';
 import * as vscode from 'vscode'; // → src/cli/vscodeShim.ts (aliased by the CLI build)
 import { AgentRunner } from '../agent/agentLoop';
 import { RunControl } from '../agent/runControl';
+import { parseRunLine } from '../agent/messageQueue';
 import { WorktreeInfo, WorktreeManager } from '../agent/worktrees';
 import { ChangeTracker } from '../agent/changeTracker';
-import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs } from '../agent/checkpoints';
+import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs, snapshotFolder } from '../agent/checkpoints';
+import { nextTurnKey, undoPicker } from './undoPicker';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
@@ -27,20 +29,27 @@ import { createAgentTools } from '../agent/subagents';
 import { loadProjectSettings, ProjectSettings } from '../agent/settings';
 import { HookRunner } from '../agent/hooks';
 import { discoverPlugins, PluginInfo, pluginSource } from '../agent/plugins';
-import { agentTaskPrompt, CustomCommand, discoverCommands, expandCommand, indexCommands, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
+import { agentTaskPrompt, CustomCommand, deepPlanningPrompt, discoverCommands, expandCommand, parseTaskArgs, resolveSlashMessage, skillTaskPrompt } from '../agent/commands';
+import { saveImplementationPlan } from '../agent/deepPlanning';
+import { normalizeCommandName, spliceSlashToken } from '../agent/slashNames';
 import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
 import { WorkspaceContext } from '../context/workspaceContext';
-import { McpManager } from '../mcp/mcpManager';
+import { McpManager, signInMcpServer } from '../mcp/mcpManager';
+import { cliMcpOAuth } from './mcpOAuth';
 import { loadMcpFiles } from '../mcp/config';
 import { cliMcpTrust } from '../mcp/trust';
+import { parseMcpSlash } from '../mcp/prompts';
 import { createProvider, ProviderRegistry } from '../providers/registry';
 import { findOllamaBinary, launchOllama, ollamaServerEnv } from '../providers/ollamaLauncher';
 import { isLoopbackUrl } from '../providers/cloud';
 import { browserInspectTool, browserScreenshotTool } from '../tools/browser';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
+import { notebookTools } from '../tools/notebook';
+import { applyPatchTool } from '../tools/applyPatchTool';
+import { patchArg, patchSummary } from '../tools/applyPatch';
 import { pdfTools } from '../tools/pdf';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
 import { ToolRegistry } from '../tools/registry';
@@ -49,9 +58,13 @@ import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
 import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
 import { setTelemetryRecorder } from '../telemetry/catalog';
+import { attachOtlp } from '../telemetry/otlpSetup';
 import { RedisTelemetry } from '../storage/redisTelemetry';
-import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
+import { AgentEvent, ALL_MODES, ApprovalDecision, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
+import { parseApprovalAnswer, toDecision } from '../agent/approvalLevel';
+import { shouldRingBell } from '../ui/notifyPolicy';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
+import { cmdMcp, parseMcpArgs } from './mcpCmd';
 import { setSecretValues } from '../providers/cloud';
 import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
@@ -63,8 +76,30 @@ import { securityScanTool } from '../tools/security';
 import { formatFindings, ScanResult, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
 import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, removePlugin, scaffoldPlugin, searchPlugins, setPluginEnabled, validatePlugin } from '../agent/pluginInstaller';
 import { SessionStore } from '../sessions/sessionStore';
+import { turnUsageLabel, usageDelta } from '../agent/usageFormat';
 import { cmdHistory, findSession, newestFirst, openCliStore, pickSession, resumeBanner } from './sessions';
+import { cmdHistoryImport } from './historyImport';
+import { cliLauncher, cmdSchedule } from './schedule';
+import { createScheduleTool } from '../tools/schedule';
+import { serveAcp } from './acp';
+import { teamPrompt } from '../agent/teamBrief';
 import { sessionSlash } from './slash/sessions';
+import { infoSlash } from './slash/info';
+import { createCompleter } from './completer';
+import { exitSummary, gitState, nextMode, statusLineText } from './statusLine';
+import { contextPercent } from '../agent/reports';
+import { effectiveContextWindow } from '../context/contextManager';
+import { NdjsonWriter, runUsage } from './ndjson';
+import { atRefs, exitCodeFor, parseDuration, readSystemArg, RunOutcome, runProviderList, withStdin, YOLO_TOOLS, finishReasonFor } from './headless';
+import { cmdConfig, ConfigSources, doctorReport } from './configCmd';
+import { newestInstalledExtension, versionNotice } from './versionCheck';
+import { readImage } from '../ui/images';
+import { findPreset } from '../providers/presets';
+import { parseThinkChoice, ThinkChoice } from '../agent/thinking';
+import { rememberThinking, savedThinking, sessionThinking } from './thinkingPref';
+import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
+import type { ProviderConfig } from '../types';
+import { deleteCommandLogs, detachWaiting, pruneCommandLogs, setCommandLogDir, stopAllCommands } from '../terminal/commandRun';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
 const VERSION = typeof __LOCALPILOT_VERSION__ === 'string' ? __LOCALPILOT_VERSION__ : '0.0.0';
@@ -101,7 +136,8 @@ ${bold('Usage')}
   localpilot [options] "task"            run one task in agent mode and exit
   localpilot                              interactive session (REPL)
   localpilot models                       list models from your providers (cloud ones are marked)
-  localpilot doctor                       check servers, settings and tools
+  localpilot doctor                       check servers, settings and tools [--json]; doctor log opens the log file
+  localpilot config [kind] [--json]       what is in force: rules, skills, agents, commands, hooks, mcp, tools, plugins
   localpilot plugin search|install|remove|enable|disable|list|new|validate   plugins from marketplaces (Claude Code format) [--project]
   localpilot scan [folder]               security scan: vulnerable dependencies (OSV.dev), secrets, risky code [--fail-on high] [--sarif out.sarif] [--json out.json] [--offline]
   localpilot work [--once] [--max N]      take tasks from the shared board (.localpilot/board) until none is left
@@ -112,11 +148,18 @@ ${bold('Usage')}
   localpilot providers key <id> [key]     set its API key (prompted if omitted, or piped in) [--key-env VAR] [--remove-key]
   localpilot providers test [id]          check a provider and list its models
   localpilot providers remove <id>        remove a provider added here (disables a VS Code one for the CLI)
+  localpilot mcp [list] [--json]          MCP servers in force; without arguments in a terminal, a menu to manage them
+  localpilot mcp add <name> <url> | add <name> [--env K=V]… -- <command> [args…]   add one [--transport stdio|http|sse]
+                                          [--header "K: V"]… [--scope user|project] (~/.localpilot/mcp.json or ./.mcp.json)
+  localpilot mcp remove|enable|disable|auth <name>   remove, switch on/off, or sign in to a remote server
   localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
   localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
   localpilot -c | -r [id]                continue the last session / pick one to resume (with a task: run it there)
   localpilot history                      saved sessions in this folder [--json] [--limit 50]; history delete <id>;
-                                          history export <id> [-o file.md|file.html]
+                                          history export <id> [-o file.md|file.html]; history import [claude|codex] [N|all]
+  localpilot schedule create <name> --cron "0 3 * * *" --prompt "…"   scheduled unattended runs via cron/launchd/Task
+                                          Scheduler [--cwd] [--mode] [--model] [--timeout]; schedule list|run|pause|resume|delete|history <name>
+  localpilot --acp                        Agent Client Protocol server on stdio (Zed, JetBrains, Neovim)
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
@@ -124,13 +167,25 @@ ${bold('Options')}
   -c, --continue               continue the most recent session in this folder (sessions are saved after every turn)
   -r, --resume [id]            resume a saved session by id or list number; without one, pick from a numbered list
   --data-dir <dir>             where sessions are saved (default ~/.localpilot, or LOCALPILOT_DATA_DIR)
+  --hooks-dir <dir>            also run the hook scripts in this folder (PreToolUse.sh, TaskStart.py…; repeatable,
+                               or LOCALPILOT_HOOKS_DIR)
   -i, --isolate                work in an isolated git worktree (your checkout is untouched); the result is applied
                                back as uncommitted changes when the run ends — --no-apply keeps it in the worktree
   -m, --model <provider/model> model for this run (e.g. ollama/gemma4:e4b)
-  -f, --file <path>            attach a file (repeatable; path#L10-L20 for a range)
+  --thinking [level]           how hard reasoning models think: auto, off, low, medium (the default without a level),
+                               high or max; remembered for later sessions
+  -f, --file <path>           attach a file (repeatable; path#L10-L20 for a range)
   -y, --yes                    approve every command / edit / network call (CI, scripts)
   -C, --cwd <dir>              workspace root (default: current directory)
-  -p, --print                  print the final answer only (no tool log; implies non-interactive)
+  -p, --print                  print the final answer only (no tool log; implies non-interactive); also when stdout
+                               is not a terminal
+  --json                       one-shot runs: one JSON event per line on stdout, then a run_result line
+  --timeout <s>                stop the run after this long (90, 90s, 5m) and exit with code 124
+  --retries <n>                stop after n failed steps in a row (localpilot.maxConsecutiveMistakes); exit code 3
+  --yolo                       for CI: --yes, only the core file and command tools, --retries 3, no MCP unless --mcp
+  -s, --system <text|@file>    add to the system prompt; --system-replace uses it instead of LocalPilot's persona
+  -P, --provider <id>          use this provider (configured, or a preset such as openai) for this run
+  -k, --key <key>              its API key for this run only (--save-key stores it like \`providers key\`)
   --no-mcp                     do not start MCP servers
   --compaction <strategy>      how a full context is compacted: agentic (model summary), basic (no model call) or off
   --trust-workspace            use providers, MCP servers, approvals and hooks from ./.vscode/settings.json
@@ -139,13 +194,24 @@ ${bold('Options')}
   -h, --help · --version
 
 ${bold('In a session')}
+  /team <task>   split the task for background workers and the shared board (multitask mode)
   /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
+  /thinking auto|off|low|medium|high|max   how hard the model thinks in this session (remembered)
   /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
-  /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins)   /permissions   /hooks   settings.json rules
+  /undo [N [f|c|b]]   go back to an earlier turn: restore its files, the chat or both (Esc Esc at an empty prompt)   /undo all   revert every pending change
+  /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins) and MCP prompts   /permissions   /hooks   settings.json rules
+  /mcp:<server>:<prompt> args…   run an MCP server's prompt (arguments by position or key=value)
   /skill <name> <task>   run a task with a skill preloaded   /agent <name> <task>   hand a task to a subagent (also as -p "/skill …")
+  /<skill-name> <task>   same as /skill   /deep-planning <task>   plan in Plan mode, saved to implementation_plan.md   /newrule   write a project rule
+  /compact   summarise older messages   /context   context use   /memory   instruction files and memory notes
+  /skills   /agents   /plugins   lists   /mcp [enable|disable|restart <name> [--save]]   MCP servers, their tools and errors
+  /yes on|off   auto-approve (the prompt shows [auto])   /settings [filter]   effective settings   /settings set <key> <value>   save one
+  Tab completes /commands and @paths (@path attaches a file or image)   Shift+Tab cycles the mode
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
-  anything you type while a run is going is handed to the agent at its next step.
+  anything you type while a run is going is handed to the agent at its next step; start a line with >> to send it
+  after the turn instead. /queue lists both kinds and /queue rm N cancels one. Ctrl+B while a command runs lets the
+  agent continue and leaves the command running (its later output goes to ~/.localpilot/cmd-logs).
 
 ${bold('Settings')} read from ${dim(userSettingsPath())}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
 ${bold('API keys')} \${env:NAME} works everywhere. Keys VS Code keeps in your OS keychain (\${secret:id}) are read here from
@@ -165,7 +231,22 @@ interface Args {
   /** Apply security-sensitive settings from the workspace's .vscode/settings.json. */
   trustWorkspace?: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history' | 'config' | 'mcp';
+  /** `mcp …`: the words after `mcp` (it parses its own flags). */
+  mcpArgv?: string[];
+  /** `--json` without a file: NDJSON events for one-shot runs, JSON output for `config` and `doctor`. */
+  json?: boolean;
+  /** Headless runs: overall time limit (ms), mistake limit, and the `--yolo` preset (`--mcp` keeps MCP with it). */
+  timeoutMs?: number;
+  retries?: number;
+  yolo?: boolean;
+  mcpFlag?: boolean;
+  /** `-s/--system`: text added to the system prompt, or used instead of the persona with `--system-replace`. */
+  system?: string;
+  systemReplace?: boolean;
+  /** `-P/--provider`: provider for this run; `-k/--key` its key (`--save-key` stores it). */
+  runProvider?: string;
+  saveKey?: boolean;
   /** `history [list|delete|export]`: JSON output, rows shown, export file. */
   historyOpts: { json: boolean; limit: number; output?: string };
   /** `-c`: continue the newest saved session. `-r [id]`: resume one (`true` = pick from a list). */
@@ -173,6 +254,8 @@ interface Args {
   resume?: string | true;
   /** `--data-dir`: root of the saved sessions instead of ~/.localpilot. */
   dataDir?: string;
+  /** `--hooks-dir` (repeatable): more folders of hook scripts named after their event. */
+  hooksDirs?: string[];
   /** `plugin <action>`: search, install, remove, enable, disable, list, new, validate, marketplaces. */
   pluginAction?: string;
   /** `plugin install --project`: into the workspace's .localpilot/plugins instead of ~/.localpilot/plugins. */
@@ -192,6 +275,8 @@ interface Args {
   /** Work in an isolated git worktree; one-shot runs apply the result automatically unless --no-apply. */
   isolate: boolean;
   apply: boolean;
+  /** `--thinking [level]`: this session's thinking level (a bare flag = medium). */
+  thinking?: ThinkChoice;
   /** A usage error found while parsing (unknown option, bad value): main prints it and exits 2. */
   error?: string;
 }
@@ -216,6 +301,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--no-apply') {a.apply = false;}
     else if (x === '--agent') {a.mode = 'agent';}
     else if (x === '-m' || x === '--model') {a.model = next();}
+    // The level is optional: `--thinking "fix the bug"` thinks at medium and keeps the prompt.
+    else if (x === '--thinking') {const v = argv[i + 1]; const lvl = v && !v.startsWith('-') ? parseThinkChoice(v) : undefined; if (lvl) {i++;} a.thinking = lvl ?? 'medium';}
     else if (x === '-f' || x === '--file') {a.files.push(next());}
     else if (x === '-y' || x === '--yes') {a.yes = true;}
     else if (x === '-C' || x === '--cwd') {a.cwd = path.resolve(next());}
@@ -228,10 +315,19 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--setup') {a.cmd = 'setup';}
     else if (x === '-h' || x === '--help') {a.cmd = 'help';}
     else if (x === '--version' || x === '-V') {a.cmd = 'version';}
-    else if (x === '--parallel' || x === '-P') {a.cmd = a.cmd ?? 'ide';} // parallel sessions live in the editor's Agents panel
+    else if (x === '--parallel') {a.cmd = a.cmd ?? 'ide';} // parallel sessions live in the editor's Agents panel
+    else if (x === '-P' || x === '--provider') {a.runProvider = next().toLowerCase();}
+    else if (x === '--save-key') {a.saveKey = true;}
+    else if (x === '-s' || x === '--system') {a.system = next();}
+    else if (x === '--system-replace') {a.systemReplace = true;}
+    else if (x === '--timeout') {const v = next(); a.timeoutMs = parseDuration(v); if (!a.timeoutMs) {a.error = a.error ?? `--timeout takes a duration in seconds (90, 90s, 5m; got "${v}")`;}}
+    else if (x === '--retries') {const v = next(); if (/^\d+$/.test(v)) {a.retries = Number(v);} else {a.error = a.error ?? `--retries takes a number (got "${v}")`;}}
+    else if (x === '--yolo') {a.yolo = true;}
+    else if (x === '--mcp') {a.mcpFlag = true;}
+    else if (x === 'config' && !words.length && !a.cmd) {a.cmd = 'config';}
     else if (x === '--user' || x === '-u') {a.user = true;}
     else if (x === '--install') {a.install = true;}
-    else if (x === '--key') {a.provider.key = next();}
+    else if (x === '--key' || x === '-k') {a.provider.key = next();}
     else if (x === '--key-env') {a.provider.keyEnv = next();}
     else if (x === '--remove-key') {a.provider.removeKey = true;}
     else if (x === '--url') {a.provider.url = next();}
@@ -269,10 +365,14 @@ function parseArgs(argv: string[]): Args {
     // `-r` takes an id (or list number) only when one follows; `-r "fix the bug"` is a picker plus a task.
     else if (x === '-r' || x === '--resume') {a.resume = /^(?:cli-|s_)[0-9a-z]+$|^\d{1,4}$/i.test(argv[i + 1] ?? '') ? next() : true;}
     else if (x === '--data-dir') {a.dataDir = path.resolve(next());}
+    else if (x === '--hooks-dir') {(a.hooksDirs ??= []).push(path.resolve(next()));}
     else if (x === '--compaction') {const v = next(); if (/^(agentic|basic|off)$/.test(v)) {cliOverrides['compaction.strategy'] = v;} else {a.error = `--compaction takes agentic, basic or off (got "${v}")`;}}
     else if (x === 'history' && !words.length && !a.cmd) {a.cmd = 'history';}
-    else if (x === '--json') {a.evalOpts.json = next(); a.scanOpts.json = a.evalOpts.json;}
+    // `eval`/`scan --json out.json` write a report file; anywhere else `--json` is a flag (NDJSON for runs, JSON output).
+    else if (x === '--json' && (a.cmd === 'eval' || a.cmd === 'scan') && /\.json$|[/\\]/i.test(argv[i + 1] ?? '')) {a.evalOpts.json = next(); a.scanOpts.json = a.evalOpts.json;}
+    else if (x === '--json') {a.json = true;}
     else if (x === 'providers' && !words.length && !a.cmd) {a.cmd = 'providers';}
+    else if (x === 'mcp' && !words.length && !a.cmd) {a.cmd = 'mcp'; a.mcpArgv = argv.slice(i + 1); break;}
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
     else if (!x.startsWith('-') && !words.length && !a.cmd && ['models', 'doctor', 'help', 'version'].includes(x)) {a.cmd = x as Args['cmd'];}
@@ -280,6 +380,14 @@ function parseArgs(argv: string[]): Args {
     else {words.push(x);}
   }
   a.prompt = words.join(' ').trim();
+  if (a.yolo) {
+    a.yes = true;
+    a.retries ??= 3;
+    a.mcp = !!a.mcpFlag && a.mcp;
+  }
+  if (a.retries !== undefined) {
+    cliOverrides.maxConsecutiveMistakes = a.retries;
+  }
   return a;
 }
 
@@ -405,7 +513,7 @@ class StreamFilter {
 class Renderer {
   private filter = new StreamFilter();
   private line = '';
-  private running = new Map<string, { label: string; start: number }>();
+  private running = new Map<string, { label: string; start: number; tail?: string }>();
   thinking = 0;
   constructor(private readonly verbose: boolean, private readonly quiet: boolean) {}
 
@@ -491,6 +599,16 @@ class Renderer {
     this.running.set(id, { label, start: Date.now() });
     process.stdout.write(`  ${dim('⟳')} ${dim(label)}${this.verbose ? ` ${dim(JSON.stringify(args).slice(0, 200))}` : ''}\n`);
   }
+  /** Live run_command output: its latest line on the status line, with the detach hint. */
+  toolOutput(id: string, chunk: string): void {
+    const r = this.running.get(id);
+    if (this.quiet || !r) {
+      return;
+    }
+    r.tail = `${r.tail ?? ''}${chunk}`.slice(-2000);
+    const last = r.tail.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? '';
+    this.status(`${last || 'running…'}${tty ? '  (Ctrl+B: proceed while it runs)' : ''}`);
+  }
   toolEnd(id: string, name: string, isError: boolean, content: string, data: unknown, cached?: boolean): void {
     if (this.quiet) {
       return;
@@ -528,8 +646,10 @@ class Renderer {
   }
   note(s: string): void {
     if (this.quiet) {
-      // --print / piped: stdout must carry the answer only, so advisory notes go to stderr.
-      process.stderr.write(`  ${dim(s)}\n`);
+      // --print / piped: stdout must carry the answer only, so advisory notes go to stderr (--json: only JSON there).
+      if (!ndjson) {
+        process.stderr.write(`  ${dim(s)}\n`);
+      }
       return;
     }
     this.clearStatus();
@@ -538,6 +658,9 @@ class Renderer {
     process.stdout.write(`  ${dim(s)}\n`);
   }
   error(s: string): void {
+    if (ndjson) {
+      return; // written as an NDJSON error record
+    }
     this.clearStatus();
     this.flushPending();
     this.breakLine();
@@ -563,7 +686,9 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'read_file': return Array.isArray(a.files) ? `Read ${a.files.length} files: ${s(a.files.map((f: unknown) => (f && typeof f === 'object' ? (f as { path?: unknown }).path : f)).join(', '))}` : `Read ${s(a.path)}${a.start_line ? ` (lines ${a.start_line}–${a.end_line ?? ''})` : ''}`;
     case 'read_pdf': return `Read PDF ${s(a.path)}${a.pages ? ` (pages ${s(a.pages)})` : ''}`;
     case 'edit_file': return `Edit ${s(a.path)}`;
+    case 'apply_patch': return `Patch ${s(patchSummary(patchArg(a)))}`;
     case 'write_file': return `Write ${s(a.path)}`;
+    case 'notebook_edit': return `${s(a.action || 'Edit')} cell ${s(a.cell)} of ${s(a.path)}`;
     case 'list_dir': return `List ${s(a.path || '.')}`;
     case 'create_directory': return `Create folder ${s(a.path)}`;
     case 'delete_path': return `Delete ${s(a.path)}`;
@@ -590,6 +715,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'manage_todos': return 'Update plan';
     case 'memory_save': return `Remember ${s(a.name)}`;
     case 'memory_read': return `Recall ${s(a.name)}`;
+    case 'mcp_read_resource': return `Read ${s(a.uri)} from ${s(a.server)}`;
     default: return `${name} ${s(a, 60)}`;
   }
 }
@@ -649,7 +775,7 @@ function migrateGlobalMemory(dir: string): void {
   }
 }
 
-async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }) => Promise<boolean>): Promise<Core> {
+async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }) => Promise<boolean | ApprovalDecision>): Promise<Core> {
   const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
   const providers = new ProviderRegistry(log);
   // A run that needs a model on a local Ollama that is installed but stopped starts it (same as in VS Code).
@@ -695,11 +821,17 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   }
   const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled, remote: () => redis });
   setTelemetryRecorder(telemetry);
+  // Opt-in OTLP export (settings or OTEL_* variables); `shutdown` flushes it with the rest of the telemetry.
+  attachOtlp(telemetry, { settings: () => getConfig().telemetry.otlp, version: VERSION, out: (l) => process.stderr.write(`${dim(l)}\n`), warn: (m) => process.stderr.write(`\x1b[33m!\x1b[0m ${m}\n`) });
   runner.telemetry = telemetry;
   providers.telemetry = telemetry;
   // Same checkpoints as in VS Code: a git ref before each turn, file snapshots under ~/.localpilot/checkpoints.
   const lpHome = path.join(os.homedir(), '.localpilot');
   tracker.persistDir = path.join(lpHome, 'checkpoints');
+  // Detached commands log to ~/.localpilot/cmd-logs and die with the CLI: their output pipes end with it.
+  setCommandLogDir(path.join(lpHome, 'cmd-logs'));
+  pruneCommandLogs();
+  process.once('exit', () => stopAllCommands());
   const checkpoints = new CheckpointService({ globalStorageDir: lpHome, enabled: () => getConfig().checkpointsEnabled, log, defaultRoot: () => args.cwd });
   runner.checkpoints = checkpoints;
   void (async () => {
@@ -709,12 +841,12 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   })().catch((e) => log.warn(`checkpoint prune: ${String(e)}`));
   // Claude Code-compatible project configuration: settings.json, plugins, custom commands (both .claude and .localpilot).
   const roots = [args.cwd];
-  let settings = await loadProjectSettings(roots, { log });
+  let settings = await loadProjectSettings(roots, { log, hookDirs: args.hooksDirs });
   const plugins = await discoverPlugins(roots, { extraDirs: getConfig().pluginPaths, enabledPlugins: settings.enabledPlugins });
   const pluginParts = pluginSource(plugins);
   const pluginLayers = pluginParts.settingsLayers();
   if (pluginLayers.length) {
-    settings = await loadProjectSettings(roots, { log, extra: pluginLayers });
+    settings = await loadProjectSettings(roots, { log, extra: pluginLayers, hookDirs: args.hooksDirs });
   }
   runner.projectSettings = () => settings;
   runner.hooks = new HookRunner(() => (getConfig().hooksEnabled ? settings : { ...settings, hooks: {} }), log, (text) => process.stderr.write(`${dim('hook:')} ${text}\n`));
@@ -724,7 +856,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   // No language server in the terminal: these would silently report nothing, so point the model at real checks instead.
   const noLsp = new Set(['get_diagnostics', 'find_symbol', 'find_references']);
   const termOnly = (list: typeof editorTools) => list.map((t) => (noLsp.has(t.definition.name) ? { ...t, execute: async () => ({ content: "Not available in the terminal (no language server). Run the project's type checker, linter or tests with run_command (e.g. npx tsc --noEmit, eslint, pytest); use grep_search or repo_graph for definitions and references.", isError: true }) } : t));
-  tools.registerAll([...fsTools, ...pdfTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
+  tools.registerAll([...fsTools, ...notebookTools, applyPatchTool, ...pdfTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
@@ -734,7 +866,8 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp.extraServers = () => pluginMcp;
     mcp.projectFolders = () => roots;
     mcp.trust = cliMcpTrust(args.cwd, () => !!args.trustWorkspace, { prompt: (q) => withPromptLock(() => ask(`${yellow('?')} ${q}`)) });
-    mcp.onFileProblems = (file, problems) => process.stderr.write(`${yellow('!')} invalid MCP configuration in ${file}:\n${problems.map((p) => `  ${p}`).join('\n')}\n`);
+    mcp.oauth = cliMcpOAuth((m) => log.info(m));
+    mcp.onFileProblems = (file, problems) => (ndjson ? ndjson.error(`invalid MCP configuration in ${file}: ${problems.join('; ')}`, { kind: 'mcp_config', file, problems }) : process.stderr.write(`${yellow('!')} invalid MCP configuration in ${file}:\n${problems.map((p) => `  ${p}`).join('\n')}\n`));
     await mcp.reload();
   }
   return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, telemetryRemote: redis, settings, plugins, commands };
@@ -749,6 +882,22 @@ function newSession(mode: Session['mode'], model: string): Session {
 let activeSignal: AbortSignal | undefined;
 /** Whether the last runTurn reached a final answer (false when it stopped at the step limit). */
 let lastTurnCompleted = true;
+/** Whether the last runTurn's turn_end said `completed: true` (a hook-blocked prompt or a stop leaves it false). */
+let lastTurnAnswered = false;
+/** The error the last runTurn ended with (an error event of the main run), for exit codes and `run_result`. */
+let lastTurnError: { message: string; kind?: string } | undefined;
+/** `--json` one-shot runs: every event also goes out as NDJSON. */
+let ndjson: NdjsonWriter | undefined;
+
+/** A failure outside the run: an `{type:'error', kind}` record with --json, else `✖ message` (and a hint) on stderr. */
+function reportError(message: string, kind: string, hint?: string): void {
+  if (ndjson) {
+    ndjson.error(message, { kind });
+  } else {
+    console.error(`${red('✖')} ${message}${hint ? `\n${dim(hint)}` : ''}`);
+  }
+}
+let lastTurnKey = 0;
 
 /** Kinds of action the user answered "always" for in this session (never deletes or destructive commands). */
 const alwaysKinds = new Set<string>();
@@ -760,7 +909,7 @@ let printMode = false;
 let yesMode = false;
 const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network', mcp: 'MCP tool' };
 
-async function approval(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean> {
+async function approvalDecision(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean | ApprovalDecision> {
   // A prompt the organization's policy requires (a floor for this kind, or no bypassing at all) is never answered by --yes or an earlier "always".
   const managed = getManagedPolicy();
   const mandatory = !!opts?.mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
@@ -770,6 +919,7 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
     return true;
   }
   const out = promptToStderr ? process.stderr : process.stdout;
+  // Refusals nobody typed are a bare `false`: the agent loop counts them as failed calls, not as a user's denial.
   if (printMode) {
     process.stderr.write(`${yellow('!')} ${title} — denied (-p is non-interactive${mandatory ? '' : '; pass --yes'})\n`);
     return false;
@@ -789,15 +939,22 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
     const body = detail.split('\n').slice(0, 24).map((l) => `  ${dim('│')} ${l}`).join('\n');
     out.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
     setReadline(rl);
-    const a = (await ask(`  ${amber('Allow?')} ${dim(mandatory ? '[y]es · [n]o' : rememberable ? `[y]es · [n]o · [a]lways allow ${KIND[kind] ?? kind} this session` : '[y]es · [n]o')} `, signal))?.trim().toLowerCase() ?? 'n';
-    if (!mandatory && (a === 'a' || a === 'always')) {
+    const a = (await ask(`  ${amber('Allow?')} ${dim(mandatory ? '[y]es · [n]o' : rememberable ? `[y]es · [n]o · [a]lways allow ${KIND[kind] ?? kind} this session` : '[y]es · [n]o')} ${dim('· n <reason> tells the agent why')} `, signal))?.trim() ?? 'n';
+    const answer = parseApprovalAnswer(a);
+    if (!mandatory && answer.choice === 'always') {
       if (rememberable) {
         alwaysKinds.add(kind);
       }
       return true;
     }
-    return a === 'y' || a === 'yes';
+    // `n use src/b.ts instead`: the reason reaches the model in place of a bare refusal.
+    return answer.choice === 'yes' ? true : { ok: false, feedback: answer.feedback };
   });
+}
+
+/** A yes/no approval (plugin installs and other callers that take no reason). */
+async function approval(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean> {
+  return toDecision(await approvalDecision(title, detail, kind, rl, signal, opts)).ok;
 }
 
 /**
@@ -836,18 +993,23 @@ async function askQuestionsNow(questions: UserQuestion[], rl: readline.Interface
   return answers;
 }
 
-async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string } = {}): Promise<string> {
+async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; images?: string[]; toolFilter?: string[]; roleOverride?: string } = {}): Promise<string> {
   let content = text;
   const root = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
   const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f, root)));
   if (blocks.some(Boolean)) {
     content = `${blocks.filter(Boolean).join('\n\n')}\n\n${text}`;
   }
-  const userMessage: ChatMessage = { role: 'user', content, meta: opts.display ? { display: opts.display } : undefined };
-  core.tracker.beginTurn(session.id, session.messages.length);
+  // Increasing turn keys, recorded on the message, so /undo can find a turn's checkpoint after compaction or a resume.
+  const checkpoint = (lastTurnKey = nextTurnKey(session, lastTurnKey));
+  const userMessage: ChatMessage = { role: 'user', content, ...(opts.images?.length ? { images: opts.images } : {}), meta: { checkpoint, ...(opts.display ? { display: opts.display } : {}) } };
+  core.tracker.beginTurn(session.id, checkpoint);
   activeSignal = control.signal;
+  const usageBefore = session.usage && { ...session.usage };
   let final = '';
   lastTurnCompleted = true;
+  lastTurnAnswered = false;
+  lastTurnError = undefined;
   // Pause / resume feedback, for the main run and for subagents the user paused or stopped individually.
   const offControl = control.onDidChange((c) => {
     const who = c === control ? '' : `${c.label ?? 'subagent'}: `;
@@ -862,23 +1024,32 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     }
   });
   let result: string;
+  const turnStarted = Date.now();
   try {
     result = await core.runner.run({
       session,
       userMessage,
       modelRef: opts.modelRef,
       permissionAllow: opts.permissionAllow,
+      toolFilter: opts.toolFilter,
+      roleOverride: opts.roleOverride,
       signal: control.signal,
       control,
       workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
       isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
       emit: (e) => {
         const p = e.payload as Record<string, unknown>;
+        ndjson?.event(e);
+        // Errors of the main run end it (subagents' carry their childId and only fail that subagent).
+        if (e.type === 'error' && !(p && typeof p === 'object' && p.childId)) {
+          lastTurnError = { message: p && typeof p === 'object' ? String(p.message ?? p.latest ?? 'error') : String(e.payload), kind: p && typeof p === 'object' && typeof p.kind === 'string' ? p.kind : undefined };
+        }
         switch (e.type) {
           case 'assistant_delta': r.text(String(e.payload)); break;
           case 'thinking_delta': r.status(`Thinking… ${dim(String(e.payload).replace(/\s+/g, ' ').slice(-60))}`); break;
           case 'status': if (typeof e.payload === 'string') {r.status(e.payload);} break;
           case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {});} break;
+          case 'tool_progress': if (!p.childId) {r.toolOutput(String(p.id), String(p.chunk ?? ''));} break;
           case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
           case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
           case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
@@ -896,15 +1067,16 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           }
           case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
           case 'rules_applied': r.note(`Conditional rules applied: ${((p.files as string[]) ?? []).join(', ')}`); break;
+          case 'hook': if (!p.childId && p.status !== 'running') {r.note(`⚙ ${p.event} ${p.name}${p.tool ? ` (${p.tool})` : ''} → ${p.status === 'blocked' ? yellow('blocked') : p.status === 'failed' ? red('failed') : 'ok'}${typeof p.ms === 'number' ? dim(` ${p.ms} ms`) : ''}`);} break;
           case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
           case 'nudge': r.note(p.reason === 'length' ? `↺ the reply was cut off at the output limit — ${p.continued ? 'asking the model to continue' : 'asking for a shorter call'}` : `↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
           case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
           case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
           case 'error': r.error(e.payload && typeof e.payload === 'object' ? String(p.message ?? p.latest ?? 'error') : String(e.payload)); break;
-          case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; break;
+          case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; lastTurnAnswered = p.completed === true; break;
         }
       },
-      requestApproval: (title, detail, kind, opts) => approval(title, detail, kind, rl, control.signal, opts),
+      requestApproval: (title, detail, kind, opts) => approvalDecision(title, detail, kind, rl, control.signal, opts),
       // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
       askUser: process.stdin.isTTY && !yesMode && !printMode ? (questions) => askQuestions(questions, rl, control.signal) : undefined,
     });
@@ -915,11 +1087,21 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     }
     // Flush the stream filter even when the run rejects, so a dangling fence or <tool_call> does not leak into the next turn.
     r.end();
+    // A stopped or failed run started TaskCancel / TaskError hooks; one-shot and piped runs exit right after, so let them finish.
+    await core.runner.hooksSettled(5_000);
     // Written now rather than debounced: one-shot runs exit right after, and `-c` must find this turn.
     if (core.store?.has(session.id)) {
       core.store.save(session);
       await core.store.flush(session);
     }
+  }
+  const spent = turnUsageLabel(usageDelta(usageBefore, session.usage));
+  if (spent) {
+    r.note(spent);
+  }
+  // A long run that finished rings the terminal bell, so a user in another window notices (`localpilot.notifications`).
+  if (!control.aborted && shouldRingBell(getConfig().notifications, !!process.stdout.isTTY, Date.now() - turnStarted)) {
+    process.stdout.write('\x07');
   }
   return final || result;
 }
@@ -952,6 +1134,19 @@ async function isolate(core: Core, session: Session, cwd: string, r: Renderer, s
   return { info, mgr };
 }
 
+/** Forget an isolated worktree a saved session still names: it ended with that run (or was kept for the user), and this run works in the checkout. */
+function detachWorktree(session: Session, store: { save(s: Session): void }): void {
+  if (!session.worktree) {
+    return;
+  }
+  const kept = fs.existsSync(session.worktree.path) ? session.worktree.path : undefined;
+  session.worktree = undefined;
+  store.save(session);
+  if (kept) {
+    process.stderr.write(dim(`the isolated worktree of this session is still at ${kept}; this run works in the checkout\n`));
+  }
+}
+
 /** Read piped stdin to the end, keeping at most `cap` characters (a note marks the cut). */
 function readStdin(cap = 200_000): Promise<string> {
   return new Promise<string>((resolve) => {
@@ -970,8 +1165,9 @@ function readStdin(cap = 200_000): Promise<string> {
 
 /** Report a failed worktree step without a stack trace and end the process. */
 async function fatal(core: Core, e: unknown): Promise<never> {
-  console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+  reportError(e instanceof Error ? e.message : String(e), 'isolate');
   core.mcp?.dispose();
+  await core.runner.hooksSettled(5_000);
   await core.telemetry.flush();
   process.exit(1);
 }
@@ -1078,6 +1274,35 @@ async function cmdProviders(args: Args): Promise<number> {
       console.error(`${red('✖')} Unknown: providers ${sub}. Try: list, presets, add, key, test, remove`);
       return 2;
   }
+}
+
+/** `localpilot mcp …`: manage the server files; `auth` connects once so a remote server can sign in. */
+async function cliMcp(args: Args): Promise<number> {
+  const m = parseMcpArgs(args.mcpArgv ?? []);
+  if (m.cwd) {
+    args.cwd = path.resolve(m.cwd);
+    setWorkspaceRoot(args.cwd);
+  }
+  const log =vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
+  const settings = await loadProjectSettings([args.cwd], { log });
+  const plugins = await discoverPlugins([args.cwd], { extraDirs: getConfig().pluginPaths, enabledPlugins: settings.enabledPlugins });
+  const trust = cliMcpTrust(args.cwd, () => !!args.trustWorkspace, { prompt: (q) => ask(q) });
+  return cmdMcp(m, {
+    cwd: args.cwd,
+    st: STYLE,
+    pluginServers: pluginSource(plugins).mcpServers(),
+    isTrusted: (k) => trust.isTrusted(k),
+    ask: (q) => ask(q),
+    authenticate: async (name, cfg) => {
+      const oauth = cliMcpOAuth((m) => log.info(m));
+      try {
+        const r = await signInMcpServer(name, cfg, oauth, log, VERSION);
+        return `${r.signedIn ? 'Signed in to' : 'Connected to'} "${name}": ${r.tools} tool${r.tools === 1 ? '' : 's'}`;
+      } finally {
+        oauth.dispose();
+      }
+    },
+  });
 }
 
 /** `localpilot plugin …`: marketplaces, install/remove/enable/disable, and authoring (new, validate). */
@@ -1444,8 +1669,72 @@ async function cmdEval(core: Core, args: Args): Promise<number> {
   return run.results.some((r) => !r.pass && !r.skipped) ? 1 : 0;
 }
 
-async function cmdDoctor(core: Core): Promise<void> {
+/** What `localpilot config` and `doctor --json` list: the objects this process runs the agent with. */
+function configSources(core: Core, args: Args): ConfigSources {
+  return { roots: [args.cwd], skills: core.skills, settings: core.settings, hookDirs: args.hooksDirs, plugins: core.plugins, tools: core.tools, mcp: core.mcp };
+}
+
+/**
+ * `-P <id> [-k <key>] [--save-key]`: make the provider usable for this run (a preset not configured yet is added for
+ * this run only) and qualify a bare `-m` with it. The key stays in this process unless --save-key. Returns a problem.
+ */
+async function useRunProvider(args: Args): Promise<string | undefined> {
+  const id = args.runProvider!;
+  const key = args.provider.key;
+  const configured = () => vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? [];
+  if (key && args.saveKey) {
+    const err = (s: string) => process.stderr.write(`${s}\n`);
+    const code = configured().some((p) => p.id === id) ? await setProviderKey(id, key, {}, STYLE, err) : findPreset(id) ? await addProvider(id, { key }, STYLE, err) : 2;
+    if (code === 2) {
+      return `could not store the key for "${id}" — localpilot providers presets lists the providers -P accepts`;
+    }
+    setWorkspaceRoot(args.cwd);
+  }
+  const secret = `localpilot-run-${id}`;
+  const useKey = !!key && !args.saveKey;
+  if (useKey) {
+    setSecretValues({ [secret]: key });
+  }
+  const r = runProviderList(configured(), id, findPreset(id)?.cfg, useKey ? `\${secret:${secret}}` : undefined);
+  if (r.error) {
+    return r.error;
+  }
+  cliOverrides.providers = r.list;
+  if (args.model && !args.model.startsWith(`${id}/`)) {
+    args.model = `${id}/${args.model}`;
+    cliOverrides.defaultModel = args.model;
+  }
+  setWorkspaceRoot(args.cwd);
+  return undefined;
+}
+
+/** `doctor log`: the log file's path, opened in the default app when there is a terminal to come back to. */
+function doctorLog(): number {
+  console.log(LOG_FILE);
+  if (!fs.existsSync(LOG_FILE)) {
+    console.error(dim('(no log yet)'));
+    return 0;
+  }
+  if (process.stdout.isTTY) {
+    const cp = require('child_process') as typeof import('child_process');
+    const [bin, ...rest] = process.platform === 'darwin' ? ['open'] : process.platform === 'win32' ? ['cmd', '/c', 'start', '""'] : ['xdg-open'];
+    cp.spawn(bin, [...rest, LOG_FILE], { detached: true, stdio: 'ignore' }).on('error', () => undefined).unref();
+  }
+  return 0;
+}
+
+async function cmdDoctor(core: Core, args?: Args): Promise<void> {
+  const newer = versionNotice(VERSION, newestInstalledExtension());
+  if (args?.json) {
+    await core.providers.listModelsStartingLocal().catch(() => undefined);
+    const rg = await runProcess('rg', ['--version']).then(() => true).catch(() => false);
+    console.log(JSON.stringify({ version: VERSION, newerExtension: newer ?? null, settingsFiles: [userSettingsPath(), CLI_SETTINGS_PATH], log: LOG_FILE, ...(await doctorReport(configSources(core, args))), ripgrep: rg, node: process.version, platform: process.platform }, null, 2));
+    return;
+  }
   console.log(`${BRAND} ${dim(`v${VERSION}`)} doctor\n`);
+  if (newer) {
+    console.log(`${yellow('!')} ${newer}\n`);
+  }
   console.log(`${bold('Settings')}\n  ${dim(userSettingsPath())}\n  ${dim(CLI_SETTINGS_PATH)}`);
   const cfg = getConfig();
   console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network} mcp=${cfg.approvals.mcp}`);
@@ -1456,9 +1745,10 @@ async function cmdDoctor(core: Core): Promise<void> {
   await core.providers.listModelsStartingLocal().catch(() => undefined);
   await listProviders(STYLE, (l) => console.log(`  ${l}`), { compact: true });
   console.log(`\n${bold('Workspace')}\n  ${core.workspace.root ?? dim('(none)')}`);
-  console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);
+  console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : s.state === 'disabled' ? dim('off') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);
   const rg = await runProcess('rg', ['--version']).then(() => true).catch(() => false);
   console.log(`  ripgrep: ${rg ? green('found') : dim('not on PATH (using built-in search)')}   node: ${process.version}   platform: ${process.platform}`);
+  console.log(`  log: ${dim(LOG_FILE)} ${dim('(localpilot doctor log opens it)')}`);
 }
 
 async function cmdSkillSearch(core: Core, args: Args, renderer: Renderer): Promise<void> {
@@ -1546,8 +1836,16 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (!args.cmd && args.json) {
+    ndjson = new NdjsonWriter();
+  }
   if (args.error) {
-    console.error(`${red('✖')} ${args.error}\n${dim('See: localpilot --help')}`);
+    reportError(args.error, 'usage', 'See: localpilot --help');
+    process.exit(2);
+  }
+  if (!args.cmd && !args.prompt && process.stdin.isTTY && (args.yolo || args.systemReplace || args.timeoutMs)) {
+    const oneShot = [args.yolo && '--yolo', args.systemReplace && '--system-replace', args.timeoutMs && '--timeout'].filter(Boolean);
+    reportError(`${oneShot.join(', ')} ${oneShot.length > 1 ? 'are' : 'is'} for one-shot runs: localpilot <flags> "task" (or pipe the task in)`, 'usage');
     process.exit(2);
   }
   if (args.cmd === 'help') {
@@ -1559,7 +1857,7 @@ async function main(): Promise<void> {
     return;
   }
   if (args.cmd === 'ide') {
-    openInVsCode(args.prompt ? 'run' : 'new', { mode: args.mode, prompt: args.prompt, files: args.files.join(','), parallel: process.argv.includes('--parallel') || process.argv.includes('-P') ? '1' : '' }, args.cwd);
+    openInVsCode(args.prompt ? 'run' : 'new', { mode: args.mode, prompt: args.prompt, files: args.files.join(','), parallel: process.argv.includes('--parallel') ? '1' : '' }, args.cwd);
   }
   if (args.cmd === 'settings' || args.cmd === 'setup') {
     openInVsCode(args.cmd, {}, args.cwd);
@@ -1570,7 +1868,12 @@ async function main(): Promise<void> {
   }
   setWorkspaceRoot(args.cwd);
   if (ignoredWorkspaceSettings.length) {
-    process.stderr.write(`${dim(`Ignoring security-sensitive settings from ${path.join(args.cwd, '.vscode', 'settings.json')} (${ignoredWorkspaceSettings.join(', ')}) — pass --trust-workspace to use them.`)}\n`);
+    const msg = `Ignoring security-sensitive settings from ${path.join(args.cwd, '.vscode', 'settings.json')} (${ignoredWorkspaceSettings.join(', ')}) — pass --trust-workspace to use them.`;
+    if (ndjson) {
+      ndjson.event({ type: 'status', sessionId: '', payload: msg });
+    } else {
+      process.stderr.write(`${dim(msg)}\n`);
+    }
   }
   if (args.model) {
     cliOverrides.defaultModel = args.model;
@@ -1579,9 +1882,53 @@ async function main(): Promise<void> {
   if (args.yes) {
     setAutoApprove(true);
   }
-  setLogLevel(args.verbose ? 'debug' : 'warn');
+  // --json keeps stderr to JSON error records: log lines stay in the log file only.
+  setLogLevel(args.verbose ? 'debug' : args.json && !args.cmd ? 'off' : 'warn');
   // Keys for `${secret:id}` references: VS Code keeps them in the OS keychain, the CLI in its own key file.
   setSecretValues(readCliKeys());
+  if (args.cmd === 'doctor' && args.prompt === 'log') {
+    process.exitCode = doctorLog();
+    return;
+  }
+  if (!args.cmd && args.provider.key && !args.runProvider) {
+    reportError('-k/--key goes with -P/--provider <id> (to store a key: localpilot providers key <id>)', 'usage');
+    process.exit(2);
+  }
+  if (args.runProvider) {
+    const problem = await useRunProvider(args).catch((e) => (e instanceof Error ? e.message : String(e)));
+    if (problem) {
+      reportError(problem, 'provider');
+      process.exit(2);
+    }
+  }
+  /** `--system-replace`: the persona this run uses instead of LocalPilot's. */
+  let systemReplace: string | undefined;
+  if (args.system !== undefined || args.systemReplace) {
+    let text: string;
+    try {
+      text = readSystemArg(args.system ?? '', args.cwd).trim();
+    } catch (e) {
+      reportError(`-s/--system: ${e instanceof Error ? e.message : String(e)}`, 'usage');
+      process.exit(2);
+    }
+    if (!text) {
+      reportError(args.systemReplace ? '--system-replace needs -s <text|@file>' : '-s/--system is empty', 'usage');
+      process.exit(2);
+    }
+    if (args.systemReplace) {
+      systemReplace = text;
+    } else {
+      cliOverrides.systemPromptAppend = [getConfig().systemPromptAppend, text].filter((t) => t?.trim()).join('\n\n');
+      setWorkspaceRoot(args.cwd);
+    }
+  }
+  if (args.cmd === 'mcp') {
+    process.exitCode = await cliMcp(args).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
+    process.exit(process.exitCode ?? 0);
+  }
   if (args.cmd === 'providers') {
     process.exitCode = await cmdProviders(args).catch((e) => {
       console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
@@ -1591,7 +1938,20 @@ async function main(): Promise<void> {
   }
   if (args.cmd === 'history') {
     const store = await openCliStore(args.cwd, args.dataDir, vscode.window.createOutputChannel('LocalPilot CLI', { log: true }));
-    process.exitCode = await cmdHistory(store, args.prompt.split(/\s+/).filter(Boolean), args.historyOpts, STYLE, args.cwd).catch((e) => {
+    // A deleted chat takes its checkpoint refs, private indexes and file snapshots with it, as in VS Code.
+    const lpHome = path.join(os.homedir(), '.localpilot');
+    const cps = new CheckpointService({ globalStorageDir: lpHome, enabled: () => true, defaultRoot: () => args.cwd });
+    const deleteCheckpoints = async (s: Session): Promise<{ checkpoints: number; logs: number }> => {
+      const roots = s.checkpoints?.history.map((e) => e.root) ?? [];
+      const snapshotDir = path.join(lpHome, 'checkpoints');
+      const used = await cps.diskUsage({ snapshotDir, sessionId: s.id, roots }).catch(() => undefined);
+      await cps.deleteSession(s.id, roots);
+      fs.rmSync(path.join(snapshotDir, snapshotFolder(s.id)), { recursive: true, force: true });
+      return { checkpoints: used?.total ?? 0, logs: deleteCommandLogs(s.id, path.join(lpHome, 'cmd-logs')) };
+    };
+    const words = args.prompt.split(/\s+/).filter(Boolean);
+    const run = words[0] === 'import' ? cmdHistoryImport(store, words.slice(1), { json: args.historyOpts.json }, STYLE, args.cwd, process.stdin.isTTY ? (q) => ask(q) : undefined) : cmdHistory(store, words, { ...args.historyOpts, deleteCheckpoints }, STYLE, args.cwd);
+    process.exitCode = await run.catch((e) => {
       console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
       return 1;
     });
@@ -1599,7 +1959,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const quiet = args.print || (!args.prompt && !process.stdin.isTTY);
+  // A one-shot run whose output goes to a pipe or file prints the answer only, as with -p.
+  const quiet = args.print || (!args.prompt && !process.stdin.isTTY) || (!args.cmd && (!!args.json || (!!args.prompt && !process.stdout.isTTY)));
+  if (ndjson && !args.prompt && process.stdin.isTTY) {
+    reportError('--json is for one-shot runs: localpilot --json "task" (or pipe the task in)', 'usage');
+    process.exit(2);
+  }
   if (quiet || !process.stdout.isTTY) {
     setPromptOutput(process.stderr);
     promptToStderr = true;
@@ -1612,7 +1977,7 @@ async function main(): Promise<void> {
     process.exitCode = await cmdScan(args, renderer);
     process.exit(process.exitCode ?? 0);
   }
-  if (['models', 'plugin', 'skill-install', 'skill-search'].includes(args.cmd ?? '')) {
+  if (['models', 'plugin', 'skill-install', 'skill-search'].includes(args.cmd ?? '') || (args.cmd === 'config' && args.prompt && !['mcp', 'tools'].includes(args.prompt))) {
     args.mcp = false;
   }
   let rl: readline.Interface | undefined;
@@ -1620,10 +1985,10 @@ async function main(): Promise<void> {
     if (e.type === 'status' && typeof e.payload === 'string') {
       renderer.status(e.payload);
     }
-  }, (_sid, title, detail, kind, opts) => approval(title, detail, kind, rl, activeSignal, opts));
+  }, (_sid, title, detail, kind, opts) => approvalDecision(title, detail, kind, rl, activeSignal, opts));
 
   // Subcommands end the process when done: MCP servers or Redis telemetry would otherwise keep it alive.
-  if (['models', 'skill-install', 'skill-search', 'doctor', 'eval', 'plugin', 'work'].includes(args.cmd ?? '')) {
+  if (['models', 'skill-install', 'skill-search', 'doctor', 'eval', 'plugin', 'work', 'config'].includes(args.cmd ?? '')) {
     try {
       if (args.cmd === 'models') {
         await cmdModels(core);
@@ -1632,7 +1997,10 @@ async function main(): Promise<void> {
       } else if (args.cmd === 'skill-search') {
         await cmdSkillSearch(core, args, renderer);
       } else if (args.cmd === 'doctor') {
-        await cmdDoctor(core);
+        await cmdDoctor(core, args);
+      } else if (args.cmd === 'config') {
+        renderer.status('');
+        process.exitCode = await cmdConfig(args.prompt, !!args.json, configSources(core, args), STYLE);
       } else if (args.cmd === 'eval') {
         process.exitCode = await cmdEval(core, args);
       } else if (args.cmd === 'plugin') {
@@ -1646,12 +2014,24 @@ async function main(): Promise<void> {
     process.exit(process.exitCode ?? 0);
   }
 
+  // -P without -m: the provider's own default model, else its model that is the global default, else its first one.
+  if (args.runProvider && !args.model) {
+    const own = getConfig().providers.find((p) => p.id === args.runProvider)?.defaultModel?.trim();
+    const mine = own ? [] : (await core.providers.listModels(true).catch(() => [] as ModelInfo[])).filter((m) => m.providerId === args.runProvider);
+    const pick = own ? `${args.runProvider}/${own}` : (mine.find((m) => m.id === getConfig().defaultModel) ?? mine[0])?.id;
+    if (!pick) {
+      reportError(`${args.runProvider} lists no models — is it reachable and is its key right? (localpilot providers test ${args.runProvider})`, 'provider');
+      process.exit(2);
+    }
+    cliOverrides.defaultModel = pick;
+    setWorkspaceRoot(args.cwd);
+  }
   // Resolve the model up front so a missing server fails fast with a useful message.
   let modelInfo: ModelInfo;
   try {
     modelInfo = (await core.providers.resolve(getConfig().defaultModel)).model;
   } catch (e) {
-    console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}\n${dim('Run `localpilot doctor` to see which servers are reachable, or `localpilot --setup` to configure one in VS Code.')}`);
+    reportError(e instanceof Error ? e.message : String(e), 'provider', 'Run `localpilot doctor` to see which servers are reachable, or `localpilot --setup` to configure one in VS Code.');
     process.exit(2);
   }
   const store = await openCliStore(args.cwd, args.dataDir, core.log);
@@ -1664,7 +2044,7 @@ async function main(): Promise<void> {
     let pick = args.continue && args.resume === undefined ? list[0] : undefined;
     if (args.resume === true) {
       if (!process.stdin.isTTY) {
-        console.error(`${red('✖')} -r without an id needs a terminal to pick from; pass the id or number (localpilot history lists them)`);
+        reportError('-r without an id needs a terminal to pick from; pass the id or number (localpilot history lists them)', 'usage');
         process.exit(2);
       }
       pick = await pickSession(list, STYLE, (q) => ask(q), out);
@@ -1674,7 +2054,7 @@ async function main(): Promise<void> {
     } else if (typeof args.resume === 'string') {
       const hit = findSession(list, args.resume);
       if (!hit.session) {
-        console.error(`${red('✖')} ${hit.ambiguous ? `"${args.resume}" matches ${hit.ambiguous.length} sessions` : `no saved session "${args.resume}" in ${args.cwd}`}\n${dim('See: localpilot history')}`);
+        reportError(hit.ambiguous ? `"${args.resume}" matches ${hit.ambiguous.length} sessions` : `no saved session "${args.resume}" in ${args.cwd}`, 'usage', 'See: localpilot history');
         process.exit(2);
       }
       pick = hit.session;
@@ -1697,7 +2077,12 @@ async function main(): Promise<void> {
     }
   }
   let session: Session = resumed ?? store.create(modelInfo.id, args.mode);
+  session.think = sessionThinking(args.thinking, session.think, savedThinking());
+  if (args.thinking) {
+    await rememberThinking(args.thinking);
+  }
   core.sessions.set(session.id, session);
+  detachWorktree(session, store);
   if (!resumed) {
     void store.prune(getConfig().sessionRetention, [session.id]).catch((e) => core.log.warn(`session prune: ${String(e)}`));
   } else if (!quiet) {
@@ -1707,24 +2092,103 @@ async function main(): Promise<void> {
   const runRoot = (): string => (session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : args.cwd);
   const notGit = `--isolate needs a git repository (${args.cwd} is not one)`;
   const cwdLabel = vscode.workspace.asRelativePath(args.cwd) === args.cwd ? path.basename(args.cwd) : args.cwd;
+  /**
+   * `/name args` runs a command, or a skill of that name (built-in command, then skill, then custom command); a custom
+   * command or workflow named inside the message is expanded where it stands. Undefined: send the text as typed.
+   */
+  const expandSlash = async (text: string, note: (n: string) => void): Promise<{ text: string; opts: { modelRef?: string; permissionAllow?: string[]; display?: string } } | undefined> => {
+    const mcpHit = parseMcpSlash(text);
+    if (mcpHit) {
+      if (!core.mcp) {
+        throw new Error(`/mcp:${mcpHit.server}:${mcpHit.prompt}: no MCP servers are running`);
+      }
+      const r = await core.mcp.getPrompt(mcpHit.server, mcpHit.prompt, mcpHit.args);
+      if (r.images.length) {
+        note(`${r.images.length} image${r.images.length > 1 ? 's' : ''} from the prompt ${r.images.length > 1 ? 'are' : 'is'} not sent from the terminal`);
+      }
+      return { text: r.text, opts: { display: text.trim() } };
+    }
+    const hit = resolveSlashMessage(text, core.commands, core.skills.enabledSkills);
+    if (!hit) {
+      return undefined;
+    }
+    if ('skill' in hit) {
+      return { text: skillTaskPrompt(hit.skill, hit.task), opts: { display: text.trim() } };
+    }
+    const { prompt, notes } = await expandCommand(hit.command, hit.args, { root: runRoot() });
+    notes.forEach(note);
+    if (!prompt) {
+      throw new Error(`${hit.command.invoke}: the command file has no prompt body`);
+    }
+    return { text: hit.inline ? spliceSlashToken(text, hit.inline, prompt) : prompt, opts: { modelRef: hit.command.model, permissionAllow: hit.command.allowedTools, display: text.trim() } };
+  };
   /** `/name args` as a one-shot prompt runs the custom command (like `claude -p "/cmd"`); anything else is sent as typed. */
   const prepare = async (text: string): Promise<{ text: string; opts: { modelRef?: string; permissionAllow?: string[]; display?: string } }> => {
     const m = /^\/([\w:-]+)\s*([\s\S]*)$/.exec(text.trim());
     const task = m && (m[1] === 'skill' || m[1] === 'agent') ? taskCommand(core, m[1], m[2]) : undefined;
     if (task) {
       if ('error' in task) {
-        console.error(`${red('✖')} ${task.error}`);
+        reportError(task.error, 'usage');
         process.exit(2);
       }
       return { text: task.prompt, opts: { display: text.trim() } };
     }
-    const custom = m ? indexCommands(core.commands).get(`/${m[1]}`) : undefined;
-    if (!custom) {
-      return { text, opts: {} };
+    try {
+      return (await expandSlash(text, (n) => process.stderr.write(`${yellow('!')} ${n}\n`))) ?? { text, opts: {} };
+    } catch (e) {
+      reportError(e instanceof Error ? e.message : String(e), 'command');
+      process.exit(2);
     }
-    const { prompt, notes } = await expandCommand(custom, m![2], { root: runRoot() });
-    notes.forEach((n) => process.stderr.write(`${yellow('!')} ${n}\n`));
-    return { text: prompt, opts: { modelRef: custom.model, permissionAllow: custom.allowedTools, display: text.trim() } };
+  };
+
+  /** --timeout: stops the run when the time is up; `fired()` tells the exit code. */
+  const deadline = (ctl: RunControl): { fired: () => boolean; clear: () => void } => {
+    let fired = false;
+    const timer = args.timeoutMs ? setTimeout(() => {
+      fired = true;
+      const msg = `timed out after ${Math.round(args.timeoutMs! / 1000)} s (--timeout)`;
+      if (ndjson) {
+        ndjson.error(msg, { kind: 'timeout' });
+      } else {
+        process.stderr.write(`${red('✖')} ${msg}\n`);
+      }
+      ctl.stop(msg);
+    }, args.timeoutMs) : undefined;
+    return { fired: () => fired, clear: () => clearTimeout(timer) };
+  };
+  /**
+   * One headless turn (a task argument, or the task piped in): `@path` attachments, the --yolo tool set and
+   * --system-replace persona, then the exit code for the outcome and, with --json, the `run_result` line.
+   */
+  const headless = async (task: string, extra: string, ctl: RunControl, timedOut: () => boolean): Promise<{ answer: string; code: number }> => {
+    const prepared = await prepare(task);
+    if (extra) {
+      prepared.text = withStdin(prepared.text, extra);
+    }
+    const refs = atRefs(task, runRoot());
+    const images = (await Promise.all(refs.images.map((f) => readImage(f)))).flatMap((i) => (i ? [i.data] : []));
+    const before = session.usage && { ...session.usage };
+    const started = Date.now();
+    let answer = '';
+    let thrown: string | undefined;
+    try {
+      answer = await runTurn(core, session, prepared.text, [...args.files, ...refs.files], renderer, undefined, ctl, { ...prepared.opts, images, toolFilter: args.yolo ? YOLO_TOOLS : undefined, roleOverride: systemReplace });
+    } catch (e) {
+      if (!ctl.signal.aborted) {
+        thrown = e instanceof Error ? e.message : String(e);
+        // A failure the run already reported (error event) is not printed twice.
+        if (!(e as { reported?: boolean } | undefined)?.reported) {
+          if (ndjson) {
+            ndjson.error(thrown);
+          } else {
+            renderer.error(thrown);
+          }
+        }
+      }
+    }
+    const outcome: RunOutcome = { aborted: ctl.signal.aborted, timedOut: timedOut(), error: lastTurnError?.message ?? thrown, errorKind: lastTurnError?.kind, completed: lastTurnCompleted };
+    ndjson?.result({ finishReason: finishReasonFor(outcome), text: answer, ...runUsage(before, session.usage), durationMs: Date.now() - started, model: session.model || modelInfo.id, sessionId: session.id });
+    return { answer, code: exitCodeFor(outcome) };
   };
 
   // One-shot mode -----------------------------------------------------------
@@ -1748,31 +2212,33 @@ async function main(): Promise<void> {
         try { process.kill(0, 'SIGCONT'); } catch { /* ignore */ }
       }
     });
+    const limit = deadline(ctl);
     const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal).catch((e) => fatal(core, e)) : undefined;
     if (ctl.signal.aborted) {
-      process.exit(130);
+      process.exit(limit.fired() ? 124 : 130);
     }
     if (args.isolate && !wt) {
-      console.error(`${red('✖')} ${notGit}`);
+      reportError(notGit, 'isolate');
       process.exit(2);
     }
     // `cmd | localpilot "review this"`: the piped input goes with the prompt (or the /skill, /agent or command's task).
     const input = process.stdin.isTTY ? '' : (await readStdin()).trim();
-    const prepared = await prepare(args.prompt);
-    if (input) {
-      prepared.text = `${prepared.text}\n\n\`\`\`\n${input}\n\`\`\``;
-    }
-    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
+    const { answer, code } = await headless(args.prompt, input, ctl, limit.fired);
+    limit.clear();
     if (quiet) {
-      process.stdout.write(answer.trimEnd() + '\n');
+      if (!ndjson && answer.trim()) {
+        process.stdout.write(answer.trimEnd() + '\n');
+      }
     } else {
       changesSummary(core, session);
       if (core.tracker.forSession(session.id).length) {
         core.tracker.keep(session.id, undefined, false); // one-shot runs keep their edits; the summary above tells the user what changed
       }
     }
-    if (wt) {
-      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet).catch((e) => fatal(core, e));
+    if (wt && (await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet).catch((e) => fatal(core, e)))) {
+      session.worktree = undefined;
+      store.save(session);
+      await store.flush(session);
     }
     // The automatic memory save runs after the answer; give it a moment before the process ends.
     if (!ctl.signal.aborted) {
@@ -1786,7 +2252,7 @@ async function main(): Promise<void> {
     await core.runner.hooks?.sessionEnd(session.id, 'other', args.cwd, { signal: ctl.signal });
     await core.telemetry.flush();
     core.telemetryRemote?.dispose();
-    process.exit(ctl.signal.aborted ? 130 : 0);
+    process.exit(code);
   }
 
   // Interactive REPL --------------------------------------------------------
@@ -1799,26 +2265,50 @@ async function main(): Promise<void> {
       ctl.stop();
       process.once('SIGINT', () => process.exit(130));
     });
+    const limit = deadline(ctl);
+    let code = 0;
     try {
       const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal).catch((e) => fatal(core, e)) : undefined;
       if (args.isolate && !wt) {
-        console.error(`${red('✖')} ${notGit}`);
+        reportError(notGit, 'isolate');
         process.exit(2);
       }
-      const prepared = await prepare(input.trim());
-      const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
-      process.stdout.write(answer.trimEnd() + '\n');
-      if (wt) {
-        await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, true).catch((e) => fatal(core, e));
+      const r = await headless(input.trim(), '', ctl, limit.fired);
+      limit.clear();
+      code = r.code;
+      if (!ndjson && r.answer.trim()) {
+        process.stdout.write(r.answer.trimEnd() + '\n');
+      }
+      if (wt && (await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, true).catch((e) => fatal(core, e)))) {
+        session.worktree = undefined;
+        store.save(session);
+        await store.flush(session);
       }
     } finally {
       await shutdown(core);
     }
-    process.exit(ctl.signal.aborted ? 130 : 0);
+    process.exit(ctl.signal.aborted && !code ? 130 : code);
   }
 
-  process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Ctrl+C to stop a run, Ctrl+Z to pause it, /exit to quit.')}\n\n`);
-  rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: `${amber('◆')} `, historySize: 200 });
+  process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Tab to complete, Shift+Tab for the next mode, Ctrl+C to stop a run, Ctrl+Z to pause it, /exit to quit.')}\n\n`);
+  const newer = versionNotice(VERSION, newestInstalledExtension());
+  if (newer) {
+    process.stdout.write(`${yellow('!')} ${newer}\n\n`);
+  }
+  /** The prompt: `[auto]` in front while every action is auto-approved. */
+  const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
+  /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
+  let shiftTab = false;
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const completer = createCompleter({
+    commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
+    root: () => runRoot(),
+    skip: () => shiftTab,
+  });
+  process.stdin.prependListener('keypress', (_s: string | undefined, key: { name?: string; shift?: boolean } | undefined) => {
+    shiftTab = key?.name === 'tab' && !!key.shift;
+  });
+  rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: promptText(), historySize: 200, completer });
   setReadline(rl);
   let current: RunControl | undefined;
   let currentRun: Promise<unknown> | undefined;
@@ -1830,6 +2320,8 @@ async function main(): Promise<void> {
   }
   /** Lines typed after the run stopped, or steering it never took: they become the next prompt. */
   const deferred: string[] = [];
+  /** `>>` lines typed during a run: each starts a turn of its own once the run ends (also after Ctrl+C). */
+  const afterTurn: string[] = [];
   const leftovers = (ctl: RunControl | undefined): void => {
     const left = ctl?.close().map((m) => m.content) ?? [];
     if (left.length) {
@@ -1847,6 +2339,7 @@ async function main(): Promise<void> {
     core.sessions.delete(session.id);
     session = next;
     core.sessions.set(session.id, session);
+    detachWorktree(session, store);
     // "Always allow" answers were given for the chat being left.
     alwaysKinds.clear();
     console.log(resumeBanner(session, STYLE, how));
@@ -1869,6 +2362,49 @@ async function main(): Promise<void> {
       current.togglePause();
     }
   });
+  // Ctrl+B while the agent waits for a command: Proceed While Running (the command keeps going, output to its log).
+  process.stdin.on('keypress', (_s: string | undefined, key: { name?: string; ctrl?: boolean } | undefined) => {
+    if (key?.ctrl && key.name === 'b' && current) {
+      const n = detachWaiting();
+      if (n) {
+        renderer.note(`↗ ${n === 1 ? 'command' : `${n} commands`} left running; the agent continues`);
+      }
+    }
+  });
+  // Esc twice at an empty prompt opens the /undo turn picker (two quick presses can arrive as one meta+Esc key).
+  let lastEsc = 0;
+  process.stdin.on('keypress', (_s: string | undefined, key: { name?: string; meta?: boolean } | undefined) => {
+    if (key?.name !== 'escape' || current || busy || rl!.line) {
+      lastEsc = 0;
+      return;
+    }
+    const now = Date.now();
+    if (!key.meta && now - lastEsc > 700) {
+      lastEsc = now;
+      return;
+    }
+    lastEsc = 0;
+    busy = true;
+    process.stdout.write('\n');
+    void slash('/undo')
+      .catch((e) => renderer.error(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        busy = false;
+        void next();
+      });
+  });
+  // Shift+Tab at the prompt: the next mode (agent → multitask → debug → plan → ask), keeping what is typed.
+  process.stdin.on('keypress', (_s: string | undefined, key: { name?: string; shift?: boolean } | undefined) => {
+    if (key?.name !== 'tab' || !key.shift || current || busy) {
+      return;
+    }
+    const to = nextMode(session.mode);
+    core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to, source: 'cli' });
+    session.mode = to;
+    store.save(session);
+    process.stdout.write(`\r\x1b[2K${dim(`mode → ${to}`)}\n`);
+    rl!.prompt(true);
+  });
   rl.on('close', async () => {
     // Ctrl+D mid-run: stop the agent (and its run_command process groups) before exiting.
     const wasRunning = !!current;
@@ -1882,7 +2418,7 @@ async function main(): Promise<void> {
     }
     // Writes still waiting for their debounce (a /mode or /model change) land before the process ends.
     store.dispose();
-    process.stdout.write(dim(session.messages.length ? `bye — continue with: localpilot -c  (or -r ${session.id})\n` : 'bye\n'));
+    process.stdout.write(`${exitSummary(session, STYLE)}\n`);
     void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', runRoot()) : Promise.resolve())
       ?.then(() => core.telemetry.flush())
       .finally(() => {
@@ -1910,9 +2446,22 @@ async function main(): Promise<void> {
         console.log(dim(`model → ${m.id}`)); return true;
       }
       case 'models': await cmdModels(core); return true;
+      case 'thinking': case 'think': {
+        if (!arg) { console.log(dim(`thinking is ${session.think ?? `${getConfig().thinking} (the localpilot.thinking setting)`}; use /thinking auto|off|low|medium|high|max`)); return true; }
+        const level = parseThinkChoice(arg);
+        if (!level) { console.log(red(`"${arg}" is not a thinking level — use auto, off, low, medium, high or max`)); return true; }
+        session.think = level; store.save(session); await rememberThinking(level);
+        console.log(dim(`thinking → ${level}`)); return true;
+      }
       case 'providers': await listProviders(STYLE); return true;
       case 'changes': changesSummary(core, session); if (!core.tracker.forSession(session.id).length) { console.log(dim('no pending changes')); } return true;
-      case 'undo': { const n = await core.tracker.undo(session.id); console.log(n ? yellow(`reverted ${n} file${n === 1 ? '' : 's'}`) : dim('nothing to undo')); return true; }
+      case 'undo': {
+        if (arg !== 'all') {
+          await undoPicker(arg, { session, store, tracker: core.tracker, checkpoints: core.runner.checkpoints, ask: (q) => ask(q), style: STYLE, prefill: (t) => setImmediate(() => rl!.write(t)) });
+          return true;
+        }
+        const n = await core.tracker.undo(session.id); console.log(n ? yellow(`reverted ${n} file${n === 1 ? '' : 's'}`) : dim('nothing to undo')); return true;
+      }
       case 'keep': core.tracker.keep(session.id); console.log(green('changes kept')); return true;
       case 'isolate': {
         if (isolated) { console.log(dim(`already isolated in ${isolated.info.path}`)); return true; }
@@ -1931,6 +2480,7 @@ async function main(): Promise<void> {
         }
         isolated = undefined;
         session.worktree = undefined;
+        store.save(session);
         return true;
       }
       case 'clear':
@@ -1940,6 +2490,8 @@ async function main(): Promise<void> {
       case 'doctor': await cmdDoctor(core); return true;
       case 'history': case 'resume': case 'fork':
         return sessionSlash(cmd, arg, { store, current: () => session, switchTo, ask: (q) => ask(q), style: STYLE });
+      case 'compact': case 'smol': case 'skills': case 'agents': case 'mcp': case 'memory': case 'context': case 'yes': case 'auto': case 'settings': case 'plugins':
+        return infoSlash(cmd, arg, { session: () => session, store, providers: core.providers, skills: core.skills, memory: core.memory, workspace: core.workspace, plugins: core.plugins, mcp: core.mcp, style: STYLE, md, status: (t) => (t ? renderer.status(t) : renderer.clearStatus()), onAutoApprove: () => rl!.setPrompt(promptText()) });
       case 'skill': case 'agent': {
         const task = taskCommand(core, cmd, arg);
         if (!task || 'error' in task) { console.log(task ? red(task.error) : dim(`usage: /${cmd} <name> <task>`)); return true; }
@@ -1957,13 +2509,18 @@ async function main(): Promise<void> {
           current = undefined;
           currentRun = undefined;
           process.stdout.write('\n');
-          rl!.setPrompt(PROMPT);
+          rl!.setPrompt(promptText());
         }
         return true;
       }
-      case 'commands':
+      case 'commands': {
         console.log(core.commands.length ? core.commands.map((c) => `  ${bold(c.invoke)}${c.argumentHint ? ` ${dim(c.argumentHint)}` : ''}  ${c.description}${c.plugin ? dim(`  (plugin ${c.plugin})`) : ''}`).join('\n') : dim('no custom commands — add markdown files under .localpilot/commands or .claude/commands'));
+        const prompts = core.mcp?.promptCommands ?? [];
+        if (prompts.length) {
+          console.log(`${bold('MCP prompts')}\n${prompts.map((p) => `  ${bold(p.invoke)}${p.argumentHint ? ` ${dim(p.argumentHint)}` : ''}  ${p.description}`).join('\n')}`);
+        }
         return true;
+      }
       case 'permissions': {
         const p = core.settings.permissions;
         const fmt = (l: string[]) => (l.length ? l.join(', ') : dim('none'));
@@ -1979,26 +2536,48 @@ async function main(): Promise<void> {
         return true;
       }
       default: {
-        const custom = indexCommands(core.commands).get(`/${cmd}`);
-        if (custom) {
-          const { prompt, notes } = await expandCommand(custom, arg, { root: runRoot() });
-          notes.forEach((n) => console.log(yellow(`  ${n}`)));
-          if (!prompt) { console.log(red(`${custom.invoke}: the command file has no prompt body`)); return true; }
+        // `/deep-planning <task>` runs one turn in Plan mode and saves its answer as implementation_plan.md. It is
+        // built in, so it beats a command or skill of that name, and its task text is never expanded.
+        const planning = normalizeCommandName(cmd) === 'deep-planning';
+        let hit: Awaited<ReturnType<typeof expandSlash>>;
+        try {
+          hit = planning ? undefined : await expandSlash(line, (n) => console.log(yellow(`  ${n}`)));
+        } catch (e) {
+          console.log(red(e instanceof Error ? e.message : String(e)));
+          return true;
+        }
+        if (planning && !arg) {
+          console.log(dim('usage: /deep-planning <task>'));
+          return true;
+        }
+        if (hit || planning) {
+          const modeBefore = planning && session.mode !== 'plan' ? session.mode : undefined;
+          if (modeBefore) {
+            session.mode = 'plan';
+          }
           rl!.setPrompt('');
           current = new RunControl(session.id);
           try {
-            currentRun = runTurn(core, session, prompt, pendingFiles, renderer, rl, current, { modelRef: custom.model, permissionAllow: custom.allowedTools, display: line });
-            await currentRun;
+            const run = hit ? runTurn(core, session, hit.text, pendingFiles, renderer, rl, current, hit.opts) : runTurn(core, session, deepPlanningPrompt(arg), pendingFiles, renderer, rl, current, { display: line });
+            currentRun = run;
+            const answer = await run;
             pendingFiles = [];
             changesSummary(core, session);
+            // Only a finished answer is a plan: an error, the step limit or a stop leaves any existing file alone.
+            if (planning && (await saveImplementationPlan(runRoot(), { text: answer, completed: lastTurnAnswered, errored: !!lastTurnError, aborted: current.aborted }))) {
+              console.log(dim(`plan saved to implementation_plan.md — /mode agent, then "implement the plan"`));
+            }
           } catch (e) {
             renderer.error(e instanceof Error ? e.message : String(e));
           } finally {
+            if (modeBefore && session.mode === 'plan') {
+              session.mode = modeBefore;
+            }
             leftovers(current);
             current = undefined;
             currentRun = undefined;
             process.stdout.write('\n');
-            rl!.setPrompt(PROMPT);
+            rl!.setPrompt(promptText());
           }
           return true;
         }
@@ -2013,7 +2592,12 @@ async function main(): Promise<void> {
     rl!.setPrompt('');
     current = new RunControl(session.id);
     try {
-      currentRun = runTurn(core, session, line, pendingFiles, renderer, rl, current);
+      // A custom command or workflow named mid-message (`then /review it`) is expanded where it stands.
+      const inline = line.startsWith('/') ? undefined : await expandSlash(line, (n) => console.log(yellow(`  ${n}`)));
+      // `@path` (Tab-completed) attaches that file, or sends that image, with the message.
+      const refs = atRefs(line, runRoot());
+      const images = (await Promise.all(refs.images.map((f) => readImage(f)))).flatMap((i) => (i ? [i.data] : []));
+      currentRun = runTurn(core, session, inline?.text ?? line, [...pendingFiles, ...refs.files], renderer, rl, current, { ...inline?.opts, images });
       await currentRun;
       pendingFiles = [];
       changesSummary(core, session);
@@ -2024,25 +2608,75 @@ async function main(): Promise<void> {
       current = undefined;
       currentRun = undefined;
       process.stdout.write('\n');
-      rl!.setPrompt(PROMPT);
+      rl!.setPrompt(promptText());
     }
   };
   /** Prompts the next queued lines (typed too late to steer the last run), or shows the prompt. */
   const next = async (): Promise<void> => {
-    while (deferred.length && !current) {
-      await runPrompt(deferred.splice(0).join('\n\n'));
+    // Leftover steering first (it belongs to the turn that just ended), then each `>>` line as a turn of its own.
+    while (!current && (deferred.length || afterTurn.length)) {
+      await runPrompt(deferred.length ? deferred.splice(0).join('\n\n') : afterTurn.shift()!);
     }
+    await promptWithStatus();
+  };
+  /** The dim status line (`model · mode · ctx 34% · main +3 −1 · auto:off · $0.02`), then the prompt. */
+  const promptWithStatus = async (): Promise<void> => {
+    if (process.stdout.isTTY) {
+      const win = core.providers.cachedModels().find((m) => m.id === (session.model || getConfig().defaultModel));
+      const ctxPercent = contextPercent(session.contextTokens, win ? effectiveContextWindow(win, getConfig().contextWindow) : undefined);
+      const git = await gitState(runRoot());
+      if (current) {
+        return; // a run started meanwhile
+      }
+      process.stdout.write(`${dim(statusLineText({ model: session.model || modelInfo.id, mode: session.mode, ctxPercent, git, auto: isAutoApprove(), costUsd: session.usage?.costUsd }))}\n`);
+    }
+    rl!.setPrompt(promptText());
     rl!.prompt();
   };
+  /** `/queue`: steers the running agent has not read yet, then the `>>` lines waiting for the turn to end. */
+  let steerSeq = 0;
+  const queueRows = (): { kind: 'steer' | 'after'; text: string; steerId?: string }[] => [
+    ...(current?.pendingSteers() ?? []).map((m) => ({ kind: 'steer' as const, text: m.content, steerId: m.meta?.steerId })),
+    ...afterTurn.map((text) => ({ kind: 'after' as const, text })),
+  ];
+  const queueCommand = (line: string): boolean => {
+    const cmd = parseRunLine(line);
+    if (cmd.kind === 'list') {
+      const rows = queueRows();
+      console.log(rows.length ? rows.map((r, i) => `  ${i + 1}. ${r.kind === 'steer' ? amber('steering') : cyan('next turn')}  ${r.text.replace(/\s+/g, ' ').slice(0, 100)}`).join('\n') : dim('the queue is empty'));
+      return true;
+    }
+    if (cmd.kind === 'remove') {
+      const row = queueRows()[cmd.index - 1];
+      const gone = !row ? false : row.kind === 'steer' ? !!(row.steerId && current?.removeSteer(row.steerId)) : afterTurn.splice(cmd.index - 1 - (current?.pendingSteers().length ?? 0), 1).length > 0;
+      console.log(gone ? dim(`removed ${cmd.index}: ${row!.text.replace(/\s+/g, ' ').slice(0, 80)}`) : yellow(`no queued message ${cmd.index} — /queue lists them`));
+      return true;
+    }
+    if (cmd.kind === 'queueUsage') {
+      console.log(dim('/queue lists queued messages · /queue rm N removes one'));
+      return true;
+    }
+    return false;
+  };
 
-  rl.prompt();
-  const PROMPT = `${amber('◆')} `;
+  void promptWithStatus();
   rl.on('line', async (raw) => {
     const line = raw.trim();
     if (current) {
       // Typed while the agent works: queue it for the next step rather than refusing or waiting.
+      if (line && queueCommand(line)) {
+        return;
+      }
+      const run = parseRunLine(line);
+      if (run.kind === 'after') {
+        if (run.text) {
+          afterTurn.push(run.text);
+          renderer.note(`↩ runs after this turn (${afterTurn.length} queued): ${run.text.slice(0, 80)}`);
+        }
+        return;
+      }
       if (line) {
-        if (!current.aborted && current.steer({ role: 'user', content: line })) {
+        if (!current.aborted && current.steer({ role: 'user', content: line, meta: { steerId: `cli_${++steerSeq}` } })) {
           renderer.note(`↩ queued for the agent: ${line.slice(0, 80)}${current.paused ? ' (Ctrl+Z to resume)' : ''}`);
         } else {
           deferred.push(line);
@@ -2056,6 +2690,17 @@ async function main(): Promise<void> {
       return;
     }
     if (!line) { rl!.prompt(); return; }
+    if (queueCommand(line)) {
+      rl!.prompt();
+      return;
+    }
+    if (line.startsWith('>>')) {
+      // Nothing is running, so "after this turn" is now.
+      const text = line.slice(2).trim();
+      if (text) { await runPrompt(text); }
+      await next();
+      return;
+    }
     if (line.startsWith('/')) {
       busy = true;
       try {

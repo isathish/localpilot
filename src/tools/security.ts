@@ -1,7 +1,8 @@
-import * as vscode from 'vscode';
 import { getManagedPolicy } from '../agent/managedPolicy';
 import { formatFindings, scanWorkspace } from '../security/scan';
 import { Tool } from '../types';
+import { rootArg } from './fs';
+import { ROOT_PARAM } from './rootPaths';
 
 export const securityScanTool: Tool = {
   approvalKind: 'network',
@@ -14,11 +15,12 @@ export const securityScanTool: Tool = {
       properties: {
         kinds: { type: 'array', items: { type: 'string', enum: ['dependencies', 'secrets', 'code', 'all'] }, description: 'Default: all three' },
         path: { type: 'string', description: 'Limit to a workspace-relative folder' },
+        root: ROOT_PARAM,
       },
     },
   },
   async execute(args, ctx) {
-    const root = ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const root = rootArg(args.root, ctx);
     if (!root) {
       return { content: 'No workspace folder open.', isError: true };
     }

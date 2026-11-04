@@ -172,7 +172,7 @@ A skill is preloaded when:
 
 - its name or a quoted trigger phrase appears in the request, or
 - it is pinned to the chat, or
-- you forced it with `/skill <name> …`, or
+- you forced it with `/skill <name> …` or `/<name> …` (an enabled skill also runs as its own slash command and is listed under **Skills** in the `/` menu), or
 - the request is brief (24 words or fewer) and has exactly one looser match. This saves a model round trip; the note lets the model ignore the skill if it does not fit.
 
 Limits:
@@ -202,20 +202,23 @@ LocalPilot records the kind of each request (main verb plus key nouns, for examp
 
 The data is a small JSON file, `skill-learning.json`, in the extension's global storage (`~/.localpilot/` for the CLI). Entries expire after 60 days.
 
-## Customize: rules, commands, hooks and skills
+## Customize: rules, commands, hooks, skills and plugins
 
-**Settings → Customize** lists what shapes the agent, in four tabs. Open it from the scale button in the chat composer, or with *LocalPilot: Open Settings*. Each tab shows the **Workspace** items first and then the **Global** ones (your home folder).
+**Settings → Customize** lists what shapes the agent, in five tabs. Open it from the scale button in the chat composer, or with *LocalPilot: Open Settings*. Each tab shows the **Workspace** items first and then the **Global** ones (your home folder).
 
 | Tab | Lists | The switch |
 |---|---|---|
 | Rules | Every instruction file: `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.clinerules`, and the files in the rule folders | Writes `disabled: true` into the file's front matter (or removes it). A switched-off rule leaves the prompt and `/memory` |
 | Commands | Slash commands in `.localpilot/commands/` and `.claude/commands/`, in the workspace and in your home | Same as rules: `disabled: true` in the front matter |
-| Hooks | Hooks from `settings.json` (open the file to change them). Scripts in `.localpilot/hooks/`, `.clinerules/hooks/`, `.cline/hooks/` and their home-folder versions are listed with a **not run yet** badge: the agent does not run them, so add them to `settings.json` | No switch. **Run hooks** turns every `settings.json` hook off |
+| Hooks | [Hook scripts](claude-code-compatibility.md#hook-scripts-in-hook-folders) in `.localpilot/hooks/`, `.clinerules/hooks/`, `.cline/hooks/` and their home-folder versions, and the hooks from `settings.json` (open the file to change those). A script whose name is not an event gets a **not an event** badge and never runs | Scripts: sets the executable bit (755) or clears it (644); on Windows, renames the script to or from `<name>.disabled`. **Run hooks** turns every hook off |
 | Skills | Installed skills | The same switch as in **Skills & subagents** |
+| Plugins | Installed [plugins](claude-code-compatibility.md#plugins), with their version and what they add | Writes `enabledPlugins` in `.localpilot/settings.json` (the workspace's for workspace plugins, your home's for yours), like *LocalPilot: Manage Plugins* |
 
-Each row also has **Open** (in the editor) and **Delete** (after a confirmation). Rules from a parent folder of the workspace, hooks and hook scripts can only be opened.
+Each row also has **Open** (in the editor; a plugin opens its `plugin.json`) and **Delete** (after a confirmation). Rules from a parent folder of the workspace and `settings.json` hooks can only be opened. Only plugins inside a `plugins` folder can be deleted from here; one from `localpilot.pluginPaths`, or a workspace that is itself a plugin, is only listed.
 
-**New rule…** and **New command…** take a name and create the file in `.localpilot/rules/` or `.localpilot/commands/` of the workspace, or of your home folder. Then they open it. Rules may end in `.md` or `.txt`, and commands in `.md`. A name without an extension gets `.md`, so "testing" becomes `.localpilot/rules/testing.md`. If the file already exists, it is opened, not overwritten. The Hooks tab has no create box: hooks are added in `settings.json`.
+**New rule…** and **New command…** take a name and create the file in `.localpilot/rules/` or `.localpilot/commands/` of the workspace, or of your home folder. Then they open it. Rules may end in `.md` or `.txt`, and commands in `.md`. A name without an extension gets `.md`, so "testing" becomes `.localpilot/rules/testing.md`. If the file already exists, it is opened, not overwritten.
+
+**New hook…** offers only the events that have no hook yet. It writes a commented template, `<Event>.sh` (bash; `<Event>.ps1` for PowerShell on Windows), that lists the event's input fields, logs them to stderr and prints a response that changes nothing (`{"continue": true}`). The file is created switched off (mode 644; on Windows it is named `<Event>.ps1.disabled`): edit it, then turn it on.
 
 Switching keeps the rest of the file exactly as it was: the other keys, the line endings and a byte-order mark. If the front matter cannot be read (no closing `---`, or a line that is not `key: value`), nothing is changed and you get an error. Edits only go to listed files whose real path, with symlinks resolved, is inside the workspace or your rule, command or hook folders.
 

@@ -3,16 +3,19 @@ import * as os from 'os';
 import * as path from 'path';
 import { discoverCommands } from '../agent/commands';
 import { setDisabled } from '../agent/frontMatterEdit';
-import { HOOK_EVENTS, readSettingsFile, settingsFilesFor, userSettingsFiles } from '../agent/settings';
+import { discoverHookScripts, HOOK_DISABLED_SUFFIX, HOOK_SCRIPT_EXT, hookScriptDirs, hookScriptName, hookTemplate, scriptEvent } from '../agent/hookScripts';
+import { describePlugin, setPluginEnabled } from '../agent/pluginInstaller';
+import { discoverPlugins } from '../agent/plugins';
+import { HOOK_EVENTS, loadProjectSettings, readSettingsFile, settingsFilesFor, userSettingsFiles } from '../agent/settings';
 import { collectInstructionFiles } from '../context/instructions';
 
 /**
- * Settings → Customize: the rule, command and hook files of the workspace and of the user, with on/off, open, delete
- * and create. Every write goes to a file that is in the current listing and whose real path lies inside an allowed
+ * Settings → Customize: the rule, command and hook files and the plugins of the workspace and of the user, with on/off,
+ * open, delete and create. Every write goes to a file that is in the current listing and whose real path lies inside an allowed
  * root, so a symlink cannot redirect a toggle or a delete outside the rule, command or hook folders.
  */
 
-export type CustomKind = 'rule' | 'command' | 'hook';
+export type CustomKind = 'rule' | 'command' | 'hook' | 'plugin';
 
 export interface CustomItem {
   kind: CustomKind;
@@ -30,26 +33,30 @@ export interface CustomItem {
   /** A hook configured in a settings.json: `detail` is the matcher and command; Open shows the settings file. */
   fromSettings?: boolean;
   detail?: string;
-  /** A hook script in a hooks folder: listed so it can be opened, but the agent does not run these yet. */
+  /** A hook script whose file name is not an event: listed, never run. */
   notRun?: boolean;
+  /** Plugins: version, and whether it may be deleted from here (not the workspace itself or a `pluginPaths` folder). */
+  version?: string;
+  removable?: boolean;
+  /** From the organisation's folder next to managed-settings.json: listed and opened, never changed from here. */
+  managed?: boolean;
+  /** `alwaysEnabled: true` front matter: cannot be switched off. */
+  alwaysEnabled?: boolean;
 }
 
 export interface CustomizeData {
   rules: CustomItem[];
   commands: CustomItem[];
   hooks: CustomItem[];
-  /** Hook events offered for a new hook script. */
+  plugins: CustomItem[];
+  /** Hook events offered for a new hook script: those with no hook yet. */
   events: string[];
   hasWorkspace: boolean;
-  /** Hook scripts are switched with the executable bit (not on Windows). */
+  /** Hook scripts are switched with the executable bit, on Windows by renaming them `….disabled`. */
   canSwitchHooks: boolean;
 }
 
-const WS_HOOK_DIRS = ['.localpilot/hooks', '.clinerules/hooks', '.cline/hooks'];
-const USER_HOOK_DIRS = ['.localpilot/hooks', '.cline/hooks', 'Documents/Cline/Hooks'];
-const HOOK_EXT = /\.(sh|bash|zsh|js|mjs|cjs|ts|py|ps1)$/i;
-const NEW_DIR: Record<CustomKind, string> = { rule: '.localpilot/rules', command: '.localpilot/commands', hook: '.localpilot/hooks' };
-const canChmod = process.platform !== 'win32';
+const NEW_DIR: Record<Exclude<CustomKind, 'plugin'>, string> = { rule: '.localpilot/rules', command: '.localpilot/commands', hook: '.localpilot/hooks' };
 
 const tilde = (p: string, home: string) => (p === home || p.startsWith(home + path.sep) ? `~${p.slice(home.length).replace(/\\/g, '/')}` : p);
 
@@ -79,7 +86,10 @@ export function allowedRoots(kind: CustomKind, roots: string[], home = os.homedi
   if (kind === 'command') {
     return [...roots.flatMap((r) => [path.join(r, '.localpilot', 'commands'), path.join(r, '.claude', 'commands')]), h('.localpilot/commands'), h('.claude/commands')];
   }
-  return [...roots.flatMap((r) => WS_HOOK_DIRS.map((d) => path.join(r, d))), ...USER_HOOK_DIRS.map(h)];
+  if (kind === 'plugin') {
+    return [...roots.flatMap((r) => [path.join(r, '.localpilot', 'plugins'), path.join(r, '.claude', 'plugins')]), h('.localpilot/plugins'), h('.claude/plugins')];
+  }
+  return hookScriptDirs(roots, home).map((d) => d.dir);
 }
 
 async function listRules(roots: string[], home: string): Promise<CustomItem[]> {
@@ -89,43 +99,60 @@ async function listRules(roots: string[], home: string): Promise<CustomItem[]> {
     file: f.file,
     name: f.name ?? path.basename(f.file),
     label: f.label,
-    scope: f.scope === 'user' ? ('global' as const) : ('workspace' as const),
+    scope: f.scope === 'user' || f.scope === 'managed' ? ('global' as const) : ('workspace' as const),
     ...(f.disabled ? { disabled: true } : {}),
     ...(f.paths ? { paths: f.paths } : {}),
-    // Ancestor folders' CLAUDE.md belong to another project: shown, not changed from here.
-    editable: f.scope !== 'ancestor',
+    ...(f.scope === 'managed' ? { managed: true } : {}),
+    ...(f.alwaysEnabled ? { alwaysEnabled: true } : {}),
+    // Ancestor folders' CLAUDE.md belong to another project, the organisation's rules to the administrator: shown, not changed from here.
+    editable: f.scope !== 'ancestor' && f.scope !== 'managed' && !f.alwaysEnabled,
   }));
 }
 
 async function listCommands(roots: string[], home: string): Promise<CustomItem[]> {
   const all = await discoverCommands(roots, { home, includeDisabled: true });
   return all
-    .filter((c) => c.source === 'project' || c.source === 'user')
-    .map((c) => ({ kind: 'command' as const, file: c.file, name: c.invoke, label: labelFor(c.file, roots, home), scope: c.source === 'user' ? ('global' as const) : ('workspace' as const), description: c.description, ...(c.disabled ? { disabled: true } : {}), editable: true }));
+    .filter((c) => c.source === 'project' || c.source === 'user' || c.source === 'managed')
+    .map((c) => ({
+      kind: 'command' as const,
+      file: c.file,
+      name: c.invoke,
+      label: c.source === 'managed' ? `organization/commands/${path.basename(c.file)}` : labelFor(c.file, roots, home),
+      scope: c.source === 'project' ? ('workspace' as const) : ('global' as const),
+      description: c.description,
+      ...(c.disabled ? { disabled: true } : {}),
+      ...(c.source === 'managed' ? { managed: true } : {}),
+      ...(c.alwaysEnabled ? { alwaysEnabled: true } : {}),
+      editable: c.source !== 'managed' && !c.alwaysEnabled,
+    }));
 }
 
 async function listHookFiles(roots: string[], home: string): Promise<CustomItem[]> {
-  const out: CustomItem[] = [];
-  const dirs = [...roots.flatMap((r) => WS_HOOK_DIRS.map((d) => ({ dir: path.join(r, d), scope: 'workspace' as const }))), ...USER_HOOK_DIRS.map((d) => ({ dir: path.join(home, d), scope: 'global' as const }))];
-  for (const { dir, scope } of dirs) {
-    let names: string[];
-    try {
-      names = (await fs.readdir(dir)).filter((n) => !n.startsWith('.')).sort();
-    } catch {
-      continue;
-    }
-    for (const n of names) {
-      const file = path.join(dir, n);
-      const st = await fs.stat(file).catch(() => undefined);
-      if (!st?.isFile()) {
-        continue;
-      }
-      const event = HOOK_EVENTS.find((e) => e.toLowerCase() === n.replace(HOOK_EXT, '').toLowerCase());
-      // Folder hook scripts are not run by the agent yet: shown read-only, so the listing does not suggest otherwise.
-      out.push({ kind: 'hook', file, name: n, label: labelFor(file, roots, home), scope, description: event ? `${event} hook script` : 'Hook script', notRun: true, editable: false });
-    }
-  }
-  return out;
+  const scripts = await discoverHookScripts(roots, { home });
+  return scripts.map((sc) => {
+    const base = hookScriptName(sc.name).replace(HOOK_SCRIPT_EXT, '');
+    const description = !sc.event ? 'Not an event name: never runs' : base === sc.event ? `${sc.event} hook script` : `${base} → ${sc.event}${sc.matcher ? ` (${sc.matcher})` : ''}`;
+    return { kind: 'hook' as const, file: sc.file, name: sc.name, label: labelFor(sc.file, roots, home), scope: sc.scope, description, ...(sc.enabled ? {} : { disabled: true }), ...(sc.event ? {} : { notRun: true }), editable: true };
+  });
+}
+
+async function listPlugins(roots: string[], home: string, pluginDirs: string[]): Promise<CustomItem[]> {
+  const { enabledPlugins } = await loadProjectSettings(roots, { home });
+  const list = await discoverPlugins(roots, { home, extraDirs: pluginDirs, enabledPlugins });
+  const managed = allowedRoots('plugin', roots, home);
+  return list.map((p) => ({
+    kind: 'plugin' as const,
+    file: p.root,
+    name: p.name,
+    label: labelFor(p.root, roots, home),
+    scope: p.source === 'user' ? ('global' as const) : ('workspace' as const),
+    description: p.description || describePlugin(p).summary,
+    detail: describePlugin(p).summary.replace(/^[^:]*: /, ''),
+    ...(p.version ? { version: p.version } : {}),
+    ...(p.enabled ? {} : { disabled: true }),
+    editable: true,
+    removable: managed.some((d) => inside(p.root, d) && path.resolve(p.root) !== path.resolve(d)),
+  }));
 }
 
 async function listSettingsHooks(roots: string[], home: string): Promise<CustomItem[]> {
@@ -143,18 +170,23 @@ async function listSettingsHooks(roots: string[], home: string): Promise<CustomI
   return out;
 }
 
-export async function listCustomizations(roots: string[], home = os.homedir()): Promise<CustomizeData> {
-  const [rules, commands, hookFiles, settingsHooks] = await Promise.all([listRules(roots, home), listCommands(roots, home), listHookFiles(roots, home), listSettingsHooks(roots, home)]);
-  return { rules, commands, hooks: [...hookFiles, ...settingsHooks], events: [...HOOK_EVENTS], hasWorkspace: roots.length > 0, canSwitchHooks: canChmod };
+export async function listCustomizations(roots: string[], home = os.homedir(), opts: { pluginDirs?: string[] } = {}): Promise<CustomizeData> {
+  const [rules, commands, hookFiles, settingsHooks, plugins] = await Promise.all([listRules(roots, home), listCommands(roots, home), listHookFiles(roots, home), listSettingsHooks(roots, home), listPlugins(roots, home, opts.pluginDirs ?? [])]);
+  const hooked = new Set<string>([...hookFiles.map((h) => scriptEvent(hookScriptName(h.name))?.event), ...settingsHooks.map((h) => h.name)].filter((e): e is string => !!e));
+  return { rules, commands, hooks: [...hookFiles, ...settingsHooks], plugins, events: HOOK_EVENTS.filter((e) => !hooked.has(e)), hasWorkspace: roots.length > 0, canSwitchHooks: true };
 }
 
 /** The listed, editable item for `file`, after checking that its real path is inside an allowed root. */
-async function writable(kind: CustomKind, file: string, roots: string[], home: string): Promise<CustomItem> {
-  const data = await listCustomizations(roots, home);
-  const items = kind === 'rule' ? data.rules : kind === 'command' ? data.commands : data.hooks;
+async function writable(kind: CustomKind, file: string, roots: string[], home: string, pluginDirs: string[] = []): Promise<CustomItem> {
+  const data = await listCustomizations(roots, home, { pluginDirs });
+  const items = kind === 'rule' ? data.rules : kind === 'command' ? data.commands : kind === 'plugin' ? data.plugins : data.hooks;
   const item = items.find((i) => i.editable && path.resolve(i.file) === path.resolve(file));
   if (!item) {
     throw new Error(`Not a ${kind} file LocalPilot manages: ${file}`);
+  }
+  if (kind === 'plugin') {
+    // Switching a plugin writes settings.json, not the plugin: only deleting needs the folder check (removable).
+    return item;
   }
   const target = await real(file);
   const allowed = await Promise.all(allowedRoots(kind, roots, home).map(real));
@@ -164,14 +196,34 @@ async function writable(kind: CustomKind, file: string, roots: string[], home: s
   return item;
 }
 
-/** Rules and commands: `disabled: true` front matter; hook scripts: the executable bit. */
-export async function setItemEnabled(kind: CustomKind, file: string, enabled: boolean, roots: string[], home = os.homedir()): Promise<void> {
-  await writable(kind, file, roots, home);
+/** The settings.json that switches a plugin: the user's for user plugins, the first workspace folder's otherwise. */
+export function pluginSettingsFile(scope: 'global' | 'workspace', roots: string[], home = os.homedir()): string {
+  return scope === 'global' || !roots[0] ? path.join(home, '.localpilot', 'settings.json') : path.join(roots[0], '.localpilot', 'settings.json');
+}
+
+/**
+ * Rules and commands: `disabled: true` front matter; hook scripts: the executable bit (on Windows: a `.disabled`
+ * suffix on the file name); plugins: `enabledPlugins`.
+ */
+export async function setItemEnabled(kind: CustomKind, file: string, enabled: boolean, roots: string[], home = os.homedir(), pluginDirs: string[] = [], platform: NodeJS.Platform = process.platform): Promise<void> {
+  const item = await writable(kind, file, roots, home, pluginDirs);
+  if (kind === 'plugin') {
+    await setPluginEnabled(pluginSettingsFile(item.scope, roots, home), item.name, enabled);
+    return;
+  }
   if (kind === 'hook') {
-    if (!canChmod) {
-      throw new Error('Hook scripts are switched on and off with the executable bit, which Windows does not have.');
+    const bare = path.join(path.dirname(file), hookScriptName(path.basename(file)));
+    // A `.disabled` name is off on every platform; Windows has no executable bit, so that is its only switch.
+    const target = enabled ? bare : platform === 'win32' ? bare + HOOK_DISABLED_SUFFIX : file;
+    if (target !== file) {
+      if (await fs.stat(target).then(() => true, () => false)) {
+        throw new Error(`${path.basename(file)} was not renamed: ${path.basename(target)} already exists.`);
+      }
+      await fs.rename(file, target);
     }
-    await fs.chmod(file, enabled ? 0o755 : 0o644);
+    if (platform !== 'win32') {
+      await fs.chmod(target, enabled ? 0o755 : 0o644);
+    }
     return;
   }
   const raw = await fs.readFile(file, 'utf8');
@@ -181,8 +233,17 @@ export async function setItemEnabled(kind: CustomKind, file: string, enabled: bo
   }
 }
 
-export async function deleteItem(kind: CustomKind, file: string, roots: string[], home = os.homedir()): Promise<void> {
-  await writable(kind, file, roots, home);
+export async function deleteItem(kind: CustomKind, file: string, roots: string[], home = os.homedir(), pluginDirs: string[] = []): Promise<void> {
+  const item = await writable(kind, file, roots, home, pluginDirs);
+  if (kind === 'plugin') {
+    const target = await real(file);
+    const allowed = await Promise.all(allowedRoots('plugin', roots, home).map(real));
+    if (!item.removable || !allowed.some((dir) => inside(target, dir) && target !== dir)) {
+      throw new Error(`${item.name} is not in a plugins folder LocalPilot manages: remove ${file} yourself.`);
+    }
+    await fs.rm(file, { recursive: true, force: true });
+    return;
+  }
   await fs.rm(file);
 }
 
@@ -198,12 +259,21 @@ export function newItemFileName(kind: CustomKind, raw: string): string {
   if (name.length > 80 || !/^[\w][\w .-]*$/.test(name) || name.includes('..') || /[. ]$/.test(name)) {
     throw new Error('Use letters, digits, spaces, "-", "_" and "." only (no folders), up to 80 characters.');
   }
+  if (kind === 'plugin') {
+    throw new Error('Plugins are installed with LocalPilot: Browse Plugins…, not created here.');
+  }
   if (kind === 'hook') {
+    // A template is bash or PowerShell, named after its event: `PreToolUse.sh`.
     const ext = /\.[^.]+$/.exec(name)?.[0];
-    if (ext && !HOOK_EXT.test(name)) {
-      throw new Error(`Hook scripts end in .sh, .bash, .zsh, .js, .mjs, .cjs, .ts, .py or .ps1 (or have no extension), not ${ext}.`);
+    if (ext && !/^\.(sh|bash|ps1)$/i.test(ext)) {
+      throw new Error(`New hook scripts are bash (.sh) or PowerShell (.ps1), not ${ext}.`);
     }
-    return name;
+    const base = ext ? name.slice(0, -ext.length) : name;
+    const event = HOOK_EVENTS.find((e) => e.toLowerCase() === base.toLowerCase());
+    if (!event) {
+      throw new Error(`A hook script is named after its event: ${HOOK_EVENTS.join(', ')}.`);
+    }
+    return `${event}${ext ? ext.toLowerCase() : process.platform === 'win32' ? '.ps1' : '.sh'}`;
   }
   const allowed = kind === 'rule' ? /\.(md|txt)$/i : /\.md$/i;
   if (allowed.test(name)) {
@@ -216,7 +286,7 @@ export function newItemFileName(kind: CustomKind, raw: string): string {
   return `${name}.md`;
 }
 
-function template(kind: CustomKind, file: string): string {
+function template(kind: Exclude<CustomKind, 'plugin'>, file: string): string {
   const base = path.basename(file).replace(/\.[^.]+$/, '');
   if (kind === 'rule') {
     return `---\n# Uncomment to apply this rule only while a matching file is in context:\n# paths: src/**/*.ts\n---\n# ${base}\n\n`;
@@ -224,16 +294,18 @@ function template(kind: CustomKind, file: string): string {
   if (kind === 'command') {
     return `---\ndescription: ${base}\nargument-hint: [what to do]\n---\n$ARGUMENTS\n`;
   }
-  return `#!/usr/bin/env bash\n# LocalPilot hook script. The event arrives as JSON on stdin.\n# Exit 0 to continue, exit 2 to block the action (stderr is the reason given to the agent).\ncat > /dev/null\nexit 0\n`;
+  const name = hookScriptName(path.basename(file));
+  return hookTemplate(name.replace(HOOK_SCRIPT_EXT, ''), /\.ps1$/i.test(name) ? 'powershell' : 'bash');
 }
 
 /**
- * Creates `.localpilot/{rules,commands}/<name>` in the first workspace folder or the home folder. An existing file is
- * left alone (`created: false`). Hook scripts are refused until the agent runs them.
+ * Creates `.localpilot/{rules,commands,hooks}/<name>` in the first workspace folder or the home folder. An existing
+ * file is left alone (`created: false`). A hook script is a commented template created switched off: mode 0644, and
+ * on Windows (no executable bit) named `<Event>.ps1.disabled`.
  */
-export async function createItem(kind: CustomKind, rawName: string, scope: 'global' | 'workspace', roots: string[], home = os.homedir()): Promise<{ file: string; created: boolean }> {
-  if (kind === 'hook') {
-    throw new Error('Hook scripts in a hooks folder are not run yet: add the hook to .localpilot/settings.json instead.');
+export async function createItem(kind: CustomKind, rawName: string, scope: 'global' | 'workspace', roots: string[], home = os.homedir(), platform: NodeJS.Platform = process.platform): Promise<{ file: string; created: boolean }> {
+  if (kind === 'plugin') {
+    throw new Error('Plugins are installed with LocalPilot: Browse Plugins…, not created here.');
   }
   const name = newItemFileName(kind, rawName);
   const base = scope === 'workspace' ? roots[0] : home;
@@ -247,7 +319,19 @@ export async function createItem(kind: CustomKind, rawName: string, scope: 'glob
   if (!allowed.some((a) => inside(realDir, a))) {
     throw new Error(`Refusing to write in ${dir}: it resolves outside the ${kind} folders (${realDir}).`);
   }
-  const file = path.join(dir, name);
+  let file = path.join(dir, name);
+  if (kind === 'hook') {
+    // The script may already be there, switched on or off.
+    const off = file + HOOK_DISABLED_SUFFIX;
+    for (const f of [file, off]) {
+      if (await fs.stat(f).then(() => true, () => false)) {
+        return { file: f, created: false };
+      }
+    }
+    if (platform === 'win32') {
+      file = off;
+    }
+  }
   try {
     await fs.writeFile(file, template(kind, file), { encoding: 'utf8', flag: 'wx', mode: 0o644 });
     return { file, created: true };

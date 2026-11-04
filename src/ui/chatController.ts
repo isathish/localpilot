@@ -16,14 +16,17 @@ import { MentionHit } from '../context/mentionSearch';
 import { MAX_ATTACHMENT_BYTES, searchCommits } from '../context/mentionResolvers';
 import { formatSize } from '../context/extractors';
 import { ProviderRegistry } from '../providers/registry';
-import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
+import { isEmptySession, SessionStore } from '../sessions/sessionStore';
+import { HistoryPage, HistoryQuery } from '../sessions/historyQuery';
 import { archiveCompaction } from '../sessions/transcriptArchive';
+import { contextReport, memoryReport } from '../agent/reports';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, UserAnswer, UserQuestion } from '../types';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
 import { MAX_ATTACHMENTS } from './imageSize';
 import { captureScreenshot, IMAGE_EXT, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
 import { RunControl } from '../agent/runControl';
+import { MessageQueue, QueueRow, queueLabel } from '../agent/messageQueue';
 import { WorktreeChange, WorktreeManager } from '../agent/worktrees';
 import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPrompt, TaskSuggestion } from '../agent/taskSuggestions';
 import { quickPrompt } from './inlineEdit';
@@ -31,11 +34,26 @@ import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { userText } from '../agent/clarify';
 import { findRipgrep, runProcess } from '../tools/search';
 import { releaseIntegratedTerminal } from '../tools/terminal';
-import { agentTaskPrompt, CommandManager, CustomCommand, expandCommand, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
+import { agentTaskPrompt, CommandManager, CustomCommand, deepPlanningPrompt, expandCommand, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
+import { findSlashToken, normalizeCommandName, pickSlashTarget, SlashToken, spliceSlashToken } from '../agent/slashNames';
+import { PlanTurnOutcome, saveImplementationPlan } from '../agent/deepPlanning';
+import { BASIC_KEEP_ASSISTANT, basicSummary } from '../context/basicCompaction';
 import * as path from 'path';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { formatBoard, TeamBoard } from '../agent/teamBoard';
 import { isPdfPath, openPdf } from './pdf/open';
+import { detachCommand, onCommandRunChange, runningCommands, stopCommand } from '../terminal/commandRun';
+import type { McpManager } from '../mcp/mcpManager';
+import { parseMcpSlash, withoutMcpPromptImages } from '../mcp/prompts';
+import { handleMcpChatAction, McpChatMessage, mcpChatStatus } from './mcpChat';
+import { RunNotifier } from './runNotifier';
+import { addManualModel, favoriteModels, manualModelProviders, toggleFavoriteModel } from './modelPicker';
+import { parseThinkChoice } from '../agent/thinking';
+import { affectsAutoApprove, AutoApproveMsg, autoApproveState, setAutoApprove } from './autoApproveBar';
+import { affectsUiPrefs, checkPathsExist, PathsExistMsg, uiPrefsMsg, UiPrefsMsg } from './chatUiExtras';
+import type { WhatsNew } from './whatsNew';
+import { toDecision } from '../agent/approvalLevel';
+import type { ApprovalDecision } from '../types';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -53,12 +71,15 @@ export type SkillOffer = {
 export type ToWebview =
   | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; models: ModelInfo[]; defaultModel: string; contextWindow: number; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off'; running: string[]; paused: string[]; platform: NodeJS.Platform }
   | { type: 'sessions'; sessions: ReturnType<SessionStore['list']> }
+  | McpChatMessage
+  | UiPrefsMsg
+  | PathsExistMsg
   /**
    * `liveFrom` is set while the session is running: messages from that index on belong to the turn in flight and are
    * drawn from the live event stream (see `replay`), not from the transcript — otherwise a tab switch or reopen
    * mid-run would show every step twice.
    */
-  | { type: 'session'; session: Session; liveFrom?: number; offers?: SkillOffer }
+  | { type: 'session'; session: Session; liveFrom?: number; offers?: SkillOffer; cwd?: string }
   /**
    * Everything a freshly created webview missed about a run in flight, in the order it happened: events (text
    * deltas coalesced), queued steering messages and the approvals still waiting for an answer. `startedAt` keeps the
@@ -67,7 +88,7 @@ export type ToWebview =
   | { type: 'replay'; sessionId: string; items: ToWebview[]; startedAt: number; status?: string; truncated: boolean }
   /** `contextWindow` is the `localpilot.contextWindow` setting (0 = model maximum) so the meter shows the window a model is actually given. */
   /** `autoModel`: the id the router would answer an Auto chat with right now (the default model if set and reachable, else the best fit). */
-  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string>; visionRouting?: boolean }
+  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string>; visionRouting?: boolean; favorites?: string[]; manualProviders?: string[]; thinking?: string }
   | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off' }
   | { type: 'event'; event: AgentEvent }
   /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
@@ -77,13 +98,18 @@ export type ToWebview =
   | { type: 'question'; id: string; sessionId: string; questions: UserQuestion[] }
   | { type: 'questionResolved'; id: string }
   | { type: 'approvalResolved'; id: string }
+  | AutoApproveMsg
   | { type: 'running'; sessionId: string; running: boolean }
   /** Pause state of a run or of one of its subagents (`childId`). `paused` = requested; `holding` = the loop has actually stopped at a step boundary. */
   | { type: 'paused'; sessionId: string; childId?: string; agent?: string; paused: boolean; holding: boolean }
+  /** A run_command call (tool call id) started, was detached (Proceed While Running) or ended. */
+  | { type: 'commandState'; sessionId: string; id: string; state: 'running' | 'detached' | 'done'; logPath?: string }
   /** A message typed while the agent was busy was queued; the loop reports `steer` when it is injected. */
   | { type: 'steerQueued'; sessionId: string; id: string; content: string; images?: string[]; fixes?: PromptFix[] }
   /** A message waits for a manual compaction to finish before it starts a run. */
   | { type: 'sendQueued'; sessionId: string }
+  /** Pending steers and after-turn messages of a chat, for the queue banner; `removed` = cancelled steer rows to drop. */
+  | { type: 'queue'; sessionId: string; items: QueueRow[]; label: string; removed?: string[] }
   /** A message never started a run (no model could read its images, a custom command failed to expand): the chat drops its placeholder turn. */
   | { type: 'sendRejected'; sessionId: string }
   | {
@@ -105,13 +131,17 @@ export type ToWebview =
   | { type: 'openFiles'; files: string[]; active?: string; selection?: boolean }
   | { type: 'mentionResults'; query: string; items: MentionHit[]; commits?: { sha: string; subject: string }[] }
   /** `append`: add the text below the current draft and the attachments to its chips instead of replacing them. */
-  | { type: 'draft'; text: string; images?: string[]; attachments?: string[]; append?: boolean }
+  | { type: 'draft'; text: string; images?: string[]; attachments?: string[]; append?: boolean; merge?: boolean }
+  /** Answer to `checkpointExists`: whether Reset Code can put the files back, and the message's draft (text, attachment refs) for the inline editor. */
+  | { type: 'checkpointExistsResult'; sessionId: string; index: number; exists: boolean; reason?: string; text?: string; attachments?: string[] }
+  /** The inline edit was not resent (refused, or nothing rewound): the editor at `index` leaves its busy state. */
+  | { type: 'editAndRegenerateResult'; sessionId: string; index: number; ok: false }
   /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
   | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
   | { type: 'focusInput' }
   | { type: 'historyCleared'; removed: number }
-  /** Answer to `searchSessions`: chats whose messages contain the query, with the matching line. */
-  | { type: 'searchResults'; query: string; hits: SessionSearchHit[] }
+  /** Answer to `listSessions`: one page of the sorted, filtered history (`seq` echoes the request). */
+  | { type: 'sessionPage'; seq: number; page: HistoryPage }
   /** Task ideas for the multitask launcher: `quick` ones come instantly from the workspace, `model` ones from the model. */
   | { type: 'taskSuggestions'; source: 'quick' | 'model'; items: TaskSuggestion[]; recent: string[] }
   /** Open the multitask launcher (from the Command Palette / Agents view). */
@@ -122,6 +152,9 @@ export type ToWebview =
 
 export type FromWebview =
   | { type: 'ready' }
+  | { type: 'mcpStatus' }
+  | { type: 'mcpToggle'; name: string; enabled: boolean }
+  | { type: 'mcpRestart'; name: string }
   /** Rewrite the composer draft into a precise request (or cancel the rewrite in progress when `cancel`). */
   | { type: 'improvePrompt'; sessionId: string; text: string; cancel?: boolean }
   | { type: 'booted' }
@@ -131,7 +164,7 @@ export type FromWebview =
   | { type: 'deleteSession'; id: string }
   | { type: 'deleteSessions'; ids: string[] }
   | { type: 'clearHistory'; keepPinned?: boolean }
-  | { type: 'searchSessions'; query: string }
+  | ({ type: 'listSessions'; seq: number } & HistoryQuery)
   | { type: 'renameSession'; id: string; title: string }
   | { type: 'pinSession'; id: string }
   | { type: 'forkSession'; id: string; uptoIndex?: number }
@@ -139,9 +172,16 @@ export type FromWebview =
   | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
   | { type: 'retry'; sessionId: string }
   | { type: 'stop'; sessionId: string }
+  /** Proceed While Running / Stop on a running command row (`id` = the run_command tool call id). */
+  | { type: 'detachCommand'; id: string }
+  | { type: 'stopCommand'; id: string }
   | { type: 'pause'; sessionId: string }
   | { type: 'resume'; sessionId: string }
   | { type: 'steer'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
+  /** "Send after this turn": starts a new turn once the run in flight ends (or right away when idle). */
+  | { type: 'queueAfterTurn'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
+  /** Withdraw a queued steer or after-turn message; `edit` puts its text back into the composer. */
+  | { type: 'cancelQueued'; sessionId: string; id: string; edit?: boolean }
   | { type: 'stopChild'; sessionId: string; childId: string }
   | { type: 'applyWorktree'; sessionId: string }
   | { type: 'discardWorktree'; sessionId: string }
@@ -153,10 +193,19 @@ export type FromWebview =
   | { type: 'buildPlan'; sessionId: string }
   | { type: 'pauseChild'; sessionId: string; childId: string }
   | { type: 'resumeChild'; sessionId: string; childId: string }
-  | { type: 'approval'; id: string; approved: boolean; remember?: boolean }
+  /** `feedback`: the reason given with a denial; the agent reads it instead of a bare refusal. */
+  | { type: 'approval'; id: string; approved: boolean; remember?: boolean; feedback?: string }
+  /** A toggle in the composer's auto-approve bar (`approvals.<key>` or `autoMode`). */
+  | { type: 'setApproval'; key: string; value: string }
   /** Answers to a `question` prompt; `answers: null` = skipped. */
   | { type: 'answer'; id: string; answers: UserAnswer[] | null }
   | { type: 'setModel'; sessionId: string; model: string; makeDefault?: boolean }
+  /** The composer's Think chip: this chat's thinking level (`null` follows `localpilot.thinking`). */
+  | { type: 'setThink'; sessionId: string; think: string | null }
+  /** Star in the model menu. */
+  | { type: 'toggleFavoriteModel'; model: string }
+  /** Enter on text that matches no model: use it as a model id with that provider. */
+  | { type: 'useModelId'; sessionId: string; providerId: string; modelId: string }
   /** The user is about to send (composer focused / typing): load the session's model so the first token comes sooner. */
   | { type: 'warm'; sessionId: string }
   | { type: 'setMode'; sessionId: string; mode: Session['mode'] }
@@ -196,12 +245,19 @@ export type FromWebview =
   | { type: 'openCheckpointSetting' }
   /** Edit & resend: drop this user message and everything after it, keep files as they are, put the text in the composer. */
   | { type: 'editMessage'; sessionId: string; messageIndex: number }
+  /** Inline edit: rewind to the user message at `index` (and its files with `restoreWorkspace`), then send the edited message. */
+  | { type: 'editAndRegenerate'; sessionId: string; index: number; text: string; images?: string[]; attachments?: string[]; restoreWorkspace?: boolean }
+  | { type: 'checkpointExists'; sessionId: string; index: number }
   | { type: 'runParallelPrompt' }
   | { type: 'dismissSkillTopic'; topic: string }
   /** Install a catalog skill offered under a request (`skills.autoInstall: ask`). */
   | { type: 'installCatalogSkill'; name: string; repo: string; sessionId?: string }
   | { type: 'dismissCatalogSkill'; name: string; sessionId?: string }
   | { type: 'openMarkdown'; text: string; title?: string }
+  /** Path links in an answer, batch-checked so links to files that do not exist render as plain code. */
+  | { type: 'pathsExist'; seq: number; paths: string[]; sessionId?: string }
+  | { type: 'dismissWhatsNew' }
+  | { type: 'openChangelog' }
   | { type: 'copyText'; text: string };
 
 export interface Sink {
@@ -220,7 +276,7 @@ interface PendingApproval {
   kind: string;
   /** Required by the organization's policy: answered each time, never remembered for the session. */
   mandatory?: boolean;
-  resolve: (ok: boolean) => void;
+  resolve: (d: ApprovalDecision) => void;
   /** A native notification for this prompt is already on screen. */
   mirrored: boolean;
 }
@@ -256,12 +312,18 @@ export class ChatController implements vscode.Disposable {
   private replays = new Map<string, RunReplay>();
   private offers = new Map<string, SkillOffer>();
   private approvals = new Map<string, PendingApproval>();
+  /** Native notifications for finished runs and long auto-approved commands (`localpilot.notifications`). */
+  private readonly notifier = new RunNotifier(() => this.anySurfaceVisible());
   /** ask_user prompts waiting for the user, by id. */
   private questions = new Map<string, { sessionId: string; questions: UserQuestion[]; resolve: (a: UserAnswer[] | null | undefined) => void; mirrored: boolean }>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
   /** Change-tracker turn key of the last run started; keys only increase so Restore checkpoint survives compaction, /clear and Edit. */
   private lastCheckpoint = 0;
   private activeSessionId?: string;
+  /** Where the model menu's stars are kept (the extension's globalState); unset, nothing is starred. */
+  modelPrefs?: vscode.Memento;
+  /** The "What's new" card shown on the empty chat after an update (set by the extension host). */
+  whatsNew?: WhatsNew;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly _onDidChangeActive = new vscode.EventEmitter<Session | undefined>();
   readonly onDidChangeActive = this._onDidChangeActive.event;
@@ -287,6 +349,17 @@ export class ChatController implements vscode.Disposable {
   worktreeOwner = 'vscode';
   private _commands?: CommandManager;
   private commandsSub?: vscode.Disposable;
+  private _mcp?: McpManager;
+  private mcpSub?: vscode.Disposable;
+  /** MCP servers for the composer's server popover and `/mcp:<server>:<prompt>`; set by the extension host. */
+  get mcp(): McpManager | undefined {
+    return this._mcp;
+  }
+  set mcp(m: McpManager | undefined) {
+    this.mcpSub?.dispose();
+    this._mcp = m;
+    this.mcpSub = m?.onDidChange(() => this.broadcast(mcpChatStatus(m)));
+  }
   /** Custom slash commands (.claude/commands, .localpilot/commands, plugins); set by the extension host. */
   get commands(): CommandManager | undefined {
     return this._commands;
@@ -317,7 +390,12 @@ export class ChatController implements vscode.Disposable {
   ) {
     // Running chats and the one on screen keep their transcript in memory; the rest can be read back on demand.
     store.inUse = (id) => this.runs.has(id) || id === this.activeSessionId;
+    const offCommands = onCommandRunChange((r) => this.broadcast({ type: 'commandState', sessionId: r.sessionId, id: r.id, state: r.state, logPath: r.logPath }));
     this.disposables.push(
+      new vscode.Disposable(offCommands),
+      // The composer's auto-approve bar follows the settings, also when they change in the Settings UI or another window.
+      vscode.workspace.onDidChangeConfiguration((e) => affectsAutoApprove(e) && this.broadcast(autoApproveState(this.log))),
+      vscode.workspace.onDidChangeConfiguration((e) => affectsUiPrefs(e) && this.broadcast(uiPrefsMsg(this.whatsNew?.pending))),
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       // Retention pruning and history clearing drop chats in the store: release their snapshots too.
       store.onDidDelete((id) => tracker.forget(id)),
@@ -418,8 +496,13 @@ export class ChatController implements vscode.Disposable {
 
   /** Adds an image to the composer of every chat surface (the PDF viewer's "Attach page as image"). */
   attachImage(img: ImageAttachment): void {
+    // No chat webview yet (revealed just now, still resolving): it gets the image when it boots.
+    if (![...this.sinks].some((s) => !s.handlesPrompts)) {
+      this.pendingImages = [...this.pendingImages.filter((p) => Date.now() - p.at < 15_000), { img, at: Date.now() }];
+    }
     this.broadcast({ type: 'image', image: img });
   }
+  private pendingImages: { img: ImageAttachment; at: number }[] = [];
 
   /** Answers the surface that asked (side bar or editor tab); without one (commands) every surface gets it. */
   private replyTo(reply: Sink | undefined, m: ToWebview): void {
@@ -464,6 +547,10 @@ export class ChatController implements vscode.Disposable {
   private readonly compacting = new Map<string, Promise<void>>();
   /** Chats whose run is being set up (before `runs` has it), so two quick sends cannot both start one. */
   private readonly starting = new Set<string>();
+  /** "Send after this turn" messages, per chat. */
+  private readonly afterTurn = new MessageQueue();
+  /** What the user typed for each pending steer (the queued message also carries attachment blocks), for the banner and ✎. */
+  private readonly steerDrafts = new Map<string, { text: string; attachments: string[]; images?: string[] }>();
   private readonly pendingDeltas = new Map<string, { sessionId: string; type: 'assistant_delta' | 'thinking_delta'; payload: string }>();
   private deltaTimer?: NodeJS.Timeout;
 
@@ -499,9 +586,11 @@ export class ChatController implements vscode.Disposable {
       case 'event':
         return msg.event.sessionId;
       case 'steerQueued':
+      case 'queue':
       case 'approval':
       case 'question':
       case 'paused':
+      case 'commandState':
         return msg.sessionId;
       default:
         return undefined;
@@ -525,6 +614,17 @@ export class ChatController implements vscode.Disposable {
           r.items.push({ type: 'event', event: { ...e } });
         }
         r.bytes += e.payload.length;
+      } else if (e.type === 'tool_progress') {
+        // Live command output: one growing item per call, so a chatty build does not flood the replay buffer.
+        const p = e.payload as { id?: string; chunk?: string } | undefined;
+        const last = r.items[r.items.length - 1];
+        const lp = last?.type === 'event' && last.event.type === 'tool_progress' ? (last.event.payload as { id?: string; chunk?: string }) : undefined;
+        if (lp && p?.id && lp.id === p.id) {
+          lp.chunk = `${lp.chunk ?? ''}${p?.chunk ?? ''}`.slice(-REPLAY_RESULT_LIMIT);
+        } else {
+          r.items.push({ type: 'event', event: { ...e, payload: { ...p } } });
+        }
+        r.bytes += (p?.chunk ?? '').length + (p?.id ? 0 : 400);
       } else if (e.type === 'tool_end') {
         // Results are shown collapsed in the step row; a huge one is trimmed here and read in full from the transcript later.
         const p = e.payload as { content?: unknown; data?: { content?: unknown } } | undefined;
@@ -551,6 +651,8 @@ export class ChatController implements vscode.Disposable {
       if (msg.type === 'paused') {
         // Only the latest pause state of the run / of each worker matters.
         r.items = r.items.filter((m) => !(m.type === 'paused' && m.childId === msg.childId));
+      } else if (msg.type === 'queue') {
+        r.items = r.items.filter((m) => m.type !== 'queue');
       }
       r.items.push(msg);
       r.bytes += msg.type === 'steerQueued' ? msg.content.length + 200 : 400;
@@ -560,7 +662,7 @@ export class ChatController implements vscode.Disposable {
       const session = this.store.get(sid!);
       r.base = session ? session.messages.length : r.base;
       r.anchor = undefined;
-      r.items = r.items.filter((m) => m.type === 'approval' || m.type === 'question' || m.type === 'steerQueued');
+      r.items = r.items.filter((m) => m.type === 'approval' || m.type === 'question' || m.type === 'steerQueued' || m.type === 'queue');
       r.bytes = 0;
       r.truncated = true;
     }
@@ -582,6 +684,10 @@ export class ChatController implements vscode.Disposable {
     if (r && ids.length) {
       const drop = new Set(ids);
       r.items = r.items.filter((m) => !(m.type === 'steerQueued' && drop.has(m.id)));
+    }
+    if (ids.some((id) => this.steerDrafts.delete(id))) {
+      // After the `steer` event itself, so the chat has already marked those rows as added.
+      queueMicrotask(() => this.broadcastQueue(sessionId));
     }
   }
 
@@ -609,14 +715,16 @@ export class ChatController implements vscode.Disposable {
   private sessionMsg(session: Session): ToWebview {
     const offers = this.offers.get(session.id);
     const r = this.replays.get(session.id);
+    // The folder the chat works in, for the task header's badge.
+    const cwd = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.workspace.root;
     if (!r) {
-      return { type: 'session', session, offers };
+      return { type: 'session', session, offers, cwd };
     }
     const base = Math.min(this.runBase(session, r), session.messages.length);
     // The user's own message of the turn is shown from the transcript; everything the loop appended after it is live.
     const first = session.messages[base];
     const liveFrom = first && first === r.anchor ? base + 1 : base;
-    return { type: 'session', session, liveFrom, offers };
+    return { type: 'session', session, liveFrom, offers, cwd };
   }
 
   /** Updates a session's skill offers and redraws it where it is shown. */
@@ -934,6 +1042,87 @@ export class ChatController implements vscode.Disposable {
     return ids;
   }
 
+  /** `/deep-planning`: the plan a finished turn ended with, as `implementation_plan.md` in the chat's workspace. */
+  private async writeImplementationPlan(sessionId: string, outcome: PlanTurnOutcome): Promise<void> {
+    const root = this.sessionRoot(sessionId);
+    if (!root) {
+      return;
+    }
+    try {
+      if (await saveImplementationPlan(root, outcome)) {
+        this.broadcast({ type: 'toast', level: 'info', text: 'Plan saved to implementation_plan.md — switch to Agent mode and say "implement the plan" to carry it out.' });
+      }
+    } catch (e) {
+      this.log.warn(`could not write implementation_plan.md: ${String(e)}`);
+    }
+  }
+
+  /** A custom command or workflow named inside a message without a leading command (`please /review this`). */
+  private inlineCommand(text: string): { command: CustomCommand; args: string; inline: SlashToken } | undefined {
+    const commands = this._commands;
+    if (!commands) {
+      return undefined;
+    }
+    const known = (name: string) => {
+      const c = commands.get(name);
+      return !!c && c.source !== 'builtin';
+    };
+    const tok = findSlashToken(text, known);
+    const command = tok && commands.get(tok.name);
+    return tok && command ? { command, args: '', inline: tok } : undefined;
+  }
+
+  /** `/newtask [note]`: a new chat that starts from a hand-off summary of this one, linked to it as its parent. */
+  private async newTask(sessionId: string, note: string): Promise<void> {
+    const s = this.store.get(sessionId);
+    if (!s || this.isRunning(s.id) || this.compacting.has(s.id)) {
+      return;
+    }
+    if (!s.messages.some((m) => m.role === 'assistant' && m.content.trim())) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Nothing to hand off yet — /newtask summarises a chat that has some work in it.' });
+      return;
+    }
+    let finished: () => void = () => undefined;
+    this.compacting.set(s.id, new Promise<void>((r) => (finished = r)));
+    try {
+      const { provider, model: picked } = await this.providers.resolve(s.model);
+      const model = { ...picked, contextWindow: effectiveContextWindow(picked, getConfig().contextWindow) };
+      const cm = new ContextManager({ compactionThreshold: 0, maxToolOutputChars: getConfig().maxToolOutputChars, keepAlive: getConfig().keepAlive || undefined, scale: () => tokenCalibration.scale(model.id), strategy: getConfig().compactionStrategy === 'basic' ? 'basic' : 'agentic' });
+      this.broadcast({ type: 'toast', level: 'info', text: cm.strategy === 'basic' ? 'Preparing the hand-off…' : `Summarising this chat for the new task with ${model.name}…` });
+      // Everything is summarised (nothing kept verbatim). A chat too long or a summary that fails gets compact()'s
+      // size-capped digest, one that times out or is too short to compact the deterministic digest here.
+      const digest = () => basicSummary(s.messages, BASIC_KEEP_ASSISTANT, Math.floor(model.contextWindow * 0.4) * 4);
+      const res = await cm.compact(s.messages, provider, model, AbortSignal.timeout(180_000), 0, true).catch((e) => {
+        this.log.warn(`newtask: summary failed, handing off the digest instead (${e instanceof Error ? e.message : String(e)})`);
+        return { summary: '' };
+      });
+      const summary = res.summary.trim() || digest();
+      const child = this.createSession(s.mode);
+      child.model = s.model;
+      child.title = (note || `${s.title} (continued)`).slice(0, 60);
+      child.parentId = s.id;
+      child.parentTitle = s.title;
+      child.skills = s.skills ? structuredClone(s.skills) : undefined;
+      child.messages = [
+        {
+          role: 'user',
+          content: `<conversation_summary>\n${summary}\n</conversation_summary>\n${note ? `Note for this task: ${note}\n` : ''}This is a new task continuing the chat "${s.title}"; the summary above is the context it hands over.`,
+          meta: { summary: true, timestamp: Date.now() },
+        },
+      ];
+      this.store.save(child);
+      this.setActive(child);
+      this.broadcast({ type: 'toast', level: 'info', text: `New task started from a summary of "${s.title}"` });
+      this.broadcast({ type: 'focusInput' });
+    } catch (e) {
+      this.log.warn(`newtask: ${e instanceof Error ? e.message : String(e)}`);
+      this.broadcast({ type: 'toast', level: 'error', text: `Could not summarise this chat for a new task (${e instanceof Error ? e.message : String(e)})` });
+    } finally {
+      this.compacting.delete(s.id);
+      finished();
+    }
+  }
+
   /** Plan mode produced a checklist: keep the plan as a file and remember title/summary for the "Prepared plan" card. */
   private async savePlan(session: Session, text: string): Promise<void> {
     const todos = session.todos ?? [];
@@ -1098,8 +1287,25 @@ export class ChatController implements vscode.Disposable {
 
   async handle(msg: FromWebview, reply?: Sink): Promise<void> {
     switch (msg.type) {
+      case 'mcpStatus':
+        this.broadcast(mcpChatStatus(this._mcp));
+        return;
+      case 'mcpToggle':
+      case 'mcpRestart':
+        await handleMcpChatAction(this._mcp, msg, (level, text) => this.broadcast({ type: 'toast', level, text }), (m) => this.broadcast(m));
+        return;
+      case 'setApproval': {
+        const err = await setAutoApprove(msg.key, msg.value, this.log);
+        if (err) {
+          this.broadcast({ type: 'toast', level: 'error', text: err });
+          this.broadcast(autoApproveState(this.log));
+        }
+        return;
+      }
       case 'ready': {
         await this.sendInit();
+        this.broadcast(mcpChatStatus(this._mcp));
+        this.broadcast(autoApproveState(this.log));
         // Opening the chat is the earliest sign a request is coming: start loading its model now.
         const s = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
         if (s && !this.runs.has(s.id)) {
@@ -1150,6 +1356,8 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'deleteSession':
+        // Before stopping: the aborted run's `send` drains the queue, which must not start a turn in a chat being deleted.
+        this.afterTurn.clear(msg.id);
         this.stop(msg.id);
         this.tracker.forget(msg.id);
         await this.runner.hooks?.sessionEnd(msg.id, 'other', this.sessionRoot(msg.id));
@@ -1176,9 +1384,11 @@ export class ChatController implements vscode.Disposable {
       case 'clearHistory':
         await this.clearHistory({ keepPinned: msg.keepPinned !== false });
         return;
-      case 'searchSessions':
-        this.broadcast({ type: 'searchResults', query: msg.query, hits: this.store.search(msg.query) });
+      case 'listSessions': {
+        const { type: _type, seq, ...q } = msg;
+        this.replyTo(reply, { type: 'sessionPage', seq, page: this.store.listSessions(q) });
         return;
+      }
       case 'renameSession':
         return this.store.rename(msg.id, msg.title);
       case 'pinSession':
@@ -1287,8 +1497,32 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       }
+      case 'pathsExist': {
+        const wt = msg.sessionId ? this.store.peek(msg.sessionId)?.worktree : undefined;
+        const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, fsPath: f.uri.fsPath }));
+        const exists = await checkPathsExist(Array.isArray(msg.paths) ? msg.paths : [], { folders, worktreeRoot: wt ? path.join(wt.path, wt.subdir ?? '') : undefined });
+        (reply ?? { post: (m: ToWebview) => this.broadcast(m) }).post({ type: 'pathsExistResult', seq: msg.seq, sessionId: msg.sessionId, exists });
+        return;
+      }
+      case 'dismissWhatsNew':
+        await this.whatsNew?.dismiss();
+        this.broadcast(uiPrefsMsg());
+        return;
+      case 'openChangelog': {
+        const file = this.whatsNew?.changelog;
+        if (file) {
+          await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(file)).then(undefined, () => vscode.window.showTextDocument(vscode.Uri.file(file)));
+        }
+        return;
+      }
       case 'stop':
         return this.stop(msg.sessionId);
+      case 'detachCommand':
+        detachCommand(msg.id);
+        return;
+      case 'stopCommand':
+        stopCommand(msg.id);
+        return;
       case 'pause':
         return void this.pause(msg.sessionId);
       case 'resume':
@@ -1296,6 +1530,10 @@ export class ChatController implements vscode.Disposable {
       case 'steer':
         await this.steer(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
         return;
+      case 'queueAfterTurn':
+        return this.queueAfterTurn(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
+      case 'cancelQueued':
+        return this.cancelQueued(msg.sessionId, msg.id, !!msg.edit);
       case 'stopChild':
         return void this.childControl(msg.sessionId, msg.childId)?.stop();
       case 'pauseChild':
@@ -1309,7 +1547,7 @@ export class ChatController implements vscode.Disposable {
           if (remember) {
             this.rememberApproval(pending.sessionId, pending.kind);
           }
-          this.settleApproval(msg.id, msg.approved);
+          this.settleApproval(msg.id, msg.approved, msg.approved ? undefined : msg.feedback);
           if (remember) {
             // Parallel workers may already be waiting on the same kind of action.
             for (const [id, other] of [...this.approvals]) {
@@ -1338,6 +1576,30 @@ export class ChatController implements vscode.Disposable {
           await setDefaultModel(msg.model);
         }
         return;
+      }
+      case 'setThink': {
+        const s = this.store.get(msg.sessionId);
+        if (s) {
+          const level = msg.think === null || msg.think === undefined ? undefined : parseThinkChoice(msg.think);
+          s.think = level;
+          this.store.save(s);
+          this.broadcast(this.sessionMsg(s));
+        }
+        return;
+      }
+      case 'toggleFavoriteModel':
+        await toggleFavoriteModel(this.modelPrefs, msg.model);
+        return this.pushModels();
+      case 'useModelId': {
+        const id = await addManualModel(msg.providerId, msg.modelId);
+        await this.providers.listModels(true).catch(() => []);
+        const s = this.store.get(msg.sessionId);
+        if (s) {
+          s.model = id;
+          this.store.save(s);
+          this.broadcast(this.sessionMsg(s));
+        }
+        return this.pushModels();
       }
       case 'warm': {
         const s = this.store.get(msg.sessionId);
@@ -1681,6 +1943,14 @@ export class ChatController implements vscode.Disposable {
       case 'editMessage':
         await this.rewindTo(msg.sessionId, msg.messageIndex, 'edit', reply);
         return;
+      case 'editAndRegenerate':
+        if (!(await this.editAndRegenerate(msg))) {
+          this.replyTo(reply, { type: 'editAndRegenerateResult', sessionId: msg.sessionId, index: msg.index, ok: false });
+        }
+        return;
+      case 'checkpointExists':
+        this.replyTo(reply, { type: 'checkpointExistsResult', sessionId: msg.sessionId, index: msg.index, ...(await this.checkpointExists(msg.sessionId, msg.index)) });
+        return;
       case 'viewChanges':
         await this.viewChanges(msg.sessionId, msg.scope);
         return;
@@ -1695,27 +1965,28 @@ export class ChatController implements vscode.Disposable {
    * put it (text, images, attachments) back into the composer, keeping the files; `workspace` puts the files back as
    * they were before that turn and keeps the chat; `both` does both ("Restore checkpoint"). Files come back from the
    * turn's git checkpoint when there is one (changes made by shell commands included), else from the file snapshots.
+   * `resend` (inline edit) leaves the composer and the success toast alone; false when nothing (or not all) was rewound.
    */
-  private async rewindTo(sessionId: string, messageIndex: number, type: RestoreType | 'edit', reply?: Sink): Promise<void> {
+  private async rewindTo(sessionId: string, messageIndex: number, type: RestoreType | 'edit', reply?: Sink, opts: { resend?: boolean } = {}): Promise<boolean> {
     if (this.compacting.has(sessionId)) {
       this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
-      return;
+      return false;
     }
     if (this.isRunning(sessionId)) {
       if (type === 'edit') {
         this.broadcast({ type: 'toast', level: 'error', text: 'Stop the running agent before editing a message' });
-        return;
+        return false;
       }
       // A restore cancels the run first: its edits are what the user wants undone.
       if (!(await this.stopAndWait(sessionId))) {
         this.broadcast({ type: 'toast', level: 'error', text: 'The agent did not stop in time; try restoring again' });
-        return;
+        return false;
       }
     }
     const s = this.store.get(sessionId);
     const target = s?.messages[messageIndex];
     if (!s || !target || target.role !== 'user') {
-      return;
+      return false;
     }
     const key = target.meta?.checkpoint;
     const revertFiles = type === 'workspace' || type === 'both';
@@ -1732,7 +2003,7 @@ export class ChatController implements vscode.Disposable {
             this.telemetry?.record({ type: 'checkpoint', action: 'restore', outcome: 'failed' });
             const saved = r.safetyStash ? ' Your state before the restore is saved in git stash ("localpilot pre-restore").' : '';
             this.broadcast({ type: 'toast', level: 'error', text: `Could not restore the checkpoint: ${r.error}.${saved}` });
-            return;
+            return false;
           }
           // The git snapshot covers only its repository; edits outside it (another root folder) come back from the turn snapshots.
           const outside = await this.tracker.restoreTurn(s.id, key, (p) => relativeIn(entry.root!, p) === undefined);
@@ -1766,9 +2037,14 @@ export class ChatController implements vscode.Disposable {
     });
     if (rewindChat) {
       this.broadcast(this.sessionMsg(s));
-      this.replyTo(reply, { type: 'draft', text: promptText(target), images: target.images, attachments: rewindAttachments(target.content) });
+      if (!opts.resend) {
+        this.replyTo(reply, { type: 'draft', text: promptText(target), images: target.images, attachments: rewindAttachments(target.content) });
+      }
     }
     this.pushChanges(s.id);
+    if (opts.resend && !restore.failed) {
+      return true;
+    }
     const n = (k: number) => `${k} file${k === 1 ? '' : 's'}`;
     const stashNote = safetyStash ? ' (your previous state is in git stash "localpilot pre-restore")' : '';
     const what = type === 'workspace' ? 'Restored files' : 'Restored checkpoint';
@@ -1792,6 +2068,72 @@ export class ChatController implements vscode.Disposable {
                       ? 'Rewound the conversation — no file changes since this message'
                       : 'No file changes since this message',
     });
+    return !restore.failed;
+  }
+
+  /**
+   * Inline edit of a past message: Reset Chat (`restoreWorkspace` false) rewinds the conversation and keeps the files,
+   * Reset Code also puts the files back to that turn's checkpoint; then the edited message is sent. Nothing is cut
+   * when the edit is empty or the rewind fails (a failed send gives the edited text back to the composer); false when
+   * nothing was resent, so the editor is released.
+   */
+  private async editAndRegenerate(msg: Extract<FromWebview, { type: 'editAndRegenerate' }>): Promise<boolean> {
+    const text = msg.text.trim();
+    let images = msg.images?.filter(Boolean) ?? [];
+    if (!text && !images.length) {
+      this.broadcast({ type: 'toast', level: 'error', text: 'The edited message is empty — type something or press Esc to cancel' });
+      return false;
+    }
+    const attachments = [...new Set(msg.attachments ?? [])];
+    if (attachments.length > MAX_ATTACHMENTS) {
+      this.broadcast({ type: 'toast', level: 'error', text: `Up to ${MAX_ATTACHMENTS} attachments per message` });
+      return false;
+    }
+    if (msg.restoreWorkspace && !(await this.checkpointExists(msg.sessionId, msg.index)).exists) {
+      this.broadcast({ type: 'toast', level: 'error', text: 'No checkpoint for this message: use Reset Chat to keep the files as they are' });
+      return false;
+    }
+    // An `/mcp:` turn's prompt images are fetched again when it is expanded again: only the user's own are sent.
+    if (parseMcpSlash(text)) {
+      images = withoutMcpPromptImages(images, this.store.get(msg.sessionId)?.messages[msg.index]) ?? [];
+    }
+    if (!(await this.rewindTo(msg.sessionId, msg.index, msg.restoreWorkspace ? 'both' : 'task', undefined, { resend: true }))) {
+      if (!this.store.get(msg.sessionId)?.messages[msg.index]) {
+        this.broadcast({ type: 'draft', text, images, attachments });
+      }
+      return false;
+    }
+    await this.send(msg.sessionId, text || 'Describe what you see in the attached image(s).', attachments, images.length ? images : undefined);
+    return true;
+  }
+
+  /** Whether Reset Code / Restore files has something to put back for the user message at `index`, plus its editable draft. */
+  private async checkpointExists(sessionId: string, index: number): Promise<{ exists: boolean; reason?: string; text?: string; attachments?: string[] }> {
+    const s = this.store.get(sessionId);
+    const target = s?.messages[index];
+    if (!s || !target || target.role !== 'user') {
+      return { exists: false, reason: 'This message is no longer in the chat' };
+    }
+    const draft = { text: promptText(target), attachments: rewindAttachments(target.content) };
+    const key = target.meta?.checkpoint;
+    if (s.worktree) {
+      return { exists: false, reason: 'This chat works in an isolated worktree: use Discard to drop the agent\'s changes', ...draft };
+    }
+    if (key === undefined) {
+      return { exists: false, reason: 'No checkpoint was recorded for this message', ...draft };
+    }
+    const entry = gitCheckpoint(s.checkpoints, key);
+    if (entry && this.runner.checkpoints && (await this.runner.checkpoints.exists(entry).catch(() => false))) {
+      return { exists: true, ...draft };
+    }
+    if (this.tracker.checkpoints(s.id).some((t) => t >= key)) {
+      return { exists: true, ...draft };
+    }
+    return {
+      exists: false,
+      reason: getConfig().checkpointsEnabled ? 'No checkpoint for this message: no file changes were recorded since it ran' : 'No checkpoint for this message: checkpoints are off (localpilot.checkpoints.enabled)',
+      ...draft,
+    };
   }
 
   /** Stops a chat's run and waits (up to `ms`) for it to wind down; false when it is still running. */
@@ -1909,6 +2251,11 @@ export class ChatController implements vscode.Disposable {
       platform: process.platform,
     });
     post(init(this.providers.cachedModels()));
+    post(uiPrefsMsg(this.whatsNew?.pending));
+    // Commands that outlive a run (detached dev servers) keep their Stop control on rows this webview draws later.
+    for (const r of runningCommands()) {
+      post({ type: 'commandState', sessionId: r.sessionId, id: r.id, state: r.state, logPath: r.logPath });
+    }
     const s = this.activeSession;
     if (s) {
       post(this.sessionMsg(s));
@@ -1919,6 +2266,11 @@ export class ChatController implements vscode.Disposable {
       post({ type: 'draft', text: this.pendingDraft.text, attachments: this.pendingDraft.attachments, append: this.pendingDraft.append });
     }
     this.pendingDraft = undefined;
+    for (const p of this.pendingImages.splice(0)) {
+      if (Date.now() - p.at < 15_000) {
+        post({ type: 'image', image: p.img });
+      }
+    }
     // Runs in flight: the active one first so the visible transcript fills in before background tabs are rebuilt.
     // Only for a specific surface — webviews that were attached all along already have these turns.
     const active = this.activeSessionId;
@@ -1968,7 +2320,7 @@ export class ChatController implements vscode.Disposable {
     const autoModel = models.length ? await this.providers.route({ role: 'agent', start: false }).then((r) => r.model.id, () => undefined) : undefined;
     // Group headings in the picker use the provider's name ("LM Studio", "colibri"), not its settings id.
     const providerNames = Object.fromEntries(this.providers.all.map((p) => [p.id, p.displayName]));
-    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames, visionRouting: getConfig().routing.enabled };
+    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames, visionRouting: getConfig().routing.enabled, favorites: favoriteModels(this.modelPrefs), manualProviders: manualModelProviders(getConfig().providers), thinking: getConfig().thinking };
   }
 
   /** Entry point used by webviews and commands. Runs are per-session, so several sessions can stream at once. */
@@ -2040,7 +2392,7 @@ export class ChatController implements vscode.Disposable {
     const lastOf = (role: 'user' | 'assistant') => [...session.messages].reverse().find((m) => m.role === role && !m.meta?.hidden && m.content.trim())?.content;
     const clip = (t: string | undefined, n: number) => (t && t.length > n ? `${t.slice(0, n)}…` : t ?? '');
     const editor = this.workspace.activeEditorContext();
-    const open = this.workspace.openEditors().slice(0, 12);
+    const open = this.workspace.contextEditors().slice(0, 12);
     const map = await this.workspace.projectMap().catch(() => '');
     const previous = lastOf('user') ? `User: ${clip(lastOf('user'), 600)}\nAssistant: ${clip(lastOf('assistant'), 900)}` : '';
     const context = [
@@ -2131,15 +2483,41 @@ export class ChatController implements vscode.Disposable {
       return await this.startRun(session, sessionId, text, attachments, images, opts);
     } finally {
       this.starting.delete(sessionId);
+      this.drainQueue(sessionId);
     }
   }
 
   private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean }): Promise<string> {
-    const slash = opts.display ? undefined : this.handleSlash(session, text);
+    const mcpSlash = opts.display ? undefined : parseMcpSlash(text);
+    let mcpPromptImages = 0;
+    if (mcpSlash) {
+      // `/mcp:<server>:<prompt> args…`: the prompt's messages become this turn; the chat shows what was typed.
+      this.telemetry?.record({ type: 'slash', command: 'mcp' });
+      this.runStatus.set(sessionId, `Getting ${mcpSlash.server}:${mcpSlash.prompt}…`);
+      this._onDidChangeRuns.fire();
+      try {
+        if (!this._mcp) {
+          throw new Error('no MCP servers are running');
+        }
+        const r = await this._mcp.getPrompt(mcpSlash.server, mcpSlash.prompt, mcpSlash.args);
+        opts = { ...opts, display: text.trim() };
+        text = r.text || `(${mcpSlash.prompt} returned only images)`;
+        images = r.images.length ? [...(images ?? []), ...r.images.map((i) => i.data)] : images;
+        mcpPromptImages = r.images.length;
+      } catch (e) {
+        this.runStatus.delete(sessionId);
+        this._onDidChangeRuns.fire();
+        this.broadcast({ type: 'toast', level: 'error', text: `/mcp:${mcpSlash.server}:${mcpSlash.prompt}: ${e instanceof Error ? e.message : String(e)}` });
+        this.broadcast({ type: 'sendRejected', sessionId });
+        return '';
+      }
+    }
+    const slash = opts.display ? undefined : this.handleSlash(session, text) ?? this.inlineCommand(text);
     if (slash !== undefined) {
       const custom = typeof slash === 'object' && 'command' in slash;
-      this.telemetry?.record({ type: 'slash', command: custom ? slash.command.name : (/^\/([\w:-]+)/.exec(text.trim())?.[1] ?? '?'), custom: custom || undefined });
+      this.telemetry?.record({ type: 'slash', command: custom ? slash.command.name : (/^\/([\w.:@-]+)/.exec(text.trim())?.[1] ?? '?'), custom: custom || undefined });
     }
+    let planTurn = false;
     if (typeof slash === 'object' && 'command' in slash) {
       // A custom command expands inside this run (which holds `starting`), so a message sent meanwhile is steering for it.
       const cmd = slash.command;
@@ -2170,11 +2548,13 @@ export class ChatController implements vscode.Disposable {
         this.store.save(session);
       }
       opts = { ...opts, modelRef: cmd.model ?? opts.modelRef, permissionAllow: cmd.allowedTools, display: text.trim() };
-      text = prompt;
+      // A command named mid-message is replaced by its prompt where it stands; the rest of the message stays as context.
+      text = slash.inline ? spliceSlashToken(text, slash.inline, prompt) : prompt;
     } else if (typeof slash === 'object') {
       // `/skill <name> <task>` and `/agent <name> <task>` become the prompt of this same run; the chat shows what was typed.
       opts = { ...opts, display: text.trim() };
       text = slash.rewrite;
+      planTurn = !!slash.planTurn;
     } else if (slash !== undefined) {
       return slash;
     }
@@ -2182,6 +2562,10 @@ export class ChatController implements vscode.Disposable {
     const control = new RunControl(sessionId);
     this.runs.set(sessionId, control);
     this.replays.set(sessionId, { base: session.messages.length, startedAt: Date.now(), items: [], bytes: 0, truncated: false });
+    if (this.afterTurn.list(sessionId).length) {
+      // Messages still waiting behind this turn go into its replay, so a chat surface opened now shows their banner.
+      this.broadcastQueue(sessionId);
+    }
     this.offers.delete(sessionId);
     control.onDidChange((c) => this.onControlChange(sessionId, c));
     const checkpoint = (this.lastCheckpoint = Math.max(Date.now(), this.lastCheckpoint + 1));
@@ -2238,9 +2622,19 @@ export class ChatController implements vscode.Disposable {
     if (images?.length) {
       content = `${content}\n\n[${images.length} image${images.length === 1 ? '' : 's'} attached]`;
     }
-    const meta: ChatMessage['meta'] = { checkpoint, ...(opts.display ? { display: opts.display } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
+    const meta: ChatMessage['meta'] = { checkpoint, ...(opts.display ? { display: opts.display } : {}), ...(mcpPromptImages ? { mcpPromptImages } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
     const userMessage: ChatMessage = { role: 'user', content, images, meta };
+    // `/deep-planning`: this turn runs in Plan mode, then the chat returns to the mode it was in.
+    const modeBefore = planTurn && session.mode !== 'plan' ? session.mode : undefined;
+    if (modeBefore) {
+      session.mode = 'plan';
+      if (sessionId === this.activeSessionId) {
+        this.broadcast(this.sessionMsg(session));
+      }
+    }
 
+    // A fatal error of this run (not a subagent's): `/deep-planning` then keeps any existing plan file as it is.
+    let turnErrored = false;
     try {
       const result = await this.runner.run({
         session,
@@ -2264,6 +2658,7 @@ export class ChatController implements vscode.Disposable {
         isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
         emit: (e) => {
           this.broadcast({ type: 'event', event: e });
+          this.notifier.event(e);
           if (e.type === 'skill_suggestions') {
             const p = e.payload as SkillOffer | undefined;
             if (p?.available || p?.create) {
@@ -2288,8 +2683,16 @@ export class ChatController implements vscode.Disposable {
           if (e.type === 'turn_end' && session.mode === 'plan' && session.todos?.length) {
             void this.savePlan(session, String((e.payload as { text?: string })?.text ?? ''));
           }
+          if (e.type === 'error' && !(e.payload as { childId?: string } | undefined)?.childId) {
+            turnErrored = true;
+          }
+          if (e.type === 'turn_end' && planTurn && !(e.payload as { childId?: string } | undefined)?.childId) {
+            const p = e.payload as { text?: string; completed?: boolean };
+            void this.writeImplementationPlan(sessionId, { text: String(p?.text ?? ''), completed: p?.completed, errored: turnErrored, aborted: control.aborted });
+          }
         },
         requestApproval: (title, detail, kind, opts) => this.requestApproval(sessionId, title, detail, kind, opts),
+        willPrompt: (kind, mandatory) => this.willPromptApproval(sessionId, kind, mandatory),
         // Unattended runs (task queue) have nobody to answer: ask_user falls back to the agent's recommendations.
         askUser: opts.unattended ? async () => null : (questions) => this.requestQuestions(sessionId, questions),
         unattended: opts.unattended,
@@ -2303,6 +2706,12 @@ export class ChatController implements vscode.Disposable {
       }
       return '';
     } finally {
+      if (modeBefore && session.mode === 'plan') {
+        session.mode = modeBefore;
+        if (sessionId === this.activeSessionId) {
+          this.broadcast(this.sessionMsg(session));
+        }
+      }
       if (this.runs.get(sessionId) === control) {
         this.runs.delete(sessionId);
         this.replays.delete(sessionId);
@@ -2335,6 +2744,8 @@ export class ChatController implements vscode.Disposable {
           }
         });
       }
+      // A run the user stopped needs no notice; group runs get the review offer above instead.
+      this.notifier.finished(sessionId, session.title, control.aborted || (!!session.group && session.group.size > 1));
     }
   }
 
@@ -2365,7 +2776,7 @@ export class ChatController implements vscode.Disposable {
     // A /skill, /agent or custom-command turn is expanded again so it keeps the command's model and allowed tools.
     const content = last.content.replace(/\n\n\[\d+ images? attached\]$/, '');
     const result = last.meta?.display?.startsWith('/')
-      ? await this.send(sessionId, last.meta.display, [], last.images)
+      ? await this.send(sessionId, last.meta.display, [], last.meta.display.startsWith('/mcp:') ? withoutMcpPromptImages(last.images, last) : last.images)
       : await this.send(sessionId, content, [], last.images, { display: last.meta?.display ?? userText(content) });
     if (session.messages[idx]?.role !== 'user') {
       // The run never started (cancelled, refused): put the exchange back instead of losing it.
@@ -2470,6 +2881,7 @@ export class ChatController implements vscode.Disposable {
       }
       this.tracker.forget(s.id);
       this.sessionApprovalMemory.delete(s.id);
+      this.afterTurn.clear(s.id);
       if (s.hadMessages) {
         await this.runner.hooks?.sessionEnd(s.id, 'other', s.root);
       }
@@ -2584,10 +2996,13 @@ export class ChatController implements vscode.Disposable {
       return fallback();
     }
     const id = `steer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    this.steerDrafts.set(id, { text: original, attachments, images });
     if (!c.steer({ role: 'user', content, images, meta: { steerId: id, ...(fixes.length ? { corrections: fixes } : {}) } })) {
+      this.steerDrafts.delete(id);
       return fallback();
     }
     this.broadcast({ type: 'steerQueued', sessionId, id, content: text, images, ...(fixes.length ? { fixes } : {}) });
+    this.broadcastQueue(sessionId);
     this.runStatus.set(sessionId, c.holding ? 'Paused · 1 message waiting' : 'Will take your message into account at the next step');
     this._onDidChangeRuns.fire();
     return true;
@@ -2596,17 +3011,88 @@ export class ChatController implements vscode.Disposable {
   /** Messages queued for a run that ended before taking them: a follow-up turn, or back to the composer when it was stopped. */
   private deliverLeftovers(sessionId: string, control: RunControl): void {
     const left = control.close();
+    for (const m of left) {
+      this.steerDrafts.delete(m.meta?.steerId ?? '');
+    }
     if (!left.length) {
+      this.broadcastQueue(sessionId);
       return;
     }
     const joined = left.map((m) => m.content).join('\n\n');
     const images = left.flatMap((m) => m.images ?? []);
     if (!control.aborted) {
-      void this.send(sessionId, joined, [], images.length ? images : undefined).catch(() => undefined);
+      // Ahead of any "send after this turn" message; `send` starts it once this run has fully let go of the chat.
+      this.afterTurn.add(sessionId, { text: joined, attachments: [], images: images.length ? images : undefined }, true);
+      this.broadcastQueue(sessionId);
       return;
     }
+    this.broadcastQueue(sessionId);
     this.broadcast({ type: 'draft', text: joined });
     this.broadcast({ type: 'toast', level: 'warn', text: 'Your queued message was not delivered — it is back in the composer.' });
+  }
+
+  /** "Send after this turn": waits in the chat's queue while it is busy, otherwise it is an ordinary send. */
+  private async queueAfterTurn(sessionId: string, text: string, attachments: string[], images?: string[]): Promise<void> {
+    if (!text.trim() && !images?.length) {
+      return;
+    }
+    // Idle (or only compacting, which `send` already waits for): nothing to wait behind.
+    if (!this.runs.has(sessionId) && !this.starting.has(sessionId)) {
+      await this.send(sessionId, text, attachments, images);
+      return;
+    }
+    this.afterTurn.add(sessionId, { text, attachments, images });
+    this.broadcastQueue(sessionId);
+  }
+
+  /** Cancels a queued message: an after-turn one, or a steer the loop has not injected yet (it never reaches the model). */
+  private cancelQueued(sessionId: string, id: string, edit: boolean): void {
+    let draft: { text: string; attachments: string[]; images?: string[] } | undefined = this.afterTurn.remove(sessionId, id);
+    let removed: string[] | undefined;
+    if (!draft) {
+      const m = this.runs.get(sessionId)?.removeSteer(id);
+      if (m) {
+        draft = this.steerDrafts.get(id) ?? { text: m.content, attachments: [], images: m.images };
+        this.steerDrafts.delete(id);
+        this.forgetSteers(sessionId, [id]);
+        removed = [id];
+      }
+    }
+    if (!draft) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'That message was already delivered.' });
+      this.broadcastQueue(sessionId);
+      return;
+    }
+    this.broadcastQueue(sessionId, removed);
+    if (edit) {
+      // Merged into whatever the user is composing rather than replacing it.
+      this.broadcast({ type: 'draft', text: draft.text, images: draft.images, attachments: draft.attachments, merge: true });
+    }
+  }
+
+  private broadcastQueue(sessionId: string, removed?: string[]): void {
+    const steers: QueueRow[] = (this.runs.get(sessionId)?.pendingSteers() ?? [])
+      .filter((m) => m.meta?.steerId)
+      .map((m) => ({ id: m.meta!.steerId!, kind: 'steer', text: this.steerDrafts.get(m.meta!.steerId!)?.text ?? m.content }));
+    const items: QueueRow[] = [...steers, ...this.afterTurn.list(sessionId).map((q): QueueRow => ({ id: q.id, kind: 'after', text: q.text || '(image)' }))];
+    this.broadcast({ type: 'queue', sessionId, items, label: queueLabel(items), ...(removed?.length ? { removed } : {}) });
+  }
+
+  /** The chat is idle again: the oldest after-turn message starts the next turn (and leaves the queue, so it runs once). */
+  private drainQueue(sessionId: string): void {
+    if (this.runs.has(sessionId) || this.starting.has(sessionId)) {
+      return;
+    }
+    if (!this.store.get(sessionId)) {
+      this.afterTurn.clear(sessionId);
+      return;
+    }
+    const next = this.afterTurn.shift(sessionId);
+    if (!next) {
+      return;
+    }
+    this.broadcastQueue(sessionId);
+    void this.send(sessionId, next.text, next.attachments, next.images).catch(() => undefined);
   }
 
   private onControlChange(sessionId: string, c: RunControl): void {
@@ -2629,16 +3115,25 @@ export class ChatController implements vscode.Disposable {
     this._onDidChangeRuns.fire();
   }
 
-  requestApproval(sessionId: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }): Promise<boolean> {
+  private approvalMandatory(kind: string, mandatory?: boolean): boolean {
     // An organization floor for this kind (or a policy that forbids bypassing prompts) is never answered from session memory.
     const managed = getManagedPolicy(this.log);
-    const mandatory = !!opts?.mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
-    const remembered = this.sessionApprovalMemory.get(sessionId);
-    if (remembered?.has(kind) && !mandatory) {
-      return Promise.resolve(true);
+    return !!mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
+  }
+
+  /** False when `requestApproval` would answer from "Allow for session" without showing anything. */
+  willPromptApproval(sessionId: string, kind: string, mandatory?: boolean): boolean {
+    return this.approvalMandatory(kind, mandatory) || !this.sessionApprovalMemory.get(sessionId)?.has(kind);
+  }
+
+  requestApproval(sessionId: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }): Promise<ApprovalDecision> {
+    const mandatory = this.approvalMandatory(kind, opts?.mandatory);
+    if (!this.willPromptApproval(sessionId, kind, mandatory)) {
+      return Promise.resolve({ ok: true });
     }
+    this.notifier.asked(sessionId);
     const id = `${sessionId}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    return new Promise<boolean>((resolve) => {
+    return new Promise<ApprovalDecision>((resolve) => {
       this.approvals.set(id, { sessionId, title, detail, kind, mandatory, resolve, mirrored: false });
       if (this.promptsNative(sessionId)) {
         // The @localpilot participant runs this session, or no surface can show the card — fall back to a native dialog.
@@ -2660,14 +3155,14 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Answers a pending approval once, whichever surface answered it, and takes the prompt down everywhere. */
-  private settleApproval(id: string, ok: boolean): void {
+  private settleApproval(id: string, ok: boolean, feedback?: string): void {
     const pending = this.approvals.get(id);
     if (!pending) {
       return;
     }
     this.approvals.delete(id);
     this.forgetApproval(id);
-    pending.resolve(ok);
+    pending.resolve(toDecision({ ok, feedback }));
     this.broadcast({ type: 'approvalResolved', id });
   }
 
@@ -2752,12 +3247,14 @@ export class ChatController implements vscode.Disposable {
 
   /** Slash commands handled locally (no model call). Returns undefined when the text is a normal prompt. */
   /** Returns the reply to a command handled here, `{ rewrite }` for a command that runs as a rewritten prompt, `{ command }` for a custom command to expand, or undefined for a normal prompt. */
-  private handleSlash(session: Session, text: string): string | { rewrite: string } | { command: CustomCommand; args: string } | undefined {
-    const m = /^\/([\w:-]+)\s*(.*)$/s.exec(text.trim());
+  private handleSlash(session: Session, text: string): string | { rewrite: string; planTurn?: boolean } | { command: CustomCommand; args: string; inline?: SlashToken } | undefined {
+    const m = /^\/([\w.:@-]+)\s*(.*)$/s.exec(text.trim());
     if (!m) {
       return undefined;
     }
-    const [, cmd, rest] = m;
+    const [, typed, rest] = m;
+    // Names match in any case, with or without `.md` (`/Review.md` runs `/review`).
+    const cmd = normalizeCommandName(typed);
     const say = (t: string) => {
       session.messages.push({ role: 'user', content: text, meta: { timestamp: Date.now() } }, { role: 'assistant', content: t, meta: { timestamp: Date.now() } });
       this.store.save(session);
@@ -2772,7 +3269,8 @@ export class ChatController implements vscode.Disposable {
             '**Slash commands**',
             '- `/model <provider/model>` — switch model for this session',
             '- `/mode agent|multitask|debug|plan|ask` — switch mode',
-            '- `/compact` — summarise older messages to free context',
+            '- `/compact` (or `/smol`) — summarise older messages to free context · `/newtask [note]` — continue in a new chat that starts from a summary of this one',
+            '- `/deep-planning <task>` — investigate, ask, then write an implementation plan (Plan mode for that turn) · `/newrule [topic]` (or `/init`) — write a project rule file',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents · `/commands` — list custom commands',
             '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill registry',
@@ -2780,7 +3278,7 @@ export class ChatController implements vscode.Disposable {
             '- `/agent <name> <task>` — delegate directly to a subagent',
             '- `/memory` — instruction files in force (CLAUDE.md, AGENTS.md…) and saved memory notes · `/permissions` — permission rules · `/hooks` — configured hooks',
             '- `/context` — show context usage · `/board` — the shared task board (`.localpilot/board`)',
-            ...(custom.length ? ['', '**Custom commands** (`.claude/commands`, `.localpilot/commands`, plugins)', ...custom.map((c) => `- \`${c.invoke}${c.argumentHint ? ` ${c.argumentHint}` : ''}\` — ${c.description || c.file}`)] : []),
+            ...(custom.length ? ['', '**Custom commands** (`.claude/commands`, `.localpilot/commands`, Cline workflows, plugins)', ...custom.map((c) => `- \`${c.invoke}${c.argumentHint ? ` ${c.argumentHint}` : ''}\` — ${c.description || c.file}`)] : []),
           ].join('\n')
         );
       }
@@ -2794,17 +3292,7 @@ export class ChatController implements vscode.Disposable {
       }
       case 'memory': {
         // Both kinds of standing context: the instruction files you write, and the notes the agent saved itself.
-        void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => {
-          const on = getConfig().memoryEnabled;
-          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope}${f.paths ? `, conditional: ${f.paths.length ? f.paths.map((g) => `\`${g}\``).join(', ') : 'never'}${f.applied ? ', applied last turn' : ''}` : ''}${f.note ? `, ${f.note}: over the instruction size cap` : ''})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
-          const shown = notes.slice(0, 30);
-          const notesPart = !on
-            ? '**Memory notes** are off (`localpilot.memory.enabled`).'
-            : notes.length
-              ? `**Memory notes** (${notes.length}, newest first; the agent sees an index and the short ones in full)\n${shown.map((n) => `- \`${n.name}\` (${n.scope}, ${n.chars.toLocaleString()} chars): ${n.summary}`).join('\n')}${notes.length > shown.length ? `\n- …and ${notes.length - shown.length} more` : ''}\n\nEdit or delete them in **Settings → Memory**, or as Markdown in \`.localpilot/memory/\`.`
-              : '**Memory notes**: none yet. The agent saves durable facts (build commands, conventions, your preferences) with `memory_save`; you can also ask it to "remember" something.';
-          say(`${filesPart}\n\n${notesPart}`);
-        });
+        void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => say(memoryReport(files, notes, getConfig().memoryEnabled)));
         return '';
       }
       case 'permissions': {
@@ -2844,16 +3332,23 @@ export class ChatController implements vscode.Disposable {
         return say(this.skills.allAgents.map((a) => `- **${a.name}** (${a.source}): ${a.description}`).join('\n'));
       case 'context': {
         const win = this.providers.cachedModels().find((m) => m.id === (session.model || getConfig().defaultModel));
-        const eff = win ? effectiveContextWindow(win, getConfig().contextWindow) : undefined;
-        const window = eff ? ` of ${eff.toLocaleString()}${win && win.contextWindow > eff ? ` (model supports ${win.contextWindow.toLocaleString()}; raise \`localpilot.contextWindow\` or set it to 0 for the model's maximum)` : ''}` : '';
-        return say(`Context: ~${session.contextTokens.toLocaleString()}${window} tokens · ${session.messages.length} messages · ${session.compactions} compactions · model ${session.model || '(default)'}`);
+        return say(contextReport(session, win, win ? effectiveContextWindow(win, getConfig().contextWindow) : undefined));
       }
       case 'clear':
         void this.handle({ type: 'clearSession', sessionId: session.id });
         return '';
       case 'compact':
+      case 'smol':
         void this.handle({ type: 'compactNow', sessionId: session.id });
         return '';
+      case 'newtask':
+        void this.newTask(session.id, rest.trim());
+        return '';
+      case 'deep-planning':
+        if (!rest.trim()) {
+          return say('Usage: `/deep-planning <task>` — investigates the code, asks what it cannot tell, then writes `implementation_plan.md` (the turn runs in Plan mode).');
+        }
+        return { rewrite: deepPlanningPrompt(rest), planTurn: true };
       case 'mode':
         if ((ALL_MODES as readonly string[]).includes(rest.trim())) {
           if (session.mode !== rest.trim()) {
@@ -2930,9 +3425,14 @@ export class ChatController implements vscode.Disposable {
         return { rewrite: agentTaskPrompt(name, task) };
       }
       default: {
-        const custom = this._commands?.get(cmd);
-        if (custom) {
-          return { command: custom, args: rest };
+        // Built-in command, then a skill of that name (`/<skill-name> <task>`), then a custom command or workflow.
+        const skill = this.skills.enabledSkills.find((s) => normalizeCommandName(s.name) === cmd);
+        const target = pickSlashTarget(this._commands?.get(cmd), skill);
+        if (target && 'skill' in target) {
+          return { rewrite: skillTaskPrompt(target.skill.name, rest) };
+        }
+        if (target) {
+          return { command: target.command, args: rest };
         }
         return undefined; // let the model see it
       }
@@ -2946,6 +3446,7 @@ export class ChatController implements vscode.Disposable {
     clearTimeout(this.deltaTimer);
     clearTimeout(this.openFilesTimer);
     this.fileIndex?.dispose();
+    this.notifier.dispose();
     this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
     this._onDidChangeRuns.dispose();

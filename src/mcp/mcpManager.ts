@@ -1,27 +1,43 @@
 import * as vscode from 'vscode';
-import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfig, McpServerConfig, onConfigChange } from '../config';
 import { ToolRegistry } from '../tools/registry';
-import { Tool, ToolDefinition } from '../types';
-import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
-import { forgetMcpToolOrigin, mcpToolOrigin, registerMcpToolOrigin } from '../agent/permissions';
+import { Tool, ToolDefinition, ToolResult } from '../types';
+import { getManagedPolicy, managedMcpServers, mcpServerAllowed, mcpServerBlocked } from '../agent/managedPolicy';
+import { forgetMcpToolOrigin, mcpServerNames, mcpToolOrigin, registerMcpToolOrigin } from '../agent/permissions';
+import { toolDisabled } from '../agent/toolAliases';
 import { resolveApiKey } from '../providers/cloud';
-import { expandMcpServer, loadMcpFiles, McpLayer, mcpLogLevel, McpSource, mcpFingerprint, mcpTimeoutMessage, mcpTimeoutSeconds, mcpTrustKey, mergeMcpLayers, normalizeMcpServers, userMcpFile } from './config';
+import { expandMcpServer, loadMcpFiles, setMcpFileServerEnabled, McpLayer, mcpLogLevel, McpSource, mcpFingerprint, mcpTimeoutMessage, mcpTimeoutSeconds, mcpTrustKey, mergeMcpLayers, policyAndSettingsLayers, userMcpFile, withMcpEnabled } from './config';
 import type { McpTrust } from './trust';
 import { HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
 import { recordTelemetry } from '../telemetry/catalog';
+import { McpContentItem, mcpContentToResult, mcpResourceText, mcpToolVisibleToModel } from './content';
+import { mapPromptArgs, mcpPromptUsage, promptMessagesToText } from './prompts';
+import { mcpToolName } from './toolNames';
+import type { ImageAttachment } from '../ui/images';
+import { McpAuthRequiredError, McpOAuth } from './oauth';
+import { mcpWatchTargets, McpServerFileWatcher } from './serverWatch';
+import { secretRefs } from '../providers/cloud';
 
-interface McpToolInfo {
+export interface McpToolInfo {
   name: string;
+  title?: string;
   description?: string;
   inputSchema?: ToolDefinition['parameters'];
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+  _meta?: unknown;
 }
 
 export interface McpResourceInfo {
   uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpResourceTemplateInfo {
+  uriTemplate: string;
   name?: string;
   description?: string;
   mimeType?: string;
@@ -35,8 +51,44 @@ export interface McpPromptInfo {
 
 type ListKind = 'tools' | 'resources' | 'prompts';
 
+/** A JSON-RPC error reply; `code` -32601 is MethodNotFound. */
+export class McpRpcError extends Error {
+  constructor(message: string, readonly code: number) {
+    super(message);
+  }
+}
+
+/** A connected server's lists and connection state, as Settings and the chat show it. */
+export interface McpServerStatus {
+  name: string;
+  state: 'connecting' | 'connected' | 'error' | 'disabled' | 'restarting' | 'auth_required';
+  /** Number of tools the model is offered. */
+  tools: number;
+  error?: string;
+  transport?: string;
+  source?: McpSource;
+  toolList?: { name: string; description?: string; params: { name: string; type?: string; description?: string; required: boolean }[] }[];
+  resources?: McpResourceInfo[];
+  resourceTemplates?: McpResourceTemplateInfo[];
+  prompts?: McpPromptInfo[];
+}
+
 /** `${env:NAME}` from the environment; `${secret:NAME}` the same way provider API keys are. */
 const lookupRef = (kind: 'env' | 'secret', name: string) => (kind === 'env' ? process.env[name] : resolveApiKey({ apiKey: `\${secret:${name}}` }));
+
+/** One value with its `${…}` references expanded. */
+const expandRef = (v: string) => expandMcpServer({ command: v }, lookupRef).cfg.command ?? v;
+
+/** A remote server's URL with references expanded (undefined for a local server). */
+function remoteUrl(cfg: McpServerConfig): string | undefined {
+  const kind = transportKind(cfg);
+  return kind === 'http' || kind === 'sse' ? expandMcpServer(cfg, lookupRef).cfg.url : undefined;
+}
+
+/** A configured OAuth client, its `${env:}` / `${secret:}` references expanded. */
+const oauthClientOf = (cfg: McpServerConfig) => (cfg.oauthClient ? { clientId: expandRef(cfg.oauthClient.clientId), clientSecret: cfg.oauthClient.clientSecret && expandRef(cfg.oauthClient.clientSecret) } : undefined);
+
+const authMessage = (name: string) => `needs you to sign in: click Authenticate in Settings → MCP servers, or run \`localpilot mcp auth ${name}\``;
 
 /** An MCP client: JSON-RPC requests and responses over whichever transport the server uses (stdio, HTTP, SSE). */
 export class McpClient implements vscode.Disposable {
@@ -45,6 +97,7 @@ export class McpClient implements vscode.Disposable {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   tools: McpToolInfo[] = [];
   resources: McpResourceInfo[] = [];
+  resourceTemplates: McpResourceTemplateInfo[] = [];
   prompts: McpPromptInfo[] = [];
   /** What the server said it supports in `initialize`. */
   private capabilities: { tools?: unknown; resources?: unknown; prompts?: unknown } = {};
@@ -143,12 +196,14 @@ export class McpClient implements vscode.Disposable {
       }
     );
     const init = await this.handshake(kind);
-    this.tools = await this.listAll<McpToolInfo>('tools', true);
-    for (const k of ['resources', 'prompts'] as const) {
-      if (this.capabilities[k]) {
-        await this.refreshList(k);
-      }
-    }
+    // Fetched together; a capability the server does not declare (or a MethodNotFound reply) is an empty list.
+    const res = !!this.capabilities.resources;
+    [this.tools, this.resources, this.resourceTemplates, this.prompts] = await Promise.all([
+      this.firstList<McpToolInfo>('tools/list', 'tools', true),
+      this.firstList<McpResourceInfo>('resources/list', 'resources', res),
+      this.firstList<McpResourceTemplateInfo>('resources/templates/list', 'resourceTemplates', res),
+      this.firstList<McpPromptInfo>('prompts/list', 'prompts', !!this.capabilities.prompts),
+    ]);
     this.log.info(`[mcp:${this.name}] ${kind}${this.cfg.url ? ` ${this.cfg.url}` : ''}: ${init?.serverInfo?.name ?? 'server'} ${init?.serverInfo?.version ?? ''} · protocol ${init?.protocolVersion ?? '?'} · ${this.tools.length} tools`);
   }
 
@@ -167,14 +222,14 @@ export class McpClient implements vscode.Disposable {
     return init;
   }
 
-  /** Every page of `tools/list`, `resources/list` or `prompts/list`. */
-  private async listAll<T>(kind: ListKind, first = false): Promise<T[]> {
+  /** Every page of a list method (`tools/list`, `resources/templates/list`, …); `key` names the array in each reply. */
+  private async listAll<T>(method: string, key: string, first = false, timeoutMs?: number): Promise<T[]> {
     const out: T[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
       // While connecting a refused request must reach start(), which may fall back to SSE.
-      const res = (await (first ? this.request(`${kind}/list`, cursor ? { cursor } : {}) : this.requestWithReinit(`${kind}/list`, cursor ? { cursor } : {}))) as Record<string, unknown> & { nextCursor?: string };
-      out.push(...((Array.isArray(res?.[kind]) ? res[kind] : []) as T[]));
+      const res = (await (first ? this.request(method, cursor ? { cursor } : {}, timeoutMs) : this.requestWithReinit(method, cursor ? { cursor } : {}, timeoutMs))) as Record<string, unknown> & { nextCursor?: string };
+      out.push(...((Array.isArray(res?.[key]) ? res[key] : []) as T[]));
       cursor = res?.nextCursor;
       if (!cursor) {
         break;
@@ -183,15 +238,40 @@ export class McpClient implements vscode.Disposable {
     return out;
   }
 
+  /** A list fetched while connecting: empty when undeclared or unknown to the server; only a failing `tools/list` fails the start. */
+  private async firstList<T>(method: string, key: string, declared: boolean): Promise<T[]> {
+    if (!declared) {
+      return [];
+    }
+    try {
+      // A server that never answers an optional list must not hold up its start (which gives up after 30 s).
+      return await this.listAll<T>(method, key, true, method === 'tools/list' ? undefined : Math.min(10_000, this.timeoutSeconds * 1000));
+    } catch (e) {
+      if (e instanceof McpRpcError && e.code === -32601) {
+        return [];
+      }
+      if (method === 'tools/list') {
+        throw e;
+      }
+      this.log.debug(`[mcp:${this.name}] ${method}: ${e instanceof Error ? e.message : String(e)}`);
+      return [];
+    }
+  }
+
   /** Fetches one list again; a server that fails it keeps the previous list. */
   private async refreshList(kind: ListKind): Promise<boolean> {
     try {
       if (kind === 'tools') {
-        this.tools = await this.listAll<McpToolInfo>(kind);
+        this.tools = await this.listAll<McpToolInfo>('tools/list', 'tools');
       } else if (kind === 'resources') {
-        this.resources = await this.listAll<McpResourceInfo>(kind);
+        const [resources, templates] = await Promise.all([
+          this.listAll<McpResourceInfo>('resources/list', 'resources'),
+          this.listAll<McpResourceTemplateInfo>('resources/templates/list', 'resourceTemplates').catch(() => this.resourceTemplates),
+        ]);
+        this.resources = resources;
+        this.resourceTemplates = templates;
       } else {
-        this.prompts = await this.listAll<McpPromptInfo>(kind);
+        this.prompts = await this.listAll<McpPromptInfo>('prompts/list', 'prompts');
       }
       return true;
     } catch (e) {
@@ -265,15 +345,22 @@ export class McpClient implements vscode.Disposable {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<{ text: string; isError: boolean }> {
-    const res = (await this.requestWithReinit('tools/call', { name, arguments: args }, timeoutMs, signal)) as { content?: { type: string; text?: string; data?: string; uri?: string; resource?: { uri?: string; text?: string } }[]; isError?: boolean; structuredContent?: unknown };
-    const parts = (res.content ?? []).map((c) =>
-      c.type === 'text' ? c.text ?? '' : c.type === 'resource' ? c.resource?.text ?? `[resource ${c.resource?.uri ?? ''}]` : c.type === 'resource_link' ? `[resource ${c.uri ?? ''}]` : `[${c.type} content]`
-    );
-    if (!parts.length && res.structuredContent !== undefined) {
-      parts.push(JSON.stringify(res.structuredContent, null, 2));
-    }
-    return { text: parts.join('\n'), isError: !!res.isError };
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<{ text: string; images: ImageAttachment[]; isError: boolean }> {
+    const res = (await this.requestWithReinit('tools/call', { name, arguments: args }, timeoutMs, signal)) as { content?: McpContentItem[]; isError?: boolean; structuredContent?: unknown };
+    const { text, images } = mcpContentToResult(res?.content, res?.structuredContent, `${this.name}-${name}`.replace(/[^\w.-]+/g, '_'));
+    return { text, images, isError: !!res?.isError };
+  }
+
+  /** `resources/read`: the text of a resource (binary contents named, images returned as images). */
+  async readResource(uri: string, signal?: AbortSignal): Promise<{ text: string; images: ImageAttachment[] }> {
+    const res = (await this.requestWithReinit('resources/read', { uri }, undefined, signal)) as { contents?: { uri?: string; mimeType?: string; text?: string; blob?: string }[] };
+    return mcpResourceText(res?.contents);
+  }
+
+  /** `prompts/get` with the arguments as strings (the spec allows only strings). */
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<{ text: string; images: ImageAttachment[]; description?: string }> {
+    const res = (await this.requestWithReinit('prompts/get', { name, arguments: args }, undefined, signal)) as { description?: string; messages?: { role?: string; content?: McpContentItem | McpContentItem[] }[] };
+    return { ...promptMessagesToText(res ?? {}, `${this.name}-${name}`.replace(/[^\w.-]+/g, '_')), description: res?.description };
   }
 
   private onMessage(msg: JsonRpcMessage): void {
@@ -281,7 +368,7 @@ export class McpClient implements vscode.Disposable {
       const p = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
       if (msg.error) {
-        p.reject(new Error(msg.error.message));
+        p.reject(new McpRpcError(msg.error.message, msg.error.code));
       } else {
         p.resolve(msg.result);
       }
@@ -371,8 +458,14 @@ export class McpClient implements vscode.Disposable {
 }
 type ServerEntry = McpServerConfig & { source: McpSource; file?: string };
 
+/** Whether `localpilot.disabledTools` switches off every tool of this server (`mcp__<server>`); its resources are then hidden too. */
+function mcpServerSwitchedOff(server: string): boolean {
+  const disabled = getConfig().disabledTools;
+  return disabled.length > 0 && mcpServerNames(server).some((n) => toolDisabled(n, disabled));
+}
+
 /**
- * Starts configured MCP servers and registers their tools as `mcp_<server>_<tool>`. Servers come from the
+ * Starts configured MCP servers and registers their tools as `mcp_<server>__<tool>`. Servers come from the
  * `localpilot.mcpServers` setting, the workspace's `.mcp.json` (after the user trusts it), the user's mcp.json and
  * plugins; a reload starts, stops or restarts only the servers whose configuration changed.
  */
@@ -409,6 +502,18 @@ export class McpManager implements vscode.Disposable {
   private warned = new Set<string>();
   private watchers = new Map<string, fs.FSWatcher>();
   private watchTimer?: ReturnType<typeof setTimeout>;
+  /** Servers whose start is in flight. */
+  private connecting = new Set<string>();
+  /** `mcp_read_resource`, registered while some connected server offers resources. */
+  private resourceTool?: { sig: string; reg: vscode.Disposable };
+  /** OAuth sign-in for remote servers that answer 401; without it such servers just fail. */
+  private _oauth?: McpOAuth;
+  /** Remote servers waiting for the user to sign in. */
+  private authRequired = new Set<string>();
+  /** Restarts a stdio server when its script changes (`localpilot.mcp.watchServerFiles`). */
+  private readonly fileWatch = new McpServerFileWatcher((name, file) => this.serverFileChanged(name, file));
+  /** Loads the `${secret:…}` values server configurations reference before they start. */
+  loadSecrets?: (names: string[]) => Promise<void>;
 
   constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
     // Only a change to the servers themselves restarts them. Any other localpilot.* change (a default model, LocalPilot's
@@ -442,13 +547,24 @@ export class McpManager implements vscode.Disposable {
   private loadedSignature = '';
   /** Everything that decides which servers run and how: every layer, and the policy's allowlist. */
   private signature(layers: McpLayer[]): string {
-    return JSON.stringify([layers.map((l) => [l.file ?? l.source, l.servers, l.problems]), getManagedPolicy(this.log).allowedMcpServers ?? null]);
+    const p = getManagedPolicy(this.log);
+    return JSON.stringify([layers.map((l) => [l.file ?? l.source, l.servers, l.problems]), p.allowedMcpServers ?? null, p.blockPersonalRemoteMcp, [...this.alwaysOn]]);
   }
 
+  /** The organisation's servers that cannot be switched off. */
+  private alwaysOn = new Set<string>();
+
   private async layers(): Promise<McpLayer[]> {
-    const settings = normalizeMcpServers({ mcpServers: getConfig().mcpServers ?? {} });
+    // The organisation's servers come first, so no user or project server can take their names. A user switches one
+    // off (unless it is always enabled) with `{ "enabled": false }` under its name in localpilot.mcpServers.
+    const org = managedMcpServers(getManagedPolicy(this.log));
+    this.alwaysOn = new Set(org.alwaysEnabled);
     const files = await loadMcpFiles(this.projectFolders(), this.userFile());
-    return [{ source: 'settings', servers: settings.servers, problems: settings.problems }, ...files, { source: 'plugin', servers: this.extraServers(), problems: [] }];
+    return [
+      ...policyAndSettingsLayers(org, getConfig().mcpServers ?? {}),
+      ...files,
+      { source: 'plugin', servers: this.extraServers(), problems: [] },
+    ];
   }
 
   private async doReload(layers?: McpLayer[]): Promise<void> {
@@ -470,16 +586,23 @@ export class McpManager implements vscode.Disposable {
       }
     }
     this.servers = mergeMcpLayers(layers);
+    if (this.loadSecrets) {
+      const names = secretRefs(JSON.stringify(this.servers));
+      if (names.length) {
+        await this.loadSecrets(names).catch((e) => this.log.warn(`MCP secrets: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    }
     const policy = getManagedPolicy(this.log);
     const blocked = new Map<string, string>();
     const desired = new Map<string, ServerEntry>();
     const untrusted: { name: string; cfg: ServerEntry; key: string }[] = [];
     for (const [name, c] of Object.entries(this.servers)) {
-      if (c.enabled === false || !transportKind(c)) {
+      if (!this.switchedOn(name, c) || !transportKind(c)) {
         continue;
       }
-      if (!mcpServerAllowed(policy, name)) {
-        blocked.set(name, "not on the MCP server allowlist in your organization's policy");
+      const refused = mcpServerBlocked(policy, name, c);
+      if (refused) {
+        blocked.set(name, refused);
         continue;
       }
       const key = mcpTrustKey(name, c);
@@ -605,7 +728,9 @@ export class McpManager implements vscode.Disposable {
   }
 
   private async startOne(name: string, cfg: McpServerConfig, gen = this.gen(name)): Promise<boolean> {
-    const client = new McpClient(name, cfg, this.log, this.clientVersion);
+    // Watched even when the start fails: fixing the script restarts the server.
+    this.watchServerFiles(name, cfg);
+    const client = new McpClient(name, cfg, this.log, this.clientVersion, this.fetchFor(cfg));
     client.settings = () => this.servers[name];
     this.started.set(name, mcpFingerprint(cfg));
     client.onMissingRefs = (missing) => {
@@ -616,6 +741,8 @@ export class McpManager implements vscode.Disposable {
       }
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
+    this.connecting.add(name);
+    this._onDidChange.fire();
     try {
       // One unresponsive server must not stall every reload (and the CLI's start-up).
       await Promise.race([
@@ -634,6 +761,7 @@ export class McpManager implements vscode.Disposable {
       this.clients.get(name)?.dispose();
       this.clients.set(name, client);
       this.errors.delete(name);
+      this.authRequired.delete(name);
       this.registerTools(name, client);
       client.onDown = (err) => this.serverDown(name, client, err);
       client.onListChanged = (kind) => {
@@ -642,6 +770,8 @@ export class McpManager implements vscode.Disposable {
         }
         if (kind === 'tools') {
           this.registerTools(name, client);
+        } else if (kind === 'resources') {
+          this.syncResourceTool();
         }
         this._onDidChange.fire();
       };
@@ -652,11 +782,22 @@ export class McpManager implements vscode.Disposable {
         client.dispose();
         return false;
       }
+      if (e instanceof McpAuthRequiredError) {
+        this.authRequired.add(name);
+        this.errors.set(name, authMessage(name));
+        this.log.warn(`MCP server "${name}" needs you to sign in (OAuth)`);
+        client.dispose();
+        return false;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       this.errors.set(name, msg);
       this.log.error(`MCP server "${name}" failed to start: ${msg}`);
       client.dispose();
       return false;
+    } finally {
+      if (gen === this.gen(name)) {
+        this.connecting.delete(name);
+      }
     }
   }
 
@@ -664,7 +805,8 @@ export class McpManager implements vscode.Disposable {
   private registerTools(name: string, client: McpClient): void {
     this.registrations.get(name)?.dispose();
     this.registrations.delete(name);
-    const infos = [...client.tools];
+    // Tools a server marks as app-only (`_meta.ui.visibility` without "model") are never offered to the model.
+    const infos = client.tools.filter(mcpToolVisibleToModel);
     const tools = infos.map((t) => this.toTool(client, t));
     const forget = new vscode.Disposable(() =>
       tools.forEach((t, i) => {
@@ -675,6 +817,74 @@ export class McpManager implements vscode.Disposable {
       })
     );
     this.registrations.set(name, vscode.Disposable.from(this.tools.registerAll(tools), forget));
+    this.syncResourceTool();
+  }
+
+  /** Registers `mcp_read_resource` while a connected server has resources (its description lists them), else removes it. */
+  private syncResourceTool(): void {
+    const offering = [...this.clients.values()].filter((c) => (c.resources.length || c.resourceTemplates.length) && !mcpServerSwitchedOff(c.name));
+    const lines = offering.map((c) => {
+      const shown = c.resources.slice(0, 15).map((r) => `${r.uri}${r.name && r.name !== r.uri ? ` (${r.name})` : ''}`);
+      const more = c.resources.length > shown.length ? `, … ${c.resources.length - shown.length} more` : '';
+      const templates = c.resourceTemplates.slice(0, 5).map((t) => t.uriTemplate);
+      return `- ${c.name}: ${[...shown, ...templates.map((t) => `template ${t}`)].join(', ')}${more}`;
+    });
+    const sig = lines.join('\n');
+    if (sig === this.resourceTool?.sig) {
+      return;
+    }
+    this.resourceTool?.reg.dispose();
+    this.resourceTool = undefined;
+    if (!offering.length || this.disposed) {
+      return;
+    }
+    this.resourceTool = { sig, reg: this.tools.registerAll([this.resourceReadTool(lines)]) };
+  }
+
+  private resourceReadTool(lines: string[]): Tool {
+    const clients = this.clients;
+    return {
+      definition: {
+        name: 'mcp_read_resource',
+        description: `Read a resource (a file, record or document) from a connected MCP server by its URI. Fill a template's {placeholders} to build a URI.\nResources:\n${lines.join('\n')}`,
+        parameters: {
+          type: 'object',
+          properties: {
+            server: { type: 'string', description: 'The MCP server name.' },
+            uri: { type: 'string', description: 'The resource URI.' },
+          },
+          required: ['server', 'uri'],
+        },
+      },
+      approvalKind: 'mcp',
+      readOnly: true,
+      parallelSafe: true,
+      async execute(args, ctx): Promise<ToolResult> {
+        const server = String(args.server ?? '').trim();
+        const uri = String(args.uri ?? '').trim();
+        const client = mcpServerSwitchedOff(server) ? undefined : clients.get(server);
+        if (!client) {
+          return { content: `No connected MCP server named "${server}". Connected: ${[...clients.keys()].filter((n) => !mcpServerSwitchedOff(n)).join(', ') || 'none'}.`, isError: true };
+        }
+        if (!uri) {
+          return { content: 'uri is required.', isError: true };
+        }
+        if (!(await ctx.requestApproval(`Read MCP resource from ${server}`, uri, 'mcp'))) {
+          return { content: 'User declined reading the MCP resource.', isError: true };
+        }
+        const started = Date.now();
+        let ok = false;
+        try {
+          const r = await client.readResource(uri, ctx.signal);
+          ok = true;
+          return { content: r.text || '(empty resource)', images: r.images.length ? r.images : undefined, data: r.images.length ? { images: r.images } : undefined };
+        } catch (e) {
+          return { content: `Could not read ${uri} from ${server}: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+        } finally {
+          recordTelemetry({ type: 'mcp_call', server, tool: 'resources/read', durationMs: Date.now() - started, ok });
+        }
+      },
+    };
   }
 
   /**
@@ -689,6 +899,7 @@ export class McpManager implements vscode.Disposable {
     this.registrations.delete(name);
     this.clients.delete(name);
     client.dispose();
+    this.syncResourceTool();
     this.scheduleRestart(name, err);
   }
 
@@ -711,7 +922,7 @@ export class McpManager implements vscode.Disposable {
       }
       // The configuration may have changed since the server went down: start what is configured now, if anything.
       const current = this.servers[name];
-      if (!current || current.enabled === false || !transportKind(current) || !mcpServerAllowed(getManagedPolicy(this.log), name)) {
+      if (!current || !this.switchedOn(name, current) || !transportKind(current) || !mcpServerAllowed(getManagedPolicy(this.log), name, current)) {
         this.restarts.delete(name);
         return;
       }
@@ -724,6 +935,9 @@ export class McpManager implements vscode.Disposable {
         // A server that then runs for a minute counts as healthy again.
         if (ok) {
           setTimeout(() => this.clients.has(name) && this.restarts.delete(name), 60_000).unref?.();
+        } else if (this.authRequired.has(name)) {
+          // Retrying cannot help until the user signs in.
+          this.restarts.delete(name);
         } else {
           this.scheduleRestart(name, err);
         }
@@ -734,14 +948,14 @@ export class McpManager implements vscode.Disposable {
   }
 
   private toTool(client: McpClient, t: McpToolInfo): Tool {
-    const full = `${client.name}_${t.name}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-    let registeredName = `mcp_${full.slice(0, 60)}`;
+    let registeredName = mcpToolName(client.name, t.name);
     const owner = mcpToolOrigin(registeredName);
     const taken = owner ? owner.server !== client.name || owner.tool !== t.name : !!this.tools.get(registeredName);
-    if (full.length > 60 || taken) {
-      // Cut or clashing names get a hash of the real server/tool so two tools never share (and overwrite) one name.
-      const hash = createHash('sha1').update(`${client.name}/${t.name}`).digest('hex').slice(0, 8);
-      registeredName = `mcp_${full.slice(0, 51)}_${hash}`;
+    if (taken) {
+      // `mcp_a__b__c` is both server a's tool b__c and server a__b's tool c: the second one gets the hashed name.
+      registeredName = mcpToolName(client.name, t.name, true);
+    }
+    if (registeredName !== `mcp_${client.name}__${t.name}`) {
       this.log.info(`MCP tool ${client.name}/${t.name} registered as ${registeredName}`);
     }
     registerMcpToolOrigin(registeredName, client.name, t.name);
@@ -769,7 +983,7 @@ export class McpManager implements vscode.Disposable {
         try {
           const r = await client.callTool(t.name, args, ctx.signal);
           ok = !r.isError;
-          return { content: r.text, isError: r.isError };
+          return { content: r.text, isError: r.isError, images: r.images.length ? r.images : undefined, data: r.images.length ? { images: r.images } : undefined };
         } finally {
           recordTelemetry({ type: 'mcp_call', server: client.name, tool: t.name, durationMs: Date.now() - started, ok });
         }
@@ -787,6 +1001,10 @@ export class McpManager implements vscode.Disposable {
     this.clients.delete(name);
     this.started.delete(name);
     this.errors.delete(name);
+    this.authRequired.delete(name);
+    this.connecting.delete(name);
+    this.fileWatch.unwatch(name);
+    this.syncResourceTool();
   }
 
   private stopAll(): void {
@@ -795,21 +1013,283 @@ export class McpManager implements vscode.Disposable {
     }
   }
 
-  /** Connected servers with their tool counts, plus configured servers that failed to start (or wait for trust) and why. */
-  get status(): { name: string; tools: number; error?: string; transport?: string }[] {
-    return [
-      ...[...this.clients.values()].map((c) => ({ name: c.name, tools: c.tools.length, transport: c.kind })),
-      ...[...this.errors].map(([name, error]) => ({ name, tools: 0, error })),
-    ];
+  /**
+   * Every configured server with its state: connected ones with their tools, resources and prompts; servers starting,
+   * waiting to restart, failed (or waiting for trust) with why; and switched-off ones.
+   */
+  get status(): McpServerStatus[] {
+    const out = new Map<string, McpServerStatus>();
+    for (const c of this.clients.values()) {
+      const visible = c.tools.filter(mcpToolVisibleToModel);
+      out.set(c.name, {
+        name: c.name,
+        state: 'connected',
+        tools: visible.length,
+        transport: c.kind,
+        source: this.servers[c.name]?.source,
+        toolList: visible.map((t) => {
+          const props = (t.inputSchema?.properties ?? {}) as Record<string, { type?: unknown; description?: unknown }>;
+          const required = new Set(Array.isArray(t.inputSchema?.required) ? t.inputSchema.required : []);
+          return {
+            name: t.name,
+            description: t.description ?? t.title,
+            params: Object.entries(props).map(([k, v]) => ({ name: k, type: typeof v?.type === 'string' ? v.type : undefined, description: typeof v?.description === 'string' ? v.description : undefined, required: required.has(k) })),
+          };
+        }),
+        resources: c.resources,
+        resourceTemplates: c.resourceTemplates,
+        prompts: c.prompts,
+      });
+    }
+    for (const name of this.connecting) {
+      if (!out.has(name)) {
+        out.set(name, { name, state: 'connecting', tools: 0, source: this.servers[name]?.source });
+      }
+    }
+    for (const [name, error] of this.errors) {
+      if (!out.has(name)) {
+        out.set(name, { name, state: this.authRequired.has(name) ? 'auth_required' : this.restarts.get(name)?.timer ? 'restarting' : 'error', tools: 0, error, source: this.servers[name]?.source });
+      }
+    }
+    for (const [name, c] of Object.entries(this.servers)) {
+      if (!out.has(name) && !this.switchedOn(name, c)) {
+        out.set(name, { name, state: 'disabled', tools: 0, source: c.source });
+      }
+    }
+    const order = Object.keys(this.servers);
+    const rank = (n: string) => (order.includes(n) ? order.indexOf(n) : order.length);
+    return [...out.values()].sort((a, b) => rank(a.name) - rank(b.name));
+  }
+
+  /** Stops and starts one server again (the Restart buttons); resolves whether it is running afterwards. */
+  restart(name: string): Promise<boolean> {
+    return this.queue(async () => {
+      const cfg = this.servers[name];
+      const ready = !!cfg && this.switchedOn(name, cfg) && !!transportKind(cfg) && mcpServerAllowed(getManagedPolicy(this.log), name, cfg) && (cfg.source !== 'project' || !!this.trust?.isTrusted(mcpTrustKey(name, cfg)));
+      this.stopOne(name);
+      this._onDidChange.fire();
+      if (ready) {
+        await this.startOne(name, cfg);
+        this._onDidChange.fire();
+      } else {
+        // Not startable as configured (switched off, blocked, untrusted): a reload reports why.
+        await this.doReload();
+      }
+    }).then(() => this.clients.has(name));
+  }
+
+  /** Servers switched off (or on) for this process only (the CLI's `/mcp disable|enable`); their configuration is left as it is. */
+  private sessionOff = new Set<string>();
+  private sessionOn = new Set<string>();
+
+  /** Enabled in its configuration or for this session, and not switched off for this session. */
+  private switchedOn(name: string, c: ServerEntry): boolean {
+    if (c.source === 'managed' && this.alwaysOn.has(name)) {
+      return true;
+    }
+    return !this.sessionOff.has(name) && (c.enabled !== false || this.sessionOn.has(name));
+  }
+
+  /** An organisation server marked `alwaysEnabled`: no switch turns it off. */
+  isAlwaysEnabled(name: string): boolean {
+    return this.servers[name]?.source === 'managed' && this.alwaysOn.has(name);
+  }
+
+  /** Switches a server off (or back on) until the process ends, without writing its configuration. */
+  async setSessionEnabled(name: string, enabled: boolean): Promise<void> {
+    if (!this.servers[name]) {
+      throw new Error(`No MCP server named "${name}"`);
+    }
+    if (!enabled && this.isAlwaysEnabled(name)) {
+      throw new Error(`"${name}" is required by your organization's policy and cannot be switched off`);
+    }
+    if (enabled) {
+      this.sessionOff.delete(name);
+      this.sessionOn.add(name);
+    } else {
+      this.sessionOff.add(name);
+      this.sessionOn.delete(name);
+    }
+    await this.reload();
+  }
+
+  /** Switches a server on or off where it is defined (the setting or its .mcp.json / mcp.json file). */
+  async setEnabled(name: string, enabled: boolean): Promise<void> {
+    const entry = this.servers[name];
+    if (!entry) {
+      throw new Error(`No MCP server named "${name}"`);
+    }
+    if (entry.source === 'plugin') {
+      throw new Error(`"${name}" comes from a plugin: switch the plugin off instead`);
+    }
+    if (entry.source === 'managed') {
+      if (!enabled && this.isAlwaysEnabled(name)) {
+        throw new Error(`"${name}" is required by your organization's policy and cannot be switched off`);
+      }
+      // The policy file is not the user's to edit: the switch is a `{ "enabled": false }` entry in the user's settings.
+      const cfg = vscode.workspace.getConfiguration('localpilot');
+      const map = { ...(cfg.inspect<Record<string, McpServerConfig>>('mcpServers')?.globalValue ?? {}) };
+      if (enabled) {
+        delete map[name];
+      } else {
+        map[name] = { enabled: false };
+      }
+      await cfg.update('mcpServers', Object.keys(map).length ? map : undefined, vscode.ConfigurationTarget.Global);
+    } else if (entry.source === 'settings') {
+      const cfg = vscode.workspace.getConfiguration('localpilot');
+      const info = cfg.inspect<Record<string, McpServerConfig>>('mcpServers');
+      const inWorkspace = !!info?.workspaceValue && name in info.workspaceValue;
+      const map = { ...((inWorkspace ? info?.workspaceValue : info?.globalValue) ?? {}) };
+      map[name] = withMcpEnabled(map[name] ?? {}, enabled);
+      await cfg.update('mcpServers', map, inWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+    } else if (entry.file) {
+      await setMcpFileServerEnabled(entry.file, name, enabled);
+    }
+    await this.reload();
+  }
+
+  /** Every prompt of the connected servers, as the slash commands that run them. */
+  get promptCommands(): { invoke: string; description: string; argumentHint: string; server: string; prompt: string }[] {
+    return [...this.clients.values()].flatMap((c) =>
+      c.prompts.map((p) => ({ invoke: `/mcp:${c.name}:${p.name}`, description: p.description ?? `MCP prompt from ${c.name}`, argumentHint: mcpPromptUsage(c.name, p.name, p.arguments).split(' ').slice(1).join(' '), server: c.name, prompt: p.name }))
+    );
+  }
+
+  /** Runs a server's prompt with typed arguments (by position or `key=value`) and returns the messages as one user turn. */
+  async getPrompt(server: string, prompt: string, rawArgs: string, signal?: AbortSignal): Promise<{ text: string; images: ImageAttachment[] }> {
+    const client = this.clients.get(server);
+    if (!client) {
+      const why = this.errors.get(server);
+      throw new Error(this.servers[server] ? `MCP server "${server}" is not connected${why ? `: ${why}` : ''}` : `No MCP server named "${server}"`);
+    }
+    const info = client.prompts.find((p) => p.name === prompt);
+    if (!info) {
+      throw new Error(`MCP server "${server}" has no prompt "${prompt}"${client.prompts.length ? ` (it has ${client.prompts.map((p) => p.name).join(', ')})` : ''}`);
+    }
+    const { args, missing } = mapPromptArgs(rawArgs, info.arguments);
+    if (missing.length) {
+      throw new Error(`missing ${missing.join(', ')}. Usage: ${mcpPromptUsage(server, prompt, info.arguments)}`);
+    }
+    const r = await client.getPrompt(prompt, args, signal);
+    if (!r.text && !r.images.length) {
+      throw new Error(`the prompt "${prompt}" of "${server}" returned no messages`);
+    }
+    return r;
+  }
+
+  /** The OAuth helper for remote servers; set before the first reload. */
+  get oauth(): McpOAuth | undefined {
+    return this._oauth;
+  }
+
+  set oauth(o: McpOAuth | undefined) {
+    this._oauth = o;
+    if (o) {
+      o.onAuthRequired = (url) => this.authLost(url);
+    }
+  }
+
+  /** The fetch a remote server uses: through OAuth unless its configuration sends its own Authorization header. */
+  private fetchFor(cfg: McpServerConfig): typeof fetch {
+    const url = remoteUrl(cfg);
+    const ownAuth = Object.keys(cfg.headers ?? {}).some((h) => h.toLowerCase() === 'authorization');
+    return this._oauth && url && !ownAuth ? this._oauth.fetchFor(url) : fetch;
+  }
+
+  /** A connected server rejected its token for good: its tools are withdrawn until the user signs in again. */
+  private authLost(url: string): void {
+    for (const [name, client] of [...this.clients]) {
+      if (remoteUrl(this.servers[name] ?? {}) !== url) {
+        continue;
+      }
+      this.registrations.get(name)?.dispose();
+      this.registrations.delete(name);
+      this.clients.delete(name);
+      client.dispose();
+      this.authRequired.add(name);
+      this.errors.set(name, authMessage(name));
+      this.log.warn(`MCP server "${name}" rejected its token: sign in again`);
+      this.syncResourceTool();
+      this._onDidChange.fire();
+    }
+  }
+
+  /** Signs in to a remote server in the browser (OAuth 2.1), then starts it again; resolves whether it runs. */
+  async authenticate(name: string, signal?: AbortSignal): Promise<boolean> {
+    const cfg = this.servers[name];
+    if (!cfg) {
+      throw new Error(`No MCP server named "${name}"`);
+    }
+    const url = remoteUrl(cfg);
+    if (!url) {
+      throw new Error(`"${name}" is a local server: there is nothing to sign in to`);
+    }
+    if (!this._oauth) {
+      throw new Error('OAuth sign-in is not available here');
+    }
+    await this._oauth.authenticate(url, { client: oauthClientOf(cfg), signal });
+    this.log.info(`MCP server "${name}": signed in`);
+    return this.restart(name);
+  }
+
+  /** Watches a stdio server's workspace scripts, so a rebuild restarts it. */
+  private watchServerFiles(name: string, cfg: McpServerConfig): void {
+    if (!getConfig().mcpWatchServerFiles) {
+      this.fileWatch.unwatch(name);
+      return;
+    }
+    this.fileWatch.watch(name, mcpWatchTargets(expandMcpServer(cfg, lookupRef).cfg, this.projectFolders()));
+  }
+
+  private serverFileChanged(name: string, file: string): void {
+    if (this.disposed || !getConfig().mcpWatchServerFiles || !this.started.has(name)) {
+      return;
+    }
+    this.log.info(`MCP server "${name}": ${file} changed; restarting`);
+    void this.restart(name);
   }
 
   dispose(): void {
     this.disposed = true;
+    this.fileWatch.dispose();
     this.configSub.dispose();
     this._onDidChange.dispose();
     clearTimeout(this.watchTimer);
     this.watchers.forEach((w) => w.close());
     this.watchers.clear();
     this.stopAll();
+    this.resourceTool?.reg.dispose();
+    this.resourceTool = undefined;
   }
+}
+
+/**
+ * `localpilot mcp auth`: connects to one remote server with the stored token; when it answers 401 the user signs in in
+ * the browser (OAuth 2.1) and it connects again. Resolves its tool count and whether a sign-in happened.
+ */
+export async function signInMcpServer(name: string, cfg: McpServerConfig, oauth: McpOAuth, log: vscode.LogOutputChannel, clientVersion: string, signal?: AbortSignal): Promise<{ tools: number; signedIn: boolean }> {
+  const url = remoteUrl(cfg);
+  if (!url) {
+    throw new Error(`"${name}" is a local server: there is nothing to sign in to`);
+  }
+  const ownAuth = Object.keys(cfg.headers ?? {}).some((h) => h.toLowerCase() === 'authorization');
+  const connect = async () => {
+    const client = new McpClient(name, cfg, log, clientVersion, ownAuth ? fetch : oauth.fetchFor(url));
+    try {
+      await client.start();
+      return client.tools.length;
+    } finally {
+      client.dispose();
+    }
+  };
+  try {
+    return { tools: await connect(), signedIn: false };
+  } catch (e) {
+    if (ownAuth || !(e instanceof McpAuthRequiredError)) {
+      throw e;
+    }
+  }
+  await oauth.authenticate(url, { client: oauthClientOf(cfg), signal });
+  log.info(`MCP server "${name}": signed in`);
+  return { tools: await connect(), signedIn: true };
 }

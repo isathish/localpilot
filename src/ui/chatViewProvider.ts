@@ -113,7 +113,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const panel = vscode.window.createWebviewPanel(ChatViewProvider.panelViewType, 'LocalPilot Chat', column, {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
+      localResourceRoots: this.resourceRoots(),
     });
     this.adoptPanel(panel);
   }
@@ -250,7 +250,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private wire(webview: vscode.Webview, onDispose: () => void, host: { onDidDispose: vscode.Event<void>; visible?: boolean }): void {
-    webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')] };
+    webview.options = { enableScripts: true, localResourceRoots: this.resourceRoots() };
     webview.html = this.html(webview);
     // `postMessage` rejects once the webview is gone (a view torn down mid-stream, an editor tab closed while a
     // run is in flight); a rejection per streamed token would flood the extension host with unhandled errors.
@@ -312,8 +312,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** `media/` for the chat's own files; `dist/webview/` for Mermaid, loaded only when an answer has a diagram. */
+  private resourceRoots(): vscode.Uri[] {
+    return [vscode.Uri.joinPath(this.ctx.extensionUri, 'media'), vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview')];
+  }
+
   private html(webview: vscode.Webview): string {
     const media = (f: string) => webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', f));
+    const mermaidSrc = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview', 'mermaid.js'));
     const nonce = Array.from({ length: 24 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
     const svg = (d: string) => `<svg viewBox="0 0 16 16" aria-hidden="true">${d}</svg>`;
     return /* html */ `<!DOCTYPE html>
@@ -325,7 +331,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <link rel="stylesheet" href="${media('chat.css')}" />
 <title>LocalPilot</title>
 </head>
-<body>
+<body data-mermaid="${mermaidSrc}">
 <div id="app">
   <div id="boot" class="boot" role="status" aria-label="Loading LocalPilot"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span></div>
   <div id="progress" class="progress hidden" aria-hidden="true"></div>
@@ -351,6 +357,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <ul id="changesList" class="panel-body hidden"></ul>
     </div>
     <div id="status" class="status hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="statusText" class="text"></span></div>
+    <div id="autoApprove" class="autoapprove hidden">
+      <button id="aaToggle" class="aa-head" aria-expanded="false" title="What the agent may do without asking"><span class="chev">${svg('<path d="M6 4l4 4-4 4"/>')}</span><span class="aa-k">Auto-approve:</span><span id="aaLabel" class="aa-v">none</span></button>
+      <div id="aaBody" class="aa-body hidden" role="group" aria-label="Auto-approve"></div>
+    </div>
     <div id="box" class="box">
       <div class="ctx-row">
         <button id="btnAddCtx" class="ctxbtn" title="Add context (@)"><span class="at">@</span><span class="lbl">Add context</span></button>
@@ -360,10 +370,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <div class="row">
         <button id="modeBtn" class="pick mode" title="Mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <button id="modelBtn" class="pick model" title="Model"><span class="ico">${svg('<path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/><circle cx="6.5" cy="7.5" r=".8" fill="currentColor"/><circle cx="9.5" cy="7.5" r=".8" fill="currentColor"/>')}</span><span id="modelLabel" class="lbl">Auto</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
+        <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico">${svg('<path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/>')}</span><span id="thinkLabel" class="lbl">Think</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico">${svg('<path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/>')}</span><span id="skillsLabel" class="lbl">Skills</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <span class="spacer"></span>
         <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent.">${svg('<path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/>')}</button>
         <button id="btnImage" class="ib" title="Attach image or take a screenshot (area, window, screen)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
+        <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send" title="Send (Enter)">${svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>')}</button>
         <button id="btnPause" class="send pause hidden" title="Pause after the current step (⌥Esc)">${svg('<path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/>')}</button>
@@ -371,7 +383,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
     </div>
   </footer>
-  <div id="popover" class="popover hidden" role="menu"></div>
+  <div id="popover" class="popover hidden"></div>
   <div id="toasts"></div>
 </div>
 <script nonce="${nonce}" src="${media('chat.js')}"></script>

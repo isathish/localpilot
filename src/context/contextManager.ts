@@ -298,7 +298,7 @@ export class ContextManager {
     // Never split a tool call from its results: back the split point up past tool results and their image carriers,
     // so the recent window starts at a user message or at an assistant message whose results all follow it.
     let split = history.length - keepRecent;
-    while (split > 0 && (history[split].role === 'tool' || history[split].meta?.toolImages)) {
+    while (split > 0 && (history[split]?.role === 'tool' || history[split]?.meta?.toolImages)) {
       split--;
     }
     const older = history.slice(0, split);

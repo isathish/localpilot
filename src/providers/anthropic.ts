@@ -1,8 +1,10 @@
 import { ChatMessage, ChatRequestOptions, CompletionRequestOptions, LLMProvider, ModelInfo, ProviderConfig, StreamEvent, ToolCall } from '../types';
-import { completeViaChat, isCloudProvider, knownContextWindow, resolveApiKey } from './cloud';
+import { completeViaChat, isCloudProvider, knownContextWindow, resolveApiKey, resolveHeaders } from './cloud';
 import { getJson, HttpError, newId, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
 import { modelFacts, pricingOf } from './modelFacts';
+import { applyModelOverrides, mergeHeaders, withExtraBody } from './providerOptions';
+import { anthropicBudget, anthropicEffort, ANSWER_ROOM } from './thinkingParams';
 import { pairToolCalls } from './toolPairing';
 
 const API_VERSION = '2023-06-01';
@@ -62,8 +64,6 @@ export function thinkingStyle(model: string): ThinkingStyle {
   return 'none';
 }
 
-const BUDGET: Record<'low' | 'medium' | 'high', number> = { low: 2048, medium: 6000, high: 12000 };
-
 /** Claude through Anthropic's Messages API (`/v1/messages`): streaming, tool use, images, thinking and prompt caching. */
 export class AnthropicProvider implements LLMProvider {
   readonly type = 'anthropic' as const;
@@ -78,13 +78,19 @@ export class AnthropicProvider implements LLMProvider {
   private readonly thinkingByCall = new Map<string, ThinkingBlock[]>();
   /** Request options a proxy or older endpoint rejected once (`cache_control`, `output_config`, `display`), not sent again. */
   private readonly unsupported = new Set<string>();
+  /** Output limit of each listed model, which caps the thinking budget. */
+  private readonly maxOutputOf = new Map<string, number>();
+  private readonly cfg: ProviderConfig;
+  private readonly modelsUrl: string;
 
   constructor(cfg: ProviderConfig) {
+    this.cfg = cfg;
     this.id = cfg.id;
     this.displayName = cfg.displayName ?? 'Anthropic';
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
     const key = resolveApiKey(cfg);
-    this.headers = { 'anthropic-version': API_VERSION, ...(key ? { 'x-api-key': key } : {}) };
+    this.headers = mergeHeaders({ 'anthropic-version': API_VERSION, ...(key ? { 'x-api-key': key } : {}) }, resolveHeaders(cfg));
+    this.modelsUrl = (cfg.modelsUrl?.trim() || `${this.baseUrl}/models`).replace(/\/+$/, '');
     this.configuredCtx = cfg.contextWindow;
     this.explicitModels = cfg.models;
     this.remote = isCloudProvider(cfg);
@@ -92,7 +98,7 @@ export class AnthropicProvider implements LLMProvider {
 
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     try {
-      await getJson(`${this.baseUrl}/models?limit=1`, this.headers, withTimeout(4000, signal));
+      await getJson(`${this.modelsUrl}?limit=1`, this.headers, withTimeout(4000, signal));
       return true;
     } catch (e) {
       // A gateway without a model listing is up; its configured models still serve.
@@ -106,7 +112,7 @@ export class AnthropicProvider implements LLMProvider {
     try {
       for (let page = 0; page < 10; page++) {
         const res = await getJson<{ data?: AnthropicModel[]; has_more?: boolean; last_id?: string }>(
-          `${this.baseUrl}/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`,
+          `${this.modelsUrl}?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`,
           this.headers,
           withTimeout(8000, signal)
         );
@@ -126,7 +132,7 @@ export class AnthropicProvider implements LLMProvider {
         listed.push({ id });
       }
     }
-    return listed.map((m) => {
+    const models = listed.map((m): ModelInfo => {
       const facts = modelFacts(m.id, 'anthropic');
       return {
         id: `${this.id}/${m.id}`,
@@ -144,6 +150,11 @@ export class AnthropicProvider implements LLMProvider {
         pricing: pricingOf(facts, 'anthropic'),
       };
     });
+    const out = applyModelOverrides(models, this.cfg.modelOverrides);
+    for (const m of out) {
+      this.maxOutputOf.set(m.modelId, m.maxOutputTokens);
+    }
+    return out;
   }
 
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
@@ -252,6 +263,8 @@ export class AnthropicProvider implements LLMProvider {
     }
     const style = thinkingStyle(opts.model);
     const level = typeof opts.think === 'string' ? opts.think : undefined;
+    const modelMax = this.maxOutputOf.get(opts.model);
+    const capped = (n: number, max?: number) => (max && max > 0 ? Math.min(n, max) : n);
     const effort = (e: string) => {
       if (!this.unsupported.has('output_config')) {
         body.output_config = { effort: e };
@@ -264,18 +277,18 @@ export class AnthropicProvider implements LLMProvider {
       } else if (opts.think !== undefined) {
         body.thinking = this.unsupported.has('display') ? { type: 'adaptive' } : { type: 'adaptive', display: 'summarized' };
         // Thinking shares max_tokens with the answer: a small output limit would leave little room for the reply.
-        body.max_tokens = Math.max(Number(body.max_tokens), 16000);
+        body.max_tokens = capped(Math.max(Number(body.max_tokens), 16000), modelMax);
         if (level) {
-          effort(level);
+          effort(anthropicEffort(level, opts.model));
         }
       }
     } else if (style === 'budget' && opts.think && canReplayThinking(messages)) {
       // These models need the reasoning of the current tool loop replayed; without it the request is rejected.
-      const budget = BUDGET[level ?? 'medium'];
+      const budget = anthropicBudget(level ?? 'medium', modelMax);
       body.thinking = { type: 'enabled', budget_tokens: budget };
-      body.max_tokens = Math.max(Number(body.max_tokens), budget + 4096);
+      body.max_tokens = capped(Math.max(Number(body.max_tokens), budget + ANSWER_ROOM), modelMax);
     }
-    return body;
+    return withExtraBody(body, this.cfg.extraBody);
   }
 
   /**

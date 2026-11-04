@@ -336,6 +336,20 @@ function lex(s: string): { toks: Tok[]; subs: string[] } {
 
 const isAssignment = (w: string) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
 const base = (w: string) => w.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|com|ps1)$/i, '').toLowerCase();
+/** Variables that make an otherwise read-only program find, load or run other code. */
+const CODE_ENV = /^(PATH|LD_\w+|DYLD_\w+|GIT_\w+|NODE_OPTIONS|NODE_PATH|PYTHON\w*|PERL5\w*|PERLLIB|RUBYOPT|RUBYLIB|BASH_ENV|ENV|ZDOTDIR|PROMPT_COMMAND|IFS|SHELLOPTS|BASHOPTS|PAGER|LESSOPEN|LESSCLOSE|EDITOR|VISUAL)=/;
+/** git options before the subcommand that run configured programs or point git at another repository's config. */
+const GIT_CODE_OPTS = /^(-c|--config-env|--exec-path|--git-dir|--work-tree)(=|$)/;
+
+/** The words `stripWrappers` looked through (`FOO=1`, `env -S …`, `sudo -u x`) before the program name. */
+function wrapperPrefix(words0: string[], w: string[] | 'lookup'): string[] {
+  return w === 'lookup' ? words0 : words0.slice(0, words0.length - w.length);
+}
+
+/** A prefix that changes which program runs or what it loads: a code-loading variable, or `env -S` (a whole command line). */
+function codeEnv(prefix: string[]): string | undefined {
+  return prefix.find((p, i) => CODE_ENV.test(p) || (/^(-S|--split-string)(=|$)/.test(p) && prefix.slice(0, i).some((x) => base(x) === 'env')));
+}
 
 function stripWrappers(w: string[]): string[] | 'lookup' {
   while (w.length) {
@@ -425,6 +439,10 @@ function subcommand(args: string[], withArg: RegExp = /^$/): { sub: string; rest
 
 function checkSimple(words0: string[], windows: boolean, depth: number): GuardVerdict {
   const w = stripWrappers(words0);
+  const env = codeEnv(wrapperPrefix(words0, w));
+  if (env) {
+    return { ok: false, reason: `\`${env.slice(0, 40)}\` changes which program runs or what it loads` };
+  }
   if (w === 'lookup' || !w.length) {
     return { ok: true };
   }
@@ -438,6 +456,9 @@ function checkSimple(words0: string[], windows: boolean, depth: number): GuardVe
       return w.length > 2 ? checkSimple(w.slice(2), windows, depth) : { ok: true };
     }
     return no('the command name comes from a variable or substitution, so it cannot be checked');
+  }
+  if (/^(export|declare|typeset|readonly|local)$/.test(name) && args.some((a) => CODE_ENV.test(a))) {
+    return no(`\`${name}\` changes which program later commands run or what they load`);
   }
   if (MUTATING.has(name)) {
     return no(`\`${name}\` changes files`);
@@ -566,7 +587,10 @@ function clusterHas(a: string, flag: string, stop: string): boolean {
 function checkGit(args: string[]): GuardVerdict {
   let i = 0;
   while (i < args.length && args[i].startsWith('-')) {
-    i += /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)$/.test(args[i]) ? 2 : 1;
+    if (GIT_CODE_OPTS.test(args[i])) {
+      return { ok: false, reason: `\`git ${args[i].replace(/=.*/, '')}\` can make git run other programs` };
+    }
+    i += /^(-C|--namespace|--super-prefix)$/.test(args[i]) ? 2 : 1;
   }
   const sub = (args[i] ?? '').toLowerCase();
   const rest = args.slice(i + 1);
@@ -590,4 +614,139 @@ function checkGit(args: string[]): GuardVerdict {
     readOnly = has(/^--(check|stat|numstat|summary)$/) && !has(/^--(apply|index|cached|3way)$/);
   }
   return readOnly ? { ok: true } : { ok: false, reason: `\`git ${sub}\` changes the repository` };
+}
+
+/** Programs that only read or print (`approvals.terminal = safe`); anything not listed here asks. */
+const SAFE_PROGRAMS = new Set([
+  'ls', 'll', 'cat', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'fd', 'tree', 'pwd', 'echo', 'printf',
+  'which', 'whereis', 'type', 'file', 'stat', 'du', 'df', 'date', 'whoami', 'id', 'uname', 'hostname', 'printenv', 'sort', 'uniq', 'cut',
+  'tr', 'diff', 'cmp', 'comm', 'basename', 'dirname', 'realpath', 'readlink', 'jq', 'column', 'nl', 'od', 'hexdump', 'md5sum',
+  'sha1sum', 'sha256sum', 'shasum', 'true', 'false', 'test', '[', 'seq', 'tsc', 'pytest', 'find',
+  'dir', 'findstr', 'where', 'get-childitem', 'gci', 'get-content', 'gc', 'select-string', 'sls', 'get-location', 'gl', 'get-item', 'gi',
+]);
+const GIT_SAFE = new Set(['status', 'log', 'diff', 'show', 'blame', 'rev-parse', 'ls-files', 'ls-tree', 'describe', 'shortlog', 'grep', 'cat-file', 'branch', 'tag', 'stash', 'remote', 'reflog']);
+/** Test, lint and build commands that are routine in a coding session. */
+const SAFE_TASKS: RegExp[] = [
+  /^(npm|pnpm|yarn|bun) (run )?(test|lint|build|typecheck|type-check|check)( .*)?$/,
+  /^npm t( .*)?$/,
+  /^npx tsc( .*)?$/,
+  /^cargo (build|test|check|clippy)( .*)?$/,
+  /^go (test|build|vet)( .*)?$/,
+  /^make (test|check)$/,
+  /^python[\d.]* -m (pytest|unittest)( .*)?$/,
+  /^dotnet (build|test)( .*)?$/,
+];
+
+/**
+ * Whether `cmd` may run without asking under `approvals.terminal = safe`: every part is a known read-only program, a
+ * read-only git subcommand or a routine test/build command, and nothing writes a file. Unlike the Plan-mode guard this
+ * is an allow-list: an unknown program is not safe.
+ */
+export function isReadOnlyOrSafe(cmd: string, opts: GuardOptions = {}): GuardVerdict {
+  const windows = opts.windows ?? process.platform === 'win32';
+  const guard = check(cmd, windows, 0);
+  return guard.ok ? checkSafe(cmd, 0) : guard;
+}
+
+function checkSafe(cmd: string, depth: number): GuardVerdict {
+  if (depth > 4) {
+    return { ok: false, reason: 'the command nests too deeply to check' };
+  }
+  const { toks, subs } = lex(cmd);
+  for (const s of subs) {
+    const v = checkSafe(s, depth + 1);
+    if (!v.ok) {
+      return v;
+    }
+  }
+  let seg: string[] = [];
+  const segments: string[][] = [seg];
+  for (let i = 0; i < toks.length; i++) {
+    const tk = toks[i];
+    if (tk.t === 'op') {
+      seg = [];
+      segments.push(seg);
+    } else if (tk.t === 'redir') {
+      if (toks[i + 1]?.t === 'w') {
+        i++;
+      }
+    } else {
+      seg.push(tk.v);
+    }
+  }
+  for (const s of segments) {
+    const v = safeSimple(s, depth);
+    if (!v.ok) {
+      return v;
+    }
+  }
+  return { ok: true };
+}
+
+function safeSimple(words0: string[], depth: number): GuardVerdict {
+  if (words0.some((w) => /^(sudo|doas)$/.test(base(w)))) {
+    return { ok: false, reason: '`sudo` runs with elevated rights' };
+  }
+  const w = stripWrappers(words0);
+  // Any variable set for the command (`PATH=. ls`, `GIT_EXTERNAL_DIFF=./x git diff`) can change what it runs.
+  const assigned = wrapperPrefix(words0, w).find(isAssignment) ?? codeEnv(wrapperPrefix(words0, w));
+  if (assigned) {
+    return { ok: false, reason: `\`${assigned.slice(0, 40)}\` sets the command's environment` };
+  }
+  if (w === 'lookup' || !w.length) {
+    return { ok: true };
+  }
+  const name = base(w[0]);
+  const args = w.slice(1);
+  const no = (): GuardVerdict => ({ ok: false, reason: `\`${[name, ...args].join(' ').slice(0, 60)}\` is not a known read-only, test or build command` });
+  if (/[$`]/.test(w[0])) {
+    return no();
+  }
+  if (args.length === 1 && args[0] === '--version') {
+    return { ok: true };
+  }
+  if (SHELLS.has(name)) {
+    const at = args.findIndex((a) => a === '-c' || /^-[a-z]*c$/.test(a));
+    return at >= 0 && args[at + 1] !== undefined ? checkSafe(args.slice(at + 1).join(' '), depth + 1) : no();
+  }
+  if (name === 'git') {
+    let i = 0;
+    while (i < args.length && args[i].startsWith('-')) {
+      if (GIT_CODE_OPTS.test(args[i])) {
+        return no();
+      }
+      i += /^(-C|--namespace)$/.test(args[i]) ? 2 : 1;
+    }
+    const sub = (args[i] ?? '').toLowerCase();
+    const rest = args.slice(i + 1);
+    if (!GIT_SAFE.has(sub)) {
+      return no();
+    }
+    if (sub === 'remote' && rest.some((a) => !a.startsWith('-')) && !/^(show|get-url)$/.test(rest.find((a) => !a.startsWith('-')) ?? '')) {
+      return no();
+    }
+    if (sub === 'reflog' && /^(expire|delete)$/.test(rest[0] ?? '')) {
+      return no();
+    }
+    if (rest.some((a) => /^(--output|--ext-diff|-O|--open-files-in-pager)/.test(a))) {
+      return no();
+    }
+    return { ok: true };
+  }
+  if (name === 'find' && args.some((a) => /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/.test(a))) {
+    return no();
+  }
+  // Options of otherwise read-only programs that write a file or run another program.
+  const risky: Record<string, RegExp> = { tsc: /^--init$/, sort: /^(-o|--output.*)$/, tree: /^-o$/, rg: /^--pre/, fd: /^(-x|-X|--exec.*)$/, date: /^(-s|--set.*)$/ };
+  if (risky[name] && args.some((a) => risky[name].test(a))) {
+    return no();
+  }
+  if ((name === 'uniq' && args.filter((a) => !a.startsWith('-')).length > 1) || (name === 'hostname' && args.some((a) => !a.startsWith('-')))) {
+    return no();
+  }
+  if (SAFE_PROGRAMS.has(name)) {
+    return { ok: true };
+  }
+  const line = [name, ...args.filter((a) => !/^--?(silent|s|q|quiet|watch=false|no-color|ci)$/.test(a))].join(' ');
+  return SAFE_TASKS.some((re) => re.test(line)) ? { ok: true } : no();
 }

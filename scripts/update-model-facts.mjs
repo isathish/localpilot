@@ -27,6 +27,14 @@ const PROVIDERS = {
   moonshot: 'moonshotai',
   dashscope: 'alibaba',
   'ollama-cloud': 'ollama-cloud',
+  huggingface: 'huggingface',
+  sambanova: 'sambanova',
+  minimax: 'minimax',
+  zai: 'zai',
+  baseten: 'baseten',
+  nebius: 'nebius',
+  requesty: 'requesty',
+  vercel: 'vercel',
 };
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);

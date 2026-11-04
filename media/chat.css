@@ -320,6 +320,17 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .term-acts button { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; color: var(--muted); font-size: var(--fs-xs); font-family: var(--vscode-font-family); }
 .term-acts button:hover { background: var(--tint-2); color: var(--fg); } .term-acts svg { width: 11px; height: 11px; }
 .termout pre.term { margin: 0; padding: 8px 10px; white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--fg-2); max-height: 300px; overflow: auto; }
+.termout .term-more { display: block; width: 100%; padding: 2px 10px; text-align: left; color: var(--muted); font-size: var(--fs-xs); border-bottom: 1px solid var(--border-soft); }
+.termout .term-more:hover { color: var(--fg); background: var(--tint-2); }
+/* Proceed While Running / Stop on a running command row; Stop stays while a detached command runs on. */
+.cmdctl { display: none; align-items: center; gap: 2px; flex: none; margin-left: 4px; }
+.step.term.running > summary .cmdctl, .step.term.detached > summary .cmdctl { display: inline-flex; }
+.step.term.detached > summary .cmdctl [data-c="detach"] { display: none; }
+.cmdctl button { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.cmdctl button:hover { background: var(--tint-2); color: var(--fg); } .cmdctl button svg { width: 11px; height: 11px; flex: none; }
+.cmdctl [data-c="stop"]:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.cmdctl button:disabled { opacity: .5; pointer-events: none; }
+@container messages (max-width: 420px) { .cmdctl [data-c="detach"] span { display: none; } }
 .step .meta .exit { font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 0 6px; line-height: 16px; border-radius: 8px; background: var(--tint-2); }
 .step .meta .exit.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .step .meta .exit.good { color: var(--muted); background: none; padding: 0; font-weight: 400; }
 /* subagent pill + nested rows */
@@ -410,6 +421,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .error-box .retry-btn svg { animation: none; }
 .note.retry { display: flex; align-items: center; gap: 6px; }
 .note.retry svg { width: 12px; height: 12px; animation: spin 1.2s linear infinite; }
+.note.hook { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0; padding: 0; border: none; font-size: var(--fs-xs); }
+.note.hook svg { width: 11px; height: 11px; animation: spin 1.2s linear infinite; }
+.note.hook i { font-style: normal; opacity: .7; }
+.note.hook .st.ok { color: var(--ok-text); } .note.hook .st.blocked { color: var(--warn-text); } .note.hook .st.failed { color: var(--error-text); }
 .turn:not(.live) .note.retry svg { animation: none; opacity: .6; }
 .chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 22px; padding: 0 6px 0 7px; font-size: 11.5px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--tint); color: var(--fg); }
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -455,6 +470,35 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .approval.question { border-color: color-mix(in srgb, var(--brand) 35%, var(--border-soft)); }
 .approval.question .head { background: color-mix(in srgb, var(--brand) 7%, transparent); }
 .approval.question .head svg { color: var(--brand-text); }
+/* Deny with reason: an inline box between the detail and the buttons. */
+.approval .reason { display: flex; gap: 6px; padding: 8px 10px 0; }
+.approval .reason.hidden { display: none; }
+.approval .reason input { flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--editor-bg); color: var(--fg); font: inherit; font-size: var(--fs-sm); }
+.approval .reason input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+/* A step the user denied: neutral, not a failure. */
+.step.denied .ico, .card.edit.denied .card-head .ico { color: var(--muted); }
+.step.denied > summary .meta, .card.edit.denied .card-head .stat { color: var(--muted); font-style: italic; }
+
+/* Auto-approve bar: one quiet line above the input; expands into a choice row per category. */
+.autoapprove { font-size: var(--fs-xs); color: var(--muted); }
+.autoapprove.hidden { display: none; }
+.aa-head { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; padding: 2px 4px; border-radius: 4px; color: var(--muted); text-align: left; }
+.aa-head:hover { background: var(--tint); color: var(--fg); }
+.aa-head .chev svg { width: 11px; height: 11px; opacity: .7; transition: transform .15s; }
+.autoapprove.open .aa-head .chev svg { transform: rotate(90deg); }
+.aa-head .aa-v { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.aa-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 4px 6px 19px; }
+.aa-body.hidden { display: none; }
+.aa-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.aa-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.aa-lock { font-style: normal; margin-left: 4px; padding: 0 4px; border: 1px solid var(--border-soft); border-radius: 3px; color: var(--muted); }
+.aa-row .seg { display: inline-flex; flex: none; border: 1px solid var(--border-soft); border-radius: 4px; overflow: hidden; }
+.aa-row .seg button { padding: 1px 7px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.aa-row .seg button + button { border-left: 1px solid var(--border-soft); }
+.aa-row .seg button:hover:not(:disabled):not(.on) { background: var(--tint); color: var(--fg); }
+.aa-row .seg button.on { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--fg); }
+.aa-row .seg button:disabled { opacity: .45; cursor: not-allowed; }
+@container (max-width: 300px) { .aa-name .aa-lock { display: none; } }
 .question .q { padding: 8px 10px 4px; border-top: 1px solid var(--border-soft); }
 .question .q-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; line-height: 1.4; }
 .question .q-chip { flex: none; font-size: var(--fs-xs); color: var(--muted); border: 1px solid var(--border-soft); border-radius: 10px; padding: 0 7px; line-height: 16px; }
@@ -563,6 +607,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .pick.skills { flex: none; max-width: 160px; color: var(--muted); }
 .pick.skills.on { color: var(--fg); } .pick.skills.on .ico { color: var(--brand, #f2a33a); }
 .pick.skills.off .ico { opacity: .5; }
+.pick.think { flex: none; max-width: 140px; color: var(--muted); }
+.pick.think.on { color: var(--fg); } .pick.think.on .ico { color: var(--brand, #f2a33a); }
 .note.skills .chip.on { border-color: color-mix(in srgb, var(--ok, #73c991) 50%, transparent); color: var(--fg); cursor: default; }
 .note.skills .chip.on small { color: var(--muted); font-size: .9em; margin-left: 2px; }
 .ctx { display: inline-flex; align-items: center; gap: 5px; height: 26px; font-size: var(--fs-xs); color: var(--muted); padding: 0 6px; flex: none; font-variant-numeric: tabular-nums; border-radius: var(--radius-sm); }
@@ -570,6 +616,12 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .ctx .ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--ring-color, var(--brand)) calc(var(--pct, 0) * 1%), var(--tint-2) 0); position: relative; flex: none; }
 .ctx .ring::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--input-bg); }
 .ctx.warn { --ring-color: var(--warn); } .ctx.danger { --ring-color: var(--error); color: var(--error-text); }
+/* Tokens and cost of the open chat, beside the context ring; collapses before the model name does. */
+.usage { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px; font-size: var(--fs-xs); color: var(--muted); flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.usage.hidden, .usage .hidden { display: none; }
+.usage .cost { padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--fg); }
+@container (max-width: 520px) { .usage .tok { display: none; } }
+@container (max-width: 340px) { .usage { display: none; } }
 .send { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius); background: var(--accent); color: var(--accent-fg); flex: none; margin-left: 4px; transition: opacity .12s, background .12s; }
 .send:hover { background: var(--accent-hover); } .send:disabled { opacity: .35; cursor: default; }
 .send.stop { background: var(--fg); color: var(--bg); } .send svg { width: 14px; height: 14px; stroke-width: 1.8; }
@@ -583,6 +635,24 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .steer .badge { flex: none; font-size: 10.5px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: var(--tint-2); color: var(--muted); }
 .steer.queued { border-color: color-mix(in srgb, var(--brand) 55%, var(--border)); } .steer.queued .badge { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand-text); }
 .steer .imgs { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; } .steer .imgs img { max-height: 90px; border-radius: 6px; border: 1px solid var(--border); }
+/* Queue banner above the input: pending steers and "send after this turn" messages. */
+.queuebar { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--brand) 55%, var(--border)); border-radius: var(--radius); background: var(--tint); font-size: var(--fs-sm); }
+.queuebar .qhead { display: flex; align-items: center; gap: 6px; padding: 0 2px; color: var(--muted); } .queuebar .qhead svg { width: 12px; height: 12px; }
+.queuebar .qrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.queuebar .qkind { flex: none; font-size: 10.5px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand-text); }
+.queuebar .qrow.after .qkind { background: var(--tint-2); color: var(--muted); }
+.queuebar .qtxt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.queuebar .ib { width: 22px; height: 22px; } .queuebar .ib svg { width: 12px; height: 12px; }
+/* Quote selection in reply: the floating button and the preview above the input. */
+.quotebtn { position: fixed; z-index: 70; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--vscode-notifications-background, var(--bg)); color: var(--fg); border: 1px solid var(--border); box-shadow: var(--shadow); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.quotebtn:hover { background: var(--tint); } .quotebtn svg { width: 12px; height: 12px; } .quotebtn.hidden { display: none; }
+.quoteprev { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 4px; padding: 4px 4px 4px 8px; border-left: 2px solid var(--brand); background: var(--tint); border-radius: var(--radius-sm); font-size: var(--fs-sm); color: var(--muted); }
+.quoteprev .qtxt { flex: 1; min-width: 0; max-height: 4.4em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.quoteprev .ib { width: 20px; height: 20px; } .quoteprev .ib svg { width: 11px; height: 11px; }
+/* Sticky last user message, shown once the request being read has scrolled above the viewport. */
+.stickyuser { position: absolute; left: 12px; right: 12px; z-index: 55; display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border-soft); border-radius: 0 0 var(--radius) var(--radius); background: var(--vscode-sideBar-background, var(--bg)); box-shadow: var(--shadow); color: var(--fg); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; animation: fadeUp .18s ease-out; }
+.stickyuser:hover { background: var(--tint); } .stickyuser svg { width: 12px; height: 12px; flex: none; color: var(--brand-text); }
+.stickyuser .txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .stickyuser.hidden { display: none; }
 /* Paused indicators in tabs and the background strip. */
 .pausedind { display: inline-grid; place-items: center; color: var(--brand-text); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
 .tab .ind .pausedind svg { width: 12px; height: 12px; }
@@ -652,6 +722,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .popover .item .lbl { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .popover .item .desc { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .popover .item .check { width: 14px; color: var(--accent); } .popover .item .check svg { width: 13px; height: 13px; }
+.popover .item .star { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: none; border-radius: var(--radius-sm); background: none; color: var(--muted); opacity: 0; cursor: pointer; flex: none; }
+.popover .item .star svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
+.popover .item:hover .star, .popover .item.sel .star, .popover .item .star:focus-visible { opacity: .8; }
+.popover .item .star.on { opacity: 1; color: var(--brand, #f2a33a); } .popover .item .star.on svg { fill: currentColor; }
+.popover .item.sel .star.on { color: inherit; }
 .popover .item .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
 .popover .item.sel .tag { background: rgba(255,255,255,.15); color: inherit; }
 .popover .empty-i { padding: 8px; color: var(--muted); }
@@ -670,6 +745,22 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-row .desc { font-size: 11px; color: var(--muted); }
 .hist-row .desc.snippet { color: var(--fg); opacity: .85; } .hist-row .desc.snippet b { font-weight: 600; color: var(--muted); }
 .hist-row mark { background: color-mix(in srgb, var(--brand) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.hist-row .meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--muted); opacity: .85; font-variant-numeric: tabular-nums; }
+.hist-row.picked { background: color-mix(in srgb, var(--brand) 14%, transparent); }
+.hist-row .pick-box { margin: 0; width: 13px; height: 13px; accent-color: var(--brand); pointer-events: none; }
+.hist-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 2px 4px; font-size: 11px; color: var(--muted); }
+.hist-bar .spacer { flex: 1 1 auto; }
+.hist-bar .n { font-variant-numeric: tabular-nums; margin-right: 2px; }
+.hist-bar .q { color: var(--fg); }
+.hist-bar select { height: 22px; padding: 0 4px; border-radius: var(--radius-sm); border: 1px solid var(--border-soft); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: 11px; }
+.hist-bar select:focus { outline: none; border-color: var(--focus); }
+.hist-bar button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: var(--radius-sm); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hist-bar button:hover:not(:disabled) { background: var(--tint-2); color: var(--fg); }
+.hist-bar button:disabled { opacity: .45; cursor: default; }
+.hist-bar button svg { width: 12px; height: 12px; flex: none; }
+.hist-bar button[aria-pressed="true"] { background: var(--tint-2); color: var(--brand-text); }
+.hist-bar button.danger { color: var(--error-text); } .hist-bar button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-text); }
+.hist-list .empty-i.more { font-size: 11px; text-align: center; }
 .hist-row .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
 .hist-row .acts { display: none; align-items: center; gap: 1px; flex: none; }
 .hist-row.sel .acts, .hist-row:hover .acts, .hist-row.confirm .acts { display: inline-flex; }
@@ -709,6 +800,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .pick.model { max-width: 150px; }
   .pick.model .auto { display: none; }
   .pick.skills .lbl { display: none; }
+  .pick.think .lbl { display: none; }
 }
 /* While a run is going, Pause and Stop take the Send button's place: the mode shrinks to its icon and "improve prompt"
    (which rewrites a draft before sending) steps aside, so the model name is not cut to a letter. */
@@ -838,6 +930,8 @@ pre.numbered .t { padding-right: 14px; }
 /* tool screenshots (browser_screenshot) */
 .step .content.shot { padding: 0; overflow: auto; max-height: 520px; }
 .step .content.shot img { display: block; max-width: 100%; max-height: 420px; height: auto; margin: 0 auto; background: var(--tint); cursor: zoom-in; border-bottom: 1px solid var(--border-soft); }
+.step .content.doc > .imgs { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+.step .content.doc > .imgs img { max-width: min(100%, 300px); max-height: 220px; border-radius: 6px; border: 1px solid var(--border); background: var(--tint); cursor: zoom-in; }
 .step .content.shot .shot-cap { padding: 6px 10px; font-family: var(--vscode-font-family); font-size: var(--fs-xs); color: var(--muted); white-space: normal; }
 .step .content.shot .shot-cap a { color: var(--link); }
 
@@ -876,6 +970,18 @@ pre.numbered .t { padding-right: 14px; }
 
 /* user text: inline code and file links, but no block markdown */
 .turn.user .utext { white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn.user .utext.editable { cursor: text; }
+/* Inline edit of a sent message: the bubble's own content and hover actions give way to the editor. */
+.turn.user.editing > :not(.uedit) { display: none; }
+.uedit { display: flex; flex-direction: column; gap: 6px; white-space: normal; }
+.uedit textarea { width: 100%; resize: none; box-sizing: border-box; border: 1px solid var(--border-2); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs); line-height: 1.5; padding: 6px 8px; min-height: 36px; max-height: 320px; }
+.uedit textarea:focus { border-color: var(--focus); }
+.uedit-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.uedit-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.uedit-bar .hint { margin-right: auto; font-size: var(--fs-xs); color: var(--muted); }
+.uedit-bar .btn:disabled { opacity: .5; cursor: default; }
+.uedit-bar .btn svg { width: 12px; height: 12px; animation: spin 1s linear infinite; }
+.uedit.busy { opacity: .7; }
 .turn.user .corrected { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .turn.user .corrected svg { width: 12px; height: 12px; flex: none; margin-top: 2px; color: var(--ok-text); }
 .turn.user .corrected code { font-family: var(--mono); font-size: .95em; background: var(--tint-2); padding: 0 4px; border-radius: 3px; }
@@ -1017,3 +1123,27 @@ body.vscode-light .afoot .acts { opacity: .85; }
 body.vscode-light :is(.lane .ico, .work .chev, .task-row .rm) { opacity: .8; }
 body.vscode-light :is(.lane .who, .panel .chev svg, .step.subhost.workers .lane .who) { opacity: 1; }
 body.vscode-light pre.numbered .n { opacity: 1; }
+
+/* MCP servers button and popover (composer footer) */
+.ib.mcp-btn { width: auto; min-width: 26px; padding: 0 4px; display: inline-flex; align-items: center; gap: 2px; }
+.ib.mcp-btn.hidden { display: none; }
+.ib.mcp-btn .mcp-n { font-size: 10px; font-variant-numeric: tabular-nums; }
+.ib.mcp-btn.warn { color: var(--warn-text); }
+.mcp-pop { min-width: 240px; }
+.mcp-pop .mcp-head { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px 4px; } .mcp-pop .mcp-head span { color: var(--muted); font-size: var(--fs-xs); margin-left: auto; }
+.mcp-pop .mcp-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border-radius: var(--radius-sm); min-width: 0; }
+.mcp-pop .mcp-row:hover { background: var(--tint-2); }
+.mcp-pop .mcp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-pop .mcp-st { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.mcp-pop .ib { width: 22px; height: 22px; } .mcp-pop .ib svg { width: 12px; height: 12px; } .mcp-pop .ib:disabled { opacity: .35; pointer-events: none; }
+.mcp-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+.mcp-dot.connected { background: var(--ok); } .mcp-dot.error { background: var(--error); }
+.mcp-dot.connecting, .mcp-dot.restarting { background: var(--warn); }
+.mcp-sw { position: relative; width: 26px; height: 14px; border-radius: 7px; flex: none; background: color-mix(in srgb, var(--fg) 22%, transparent); padding: 0; }
+.mcp-sw i { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg); transition: left .12s; }
+.mcp-sw.on { background: var(--accent); } .mcp-sw.on i { left: 14px; }
+.mcp-sw:disabled { opacity: .45; cursor: not-allowed; }
+.mcp-sw:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.mcp-pop .mcp-foot { border-top: 1px solid var(--border-soft); margin-top: 4px; padding-top: 4px; }
+.mcp-pop .mcp-foot .btn { display: inline-flex; align-items: center; gap: 6px; } .mcp-pop .mcp-foot svg { width: 13px; height: 13px; }
+@media (prefers-reduced-motion: reduce) { .mcp-sw i { transition: none; } }

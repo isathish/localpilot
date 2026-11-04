@@ -10,12 +10,14 @@ import {
   StreamEvent,
 } from '../types';
 import { lookupCatalog } from './catalog';
-import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey } from './cloud';
+import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey, resolveHeaders } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
 import { fetchLmStudioContexts, isLmStudio } from './lmstudio';
 import { anyModelFacts, factsProvider, modelFacts, outputLimit, pricingOf } from './modelFacts';
+import { applyModelOverrides, isOpenRouterUrl, mergeHeaders, OPENROUTER_HEADERS, withApiVersion, withExtraBody } from './providerOptions';
+import { effortOf, openRouterReasoning } from './thinkingParams';
 import { ThinkTagSplitter } from './thinkTags';
 import { pairToolCalls } from './toolPairing';
 
@@ -121,6 +123,9 @@ export class OpenAICompatProvider implements LLMProvider {
   engine?: 'colibri';
   /** The cloud preset whose bundled model facts (limits, prices) apply; undefined for local servers and gateways. */
   private readonly factsKey?: string;
+  private readonly cfg: ProviderConfig;
+  /** OpenRouter takes reasoning as one `reasoning` object instead of `reasoning_effort`. */
+  private readonly openRouter: boolean;
 
   /** The configured name, unless it is the stock vLLM label on :8000 and the server turned out to be colibri. */
   get displayName(): string {
@@ -128,11 +133,15 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   constructor(cfg: ProviderConfig) {
+    this.cfg = cfg;
     this.id = cfg.id;
     this.configuredName = cfg.displayName ?? cfg.id;
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
+    this.openRouter = isOpenRouterUrl(this.baseUrl);
     const key = resolveApiKey(cfg);
-    this.headers = !key ? {} : isAzureUrl(this.baseUrl) ? { 'api-key': key } : { authorization: `Bearer ${key}` };
+    const auth: Record<string, string> = !key ? {} : isAzureUrl(this.baseUrl) ? { 'api-key': key } : { authorization: `Bearer ${key}` };
+    // Custom headers come last: a gateway may need its own Authorization or replace the attribution headers.
+    this.headers = mergeHeaders(auth, this.openRouter ? OPENROUTER_HEADERS : {}, resolveHeaders(cfg));
     this.explicitModels = cfg.models;
     this.configuredCtx = cfg.contextWindow;
     this.remote = isCloudProvider(cfg);
@@ -140,9 +149,18 @@ export class OpenAICompatProvider implements LLMProvider {
     this.factsKey = this.remote ? factsProvider(cfg) : undefined;
   }
 
+  /** An endpoint under the base URL, with Azure's `api-version` when one is configured. */
+  private url(path: string): string {
+    return withApiVersion(`${this.baseUrl}${path}`, this.cfg.apiVersion);
+  }
+
+  private get modelsUrl(): string {
+    return this.cfg.modelsUrl?.trim() || this.url('/models');
+  }
+
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     try {
-      await getJson(`${this.baseUrl}/models`, this.headers, withTimeout(2500, signal));
+      await getJson(this.modelsUrl, this.headers, withTimeout(2500, signal));
       return true;
     } catch (e) {
       // A server that answers with an error status (no /models endpoint) is up; its configured models still serve.
@@ -154,7 +172,7 @@ export class OpenAICompatProvider implements LLMProvider {
     let models: OpenAIModel[] = [];
     try {
       // Together AI answers with a bare array instead of `{ data: [...] }`.
-      const res = await getJson<OpenAIModel[] | { data?: OpenAIModel[] | null }>(`${this.baseUrl}/models`, this.headers, withTimeout(5000, signal));
+      const res = await getJson<OpenAIModel[] | { data?: OpenAIModel[] | null }>(this.modelsUrl, this.headers, withTimeout(5000, signal));
       models = Array.isArray(res) ? res : (res?.data ?? []);
     } catch (e) {
       if (!(e instanceof HttpError) || !this.explicitModels?.length) {
@@ -179,7 +197,7 @@ export class OpenAICompatProvider implements LLMProvider {
     if (native === null && !this.lmStudio) {
       this.noNativeApi = true;
     }
-    return models
+    const listed = models
       .filter((m) => !/^(embeddings?|image|rerank|moderation|audio|transcribe|video)$/i.test(m.type ?? '') && !/embed/i.test(m.id))
       // Cloud listings mix in speech, image and moderation models; Mistral flags the ones that cannot chat.
       .filter((m) => !this.remote || (!isNonChatModel(m.id) && capabilityList(m)?.includes('completion_chat') !== false))
@@ -236,6 +254,7 @@ export class OpenAICompatProvider implements LLMProvider {
         }
         return info;
       });
+    return applyModelOverrides(listed, this.cfg.modelOverrides);
   }
 
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
@@ -263,14 +282,17 @@ export class OpenAICompatProvider implements LLMProvider {
     if (opts.jsonSchema) {
       body.response_format = { type: 'json_schema', json_schema: { name: 'response', schema: opts.jsonSchema } };
     }
-    if (typeof opts.think === 'string') {
-      body.reasoning_effort = opts.think;
+    if (this.openRouter && opts.think !== undefined) {
+      body.reasoning = openRouterReasoning(opts.think);
+    } else if (typeof opts.think === 'string') {
+      body.reasoning_effort = effortOf(opts.think);
     } else if (opts.think === false && this.remote) {
       body.reasoning_effort = 'none';
     } else if (opts.think === false) {
       // Qwen3-style chat templates (vLLM, SGLang, llama.cpp --jinja) read this to skip reasoning.
       body.chat_template_kwargs = { enable_thinking: false };
     }
+    withExtraBody(body, this.cfg.extraBody);
 
     // Accumulate streamed tool-call fragments by index. Some servers (Gemini) send complete calls without an index, and
     // some gateways send index 0 for every call: those get keys above any real index, in arrival order.
@@ -361,7 +383,7 @@ export class OpenAICompatProvider implements LLMProvider {
       PARAM_FIXES.find((f) => f.name === name)?.apply(body);
     }
     for (let attempt = 0; ; attempt++) {
-      const it = streamSse<OpenAIChunk>(`${this.baseUrl}/chat/completions`, body, this.headers, signal)[Symbol.asyncIterator]();
+      const it = streamSse<OpenAIChunk>(this.url('/chat/completions'), body, this.headers, signal)[Symbol.asyncIterator]();
       let first: IteratorResult<OpenAIChunk>;
       try {
         first = await it.next();
@@ -401,7 +423,7 @@ export class OpenAICompatProvider implements LLMProvider {
       body.stop = opts.stop;
     }
     try {
-      const res = await postJson<{ choices?: { text?: string }[] }>(`${this.baseUrl}/completions`, body, this.headers, opts.signal);
+      const res = await postJson<{ choices?: { text?: string }[] }>(this.url('/completions'), body, this.headers, opts.signal);
       return res.choices?.[0]?.text ?? '';
     } catch (e) {
       if (!opts.suffix || opts.signal?.aborted || !/suffix/i.test(e instanceof Error ? e.message : String(e))) {
@@ -413,7 +435,7 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async embed(model: string, input: string[]): Promise<number[][]> {
-    const res = await postJson<{ data: { embedding: number[] }[] }>(`${this.baseUrl}/embeddings`, { model, input }, this.headers);
+    const res = await postJson<{ data: { embedding: number[] }[] }>(this.url('/embeddings'), { model, input }, this.headers);
     return res.data.map((d) => d.embedding);
   }
 }
@@ -461,6 +483,7 @@ const PARAM_FIXES: ParamFix[] = [
     },
   },
   dropParam('reasoning_effort', /reasoning/i),
+  dropParam('reasoning', /reasoning/i),
   dropParam('stream_options', /stream_options|include_usage/i),
   dropParam('response_format', /response_format|json_schema/i),
   dropParam('tool_choice', /tool_choice/i),

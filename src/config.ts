@@ -2,9 +2,12 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { DEFAULT_SKILL_REPOSITORIES } from './agent/skillCatalog';
-import { ApprovalMode, ProviderConfig, ThinkingLevel } from './types';
+import { ApprovalMode, ProviderConfig, TerminalApprovalMode, ThinkingLevel } from './types';
 import { DEFAULT_PROVIDERS } from './providers/defaultProviders';
 import { expandHome } from './providers/colibriSetup';
+import { VSCODE_LM_BASE_URL } from './providers/vscodeLmMessages';
+import type { OtlpSettings } from './telemetry/otlp';
+import { getManagedPolicy, mergeManagedProviders, policyRedis, policyTelemetry } from './agent/managedPolicy';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -30,6 +33,8 @@ export interface McpServerConfig {
   timeout?: number;
   /** Tool names (as the server names them) called without asking. */
   autoApprove?: string[];
+  /** A pre-registered OAuth client for a remote server; without one LocalPilot registers itself dynamically. */
+  oauthClient?: { clientId: string; clientSecret?: string };
 }
 
 export interface RoutingConfig {
@@ -56,6 +61,8 @@ export interface LocalPilotConfig {
   /** Sampling temperature for agent turns; undefined = the model's own default (its Modelfile / server setting). */
   temperature?: number;
   compactionThreshold: number; // 0..1 fraction of context before compaction
+  /** Rotate short feature tips in the chat's status row while the agent thinks. */
+  showTips: boolean;
   /** How a full context is compacted: a model-written summary, a deterministic digest without a model call, or not at all. */
   compactionStrategy: 'agentic' | 'basic' | 'off';
   /** Tools that need the internet (web_search, web_fetch, browser_*) are offered and @url mentions fetched. */
@@ -67,7 +74,15 @@ export interface LocalPilotConfig {
   maxConsecutiveMistakes: number;
   /** Tools never offered to the model: our names, Claude Code / Cline names, or globs (`mcp_*`, `browser_*`). */
   disabledTools: string[];
-  approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode; mcp: ApprovalMode };
+  /** File-editing tool offered to the model: `auto` gives GPT/Codex/gpt-oss models apply_patch and others edit_file. */
+  editTool: 'auto' | 'edit_file' | 'apply_patch';
+  /** Side-by-side diff of a proposed edit: while its approval is pending, for every edit, or never. */
+  diffPreview: 'onApproval' | 'always' | 'off';
+  approvals: { terminal: TerminalApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode; mcp: ApprovalMode };
+  /** A destructive-looking command asks even when `approvals.terminal` is `always`. */
+  dangerousAlwaysAsk: boolean;
+  /** Native notification when a run finishes or an auto-approved command runs long: only while the chat is hidden, always, or never. */
+  notifications: 'whenHidden' | 'always' | 'off';
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
   /** Task queue: how many queued tasks run at once (1 = one after another). */
   queue: { concurrency: number };
@@ -77,12 +92,14 @@ export interface LocalPilotConfig {
   supervisor: { enabled: boolean; intervalSeconds: number; autoInstall: boolean };
   worktrees: { mode: 'always' | 'parallel' | 'off'; location?: string };
   /** Local-only usage metrics and log mirror shown on the dashboard. Nothing is sent anywhere. */
-  telemetry: { enabled: boolean; retentionDays: number };
+  telemetry: { enabled: boolean; retentionDays: number; /** Opt-in OTLP/HTTP JSON export to the user's own collector. */ otlp: OtlpSettings };
   /** Memory footprint: chat transcripts kept in RAM, and the optional Redis Stack store for telemetry. */
   storage: { sessionsInMemory: number; redis: { enabled: boolean; url: string } };
   webSearch: WebSearchConfig;
   inlineCompletion: { enabled: boolean; model?: string; debounceMs: number; maxTokens: number };
   mcpServers: Record<string, McpServerConfig>;
+  /** Restart a stdio server when its workspace script (a .js/.py file, or a file under build/ or dist/) changes. */
+  mcpWatchServerFiles: boolean;
   /** Extra repositories the agent can work across, name → path (besides the workspace folders and .localpilot/repos.json). */
   repos: Record<string, string>;
   skillsPaths: string[];
@@ -124,7 +141,10 @@ export interface LocalPilotConfig {
   autoCorrectPrompts: boolean;
   systemPromptAppend: string;
   showWelcomeOnStartup: boolean;
-  terminal: { runInIntegratedTerminal: boolean; reveal: boolean };
+  /** Agent terminal: how long to wait for shell integration (ms) and the `terminal.integrated.profiles` entry to use ('default' = VS Code's). */
+  terminal: { runInIntegratedTerminal: boolean; reveal: boolean; shellIntegrationTimeout: number; profile: string; autoDetachSeconds: number };
+  /** After edit_file/write_file/apply_patch, append new Error diagnostics of the edited file to the tool result. */
+  edit: { reportNewErrors: boolean };
   /** `provider/model` ids hidden from pickers and routing. */
   disabledModels: string[];
   /** Offer to install Ollama + a starter model when no local model is found. */
@@ -165,7 +185,12 @@ export function editableProviders(): { list: ProviderConfig[]; target: vscode.Co
 
 export function getConfig(): LocalPilotConfig {
   const c = vscode.workspace.getConfiguration(SECTION);
-  const providers = c.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS).filter((p) => p.enabled !== false);
+  // Organisation policy: its providers are merged in (locked), its telemetry policy overrides the user's.
+  const org = getManagedPolicy();
+  const providers = mergeManagedProviders(c.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS), org)
+    .filter((p) => p.enabled !== false)
+    // VS Code's language models have no server URL to configure.
+    .map((p) => (p.type === 'vscode-lm' && !p.baseUrl ? { ...p, baseUrl: VSCODE_LM_BASE_URL } : p));
   const maxConcurrency = Math.floor(Number(c.get<number>('parallel.maxConcurrency', 4)));
   return {
     providers,
@@ -175,33 +200,47 @@ export function getConfig(): LocalPilotConfig {
     // Negative (the default, -1) means: send none, so each model samples as its makers tuned it.
     temperature: (() => { const t = c.get<number>('temperature', -1); return typeof t === 'number' && t >= 0 ? Math.min(2, t) : undefined; })(),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
+    showTips: c.get<boolean>('showTips', true),
     compactionStrategy: (['agentic', 'basic', 'off'] as const).find((m) => m === c.get<string>('compaction.strategy', 'agentic')) ?? 'agentic',
     webEnabled: c.get<boolean>('webSearch.enabled', true) !== false,
     preferredLanguage: (c.get<string>('preferredLanguage', 'auto') ?? 'auto').trim() || 'auto',
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
     maxConsecutiveMistakes: (() => { const n = Number(c.get<number>('maxConsecutiveMistakes', 6)); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6; })(),
     disabledTools: (c.get<string[]>('disabledTools', []) ?? []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()),
+    editTool: (['auto', 'edit_file', 'apply_patch'] as const).find((m) => m === c.get<string>('editTool', 'auto')) ?? 'auto',
+    diffPreview: (['onApproval', 'always', 'off'] as const).find((m) => m === c.get<string>('diffPreview', 'onApproval')) ?? 'onApproval',
     approvals: {
-      terminal: c.get<ApprovalMode>('approvals.terminal', 'ask'),
+      terminal: (['always', 'safe', 'ask', 'never'] as const).find((m) => m === c.get<string>('approvals.terminal', 'ask')) ?? 'ask',
       write: c.get<ApprovalMode>('approvals.write', 'always'),
       delete: c.get<ApprovalMode>('approvals.delete', 'ask'),
       network: c.get<ApprovalMode>('approvals.network', 'always'),
       mcp: c.get<ApprovalMode>('approvals.mcp', 'always'),
     },
+    dangerousAlwaysAsk: c.get<boolean>('approvals.dangerousAlwaysAsk', true) !== false,
+    notifications: (['whenHidden', 'always', 'off'] as const).find((m) => m === c.get<string>('notifications', 'whenHidden')) ?? 'whenHidden',
     worktrees: {
       mode: (['always', 'parallel', 'off'] as const).find((m) => m === c.get<string>('worktrees.mode', 'always')) ?? 'always',
       location: homePath(c.get<string>('worktrees.location', '')),
     },
-    telemetry: {
+    telemetry: policyTelemetry(org, {
       enabled: c.get<boolean>('telemetry.enabled', true),
       retentionDays: Math.max(0, Math.floor(c.get<number>('telemetry.retentionDays', 30))),
-    },
+      otlp: {
+        enabled: c.get<boolean>('telemetry.otlp.enabled', false) === true,
+        endpoint: c.get<string>('telemetry.otlp.endpoint', 'http://localhost:4318') || 'http://localhost:4318',
+        headers: c.get<Record<string, string>>('telemetry.otlp.headers', {}) ?? {},
+        metricsInterval: Math.max(1, Number(c.get<number>('telemetry.otlp.metricsInterval', 60)) || 60),
+        exporters: c.get<string[]>('telemetry.otlp.exporters', ['otlp']) ?? ['otlp'],
+        traceSamplePercent: ((n) => (Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 100))(Number(c.get<number>('telemetry.otlp.traceSamplePercent', 100))),
+        recordContent: c.get<boolean>('telemetry.otlp.recordContent', false) === true,
+      },
+    }),
     storage: {
       sessionsInMemory: Math.max(2, Math.min(500, Math.floor(c.get<number>('storage.sessionsInMemory', 16)))),
-      redis: {
+      redis: policyRedis(org, {
         enabled: c.get<boolean>('storage.redis.enabled', false),
         url: c.get<string>('storage.redis.url', 'redis://127.0.0.1:6379') || 'redis://127.0.0.1:6379',
-      },
+      }),
     },
     parallel: {
       maxConcurrency: Number.isFinite(maxConcurrency) ? Math.max(1, Math.min(16, maxConcurrency)) : 4,
@@ -227,6 +266,7 @@ export function getConfig(): LocalPilotConfig {
       maxTokens: c.get<number>('inlineCompletion.maxTokens', 128),
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
+    mcpWatchServerFiles: c.get<boolean>('mcp.watchServerFiles', true),
     repos: Object.fromEntries(Object.entries(c.get<Record<string, unknown>>('repos', {}) ?? {}).filter(([, v]) => typeof v === 'string')) as Record<string, string>,
     skillsPaths: c.get<string[]>('skillsPaths', []),
     pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
@@ -260,7 +300,11 @@ export function getConfig(): LocalPilotConfig {
     terminal: {
       runInIntegratedTerminal: c.get<boolean>('terminal.runInIntegratedTerminal', true),
       reveal: c.get<boolean>('terminal.reveal', true),
+      shellIntegrationTimeout: Math.max(500, Math.floor(Number(c.get<number>('terminal.shellIntegrationTimeout', 4000)) || 4000)),
+      profile: (c.get<string>('terminal.profile', 'default') ?? '').trim() || 'default',
+      autoDetachSeconds: Math.max(0, Math.floor(Number(c.get<number>('terminal.autoDetachSeconds', 300)) || 0)),
     },
+    edit: { reportNewErrors: c.get<boolean>('edit.reportNewErrors', true) },
     disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
     autoSetupModels: c.get<boolean>('models.autoSetup', true),
     autoClarify: c.get<boolean>('autoClarify', true),
@@ -319,7 +363,7 @@ function normalizeThinking(v: unknown): ThinkingLevel {
   if (v === true) {
     return 'on';
   }
-  if (v === 'on' || v === 'low' || v === 'medium' || v === 'high' || v === 'off') {
+  if (v === 'on' || v === 'low' || v === 'medium' || v === 'high' || v === 'max' || v === 'off') {
     return v;
   }
   return 'auto';

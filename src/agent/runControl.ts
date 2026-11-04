@@ -118,6 +118,22 @@ export class RunControl {
     return true;
   }
 
+  /** Messages queued by `steer()` that the loop has not taken yet, oldest first. */
+  pendingSteers(): readonly ChatMessage[] {
+    return [...this.queue];
+  }
+
+  /** Withdraw a steer the loop has not injected yet (matched on `meta.steerId`); returns it, or undefined when it is gone. */
+  removeSteer(steerId: string): ChatMessage | undefined {
+    const i = this.queue.findIndex((m) => m.meta?.steerId === steerId);
+    if (i < 0) {
+      return undefined;
+    }
+    const [removed] = this.queue.splice(i, 1);
+    this.notify();
+    return removed;
+  }
+
   takeSteering(): ChatMessage[] {
     return this.queue.splice(0);
   }

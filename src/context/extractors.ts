@@ -83,7 +83,7 @@ export function splitAttachmentRef(ref: string): { path: string; start?: number;
 }
 
 type NbOutput = { output_type?: string; text?: string | string[]; data?: Record<string, unknown>; ename?: string; evalue?: string };
-type NbCell = { cell_type?: string; source?: string | string[]; outputs?: NbOutput[] };
+type NbCell = { cell_type?: string; source?: string | string[]; outputs?: NbOutput[]; execution_count?: number | null };
 
 const joined = (v: unknown): string => (Array.isArray(v) ? v.join('') : typeof v === 'string' ? v : '');
 
@@ -117,6 +117,43 @@ export function notebookToText(json: string, maxOutputChars = 2000): string {
     }
   });
   return out.join('\n');
+}
+
+/**
+ * A notebook for read_file: `# [code] cell 3 (exec 12)` then the source, then text outputs (each cell's cut at
+ * `maxOutputChars`); image and other rich outputs are dropped. Throws when the file is not notebook JSON.
+ */
+export function notebookToCompactText(json: string, maxOutputChars = 2000): { text: string; cells: number } {
+  const nb = JSON.parse(json) as { cells?: NbCell[] };
+  if (!nb || !Array.isArray(nb.cells)) {
+    throw new Error('not a Jupyter notebook (no "cells" array)');
+  }
+  const out: string[] = [];
+  nb.cells.forEach((cell, i) => {
+    const type = cell.cell_type ?? 'code';
+    const exec = type === 'code' && typeof cell.execution_count === 'number' ? ` (exec ${cell.execution_count})` : '';
+    out.push(`# [${type}] cell ${i + 1}${exec}`);
+    const src = joined(cell.source).replace(/\s+$/, '');
+    if (src) {
+      out.push(src);
+    }
+    const texts: string[] = [];
+    for (const o of cell.outputs ?? []) {
+      if (o.output_type === 'stream') {
+        texts.push(joined(o.text));
+      } else if (o.output_type === 'error') {
+        texts.push(`${o.ename ?? 'Error'}: ${o.evalue ?? ''}`);
+      } else if (o.data && !Object.keys(o.data).some((k) => k.startsWith('image/'))) {
+        // A plot's text/plain is only "<Figure size …>": dropped with the image.
+        texts.push(joined(o.data['text/plain']));
+      }
+    }
+    const text = texts.map((t) => t.replace(/\s+$/, '')).filter(Boolean).join('\n');
+    if (text) {
+      out.push(`# output:\n${text.length > maxOutputChars ? `${text.slice(0, maxOutputChars)}\n… [output cut at ${maxOutputChars.toLocaleString()} characters]` : text}`);
+    }
+  });
+  return { text: out.join('\n'), cells: nb.cells.length };
 }
 
 /** The text of a Word (.docx) document: paragraphs, one per line. */

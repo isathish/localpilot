@@ -7,9 +7,11 @@ import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
 import { isCloudProvider, isLoopbackUrl, isRemoteUrl, onSecretsChanged, resolveApiKey } from './cloud';
-import { getManagedPolicy, providerAllowed } from '../agent/managedPolicy';
+import { getManagedPolicy, isManagedProvider, modelAllowed, providerAllowed } from '../agent/managedPolicy';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
+import { VscodeLmProvider, vscodeLmAvailable } from './vscodeLm';
+import { expandProviderRef } from './providerOptions';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
 
 export interface RouteRequest {
@@ -121,8 +123,13 @@ export class ProviderRegistry implements vscode.Disposable {
     const nextConfigs = new Map<string, string>();
     const managed = getManagedPolicy(this.log);
     for (const cfg of getConfig().providers) {
+      // VS Code's language models exist only inside VS Code: the CLI leaves such a provider out.
+      if (cfg.type === 'vscode-lm' && !vscodeLmAvailable()) {
+        continue;
+      }
       // Organisation policy: a provider it does not permit is never built, so nothing can route to it.
-      const allowed = providerAllowed(managed, cfg.baseUrl, isCloudProvider(cfg));
+      // The organisation's own providers are exempt from its host and cloud limits.
+      const allowed = isManagedProvider(managed, cfg) ? { ok: true } : providerAllowed(managed, cfg.baseUrl, isCloudProvider(cfg));
       if (!allowed.ok) {
         if (!this.policyBlocked.has(cfg.id)) {
           this.policyBlocked.add(cfg.id);
@@ -296,9 +303,11 @@ export class ProviderRegistry implements vscode.Disposable {
       return; // the providers changed meanwhile; these results describe servers that may no longer be configured
     }
     const models: ModelInfo[] = [];
+    // Organisation policy: models off its allowlist are never listed, so no picker or route can reach them.
+    const policy = getManagedPolicy(this.log);
     results.forEach((r, i) => {
       if (r.status === 'fulfilled') {
-        models.push(...r.value);
+        models.push(...r.value.filter((m) => modelAllowed(policy, m.id)));
       } else {
         this.log.warn(`listModels failed for ${probed[i].id}: ${String(r.reason)}`);
       }
@@ -553,7 +562,8 @@ export class ProviderRegistry implements vscode.Disposable {
     let models = await this.listModels(req.fresh && (await this.installedChanged()));
     const roleOverride =
       role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
-    const wanted = req.modelRef || roleOverride || cfg.defaultModel;
+    // A bare provider id (`-m openrouter`) means that provider's own default model.
+    const wanted = expandProviderRef(req.modelRef || roleOverride || cfg.defaultModel, cfg.providers);
     const wantedPid = wanted ? this.providerIdOf(wanted, cfg.providers) : undefined;
     // A local server that is installed but stopped is started, rather than failing the run or quietly falling back
     // to another model, which may be a cloud one.
@@ -581,16 +591,18 @@ export class ProviderRegistry implements vscode.Disposable {
       const providerId = wanted.slice(0, wanted.indexOf('/'));
       const listsModels = models.some((m) => m.providerId === providerId);
       const unlisted = listsModels || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow > 0 ? cfg.contextWindow : 32768, cfg.maxOutputTokens);
-      if (unlisted && !cfg.disabledModels.includes(unlisted.id)) {
+      if (unlisted && !cfg.disabledModels.includes(unlisted.id) && modelAllowed(getManagedPolicy(this.log), unlisted.id)) {
         model = unlisted;
       }
     }
     if (!model && wanted && models.length) {
       const pc = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
       unavailable = !!pc && pc.enabled !== false && !this.reachable.has(pc.id);
-      reason = unavailable && pc
-        ? `${pc.displayName ?? pc.id} is not answering — using the best model that is for this turn`
-        : `${wanted.split('/').pop()} is not available — using the best model that is`;
+      reason = wanted.includes('/') && !modelAllowed(getManagedPolicy(this.log), wanted)
+        ? `${wanted.split('/').pop()} is not on your organization's model allowlist — using the best model that is`
+        : unavailable && pc
+          ? `${pc.displayName ?? pc.id} is not answering — using the best model that is for this turn`
+          : `${wanted.split('/').pop()} is not available — using the best model that is`;
       fallback = true;
     }
     if (model && cfg.routing.enabled) {
@@ -697,7 +709,7 @@ export class ProviderRegistry implements vscode.Disposable {
 }
 
 export function createProvider(cfg: ProviderConfig): LLMProvider {
-  return cfg.type === 'ollama' ? new OllamaProvider(cfg) : cfg.type === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatProvider(cfg);
+  return cfg.type === 'ollama' ? new OllamaProvider(cfg) : cfg.type === 'anthropic' ? new AnthropicProvider(cfg) : cfg.type === 'vscode-lm' ? new VscodeLmProvider(cfg) : new OpenAICompatProvider(cfg);
 }
 
 /**

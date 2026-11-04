@@ -5,6 +5,7 @@ import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
 import { builtinAgents, localToolNames } from './builtinAgents';
 import { parseFrontMatter } from './frontMatter';
+import { alwaysEnabled, managedDir } from './managedPolicy';
 import type { PluginSource } from './plugins';
 
 export { parseFrontMatter } from './frontMatter';
@@ -139,8 +140,9 @@ export class SkillManager implements vscode.Disposable {
     }
     const home = os.homedir();
     const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-    const skillDirs: { dir: string; source: Skill['source'] }[] = [];
-    const agentDirs: { dir: string; source: Skill['source'] }[] = [];
+    // The organisation's skills come first: no workspace or user skill can take their names.
+    const skillDirs: { dir: string; source: Skill['source'] }[] = [{ dir: managedDir('skills'), source: 'managed' }];
+    const agentDirs: { dir: string; source: SubagentDefinition['source'] }[] = [];
     for (const r of roots) {
       skillDirs.push({ dir: path.join(r, '.localpilot', 'skills'), source: 'workspace' });
       skillDirs.push({ dir: path.join(r, '.claude', 'skills'), source: 'workspace' });
@@ -177,7 +179,7 @@ export class SkillManager implements vscode.Disposable {
     }
     const disabled = new Set(getConfig().skillsDisabled);
     for (const s of skills.values()) {
-      s.disabled = disabled.has(s.name) || undefined;
+      s.disabled = (disabled.has(s.name) && !s.alwaysEnabled) || undefined;
     }
     for (const { dir, source } of agentDirs) {
       await this.loadAgentsFrom(dir, source, agents);
@@ -215,6 +217,7 @@ export class SkillManager implements vscode.Disposable {
           dir: path.join(dir, name),
           body,
           source,
+          ...(alwaysEnabled(meta) ? { alwaysEnabled: true } : {}),
         });
       } catch {
         /* no SKILL.md */
@@ -222,7 +225,7 @@ export class SkillManager implements vscode.Disposable {
     }
   }
 
-  private async loadAgentsFrom(dir: string, source: Skill['source'], into: Map<string, SubagentDefinition>): Promise<void> {
+  private async loadAgentsFrom(dir: string, source: SubagentDefinition['source'], into: Map<string, SubagentDefinition>): Promise<void> {
     let entries: [string, vscode.FileType][];
     try {
       entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));

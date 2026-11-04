@@ -10,7 +10,7 @@ import { mapToolNames } from './toolAliases';
  */
 
 // `load_skill` is read-only: every subagent may pull in a playbook that applies to its brief.
-const READ_ONLY = ['read_file', 'read_pdf', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill', 'repo_graph'];
+const READ_ONLY = ['read_file', 'read_pdf', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill', 'repo_graph', 'mcp_read_resource'];
 const READ_AND_RUN = [...READ_ONLY, 'run_command'];
 
 const REPORT_RULES = `# Report
@@ -230,4 +230,4 @@ export function routeSubagent(def: SubagentDefinition, explicit: string | undefi
   return { role, modelRef: routing.coding ?? parentModel };
 }
 
-const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path', 'run_command', 'run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
+const MUTATING_TOOLS = new Set(['edit_file', 'apply_patch', 'write_file', 'notebook_edit', 'create_directory', 'delete_path', 'run_command', 'run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);

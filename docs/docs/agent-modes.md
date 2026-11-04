@@ -24,10 +24,12 @@ Agent is the default. The agent works until the task is done:
 
 1. It gathers context with read-only tools (`read_file`, `grep_search`, `find_symbol` and others). When the model requests several at once, they run in parallel.
    - One `read_file` call reads up to 8 files (`"files": [{"path", "start_line", "end_line"}]`). Each file shows at most 2,000 lines or 48,000 characters, ending with `[Showing lines A-B of N …]` while more remain.
+   - A Jupyter notebook (`.ipynb`) reads as its cells, not the JSON: `# [code] cell 3 (exec 12)` then the source and its text outputs (cut at 2,000 characters per cell); image outputs are left out. Line numbers count this view. The agent changes cells with `notebook_edit` (insert, replace or delete by cell number), not by editing the JSON.
    - Images (PNG, JPEG, GIF, WebP up to 10 MB) reach vision models as images; other models get an error. Binary files are reported by size, and files over 100 MB are refused.
    - File names with unusual spaces, such as the narrow no-break space in macOS screenshot names, are still found.
 2. It edits with `edit_file` replacements, or `write_file` for new files.
    - `edit_file` can also insert at a line (`insert_line`; the line count + 1 appends). It keeps the file's CRLF or LF line endings.
+   - After an edit or write, LocalPilot waits up to 1.5 s for the language server and adds the errors the change introduced in that file to the result (`New problems:` then `<line>: <message>`, at most 10), so the agent can fix them right away. Turn this off with `localpilot.edit.reportNewErrors`.
    - Each result includes a unified diff of the change (at most 200 lines). Text over 6,000 characters is refused, with a request to split the edit.
 3. It checks its work with `get_diagnostics` and `run_command` (tests, builds).
 4. It can hand separable work to subagents.
@@ -76,7 +78,8 @@ Plan mode investigates without editing, then shows a **Prepared plan** card. MCP
 - redirection into a file (`>`, `>>`); `2>&1` and `>/dev/null` are fine;
 - git commands that change the repository (`add`, `commit`, `checkout`, `reset`, `push`, `stash`, `tag v1` …), also through `git -C`;
 - installing or removing packages with npm, pnpm, yarn, bun, pip, cargo, gem, composer, go, dotnet, brew, apt, winget or nuget;
-- on Windows, `del`, `move`, `copy`, `xcopy`, `robocopy`, `New-Item`, `Set-Content`, `Out-File` and their aliases.
+- on Windows, `del`, `move`, `copy`, `xcopy`, `robocopy`, `New-Item`, `Set-Content`, `Out-File` and their aliases;
+- commands whose name comes from a variable or substitution (`$x -rf y`, `$(echo rm) y`), because what they run cannot be checked.
 
 A refused command does not show an approval card. The model gets *"Plan mode: `rm` changes files. Only read-only commands run in Plan mode."* and carries on.
 
@@ -128,14 +131,27 @@ Each kind of action has its own setting:
 Values:
 
 - `always`: run without asking.
+- `safe` (commands only): run read-only commands (`ls`, `cat`, `grep`, `git status`, `git log`, `git diff`…) and routine test, lint and build commands (`npm test`, `npm run lint`, `pnpm build`, `tsc`, `pytest`, `cargo build|test|check`, `go test|build|vet`, `make test|check`) without asking. Every other command asks, as do unknown programs, redirections into files, `sudo`, a command that sets environment variables (`PATH=. ls`, `GIT_EXTERNAL_DIFF=./x git diff`) and git's `-c`, `--config-env`, `--exec-path`, `--git-dir` and `--work-tree` options.
 - `ask`: show a prompt with *Allow*, *Allow for session* and *Deny*.
 - `never`: block the action.
 
 The setup wizard's presets set these four values. *Careful* asks for everything. *Balanced* (the default) asks for commands and deletes. *Autonomous* asks only for deletes.
 
-When a command needs approval and matches a known destructive pattern (`rm -rf /`, `sudo`, `git push --force`, `git reset --hard` and others), the prompt is titled *Potentially destructive command*. If `localpilot.approvals.terminal` is `always`, commands run without a prompt, including these. Claude Code style permission rules in `settings.json` can also allow or deny specific tools; see [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }}).
+When a command matches a known destructive pattern (`rm -rf /`, `sudo`, `git push --force`, `git reset --hard` and others), the prompt is titled *Potentially destructive command*. Such a command asks even when `localpilot.approvals.terminal` is `always`, and *Allow for session* or auto mode does not answer it, unless you turn `localpilot.approvals.dangerousAlwaysAsk` off. The model can also set `requires_approval` on a command it considers impactful; that command asks even under `always` or `safe`. Claude Code style permission rules in `settings.json` can also allow or deny specific tools; see [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }}).
 
 A prompt waits until you answer. If the chat is hidden, closed or moved while an agent waits, the prompt also appears as a VS Code notification (*Allow*, *Allow for session*, *Deny*, *Show chat*). Answering in either place closes both. **Stop** denies the chat's pending prompts.
+
+### Deny with a reason
+
+To tell the agent what to do instead, deny with a reason. Type it in the message box and click **Deny**, or click **Deny with reason…** (or press Shift+N), type it in the box that opens and press Enter. The agent gets "The user denied this action: *your reason*" in place of a plain refusal, and the step shows as *Denied* rather than as a failure. In the terminal CLI, answer `n` followed by the reason, for example `n edit src/b.ts instead`.
+
+### Auto-approve bar
+
+The line above the message box reads **Auto-approve:** followed by the categories that run without asking, for example *Edit, Web*. Click it to change them: Edit files, Delete, Commands (Ask, Safe only, Always, Never), Web, MCP and Auto Mode. A change writes the user setting and applies at once, also to a run in progress: switch Commands to *Always* and the agent's next command runs without a prompt. Choices your organization's policy rules out are disabled and marked *policy*.
+
+### Notifications
+
+When a chat finishes while the chat view is hidden or VS Code is not focused, LocalPilot shows a notification with **Open**. A command that was approved automatically and is still running after 30 seconds adds a status-bar item and a notification, once per command. Set `localpilot.notifications` to `always` to be notified even while you watch the chat, or to `off`. The terminal CLI rings the terminal bell when a run that took more than 10 seconds finishes.
 
 <p><img src="{{ '/assets/screenshots/approval.png' | relative_url }}" alt="Approval card: Run command python -m pytest -q, with Deny (N), Allow for session (A) and Allow once (Y), above the Tasks and changed-files panels" width="420"></p>
 
@@ -155,7 +171,7 @@ LocalPilot parses these blocks and returns the results as a user message. This i
 
 A turn allows up to 40 model and tool round trips. Subagents get 25.
 
-A run also stops when it keeps failing. After 6 steps in a row in which every tool call failed, or a tool call had to be sent back because it did not parse, the chat shows *LocalPilot ran into 6 errors in a row and stopped* with the latest error. Send a message to guide the agent and it continues normally. Any successful tool call resets the count. Change the limit with `localpilot.maxConsecutiveMistakes` (`0` = no limit).
+A run also stops when it keeps failing. After 6 steps in a row in which every tool call failed, or a tool call had to be sent back because it did not parse, the chat shows *LocalPilot ran into 6 errors in a row and stopped* with the latest error. Send a message to guide the agent and it continues normally. Any successful tool call resets the count. A step you deny at a prompt is not counted; a call refused by a `never` setting, the organization's policy or a non-interactive `localpilot -p` run is. Change the limit with `localpilot.maxConsecutiveMistakes` (`0` = no limit).
 
 When a reply stops at the output limit (`localpilot.maxOutputTokens`), LocalPilot recovers on its own. A tool call cut off mid-arguments is not run: the model is asked to resend it more concisely, splitting a large `write_file` into several `edit_file` calls, up to 3 times in a row. A text answer that was cut off is continued once and joined into one message.
 

@@ -83,8 +83,8 @@ suite('LocalPilot MCP approval category', () => {
         trackChange: async () => undefined,
         depth: 0,
       };
-      const safe = tools.get('mcp_two_safe')!;
-      const risky = tools.get('mcp_two_risky')!;
+      const safe = tools.get('mcp_two__safe')!;
+      const risky = tools.get('mcp_two__risky')!;
       assert.strictEqual(safe.approvalKind, 'mcp');
       assert.strictEqual((await safe.execute({}, ctx)).content, 'ran safe');
       assert.deepStrictEqual(asked, [], 'autoApprove tools are not asked about');
@@ -127,7 +127,7 @@ suite('LocalPilot MCP approval category', () => {
         trackChange: async () => undefined,
         depth: 0,
       };
-      const r = await tools.get('mcp_two_safe')!.execute({}, ruleAsk);
+      const r = await tools.get('mcp_two__safe')!.execute({}, ruleAsk);
       assert.ok(r.isError && /declined/.test(r.content), 'the ask rule prompted and the refusal stood');
       assert.deepStrictEqual(seen, [true], 'the tool always reaches the approval gate, flagging its autoApprove entry');
     } finally {

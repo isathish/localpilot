@@ -1,6 +1,8 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { stripAnsi } from '../tools/terminal';
+import { CommandOutcome, CommandRun, onCommandRunChange, OutputCapture, stripAnsi } from './commandRun';
+import { getConfig } from '../config';
+import { agentTerminalShellOptions } from './profileSetting';
 
 /** One shell command observed in any VS Code terminal (via shell integration). */
 export interface TerminalExecutionRecord {
@@ -14,10 +16,19 @@ export interface TerminalExecutionRecord {
   endedAt?: number;
 }
 
-export interface IntegratedRunResult {
-  output: string;
-  exitCode: number | undefined;
+/** Finished (output + exit code), detached (partial output + log path) or not started. */
+export type IntegratedRunResult = CommandOutcome;
+
+/** Live output, Proceed While Running and auto-detach for one integrated-terminal run. */
+export interface IntegratedRunOptions {
+  /** Tool call id the chat's command row addresses. */
+  id?: string;
+  onOutput?(chunk: string): void;
+  /** Detach after this long instead of killing at `timeoutMs`; 0 or unset = never. */
+  detachAfterMs?: number;
 }
+
+export { OutputCapture };
 
 const MAX_OUTPUT = 64_000;
 const MAX_RECORDS = 30;
@@ -152,7 +163,8 @@ export class TerminalManager implements vscode.Disposable {
     }
     // Nobody answers prompts in the agent terminal: pagers print straight through and editors exit at once.
     const env = { CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', GH_PAGER: 'cat', MANPAGER: 'cat', AWS_PAGER: '', GIT_EDITOR: 'true', VISUAL: 'true', EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no', GIT_TERMINAL_PROMPT: '0' };
-    const term = vscode.window.createTerminal({ name: 'LocalPilot Agent', cwd, env, ...this.brand(), isTransient: true });
+    const shell = agentTerminalShellOptions();
+    const term = vscode.window.createTerminal({ name: 'LocalPilot Agent', cwd, ...shell, env: { ...shell.env, ...env }, ...this.brand(), isTransient: true });
     this.agentTerminals.set(sessionId, term);
     return term;
   }
@@ -180,7 +192,7 @@ export class TerminalManager implements vscode.Disposable {
    * Run `command` in the session's LocalPilot Agent terminal. Resolves with captured output and exit code,
    * or `undefined` when shell integration is unavailable so the caller can fall back to a child process.
    */
-  async run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean): Promise<IntegratedRunResult | undefined> {
+  async run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean, opts: IntegratedRunOptions = {}): Promise<IntegratedRunResult | undefined> {
     if (this.noIntegration.has(sessionId)) {
       return undefined;
     }
@@ -192,7 +204,7 @@ export class TerminalManager implements vscode.Disposable {
       return undefined;
     }
     const term = this.agentTerminal(sessionId, cwd);
-    const si = await this.waitForShellIntegration(term, 4000);
+    const si = await this.waitForShellIntegration(term, getConfig().terminal.shellIntegrationTimeout);
     if (!si) {
       this.log.info('terminal: shell integration not available, falling back to child process');
       this.noIntegration.add(sessionId);
@@ -210,42 +222,57 @@ export class TerminalManager implements vscode.Disposable {
     }
     // Always cd: a reused shell may sit in a directory (or a removed worktree) other than the one it reports.
     const exec = si.executeCommand(inDir(cwd, command, (term.state as { shell?: string }).shell ?? vscode.env.shell));
-    const cap = new OutputCapture();
-    let exitCode: number | undefined;
-    let sub: vscode.Disposable | undefined;
-    const done = new Promise<'done'>((resolve) => {
-      sub = vscode.window.onDidEndTerminalShellExecution((e) => {
-        if (e.execution === exec) {
-          exitCode = e.exitCode;
-          resolve('done');
-        }
-      });
-    });
-    const reader = (async () => {
-      for await (const chunk of exec.read()) {
-        cap.push(chunk);
-      }
-    })();
-    const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), timeoutMs));
-    const aborted = new Promise<'aborted'>((r) => signal.addEventListener('abort', () => r('aborted'), { once: true }));
-    const result = await Promise.race([done, timeout, aborted]);
-    sub?.dispose();
-    if (result !== 'done') {
-      term.sendText('\u0003', false); // Ctrl+C the running command
-    }
-    await Promise.race([reader, new Promise((r) => setTimeout(r, 500))]);
-    let output = cap.text();
-    if (result !== 'done') {
-      output += `\n[${result === 'timeout' ? `timed out after ${timeoutMs / 1000}s` : 'cancelled'}]`;
-    }
-    if (result !== 'done') {
-      // ^C may not reach a pager or prompt that grabbed the TTY: never hand a possibly stuck shell to the next command.
-      term.dispose();
+    const forget = () => {
       if (this.agentTerminals.get(sessionId) === term) {
         this.agentTerminals.delete(sessionId);
       }
+    };
+    const run = new CommandRun({
+      id: opts.id ?? `cmd-${Date.now().toString(36)}`,
+      sessionId,
+      command,
+      // ^C may not reach a pager or prompt that grabbed the TTY: never hand a possibly stuck shell to the next command.
+      kill: () => {
+        term.sendText('\u0003', false);
+        term.dispose();
+        forget();
+      },
+      onOutput: opts.onOutput,
+      detachAfterMs: opts.detachAfterMs,
+      timeoutMs,
+      signal,
+    });
+    const reader = (async () => {
+      for await (const chunk of exec.read()) {
+        run.push(chunk);
+      }
+    })().catch(() => undefined);
+    const subs = [
+      vscode.window.onDidEndTerminalShellExecution(async (e) => {
+        if (e.execution === exec) {
+          await Promise.race([reader, new Promise((r) => setTimeout(r, 500))]);
+          run.finish(e.exitCode);
+        }
+      }),
+      vscode.window.onDidCloseTerminal((t) => {
+        if (t === term) {
+          run.finish(undefined);
+        }
+      }),
+    ];
+    // A detached command keeps its listeners until it ends: they write the exit code to its log.
+    const off = onCommandRunChange((r) => {
+      if (r === run && r.state === 'done') {
+        off();
+        subs.forEach((s) => s.dispose());
+      }
+    });
+    const outcome = await run.result;
+    if (outcome.detached) {
+      // The shell is busy with the detached command: the next command gets a fresh agent terminal.
+      forget();
     }
-    return { output: stripAnsi(output).replace(/\r\n?/g, '\n'), exitCode };
+    return outcome;
   }
 
   /** Close the agent terminal of a chat or subagent that is finished (or whose worktree is going away). */
@@ -259,32 +286,6 @@ export class TerminalManager implements vscode.Disposable {
     this.agentTerminals.clear();
     this.disposables.forEach((d) => d.dispose());
     this._onDidRecord.dispose();
-  }
-}
-
-/** Keeps the start and a rolling end of long output: failures and summaries are reported last. */
-export class OutputCapture {
-  private head = '';
-  private tail = '';
-  private dropped = 0;
-
-  constructor(private readonly headMax = 16_000, private readonly tailMax = 48_000) {}
-
-  push(chunk: string): void {
-    if (this.head.length < this.headMax) {
-      const take = chunk.slice(0, this.headMax - this.head.length);
-      this.head += take;
-      chunk = chunk.slice(take.length);
-    }
-    this.tail += chunk;
-    if (this.tail.length > this.tailMax) {
-      this.dropped += this.tail.length - this.tailMax;
-      this.tail = this.tail.slice(-this.tailMax);
-    }
-  }
-
-  text(): string {
-    return this.dropped ? `${this.head}\n…[${this.dropped} characters of output omitted]…\n${this.tail}` : this.head + this.tail;
   }
 }
 

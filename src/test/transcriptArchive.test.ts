@@ -83,6 +83,82 @@ suite('Transcript archive (compaction keeps the originals)', () => {
     }
   });
 
+  async function compactInto(store: SessionStore, s: { id: string; messages: ChatMessage[]; compactions: number }): Promise<void> {
+    const cm = new ContextManager({ compactionThreshold: 0.5, maxToolOutputChars: 1000, keepRecent: 4, strategy: 'basic' });
+    const res = await cm.compact(cm.pruneToolOutputs(s.messages, 0).messages, noModel, model);
+    assert.ok(res.removed > 0);
+    archiveCompaction(store, s.id, s.compactions, s.messages, res.messages);
+    s.messages = res.messages;
+    s.compactions++;
+  }
+
+  test('a cleared chat starts a new archive: rewinding never brings the cleared conversation back', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-archive-'));
+    const store = new SessionStore({ storageUri: vscode.Uri.file(dir) } as vscode.ExtensionContext, log);
+    await store.load();
+    try {
+      const s = store.create('m');
+      for (let i = 1; i <= 6; i++) {
+        s.messages.push(...turn(i));
+      }
+      await compactInto(store, s);
+      s.messages = [];
+      s.compactions = 0;
+      await store.clearArchive(s.id);
+      assert.deepStrictEqual(await store.loadArchive(s.id), []);
+      for (let i = 101; i <= 106; i++) {
+        s.messages.push(...turn(i));
+      }
+      await compactInto(store, s);
+      s.messages.push(...turn(107));
+      const idx = s.messages.findIndex((m) => m.content === 'request 106');
+      assert.strictEqual(s.messages[idx].meta?.archived, 20);
+      const rebuilt = await store.historyBefore(s, idx);
+      assert.strictEqual(rebuilt.length, 20);
+      assert.ok(!rebuilt.some((m) => /^(request|done with) [1-6]$/.test(m.content)), 'nothing from before the clear');
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a fork keeps the archive up to the fork point, so compacting and rewinding inside it rebuilds its own history', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-archive-'));
+    const store = new SessionStore({ storageUri: vscode.Uri.file(dir) } as vscode.ExtensionContext, log);
+    await store.load();
+    try {
+      const parent = store.create('m');
+      for (let i = 1; i <= 6; i++) {
+        parent.messages.push(...turn(i));
+      }
+      const original = structuredClone(parent.messages);
+      await compactInto(store, parent);
+      parent.messages.push(...turn(7));
+      const child = store.fork(parent.id)!;
+      const other = store.fork(parent.id)!;
+      const copied = other.messages.findIndex((m) => m.content === 'request 6');
+      assert.strictEqual(other.messages[copied].meta?.archived, 20);
+      assert.deepStrictEqual((await store.historyBefore(other, copied)).map((m) => m.content), original.slice(0, 20).map((m) => m.content));
+      for (let i = 8; i <= 12; i++) {
+        child.messages.push(...turn(i));
+      }
+      const full = [...original, ...turn(7), ...[8, 9, 10, 11, 12].flatMap(turn)];
+      await compactInto(store, child);
+      // The parent goes on independently: its archive is not the fork's.
+      parent.messages.push(...turn(50), ...turn(51));
+      await compactInto(store, parent);
+
+      const later = child.messages.findIndex((m) => m.content === 'request 12');
+      assert.strictEqual(child.messages[later].meta?.archived, 44);
+      const fromFork = await store.historyBefore(child, later);
+      assert.deepStrictEqual(fromFork.map((m) => m.content), full.slice(0, 44).map((m) => m.content), 'turns 1–11 as they were');
+      assert.strictEqual((await store.loadArchive(child.id)).length, 44);
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('chats the store does not hold (subagents) are not archived', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-archive-'));
     const store = new SessionStore({ storageUri: vscode.Uri.file(dir) } as vscode.ExtensionContext, log);
