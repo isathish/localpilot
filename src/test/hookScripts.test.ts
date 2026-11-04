@@ -136,10 +136,11 @@ suite('Hook scripts: templates and the Customize Hooks tab', () => {
     assert.ok(before.events.includes('Stop'));
     const r = await createItem('hook', 'Stop.sh', 'workspace', [root], home);
     // Compare the tail: on Windows the temp folder may come back as its short (RUNNER~1) or long name.
-    assert.ok(r.created && r.file.endsWith(path.join('.localpilot', 'hooks', 'Stop.sh')), r.file);
+    // On Windows (no executable bit) a new hook is created switched off as `….disabled`.
+    assert.ok(r.created && r.file.endsWith(path.join('.localpilot', 'hooks', unix ? 'Stop.sh' : 'Stop.sh.disabled')), r.file);
     const after = await listCustomizations([root], home);
     assert.ok(!after.events.includes('Stop'));
-    const item = after.hooks.find((h) => h.file === r.file);
+    const item = after.hooks.find((h) => path.basename(h.file) === path.basename(r.file));
     assert.ok(item && item.editable && !item.notRun, JSON.stringify(item));
     if (unix) {
       assert.strictEqual((await fs.stat(r.file)).mode & 0o777 & ~0o022, 0o644 & ~0o022);

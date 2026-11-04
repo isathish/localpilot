@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { CommandLog, CommandRun, commandLogDir, detachCommand, formatCommandOutcome, pruneCommandLogs, runningCommands, setCommandLogDir, stopCommand } from '../terminal/commandRun';
 import { runCommandTool } from '../tools/terminal';
 import { ToolContext } from '../types';
+import { removeTemp } from './removeTemp';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,7 +31,7 @@ suite('Proceed While Running (detached commands)', () => {
   });
   teardown(() => {
     setCommandLogDir(prevDir);
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeTemp(dir);
   });
 
   test('a finished command answers with its full output and exit code', async () => {
@@ -143,7 +144,7 @@ suite('Proceed While Running (detached commands)', () => {
     } finally {
       await cfg.update('terminal.runInIntegratedTerminal', prevIntegrated, vscode.ConfigurationTarget.Global);
       await cfg.update('terminal.autoDetachSeconds', prevDetach, vscode.ConfigurationTarget.Global);
-      fs.rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      removeTemp(ws);
     }
   });
 });

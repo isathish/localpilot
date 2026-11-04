@@ -6,6 +6,7 @@ import * as path from 'path';
 import { checkpointChanges, checkpointFile, checkpointRef, CheckpointService, gitCheckpoint, parseNameStatus, relativeIn } from '../agent/checkpoints';
 import { rewindAttachments } from '../ui/rewindDraft';
 import { Session } from '../types';
+import { removeTemp } from './removeTemp';
 
 const git = (cwd: string, ...args: string[]) =>
   cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -58,6 +59,7 @@ suite('checkpoint restore (git)', function () {
     repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo);
     git(repo, 'init', '-q');
+    git(repo, 'config', 'core.autocrlf', 'false');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'A0\n');
     fs.writeFileSync(path.join(repo, '.gitignore'), 'ignored.log\n');
     git(repo, 'add', '.');
@@ -65,7 +67,7 @@ suite('checkpoint restore (git)', function () {
     svc = new CheckpointService({ globalStorageDir: path.join(tmp, 'global'), enabled: () => true });
   });
 
-  teardown(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  teardown(() => removeTemp(tmp));
 
   test('files-only restore undoes what a shell command did, and keeps a safety stash', async () => {
     const s = session('s_cmd');

@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { ChangeTracker } from '../agent/changeTracker';
 import { checkpointRef, CheckpointService, isOrphanCheckpoint, lastCheckpointAt, pickOutcome, pruneSnapshotDirs, recordCheckpoint, refSafe, scratchKey, SessionCheckpoints } from '../agent/checkpoints';
 import { Session } from '../types';
+import { removeTemp } from './removeTemp';
 
 const git = (cwd: string, ...args: string[]) =>
   cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -76,6 +77,7 @@ suite('checkpoints (git)', function () {
     repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo);
     git(repo, 'init', '-q');
+    git(repo, 'config', 'core.autocrlf', 'false');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'A0\n');
     fs.writeFileSync(path.join(repo, '.gitignore'), 'ignored.log\n');
     git(repo, 'add', '.');
@@ -84,7 +86,7 @@ suite('checkpoints (git)', function () {
     svc = new CheckpointService({ globalStorageDir: path.join(tmp, 'global'), enabled: () => enabled });
   });
 
-  teardown(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  teardown(() => removeTemp(tmp));
 
   test('clean tree records HEAD', async () => {
     const s = session('s_clean');
@@ -246,8 +248,8 @@ suite('checkpoints (persisted file snapshots)', () => {
       t3.dispose();
     } finally {
       log.dispose();
-      fs.rmSync(dir, { recursive: true, force: true });
-      fs.rmSync(store, { recursive: true, force: true });
+      removeTemp(dir);
+      removeTemp(store);
     }
   });
 });

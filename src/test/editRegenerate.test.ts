@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CheckpointService } from '../agent/checkpoints';
 import { ChatController } from '../ui/chatController';
+import { removeTemp } from './removeTemp';
 
 suite('Inline edit and regenerate (Reset Chat / Reset Code)', () => {
   const root = path.resolve('/repo');
@@ -124,6 +125,7 @@ suite('Inline edit and regenerate (Reset Chat / Reset Code)', () => {
     const git = (...args: string[]) => cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false', ...args], { cwd: dir, encoding: 'utf8' }).trim();
     try {
       git('init', '-q');
+      git('config', 'core.autocrlf', 'false');
       fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
       git('add', '.');
       git('commit', '-qm', 'init');
@@ -138,7 +140,7 @@ suite('Inline edit and regenerate (Reset Chat / Reset Code)', () => {
       assert.strictEqual(await svc.exists({ ...entry!, ref: undefined, sha: '0'.repeat(40) }), false);
       assert.strictEqual(await svc.exists({ ...entry!, kind: 'files' }), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeTemp(dir);
     }
   });
 });

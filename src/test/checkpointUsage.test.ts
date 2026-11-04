@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { CheckpointService, dirBytes, diskUsageRevs, formatBytes, snapshotFolder } from '../agent/checkpoints';
+import { removeTemp } from './removeTemp';
 
 suite('Checkpoint disk usage and cleanup on delete', () => {
   test('byte formatting, snapshot folder names and the git revisions counted', () => {
@@ -28,6 +29,7 @@ suite('Checkpoint disk usage and cleanup on delete', () => {
     const git = (...args: string[]) => cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false', ...args], { cwd: repo, encoding: 'utf8' }).trim();
     try {
       git('init', '-q');
+      git('config', 'core.autocrlf', 'false');
       fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
       git('add', '.');
       git('commit', '-qm', 'init');
@@ -57,7 +59,7 @@ suite('Checkpoint disk usage and cleanup on delete', () => {
       assert.ok((await svc.refs('s_other', repo)).length, 'other chats keep their checkpoints');
       assert.strictEqual(await svc.diskUsage({ snapshotDir: path.join(dir, 'missing') }).then((u) => u.snapshots), 0);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeTemp(dir);
     }
   });
 });

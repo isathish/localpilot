@@ -75,12 +75,31 @@ export class McpServerFileWatcher {
       return;
     }
     const entry: { watchers: fs.FSWatcher[]; timer?: ReturnType<typeof setTimeout>; key: string } = { watchers: [], key };
+    // What each file looked like when watching began: Windows reports reads (last-access updates) as changes too,
+    // and a server starting reads its own script, so only a new size or modification time counts.
+    const sig = (f: string) => {
+      try {
+        const st = fs.statSync(f);
+        return `${st.size}:${st.mtimeMs}`;
+      } catch {
+        return 'missing';
+      }
+    };
+    const seen = new Map(files.map((f) => [f, sig(f)]));
     for (const [dir, names] of byDir) {
       try {
         const w = fs.watch(dir, { persistent: false }, (_ev, name) => {
           const file = name ? names.get(String(name)) : undefined;
           if (!file) {
             return;
+          }
+          // The file itself (not a folder on the way to it that just appeared): unchanged content is no change.
+          if (path.basename(file) === String(name)) {
+            const now = sig(file);
+            if (seen.get(file) === now) {
+              return;
+            }
+            seen.set(file, now);
           }
           clearTimeout(entry.timer);
           entry.timer = setTimeout(() => {
