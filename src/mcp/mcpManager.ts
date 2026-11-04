@@ -10,6 +10,7 @@ interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: ToolDefinition['parameters'];
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
 /** Expands `${env:NAME}` / `${secret:NAME}` the same way provider API keys are. */
@@ -304,7 +305,11 @@ export class McpManager implements vscode.Disposable {
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },
       approvalKind: 'network',
+      readOnly: t.annotations?.readOnlyHint === true,
       async execute(args, ctx) {
+        if (ctx.readOnly && t.annotations?.readOnlyHint !== true) {
+          return { content: 'This MCP tool may change files or remote state, which Plan/Ask mode does not allow. Switch to Agent mode to use it.', isError: true };
+        }
         if (!(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'network'))) {
           return { content: 'User declined the MCP tool call.', isError: true };
         }

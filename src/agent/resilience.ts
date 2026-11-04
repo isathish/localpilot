@@ -158,20 +158,28 @@ export function onAbort(signal: AbortSignal | undefined, fn: () => void): () => 
   if (!signal) {
     return () => undefined;
   }
+  // An already-aborted signal never fires 'abort' again, so run the handler now.
+  if (signal.aborted) {
+    fn();
+    return () => undefined;
+  }
   signal.addEventListener('abort', fn, { once: true });
   return () => signal.removeEventListener('abort', fn);
 }
 
 export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
-    const off = onAbort(signal, () => {
-      clearTimeout(t);
-      resolve();
-    });
+    if (signal?.aborted) {
+      return resolve();
+    }
     const t = setTimeout(() => {
       off();
       resolve();
     }, ms);
+    const off = onAbort(signal, () => {
+      clearTimeout(t);
+      resolve();
+    });
   });
 
 /** Stable key for "the same tool call again" detection. */

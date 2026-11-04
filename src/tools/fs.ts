@@ -38,23 +38,16 @@ export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
     throw new Error('No workspace folder open');
   }
   let abs = path.isAbsolute(p) ? p : path.join(root, p);
-  // Isolated worktree: an absolute path into the real workspace (the model may have seen it in context) is the
-  // same file inside the copy — never let the agent reach around its isolation.
-  // A path already inside the agent's own root (e.g. a repository nested in another workspace folder) is left alone.
-  if (ctx.workspaceRoot && path.isAbsolute(p) && !isWithin(abs, ctx.workspaceRoot)) {
-    for (const f of vscode.workspace.workspaceFolders ?? []) {
-      const main = f.uri.fsPath;
-      if (foldCase(main) !== foldCase(ctx.workspaceRoot) && isWithin(abs, main)) {
-        abs = path.join(ctx.workspaceRoot, path.relative(main, abs));
-        break;
-      }
-    }
+  // Isolated worktree: an absolute path into the real folder it mirrors (the model may have seen it in context) is
+  // the same file inside the copy — never let the agent reach around its isolation. Other folders are left alone.
+  if (ctx.isolatedFrom && ctx.workspaceRoot && path.isAbsolute(p) && isWithin(abs, ctx.isolatedFrom) && !isWithin(abs, ctx.workspaceRoot)) {
+    abs = path.join(ctx.workspaceRoot, path.relative(ctx.isolatedFrom, abs));
   }
   const normalized = path.normalize(abs);
   // Prevent path traversal outside the workspace unless the user opened that folder — or outside the agent's
   // isolated copy of it when it works in a worktree.
   // Repositories the user registered for multi-repository work (.localpilot/repos.json, localpilot.repos) are in reach too.
-  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...registeredRepoPaths(root)];
+  const roots = [...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? []), ...(ctx.workspaceRoot ? [ctx.workspaceRoot] : []), ...registeredRepoPaths(ctx.mainRoot ?? root)];
   const inside = roots.some((r) => isWithin(normalized, r));
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);
@@ -270,11 +263,20 @@ export const deleteTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const ok = await ctx.requestApproval(`Delete ${displayPath(uri, ctx)}`, 'This moves the path to the trash.', 'delete');
+    const stat = await Promise.resolve(vscode.workspace.fs.stat(uri)).then(
+      (st) => st,
+      () => undefined
+    );
+    const isDir = !!stat && (stat.type & vscode.FileType.Directory) !== 0;
+    const detail = isDir ? 'This moves the folder to the trash. Undo cannot bring a deleted folder back.' : 'This moves the path to the trash.';
+    const ok = await ctx.requestApproval(`Delete ${displayPath(uri, ctx)}`, detail, 'delete');
     if (!ok) {
       return { content: 'User declined the deletion.', isError: true };
     }
-    await ctx.trackChange(uri.fsPath);
+    // A folder has no text snapshot: tracking it would record it as created, and undo would delete it again.
+    if (!isDir) {
+      await ctx.trackChange(uri.fsPath);
+    }
     await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
     return { content: `Deleted ${displayPath(uri, ctx)}` };
   },

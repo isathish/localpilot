@@ -176,6 +176,9 @@ export class TerminalManager implements vscode.Disposable {
    * or `undefined` when shell integration is unavailable so the caller can fall back to a child process.
    */
   async run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean): Promise<IntegratedRunResult | undefined> {
+    if (signal.aborted) {
+      return { output: 'Not run: the user stopped the run.', exitCode: undefined };
+    }
     const term = this.agentTerminal(sessionId, cwd);
     if (reveal) {
       term.show(true);
@@ -184,6 +187,9 @@ export class TerminalManager implements vscode.Disposable {
     if (!si) {
       this.log.info('terminal: shell integration not available, falling back to child process');
       return undefined;
+    }
+    if (signal.aborted) {
+      return { output: 'Not run: the user stopped the run.', exitCode: undefined };
     }
     const inCwd = si.cwd?.fsPath === cwd ? command : `cd ${quote(cwd)} && ${command}`;
     const exec = si.executeCommand(inCwd);

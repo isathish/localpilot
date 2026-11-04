@@ -8,7 +8,7 @@ import { setSkillEnabled } from '../config';
 import * as vscode from 'vscode';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
-import { routeSubagent } from '../agent/builtinAgents';
+import { resolveAgentName, routeSubagent } from '../agent/builtinAgents';
 import { builtinAgents } from '../agent/builtinAgents';
 import { pickForRole, scoreForRole } from '../providers/registry';
 import { ModelInfo } from '../types';
@@ -181,6 +181,12 @@ suite('Subagent routing', () => {
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: true }).modelRef, undefined, 'router picks the fast model');
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: true, fast: 'session' }).modelRef, 'ollama/big');
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: false }).modelRef, 'ollama/big');
+  });
+
+  test('Claude Code worker names resolve to coder and unknown names stay unresolved', () => {
+    const names = agents.map((a) => a.name);
+    assert.strictEqual(resolveAgentName('general-purpose', names), 'coder');
+    assert.strictEqual(resolveAgentName('implementer-2', names), undefined);
   });
 
   test('fast role prefers the smallest tool-capable instruct model', () => {

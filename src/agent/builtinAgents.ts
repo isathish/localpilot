@@ -148,6 +148,8 @@ const AGENT_ALIASES: Record<string, string> = {
   developer: 'coder',
   dev: 'coder',
   engineer: 'coder',
+  'general-purpose': 'coder',
+  general: 'coder',
   review: 'reviewer',
   'code-review': 'reviewer',
   research: 'researcher',

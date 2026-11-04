@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { parseJsonc } from './jsonc';
 
 /**
  * Project / user settings files in the Claude Code format (`settings.json`), read from both the `.claude` and the
@@ -71,13 +72,7 @@ export function userSettingsFiles(home = os.homedir()): string[] {
 }
 
 /** JSON with `//` and `/* *\/` comments and trailing commas (settings files are hand-edited). */
-export function parseJsonc(text: string): unknown {
-  const stripped = text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:\\"'])\/\/.*$/gm, '$1')
-    .replace(/,\s*([}\]])/g, '$1');
-  return JSON.parse(stripped);
-}
+export { parseJsonc };
 
 const asStringList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((s) => s.trim()) : typeof v === 'string' && v.trim() ? [v.trim()] : []);
 

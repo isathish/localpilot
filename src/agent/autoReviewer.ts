@@ -95,6 +95,11 @@ export class AutoReviewer {
   ) {}
 
   async review(req: AutoReviewRequest, modelRef?: string): Promise<AutoVerdict> {
+    // A stopped run approves nothing, and a late answer must not turn into an allow.
+    const stopped: AutoVerdict = { decision: 'ask', reason: 'stopped', source: 'error' };
+    if (req.signal?.aborted) {
+      return stopped;
+    }
     const risk = hardRisk(req.kind, req.title, req.detail);
     if (risk) {
       return { decision: 'ask', reason: risk, source: 'rule' };
@@ -114,6 +119,9 @@ export class AutoReviewer {
       }
       const v = parseVerdict(out);
       this.log?.info(`auto mode (${model.id}): ${v.allow ? 'allow' : 'ask'} ${req.kind} "${req.title}" — ${v.reason}`);
+      if (v.allow && req.signal?.aborted) {
+        return stopped;
+      }
       return { decision: v.allow ? 'allow' : 'ask', reason: v.reason, source: 'model' };
     } catch (e) {
       const why = abort.signal.aborted && !req.signal?.aborted ? 'the reviewer timed out' : e instanceof Error ? e.message : String(e);

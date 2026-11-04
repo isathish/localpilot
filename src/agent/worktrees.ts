@@ -29,6 +29,10 @@ export interface WorktreeInfo {
   createdAt: number;
   /** Set once the result was applied to the main checkout. */
   appliedAt?: number;
+  /** Folder of the workspace inside the repository (relative; empty or absent = the repository root). */
+  subdir?: string;
+  /** Who created the worktree (`cli`, `vscode:<window store>`); only its owner prunes it. */
+  owner?: string;
 }
 
 export interface WorktreeChange {
@@ -98,7 +102,7 @@ export class WorktreeManager {
    * Create a worktree for `id` from the main checkout at `repo`, seeded with its uncommitted changes and untracked
    * files, then run the repository's setup commands. `progress` receives human-readable status lines.
    */
-  async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number } = {}): Promise<WorktreeInfo> {
+  async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number; subdir?: string; owner?: string } = {}): Promise<WorktreeInfo> {
     const progress = opts.progress ?? (() => {});
     const dir = path.join(this.dirFor(repo), id.replace(/[^\w.-]+/g, '_'));
     await fs.promises.mkdir(path.dirname(dir), { recursive: true });
@@ -146,9 +150,11 @@ export class WorktreeManager {
     await git(['add', '-A'], dir);
     await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'LocalPilot: workspace snapshot (base)'], dir);
     const base = (await git(['rev-parse', 'HEAD'], dir)).trim();
-    const info: WorktreeInfo = { path: dir, base, repo, createdAt: Date.now() };
+    // Only a folder inside the repository is a subfolder of the copy.
+    const subdir = opts.subdir && !path.isAbsolute(opts.subdir) && !opts.subdir.split(/[\\/]/).includes('..') ? path.normalize(opts.subdir) : undefined;
+    const info: WorktreeInfo = { path: dir, base, repo, createdAt: Date.now(), subdir, owner: opts.owner };
     // Bookkeeping lives next to the worktree, not inside it, so it never shows up as a change.
-    await fs.promises.writeFile(`${dir}.json`, JSON.stringify({ id, repo, base, createdAt: info.createdAt }));
+    await fs.promises.writeFile(`${dir}.json`, JSON.stringify({ id, repo, base, createdAt: info.createdAt, subdir: info.subdir, owner: info.owner }));
     this.log.info(`worktree ${id}: created at ${dir} (base ${base.slice(0, 8)})`);
     return info;
   }
@@ -317,10 +323,10 @@ export class WorktreeManager {
     const out: { id: string; info: WorktreeInfo }[] = [];
     for (const e of entries.filter((n) => n.endsWith('.json'))) {
       try {
-        const meta = JSON.parse(await fs.promises.readFile(path.join(dir, e), 'utf8')) as { id: string; base: string; createdAt: number };
+        const meta = JSON.parse(await fs.promises.readFile(path.join(dir, e), 'utf8')) as { id: string; base: string; createdAt: number; subdir?: string; owner?: string };
         const wt = path.join(dir, e.slice(0, -5));
         if (fs.existsSync(wt)) {
-          out.push({ id: meta.id, info: { path: wt, base: meta.base, repo, createdAt: meta.createdAt } });
+          out.push({ id: meta.id, info: { path: wt, base: meta.base, repo, createdAt: meta.createdAt, subdir: meta.subdir || undefined, owner: meta.owner } });
         } else {
           await fs.promises.rm(path.join(dir, e), { force: true });
         }
@@ -331,11 +337,15 @@ export class WorktreeManager {
     return out;
   }
 
-  /** Remove worktrees whose session is gone (not in `keep`). Returns how many were removed. */
-  async prune(repo: string, keep: Set<string>): Promise<number> {
+  /**
+   * Remove worktrees of `owner` whose session is gone (not in `keep`); other windows' and the CLI's are left alone.
+   * Legacy worktrees without an owner go only once they are a week old. Returns how many were removed.
+   */
+  async prune(repo: string, keep: Set<string>, owner: string): Promise<number> {
     let n = 0;
     for (const { id, info } of await this.list(repo)) {
-      if (!keep.has(id)) {
+      const mine = info.owner ? info.owner === owner : Date.now() - (info.createdAt || 0) > 7 * 24 * 3600_000 && !id.startsWith('cli-');
+      if (mine && !keep.has(id)) {
         await this.remove(info);
         n++;
       }

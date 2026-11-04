@@ -2,10 +2,11 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { hardRisk, parseVerdict } from '../agent/autoReviewer';
+import { AutoReviewer, hardRisk, parseVerdict } from '../agent/autoReviewer';
 import { fitNote, newLines } from '../agent/memory';
 import { QueueTask, TaskQueue } from '../agent/taskQueue';
 import { backoffMs, MAX_FAILURES, ServiceSupervisor } from '../providers/supervisor';
+import type { ProviderRegistry } from '../providers/registry';
 
 /** A runner whose runs finish only when the test says so. */
 function controllableRunner() {
@@ -66,6 +67,24 @@ suite('Task queue: sequential, parallel and dependent agent tasks', () => {
     assert.deepStrictEqual(q.list.map((t) => t.status), ['running', 'done', 'queued'], 'the blocked dependent is re-queued with it');
     await r.end('a');
     assert.deepStrictEqual(r.started, ['a', 'b', 'a', 'c']);
+    await q.flush();
+    q.dispose();
+  });
+
+  test('resuming with concurrency 2 starts each ready task exactly once (no re-entrant double start)', async () => {
+    const r = controllableRunner();
+    const q = new TaskQueue(path.join(dir, 'q.json'), r.runner, () => 2);
+    q.setPaused(true);
+    q.add({ prompt: 'a' });
+    q.add({ prompt: 'b' });
+    assert.deepStrictEqual(r.started, []);
+    q.setPaused(false);
+    await tick();
+    assert.deepStrictEqual([...r.started].sort(), ['a', 'b']);
+    assert.strictEqual(q.activeCount, 2);
+    await r.end('a');
+    await r.end('b');
+    assert.deepStrictEqual([...r.started].sort(), ['a', 'b']);
     await q.flush();
     q.dispose();
   });
@@ -131,6 +150,17 @@ suite('Auto mode reviewer', () => {
     assert.strictEqual(parseVerdict('ALLOW: harmless').allow, true);
     assert.strictEqual(parseVerdict('I think this is probably fine').allow, false);
     assert.strictEqual(parseVerdict('').allow, false);
+  });
+
+  test('a stopped run never asks the reviewer and never auto-approves', async () => {
+    let routed = 0;
+    const provider = { chat: async function* () { yield { type: 'text', text: '{"decision":"allow","reason":"fine"}' }; } };
+    const registry = { route: async () => (routed++, { provider, model: { id: 'stub/m', modelId: 'm', contextWindow: 8192 } }) } as unknown as ProviderRegistry;
+    const stop = new AbortController();
+    stop.abort();
+    const v = await new AutoReviewer(registry).review({ kind: 'terminal', title: 'Run command', detail: 'npm test', request: 'run the tests', signal: stop.signal });
+    assert.strictEqual(v.decision, 'ask');
+    assert.strictEqual(routed, 0);
   });
 });
 

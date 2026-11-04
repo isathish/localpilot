@@ -172,11 +172,32 @@ export class TaskQueue implements vscode.Disposable {
     this.changed();
   }
 
+  private pumping = false;
+  private repump = false;
+
   /** Starts whatever the dependency waves and the concurrency limit allow. */
   private pump(): void {
     if (this._paused || this.disposed) {
       return;
     }
+    // A task's `started` callback re-enters through changed(): run once more afterwards instead of nesting.
+    if (this.pumping) {
+      this.repump = true;
+      return;
+    }
+    this.pumping = true;
+    try {
+      this.pumpOnce();
+    } finally {
+      this.pumping = false;
+    }
+    if (this.repump) {
+      this.repump = false;
+      this.pump();
+    }
+  }
+
+  private pumpOnce(): void {
     const pending = this.tasks.filter((t) => t.status === 'queued');
     if (!pending.length) {
       return;
@@ -193,8 +214,13 @@ export class TaskQueue implements vscode.Disposable {
       t.error = wave.cyclic.includes(t) ? 'Its dependencies wait on each other.' : 'A task it depends on did not finish.';
       blockedAny = true;
     }
-    const slots = Math.max(1, this.concurrency()) - this.running.size;
-    for (const t of wave.ready.slice(0, Math.max(0, slots))) {
+    for (const t of wave.ready) {
+      if (this.running.size >= Math.max(1, this.concurrency())) {
+        break;
+      }
+      if (t.status !== 'queued') {
+        continue;
+      }
       this.start(t);
     }
     if (blockedAny) {
@@ -207,6 +233,9 @@ export class TaskQueue implements vscode.Disposable {
   private readonly runTokens = new Map<string, symbol>();
 
   private start(t: QueueTask): void {
+    if (this.running.has(t.id)) {
+      return;
+    }
     t.status = 'running';
     t.startedAt = Date.now();
     this.running.add(t.id);

@@ -122,6 +122,8 @@ export type StreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'usage'; promptTokens?: number; completionTokens?: number }
+  /** Liveness while a tool call's arguments stream (nothing to show yet). */
+  | { type: 'progress' }
   | { type: 'done'; finishReason?: string };
 
 export interface CompletionRequestOptions {
@@ -206,6 +208,10 @@ export interface UserAnswer {
 export interface ToolContext {
   sessionId: string;
   workspaceRoot?: string;
+  /** The real checkout folder an isolated run mirrors (its worktree copy is `workspaceRoot`); unset when not isolated. */
+  isolatedFrom?: string;
+  /** The real checkout: shared state such as the team board and repos.json lives there, also for isolated runs. */
+  mainRoot?: string;
   signal: AbortSignal;
   /** Ask the user to approve a dangerous action. Resolves true when approved. */
   requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network'): Promise<boolean>;
@@ -245,6 +251,8 @@ export interface Tool {
   approvalKind?: 'terminal' | 'write' | 'delete' | 'network';
   /** Safe to run concurrently with other tools (read-only). */
   parallelSafe?: boolean;
+  /** Declared side-effect free (e.g. MCP readOnlyHint); allowed in Plan/Ask. */
+  readOnly?: boolean;
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 

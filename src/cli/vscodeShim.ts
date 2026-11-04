@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
+import { stripJsonc } from '../agent/jsonc';
 
 // ------------------------------------------------------------------ primitives
 export class Disposable {
@@ -284,8 +285,7 @@ export const CLI_SETTINGS_PATH = path.join(os.homedir(), '.localpilot', 'config.
 function readJsonc(file: string): Record<string, unknown> {
   try {
     const raw = fs.readFileSync(file, 'utf8');
-    const stripped = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1');
-    return JSON.parse(stripped) as Record<string, unknown>;
+    return JSON.parse(stripJsonc(raw)) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -304,22 +304,42 @@ function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, pr
     }
   }
 }
+
+/** Settings a cloned repo's .vscode/settings.json must not set unless the workspace is trusted (they choose endpoints, commands and approvals). */
+const SENSITIVE_WORKSPACE_KEYS = ['providers', 'defaultModel', 'routing.', 'mcpServers', 'approvals.', 'autoMode.', 'hooks.', 'pluginPaths', 'skillsPaths', 'skills.repositories', 'webSearch.', 'storage.redis.', 'terminal.', 'inlineCompletion.model'];
+let trustWorkspace = process.env.LOCALPILOT_TRUST_WORKSPACE === '1';
+export function setTrustWorkspace(v: boolean): void {
+  trustWorkspace = v;
+}
+/** Workspace keys skipped by the last loadSettings because the workspace is not trusted. */
+export const ignoredWorkspaceSettings: string[] = [];
+const isSensitive = (key: string) => SENSITIVE_WORKSPACE_KEYS.some((p) => {
+  const base = p.replace(/\.$/, '');
+  return key === base || key.startsWith(`${base}.`);
+});
+
 export function loadSettings(workspaceRoot?: string): void {
   for (const k of Object.keys(settings)) {
     delete settings[k];
   }
-  const fromVsCode = (file: string) => {
+  ignoredWorkspaceSettings.length = 0;
+  const fromVsCode = (file: string, untrusted: boolean) => {
     const flat: Record<string, unknown> = {};
     flatten(readJsonc(file), flat);
     for (const [k, v] of Object.entries(flat)) {
       if (k.startsWith('localpilot.')) {
-        settings[k.slice('localpilot.'.length)] = v;
+        const key = k.slice('localpilot.'.length);
+        if (untrusted && !trustWorkspace && isSensitive(key)) {
+          ignoredWorkspaceSettings.push(key);
+          continue;
+        }
+        settings[key] = v;
       }
     }
   };
-  fromVsCode(USER_SETTINGS_PATH);
+  fromVsCode(USER_SETTINGS_PATH, false);
   if (workspaceRoot) {
-    fromVsCode(path.join(workspaceRoot, '.vscode', 'settings.json'));
+    fromVsCode(path.join(workspaceRoot, '.vscode', 'settings.json'), true);
   }
   const cli: Record<string, unknown> = {};
   flatten(readJsonc(CLI_SETTINGS_PATH), cli);
@@ -582,7 +602,29 @@ export const workspace = {
       await fsp.mkdir(uri.fsPath, { recursive: true });
     },
     async delete(uri: Uri, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {
-      await fsp.rm(uri.fsPath, { recursive: !!opts?.recursive, force: true });
+      if (opts?.useTrash) {
+        // No system trash from a terminal: deleted paths go to ~/.localpilot/trash so they can be recovered.
+        const exists = await fsp.lstat(uri.fsPath).then(
+          () => true,
+          () => false
+        );
+        if (exists) {
+          const trash = path.join(os.homedir(), '.localpilot', 'trash');
+          await fsp.mkdir(trash, { recursive: true });
+          const dest = path.join(trash, `${Date.now()}-${path.basename(uri.fsPath)}`);
+          try {
+            await fsp.rename(uri.fsPath, dest);
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'EXDEV') {
+              throw e;
+            }
+            await fsp.cp(uri.fsPath, dest, { recursive: true });
+            await fsp.rm(uri.fsPath, { recursive: true });
+          }
+        }
+      } else {
+        await fsp.rm(uri.fsPath, { recursive: !!opts?.recursive, force: true });
+      }
       docs.delete(uri.fsPath);
     },
     async rename(a: Uri, b: Uri): Promise<void> {

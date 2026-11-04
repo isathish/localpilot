@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Chat Actions in the Agents view act on the chat you clicked.** The "…" button on a row opened the menu for the chat on screen instead, so Delete removed the chat you were working in, with its isolated worktree and unapplied changes. It now acts on that row's chat, and Delete and Undo all ask first.
+
 ## 1.5.2 — 2026-11-04
 
 ### Fixed

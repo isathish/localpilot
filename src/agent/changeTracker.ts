@@ -104,38 +104,40 @@ export class ChangeTracker implements vscode.Disposable {
     if (!byTurn) {
       return 0;
     }
+    const turns = [...byTurn.keys()].filter((t) => t >= turn).sort((a, b) => a - b);
     const earliest = new Map<string, string | undefined>();
-    for (const t of [...byTurn.keys()].sort((a, b) => a - b)) {
-      if (t < turn) {
-        continue;
-      }
+    for (const t of turns) {
       for (const [fsPath, content] of byTurn.get(t)!) {
         if (!earliest.has(fsPath)) {
           earliest.set(fsPath, content);
         }
       }
-      byTurn.delete(t);
     }
     let n = 0;
+    const failed = new Set<string>();
     for (const [fsPath, content] of earliest) {
-      const uri = vscode.Uri.file(fsPath);
       try {
-        if (content === undefined) {
-          await vscode.workspace.fs.delete(uri, { useTrash: true });
-        } else {
-          const doc = await vscode.workspace.openTextDocument(uri);
-          const edit = new vscode.WorkspaceEdit();
-          edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), content);
-          await vscode.workspace.applyEdit(edit);
-          await doc.save();
-        }
+        await restoreFile(vscode.Uri.file(fsPath), content);
         n++;
         const tracked = this.changes.get(`${sid}|${fsPath}`);
         if (tracked && tracked.original === content) {
           this.changes.delete(`${sid}|${fsPath}`);
         }
       } catch (e) {
+        failed.add(fsPath);
         this.log.error(`checkpoint restore failed for ${fsPath}: ${String(e)}`);
+      }
+    }
+    // Snapshots of files that could not be restored stay, so the checkpoint can be retried.
+    for (const t of turns) {
+      const files = byTurn.get(t)!;
+      for (const fsPath of [...files.keys()]) {
+        if (!failed.has(fsPath)) {
+          files.delete(fsPath);
+        }
+      }
+      if (!files.size) {
+        byTurn.delete(t);
       }
     }
     this._onDidChange.fire();
@@ -173,22 +175,13 @@ export class ChangeTracker implements vscode.Disposable {
       if (fsPath && c.fsPath !== fsPath) {
         continue;
       }
-      const uri = vscode.Uri.file(c.fsPath);
       try {
-        if (c.original === undefined) {
-          await vscode.workspace.fs.delete(uri, { useTrash: true });
-        } else {
-          const edit = new vscode.WorkspaceEdit();
-          const doc = await vscode.workspace.openTextDocument(uri);
-          edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), c.original);
-          await vscode.workspace.applyEdit(edit);
-          await doc.save();
-        }
+        await restoreFile(vscode.Uri.file(c.fsPath), c.original);
         n++;
+        this.changes.delete(`${c.sessionId}|${c.fsPath}`);
       } catch (e) {
         this.log.error(`undo failed for ${c.fsPath}: ${String(e)}`);
       }
-      this.changes.delete(`${c.sessionId}|${c.fsPath}`);
     }
     this._onDidChange.fire();
     this.decorateVisible();
@@ -226,6 +219,27 @@ export class ChangeTracker implements vscode.Disposable {
     this.addedDeco.dispose();
     this.modifiedDeco.dispose();
     this._onDidChange.dispose();
+  }
+}
+
+/** Put a file back to `content` (undefined = it did not exist): recreated when it was deleted since. */
+async function restoreFile(uri: vscode.Uri, content: string | undefined): Promise<void> {
+  const exists = await Promise.resolve(vscode.workspace.fs.stat(uri)).then(
+    () => true,
+    () => false
+  );
+  if (content === undefined) {
+    if (exists) {
+      await vscode.workspace.fs.delete(uri, { useTrash: true });
+    }
+  } else if (!exists) {
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+  } else {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), content);
+    await vscode.workspace.applyEdit(edit);
+    await doc.save();
   }
 }
 

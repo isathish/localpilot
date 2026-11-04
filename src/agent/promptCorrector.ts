@@ -5,6 +5,11 @@
  * with the same extension, so "Next.js" never becomes "next.ts"), snake_case, camelCase or names with digits. Plain
  * words are left alone: the model reads ordinary typos fine, while "correcting" English against a code vocabulary would
  * turn "form" into "from".
+ *
+ * It stays out of the way when a name is clearly meant as written: inside code fences, backtick or quoted spans, URLs and
+ * pasted error/stack-trace lines; a name being created or renamed to ("create users.py", "rename rollDice to rollDie");
+ * a case-only difference; a numbered variant of an existing name ("main2.py"); or a candidate the message already
+ * mentions. Long pastes (over 4000 characters) are returned unchanged.
  */
 
 export interface NameVocabulary {
@@ -68,50 +73,128 @@ function extensionOf(name: string): string {
   return name.slice(name.lastIndexOf('.') + 1).toLowerCase();
 }
 
+interface Entry {
+  name: string;
+  lower: string;
+}
+
+const MAX_TEXT = 4000;
+const MAX_TOKENS = 200;
+const FENCE = /```[\s\S]*?(?:```|$)/g;
+const INLINE_CODE = /`[^`\n]*`/g;
+const QUOTED = /"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g;
+const ERROR_LINE =
+  /^\s*at\s|^\s*(?:\w+(?:Error|Exception)|error(?:\s+TS\d+)?)\s*:|\(\d+,\d+\):|^\s*Traceback \(most recent|cannot find (?:name|module)|did you mean/i;
+const INTENT =
+  /\b(create|creating|new|add|make|write|generate|named|called|rename\b.*\bto|move\b.*\bto)\s+(?:(?:a|an|the|file|function|class|method|module|component|test)\s+){0,2}$/i;
+
 /** The single closest name within the allowance, or undefined when there is none or two are equally close. */
-function closest(token: string, names: ReadonlySet<string>): string | undefined {
+function closest(token: string, names: readonly Entry[]): string | undefined {
   const max = allowance(token.length);
   if (!max) {
     return undefined;
   }
   const lower = token.toLowerCase();
-  let best: string | undefined;
+  let best: Entry | undefined;
   let bestD = max + 1;
   let tie = false;
   for (const n of names) {
-    const d = editDistance(lower, n.toLowerCase(), max);
+    const d = editDistance(lower, n.lower, max);
     if (d < bestD) {
       best = n;
       bestD = d;
       tie = false;
-    } else if (d === bestD && d <= max && best?.toLowerCase() !== n.toLowerCase()) {
+    } else if (d === bestD && d <= max && best?.lower !== n.lower) {
       tie = true;
     }
   }
-  return best && bestD <= max && !tie ? best : undefined;
+  return best && bestD <= max && !tie ? best.name : undefined;
+}
+
+/** `main2.py` → `main.py`, `userId2` → `userId`. */
+function withoutVersion(name: string): string {
+  return name.replace(/\d+((?:\.[A-Za-z0-9]{1,8})?)$/, '$1').toLowerCase();
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function correctPromptNames(text: string, vocab: NameVocabulary): { text: string; fixes: PromptFix[] } {
-  if (!vocab.files.size && !vocab.identifiers.size) {
+  if ((!vocab.files.size && !vocab.identifiers.size) || text.length > MAX_TEXT) {
     return { text, fixes: [] };
   }
+  const group = <K>(map: Map<K, Entry[]>, key: K, name: string) => {
+    const entry = { name, lower: name.toLowerCase() };
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      map.set(key, [entry]);
+    }
+  };
   const fileNamesLower = new Set([...vocab.files].map((f) => f.toLowerCase()));
-  const skip: [number, number][] = [...text.matchAll(URL)].map((m) => [m.index!, m.index! + m[0].length]);
-  const inside = (ranges: [number, number][], i: number) => ranges.some(([a, b]) => i >= a && i < b);
-  const fixes: PromptFix[] = [];
-  const out = text.replace(TOKEN, (whole, dir: string, name: string, offset: number) => {
-    if (inside(skip, offset)) {
-      return whole;
+  const filesByExt = new Map<string, Entry[]>();
+  for (const name of vocab.files) {
+    group(filesByExt, extensionOf(name), name);
+  }
+  const idsByLength = new Map<number, Entry[]>();
+  for (const name of vocab.identifiers) {
+    group(idsByLength, name.length, name);
+  }
+  const skip: [number, number][] = [];
+  for (const re of [URL, FENCE, INLINE_CODE, QUOTED]) {
+    for (const m of text.matchAll(re)) {
+      skip.push([m.index!, m.index! + m[0].length]);
+    }
+  }
+  for (const m of text.matchAll(/^.*$/gm)) {
+    if (ERROR_LINE.test(m[0])) {
+      skip.push([m.index!, m.index! + m[0].length]);
+    }
+  }
+  const inside = (i: number) => skip.some(([a, b]) => i >= a && i < b);
+  const memo = new Map<string, string | undefined>();
+  const lookup = (name: string): string | undefined => {
+    if (memo.has(name)) {
+      return memo.get(name);
     }
     let to: string | undefined;
     if (isFileLike(name)) {
       if (!fileNamesLower.has(name.toLowerCase())) {
-        const ext = extensionOf(name);
-        to = closest(name, new Set([...vocab.files].filter((f) => extensionOf(f) === ext)));
+        to = closest(name, filesByExt.get(extensionOf(name)) ?? []);
       }
     } else if (isIdentifierLike(name) && !vocab.identifiers.has(name)) {
-      to = closest(name, vocab.identifiers);
+      const max = allowance(name.length);
+      const near: Entry[] = [];
+      for (let len = name.length - max; len <= name.length + max; len++) {
+        near.push(...(idsByLength.get(len) ?? []));
+      }
+      to = closest(name, near);
     }
+    if (
+      to &&
+      (to.toLowerCase() === name.toLowerCase() ||
+        withoutVersion(name) === to.toLowerCase() ||
+        withoutVersion(to) === name.toLowerCase() ||
+        new RegExp(`(?<![\\w-])${escapeRegExp(to)}(?![\\w-])`).test(text))
+    ) {
+      to = undefined;
+    }
+    memo.set(name, to);
+    return to;
+  };
+  const fixes: PromptFix[] = [];
+  let candidates = 0;
+  const out = text.replace(TOKEN, (whole, dir: string, name: string, offset: number) => {
+    if (inside(offset) || (!isFileLike(name) && !isIdentifierLike(name)) || ++candidates > MAX_TOKENS) {
+      return whole;
+    }
+    const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+    if (INTENT.test(text.slice(Math.max(lineStart, offset - 40), offset))) {
+      return whole;
+    }
+    const to = lookup(name);
     if (!to || to === name) {
       return whole;
     }

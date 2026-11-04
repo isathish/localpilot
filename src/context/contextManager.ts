@@ -147,7 +147,7 @@ export class ContextManager {
     let messages = history;
     let budget = budgetOf(messages);
     const compactions: CompactionResult[] = [];
-    if (!this.needsCompaction(budget)) {
+    if (signal?.aborted || !this.needsCompaction(budget)) {
       return { messages, budget, compactions };
     }
     const pruned = this.pruneToolOutputs(messages);
@@ -157,7 +157,7 @@ export class ContextManager {
     }
     const first = this.opts.keepRecent ?? 8;
     for (const keep of [first, Math.min(first, 4), 2]) {
-      if (!this.needsCompaction(budget)) {
+      if (signal?.aborted || !this.needsCompaction(budget)) {
         break;
       }
       if (keep < first) {
@@ -195,11 +195,41 @@ export class ContextManager {
     return `${text.slice(0, head)}\n\n... [${omitted.toLocaleString()} characters omitted — use offsets/filters to read more] ...\n\n${text.slice(-tail)}`;
   }
 
-  /** Strategy 1: collapse tool results older than the recent window. */
+  /** Strategy 1: collapse tool results, and large tool-call arguments (file contents), older than the recent window. */
   pruneToolOutputs(history: ChatMessage[], keepRecent = this.opts.keepRecent ?? 12): { messages: ChatMessage[]; saved: number } {
     const cutoff = Math.max(0, history.length - keepRecent);
     let saved = 0;
     const messages = history.map((m, i) => {
+      if (i < cutoff && m.role === 'assistant' && m.toolCalls?.length && !m.meta?.pruned) {
+        const toolCalls = m.toolCalls.map((c) => {
+          let args: unknown;
+          try {
+            args = JSON.parse(c.arguments);
+          } catch {
+            return c;
+          }
+          if (!args || typeof args !== 'object' || Array.isArray(args)) {
+            return c;
+          }
+          let hit = false;
+          const out: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+            if (typeof v === 'string' && v.length > 400) {
+              out[k] = `[${v.length.toLocaleString()} chars — pruned to save context; read the file for current text]`;
+              hit = true;
+            } else {
+              out[k] = v;
+            }
+          }
+          return hit ? { ...c, arguments: JSON.stringify(out) } : c;
+        });
+        if (!toolCalls.some((c, j) => c !== m.toolCalls![j])) {
+          return m;
+        }
+        const pruned: ChatMessage = { ...m, toolCalls, meta: { ...m.meta, pruned: true } };
+        saved += estimateMessageTokens(m) - estimateMessageTokens(pruned);
+        return pruned;
+      }
       if (i >= cutoff || m.role !== 'tool' || m.meta?.pruned || m.content.length < 400) {
         return m;
       }
@@ -231,19 +261,31 @@ export class ContextManager {
     if (history.length <= keepRecent + 2) {
       return { messages: history, summary: '', removed: 0, before, after: before };
     }
-    // Never split a tool call from its results: back the split point up to a user message.
+    // Never split a tool call from its results: back the split point up past tool results and their image carriers,
+    // so the recent window starts at a user message or at an assistant message whose results all follow it.
     let split = history.length - keepRecent;
-    while (split > 1 && history[split].role !== 'user') {
+    while (split > 0 && (history[split].role === 'tool' || history[split].meta?.toolImages)) {
       split--;
     }
     const older = history.slice(0, split);
     const recent = history.slice(split);
-    if (!older.some((m) => !m.meta?.summary)) {
+    // Splitting inside a running turn: the request that started it stays verbatim, only the work since is summarised.
+    let request: ChatMessage | undefined;
+    if (history[split]?.role === 'assistant') {
+      for (let i = older.length - 1; i >= 0; i--) {
+        const m = older[i];
+        if (m.role === 'user' && !m.meta?.hidden && !m.meta?.summary && !m.meta?.toolImages && !m.meta?.steer) {
+          request = m;
+          break;
+        }
+      }
+    }
+    if (!older.some((m) => !m.meta?.summary && m !== request)) {
       return { messages: history, summary: '', removed: 0, before, after: before };
     }
     const priorSummaries = older.filter((m) => m.meta?.summary).map((m) => m.content);
     const transcript = older
-      .filter((m) => !m.meta?.summary)
+      .filter((m) => !m.meta?.summary && m !== request)
       .map((m) => {
         const tc = m.toolCalls?.map((t) => `${t.name}(${t.arguments.slice(0, 300)})`).join(', ');
         return `${m.role.toUpperCase()}: ${m.content.slice(0, 4000)}${tc ? `\n[tool calls: ${tc}]` : ''}`;
@@ -254,7 +296,7 @@ export class ContextManager {
     try {
       summary = await this.summarise(provider, model, priorSummaries, transcript, signal);
     } catch (e) {
-      if (!truncateOnFailure) {
+      if (!truncateOnFailure || signal?.aborted) {
         throw e;
       }
       // Strategy 3 fallback: hard truncation with a plain-text stub.
@@ -265,8 +307,8 @@ export class ContextManager {
       content: `<conversation_summary>\n${summary}\n</conversation_summary>\nContinue from here; the summary above replaces earlier messages.`,
       meta: { summary: true, timestamp: Date.now() },
     };
-    const messages = [summaryMsg, ...recent];
-    return { messages, summary, removed: older.length, before, after: this.tokens(estimateMessagesTokens(messages)) };
+    const messages = request ? [summaryMsg, request, ...recent] : [summaryMsg, ...recent];
+    return { messages, summary, removed: older.length - (request ? 1 : 0), before, after: this.tokens(estimateMessagesTokens(messages)) };
   }
 
   private async summarise(

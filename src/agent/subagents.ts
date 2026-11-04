@@ -125,16 +125,25 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
       // A subagent in another repository is told where it is: paths it writes are relative to that repository's root.
       const inRepo = (t: (typeof tasks)[number], i: number) => (roots[i] ? `You are working in the repository "${roots[i]!.name}" (${roots[i]!.path}). Every relative path is relative to that repository's root: write "server.js", not "${roots[i]!.name}/server.js". Make and verify the change there.\n\n${t.prompt}` : t.prompt);
-      const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path } : ctx, roots[i]?.name, strList(t.skills)));
+      const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path, isolatedFrom: undefined } : ctx, roots[i]?.name, strList(t.skills)));
       const out = settled.map((r, i) => {
         const header = `## Task ${i + 1} (${tasks[i].agent}${roots[i] ? ` in ${roots[i]!.name}` : ''}): ${tasks[i].prompt.slice(0, 80)}`;
         return r.status === 'fulfilled' ? `${header}\n${r.value.content}` : `${header}\nFAILED: ${String(r.reason)}`;
       });
-      return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected') };
+      return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected' || r.value.isError) };
     },
   };
 
+  /** The agent names in `requested` that match no installed subagent, plus the names that do exist. */
+  const unknownAgents = (requested: string[]): { unknown: string[]; available: string[] } => {
+    const available = skills.allAgents.map((a) => a.name);
+    return { unknown: [...new Set(requested.filter((n) => !resolveAgentName(n, available)))], available };
+  };
+
   async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string, extraSkills?: string[]) {
+    if (ctx.signal.aborted) {
+      return { content: 'Not started: the user stopped the run.', isError: true };
+    }
     const cfg = getConfig();
     if (ctx.depth >= cfg.parallel.maxSubagentDepth) {
       return { content: `Subagent depth limit (${cfg.parallel.maxSubagentDepth}) reached; do the work directly instead.`, isError: true };
@@ -142,9 +151,12 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     if (!prompt.trim()) {
       return { content: 'The subagent prompt is empty. Describe the goal, the relevant files/symbols and what to return.', isError: true };
     }
-    const resolved = resolveAgentName(agentName, skills.allAgents.map((a) => a.name));
-    const def = (resolved ? skills.getAgent(resolved) : undefined) ?? skills.getAgent('explore')!;
-    const fallbackNote = def.name !== agentName && !resolved ? `Note: unknown subagent "${agentName}" — ran "${def.name}" instead. Available: ${skills.allAgents.map((a) => a.name).join(', ')}.\n\n` : '';
+    const available = skills.allAgents.map((a) => a.name);
+    const resolved = resolveAgentName(agentName, available);
+    const def = resolved ? skills.getAgent(resolved) : undefined;
+    if (!def) {
+      return { content: `Unknown subagent "${agentName}". Available: ${available.join(', ')}. Call again with one of these names.`, isError: true };
+    }
     const childId = `${ctx.sessionId}::${def.name}::${newId('sub')}`;
     const { role, modelRef: routedModel } = routeSubagent(def, modelRef, ctx.modelRef, cfg.routing);
     const child: Session = {
@@ -177,6 +189,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // left to the router): when it is saturated the router may run this worker on a comparable idle model instead.
     const spreadable = !modelRef && !def.model;
     let fellBack = false;
+    /** False when the child's turn hit its step limit instead of reaching a final answer. */
+    let completed = true;
     const attempt = () =>
       runner.run({
         session: child,
@@ -189,12 +203,18 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         // The parent's active skills, the agent file's `skills:` and anything the task named: the swarm follows one playbook.
         skills: [...new Set([...(ctx.skills ?? []), ...(def.skills ?? []), ...(extraSkills ?? [])])],
         workspaceRoot: ctx.workspaceRoot,
+        isolatedFrom: ctx.isolatedFrom,
         depth: ctx.depth + 1,
         signal: control.signal,
         control,
         requestApproval: (title, detail, kind) => approval(ctx.sessionId, title, detail, kind),
         // Child progress is forwarded under the parent's session id so the UI can nest it.
-        emit: (e) => emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type }),
+        emit: (e) => {
+          if (e.type === 'turn_end') {
+            completed = (e.payload as { completed?: boolean } | undefined)?.completed !== false;
+          }
+          emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type });
+        },
         maxIterations: 25,
         maxModelRetries: routedElsewhere && !fellBack ? 0 : undefined,
         // A side model that has not produced a token in a minute is not loading, it is dead; the parent's model is ready.
@@ -222,13 +242,18 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         child.model = ctx.modelRef!;
         text = await attempt();
       }
-      if (control.aborted && !ctx.signal.aborted) {
-        const note = `Subagent "${def.name}" was stopped by the user before it finished.${text ? ` Partial output:\n${text}` : ''} Do not retry it; continue with what you have or do that part yourself.`;
+      if (control.aborted) {
+        const partial = text ? ` Partial output:\n${text}` : '';
+        const note = ctx.signal.aborted ? `Stopped by the user before it finished.${partial}` : `Subagent "${def.name}" was stopped by the user before it finished.${partial} Do not retry it; continue with what you have or do that part yourself.`;
         emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user' } });
-        return { content: fallbackNote + note };
+        return { content: note, isError: true };
+      }
+      if (!completed) {
+        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Ran out of steps' } });
+        return { content: `Subagent "${def.name}" ran out of steps before finishing.${text ? ` Partial output:\n${text}` : ''}`, isError: true };
       }
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: child.model && child.model !== announcedModel ? child.model : undefined } });
-      return { content: fallbackNote + (text || '(subagent returned no text)') };
+      return { content: text || '(subagent returned no text)' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg } });
@@ -276,6 +301,10 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       // Inline tasks: turn them into checklist items first, then run exactly those.
       const inline = Array.isArray(args.tasks) ? (args.tasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown; skills?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
       if (inline.length) {
+        const bad = unknownAgents(inline.map((t) => String(t.agent)));
+        if (bad.unknown.length) {
+          return { content: `Unknown subagent${bad.unknown.length === 1 ? '' : 's'}: ${bad.unknown.map((n) => `"${n}"`).join(', ')}. Available: ${bad.available.join(', ')}. Call again with these names; nothing was run.`, isError: true };
+        }
         const existing = ctx.todos.get();
         const used = new Set(existing.map((t) => t.id));
         const norm = (x: unknown) => String(x ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -313,6 +342,10 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       if (!runnable.length) {
         return { content: 'Nothing to run: no pending todos with an "agent". Pass the work inline — run_todos_parallel({"tasks":[{"title":"…","agent":"coder","prompt":"…"},{"title":"…","agent":"tester","prompt":"…"}]}) — or add items with manage_todos first.', isError: true };
       }
+      const bad = unknownAgents(runnable.map((t) => t.agent!));
+      if (bad.unknown.length) {
+        return { content: `Unknown subagent${bad.unknown.length === 1 ? '' : 's'}: ${bad.unknown.map((n) => `"${n}"`).join(', ')} (items ${runnable.filter((t) => bad.unknown.includes(t.agent!)).map((t) => t.id).join(', ')}). Available: ${bad.available.join(', ')}. Fix the items' agent with manage_todos and re-run; nothing was run.`, isError: true };
+      }
       const update = (id: string, patch: Partial<TodoItem>) => ctx.todos!.set(ctx.todos!.get().map((t) => (t.id === id ? { ...t, ...patch } : t)));
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
       const known = new Set(all.map((t) => t.id));
@@ -330,7 +363,11 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       const outcomes: { t: TodoItem; content: string; ok: boolean }[] = [];
       let remaining = [...runnable];
       let wave = 0;
+      const STOPPED = 'Stopped by the user before it finished.';
       while (remaining.length) {
+        if (ctx.signal.aborted) {
+          break;
+        }
         const { ready, blocked, cyclic } = nextWave(remaining, satisfied, failed);
         for (const t of blocked) {
           const why = (t.dependsOn ?? []).filter((d) => failed.has(d));
@@ -350,18 +387,25 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         wave++;
         emit({ sessionId: ctx.sessionId, type: 'status', payload: `Running ${ready.length} checklist item${ready.length === 1 ? '' : 's'} in parallel (wave ${wave})…` });
         const settled = await pool.map(ready, async (t) => {
+          if (ctx.signal.aborted) {
+            return { content: STOPPED, isError: true };
+          }
           update(t.id, { status: 'in_progress' });
           const deps = (t.dependsOn ?? []).filter((d) => reports.has(d));
           const depText = deps.length ? `\n\nReports from the prerequisite items you build on:\n${deps.map((d) => `### Item ${d}\n${reports.get(d)!.slice(0, 2500)}`).join('\n\n')}` : '';
           const brief = t.prompt?.trim() || `Carry out checklist item ${t.id}: "${t.title}". Use the tools to inspect the workspace, make the change (or produce the analysis) and verify it.`;
           const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx, t.title, t.skills);
           const ok = !r.isError;
-          update(t.id, { status: ok ? 'done' : 'skipped', result: r.content.slice(0, 2000) });
+          // Stopped mid-way: the item goes back to pending (not done, not skipped) so it can be run again.
+          update(t.id, ok ? { status: 'done', result: r.content.slice(0, 2000) } : ctx.signal.aborted ? { status: 'pending', result: STOPPED } : { status: 'skipped', result: r.content.slice(0, 2000) });
           return r;
         });
         settled.forEach((r, i) => {
           const t = ready[i];
           const ok = r.status === 'fulfilled' && !r.value.isError;
+          if (!ok && ctx.signal.aborted) {
+            return;
+          }
           const content = r.status === 'fulfilled' ? r.value.content : String(r.reason);
           if (ok) {
             satisfied.add(t.id);
@@ -372,6 +416,20 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           outcomes.push({ t, content, ok });
         });
         remaining = remaining.filter((t) => !ready.includes(t));
+      }
+      if (ctx.signal.aborted) {
+        const finished = new Set(outcomes.filter((o) => o.ok).map((o) => o.t.id));
+        for (const t of runnable) {
+          const now = ctx.todos.get().find((x) => x.id === t.id);
+          if (!finished.has(t.id) && now && (now.status === 'pending' || now.status === 'in_progress')) {
+            update(t.id, { status: 'pending', result: STOPPED });
+          }
+        }
+        const done = outcomes.filter((o) => o.ok);
+        return {
+          content: `Stopped: ${done.length} of ${runnable.length} items finished; the rest are still pending.${done.length ? `\n\n${done.map(({ t, content }) => `## ${t.id}. ${t.title} (${t.agent})\n${content}`).join('\n\n')}` : ''}`,
+          isError: true,
+        };
       }
       const stillWaiting = remaining.map((t) => `${t.id} (waiting for ${(t.dependsOn ?? []).filter((d) => !satisfied.has(d)).join(', ')} — an item without an agent; do it yourself, then re-run)`);
       const byId = new Map(runnable.map((t, i) => [t.id, i]));

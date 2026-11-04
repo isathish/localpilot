@@ -128,6 +128,10 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
     const sessions = this.controller.store.list();
     const running = new Set(this.controller.runningSessionIds);
     if (!n) {
+      // Nothing worth listing: return no roots so the contributed viewsWelcome content shows.
+      if (!running.size && !this.queue?.list.length && sessions.every((s) => s.messageCount === 0 && !s.worktree && !this.controller.tracker.forSession(s.id).length)) {
+        return [];
+      }
       const groups: Node[] = [];
       if (running.size) {
         groups.push({ kind: 'group', id: 'running', label: `Running (${running.size})` });

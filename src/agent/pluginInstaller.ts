@@ -239,10 +239,20 @@ export async function removePlugin(name: string, dest: string): Promise<boolean>
 /** Turns a plugin on or off in a settings.json (`enabledPlugins`), keeping the file's other keys. */
 export async function setPluginEnabled(settingsFile: string, name: string, enabled: boolean): Promise<void> {
   let obj: Record<string, unknown> = {};
+  let text: string | undefined;
   try {
-    obj = (parseJsonc(await fs.promises.readFile(settingsFile, 'utf8')) as Record<string, unknown>) ?? {};
-  } catch {
-    /* new file */
+    text = await fs.promises.readFile(settingsFile, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw e;
+    }
+  }
+  if (text?.trim()) {
+    try {
+      obj = (parseJsonc(text) as Record<string, unknown>) ?? {};
+    } catch (e) {
+      throw new Error(`Cannot update ${settingsFile}: it is not valid JSON (${(e as Error).message})`);
+    }
   }
   const ep = { ...((obj.enabledPlugins as Record<string, boolean>) ?? {}) };
   if (enabled) {

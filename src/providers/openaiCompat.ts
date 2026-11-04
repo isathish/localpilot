@@ -224,6 +224,9 @@ export class OpenAICompatProvider implements LLMProvider {
           }
           pending.set(idx, cur);
         }
+        if (d?.tool_calls?.length) {
+          yield { type: 'progress' };
+        }
         if (choice.finish_reason) {
           finish = choice.finish_reason;
         }

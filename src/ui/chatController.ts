@@ -242,6 +242,8 @@ export class ChatController implements vscode.Disposable {
   loaded: Promise<unknown> = Promise.resolve();
   /** Local-only worktree metrics for the dashboard. */
   telemetry?: Pick<Telemetry, 'record'>;
+  /** Marks this window's worktrees (`vscode:<store hash>`, set by the extension host) so only it prunes them. */
+  worktreeOwner = 'vscode';
   private _commands?: CommandManager;
   private commandsSub?: vscode.Disposable;
   /** Custom slash commands (.claude/commands, .localpilot/commands, plugins); set by the extension host. */
@@ -657,7 +659,9 @@ export class ChatController implements vscode.Disposable {
     }
     try {
       const started = Date.now();
-      session.worktree = await this.worktrees.create(repo, session.id, { progress: status });
+      // In a subfolder of the repository the agent works in the same subfolder of the copy.
+      const subdir = path.relative(repo, this.workspace.root);
+      session.worktree = await this.worktrees.create(repo, session.id, { progress: status, subdir, owner: this.worktreeOwner });
       session.isolated = true;
       this.store.save(session);
       this.telemetry?.record({ type: 'worktree', action: 'create', durationMs: Date.now() - started });
@@ -877,7 +881,8 @@ export class ChatController implements vscode.Disposable {
 
   /** Folder hooks run in for a session: its worktree while isolated, otherwise the workspace. */
   private sessionRoot(sessionId: string): string | undefined {
-    return this.store.get(sessionId)?.worktree?.path ?? this.workspace.root;
+    const wt = this.store.get(sessionId)?.worktree;
+    return wt ? path.join(wt.path, wt.subdir ?? '') : this.workspace.root;
   }
 
   /** Delete worktrees left behind by sessions that no longer exist (e.g. after a crash). */
@@ -889,7 +894,7 @@ export class ChatController implements vscode.Disposable {
     if (!repo) {
       return 0;
     }
-    return this.worktrees.prune(repo, new Set(this.store.list().map((s) => s.id)));
+    return this.worktrees.prune(repo, new Set(this.store.list().map((s) => s.id)), this.worktreeOwner);
   }
 
   isRunning(sessionId: string): boolean {
@@ -1727,7 +1732,8 @@ export class ChatController implements vscode.Disposable {
         permissionAllow: opts.permissionAllow,
         signal: control.signal,
         control,
-        workspaceRoot: session.worktree?.path,
+        workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
+        isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
         emit: (e) => {
           this.broadcast({ type: 'event', event: e });
           if (e.type === 'skill_suggestions') {
@@ -2181,7 +2187,8 @@ export class ChatController implements vscode.Disposable {
           ...(orgLines.length ? [`**Organization policy** (from \`${org.source}\`; cannot be changed here)${org.message ? ` — ${org.message}` : ''}`, ...orgLines.map((l) => `- ${l}`), ''] : []),`**Permission rules** (from ${p.sources.length ? p.sources.map((s) => `\`${vscode.workspace.asRelativePath(s)}\``).join(', ') : 'no settings file'})`, `- deny: ${fmt(p.permissions.deny)}`, `- ask: ${fmt(p.permissions.ask)}`, `- allow: ${fmt(p.permissions.allow)}`, p.permissions.defaultMode ? `- defaultMode: \`${p.permissions.defaultMode}\`` : '', '', 'Edit `.localpilot/settings.json` or `.claude/settings.json`: `{ "permissions": { "allow": ["Bash(npm run test:*)"], "deny": ["Read(.env)"] } }`.'].filter((l) => l !== '').join('\n'));
       }
       case 'board': {
-        const root = session.worktree?.path ?? this.workspace.root;
+        // The board is shared: always the real checkout's, also for a chat working in an isolated worktree.
+        const root = this.workspace.root;
         if (!root) {
           return say('Open a folder to use the shared board.');
         }
@@ -2298,7 +2305,7 @@ export class ChatController implements vscode.Disposable {
     this.runStatus.set(session.id, `Preparing ${cmd.invoke}…`);
     this.broadcast({ type: 'event', event: { sessionId: session.id, type: 'status', payload: `Preparing ${cmd.invoke}…` } });
     try {
-      const { prompt, notes } = await expandCommand(cmd, argText, { root: session.worktree?.path ?? this.workspace.root });
+      const { prompt, notes } = await expandCommand(cmd, argText, { root: this.sessionRoot(session.id) });
       for (const n of notes) {
         this.broadcast({ type: 'toast', level: 'warn', text: n });
       }

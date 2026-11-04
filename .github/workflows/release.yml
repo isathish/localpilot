@@ -12,7 +12,8 @@ name: Release
 #   3. someone pushes a v*.*.* tag / runs this workflow manually.
 # prepare  decides and validates metadata (versions agree, changelog section has entries)
 # bump     (path 1 only) bumps the version on main and starts a new run
-# verify   type-checks, lints, runs smoke + Extension Host tests and packages the VSIX
+# verify   type-checks, lints, runs smoke, CLI e2e + Extension Host tests and packages the VSIX
+# verify-os  repeats the build and tests on macOS and Windows
 # publish  only then tags the commit, creates the GitHub Release with the changelog section as notes
 #          and publishes to the VS Code Marketplace and Open VSX, then redeploys the website so it
 #          shows the new version. A failed publish fails the run;
@@ -156,6 +157,8 @@ jobs:
         run: npm run compile
       - name: Offline smoke tests
         run: npm run smoke
+      - name: CLI end-to-end
+        run: node scripts/cli-e2e.mjs
       - name: Extension Host tests
         run: xvfb-run -a npm test
       - name: Package VSIX
@@ -196,9 +199,36 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  verify-os:
+    name: Build & test (${{ matrix.os }})
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check, lint, bundle
+        run: npm run compile
+      - name: Offline smoke tests
+        run: npm run smoke
+      - name: CLI end-to-end
+        run: node scripts/cli-e2e.mjs
+      - name: Extension Host tests
+        run: npm test
+
   publish:
     name: Tag, release & publish
-    needs: [prepare, verify]
+    needs: [prepare, verify, verify-os]
     runs-on: ubuntu-latest
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}

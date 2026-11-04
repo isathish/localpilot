@@ -206,10 +206,10 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
   });
 
   test('remove is idempotent and prune drops worktrees whose session is gone', async () => {
-    const a = await mgr.create(repo, 'keep-me');
-    const b = await mgr.create(repo, 'gone');
+    const a = await mgr.create(repo, 'keep-me', { owner: 'w' });
+    const b = await mgr.create(repo, 'gone', { owner: 'w' });
     assert.deepStrictEqual((await mgr.list(repo)).map((l) => l.id).sort(), ['gone', 'keep-me']);
-    assert.strictEqual(await mgr.prune(repo, new Set(['keep-me'])), 1);
+    assert.strictEqual(await mgr.prune(repo, new Set(['keep-me']), 'w'), 1);
     assert.deepStrictEqual((await mgr.list(repo)).map((l) => l.id), ['keep-me']);
     await assert.rejects(fs.stat(b.path));
     assert.doesNotMatch(git(['worktree', 'list'], repo), /gone/);
@@ -217,6 +217,37 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     await mgr.remove(a);
     assert.deepStrictEqual(await mgr.list(repo), []);
     assert.deepStrictEqual(await mgr.changes(a), [], 'changes() on a removed worktree is empty, not an error');
+  });
+
+  test('prune removes only the worktrees of its owner (not the CLI or another window)', async () => {
+    const a = await mgr.create(repo, 'win-a', { owner: 'a' });
+    const c = await mgr.create(repo, 'cli-x', { owner: 'cli' });
+    try {
+      assert.deepStrictEqual((await mgr.list(repo)).map((l) => [l.id, l.info.owner]).sort(), [['cli-x', 'cli'], ['win-a', 'a']]);
+      assert.strictEqual(await mgr.prune(repo, new Set(), 'a'), 1);
+      assert.deepStrictEqual((await mgr.list(repo)).map((l) => l.id), ['cli-x']);
+      await assert.rejects(fs.stat(a.path));
+      await fs.stat(c.path);
+    } finally {
+      await mgr.remove(a);
+      await mgr.remove(c);
+    }
+  });
+
+  test('a workspace in a subfolder of the repository records the subfolder; the copy mirrors it', async () => {
+    await fs.mkdir(path.join(repo, 'packages', 'app'), { recursive: true });
+    await fs.writeFile(path.join(repo, 'packages', 'app', 'index.ts'), 'export {};\n');
+    git(['add', '-A'], repo);
+    git(['commit', '-q', '-m', 'app'], repo);
+    const wt = await mgr.create(repo, 'sub', { subdir: path.join('packages', 'app') });
+    try {
+      const info = (await mgr.list(repo)).find((l) => l.id === 'sub')!.info;
+      assert.strictEqual(info.subdir, path.join('packages', 'app'));
+      assert.strictEqual(wt.subdir, info.subdir);
+      assert.strictEqual(await fs.readFile(path.join(info.path, info.subdir!, 'index.ts'), 'utf8'), 'export {};\n');
+    } finally {
+      await mgr.remove(wt);
+    }
   });
 
   test('an empty repository (no commits) still gets an isolated worktree', async () => {

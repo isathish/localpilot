@@ -5,6 +5,7 @@ import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
 import { builtinAgents } from './builtinAgents';
 import { parseFrontMatter } from './frontMatter';
+import { expandAgentTools } from './permissions';
 import type { PluginSource } from './plugins';
 
 export { parseFrontMatter } from './frontMatter';
@@ -230,7 +231,14 @@ export class SkillManager implements vscode.Disposable {
         const { meta, body } = parseFrontMatter(raw);
         const name = (meta.name as string) || file.replace(/\.md$/, '');
         const list = (v: unknown): string[] | undefined => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : Array.isArray(v) ? (v as unknown[]).map(String).filter(Boolean) : undefined);
-        into.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools: list(meta.tools), skills: list(meta.skills), model: meta.model as string | undefined, source });
+        const declared = list(meta.tools);
+        const tools = declared ? expandAgentTools(declared) : undefined;
+        if (declared?.length && !tools?.length) {
+          this.log.warn(`Agent ${file}: none of its tools (${declared.join(', ')}) are known; it gets no tools`);
+        }
+        // Claude Code's `inherit` / `default` and family names are not model ids here: the child inherits or is routed.
+        const model = typeof meta.model === 'string' && !/^(inherit|default|sonnet|opus|haiku)$/i.test(meta.model.trim()) ? meta.model.trim() || undefined : undefined;
+        into.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools, skills: list(meta.skills), model, source });
       } catch (e) {
         this.log.warn(`Failed to load agent ${file}: ${String(e)}`);
       }

@@ -7,6 +7,7 @@ import { createDirTool, deleteTool, diffPreview, displayPath, editFileTool, fsTo
 import { fileSearchTool, grepSearchTool, looksLikeRegex } from '../tools/search';
 import { getDiagnosticsTool, openEditorsTool, openFileTool } from '../tools/editor';
 import { ToolContext } from '../types';
+import { ChangeTracker } from '../agent/changeTracker';
 
 const root = (): string => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -171,6 +172,21 @@ suite('Filesystem tools', () => {
     assert.match(del.content, /^Deleted /);
     assert.deepStrictEqual(c.approvals.map((a) => a.kind), ['delete']);
     await assert.rejects(fs.stat(path.join(dir, 'ls/a.txt')));
+  });
+
+  test('undo brings back a file deleted after it was tracked', async () => {
+    const file = path.join(dir, 'undo-del.txt');
+    await fs.writeFile(file, 'original\ncontent\n');
+    const tracker = new ChangeTracker(vscode.window.createOutputChannel('LocalPilot undo test', { log: true }));
+    try {
+      await tracker.beforeChange(file, 'undo-session');
+      await fs.rm(file);
+      assert.strictEqual(await tracker.undo('undo-session'), 1);
+      assert.strictEqual(await fs.readFile(file, 'utf8'), 'original\ncontent\n');
+      assert.strictEqual(tracker.forSession('undo-session').length, 0);
+    } finally {
+      tracker.dispose();
+    }
   });
 
   test('diffPreview and the tool roster', () => {

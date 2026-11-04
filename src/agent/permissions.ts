@@ -75,6 +75,28 @@ export function canonicalToolName(name: string): string {
   return name;
 }
 
+/**
+ * A Claude Code agent's `tools:` list in our tool names: `Read` → read_file, open_file, …; `Bash(git:*)` → run_command;
+ * `mcp__server__tool` → `mcp_server_tool`. Our own names and unknown names are kept as written.
+ */
+export function expandAgentTools(list: string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of list) {
+    const name = raw.trim().replace(/\(.*\)$/s, '').trim();
+    if (!name) {
+      continue;
+    }
+    const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(name);
+    if (mcp) {
+      out.add(`mcp_${`${mcp[1]}_${mcp[2]}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60)}`);
+      continue;
+    }
+    const mapped = TOOL_ALIASES[name] ? [] : Object.keys(TOOL_ALIASES).filter((t) => TOOL_ALIASES[t].includes(name));
+    (mapped.length ? mapped : [name]).forEach((t) => out.add(t));
+  }
+  return [...out];
+}
+
 /** Every name a rule may use for this tool: our own, the Claude aliases, and `mcp__server` / `mcp__server__tool`. */
 export function toolNames(name: string): string[] {
   const names = [name, ...(TOOL_ALIASES[name] ?? [])];

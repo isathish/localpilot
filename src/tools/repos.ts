@@ -8,9 +8,10 @@ import { runCmd } from './git';
 import { onAbort } from '../agent/resilience';
 
 /** The repositories in reach of this run (see agent/repos.ts). */
-export function reposFor(ctx: Pick<ToolContext, 'workspaceRoot'>): RepoInfo[] {
+export function reposFor(ctx: Pick<ToolContext, 'workspaceRoot' | 'mainRoot'>): RepoInfo[] {
   const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-  return listRepos(ctx.workspaceRoot ?? folders[0], folders, getConfig().repos);
+  // The registry lives in the real checkout, not in an isolated worktree copy of it.
+  return listRepos(ctx.mainRoot ?? ctx.workspaceRoot ?? folders[0], folders, getConfig().repos);
 }
 
 const tail = (s: string, lines = 30) => {

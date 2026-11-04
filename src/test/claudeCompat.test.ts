@@ -3,12 +3,13 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { applyHookResult, execHook, hookMatches, HookOutcome, HookRunner } from '../agent/hooks';
-import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, splitCommandChain } from '../agent/permissions';
+import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, expandAgentTools, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, splitCommandChain } from '../agent/permissions';
 import { emptySettings, loadProjectSettings, mergeSettings, normalizeSettings, parseJsonc } from '../agent/settings';
 import { discoverCommands, expandCommand, indexCommands, parseCommandFile, splitArgs, splitRules } from '../agent/commands';
 import { buildInstructions, collectInstructionFiles, resolveImports } from '../context/instructions';
 import { discoverPlugins, pluginSource } from '../agent/plugins';
 import { parseFrontMatter } from '../agent/frontMatter';
+import { readTsPaths } from '../context/repoGraph';
 
 const tmp = async (name: string) => fs.mkdtemp(path.join(os.tmpdir(), `localpilot-${name}-`));
 const write = async (file: string, text: string) => {
@@ -24,6 +25,24 @@ suite('Claude Code compatibility: settings.json', () => {
     assert.deepStrictEqual(v.b, [1, 2]);
     // URLs inside strings are not comments.
     assert.strictEqual((parseJsonc('{"u": "http://x.y/z"}') as { u: string }).u, 'http://x.y/z');
+  });
+
+  test('leaves comment markers and commas inside strings alone', () => {
+    const deny = ['Read(./secrets/**)', 'Read(**/*.pem)', 'Bash(curl:*)'];
+    assert.deepStrictEqual(parseJsonc(JSON.stringify({ deny })), { deny });
+    assert.deepStrictEqual(parseJsonc('{"deny": ["Read(./secrets/**)", "Read(**/*.pem)"]}'), { deny: ['Read(./secrets/**)', 'Read(**/*.pem)'] });
+    const multi = '{\n  "permissions": {\n    "allow": ["Edit(src/**)", "Bash(npm test)", "Edit(src/**/*.ts)"],\n    "deny": ["Read(**/.env)", "Bash(rm:*)", "Read(//etc/**)"],\n  },\n}';
+    assert.deepStrictEqual(parseJsonc(multi), { permissions: { allow: ['Edit(src/**)', 'Bash(npm test)', 'Edit(src/**/*.ts)'], deny: ['Read(**/.env)', 'Bash(rm:*)', 'Read(//etc/**)'] } });
+    assert.deepStrictEqual(parseJsonc('{"a": "Read(//etc/**)"} // c'), { a: 'Read(//etc/**)' });
+    assert.deepStrictEqual(parseJsonc('{"a": "x, ]", }'), { a: 'x, ]' });
+    assert.deepStrictEqual(parseJsonc('{"a": "// not a comment", "b": "say \\"/*\\" ok"}'), { a: '// not a comment', b: 'say "/*" ok' });
+    assert.deepStrictEqual(parseJsonc('\ufeff{"a":1}'), { a: 1 });
+    assert.deepStrictEqual(parseJsonc('{ // c\n "a": 1, /* b */ }'), { a: 1 });
+  });
+
+  test('readTsPaths keeps globs in a create-next-app tsconfig', () => {
+    const tsconfig = '{\n  "compilerOptions": {\n    "paths": { "@/*": ["./src/*"] }\n  },\n  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],\n  "exclude": ["node_modules"]\n}\n';
+    assert.deepStrictEqual(readTsPaths(tsconfig), [['@', 'src']]);
   });
 
   test('normalises permissions, hooks, env and enabledPlugins', () => {
@@ -164,6 +183,15 @@ suite('Claude Code compatibility: permission rules', () => {
     const back = fromClaudeToolInput('edit_file', { new_string: 'z' }, { path: 'a.ts', old_text: 'x', new_text: 'y' });
     assert.strictEqual(back.new_text, 'z');
     assert.strictEqual(back.path, 'a.ts');
+  });
+
+  test('agent tools lists in Claude names expand to ours', () => {
+    const tools = expandAgentTools(['Read', 'Grep', 'Glob', 'Bash(git:*)']);
+    for (const t of ['read_file', 'grep_search', 'file_search', 'run_command']) {
+      assert.ok(tools.includes(t), t);
+    }
+    assert.ok(!tools.includes('edit_file'));
+    assert.deepStrictEqual(expandAgentTools(['read_file', 'mcp__github__get_issue', 'custom_tool', 'read_file']), ['read_file', 'mcp_github_get_issue', 'custom_tool']);
   });
 });
 

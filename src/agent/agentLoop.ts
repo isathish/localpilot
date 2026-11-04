@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
-import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow, FitResult, tokenCalibration } from '../context/contextManager';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
@@ -61,6 +61,8 @@ export interface AgentRunOptions {
   skills?: string[];
   /** Folder the tools operate in (an isolated worktree); defaults to the workspace root. */
   workspaceRoot?: string;
+  /** The real folder an isolated run's `workspaceRoot` mirrors; set only for isolated runs. */
+  isolatedFrom?: string;
   depth?: number;
   emit: (e: AgentEvent) => void;
   signal: AbortSignal;
@@ -189,7 +191,7 @@ export class AgentRunner {
         toolCalls: stats.toolCalls,
         promptTokens: stats.promptTokens,
         completionTokens: stats.completionTokens,
-        isolated: !!o.workspaceRoot && !!this.workspace.root && o.workspaceRoot !== this.workspace.root,
+        isolated: !!o.isolatedFrom,
       });
     }
   }
@@ -239,7 +241,8 @@ export class AgentRunner {
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
     // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
     const recent = [...session.messages.filter((m) => m.role === 'user').slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
-    const root = o.workspaceRoot ?? this.workspace.root;
+    // Shared state (the board, repos.json) lives in the real checkout, not in an isolated worktree.
+    const root = this.workspace.root ?? o.workspaceRoot;
     // Once offered in a chat, a tool stays offered: tool definitions sit at the start of the prompt, and a list that
     // changes from turn to turn would make the server re-read the whole prompt (no prefix cache) on every change.
     const offered = this.offeredTools.get(session.id) ?? new Set<string>();
@@ -275,7 +278,7 @@ export class AgentRunner {
       memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
     });
     const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
-    const isolated = o.workspaceRoot && this.workspace.root && o.workspaceRoot !== this.workspace.root;
+    const isolated = !!o.isolatedFrom;
     const systemIsolated = isolated
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
       : system;
@@ -502,6 +505,8 @@ export class AgentRunner {
       sessionId: session.id,
       skills: [...activeSkills],
       workspaceRoot: o.workspaceRoot ?? this.workspace.root,
+      isolatedFrom: o.isolatedFrom,
+      mainRoot: this.workspace.root,
       signal: o.signal,
       control,
       depth,
@@ -593,10 +598,21 @@ export class AgentRunner {
       const budgetOf = (h: ChatMessage[]) => ctxMgr.budget(model, turnContext ? `${systemWithTextTools}\n\n${turnContext}` : systemWithTextTools, nativeTools ? toolDefs : [], h, cfg.maxOutputTokens);
       let budget = budgetOf(session.messages);
       if (ctxMgr.needsCompaction(budget)) {
-        if (this.hooks?.has('PreCompact')) {
-          await this.hooks.run('PreCompact', { session_id: session.id, trigger: 'auto', custom_instructions: '' }, { cwd: hookRoot, matchKey: 'auto', signal: o.signal });
+        let fit: FitResult | undefined;
+        try {
+          if (this.hooks?.has('PreCompact')) {
+            await this.hooks.run('PreCompact', { session_id: session.id, trigger: 'auto', custom_instructions: '' }, { cwd: hookRoot, matchKey: 'auto', signal: o.signal });
+          }
+          fit = await ctxMgr.fit(session.messages, provider, model, budgetOf, o.signal, () => status('Compacting conversation to fit the context window…'));
+        } catch (e) {
+          if (!o.signal.aborted && !control.aborted) {
+            throw e;
+          }
         }
-        const fit = await ctxMgr.fit(session.messages, provider, model, budgetOf, o.signal, () => status('Compacting conversation to fit the context window…'));
+        // Stopped while compacting: keep the history as it was rather than a half-finished (or truncated) summary.
+        if (!fit || o.signal.aborted || control.aborted) {
+          break;
+        }
         session.messages = fit.messages;
         budget = fit.budget;
         for (const result of fit.compactions) {
@@ -636,6 +652,10 @@ export class AgentRunner {
         text = '';
         thinking = '';
         calls.length = 0;
+        if (o.signal.aborted) {
+          aborted = true;
+          break;
+        }
         const ac = new AbortController();
         const onAbort = () => ac.abort();
         o.signal.addEventListener('abort', onAbort, { once: true });
@@ -661,9 +681,11 @@ export class AgentRunner {
           // A request queued behind `others` on a one-slot server legitimately waits for all of them: give it
           // their first-token budget too instead of calling it a stall and retrying (which only re-queues it).
           const patience = watchdogFor(model, profile?.modelBudgetGb);
+          // Ollama sends nothing while it buffers a tool call: a measured-slow model gets time for a max-length one.
+          const measured = stats.genMs && stats.genTokens ? (cfg.maxOutputTokens / (stats.genTokens / (stats.genMs / 1000))) * 1.5 * 1000 : 0;
           const guarded = withWatchdog(stream, {
             firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
-            idleMs: IDLE_TIMEOUT_MS * patience.idle,
+            idleMs: Math.max(IDLE_TIMEOUT_MS * patience.idle, measured),
             abort: () => ac.abort(),
             onWaiting: (s) => status(`${waitingFor} · ${s}s…`),
           });
@@ -739,8 +761,20 @@ export class AgentRunner {
             compactedForOverflow = true;
             this.log.warn(`model rejected the prompt as too long; compacting and retrying: ${msg}`);
             status('Prompt too long for the model — compacting and retrying…');
-            session.messages = ctxMgr.pruneToolOutputs(session.messages, 0).messages;
-            const result = await ctxMgr.compact(session.messages, provider, model, o.signal, 4);
+            const prunedForOverflow = ctxMgr.pruneToolOutputs(session.messages, 0).messages;
+            let result: Awaited<ReturnType<typeof ctxMgr.compact>> | undefined;
+            try {
+              result = await ctxMgr.compact(prunedForOverflow, provider, model, o.signal, 4);
+            } catch (ce) {
+              if (!o.signal.aborted) {
+                throw ce;
+              }
+            }
+            if (!result || o.signal.aborted) {
+              aborted = true;
+              break;
+            }
+            session.messages = prunedForOverflow;
             if (result.removed > 0) {
               session.messages = result.messages;
               session.compactions++;
@@ -793,6 +827,10 @@ export class AgentRunner {
           status(overthought ? `The model used its whole reply for thinking — asking again without thinking (${attempt}/${maxModelRetries})…` : `The model returned nothing — asking again (${attempt}/${maxModelRetries})…`);
           emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: 'empty', message: 'empty completion' } });
           await sleep(RETRY_BACKOFF_MS[0], o.signal);
+          if (o.signal.aborted) {
+            aborted = true;
+            break;
+          }
           continue;
         }
         modelEvent(o.signal.aborted ? 'aborted' : 'ok');
@@ -963,7 +1001,7 @@ export class AgentRunner {
       // Which model answered and how fast, for the footer under the answer (kept with the transcript, never sent).
       last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
-    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens } });
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, completed, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens } });
     // Keep what a substantial run taught about the project, after the answer is out (never delays the reply).
     const turnStart = session.messages.indexOf(turnMessage);
     const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
@@ -1107,7 +1145,7 @@ export class AgentRunner {
     }
     if (!isWriteMode(mode)) {
       // Read-only modes: strip mutating tools.
-      list = list.filter((t) => !t.approvalKind || t.approvalKind === 'network');
+      list = list.filter((t) => (!t.approvalKind || t.approvalKind === 'network') && (!t.definition.name.startsWith('mcp_') || t.readOnly));
     } else if (mode === 'multitask') {
       // The coordinator reads, plans, delegates and verifies; only its workers edit files.
       list = list.filter((t) => t.approvalKind !== 'write' && t.approvalKind !== 'delete');
@@ -1155,7 +1193,12 @@ export class AgentRunner {
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
     const toolMsg = (call: ToolCall, content: string): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } });
+    const notRun = 'Not run: the user stopped the run. Nothing was done.';
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
+      if (ctx.signal.aborted) {
+        emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
+        return { msg: toolMsg(call, notRun), isError: true };
+      }
       const started = Date.now();
       let result: { content: string; isError?: boolean; data?: unknown } | undefined;
       let callCtx = ctx;
@@ -1201,7 +1244,7 @@ export class AgentRunner {
             result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
           } else if (decision === 'allow' && !(tool.approvalKind && managed.approvals[tool.approvalKind])) {
             // A project allow skips the prompt, unless the organisation set an approval floor for this kind of action.
-            callCtx = { ...ctx, requestApproval: async () => true };
+            callCtx = { ...ctx, requestApproval: async () => !ctx.signal.aborted };
           } else if (decision === 'ask') {
             callCtx = { ...ctx, requestApproval: policy.ask };
             // Tools that never ask for approval themselves (reads, searches) would run straight through an `ask`
@@ -1223,8 +1266,9 @@ export class AgentRunner {
           ? await this.tools.execute(call.name, args, callCtx)
           : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
       }
-      if (ctx.signal.aborted) {
-        result = { content: 'Cancelled by user.', isError: true };
+      if (ctx.signal.aborted && !result.isError) {
+        // The step really ran; keep its result so the model knows what changed.
+        result = { ...result, content: `${result.content ?? ''} (The user pressed Stop after this step finished.)` };
       }
       const img = (result.data as { image?: { data?: string }; caption?: string } | undefined)?.image;
       let text = result.content ?? '';
@@ -1298,6 +1342,12 @@ export class AgentRunner {
       results.set(call.id, r.status === 'fulfilled' ? r.value : { role: 'tool', content: `Tool failed: ${String(r.reason)}`, toolCallId: call.id, toolName: call.name });
     });
     for (const call of serial) {
+      if (ctx.signal.aborted) {
+        emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args: parseArgs(call.arguments) } });
+        emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
+        results.set(call.id, toolMsg(call, notRun));
+        continue;
+      }
       results.set(call.id, await runOne(call));
     }
     // Preserve the model's original call order in the transcript.
@@ -1326,6 +1376,11 @@ export class AgentRunner {
       audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: ok, by }, info?.root, this.log);
       return ok;
     };
+    // A stopped run (or a single stopped subagent lane) must not approve anything or hang on a prompt nobody will answer now.
+    const sig = info?.signal;
+    if (sig?.aborted) {
+      return decided(false, 'stopped');
+    }
     if (floored === 'always') {
       return decided(true, 'setting');
     }
@@ -1339,6 +1394,9 @@ export class AgentRunner {
     if (auto.enabled && info && this.autoReviewer && !managed.disableBypassPermissions) {
       emit({ sessionId, type: 'status', payload: `Auto mode: reviewing "${info.title.slice(0, 60)}"…` });
       const v = await this.autoReviewer.review({ kind, title: info.title, detail: info.detail, request: info.request ?? '', signal: info.signal }, auto.model);
+      if (sig?.aborted) {
+        return decided(false, 'stopped');
+      }
       if (v.decision === 'allow') {
         emit({ sessionId, type: 'status', payload: `Auto mode approved: ${info.title.slice(0, 60)}${v.reason ? ` (${v.reason})` : ''}` });
         return decided(true, 'auto-mode');
@@ -1350,8 +1408,6 @@ export class AgentRunner {
       // Fire-and-forget: a Notification hook may ping the user (desktop notification, sound) while the prompt waits.
       void this.hooks.run('Notification', { session_id: sessionId, message: `${info.title}\n${info.detail}`.trim(), notification_type: 'permission_prompt' }, { cwd: info.root, matchKey: 'permission_prompt' });
     }
-    // A stopped run (or a single stopped subagent lane) must not hang on an approval nobody will answer now.
-    const sig = info?.signal;
     if (sig?.aborted) {
       return decided(false, 'stopped');
     }

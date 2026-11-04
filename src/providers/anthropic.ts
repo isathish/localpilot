@@ -181,11 +181,13 @@ export class AnthropicProvider implements LLMProvider {
             yield { type: 'thinking', text: d.thinking };
           } else if (d?.type === 'signature_delta' && d.signature && t?.type === 'thinking') {
             t.signature += d.signature;
+            yield { type: 'progress' };
           } else if (d?.type === 'input_json_delta' && d.partial_json) {
             const cur = pending.get(i);
             if (cur) {
               cur.args += d.partial_json;
             }
+            yield { type: 'progress' };
           }
           break;
         }

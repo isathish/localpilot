@@ -8,6 +8,7 @@
  * keep it on your machine; cloud providers (`localpilot providers add openai`) receive what you send to their models.
  */
 import * as readline from 'readline';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode'; // → src/cli/vscodeShim.ts (aliased by the CLI build)
@@ -46,7 +47,7 @@ import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { setSecretValues } from '../providers/cloud';
-import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, setAutoApprove, setLogLevel, setReadline, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
+import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard } from '../agent/teamBoard';
@@ -116,6 +117,7 @@ ${bold('Options')}
   -C, --cwd <dir>              workspace root (default: current directory)
   -p, --print                  print the final answer only (no tool log; implies non-interactive)
   --no-mcp                     do not start MCP servers
+  --trust-workspace            use providers, MCP servers, approvals and hooks from ./.vscode/settings.json
   -v, --verbose                show tool arguments and debug logs
   --settings | --setup         open LocalPilot Settings / the setup wizard in VS Code
   -h, --help · --version
@@ -143,6 +145,8 @@ interface Args {
   cwd: string;
   print: boolean;
   mcp: boolean;
+  /** Apply security-sensitive settings from the workspace's .vscode/settings.json. */
+  trustWorkspace?: boolean;
   verbose: boolean;
   cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin';
   /** `plugin <action>`: search, install, remove, enable, disable, list, new, validate, marketplaces. */
@@ -185,6 +189,7 @@ function parseArgs(argv: string[]): Args {
     else if (x === '-C' || x === '--cwd') {a.cwd = path.resolve(next());}
     else if (x === '-p' || x === '--print') {a.print = true;}
     else if (x === '--no-mcp') {a.mcp = false;}
+    else if (x === '--trust-workspace') {a.trustWorkspace = true;}
     else if (x === '-v' || x === '--verbose') {a.verbose = true;}
     else if (x === '--ide' || x === '--vscode') {a.cmd = 'ide';}
     else if (x === '--settings') {a.cmd = 'settings';}
@@ -689,7 +694,8 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     permissionAllow: opts.permissionAllow,
     signal: control.signal,
     control,
-    workspaceRoot: session.worktree?.path,
+    workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
+    isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
     emit: (e) => {
       const p = e.payload as Record<string, unknown>;
       switch (e.type) {
@@ -736,7 +742,10 @@ async function isolate(core: Core, session: Session, cwd: string, r: Renderer): 
   if (!repo) {
     return undefined;
   }
-  const info = await mgr.create(repo, session.id, { progress: (t) => r.status(t) });
+  // Started in a subfolder of the repository: work in the same subfolder of the copy. CLI worktrees are never pruned
+  // by the extension.
+  const real = (() => { try { return fs.realpathSync.native(cwd); } catch { return path.resolve(cwd); } })();
+  const info = await mgr.create(repo, session.id, { progress: (t) => r.status(t), subdir: path.relative(repo, real), owner: 'cli' });
   session.worktree = info; // runTurn routes the tools into it
   r.note(`Isolated: working in ${info.path} (your checkout stays untouched)`);
   return { info, mgr };
@@ -1207,7 +1216,13 @@ async function main(): Promise<void> {
     openInVsCode(args.cmd, {}, args.cwd);
   }
 
+  if (args.trustWorkspace) {
+    setTrustWorkspace(true);
+  }
   setWorkspaceRoot(args.cwd);
+  if (ignoredWorkspaceSettings.length) {
+    process.stderr.write(`${dim(`Ignoring security-sensitive settings from ${path.join(args.cwd, '.vscode', 'settings.json')} (${ignoredWorkspaceSettings.join(', ')}) — pass --trust-workspace to use them.`)}\n`);
+  }
   if (args.model) {
     cliOverrides.defaultModel = args.model;
     setWorkspaceRoot(args.cwd);

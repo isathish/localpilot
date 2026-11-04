@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { LocalPilotApi } from '../extension';
 import { autoDetectProviders, discoverDockerProviders } from '../providers/discovery';
+import { ollamaModelsOnDisk } from '../providers/ollamaLauncher';
 
 /**
  * Real end-to-end runs against a local model server (Ollama on :11434).
@@ -63,10 +64,13 @@ suite('LocalPilot end-to-end (real local model)', () => {
     assert.ok(root, 'tests need a workspace folder (see .vscode-test.mjs)');
 
     // Ollama not running: start it the way users get it started (Set Up Models Automatically starts an installed
-    // Ollama and keeps its models). With LOCALPILOT_E2E_INSTALL=1 a missing Ollama is installed with a starter model
-    // too. The suite skips only when there is nothing to start.
+    // Ollama and keeps its models). Without LOCALPILOT_E2E_INSTALL=1 an installed Ollama is started only if it already
+    // has models on disk, and nothing is downloaded; with it, a missing Ollama is installed with a starter model too.
     const install = process.env.LOCALPILOT_E2E_INSTALL === '1';
     if (!(await ollamaUp())) {
+      if (!install && !(await ollamaModelsOnDisk())) {
+        this.skip();
+      }
       const r = await api.autoSetupModels({ installRuntime: install });
       console.log(`      e2e: Ollama was not running; setup → ${JSON.stringify(r)}`);
       if (!(await ollamaUp())) {

@@ -207,6 +207,56 @@ suite('ContextManager', () => {
     assert.ok(r.compactions.length <= 3, 'bounded number of passes');
   });
 
+  test('a compaction stopped by the user is not turned into a truncation, and fit leaves the history alone', async () => {
+    const cm = new ContextManager({ compactionThreshold: 0.8, maxToolOutputChars: 1000, keepRecent: 4 });
+    const stop = new AbortController();
+    stop.abort();
+    const abortErr = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+    const provider = fakeProvider(abortErr);
+    const history = [...turn(1), ...turn(2), ...turn(3)];
+    await assert.rejects(cm.compact(history, provider, model, stop.signal), /aborted/);
+    const tiny: ModelInfo = { ...model, contextWindow: MIN_CONTEXT_WINDOW };
+    const big: ChatMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      big.push({ role: 'user', content: `q${i} ${'w '.repeat(600)}` }, { role: 'assistant', content: `a${i} ${'r '.repeat(600)}` });
+    }
+    const r = await cm.fit(big, provider, model, (h) => cm.budget(tiny, 'sys', [], h, 512), stop.signal);
+    assert.strictEqual(r.messages, big, 'the original messages come back');
+    assert.strictEqual(r.compactions.length, 0);
+    assert.ok(!r.messages.some((m) => /was truncated/.test(m.content)));
+  });
+
+  test('fit shrinks one long native-tool turn, keeping its request verbatim and every tool call with its result', async () => {
+    const cm = new ContextManager({ compactionThreshold: 0.8, maxToolOutputChars: 1000, keepRecent: 8 });
+    const provider = fakeProvider('## Task & goals\n- wrote files');
+    const small: ModelInfo = { ...model, contextWindow: 16384 };
+    const request = 'build the whole feature: write src/a0.ts through src/a11.ts';
+    const history: ChatMessage[] = [{ role: 'user', content: request }];
+    for (let i = 0; i < 12; i++) {
+      history.push(
+        { role: 'assistant', content: '', toolCalls: [{ id: `w${i}`, name: 'write_file', arguments: JSON.stringify({ path: `src/a${i}.ts`, content: `// file ${i}\n${'const x = 1;\n'.repeat(500)}` }) }] },
+        { role: 'tool', toolCallId: `w${i}`, toolName: 'write_file', content: `Wrote src/a${i}.ts` }
+      );
+    }
+    const budgetOf = (h: ChatMessage[]) => cm.budget(small, 'sys', [], h, 1024);
+    assert.ok(cm.needsCompaction(budgetOf(history)), 'the test history must start over budget');
+    const r = await cm.fit(history, provider, model, budgetOf);
+    assert.ok(!cm.needsCompaction(r.budget), `still over budget: ${r.budget.usageRatio}`);
+    assert.ok(r.messages.some((m) => m.role === 'user' && m.content === request && !m.meta?.summary), 'the request survives verbatim');
+    r.messages.forEach((m, i) => {
+      if (m.role === 'tool') {
+        let j = i - 1;
+        while (j >= 0 && r.messages[j].role === 'tool') {
+          j--;
+        }
+        assert.ok(r.messages[j]?.toolCalls?.some((c) => c.id === m.toolCallId), `tool result ${m.toolCallId} lost its call`);
+      }
+    });
+    for (const c of r.messages.flatMap((m) => m.toolCalls ?? [])) {
+      assert.doesNotThrow(() => JSON.parse(c.arguments), 'arguments stay valid JSON');
+    }
+  });
+
   test('fit stops on abort signals handed to the summariser', async () => {
     const cm = new ContextManager({ compactionThreshold: 0.8, maxToolOutputChars: 1000, keepRecent: 4 });
     const abort = new AbortController();

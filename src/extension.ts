@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -138,6 +139,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
   const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
+  // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
+  controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
   runner.telemetry = telemetry;
   runner.autoReviewer = new AutoReviewer(providers, log);
   controller.telemetry = telemetry;
@@ -177,8 +180,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       },
     })
   );
-  // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start.
-  setTimeout(() => void controller.pruneWorktrees().then((n) => n && log.info(`removed ${n} orphaned worktree(s)`)), 5000);
   controller.learner = learner;
   controller.catalog = catalog;
   context.subscriptions.push(learner);
@@ -304,6 +305,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   projectSettings.pluginLayers = plugins.settingsLayers();
   await projectSettings.reload();
   await (controller.loaded = Promise.all([store.load(), skills.refresh(), commands.refresh()]));
+  // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start —
+  // only once the sessions are loaded, so a live chat's worktree is never mistaken for an orphan.
+  setTimeout(() => void controller.pruneWorktrees().then((n) => n && log.info(`removed ${n} orphaned worktree(s)`)), 5000);
   /** Background refreshes must never surface as unhandled rejections: one failing layer is logged, the others still apply. */
   const refresh = (what: string, p: Promise<unknown>) => void p.catch((e) => log.warn(`${what}: ${e instanceof Error ? e.message : String(e)}`));
   refresh('mcp', mcp.reload());
@@ -659,8 +663,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     qp.onDidHide(() => qp.dispose());
     qp.show();
   });
-  cmd('localpilot.sessionMenu', async (id?: unknown) => {
-    const s = (typeof id === 'string' ? controller.store.get(id) : undefined) ?? controller.activeSession;
+  cmd('localpilot.sessionMenu', async (arg?: unknown) => {
+    // From the Agents view the argument is the row's tree node: act on that chat, not the one on screen.
+    const node = arg as { sessionId?: string; session?: { id: string } } | undefined;
+    const id = typeof arg === 'string' ? arg : node?.session?.id ?? node?.sessionId;
+    const s = id ? controller.store.get(id) : controller.activeSession;
     if (!s) {
       return;
     }
@@ -697,11 +704,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       case 'keep':
         return controller.handle({ type: 'keepChanges', sessionId: s.id });
       case 'undo':
-        return controller.handle({ type: 'undoChanges', sessionId: s.id });
+        if ((await vscode.window.showWarningMessage(`Undo all ${changed} changes of "${s.title}"?`, { modal: true }, 'Undo all')) === 'Undo all') {
+          return controller.handle({ type: 'undoChanges', sessionId: s.id });
+        }
+        return;
       case 'clear':
         return controller.handle({ type: 'clearSession', sessionId: s.id });
       case 'delete':
-        return controller.handle({ type: 'deleteSession', id: s.id });
+        if ((await vscode.window.showWarningMessage(`Delete "${s.title}"?`, { modal: true, detail: s.worktree ? 'Its isolated worktree and any changes not applied to the workspace are deleted too.' : 'This cannot be undone.' }, 'Delete')) === 'Delete') {
+          return controller.handle({ type: 'deleteSession', id: s.id });
+        }
+        return;
     }
   });
   // Session argument: id (palette / API) or an Agents-view node.
@@ -720,8 +733,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const res = await controller.applyWorktree(id);
     if (res?.conflicts.length) {
       const open = await vscode.window.showWarningMessage(`${res.conflicts.length === 1 ? '1 file has' : `${res.conflicts.length} files have`} conflict markers.`, 'Open first conflict');
-      if (open && workspace.root) {
-        await vscode.window.showTextDocument(vscode.Uri.file(path.join(workspace.root, res.conflicts[0])));
+      // Conflict paths are relative to the repository, which may be above the workspace folder.
+      const repo = store.get(id)?.worktree?.repo ?? workspace.root;
+      if (open && repo) {
+        await vscode.window.showTextDocument(vscode.Uri.file(path.join(repo, res.conflicts[0])));
       }
     }
   });

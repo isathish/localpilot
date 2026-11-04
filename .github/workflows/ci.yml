@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Every main commit gets a complete result; superseded PR runs are cancelled.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
@@ -40,6 +41,11 @@ jobs:
         run: npm run smoke
       - name: CLI end-to-end (providers, keys, Claude tool loop, gateway, Auto stays local)
         run: node scripts/cli-e2e.mjs
+      - name: Start Redis Stack (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name lp-redis -p 16379:6379 redis/redis-stack-server:latest
+          for i in $(seq 1 30); do docker exec lp-redis redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 1; done
       - name: Extension Host tests (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm test

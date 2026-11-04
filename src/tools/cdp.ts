@@ -127,13 +127,26 @@ export class CdpSession {
     this.pending.clear();
   }
 
-  send<T extends Json = Json>(method: string, params: Json = {}, sessionId?: string): Promise<T> {
+  send<T extends Json = Json>(method: string, params: Json = {}, sessionId?: string, timeoutMs = 30_000): Promise<T> {
     if (this.closed || this.ws.readyState !== 1) {
       return Promise.reject(new Error('DevTools session is closed'));
     }
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: Json) => void, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v as T);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
@@ -332,7 +345,15 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
   const report: InspectReport = { url, finalUrl: url, title: '', width: opts.width, height: opts.height, console: [], network: [], perf: { resources: 0, transferredBytes: 0 }, layout: [], actionLog: [] };
   try {
     const sid = await cdp.newPage();
-    const call = <T extends Json = Json>(m: string, p: Json = {}) => cdp.send<T>(m, p, sid);
+    const call = <T extends Json = Json>(m: string, p: Json = {}, timeoutMs?: number) => cdp.send<T>(m, p, sid, timeoutMs);
+    // A pending alert/confirm/prompt blocks the page's main thread, so every later evaluate would hang.
+    cdp.on('Page.javascriptDialogOpening', (p, s) => {
+      if (s !== sid) {
+        return;
+      }
+      report.actionLog.push(`dialog ${String(p.type)}: ${String(p.message ?? '').slice(0, 200)} (accepted)`);
+      void call('Page.handleJavaScriptDialog', { accept: true, promptText: String(p.defaultPrompt ?? '') }).catch(() => undefined);
+    });
     await Promise.all([call('Page.enable'), call('Runtime.enable'), call('Log.enable'), call('Network.enable', { maxTotalBufferSize: 10_000_000 }), call('Performance.enable')]);
     await call('Emulation.setDeviceMetricsOverride', { width: opts.width, height: opts.height, deviceScaleFactor: opts.mobile ? 2 : 1, mobile: !!opts.mobile });
     if (opts.mobile) {
@@ -431,7 +452,7 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
     // --- navigate & settle -----------------------------------------------------------------
     say(`Loading ${url}…`);
     const loaded = cdp.once('Page.loadEventFired', opts.waitMs + 30_000).catch(() => undefined);
-    const nav = await call<{ errorText?: string }>('Page.navigate', { url });
+    const nav = await call<{ errorText?: string }>('Page.navigate', { url }, opts.waitMs + 30_000);
     if (nav.errorText) {
       throw new Error(`Could not load ${url}: ${nav.errorText}`);
     }
@@ -451,8 +472,14 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
     }
 
     // --- actions ---------------------------------------------------------------------------
-    const evaluate = async <T>(expression: string): Promise<T | undefined> => {
-      const r = await call<{ result?: { value?: T }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    let unresponsive = false;
+    const evaluate = async <T>(expression: string, timeoutMs = 10_000): Promise<T | undefined> => {
+      const r = await call<{ result?: { value?: T }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true, timeout: timeoutMs }, timeoutMs + 5_000).catch((e: unknown) => {
+        if (e instanceof Error && e.message.endsWith('timed out')) {
+          unresponsive = true;
+        }
+        throw e;
+      });
       if (r.exceptionDetails) {
         throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'evaluation failed');
       }
@@ -461,6 +488,10 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
     for (const a of opts.actions ?? []) {
       if (opts.signal?.aborted) {
         throw new Error('Cancelled');
+      }
+      if (unresponsive) {
+        report.actionLog.push('skipped remaining actions: page unresponsive');
+        break;
       }
       try {
         if (a.click) {
@@ -473,7 +504,7 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
           await evaluate(`window.scrollTo(0, ${a.scroll === 'bottom' ? 'document.documentElement.scrollHeight' : a.scroll === 'top' ? '0' : Number(a.scroll)})`);
           report.actionLog.push(`scrolled to ${a.scroll}`);
         } else if (a.eval) {
-          const v = await evaluate<unknown>(a.eval);
+          const v = await evaluate<unknown>(a.eval, (a.wait ? Math.min(15_000, Number(a.wait)) : 0) + 10_000);
           report.actionLog.push(`eval → ${typeof v === 'string' ? v : JSON.stringify(v)}`.slice(0, 500));
         }
         if (a.wait) {
@@ -502,26 +533,36 @@ export async function inspectPage(browser: string, url: string, opts: InspectOpt
       resources: report.network.length,
       transferredBytes: report.network.reduce((n, e) => n + (e.bytes || 0), 0),
     };
-    report.layout = (await evaluate<LayoutIssue[]>(LAYOUT_SCRIPT).catch(() => [])) ?? [];
-    if (opts.includeText) {
+    report.layout = (unresponsive ? [] : await evaluate<LayoutIssue[]>(LAYOUT_SCRIPT).catch(() => [])) ?? [];
+    if (opts.includeText && !unresponsive) {
       report.text = ((await evaluate<string>('document.body ? document.body.innerText : ""').catch(() => '')) ?? '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 4000);
     }
 
     // --- screenshot ------------------------------------------------------------------------
     say('Taking screenshot…');
-    let clip: Json | undefined;
-    if (opts.fullPage) {
-      const m = await call<{ cssContentSize?: { width: number; height: number }; contentSize?: { width: number; height: number } }>('Page.getLayoutMetrics');
-      const size = m.cssContentSize ?? m.contentSize;
-      if (size) {
-        const h = Math.min(Math.ceil(size.height), 8000);
-        await call('Emulation.setDeviceMetricsOverride', { width: opts.width, height: h, deviceScaleFactor: opts.mobile ? 2 : 1, mobile: !!opts.mobile });
-        clip = { x: 0, y: 0, width: opts.width, height: h, scale: 1 };
-        report.height = h;
+    try {
+      let clip: Json | undefined;
+      if (opts.fullPage) {
+        const m = await call<{ cssContentSize?: { width: number; height: number }; contentSize?: { width: number; height: number } }>('Page.getLayoutMetrics', {}, 20_000);
+        const size = m.cssContentSize ?? m.contentSize;
+        if (size) {
+          const h = Math.min(Math.ceil(size.height), 8000);
+          await call('Emulation.setDeviceMetricsOverride', { width: opts.width, height: h, deviceScaleFactor: opts.mobile ? 2 : 1, mobile: !!opts.mobile }, 20_000);
+          clip = { x: 0, y: 0, width: opts.width, height: h, scale: 1 };
+          report.height = h;
+        }
       }
+      const shot = await call<{ data: string }>('Page.captureScreenshot', { format: 'png', ...(clip ? { clip, captureBeyondViewport: true } : {}) }, 20_000);
+      report.screenshot = shot.data;
+    } catch (e) {
+      if (!(e instanceof Error && e.message.endsWith('timed out'))) {
+        throw e;
+      }
+      unresponsive = true;
     }
-    const shot = await call<{ data: string }>('Page.captureScreenshot', { format: 'png', ...(clip ? { clip, captureBeyondViewport: true } : {}) });
-    report.screenshot = shot.data;
+    if (unresponsive) {
+      report.actionLog.push('page main thread unresponsive: some metrics or the screenshot could not be collected');
+    }
     return report;
   } finally {
     await cdp.close();

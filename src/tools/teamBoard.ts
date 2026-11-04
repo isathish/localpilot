@@ -1,11 +1,44 @@
 import * as vscode from 'vscode';
-import { formatBoard, TeamBoard, whoAmI } from '../agent/teamBoard';
+import { formatBoard, LEASE_MS, TeamBoard, whoAmI } from '../agent/teamBoard';
+import { onAbort } from '../agent/resilience';
 import { Tool, ToolContext } from '../types';
 
 /** The identity a chat works under on the board; `localpilot work` claims tasks under the same one for its chats. */
 export const boardOwner = (sessionId: string) => whoAmI(`session ${sessionId.slice(-8)}`);
 
-const rootOf = (ctx: ToolContext) => ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+// The board is shared: an isolated run uses the real checkout's board, not its worktree's copy.
+const rootOf = (ctx: ToolContext) => ctx.mainRoot ?? ctx.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+/** Lease renewals of claims held by running agents, keyed by `root|task|owner`. */
+const renewals = new Map<string, () => void>();
+
+function stopRenewing(root: string, id: string, me: string): void {
+  renewals.get(`${root}|${id}|${me}`)?.();
+}
+
+/** Keeps a claim alive while the agent works on it; stops when the run ends or the claim is gone. */
+function keepRenewing(board: TeamBoard, root: string, id: string, me: string, signal: AbortSignal): void {
+  const key = `${root}|${id}|${me}`;
+  renewals.get(key)?.();
+  let off = () => {};
+  const stop = () => {
+    clearInterval(timer);
+    off();
+    if (renewals.get(key) === stop) {
+      renewals.delete(key);
+    }
+  };
+  const renew = async () => {
+    const t = await board.get(id);
+    if (t?.status !== 'claimed' || t.owner !== me || (await board.update(id, me, { renew: true })).error) {
+      stop();
+    }
+  };
+  const timer = setInterval(() => void renew().catch(stop), LEASE_MS / 3);
+  timer.unref?.();
+  renewals.set(key, stop);
+  off = onAbort(signal, stop);
+}
 
 export const teamBoardTool: Tool = {
   definition: {
@@ -59,6 +92,9 @@ export const teamBoardTool: Tool = {
       }
       case 'claim': {
         const t = await board.claim(me, id || undefined);
+        if (t) {
+          keepRenewing(board, root, t.id, me, ctx.signal);
+        }
         return t ? { content: `Claimed "${t.id}": ${t.title}\n\n${t.brief}${t.notes.length > 1 ? `\n\nEarlier notes:\n${t.notes.slice(0, -1).map((n) => `- ${n.by}: ${n.text}`).join('\n')}` : ''}\n\nWhen finished call team_board complete with id "${t.id}".` } : { content: id ? `"${id}" cannot be claimed: it is taken, finished, or waits for unfinished tasks.` : 'No free task on the board right now.' };
       }
       case 'note':
@@ -72,7 +108,12 @@ export const teamBoardTool: Tool = {
         if (a !== 'note' && !text) {
           return { content: `${a} needs text: ${a === 'complete' ? 'what changed and how it was verified' : a === 'fail' ? 'why it cannot be done' : 'what is done and what is left'}.`, isError: true };
         }
-        const r = await board.update(id, me, a === 'note' ? { note: text } : { note: a === 'complete' ? 'completed' : a === 'fail' ? `failed: ${text}` : `released: ${text}`, status: a === 'complete' ? 'done' : a === 'fail' ? 'failed' : 'open', result: a === 'release' ? undefined : text });
+        // A note on your own claim also renews its lease (a note on someone else's claim must not).
+        const mine = a === 'note' && (await board.get(id).then((t) => t?.status === 'claimed' && t.owner === me).catch(() => false));
+        const r = await board.update(id, me, a === 'note' ? { note: text, renew: mine || undefined } : { note: a === 'complete' ? 'completed' : a === 'fail' ? `failed: ${text}` : `released: ${text}`, status: a === 'complete' ? 'done' : a === 'fail' ? 'failed' : 'open', result: a === 'release' ? undefined : text });
+        if (!r.error && a !== 'note') {
+          stopRenewing(root, id, me);
+        }
         return r.error ? { content: r.error, isError: true } : { content: `${a === 'note' ? 'Noted on' : a === 'complete' ? 'Completed' : a === 'fail' ? 'Marked failed:' : 'Released'} "${id}".` };
       }
     }

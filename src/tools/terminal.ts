@@ -44,11 +44,11 @@ export const runCommandTool: Tool = {
     // Models often pass the workspace root itself (absolute) as cwd; joining that onto root gave a nonexistent path.
     let cwd = typeof args.cwd === 'string' && args.cwd.trim() ? path.resolve(root, args.cwd.trim()) : root;
     if (ctx.workspaceRoot && cwd !== root) {
-      // Isolated worktree: map the real checkout onto the copy and never run outside it.
+      // Isolated worktree: the real checkout maps onto the copy; either way never run outside the workspace.
       try {
         cwd = resolveWorkspacePath(cwd, ctx).fsPath;
       } catch {
-        return { content: `cwd must be inside the isolated workspace (${root}): ${cwd}`, isError: true };
+        return { content: `cwd must be inside the ${ctx.isolatedFrom ? 'isolated ' : ''}workspace (${root}): ${cwd}`, isError: true };
       }
     }
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
@@ -62,6 +62,9 @@ export const runCommandTool: Tool = {
     );
     if (!ok) {
       return { content: 'User declined to run the command.', isError: true };
+    }
+    if (ctx.signal.aborted) {
+      return { content: 'Not run: the user stopped the run.', isError: true };
     }
 
     if (args.background) {

@@ -109,6 +109,27 @@ suite('Usage advisor', () => {
     assert.ok(!suggestModels(models, u, { routing: {} }, profile).some((s) => s.suggested === 'ollama/chatty:7b' && s.role !== 'completion'));
   });
 
+  test('never suggests a cloud model even with a strong record', () => {
+    const models = [model('ollama/qwen2.5-coder:7b'), model('claude/sonnet', { remote: true, supportsVision: true })];
+    const events = [
+      ...times(20, () => run('claude/sonnet', 'done')),
+      ...times(10, () => run('claude/sonnet', 'done', { mode: 'plan' })),
+      ...times(10, () => run('claude/sonnet', 'done', { depth: 1, role: 'fast' })),
+      ...times(10, () => run('claude/sonnet', 'done', { depth: 1, agent: 'coder' })),
+      ...times(10, () => call('claude/sonnet', 120)),
+      ...times(6, () => run('ollama/qwen2.5-coder:7b', 'failed')),
+    ];
+    const s = suggestModels(models, analyzeUsage(events, { now: NOW }), { defaultModel: 'ollama/qwen2.5-coder:7b', routing: { vision: 'ollama/qwen2.5-coder:7b' } }, profile);
+    assert.ok(!s.some((x) => x.suggested === 'claude/sonnet'));
+  });
+
+  test('produces nothing when only a cloud model can fill a role', () => {
+    const models = [model('ollama/chatty:7b', { supportsTools: false }), model('claude/sonnet', { remote: true })];
+    const events = [...times(20, () => run('claude/sonnet', 'done')), ...times(10, () => run('claude/sonnet', 'done', { mode: 'plan' })), ...times(10, () => call('claude/sonnet', 120))];
+    const s = suggestModels(models, analyzeUsage(events, { now: NOW }), { defaultModel: 'ollama/chatty:7b', routing: { reasoning: 'ollama/chatty:7b', fast: 'ollama/chatty:7b' } }, profile);
+    assert.ok(!s.some((x) => x.suggested === 'claude/sonnet' && ['agent', 'reasoning', 'coding', 'fast'].includes(x.role)));
+  });
+
   test('completion picks follow acceptance', () => {
     const models = [model('ollama/qwen2.5-coder:1.5b-base', { supportsFim: true }), model('ollama/starcoder2:3b', { supportsFim: true })];
     const ev: TelemetryEvent[] = [];

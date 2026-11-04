@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { stripJsonc } from '../agent/jsonc';
 
 /**
  * Repository intelligence without a language server: an import graph and a symbol index built from source text.
@@ -275,7 +276,7 @@ export async function buildRepoGraph(root: string, maxAgeMs = 5_000): Promise<Re
 /** `compilerOptions.paths` prefixes (`@/*` → `src/*`) from a tsconfig, tolerating comments and trailing commas. */
 export function readTsPaths(text: string): [string, string][] {
   try {
-    const json = JSON.parse(text.replace(/\/\*[\s\S]*?\*\/|(^|[^:"])\/\/.*$/gm, '$1').replace(/,(\s*[}\]])/g, '$1')) as { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
+    const json = JSON.parse(stripJsonc(text)) as { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
     const base = json.compilerOptions?.baseUrl ?? '.';
     return Object.entries(json.compilerOptions?.paths ?? {}).flatMap(([k, v]) => (v[0] ? [[k.replace(/\/\*$/, ''), path.posix.normalize(path.posix.join(base, v[0].replace(/\/\*$/, '')))] as [string, string]] : []));
   } catch {
