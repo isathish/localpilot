@@ -78,10 +78,10 @@
   };
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   /** Consecutive calls to these fold into one "Explored" row in the transcript (see foldExplore). */
-  const EXPLORE_TOOLS = new Set([...READ_TOOLS, 'gather_context', 'read_pdf', 'repo_graph', 'analyze_workspace', 'mcp_read_resource']);
+  const EXPLORE_TOOLS = new Set([...READ_TOOLS, 'gather_context', 'read_pdf', 'repo_graph', 'analyze_workspace', 'mcp_read_resource', 'git_status', 'ci_status']);
   const SLASH = [
     ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/smol', 'Summarise older messages (same as /compact)'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one'], ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'], ['/board', 'Shared task board'],
+    ['/compact', 'Summarise older messages'], ['/smol', 'Summarise older messages (same as /compact)'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one'], ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md'], ['/team ', 'Split a task for background workers and the shared board'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'], ['/board', 'Shared task board'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -2679,7 +2679,7 @@
       else if (e.key === 'Escape') { e.preventDefault(); closeMenu(); els.input.focus(); }
     };
     p.onkeydown = key;
-    if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; list.tabIndex = -1; list.focus(); menuA11y(anchor, search, list); }
+    if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; list.tabIndex = -1; if (anchor !== els.box) { list.focus(); } menuA11y(anchor, search, list); }
   }
   document.addEventListener('mousedown', (e) => { if (menuState && e.target.isConnected && !els.popover.contains(e.target) && !e.target.closest('.pick, .ctxbtn, #btnHistory, #btnMcp')) { closeMenu(); } });
   // Escape closes the menu even when focus has left it (capture phase, so the approval card's Escape = Deny does not fire too).
@@ -3171,7 +3171,7 @@
       const p = state.paused.get(state.session.id);
       // Paused: the message is plainly meant for this agent. Running: ask, since a new tab is just as likely.
       if (p && p.paused) { steerCurrent(); return; }
-      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: 'Starts a new turn here when this one ends', icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return;
+      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: 'Starts a new turn here when this one ends', icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); els.input.focus(); return;
     }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
@@ -3265,7 +3265,7 @@
   }
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
-    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { const pl = code.closest('.code').querySelector('.path-link'); post({ type: 'applyCodeToFile', code: text, path: pl ? pl.dataset.path : undefined }); } return; }
+    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { const pl = code.closest('.code').querySelector('.code-head [data-path]'); post({ type: 'applyCodeToFile', code: text, path: pl ? pl.dataset.path : undefined }); } return; }
     const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined, sessionId: state.session && state.session.id }); return; }
     const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
     const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
@@ -3589,6 +3589,366 @@
     els.approvals.parentElement.scrollTop = 0;
     if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
   }
+
+  // ------------------------------------------------------------------ task header
+  // A card under the tab strip: the chat's first prompt (clamped, click to expand), where it runs, what it has cost so
+  // far, and Copy / Delete. Whether the card is folded is remembered in the webview state.
+  const taskHead = el('section', 'taskhead hidden');
+  taskHead.setAttribute('aria-label', 'Task');
+  els.messages.before(taskHead);
+  /** sessionId → the folder the chat works in (its worktree, else the workspace), from the `session` message. */
+  const taskCwd = new Map();
+  /** Chats whose prompt is shown in full instead of clamped. */
+  const taskOpen = new Set();
+  const viewState = () => (typeof vscode.getState === 'function' && vscode.getState()) || {};
+  function headCollapsed() { return !!viewState().taskHeadCollapsed; }
+  function setHeadCollapsed(v) { if (typeof vscode.setState === 'function') { vscode.setState({ ...viewState(), taskHeadCollapsed: v }); } }
+  function firstPrompt(s) {
+    const m = (s.messages || []).find((x) => x.role === 'user' && !(x.meta && x.meta.summary));
+    if (!m) { return ''; }
+    return String((m.meta && m.meta.display) || m.content || '')
+      .replace(/<attachment[^>]*>[\s\S]*?<\/attachment>\s*/g, '')
+      .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output)[^>]*>[\s\S]*?<\/\1>\s*/g, '')
+      .replace(/\n\n\[\d+ images? attached\]$/, '').trim();
+  }
+  const leaf = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || String(p || '');
+  function renderTaskHead() {
+    const s = state.session; const prompt = s ? firstPrompt(s) : '';
+    if (!prompt) { taskHead.classList.add('hidden'); taskHead.innerHTML = ''; taskHead.__sig = ''; return; }
+    const collapsed = headCollapsed(); const open = taskOpen.has(s.id);
+    const u = chatUsage(); const p = usageParts(u); const local = usageModelIsLocal(u);
+    const row = state.sessions.find((x) => x.id === s.id); const bytes = row && row.bytes;
+    const wt = s.worktree; const cwd = taskCwd.get(s.id) || '';
+    const sig = JSON.stringify([s.id, prompt, collapsed, open, p, local, wt && wt.path, cwd, bytes, s.title]);
+    if (sig === taskHead.__sig) { return; }
+    taskHead.__sig = sig;
+    const where = wt
+      ? `<span class="badge iso" title="Isolated worktree: ${esc(wt.path)}${wt.base ? `\nStarted from ${esc(String(wt.base).slice(0, 10))}` : ''}">${I.git}<span>isolated: ${esc(leaf(wt.path))}</span></span>`
+      : cwd ? `<span class="badge" title="Working folder: ${esc(cwd)}">${I.folder}<span>${esc(leaf(cwd))}</span></span>` : '';
+    const tok = p ? `<span class="pill" title="${esc(usageText(u))}">↑${fmtTok(p.input)} ↓${fmtTok(p.output)}</span>` : '';
+    const cost = p && p.cost !== undefined && !local ? `<span class="pill cost" title="Cost reported by the provider">${fmtUsd(p.cost)}</span>` : '';
+    taskHead.className = `taskhead${collapsed ? ' collapsed' : ''}`;
+    taskHead.innerHTML = `<div class="th-row"><button class="th-toggle" aria-expanded="${!collapsed}" title="${collapsed ? 'Show the task' : 'Fold the task away'}"><span class="chev">${I.chev}</span><span class="th-k">Task</span></button>`
+      + `<span class="th-line">${collapsed ? esc(prompt.split('\n')[0]) : ''}</span>${where}${tok}${cost}`
+      + `<button class="ib" data-th="copy" title="Copy the task" aria-label="Copy the task">${I.copy}</button>`
+      + `<button class="ib" data-th="delete" title="Delete this chat${bytes ? ` (${fmtBytes(bytes)} on disk)` : ''}" aria-label="Delete this chat${bytes ? `, ${fmtBytes(bytes)} on disk` : ''}">${I.trash}</button></div>`
+      + (collapsed ? '' : `<div class="th-text${open ? ' open' : ''}" tabindex="0" role="button" aria-expanded="${open}">${inline(prompt).replace(/\n/g, '<br>')}</div>`);
+    const t = taskHead.querySelector('.th-text');
+    // Only a prompt that overflows the clamp fades out and expands on click.
+    if (t && !open) { requestAnimationFrame(() => { const over = t.scrollHeight > t.clientHeight + 2; t.classList.toggle('clamped', over); t.title = over ? 'Click to show the whole prompt' : ''; }); }
+    if (t && open) { t.title = 'Click to clamp'; }
+  }
+  function toggleTaskText() {
+    const s = state.session; const t = taskHead.querySelector('.th-text'); if (!s || !t) { return; }
+    if (!t.classList.contains('clamped') && !taskOpen.has(s.id)) { return; }
+    if (taskOpen.has(s.id)) { taskOpen.delete(s.id); } else { taskOpen.add(s.id); }
+    renderTaskHead();
+  }
+  taskHead.addEventListener('click', (e) => {
+    const s = state.session; if (!s) { return; }
+    if (e.target.closest('.th-toggle')) { setHeadCollapsed(!headCollapsed()); renderTaskHead(); return; }
+    const b = e.target.closest('[data-th]');
+    if (b && b.dataset.th === 'copy') { copyTo(b, firstPrompt(s)); return; }
+    if (b && b.dataset.th === 'delete') {
+      const title = s.title || 'New chat'; const running = state.running.has(s.id);
+      openMenu(b, [
+        { label: `Delete “${title.length > 32 ? `${title.slice(0, 31)}…` : title}”`, desc: running ? 'Stops the agent and deletes everything' : 'Permanently removes this chat', icon: I.trash, onPick: () => { if (state.openTabs) { state.openTabs.delete(s.id); saveState(); } post({ type: 'deleteSession', id: s.id }); } },
+        { label: 'Cancel', icon: I.x },
+      ]);
+      return;
+    }
+    const link = e.target.closest('.path-link'); if (link) { post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined, sessionId: s.id }); return; }
+    if (e.target.closest('.th-text') && !String(window.getSelection() || '')) { toggleTaskText(); }
+  });
+  taskHead.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('th-text')) { e.preventDefault(); toggleTaskText(); } });
+
+  // ------------------------------------------------------------------ context meter: breakdown and compact confirmation
+  /** Chat preferences from the host (`uiPrefs`): tips, the auto-compact threshold and the What's new card. */
+  const uiPrefs = { showTips: true, compactionThreshold: 0.75, autoCompact: true, whatsNew: null };
+  const ctxCard = el('div', 'ctxcard hidden'); ctxCard.id = 'ctxCard'; ctxCard.setAttribute('role', 'tooltip');
+  document.body.appendChild(ctxCard);
+  els.ctx.setAttribute('aria-describedby', 'ctxCard');
+  /** '' hidden · 'hover' the breakdown · 'confirm' the "Compact this chat?" question. */
+  let ctxMode = '';
+  function ctxRows() {
+    const c = state.ctxInfo; if (!c) { return ''; }
+    const u = chatUsage(); const n = (v) => Number(v || 0).toLocaleString();
+    const row = (k, v, cls) => `<div class="r${cls ? ` ${cls}` : ''}"><span>${k}</span><b>${v}</b></div>`;
+    let h = `<div class="h">Context</div>${row('Used', `${n(c.used)} · ${c.pct}%`)}${row('Window', n(c.win))}${row('Remaining', n(Math.max(0, c.win - c.used)))}`;
+    if (u && u.requests) {
+      h += `<div class="h">This chat</div>${row('Prompt tokens', n(u.promptTokens))}${row('Output tokens', n(u.completionTokens))}`;
+      if (u.cacheReadTokens || u.cacheWriteTokens) { h += row('Cache read', n(u.cacheReadTokens)) + row('Cache write', n(u.cacheWriteTokens)); }
+    }
+    const at = Math.round(uiPrefs.compactionThreshold * 100);
+    h += row('Auto-compact', uiPrefs.autoCompact ? `at ${at}% · ${n(Math.round(c.win * uiPrefs.compactionThreshold))}` : 'off', 'sep');
+    if (c.compactions) { h += row('Compacted', `${c.compactions}×`); }
+    if (c.native) { h += `<div class="note">${esc(c.native.trim().replace(/^\(|\)$/g, ''))}</div>`; }
+    return h;
+  }
+  function placeCtxCard() {
+    const r = els.ctx.getBoundingClientRect(); const w = ctxCard.offsetWidth; const h = ctxCard.offsetHeight;
+    ctxCard.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    ctxCard.style.top = `${r.top - h - 6 >= 8 ? r.top - h - 6 : r.bottom + 6}px`;
+  }
+  function showCtxCard(mode) {
+    if (!state.session || !state.ctxInfo || els.ctx.classList.contains('hidden')) { return; }
+    ctxMode = mode;
+    const busy = state.running.has(state.session.id);
+    ctxCard.setAttribute('role', mode === 'confirm' ? 'dialog' : 'tooltip');
+    ctxCard.classList.toggle('confirm', mode === 'confirm');
+    if (mode === 'confirm') { ctxCard.setAttribute('aria-label', 'Compact this chat?'); } else { ctxCard.removeAttribute('aria-label'); }
+    ctxCard.innerHTML = mode === 'confirm'
+      ? `<div class="q"><b>Compact this chat?</b> Older messages are summarised to free up context. The latest turns are kept as they are.</div><div class="acts"><button class="btn" data-c="cancel">Cancel</button><button class="btn primary" data-c="compact">Compact</button></div>`
+      : `${ctxRows()}<div class="hint">${busy ? 'You can compact once the agent finishes' : 'Click to compact now'}</div>`;
+    ctxCard.classList.remove('hidden'); placeCtxCard();
+    if (mode === 'confirm') { ctxCard.querySelector('[data-c="compact"]').focus(); }
+  }
+  function hideCtxCard() { ctxMode = ''; ctxCard.classList.add('hidden'); }
+  function refreshCtxCard() { if (ctxMode === 'hover') { showCtxCard('hover'); } }
+  function openCtxConfirm() {
+    if (!state.session) { return; }
+    if (state.running.has(state.session.id)) { showCtxCard('hover'); return; }
+    if (ctxMode === 'confirm') { hideCtxCard(); return; }
+    showCtxCard('confirm');
+  }
+  const ctxHover = () => { if (ctxMode !== 'confirm') { showCtxCard('hover'); } };
+  const ctxLeave = () => { if (ctxMode === 'hover') { hideCtxCard(); } };
+  els.ctx.addEventListener('mouseenter', ctxHover); els.ctx.addEventListener('focus', ctxHover);
+  els.ctx.addEventListener('mouseleave', ctxLeave); els.ctx.addEventListener('blur', ctxLeave);
+  ctxCard.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-c]'); if (!b) { return; }
+    if (b.dataset.c === 'compact' && state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); }
+    hideCtxCard(); els.input.focus();
+  });
+  ctxCard.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxCard(); els.ctx.focus(); } });
+  document.addEventListener('mousedown', (e) => { if (ctxMode === 'confirm' && !ctxCard.contains(e.target) && !els.ctx.contains(e.target)) { hideCtxCard(); } });
+  window.addEventListener('resize', () => { if (ctxMode) { hideCtxCard(); } });
+
+  // ------------------------------------------------------------------ tips while the agent thinks, What's new
+  function tips() {
+    const mod = state.platform === 'darwin' ? '⌘' : 'Ctrl+'; const alt = state.platform === 'darwin' ? '⌥' : 'Alt+';
+    return [
+      'Type while the agent works to steer it: your message is read at its next step.',
+      'The send menu while busy has <b>Send after this turn</b>, which queues a message for when the run ends.',
+      '<b>@</b> adds files, folders, <code>@problems</code>, <code>@git</code> or the last terminal output as context.',
+      '<code>/compact</code> summarises older messages when the context ring fills up.',
+      'Hover the context ring for a token breakdown; click it to compact.',
+      'Every message gets a checkpoint: <b>Restore checkpoint</b> puts back the files, the chat or both.',
+      'Click a message you sent to edit it, then rewind and resend from there.',
+      '<b>Multitask</b> mode splits the work across background workers that run at the same time.',
+      '<b>Best of N</b> runs one prompt on several models side by side; apply the best result.',
+      `<kbd>${mod}⇧↵</kbd> sends the draft in a new tab: another agent, in parallel.`,
+      'Select text in an answer and click <b>Quote</b> to reply to just that part.',
+      '<kbd>⇧Tab</kbd> in the composer cycles Agent, Multitask, Debug, Plan and Ask.',
+      '<b>Plan</b> mode investigates read-only and prepares a checklist you build with one click.',
+      `<kbd>${alt}Esc</kbd> pauses after the current step; <kbd>Esc</kbd> stops the agent.`,
+      `<kbd>${mod}I</kbd> rewrites your draft into a precise request without sending it.`,
+      'Drag files from the Explorer onto the composer to mention them.',
+      'Paste a screenshot to show a vision model what you see.',
+      'Project rules in <code>AGENTS.md</code> or <code>.localpilot/rules</code> are followed in every chat.',
+      '<code>/skill &lt;name&gt; …</code> runs a task with a skill; <code>/skills</code> lists them.',
+      '<code>/newtask</code> continues in a fresh chat that starts from a summary of this one.',
+      'Long answers open as a document in the Markdown reader: the <b>Open as document</b> button.',
+      `<kbd>${alt}↑</kbd> / <kbd>${alt}↓</kbd> switch between chat tabs.`,
+    ];
+  }
+  const tipRow = el('div', 'tiprow hidden', '<span class="k">Tip</span><span class="t"></span>');
+  tipRow.setAttribute('role', 'note');
+  els.status.after(tipRow);
+  let thinkingSince = 0; let tipShownAt = 0; let tipIdx = Math.floor(Math.random() * 22);
+  /** The model is working on its answer: reasoning streams, or the typing dots wait for its first token. Not when paused or asking. */
+  function agentThinking() {
+    const s = state.session; if (!s || !state.running.has(s.id) || els.approvals.children.length) { return false; }
+    const p = state.paused.get(s.id); if (p && p.paused) { return false; }
+    const live = state.live.get(s.id);
+    return !!(live && (live.thinkingEl || live.body.querySelector('.typing')));
+  }
+  setInterval(() => {
+    if (!uiPrefs.showTips || !agentThinking()) { thinkingSince = 0; tipRow.classList.add('hidden'); return; }
+    const now = Date.now(); if (!thinkingSince) { thinkingSince = now; }
+    if (now - thinkingSince < 4000) { return; }
+    if (tipRow.classList.contains('hidden') || now - tipShownAt > 9000) {
+      const list = tips(); tipIdx = (tipIdx + 1) % list.length;
+      tipRow.querySelector('.t').innerHTML = list[tipIdx]; tipShownAt = now; tipRow.classList.remove('hidden');
+    }
+  }, 1000);
+  function whatsNewCard() {
+    const w = uiPrefs.whatsNew; if (!w || !Array.isArray(w.bullets) || !w.bullets.length) { return null; }
+    const c = el('div', 'whatsnew', `<div class="wn-h"><b>What's new in v${esc(w.version)}</b><button class="ib" data-w="close" title="Dismiss" aria-label="Dismiss what's new">${I.x}</button></div><ul>${w.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul><button class="wn-log" data-w="log">Open changelog</button>`);
+    c.setAttribute('role', 'note'); c.setAttribute('aria-label', `What's new in version ${w.version}`);
+    c.onclick = (e) => {
+      const b = e.target.closest('[data-w]'); if (!b) { return; }
+      if (b.dataset.w === 'log') { post({ type: 'openChangelog' }); return; }
+      uiPrefs.whatsNew = null; c.remove(); post({ type: 'dismissWhatsNew' });
+    };
+    return c;
+  }
+
+  // ------------------------------------------------------------------ answers: path links that exist, Mermaid diagrams
+  // Settled answers are scanned shortly after they land (a mutation observer, so every render path is covered): path
+  // links are checked in one batch per scan, and links to files that do not exist become plain code.
+  const scriptNonce = (document.currentScript && document.currentScript.nonce) || '';
+  /** `<sessionId>\0<path>` → whether it exists. */
+  const pathKnown = new Map();
+  let pathSeq = 0; let enhanceTimer = 0;
+  new MutationObserver(() => { if (!enhanceTimer) { enhanceTimer = setTimeout(enhanceAnswers, 120); } }).observe(els.messages, { childList: true, subtree: true });
+  function enhanceAnswers() {
+    enhanceTimer = 0;
+    const sid = state.session && state.session.id; if (!sid) { return; }
+    const ask = new Set();
+    for (const link of els.messages.querySelectorAll('.turn.assistant:not(.live) > .body .path-link:not([data-ck])')) {
+      const p = link.dataset.path; if (!p) { continue; }
+      const known = pathKnown.get(`${sid}\u0000${p}`);
+      if (known === undefined) { if (ask.size < 200) { ask.add(p); link.dataset.ck = 'wait'; } } else { settlePathLink(link, known); }
+    }
+    if (ask.size) { post({ type: 'pathsExist', seq: ++pathSeq, sessionId: sid, paths: [...ask] }); }
+    for (const block of els.messages.querySelectorAll('.turn.assistant:not(.live) > .body .code[data-lang="mermaid"]:not([data-mm])')) { block.dataset.mm = '1'; mermaidFigure(block); }
+  }
+  function settlePathLink(link, exists) {
+    if (exists) { link.dataset.ck = '1'; return; }
+    if (link.closest('.code-head')) { link.classList.remove('path-link'); link.dataset.ck = '0'; link.title = 'Not in the workspace yet'; return; }
+    const c = document.createElement('code'); c.className = 'nopath'; c.textContent = link.textContent; c.title = 'No such file in the workspace';
+    link.replaceWith(c);
+  }
+  function applyPathChecks(m) {
+    const sid = m.sessionId || (state.session && state.session.id); if (!sid || !m.exists) { return; }
+    for (const [p, ok] of Object.entries(m.exists)) { pathKnown.set(`${sid}\u0000${p}`, !!ok); }
+    if (!state.session || state.session.id !== sid) { return; }
+    for (const link of els.messages.querySelectorAll('.path-link[data-ck="wait"]')) {
+      const known = pathKnown.get(`${sid}\u0000${link.dataset.path}`);
+      if (known !== undefined) { settlePathLink(link, known); }
+    }
+  }
+  let mermaidLoad = null; let mermaidQueue = Promise.resolve(); let mermaidSeq = 0;
+  function loadMermaid() {
+    if (window.mermaid) { return Promise.resolve(window.mermaid); }
+    const src = document.body.dataset.mermaid; if (!src) { return Promise.reject(new Error('Mermaid is not bundled')); }
+    if (!mermaidLoad) {
+      mermaidLoad = new Promise((resolve, reject) => {
+        const s = document.createElement('script'); s.nonce = scriptNonce; s.src = src;
+        s.onload = () => (window.mermaid ? resolve(window.mermaid) : reject(new Error('Mermaid did not load')));
+        s.onerror = () => { mermaidLoad = null; reject(new Error('Mermaid could not be loaded')); };
+        document.head.appendChild(s);
+      });
+    }
+    return mermaidLoad;
+  }
+  function mermaidTheme() {
+    const c = document.body.classList;
+    if (c.contains('vscode-high-contrast-light')) { return 'base'; }
+    return c.contains('vscode-dark') || c.contains('vscode-high-contrast') ? 'dark' : 'default';
+  }
+  /** Wraps a ```mermaid block in a figure; the diagram replaces the source once drawn, and the source stays one click away. */
+  function mermaidFigure(block) {
+    const source = (block.querySelector('pre') || {}).textContent || '';
+    if (!source.trim()) { return; }
+    const fig = el('figure', 'mermaid'); fig.dataset.source = source;
+    block.before(fig); fig.appendChild(block);
+    fig.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fig]'); if (!b) { return; }
+      if (b.dataset.fig === 'copy') { copyTo(b, source); }
+      else if (b.dataset.fig === 'open') { post({ type: 'openMarkdown', text: `\`\`\`mermaid\n${source}\n\`\`\`\n`, title: `${(state.session && state.session.title) || 'Chat'} · diagram` }); }
+      else if (b.dataset.fig === 'src') { block.hidden = !block.hidden; b.setAttribute('aria-pressed', String(!block.hidden)); }
+    });
+    drawMermaid(fig);
+  }
+  function drawMermaid(fig) {
+    mermaidQueue = mermaidQueue.then(async () => {
+      if (!fig.isConnected) { return; }
+      const block = fig.querySelector(':scope > .code'); const source = fig.dataset.source || '';
+      let mermaid;
+      try { mermaid = await loadMermaid(); } catch { fig.classList.add('unavailable'); return; }
+      const font = getComputedStyle(document.body).getPropertyValue('--vscode-font-family').trim() || 'sans-serif';
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: mermaidTheme(), fontFamily: font });
+      const id = `lp-chat-mermaid-${++mermaidSeq}`;
+      try {
+        const { svg } = await mermaid.render(id, source);
+        let holder = fig.querySelector(':scope > .mermaid-svg');
+        if (!holder) {
+          fig.insertAdjacentHTML('afterbegin', `<div class="fig-bar"><span class="lbl">Diagram</span><span class="spacer"></span><button data-fig="src" aria-pressed="false" title="Show the Mermaid source">Source</button><button data-fig="copy" title="Copy the Mermaid source">${I.copy}<span>Copy source</span></button><button data-fig="open" title="Open in the Markdown reader">${I.open}<span>Open in reader</span></button></div><div class="mermaid-svg" role="img" aria-label="Mermaid diagram"></div>`);
+          holder = fig.querySelector(':scope > .mermaid-svg');
+        }
+        holder.innerHTML = svg; fig.classList.add('drawn'); fig.querySelector(':scope > .mermaid-error')?.remove();
+        if (block) { block.hidden = true; }
+      } catch (err) {
+        document.getElementById(`d${id}`)?.remove(); document.getElementById(id)?.remove();
+        let e = fig.querySelector(':scope > .mermaid-error');
+        if (!e) { e = el('div', 'mermaid-error'); fig.prepend(e); }
+        e.textContent = `Mermaid: ${(err && err.message ? err.message : String(err)).split('\n').slice(0, 3).join(' ')}`;
+        if (block) { block.hidden = false; }
+      }
+    }).catch(() => undefined);
+  }
+  let chatTheme = mermaidTheme();
+  new MutationObserver(() => {
+    const t = mermaidTheme(); if (t === chatTheme) { return; }
+    chatTheme = t; els.messages.querySelectorAll('figure.mermaid.drawn').forEach(drawMermaid);
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  // ------------------------------------------------------------------ accessibility
+  for (const b of [els.modeBtn, els.modelBtn, els.skillsBtn, $('thinkBtn')]) { if (b) { b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false'); } }
+  /** Says "3 of 12: /compact" in an assertive live region as the selection in a menu moves. */
+  function srAnnounce(text) {
+    let r = document.getElementById('srLive');
+    if (!r) { r = el('div', 'sr-only'); r.id = 'srLive'; r.setAttribute('aria-live', 'assertive'); r.setAttribute('aria-atomic', 'true'); document.body.appendChild(r); }
+    r.textContent = ''; requestAnimationFrame(() => { r.textContent = text; });
+  }
+  /** Listbox semantics for openMenu: the focused control (composer, search box or list) points at the selected option. */
+  function menuA11y(anchor, search, list) {
+    if (!menuState) { return; }
+    const items = menuState.items; const x = items[menuState.sel];
+    items.forEach((y, i) => y.row.setAttribute('aria-selected', String(i === menuState.sel)));
+    const owner = anchor === els.box ? els.input : search || list;
+    if (search) { search.setAttribute('role', 'combobox'); search.setAttribute('aria-expanded', 'true'); search.setAttribute('aria-autocomplete', 'list'); }
+    if (owner !== list) { owner.setAttribute('aria-controls', list.id); }
+    if (x) { owner.setAttribute('aria-activedescendant', x.row.id); } else { owner.removeAttribute('aria-activedescendant'); }
+    const prev = els.popover._anchor; if (prev && prev !== anchor) { prev.setAttribute('aria-expanded', 'false'); els.popover._anchor = null; }
+    if (anchor && anchor.setAttribute && anchor !== els.box) { anchor.setAttribute('aria-expanded', 'true'); els.popover._anchor = anchor; }
+    const label = x ? plainLabel(x.it.labelHtml || esc(x.it.label || '')) : '';
+    const said = items.length ? `${menuState.sel + 1} of ${items.length}: ${label}` : 'No matches';
+    if (said !== els.popover._said) { els.popover._said = said; srAnnounce(said); }
+  }
+  function menuA11yClose() {
+    els.input.removeAttribute('aria-activedescendant'); els.input.removeAttribute('aria-controls');
+    const a = els.popover._anchor; if (a) { a.setAttribute('aria-expanded', 'false'); els.popover._anchor = null; }
+    els.popover._said = '';
+  }
+  // Escape anywhere in the chat stops the run when nothing else claims it (a menu, an approval, a text field, the lightbox).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) { return; }
+    if (ctxMode) { e.preventDefault(); hideCtxCard(); return; }
+    if (menuState || els.approvals.children.length || e.target === els.input || (els.tabs.contains(e.target) && state.selected.size)) { return; }
+    if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], .popover')) { return; }
+    const lb = document.getElementById('lightbox'); if (lb && !lb.classList.contains('hidden')) { return; }
+    const s = state.session; if (!s || !state.running.has(s.id)) { return; }
+    e.preventDefault(); post({ type: 'stop', sessionId: s.id }); srAnnounce('Stopping the agent');
+  }, true);
+  // Collapsing a group (a finished thought, an explore group) must not leave a reader who was following the end behind.
+  els.messages.addEventListener('toggle', (e) => { if (!e.target.open && stickToBottom) { requestAnimationFrame(() => scrollToBottom(false)); } }, true);
+
+  // The extras above follow the same messages as the main handler (which runs first: it was registered earlier).
+  window.addEventListener('message', (ev) => {
+    const m = ev.data; if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
+    try {
+      switch (m.type) {
+        case 'uiPrefs': {
+          const had = !!uiPrefs.whatsNew;
+          Object.assign(uiPrefs, { showTips: m.showTips !== false, compactionThreshold: Number(m.compactionThreshold) || 0.75, autoCompact: m.autoCompact !== false, whatsNew: m.whatsNew || null });
+          refreshCtxCard();
+          if (had !== !!uiPrefs.whatsNew && state.session && !(state.session.messages || []).length) { renderSession(); }
+          break;
+        }
+        case 'pathsExistResult': applyPathChecks(m); break;
+        case 'session': if (m.session) { taskCwd.set(m.session.id, m.cwd || ''); } if (ctxMode === 'confirm') { hideCtxCard(); } renderTaskHead(); break;
+        case 'sessions': renderTaskHead(); break;
+        case 'running':
+          if (state.session && state.session.id === m.sessionId) { if (m.running && ctxMode === 'confirm') { hideCtxCard(); } updateCtx(); }
+          // A finished run may have created files an earlier answer named: check those links again on the next render.
+          if (!m.running) { for (const [k, v] of pathKnown) { if (!v && k.startsWith(`${m.sessionId}\u0000`)) { pathKnown.delete(k); } } }
+          break;
+      }
+    } catch (err) { reportError(`message '${m.type}' (extras)`, err); }
+  });
 
   updateSendEnabled();
   requestInit();

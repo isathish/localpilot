@@ -15,6 +15,7 @@
     server: '<svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2"/><rect x="2" y="9" width="12" height="4.5" rx="1.2"/><path d="M4.5 4.8h.01M4.5 11.3h.01"/></svg>',
     cpu: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="3" height="3"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2"/></svg>',
     shield: '<svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/><path d="M5.8 8l1.5 1.5L10.5 6"/></svg>',
+    lock: '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
     ghost: '<svg viewBox="0 0 16 16"><path d="M3 8a5 5 0 0 1 10 0v6l-1.7-1.3L9.6 14 8 12.7 6.4 14l-1.7-1.3L3 14z"/><path d="M6 7.5h.01M10 7.5h.01"/></svg>',
     globe: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2.2 2 9.8 0 12M8 2c-2 2.2-2 9.8 0 12"/></svg>',
     brain: '<svg viewBox="0 0 16 16"><path d="M6 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/><path d="M8 3v10M5 7h6M5 9.5h6"/></svg>',
@@ -363,7 +364,30 @@
   const val = (key) => S(key).value;
   /** The value stored in the selected scope (not the merged one), so an edit never copies the other scope's value into it. */
   const ownValue = (key) => { const s = S(key); return state.scope === 'workspace' ? (s.workspaceValue ?? s.userValue ?? s.default) : (s.userValue ?? s.default); };
+  // Organisation policy per control (managed-settings.json): locked settings, approval floors, allowlists.
+  const POLICY = () => (state.data && state.data.policy) || null;
+  const MANAGED_TIP = 'Managed by your organization';
+  /** Why the policy refuses `value` for `key` (the whole setting is locked, or that value is below an approval floor); '' when it does not. */
+  const policyRefuses = (key, value) => {
+    const p = POLICY(); if (!p) { return ''; }
+    if (p.locked[key]) { return p.locked[key]; }
+    return (p.disabledOptions[key] || []).includes(String(value)) ? 'Your organization requires approval here' : '';
+  };
+  const lockIcon = (why) => `<span class="lock" role="img" title="${esc(why ? `${MANAGED_TIP} — ${why}` : MANAGED_TIP)}" aria-label="${esc(MANAGED_TIP)}">${I.lock}</span>`;
+  /** Mirrors providerAllowed in src/agent/managedPolicy.ts: why the policy keeps a provider of the user's from loading. */
+  const providerPolicyBlock = (p) => {
+    const pol = POLICY(); if (!pol || (pol.providers || []).some((m) => m.id === p.id && m.baseUrl === p.baseUrl)) { return ''; }
+    if (!pol.allowCloudProviders && isCloud(p)) { return 'Cloud providers are off by your organization'; }
+    if (pol.allowedProviderHosts) {
+      const host = hostOfUrl(p.baseUrl);
+      const ok = pol.allowedProviderHosts.some((h) => { const pat = h.toLowerCase(); return pat.startsWith('*.') ? host === pat.slice(2) || host.endsWith(pat.slice(1)) : host === pat; });
+      if (!ok) { return `${host || p.baseUrl} is not on your organization's provider allowlist`; }
+    }
+    return '';
+  };
   function set(key, value) {
+    const refused = policyRefuses(key, value);
+    if (refused) { toast(`${MANAGED_TIP}: ${refused}`, 'error'); return; }
     state.pendingSave = Date.now();
     post({ type: 'set', key, value, scope: state.scope });
     if (state.scope === 'user' && S(key).workspaceValue !== undefined) { toast(`Saved to User settings, but this workspace overrides ${key} — switch to Workspace to change the value in effect`, 'error'); }
@@ -388,7 +412,9 @@
     f._rebuild = () => field(key, label, desc, kind, opts);
     f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
     const ctl = f.querySelector('.ctl');
-    const v = val(key);
+    // Where the policy decides the value (locked, or held at an approval floor), show what applies, not what is stored.
+    const eff = POLICY() && POLICY().effective;
+    const v = eff && Object.prototype.hasOwnProperty.call(eff, key) ? eff[key] : val(key);
     if (kind === 'toggle') {
       const b = el('button', `toggle ${v ? 'on' : ''}`); b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(!!v)); b.setAttribute('aria-label', label);
       b.onclick = () => { b.classList.toggle('on'); set(key, b.classList.contains('on')); };
@@ -431,7 +457,21 @@
       i.onchange = commit; i.onblur = commit; i.oninput = debounce(commit, 700);
       ctl.appendChild(i);
     }
+    const why = policyRefuses(key, undefined);
+    const floor = (POLICY() && POLICY().disabledOptions[key]) || [];
+    // Appended before the lock so its buttons (Redis setup, …) are disabled with the control.
     if (opts.after) { ctl.appendChild(opts.after); }
+    if (why) {
+      // Locked by the organisation: the control shows the value the policy applies, nothing here can change it.
+      f.classList.add('locked');
+      f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(why));
+      const rb = f.querySelector('.reset'); if (rb) { rb.remove(); }
+      ctl.querySelectorAll('button, input, select, textarea').forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; });
+    } else if (floor.length && kind === 'seg') {
+      const btns = ctl.querySelectorAll('.seg button');
+      opts.options.forEach(([ov], i) => { if (floor.includes(String(ov)) && btns[i]) { btns[i].disabled = true; btns[i].title = `${MANAGED_TIP} — your organization requires approval here`; } });
+      f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(`${opts.options.filter(([ov]) => floor.includes(String(ov))).map(([, l]) => l).join(', ')} is not allowed`));
+    }
     return f;
   }
   const card = (...children) => { const c = el('div', 'card'); children.forEach((x) => x && c.appendChild(x)); return c; };
@@ -684,11 +724,20 @@
     bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     // Configured providers, local first: the split shows at a glance which models keep code on this machine.
+    // The organisation's providers: locked, only the key is the user's. A same-id entry of the user's is shown here, not below.
+    const orgProv = (POLICY() && POLICY().providers) || [];
+    const orgIds = new Set(orgProv.map((p) => p.id));
+    if (orgProv.length) {
+      const org = el('div', 'prov-list');
+      org.appendChild(el('div', 'prov-group', `<b>Your organization</b><span class="count">${orgProv.length}</span><span class="muted small">configured by your administrator; add your key</span>`));
+      for (const p of orgProv) { org.appendChild(orgProviderCard(p)); }
+      sec.appendChild(org);
+    }
     const wrap = el('div', 'prov-list'); wrap.dataset.deps = 'providers';
-    if (!list.length) { wrap.appendChild(el('div', 'empty', 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
+    if (!list.length && !orgProv.length) { wrap.appendChild(el('div', 'empty', 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
     const mixed = list.some(isCloud) && list.some((p) => !isCloud(p));
     for (const [cloud, label, hint] of [[false, 'Local', 'code stays on this machine'], [true, 'Cloud', 'prompts and code are sent to the provider']]) {
-      const items = list.filter((p) => isCloud(p) === cloud);
+      const items = list.filter((p) => isCloud(p) === cloud && !orgIds.has(p.id));
       if (!items.length) { continue; }
       if (mixed) { wrap.appendChild(el('div', 'prov-group', `<b>${label}</b><span class="count">${items.length}</span><span class="muted small">${hint}</span>`)); }
       for (const p of items) { wrap.appendChild(providerCard(p, list)); }
@@ -939,6 +988,54 @@
     draw();
     return box;
   }
+  /** One of the organisation's providers: name, endpoint and API shown locked; the API key is the only field, saved in the user's own list. */
+  function orgProviderCard(p) {
+    const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
+    const open = state.expanded === p.id;
+    const ks = keyState(p);
+    const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
+    const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'}` : probe ? 'unreachable' : '';
+    const c = el('div', 'prov managed');
+    c.dataset.prov = p.id;
+    const badges = `${ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${lockIcon('Endpoint, headers and API version are set by your organization')}`;
+    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(hostOfUrl(p.baseUrl) || p.baseUrl)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+    disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
+    if (!open) { return c; }
+    const body = el('div', 'prov-body');
+    const row = (label, desc, input) => { const f = el('div', 'field locked'); f.innerHTML = `<div><div class="lbl">${esc(label)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`; const ctl = el('div', 'ctl'); ctl.appendChild(input); f.appendChild(ctl); return f; };
+    const ro = (v) => { const i = el('input'); i.type = 'text'; i.value = v; i.disabled = true; i.title = MANAGED_TIP; return i; };
+    // Saved into the user's own provider list under the same id; only its key is used while the policy provides the provider.
+    const own = providersList();
+    const mine = own.find((x) => x.id === p.id);
+    const key = mine ? mine.apiKey : undefined;
+    const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(key || '') ? 'text' : 'password';
+    const stored = isSecretRef(key);
+    keyIn.value = stored ? '' : key || '';
+    keyIn.placeholder = stored ? '•••••••• saved in secret storage — type to replace' : 'paste your key, or ${env:API_KEY}';
+    const saveKey = (v) => {
+      const next = providersList(); const i = next.findIndex((x) => x.id === p.id);
+      if (i >= 0) { next[i] = { ...next[i], apiKey: v || undefined }; } else if (v) { next.push({ id: p.id, type: p.type, baseUrl: p.baseUrl, apiKey: v }); }
+      delete state.tests[p.id]; state.probedSig = ''; saveProviders(next);
+    };
+    const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((key || '') !== v) { saveKey(v); } };
+    keyIn.onchange = commitKey; keyIn.onblur = commitKey;
+    const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
+    if (key) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
+    const keyRow = el('div', 'field'); keyRow.innerHTML = `<div><div class="lbl">Your API key</div><div class="desc">${ks.note ? `<b>${ks.note}</b> ` : ''}Kept in VS Code secret storage (your OS keychain). Or write <code>\${env:NAME}</code> to read it from an environment variable.</div></div>`;
+    const kc = el('div', 'ctl'); kc.appendChild(keyCtl); keyRow.appendChild(kc);
+    body.appendChild(keyRow);
+    body.appendChild(row('Base URL', 'Set by your organization.', ro(p.baseUrl)));
+    body.appendChild(row('API type', '', ro(API_LABEL[p.type] || 'OpenAI API')));
+    if (p.headers && Object.keys(p.headers).length) { body.appendChild(row('Headers', 'Sent with every request; values are not shown.', ro(Object.keys(p.headers).join(', ')))); }
+    if (p.apiVersion) { body.appendChild(row('Azure api-version', '', ro(p.apiVersion))); }
+    const foot = el('div', 'prov-foot');
+    foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button><span class="spacer"></span>`;
+    foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: { ...p, apiKey: key } }); };
+    body.appendChild(foot);
+    if (probe) { body.appendChild(el('div', `prov-result ${probe.ok ? 'ok' : 'err'}`, probe.ok ? `${I.check} Connected in ${probe.latencyMs} ms` : `${I.x} ${esc(probe.error || 'Unreachable')}`)); }
+    c.appendChild(body);
+    return c;
+  }
   function providerCard(p, list) {
     const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
     const open = state.expanded === p.id;
@@ -956,6 +1053,7 @@
       isCloud(p) && !grouped ? '<span class="badge" title="Prompts and code sent to these models leave this machine">cloud</span>' : '',
       ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : n ? `<span class="badge ${status}">${esc(n)}</span>` : '',
       p.enabled === false ? '<span class="badge">disabled</span>' : '',
+      providerPolicyBlock(p) ? `<span class="badge err" title="${esc(providerPolicyBlock(p))}">blocked by policy</span>${lockIcon(providerPolicyBlock(p))}` : '',
     ].join('');
     c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn && p.enabled !== false ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(where)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
@@ -1608,7 +1706,8 @@
       for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
         const on = Object.keys(p.v).every((x) => p.v[x] === cur[x]);
         const b = el('button', `ap ${on ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
-        b.onclick = () => { for (const [x, v] of Object.entries(p.v)) { if (cur[x] !== v) { set(`approvals.${x}`, v); } } };
+        // A value the organisation does not allow is left as it is; the rest of the preset still applies.
+        b.onclick = () => { for (const [x, v] of Object.entries(p.v)) { if (cur[x] !== v && !policyRefuses(`approvals.${x}`, v)) { set(`approvals.${x}`, v); } } };
         presets.appendChild(b);
       }
       return component(presets, APPROVAL_KEYS, presetsEl);
@@ -1759,7 +1858,9 @@
   }
 
   // ------------------------------------------------------------------ skills & subagents
-  const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user' };
+  const SOURCE_LABEL = { builtin: 'built-in', workspace: 'workspace', user: 'user', managed: 'organization' };
+  /** A skill the organisation requires: its switch is locked on. */
+  const lockAlwaysOn = (tg, s) => { if (s.alwaysEnabled) { tg.disabled = true; tg.title = `${MANAGED_TIP} — always on`; tg.insertAdjacentHTML('afterend', lockIcon('Always on: required by your organization')); } };
   const SKILL_MODE_DESC = {
     auto: 'A registry skill that matches a request better than anything installed is installed as the request starts and loaded into it.',
     ask: 'A matching registry skill is offered as an “Install” chip; nothing is downloaded until you click it.',
@@ -1805,7 +1906,7 @@
       const row = el('div', `mrow sk ${s.disabled ? 'off' : ''}`);
       const tg = el('button', `toggle ${s.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.title = s.disabled ? 'Enable: the agent can see and load this skill' : 'Disable: hidden from the agent, stays on disk';
       tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleSkill', name: s.name, enabled: !!s.disabled }); };
-      row.appendChild(tg);
+      row.appendChild(tg); lockAlwaysOn(tg, s);
       row.appendChild(el('span', 'ic brand-mark sk-ic', I.book));
       row.appendChild(el('div', 't', `<b title="${esc(s.dir || '')}">${esc(s.name)}</b><span>${esc(s.description || '')}</span>`));
       const right = el('div', 'mrow-right');
@@ -1988,7 +2089,9 @@
     if (it.fromSettings) { tags.push('<span class="badge">settings.json</span>'); }
     if (it.notRun) { tags.push('<span class="badge warn" title="Hook scripts are named after the event they hook (PreToolUse.sh, TaskStart.py…): this one never runs">not an event</span>'); }
     if (it.version) { tags.push(`<span class="badge">${esc(it.version)}</span>`); }
-    if (!it.editable && !it.fromSettings) { tags.push('<span class="badge" title="From a parent folder of the workspace: change it there">parent folder</span>'); }
+    if (it.managed) { tags.push(`<span class="badge" title="From your organization's folder next to managed-settings.json">organization</span>`); }
+    if (it.alwaysEnabled) { tags.push(lockIcon('Always on: it cannot be switched off')); }
+    if (!it.editable && !it.fromSettings && !it.managed && !it.alwaysEnabled) { tags.push('<span class="badge" title="From a parent folder of the workspace: change it there">parent folder</span>'); }
     if (it.disabled) { tags.push('<span class="badge warn">disabled</span>'); }
     right.appendChild(el('div', 'tags', tags.join('')));
     const acts = el('div', 'acts');
@@ -2010,7 +2113,7 @@
         const row = el('div', `mrow sk ${s.disabled ? 'off' : ''}`);
         const tg = el('button', `toggle ${s.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.setAttribute('aria-checked', String(!s.disabled)); tg.setAttribute('aria-label', `${s.disabled ? 'Enable' : 'Disable'} ${s.name}`);
         tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleSkill', name: s.name, enabled: !!s.disabled }); };
-        row.appendChild(tg);
+        row.appendChild(tg); lockAlwaysOn(tg, s);
         row.appendChild(el('span', 'ic brand-mark sk-ic', I.book));
         row.appendChild(el('div', 't', `<b title="${esc(s.dir || '')}">${esc(s.name)}</b><span>${esc(s.description || '')}</span>`));
         const right = el('div', 'mrow-right');
@@ -2077,30 +2180,45 @@
   const joinArgs = (args) => args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '')}"` : a)).join(' ');
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the MCP tools approval policy.');
+    const cat = mcpCatState();
+    const tabs = el('div', 'seg mcp-tabs'); tabs.setAttribute('role', 'tablist');
+    tabs.innerHTML = [['installed', 'Servers'], ['browse', 'Browse']].map(([k, l]) => `<button role="tab" aria-selected="${cat.view === k}" class="${cat.view === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('');
+    tabs.onclick = (e) => { const b = e.target.closest('button'); if (b && b.dataset.k !== cat.view) { cat.view = b.dataset.k; render(); } };
+    const editBtn = el('button', 'btn sm', `${I.external}Edit configuration…`); editBtn.title = 'Open your mcp.json, the workspace .mcp.json or settings.json'; editBtn.onclick = () => post({ type: 'command', id: 'localpilot.editMcpConfig' });
+    const tabBar = el('div', 'btnrow'); tabBar.append(tabs, el('span', 'spacer'), editBtn);
+    sec.appendChild(tabBar);
+    if (cat.view === 'browse') { mcpBrowse(sec); return; }
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
     // Shown merged; written from the selected scope's own map so the other scope's servers are never copied into it.
     const own = () => ({ ...((state.scope === 'workspace' ? S('mcpServers').workspaceValue : S('mcpServers').userValue) || {}) });
     const status = new Map((state.data.mcp || []).map((s) => [s.name, s]));
     // Servers from .mcp.json files and plugins are listed too (read-only here: edit them in their file).
-    const names = [...new Set([...Object.keys(servers), ...status.keys()])];
+    const pol = POLICY();
+    // The organisation's servers: listed first, never edited here; `alwaysEnabled` ones have no switch at all.
+    const orgSrv = new Set(pol ? pol.mcpServers : []);
+    const alwaysOn = new Set(pol ? pol.mcpAlwaysEnabled : []);
+    const names = [...new Set([...orgSrv, ...Object.keys(servers), ...status.keys()])];
     const list = el('div');
     if (!names.length) { list.appendChild(el('div', 'empty', 'No MCP servers configured. Add one below — for example the filesystem or GitHub server from <code>@modelcontextprotocol</code>.')); }
     for (const name of names) {
       const st = status.get(name);
-      const inSettings = name in servers;
-      const s = servers[name] || {};
+      const managed = orgSrv.has(name);
+      const inSettings = name in servers && !managed;
+      const s = inSettings ? servers[name] : {};
       const off = inSettings ? s.enabled === false : !!st && st.state === 'disabled';
       const open = state.expanded === `mcp:${name}`;
       const c = el('div', `prov ${off ? 'off' : ''}`);
       const tools = st && st.state === 'connected' ? st.tools : undefined;
       const err = st && st.error;
       const busy = st && (st.state === 'connecting' || st.state === 'restarting');
-      const where = inSettings ? (s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' ')) : `from ${({ project: "the workspace's .mcp.json", user: 'your mcp.json', plugin: 'a plugin' })[st && st.source] || 'a server file'}`;
-      const badge = tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : off ? '<span class="badge">disabled</span>' : busy ? `<span class="badge warn">${st.state === 'restarting' ? 'restarting…' : 'connecting…'}</span>` : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`;
-      c.innerHTML = `<div class="prov-head"><span class="dot ${off ? '' : tools !== undefined ? 'ok' : busy ? 'busy' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(where)}</span></div><div class="prov-meta">${badge}${off ? '' : `<button class="btn sm ghost" data-restart title="Stop and start ${esc(name)} again">${I.refresh}Restart</button>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+      const auth = !off && st && st.state === 'auth_required';
+      const where = inSettings ? (s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' ')) : managed ? 'from your organization' : `from ${({ project: "the workspace's .mcp.json", user: 'your mcp.json', plugin: 'a plugin' })[st && st.source] || 'a server file'}`;
+      const badge = tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : off ? '<span class="badge">disabled</span>' : auth ? `<button class="btn sm primary" data-auth title="Sign in to ${esc(name)} in your browser (OAuth)">${I.external}Authenticate</button>` : busy ? `<span class="badge warn">${st.state === 'restarting' ? 'restarting…' : 'connecting…'}</span>` : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`;
+      c.innerHTML = `<div class="prov-head"><span class="dot ${off ? '' : tools !== undefined ? 'ok' : busy ? 'busy' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(where)}</span></div><div class="prov-meta">${managed ? lockIcon(alwaysOn.has(name) ? 'Always on: required by your organization' : 'Provided by your organization') : ''}${badge}${off ? '' : `<button class="btn sm ghost" data-restart title="Stop and start ${esc(name)} again">${I.refresh}Restart</button>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
       const restart = () => { post({ type: 'restartMcp', name }); toast(`Restarting ${name}…`); };
       const rb = c.querySelector('[data-restart]'); if (rb) { rb.onclick = (e) => { e.stopPropagation(); restart(); }; rb.onkeydown = (e) => e.stopPropagation(); }
-      if (err && !off && !busy) {
+      const ab = c.querySelector('[data-auth]'); if (ab) { ab.onclick = (e) => { e.stopPropagation(); post({ type: 'authMcp', name }); }; ab.onkeydown = (e) => e.stopPropagation(); }
+      if (err && !off && !busy && !auth) {
         const box = el('div', 'prov-result err mcp-err', `<span>${I.x} ${esc(err)}</span><button class="btn sm">Retry</button>`);
         box.querySelector('button').onclick = restart;
         c.appendChild(box);
@@ -2108,7 +2226,11 @@
       disclosure(c.querySelector('.prov-head'), open, `${name} server settings`, () => { state.expanded = open ? null : `mcp:${name}`; render(); });
       if (open) {
         if (st && st.state === 'connected') { c.appendChild(mcpInspect(name, st)); }
-        if (inSettings) { c.appendChild(mcpForm(name, s, servers, own)); } else {
+        if (managed) {
+          const note = el('div', 'prov-result mcp-err', `<span>${I.lock} Provided by your organization's policy${alwaysOn.has(name) ? ' and always on' : ''}. It cannot be edited here.</span>${alwaysOn.has(name) ? '' : `<button class="btn sm">${off ? 'Turn on' : 'Turn off'}</button>`}`);
+          const tb = note.querySelector('button'); if (tb) { tb.onclick = () => post({ type: 'toggleMcp', name, enabled: off }); }
+          c.appendChild(note);
+        } else if (inSettings) { c.appendChild(mcpForm(name, s, servers, own)); } else {
           const note = el('div', 'prov-result mcp-err', `<span>Defined in ${esc(({ project: "the workspace's .mcp.json", user: 'your mcp.json (~/.localpilot/mcp.json)', plugin: 'a plugin' })[st && st.source] || 'a server file')}. Edit it there; it reloads on save.</span>${st && st.source !== 'plugin' ? `<button class="btn sm">${off ? 'Turn on' : 'Turn off'}</button>` : ''}`);
           const tb = note.querySelector('button'); if (tb) { tb.onclick = () => post({ type: 'toggleMcp', name, enabled: off }); }
           c.appendChild(note);
@@ -2120,7 +2242,7 @@
     sec.appendChild(el('h2', 'sub', 'Add a server'));
     const add = el('div', 'card');
     const f = el('div', 'field wide');
-    f.innerHTML = `<div><div class="lbl">New MCP server</div><div class="desc">Give it a name and either the command that starts it (<code>npx -y @modelcontextprotocol/server-filesystem /path</code>) or the URL of a remote server (<code>https://mcp.example.com/mcp</code>). Add authentication headers after adding it.</div></div>`;
+    f.innerHTML = `<div><div class="lbl">New MCP server${pol && (pol.blockPersonalRemoteMcp || pol.allowedMcpServers) ? lockIcon(pol.blockPersonalRemoteMcp ? 'Only remote servers your organization lists can start' : 'Only servers on your organization\'s allowlist can start') : ''}</div><div class="desc">Give it a name and either the command that starts it (<code>npx -y @modelcontextprotocol/server-filesystem /path</code>) or the URL of a remote server (<code>https://mcp.example.com/mcp</code>). Add authentication headers after adding it.</div></div>`;
     const ctl = el('div', 'ctl');
     ctl.innerHTML = `<div class="row"><input type="text" id="mcpName" placeholder="name (e.g. filesystem)" style="max-width:200px"><input type="text" id="mcpCmd" placeholder="command and args, or https://… URL"><button class="btn primary sm" id="mcpAdd">${I.plus}Add</button></div>`;
     ctl.querySelector('#mcpAdd').onclick = () => {
@@ -2128,7 +2250,8 @@
       const raw = ctl.querySelector('#mcpCmd').value.trim();
       const parts = splitArgs(raw);
       if (!name || !parts.length) { toast('Name and a command or URL are required', 'error'); return; }
-      if (servers[name]) { toast(`“${name}” already exists`, 'error'); return; }
+      if (servers[name] || orgSrv.has(name)) { toast(`“${name}” already exists`, 'error'); return; }
+      if (pol && pol.blockPersonalRemoteMcp && /^https?:\/\//i.test(raw) && !(pol.allowedMcpServers || []).some((a) => a.url && a.url.replace(/\/+$/, '') === raw.replace(/\/+$/, ''))) { toast(`${MANAGED_TIP}: remote MCP servers it does not list are blocked`, 'error'); return; }
       const next = own();
       next[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0], args: parts.slice(1) };
       state.expanded = `mcp:${name}`;
@@ -2138,6 +2261,73 @@
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reconnect servers</button><span class="muted small">Servers start when LocalPilot activates and after you reload.</span>`;
     sec.appendChild(bar);
+  }
+  /** Browse tab: the bundled catalog (plus the MCP registry once refreshed), searched and filtered by tag. */
+  const mcpCatState = () => (state.mcpCat ||= { view: 'installed', q: '', tag: '', entries: [], loaded: false, loading: false, registry: false, error: '', jobs: {} });
+  function mcpBrowse(sec) {
+    const cat = mcpCatState();
+    if (!cat.loaded) { cat.loaded = true; cat.loading = true; post({ type: 'mcpCatalog' }); }
+    const tools = el('div', 'gal-tools');
+    const search = el('div', 'gal-search', I.search);
+    const q = el('input'); q.type = 'search'; q.id = 'mcp-q'; q.placeholder = 'Search servers — e.g. github, postgres, browser, search…'; q.value = cat.q; q.setAttribute('aria-label', 'Search MCP servers');
+    if (document.activeElement && document.activeElement.id === 'mcp-q') { requestAnimationFrame(() => { const n = app.querySelector('#mcp-q'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }
+    q.oninput = debounce(() => { cat.q = q.value.trim(); renderMcpCatalog(); }, 150);
+    search.appendChild(q); tools.appendChild(search);
+    const counts = new Map();
+    for (const e of cat.entries) { for (const t of e.tags || []) { counts.set(t, (counts.get(t) || 0) + 1); } }
+    const chips = el('div', 'chips');
+    for (const t of ['', ...[...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b)).slice(0, 14)]) {
+      const b = el('button', `chip ${cat.tag === t ? 'on' : ''}`, esc(t || 'All')); b.onclick = () => { cat.tag = t; render(); }; chips.appendChild(b);
+    }
+    tools.appendChild(chips);
+    sec.appendChild(tools);
+    const results = el('div', 'gal-results'); results.id = 'mcp-results';
+    sec.appendChild(results);
+    renderMcpCatalog(results);
+    const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
+    bar.innerHTML = `<span class="muted small">Installing adds the server to <code>~/.localpilot/mcp.json</code>; API keys you enter go to your OS keychain.${cat.registry ? ' Includes servers from the MCP registry.' : ''}</span><span class="spacer"></span><button class="btn sm" id="mcp-reg" ${cat.loading ? 'disabled' : ''} title="Fetch the server list from registry.modelcontextprotocol.io (only when you click)">${cat.loading ? '<span class="spinner"></span>' : I.refresh}Refresh from the MCP registry</button>`;
+    bar.querySelector('#mcp-reg').onclick = () => { cat.loading = true; render(); post({ type: 'mcpCatalog', refresh: true }); };
+    sec.appendChild(bar);
+  }
+  function renderMcpCatalog(container) {
+    const box = container || app.querySelector('#mcp-results');
+    if (!box) { return; }
+    box.innerHTML = '';
+    const cat = mcpCatState();
+    if (cat.loading && !cat.entries.length) { box.appendChild(skeleton('Loading the MCP catalog…', 4)); return; }
+    const have = new Set([...Object.keys(val('mcpServers') || {}), ...(state.data.mcp || []).map((s) => s.name)]);
+    const words = cat.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = cat.entries.filter((e) => (!cat.tag || (e.tags || []).includes(cat.tag)) && words.every((w) => `${e.id} ${e.name} ${e.tagline} ${(e.tags || []).join(' ')}`.toLowerCase().includes(w)));
+    if (cat.error) { box.appendChild(el('div', 'prov-result err mcp-err', `<span>${I.x} The MCP registry could not be loaded: ${esc(cat.error)}</span>`)); }
+    if (!rows.length) { box.appendChild(el('div', 'empty', cat.entries.length ? 'No server matches. Try other words, or add one by hand under <b>Servers</b>.' : 'The catalog is empty.')); return; }
+    box.appendChild(el('div', 'gal-count', `${rows.length} server${rows.length === 1 ? '' : 's'}${cat.q ? ` for “${esc(cat.q)}”` : ''}`));
+    const list = el('div', 'card');
+    for (const e of rows.slice(0, 80)) {
+      const installed = have.has(e.id);
+      const row = el('div', `mrow sk ${installed ? 'have' : ''}`);
+      row.appendChild(el('span', 'ic brand-mark sk-ic', I.plug));
+      const how = [e.install ? 'local' : '', e.remote ? 'remote' : ''].filter(Boolean).join(' · ');
+      const needs = ((e.install && e.install.env) || []).filter((v) => v.required && v.secret !== false).map((v) => v.name);
+      row.appendChild(el('div', 't', `<b>${esc(e.name)}</b><span>${esc(e.tagline || '')}${needs.length ? ` <i class="muted">· needs ${esc(needs.join(', '))}</i>` : ''}</span>`));
+      const right = el('div', 'mrow-right');
+      right.appendChild(el('div', 'tags', `${(e.tags || []).slice(0, 3).map((t) => `<span class="badge">${esc(t)}</span>`).join('')}<span class="badge" title="How it runs">${esc(how)}</span>${installed ? `<span class="badge ok">${I.check} added</span>` : ''}`));
+      const acts = el('div', 'acts');
+      if (e.repo) { const r = el('button', 'btn ghost sm', I.external); r.title = `Open ${e.repo}`; r.onclick = () => post({ type: 'openExternal', url: e.repo }); acts.appendChild(r); }
+      const job = cat.jobs[e.id];
+      if (job === 'running') {
+        acts.appendChild(el('span', 'note', '<span class="spinner"></span> Installing…'));
+      } else {
+        const b = el('button', `btn sm ${installed ? '' : 'primary'}`, `${I.download}${installed ? 'Add again' : 'Install'}`);
+        b.title = `Add “${e.name}” to ~/.localpilot/mcp.json`;
+        b.onclick = () => { cat.jobs[e.id] = 'running'; renderMcpCatalog(); post({ type: 'installMcpCatalog', id: e.id }); setTimeout(() => { if (cat.jobs[e.id] === 'running') { delete cat.jobs[e.id]; renderMcpCatalog(); } }, 120000); };
+        acts.appendChild(b);
+      }
+      right.appendChild(acts);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+    if (rows.length > 80) { list.appendChild(el('div', 'cat-more', `${rows.length - 80} more — narrow the search`)); }
+    box.appendChild(list);
   }
   /** Tabs listing what a connected server offers: its tools (required parameters marked *), resources and prompts. */
   function mcpInspect(name, st) {
@@ -2334,6 +2524,8 @@
     renderLogs();
     // Settings
     sec.appendChild(el('h2', 'sub', 'Telemetry'));
+    const orgOtlp = POLICY() && POLICY().telemetryEndpoint;
+    if (orgOtlp) { sec.appendChild(el('div', 'policy', `${I.lock}<div><b>${MANAGED_TIP}</b> Usage metrics, traces and the log are exported to <code>${esc(orgOtlp)}</code>, whatever is set below or in <code>OTEL_*</code> variables.</div>`)); }
     sec.appendChild(card(
       field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine (or to the Redis server below, when you turn that on) so this page can show them. Turning it off stops recording; the log is still mirrored for the viewer above. <b>Nothing is sent anywhere you did not configure.</b>', 'toggle'),
       field('telemetry.retentionDays', 'Keep for', 'Days of metrics and log files to keep; older files are deleted automatically. <code>0</code> keeps everything.', 'number', { min: 0, max: 3650, step: 1 })
@@ -2643,7 +2835,9 @@
       c.innerHTML = `<h3>3 · How much freedom should the agent have?</h3><p class="hint">You can change this any time in Settings → Agent &amp; approvals. Every file edit is tracked and can be undone regardless.</p>`;
       const presets = el('div', 'approval-presets');
       for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
-        const b = el('button', `ap ${su.approvals === k ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
+        // Preset values the organisation locks or forbids are not saved (finishSetup skips them); say which.
+        const held = Object.entries(p.v).filter(([x, v]) => policyRefuses(`approvals.${x}`, v)).map(([x]) => x);
+        const b = el('button', `ap ${su.approvals === k ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>${held.length ? `<span class="muted small">${lockIcon('')} Your organization sets ${esc(held.join(', '))}</span>` : ''}`);
         b.onclick = () => { su.approvals = k; render(); };
         presets.appendChild(b);
       }
@@ -2776,6 +2970,14 @@
         if (m.q !== reg.q) { break; }
         reg.loading = false; reg.entries = m.entries || []; reg.status = m.status || []; reg.refreshing = !!m.refreshing;
         if (state.section === 'skills') { renderSkillRegistry(); renderSkillRepoStatus(); }
+        break;
+      }
+      case 'mcpCatalog': {
+        const cat = mcpCatState();
+        cat.entries = m.entries || []; cat.registry = !!m.registry; cat.error = m.error || ''; cat.loading = !!m.loading;
+        if (!m.loading) { cat.jobs = {}; }
+        if (m.installed) { cat.view = 'installed'; state.expanded = `mcp:${m.installed}`; }
+        if (state.section === 'mcp') { render(); }
         break;
       }
       case 'skillJob':

@@ -75,7 +75,10 @@ const NONE: ManagedPolicy = { permissions: { deny: [], ask: [], allow: [] }, app
 export function managedPolicyPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = fs.existsSync): string {
   const system = platform === 'darwin' ? '/Library/Application Support/LocalPilot/managed-settings.json' : platform === 'win32' ? path.win32.join(env.ProgramData ?? 'C:\\ProgramData', 'LocalPilot', 'managed-settings.json') : '/etc/localpilot/managed-settings.json';
   // The environment can point elsewhere only where no administrator deployed a policy: it must not replace one.
-  return env.LOCALPILOT_MANAGED_SETTINGS && !exists(system) ? env.LOCALPILOT_MANAGED_SETTINGS : system;
+  // Only an absolute path counts: a relative one would follow whatever folder LocalPilot runs in, and the policy's
+  // skills, rules and commands folders next to it with it.
+  const override = env.LOCALPILOT_MANAGED_SETTINGS;
+  return override && path.isAbsolute(override) && !exists(system) ? override : system;
 }
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()) : []);
@@ -479,6 +482,43 @@ export function policyLocks(p: ManagedPolicy): PolicyLocks | undefined {
     mcpAlwaysEnabled: mcp.alwaysEnabled,
     telemetryEndpoint: org,
   };
+}
+
+/**
+ * The value in effect for each setting the policy decides (locked, or held at an approval floor), so Settings shows
+ * what applies rather than the user's stored value. `cfg` is getConfig() output, which already has the policy applied.
+ */
+export function policyEffectiveValues(
+  p: ManagedPolicy,
+  cfg: { approvals: Record<ApprovalKind, string>; telemetry: { enabled: boolean; otlp: OtlpSettings }; storage: { redis: { enabled: boolean } } },
+): Record<string, unknown> {
+  const locks = policyLocks(p);
+  if (!locks) {
+    return {};
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, mode] of Object.entries(cfg.approvals) as [ApprovalKind, string][]) {
+    const eff = flooredApproval(p, k, mode);
+    if (locks.locked[`approvals.${k}`] || eff !== mode) {
+      out[`approvals.${k}`] = eff;
+    }
+  }
+  const fixed: Record<string, unknown> = {
+    'autoMode.enabled': false,
+    'webSearch.enabled': false,
+    'skills.autoInstall': 'off',
+    'telemetry.enabled': cfg.telemetry.enabled,
+    'storage.redis.enabled': cfg.storage.redis.enabled,
+  };
+  for (const key of Object.keys(locks.locked)) {
+    if (key in fixed) {
+      out[key] = fixed[key];
+    } else if (key.startsWith('telemetry.otlp.') && key !== 'telemetry.otlp.headers') {
+      // Headers can carry the organisation's collector credentials: never echoed to the webview.
+      out[key] = cfg.telemetry.otlp[key.slice('telemetry.otlp.'.length) as keyof OtlpSettings];
+    }
+  }
+  return out;
 }
 
 /** One line per restriction, for `/permissions`, `localpilot doctor` and the Settings banner. */

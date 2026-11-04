@@ -178,15 +178,32 @@ The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, f
   "allowCloudProviders": false,       // only providers on this machine or the private network load
   "allowedProviderHosts": ["localhost", "127.0.0.1", "*.corp.example"],
   "allowWebAccess": false,            // removes web_search, web_fetch and the browser tools
-  "allowedMcpServers": ["github"],    // other MCP servers do not start
+  "allowedMcpServers": ["github", { "name": "jira", "url": "https://mcp.corp.example/jira" }], // other MCP servers do not start; a url or command pins what the name may point at
+  "mcpServers": {                     // the organization's MCP servers (the mcp.json shape); they win over any server of the same name
+    "docs": { "url": "https://mcp.corp.example/docs", "alwaysEnabled": true }
+  },
+  "blockPersonalRemoteMcp": true,     // remote (URL) servers start only when the policy lists their URL
+  "providers": [                      // merged into every user's providers and locked; users only add their key
+    { "id": "corp", "type": "openai", "baseUrl": "https://llm.corp.example/v1", "headers": { "X-Team": "eng" } }
+  ],
+  "allowedModels": ["corp/*", "ollama/qwen*"],  // globs over provider/model; other models are not listed or routed to
+  "telemetry": {                      // overrides the user's telemetry settings
+    "enabled": true,                  // force local recording on (or off)
+    "allowRemoteExport": false,       // the user's own OTLP export and Redis storage stay off (the default)
+    "otlp": { "endpoint": "https://otel.corp.example:4318", "headers": { "x-api-key": "…" } } // exported here regardless of the user's opt-out and OTEL_* variables
+  },
   "allowSkillInstall": false,         // no skill downloads; skills from a local folder still install
   "auditLog": "/var/log/localpilot/${workspaceFolder}.jsonl"  // every tool call and approval, as JSON Lines
 }
 ```
 
-Rules use the same syntax as [permission rules](claude-code-compatibility.md) in `settings.json`. Every key is optional. A policy file that exists but cannot be parsed fails closed: cloud providers, web access and skill downloads are switched off, and every action needs approval, until it is fixed.
+Rules use the same syntax as [permission rules](claude-code-compatibility.md) in `settings.json`. Every key is optional. A policy file that exists but cannot be parsed fails closed: cloud providers, web access, remote MCP servers, telemetry export and skill downloads are switched off, and every action needs approval, until it is fixed.
 
-Users see the policy in **Settings** (a note on the Agent & approvals, Providers, Skills, MCP and Web search pages), in `/permissions` in the chat, and in `localpilot doctor`. Each audit record has the time, user, host, workspace, session, tool, its arguments (cut at 2,000 characters), the outcome, and whether the policy blocked it. Approvals are recorded with who decided: the setting, the policy, Auto mode or the user.
+The organization's providers are exempt from `allowCloudProviders` and `allowedProviderHosts`. Users enter their key on the provider's card in **Settings → Providers** or with `localpilot providers key <id>`; `localpilot providers remove` refuses them. A user can switch off an organization MCP server unless it has `"alwaysEnabled": true`.
+
+**Organization rules, skills and commands.** The `rules/`, `skills/` and `commands/` folders next to the policy file are loaded as an extra layer with the source *organization*. Organization rules come last in the prompt, so they take precedence and are the last to be cut by the size limit. Organization skills and commands take precedence over workspace and user ones with the same name. These items can be opened from **Settings → Customize** but not changed or deleted there. An organization item with `alwaysEnabled: true` in its front matter cannot be switched off; the key is ignored in workspace and user rules, skills and commands.
+
+Users see the policy in **Settings** (a note on the Agent & approvals, Providers, Skills, MCP and Web search pages), in `/permissions` in the chat, and in `localpilot doctor`. Every setting the policy decides shows a lock icon with the tooltip *Managed by your organization*, and its control is disabled and shows the value the policy applies, not the one stored in your settings. The setup wizard does not save approval values the policy forbids. Approval options below a floor are greyed out. When the organization exports telemetry, the Dashboard says where. Each audit record has the time, user, host, workspace, session, tool, its arguments (cut at 2,000 characters), the outcome, and whether the policy blocked it. Approvals are recorded with who decided: the setting, the policy, Auto mode or the user.
 
 ## Terminal
 
@@ -273,6 +290,10 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 ## MCP
 
 `localpilot.mcpServers` (default `{}`): see [MCP servers]({{ '/docs/mcp/' | relative_url }}).
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.mcp.watchServerFiles` | `true` | Restart a local MCP server 500 ms after its workspace script changes (a `.js`, `.mjs`, `.cjs` or `.py` file in its command or arguments, or a file under `build/` or `dist/`) |
 
 ## Example
 

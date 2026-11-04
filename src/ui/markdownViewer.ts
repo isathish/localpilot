@@ -4,8 +4,6 @@ import { resolveWorkspacePath } from '../tools/fs';
 import { Tool } from '../types';
 import { MarkdownViewSession, ReaderChat, Source } from './markdown/viewSession';
 
-/** Test hooks. */
-export const __test = { serializerRegistered: false };
 
 /**
  * A dedicated, distraction-free reader for Markdown: assistant answers, specs and plans the agent writes,
@@ -41,7 +39,6 @@ export class MarkdownViewer implements vscode.Disposable {
    * text has nothing to come back to and is closed. Register it synchronously during activation.
    */
   static registerSerializer(_ctx: vscode.ExtensionContext): vscode.Disposable {
-    __test.serializerRegistered = true;
     return vscode.window.registerWebviewPanelSerializer(MarkdownViewer.viewType, {
       async deserializeWebviewPanel(panel: vscode.WebviewPanel, state: unknown) {
         const src = (state as { source?: { kind?: string; uri?: string } } | undefined)?.source;

@@ -312,6 +312,10 @@ export class McpClient implements vscode.Disposable {
    * answers 404 (or a 400 naming the session), so the client starts a new session and retries once.
    */
   private async requestWithReinit(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown> {
+    // A session renewal in progress has cleared the session: wait for the new one instead of sending without it.
+    if (this.reinit) {
+      await this.reinit.catch(() => undefined);
+    }
     const transport = this.transport;
     const hadSession = transport instanceof StreamableHttpTransport && transport.hasSession;
     try {
@@ -518,7 +522,20 @@ export class McpManager implements vscode.Disposable {
   constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
     // Only a change to the servers themselves restarts them. Any other localpilot.* change (a default model, LocalPilot's
     // own auto-tuning) used to stop every server and fail the MCP tool calls in flight.
-    this.configSub = onConfigChange(() => void this.reloadIfChanged());
+    let watching = getConfig().mcpWatchServerFiles;
+    this.configSub = onConfigChange(() => {
+      // Turning the file watch on or off does not change any server, so the running ones are (un)watched here.
+      if (getConfig().mcpWatchServerFiles !== watching) {
+        watching = !watching;
+        for (const name of this.started.keys()) {
+          const cfg = this.servers[name];
+          if (cfg) {
+            this.watchServerFiles(name, cfg);
+          }
+        }
+      }
+      void this.reloadIfChanged();
+    });
   }
 
   /** Reloads run one at a time: a second settings change while servers are still starting must not race a stop against a start. */

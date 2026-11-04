@@ -416,7 +416,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     vscode.commands.registerCommand('localpilot.openPdf', async (arg?: unknown) => {
       const uri = arg instanceof vscode.Uri ? arg : (await vscode.window.showOpenDialog({ canSelectMany: false, openLabel: 'Open PDF', filters: { PDF: ['pdf'] }, defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri }))?.[0];
       if (uri) {
-        await openPdf(uri);
+        // `file.pdf#page=3` opens at that page (and reuses an open viewer of the file).
+        const page = /(?:^|&)page=(\d+)/.exec(uri.fragment)?.[1];
+        await openPdf(uri, page ? Number(page) : undefined);
       }
     }),
     vscode.commands.registerCommand('localpilot.pdf.attachPageImage', () => {

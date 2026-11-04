@@ -94,11 +94,11 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot providers key <id> [key]` | Sets a provider's API key: as an argument, typed at a hidden prompt, or piped in (`pass openai \| localpilot providers key openai`). `--key-env VAR` reads it from a variable instead; `--remove-key` deletes it |
 | `localpilot providers test [id]` | Checks one provider, or all, and lists their models |
 | `localpilot providers remove <id>` | Removes a provider added from the CLI, with its stored key. A provider from VS Code settings is disabled for the CLI only |
-| `localpilot mcp [list] [--json]` | Lists the MCP servers in force: transport, command or URL, on/off state, the file each comes from and any definition it overrides. Without arguments in a terminal, a numbered menu to add, remove, enable, disable or sign in |
+| `localpilot mcp [list] [--json]` | Lists the MCP servers in force: transport, command or URL, on/off state, where each comes from (your organization's policy, the setting, a file or a plugin) and any definition it overrides. Without arguments in a terminal, a numbered menu to add, remove, enable, disable or sign in |
 | `localpilot mcp add <name> [--env K=V]… -- <command> [args…]` | Adds a local (stdio) server to `~/.localpilot/mcp.json`, or to `./.mcp.json` with `--scope project`. Everything after `--` is the server's command line. `--force` replaces a server of the same name |
 | `localpilot mcp add <name> <url> [--transport http\|sse] [--header "K: V"]…` | Adds a remote server. Without `--transport`, Streamable HTTP is tried first, then SSE |
-| `localpilot mcp remove\|enable\|disable <name>` | Removes a server from its file, or switches it on or off where it is defined (a file's `disabled` field, or the `localpilot.mcpServers` setting in `~/.localpilot/config.json`) |
-| `localpilot mcp auth <name>` | Connects to a remote server once, so it can sign you in, and reports its tools |
+| `localpilot mcp remove\|enable\|disable <name>` | Removes a server from its file, or switches it on or off where it is defined (a file's `disabled` field, or the `localpilot.mcpServers` setting in `~/.localpilot/config.json`). A server from your organization's policy is switched off with a `{ "enabled": false }` entry in that setting, unless the policy keeps it always on |
+| `localpilot mcp auth <name>` | Connects to a remote server and reports its tools. When the server asks for sign-in (OAuth), your browser opens; the token is saved in `~/.localpilot/secrets.json` (readable only by you) and later CLI sessions use it |
 | `localpilot skill install <source> [--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `--user` installs to `~/.localpilot/skills` |
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
 | `localpilot eval [--models a,b]` | Benchmarks models on real coding tasks; see [Benchmarking models](#benchmarking-models) |
@@ -106,6 +106,9 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot history [--json] [--limit 50]` | Lists the sessions saved in this folder, newest first, with title, age, message count and model. `--json` prints them as JSON |
 | `localpilot history delete <id>` | Deletes a saved session (by id, unique id prefix or list number) |
 | `localpilot history export <id> [-o file]` | Exports a session as Markdown (printed, or written to `-o file.md`) or as a standalone HTML page (`-o file.html`) |
+| `localpilot history import [claude\|codex] [N\|all]` | Imports this folder's Claude Code chats (`~/.claude/projects/…`) and Codex chats (`~/.codex/sessions/…`) into the saved sessions; see [Importing chats](#importing-claude-code-and-codex-chats) |
+| `localpilot schedule create <name> --cron "…" --prompt "…"` | Runs a task on a schedule, unattended; see [Scheduled agents](#scheduled-agents) |
+| `localpilot --acp` | Serves the Agent Client Protocol on stdio for Zed, JetBrains IDEs and Neovim; see [Editors over ACP](acp.md) |
 | `localpilot work [--once] [--max N]` | Takes tasks from the [shared board](parallel-agents.md#the-shared-board) (`.localpilot/board`) one after another until none is left; run several for parallel workers |
 
 ### Benchmarking models
@@ -212,6 +215,30 @@ Every CLI session is saved after each turn, per folder, under `~/.localpilot/wor
 
 VS Code lists these sessions in the chat history of the same folder, marked **CLI** (turn off with `localpilot.history.includeCli`). Continuing one in VS Code saves it with the editor's chats; deleting it there deletes the CLI's copy too. Forks made in either place show "forked from …" in the history.
 
+### Importing Claude Code and Codex chats
+
+`localpilot history import` lists the Claude Code and Codex chats held in the current folder, with title, age and message count, and asks which to import (`1,3`, `2-5` or `all`). Pass the selection directly to skip the question (`localpilot history import all`), or `claude` / `codex` to list one tool only. User messages, replies (with their reasoning) and tool calls with their results become a normal saved session: `localpilot -r` resumes it on your own model. Importing the same chat again does nothing.
+
+In VS Code, **LocalPilot: Import Claude Code / Codex Sessions…** (also in the chat's **…** menu) does the same with a multi-select picker. Imported chats are marked **Claude Code** or **Codex** in the history.
+
+### Scheduled agents
+
+```bash
+localpilot schedule create nightly --cron "0 3 * * 1-5" --prompt "Run the tests; fix what fails and commit nothing" --timeout 30m
+localpilot schedule list                 # next run and last result of each
+localpilot schedule run nightly          # run it now
+localpilot schedule history nightly      # past runs and their reports
+localpilot schedule pause nightly        # resume / delete work the same way
+```
+
+A schedule has a name, a 5-field cron expression in local time (`minute hour day-of-month month day-of-week`, with lists, ranges, steps, `mon-fri` and `@daily`-style aliases), a prompt, and optionally `--cwd` (default: the current folder), `--mode agent|plan|ask`, `--model provider/model` and `--timeout` (default 30 minutes). Schedules are kept in `~/.localpilot/schedules.json`.
+
+No service runs in the background: the operating system's scheduler starts each run. On Linux that is a line in your crontab, on macOS a launchd agent (`~/Library/LaunchAgents/dev.localpilot.schedule.<name>.plist`), on Windows a Task Scheduler task under `LocalPilot\`. Task Scheduler handles every N minutes, hourly, daily, weekly and monthly expressions; others are refused there. Without the `localpilot` command installed, a Windows task runs VS Code's own binary in Node mode; when that command line is longer than Task Scheduler's 261 characters, install the command (**LocalPilot: Install 'localpilot' CLI in PATH**) and create the schedule again. Set `LOCALPILOT_SCHEDULER=off` to keep schedules in the file only.
+
+Each run is `localpilot --yolo --json --timeout … -C <folder> "<prompt>"`, so it is unattended: edits and commands are approved, and only the core file and command tools are offered. A run of a schedule that is still going is skipped. Every run writes a Markdown report (status, answer, tools used, errors) to `~/.localpilot/schedules/reports/<run-id>.md` and a line to `~/.localpilot/schedules/history.jsonl`.
+
+The agent can manage schedules too, with the `schedule` tool ("every weekday at 7 check the dependencies for vulnerabilities"). Listing needs no approval; creating, deleting and starting a run ask like a terminal command.
+
 ### Interactive session
 
 Run `localpilot` with no task to start a session. These commands are available:
@@ -219,6 +246,7 @@ Run `localpilot` with no task to start a session. These commands are available:
 | Command | What it does |
 |---|---|
 | `/mode agent\|multitask\|debug\|plan\|ask` | Switch mode |
+| `/team <task>` | Coordinate a team: Multitask mode, the pieces go on the [shared board](parallel-agents.md#the-shared-board) and to background workers |
 | `/model <name>`, `/models` | Switch model, list models |
 | `/thinking <level>` | This session's thinking level (`auto`, `off`, `low`, `medium`, `high`, `max`); remembered for later sessions |
 | `/providers` | List providers with reachability and key state |

@@ -24,7 +24,7 @@ export class RunNotifier implements vscode.Disposable {
   constructor(private readonly chatVisible: () => boolean) {}
 
   private due(): boolean {
-    return shouldNotify(getConfig().notifications, this.chatVisible(), vscode.window.state.focused);
+    return shouldNotify(getConfig().notifications, this.chatVisible(), vscode.window.state?.focused ?? true);
   }
 
   /** Follows the top-level tool events of a run. */

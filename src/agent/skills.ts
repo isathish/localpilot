@@ -217,7 +217,8 @@ export class SkillManager implements vscode.Disposable {
           dir: path.join(dir, name),
           body,
           source,
-          ...(alwaysEnabled(meta) ? { alwaysEnabled: true } : {}),
+          // Only the organisation's skills can be locked on.
+          ...(source === 'managed' && alwaysEnabled(meta) ? { alwaysEnabled: true } : {}),
         });
       } catch {
         /* no SKILL.md */

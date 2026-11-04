@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -292,4 +293,110 @@ export function formatBoard(all: BoardTask[], now = Date.now()): string {
   return all
     .map((t) => `${t.id} [${label(t)}${waiting(t) ? `, waits for ${t.dependsOn.join(', ')}` : ''}] p${t.priority} ${t.title}${t.owner ? ` — ${t.owner}` : ''}${t.notes.length ? ` · ${t.notes.length} note${t.notes.length === 1 ? '' : 's'}` : ''}`)
     .join('\n');
+}
+
+/**
+ * The board's mailbox: short messages between the people and agents working on it, kept beside the tasks in
+ * `.localpilot/board/mail.jsonl` (append-only). A message goes to an owner (`user@host · session 1a2b3c4d`, or just the
+ * session's last characters), to whoever holds a task (its id), or to everyone (`*`). Each reader keeps its own cursor
+ * under `.localpilot/board/mail-read/`, so reading never rewrites the shared file.
+ */
+export interface BoardMessage {
+  id: string;
+  at: string;
+  from: string;
+  to: string;
+  text: string;
+}
+
+/** A newcomer's first inbox includes broadcasts sent up to this long before it looked. */
+export const BROADCAST_BACKLOG_MS = 24 * 3_600_000;
+
+export const mailFile = (root: string) => path.join(boardDir(root), 'mail.jsonl');
+
+/** Pure: whether `m` is for `me` (holding the tasks `myTasks`); a sender never receives its own messages. */
+export function addressedTo(m: BoardMessage, me: string, myTasks: string[] = []): boolean {
+  if (m.from === me) {
+    return false;
+  }
+  const to = m.to.trim();
+  return to === '*' || to === me || myTasks.includes(to) || (to.length >= 6 && me.endsWith(to));
+}
+
+/** Pure: the messages of an inbox as text for the agent (oldest first). */
+export function formatMail(msgs: BoardMessage[]): string {
+  return msgs.map((m) => `- ${m.at.slice(0, 16).replace('T', ' ')} from ${m.from}${m.to === '*' ? ' (to everyone)' : ''}: ${m.text}`).join('\n');
+}
+
+export class BoardMailbox {
+  constructor(readonly root: string) {}
+
+  private cursorFile(me: string): string {
+    return path.join(boardDir(this.root), 'mail-read', `${slug(me)}-${createHash('sha1').update(me).digest('hex').slice(0, 10)}.json`);
+  }
+
+  async all(): Promise<BoardMessage[]> {
+    let text: string;
+    try {
+      text = await fs.promises.readFile(mailFile(this.root), 'utf8');
+    } catch {
+      return [];
+    }
+    const out: BoardMessage[] = [];
+    for (const l of text.split('\n')) {
+      try {
+        const m = JSON.parse(l) as BoardMessage;
+        if (m && typeof m.text === 'string' && typeof m.to === 'string') {
+          out.push(m);
+        }
+      } catch {
+        /* blank or torn line */
+      }
+    }
+    return out;
+  }
+
+  /** Appends one message; `to` is an owner, a task id or `*`. */
+  async send(from: string, to: string, text: string): Promise<BoardMessage> {
+    const m: BoardMessage = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: new Date().toISOString(), from, to: to.trim() || '*', text: text.trim().replace(/\s*\n\s*/g, ' ').slice(0, 2000) };
+    await fs.promises.mkdir(boardDir(this.root), { recursive: true });
+    await fs.promises.appendFile(mailFile(this.root), `${JSON.stringify(m)}\n`);
+    return m;
+  }
+
+  /** Unread messages for `me`, oldest first; marks them read unless `peek`. */
+  async inbox(me: string, myTasks: string[] = [], opts: { peek?: boolean; now?: number } = {}): Promise<BoardMessage[]> {
+    const { messages, seen } = await this.peekInbox(me, myTasks, opts.now);
+    if (!opts.peek) {
+      await this.markRead(me, seen, opts.now);
+    }
+    return messages;
+  }
+
+  /** Unread messages for `me` without moving the cursor, plus the position to pass to `markRead` once they are handled. */
+  async peekInbox(me: string, myTasks: string[] = [], now = Date.now()): Promise<{ messages: BoardMessage[]; seen: number }> {
+    const all = await this.all();
+    const cursor = await this.readCursor(me);
+    const messages = all.slice(cursor ? Math.min(cursor.seen, all.length) : 0).filter((m) => addressedTo(m, me, myTasks) && (cursor || m.to !== '*' || now - Date.parse(m.at) <= BROADCAST_BACKLOG_MS));
+    return { messages, seen: all.length };
+  }
+
+  /** Moves `me`'s cursor to `seen` (from `peekInbox`); never backwards. */
+  async markRead(me: string, seen: number, now = Date.now()): Promise<void> {
+    const cursor = await this.readCursor(me);
+    if (cursor && cursor.seen >= seen) {
+      return;
+    }
+    const file = this.cursorFile(me);
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify({ seen, since: cursor?.since ?? new Date(now).toISOString() }));
+  }
+
+  private async readCursor(me: string): Promise<{ seen: number; since: string } | undefined> {
+    try {
+      return JSON.parse(await fs.promises.readFile(this.cursorFile(me), 'utf8')) as { seen: number; since: string };
+    } catch {
+      return undefined; // first look
+    }
+  }
 }

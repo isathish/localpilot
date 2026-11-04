@@ -17,9 +17,13 @@ export function normalizeCommandName(raw: string): string {
     .replace(/[^a-z0-9_.:@-]/g, '');
 }
 
-/** What `/name` runs: a LocalPilot built-in command first, then an enabled skill of that name, then a custom command. */
-export function pickSlashTarget<C extends { source: string }, S>(command: C | undefined, skill: S | undefined): { command: C } | { skill: S } | undefined {
+/** What `/name` runs: a LocalPilot built-in command first, then an enabled skill of that name (a bundled one only when no custom command has the name), then a custom command. */
+export function pickSlashTarget<C extends { source: string }, S extends { name: string; source?: string }>(command: C | undefined, skill: S | undefined): { command: C } | { skill: S } | undefined {
   if (command?.source === 'builtin') {
+    return { command };
+  }
+  // A skill bundled with LocalPilot never shadows a command the user or the project wrote with the same name.
+  if (command && skill?.source === 'builtin') {
     return { command };
   }
   if (skill) {

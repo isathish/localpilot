@@ -62,12 +62,17 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **A transcript you can follow.**
   - Reasoning, steps and status stream live.
   - A one-line work strip says what the agent is doing.
-  - Bursts of reads and searches fold into one row.
+  - Bursts of read-only steps (reads, searches, symbol lookups, web lookups, diagnostics) fold into one row, "Explored 7 files · 3 searches", and the view stays pinned to the bottom when groups fold away.
   - Web results show as link cards.
+  - ```` ```mermaid ```` blocks in answers are drawn as diagrams (bundled, offline), with **Source**, **Copy source** and **Open in reader**.
+  - File links in answers are checked: a path that names no file in the workspace shows as plain code instead of a link that would fail.
+  - While the model thinks for more than a few seconds, a short tip about a feature shows under the status line (`localpilot.showTips`).
+- **Task header.** A card under the tabs shows the chat's first prompt (click to expand it), the folder or isolated worktree it runs in, its tokens and, for priced cloud models, its cost, plus **Copy** and **Delete** (the tooltip gives the size on disk). Fold it away with its chevron; it stays folded.
+- **What's new.** After an update, the empty chat shows the top items of the new version's changelog once, with **Open changelog**. Nothing is fetched from the network.
 - **Every answer shows its model and speed,** with Copy, **Regenerate** and Open as document. A failed answer keeps **Retry** and **Change model**.
 - **Quote and find your place.** Select text in an answer and click **Quote**. The quote shows above the input (✕ removes it) and is sent in front of your reply as a `> ` block. When you scroll up past your last request, a strip at the top shows it; click the strip to jump back to it.
 - **Sessions.** Chats are saved per workspace, with a history panel, fork, pin, rename and export to Markdown. **Edit** any of your messages, or use **Restore checkpoint** to restore the files, the conversation, or both ([details](#checkpoints)). Restore checkpoint applies to chats that edit the workspace directly; in an isolated worktree chat use **Discard**, or **Edit** and **Reset Chat** to rewind only the conversation.
-- **Slash commands.** `/help`, `/model`, `/mode`, `/compact` (or `/smol`), `/newtask` (continue in a new chat that starts from a summary of this one), `/deep-planning <task>` (investigate, ask, then write `implementation_plan.md`), `/newrule` (or `/init`, write a project rule file in `.localpilot/rules/`), `/<skill-name> <task>`, `/clear`, `/skills`, `/agents`, `/commands`, `/skill`, `/agent`, `/memory`, `/permissions`, `/hooks`, `/context`.
+- **Slash commands.** `/help`, `/model`, `/mode`, `/compact` (or `/smol`), `/newtask` (continue in a new chat that starts from a summary of this one), `/deep-planning <task>` (investigate, ask, then write `implementation_plan.md`), `/team <task>` (split the work for background workers and the shared board), `/newrule` (or `/init`, write a project rule file in `.localpilot/rules/`), `/<skill-name> <task>`, `/clear`, `/skills`, `/agents`, `/commands`, `/skill`, `/agent`, `/memory`, `/permissions`, `/hooks`, `/context`.
 - **The chat goes where you want it.** Primary or Secondary Side Bar, bottom Panel or an editor tab (**Move Chat To…**). It works the same in each, down to narrow widths.
 
 ![A finished agent turn: a step summary (read, searched, edited +6 −4, ran pytest), the answer with a list, inline code and a syntax-highlighted code block with Copy, Insert and Save actions]({{ '/assets/screenshots/chat-rendering.png' | relative_url }})

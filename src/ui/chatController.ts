@@ -35,6 +35,7 @@ import { userText } from '../agent/clarify';
 import { findRipgrep, runProcess } from '../tools/search';
 import { releaseIntegratedTerminal } from '../tools/terminal';
 import { agentTaskPrompt, CommandManager, CustomCommand, deepPlanningPrompt, expandCommand, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
+import { teamPrompt } from '../agent/teamBrief';
 import { findSlashToken, normalizeCommandName, pickSlashTarget, SlashToken, spliceSlashToken } from '../agent/slashNames';
 import { PlanTurnOutcome, saveImplementationPlan } from '../agent/deepPlanning';
 import { BASIC_KEEP_ASSISTANT, basicSummary } from '../context/basicCompaction';
@@ -716,7 +717,7 @@ export class ChatController implements vscode.Disposable {
     const offers = this.offers.get(session.id);
     const r = this.replays.get(session.id);
     // The folder the chat works in, for the task header's badge.
-    const cwd = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.workspace.root;
+    const cwd = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.workspace?.root;
     if (!r) {
       return { type: 'session', session, offers, cwd };
     }
@@ -3270,7 +3271,7 @@ export class ChatController implements vscode.Disposable {
             '- `/model <provider/model>` — switch model for this session',
             '- `/mode agent|multitask|debug|plan|ask` — switch mode',
             '- `/compact` (or `/smol`) — summarise older messages to free context · `/newtask [note]` — continue in a new chat that starts from a summary of this one',
-            '- `/deep-planning <task>` — investigate, ask, then write an implementation plan (Plan mode for that turn) · `/newrule [topic]` (or `/init`) — write a project rule file',
+            '- `/deep-planning <task>` — investigate, ask, then write an implementation plan (Plan mode for that turn) · `/team <task>` — split the task for background workers and the shared board (Multitask mode) · `/newrule [topic]` (or `/init`) — write a project rule file',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents · `/commands` — list custom commands',
             '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill registry',
@@ -3349,6 +3350,18 @@ export class ChatController implements vscode.Disposable {
           return say('Usage: `/deep-planning <task>` — investigates the code, asks what it cannot tell, then writes `implementation_plan.md` (the turn runs in Plan mode).');
         }
         return { rewrite: deepPlanningPrompt(rest), planTurn: true };
+      case 'team':
+        if (!rest.trim()) {
+          return say('Usage: `/team <task>` — splits the task into pieces on the shared board and hands them to background workers (switches this chat to Multitask mode).');
+        }
+        // The coordinator brief needs Multitask mode (delegation tools, no direct edits); the chat stays in it, as with /mode.
+        if (session.mode !== 'multitask') {
+          this.telemetry?.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: 'multitask', source: 'slash' });
+          session.mode = 'multitask';
+          this.store.save(session);
+          this.broadcast(this.sessionMsg(session));
+        }
+        return { rewrite: teamPrompt(rest) };
       case 'mode':
         if ((ALL_MODES as readonly string[]).includes(rest.trim())) {
           if (session.mode !== rest.trim()) {

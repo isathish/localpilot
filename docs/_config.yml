@@ -77,6 +77,8 @@ nav:
     url: /docs/memory-and-planning/
   - title: Terminal & CLI
     url: /docs/terminal-and-cli/
+  - title: Zed, JetBrains & Neovim (ACP)
+    url: /docs/acp/
   - title: Context & mentions
     url: /docs/context/
   - title: Screenshots & images

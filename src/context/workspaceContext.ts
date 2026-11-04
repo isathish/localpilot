@@ -180,7 +180,8 @@ export class WorkspaceContext implements vscode.Disposable {
    */
   contextPaths(message: string, workingSet: readonly string[] = []): string[] {
     const out = new Set(pathsInText(message));
-    const uris = [...vscode.window.visibleTextEditors.map((e) => e.document.uri), ...vscode.window.tabGroups.all.flatMap((g) => g.tabs).map((t) => (t.input instanceof vscode.TabInputText ? t.input.uri : undefined))];
+    // Hosts without editors (the CLI shim, the offline test stub) may lack either list.
+    const uris = [...(vscode.window.visibleTextEditors ?? []).map((e) => e.document.uri), ...(vscode.window.tabGroups?.all ?? []).flatMap((g) => g.tabs).map((t) => (t.input instanceof vscode.TabInputText ? t.input.uri : undefined))];
     for (const uri of uris) {
       if (uri?.scheme === 'file') {
         const rel = vscode.workspace.asRelativePath(uri, false);

@@ -23,9 +23,27 @@ export const livePdfViews = {
 export async function openPdf(uri: vscode.Uri, page?: number): Promise<void> {
   const file = uri.with({ fragment: '' });
   const n = page && page > 0 ? Math.floor(page) : undefined;
-  const live = livePdfViews.views.get(file.toString());
+  const key = file.toString();
+  const live = livePdfViews.views.get(key);
   if (live) {
     live.reveal(n);
+    return;
+  }
+  // A tab of this file whose viewer is still starting (a second link clicked right after the first): focus that tab
+  // and go to the page once its viewer has registered, instead of opening the file again.
+  const tab = vscode.window.tabGroups.all
+    .flatMap((g) => g.tabs)
+    .find((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType === PDF_VIEW_TYPE && t.input.uri.with({ fragment: '' }).toString() === key);
+  if (tab) {
+    await vscode.commands.executeCommand('vscode.openWith', (tab.input as vscode.TabInputCustom).uri, PDF_VIEW_TYPE);
+    for (let i = 0; i < 50; i++) {
+      const v = livePdfViews.views.get(key);
+      if (v) {
+        v.reveal(n);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
     return;
   }
   await vscode.commands.executeCommand('vscode.openWith', n ? file.with({ fragment: `page=${n}` }) : file, PDF_VIEW_TYPE);

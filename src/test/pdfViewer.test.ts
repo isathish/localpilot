@@ -8,7 +8,6 @@ import { openFileTool } from '../tools/editor';
 import { ToolContext } from '../types';
 import { ChatController } from '../ui/chatController';
 import { isAllowedExternalLink, isBase64, MAX_RANGE_BYTES, pageFromFragment, rangeAllowed, rememberPosition, selectionDraft, validatePdfViewerMessage } from '../pdf/viewerMessages';
-import { livePdfViews, openPdf } from '../ui/pdf/open';
 import { makePdf } from './fixtures/makePdf';
 
 const EXT = 'localpilot.localpilot-agent';
@@ -176,9 +175,10 @@ suite('PDF viewer: VS Code integration', () => {
 
   test('openPdf with a page opens the viewer once; a second link reuses the tab', async () => {
     const uri = await workspaceFile('viewer-link.pdf', makePdf(['One', 'Two']));
-    await openPdf(uri, 2);
-    assert.ok(await waitFor(() => !!pdfTab() && livePdfViews.views.has(uri.toString())), 'PDF opened in the custom editor');
-    await openPdf(uri, 1);
+    await vscode.commands.executeCommand('localpilot.openPdf', uri.with({ fragment: 'page=2' }));
+    // The extension runs from its bundle: watch the tab, not module state imported here.
+    assert.ok(await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).some((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType === 'localpilot.pdfViewer' && /viewer-link\.pdf$/.test(t.input.uri.path))), 'PDF opened in the custom editor');
+    await vscode.commands.executeCommand('localpilot.openPdf', uri.with({ fragment: 'page=1' }));
     const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
     assert.strictEqual(tabs.filter((t) => t.input instanceof vscode.TabInputCustom && /viewer-link\.pdf$/.test(t.input.uri.path)).length, 1);
     assert.ok(!tabs.some((t) => t.input instanceof vscode.TabInputText && /viewer-link\.pdf$/.test(t.input.uri.path)), 'not as text');

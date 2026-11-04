@@ -74,6 +74,8 @@ import { readTools } from './smokeReadTools';
 import { applyPatchChecks } from './smokeApplyPatch';
 import { toolsExtras } from './smokeToolsExtras';
 import { historySmoke } from './smokeHistory';
+import { chatUxSmoke } from './smokeChatUx';
+import { orgPolicySmoke } from './smokeOrgPolicy';
 import { cliParity } from './smokeCliParity';
 import { editorIntegration } from './smokeEditorIntegration';
 import { commandRuns } from './smokeCommandRun';
@@ -82,6 +84,7 @@ import { workspaceRoots } from './smokeWorkspaceRoots';
 import { pricing } from './smokePricing';
 import { vscodeLm } from './smokeVscodeLm';
 import { cliSlash } from './smokeCliSlash';
+import { automation } from './smokeAutomation';
 import { cliMcp } from './smokeCliMcp';
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
@@ -751,7 +754,8 @@ async function pureLogic() {
   {
     const md = 'See[^a].\n\n```\n[^a]\n```\n[^a]: Note';
     const out = preprocessFootnotes(md);
-    check('footnotes keep the line count', out.split('\n').length === md.split('\n').length, out);
+    const outLines = out.split('\n');
+    check('footnotes keep every line where it was; the notes section is appended at the end', outLines.length >= md.split('\n').length && md.split('\n').every((l, i) => (l.startsWith('[^a]:') ? outLines[i] === '' : true)) && outLines[outLines.length - 1].startsWith('<section class="footnotes">'), out);
     check('footnote reference numbered, fenced code untouched', /id="fnref-a">1</.test(out) && out.split('\n')[3] === '[^a]', out);
     check('link #L10-L20 and .md#heading parsed', JSON.stringify(parseLinkTarget('src/a.ts#L10-L20')) === JSON.stringify({ kind: 'path', path: 'src/a.ts', line: 10, endLine: 20 }) && parseLinkTarget('docs/b.md#intro')?.kind === 'path');
     check('javascript: links are ignored', parseLinkTarget('javascript:alert(1)') === undefined);
@@ -940,7 +944,7 @@ async function pureLogic() {
     try { await cm.compact(history, broken, model, undefined, 6, false); } catch (e) { threw = String(e); }
     check('a failed summary throws instead of truncating when asked to', /connection refused/.test(threw));
     const mid = await cm.compact(history, broken, model, undefined, 6);
-    check('mid-run, a failed summary still falls back to a truncation note so the run goes on', mid.removed > 0 && /truncated/.test(mid.summary));
+    check('mid-run, a failed summary falls back to a deterministic digest of the older messages so the run goes on', mid.removed > 0 && mid.summary.trim().length > 0 && !/connection refused/.test(mid.summary), mid.summary.slice(0, 200));
     const empty = { ...fake, chat: async function* (): AsyncGenerator<StreamEvent> { yield { type: 'text', text: '  ' } as StreamEvent; } };
     let emptyThrew = false;
     try { await cm.compact(history, empty, model, undefined, 6, false); } catch { emptyThrew = true; }
@@ -1009,7 +1013,11 @@ async function pureLogic() {
     resetManagedPolicyCache();
     const broken = getManagedPolicy();
     check('an unreadable policy fails closed (cloud, web and downloads off), never open', broken.source === file && !broken.allowCloudProviders && !broken.allowWebAccess && !broken.allowSkillInstall);
-    process.env.LOCALPILOT_MANAGED_SETTINGS = prev;
+    if (prev === undefined) {
+      delete process.env.LOCALPILOT_MANAGED_SETTINGS;
+    } else {
+      process.env.LOCALPILOT_MANAGED_SETTINGS = prev;
+    }
     resetManagedPolicyCache();
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
@@ -2584,6 +2592,8 @@ async function redisStorage() {
   await applyPatchChecks(check);
   toolsExtras(check);
   historySmoke(check);
+  await chatUxSmoke(check);
+  await orgPolicySmoke(check);
   cliParity(check);
   editorIntegration(check);
   await commandRuns(check);
@@ -2592,6 +2602,7 @@ async function redisStorage() {
   await pricing(check);
   vscodeLm(check);
   await cliSlash(check);
+  await automation(check);
   await cliMcp(check);
   await pauseAndSteer();
   await reopenReplay();

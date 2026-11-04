@@ -26,7 +26,7 @@ import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/te
 import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
-import { describePolicy, getManagedPolicy, mergeManagedProviders, policyLocks } from '../agent/managedPolicy';
+import { describePolicy, getManagedPolicy, mergeManagedProviders, PolicyLocks, policyEffectiveValues, policyLocks } from '../agent/managedPolicy';
 import { toolDisabled } from '../agent/toolAliases';
 import { createItem, CustomizeData, CustomKind, deleteItem, listCustomizations, setItemEnabled } from './customize';
 import { FrontMatterError } from '../agent/frontMatterEdit';
@@ -83,6 +83,8 @@ export interface SettingsSkill {
   source: string;
   used?: number;
   disabled?: boolean;
+  /** Required by the organisation: cannot be switched off. */
+  alwaysEnabled?: boolean;
   dir: string;
   /** Workspace / user skills can be deleted from Settings; bundled ones cannot. */
   removable: boolean;
@@ -105,7 +107,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> } }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -541,10 +543,15 @@ export class SettingsPanel implements vscode.Disposable {
         if (!entry) {
           throw new Error(`“${m.id}” is not in the catalog`);
         }
-        const name = await installCatalogServer(entry, [...Object.keys(getConfig().mcpServers ?? {}), ...this.mcp.status.map((s) => s.name)], this.secrets);
-        if (name) {
-          this.post({ type: 'toast', level: 'info', text: installedMessage(name) });
-          await this.mcp.reload();
+        let name: string | undefined;
+        try {
+          name = await installCatalogServer(entry, [...Object.keys(getConfig().mcpServers ?? {}), ...this.mcp.status.map((s) => s.name)], this.secrets);
+          if (name) {
+            this.post({ type: 'toast', level: 'info', text: installedMessage(name) });
+            await this.mcp.reload();
+          }
+        } finally {
+          // Also after a cancel or an error: the card stops showing "Installing…".
           this.post({ type: 'mcpCatalog', ...(await this.mcpCatalog.entries()), installed: name });
         }
         return;
@@ -897,7 +904,12 @@ export class SettingsPanel implements vscode.Disposable {
       await cfg.update('defaultModel', model, vscode.ConfigurationTarget.Global);
     }
     if (m.approvals) {
+      // Values the organisation locks or forbids are left as they are, as the Settings preset buttons do.
+      const locks = policyLocks(getManagedPolicy(this.log));
       for (const [k, v] of Object.entries(PRESETS[m.approvals])) {
+        if (locks && (locks.locked[`approvals.${k}`] || locks.disabledOptions[`approvals.${k}`]?.includes(v))) {
+          continue;
+        }
         if (cfg.get<string>(`approvals.${k}`) !== v) {
           await cfg.update(`approvals.${k}`, v, vscode.ConfigurationTarget.Global);
         }
@@ -1035,7 +1047,7 @@ export class SettingsPanel implements vscode.Disposable {
       mcp: this.mcp.status,
       managed: (() => { const p = getManagedPolicy(this.log); return p.source ? { source: p.source, message: p.message, lines: describePolicy(p) } : undefined; })(),
       // Per control: what Settings shows locked (keys, approval floors, allowlists, the organisation's providers and servers).
-      policy: policyLocks(getManagedPolicy(this.log)),
+      policy: (() => { const p = getManagedPolicy(this.log); const locks = policyLocks(p); return locks && { ...locks, effective: policyEffectiveValues(p, getConfig()) }; })(),
       memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length, notes: notes.slice(0, 200).map((n) => ({ name: n.name, scope: n.scope, summary: n.summary, updatedAt: n.updatedAt, chars: n.chars })) },
       sessions: { ...stats, checkpointBytes, running: this.running().length, pinned: this.store.list().filter((x) => x.pinned).length },
       welcomed: !!this.ctx.globalState.get(WELCOMED_KEY),

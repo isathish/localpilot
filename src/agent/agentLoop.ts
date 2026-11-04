@@ -213,7 +213,8 @@ export class AgentRunner {
     let reply: string | undefined;
     const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
     try {
-      const text = await (this.telemetry ? this.telemetry.tracing.with(span, () => this.runTurn(o, stats)) : this.runTurn(o, stats));
+      const tracing = this.telemetry?.tracing;
+      const text = await (tracing ? tracing.with(span, () => this.runTurn(o, stats)) : this.runTurn(o, stats));
       outcome = o.signal.aborted ? 'stopped' : 'done';
       const last = o.session.messages[o.session.messages.length - 1];
       error = last?.role === 'assistant' ? last.meta?.error : undefined;

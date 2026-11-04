@@ -22,6 +22,7 @@ export class RunControl {
   private readonly waiters = new Set<() => void>();
   private readonly queue: ChatMessage[] = [];
   private closed = false;
+  private readonly endListeners = new Set<() => void>();
   readonly children = new Map<string, RunControl>();
   /** Set by the loop while it is actually holding at a step boundary (as opposed to a pause being requested). */
   get holding(): boolean {
@@ -140,8 +141,30 @@ export class RunControl {
 
   /** The run has ended: refuse further steering and return the messages the loop never took. */
   close(): ChatMessage[] {
-    this.closed = true;
+    this.end();
     return this.queue.splice(0);
+  }
+
+  /** True once the run has ended (closed or disposed): `steer()` refuses from then on. */
+  get ended(): boolean {
+    return this.closed;
+  }
+
+  /** Called once when the run ends (`close()` or `dispose()`); immediately when it already has. Returns an unsubscribe. */
+  onEnd(listener: () => void): () => void {
+    if (this.closed) {
+      listener();
+      return () => {};
+    }
+    this.endListeners.add(listener);
+    return () => this.endListeners.delete(listener);
+  }
+
+  private end(): void {
+    this.closed = true;
+    const ls = [...this.endListeners];
+    this.endListeners.clear();
+    ls.forEach((l) => l());
   }
 
   /** Listeners fire for changes on this control and on any descendant (the changed control is passed). */
@@ -199,6 +222,7 @@ export class RunControl {
   }
 
   dispose(): void {
+    this.end();
     this.unlink.splice(0).forEach((f) => f());
     this.parent?.children.delete(this.id);
     this.listeners.clear();

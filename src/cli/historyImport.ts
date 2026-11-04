@@ -1,5 +1,5 @@
 import { ageLabel } from './sessions';
-import { Style } from './providers';
+import type { Style } from './providers';
 import { alreadyImported, findImportable, ImportCandidate, ImportSource, importInto, ImportTarget, readImport, SOURCE_LABEL } from '../sessions/importers';
 
 /** Pure: which candidates a selection names: `all`, list numbers (`1,3`, `2-4`) or session id prefixes. */

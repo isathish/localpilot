@@ -7,6 +7,7 @@ import { ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { CLI_KEYS_PATH, CLI_SETTINGS_PATH, readCliConfig, writeCliConfig, writeCliKey } from './vscodeShim';
+import { getManagedPolicy, isManaged, mergeManagedProviders } from '../agent/managedPolicy';
 
 export interface Style {
   bold(s: string): string;
@@ -36,7 +37,8 @@ const GROUP_LABEL: Record<PresetGroup, string> = { local: 'On this machine', gat
 /** Every configured provider, disabled ones included (getConfig() drops those). */
 export function configured(): ProviderConfig[] {
   // VS Code's language models (`vscode-lm`) exist only inside VS Code.
-  return (vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? []).filter((p) => p.type !== 'vscode-lm');
+  // The organisation's providers are listed too: users supply their key with `providers key <id>`.
+  return mergeManagedProviders(vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? [], getManagedPolicy()).filter((p) => p.type !== 'vscode-lm');
 }
 
 /** Providers written by the CLI itself (~/.localpilot/config.json), as stored. */
@@ -58,6 +60,24 @@ async function patchProvider(id: string, patch: Partial<ProviderConfig>): Promis
   const i = list.findIndex((p) => p.id === id);
   const next = i >= 0 ? list.map((p, j) => (j === i ? { ...p, ...patch } : p)) : [...list, { id, ...patch } as ProviderConfig];
   await saveCliProviders(next.map((p) => Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)) as unknown as ProviderConfig));
+}
+
+/** The organisation's provider with this id, when the policy provides one. */
+function orgProvider(id: string): ProviderConfig | undefined {
+  const pol = getManagedPolicy();
+  return isManaged(pol) ? pol.providers?.find((m) => m.id === id) : undefined;
+}
+
+/** Sets a provider's key in the CLI's list. A new entry for an organisation provider carries its type and endpoint (as Settings does), never a bare stub. */
+async function patchKey(id: string, apiKey: string | undefined): Promise<void> {
+  const org = orgProvider(id);
+  if (org && !cliProviders().some((p) => p.id === id)) {
+    if (apiKey) {
+      await patchProvider(id, { type: org.type, baseUrl: org.baseUrl, apiKey });
+    }
+    return;
+  }
+  await patchProvider(id, { apiKey });
 }
 
 function keyText(p: ProviderConfig, st: Style): string {
@@ -266,12 +286,12 @@ export async function setProviderKey(id: string, key: string | undefined, flags:
   }
   if (flags.removeKey) {
     await writeCliKey(id, undefined);
-    await patchProvider(id, { apiKey: undefined });
+    await patchKey(id, undefined);
     out(`${st.green('✓')} Removed the key of ${id}`);
     return 0;
   }
   if (flags.keyEnv) {
-    await patchProvider(id, { apiKey: `\${env:${flags.keyEnv}}` });
+    await patchKey(id, `\${env:${flags.keyEnv}}`);
     out(`${st.green('✓')} ${id} reads its key from $${flags.keyEnv}${process.env[flags.keyEnv] ? '' : st.yellow(' (not set in this shell)')}`);
   } else {
     const k = key ?? (await readSecret(`API key for ${p.displayName || id}: `));
@@ -282,7 +302,7 @@ export async function setProviderKey(id: string, key: string | undefined, flags:
     const ref = await storeKey(id, k);
     // Keep a VS Code keychain reference as it is: the CLI resolves `${secret:id}` from its own key file.
     if (p.apiKey !== ref) {
-      await patchProvider(id, { apiKey: ref });
+      await patchKey(id, ref);
     }
     out(`${st.green('✓')} Key for ${id} saved to ${st.dim(CLI_KEYS_PATH)} (readable by you only)`);
   }
@@ -293,6 +313,10 @@ export async function setProviderKey(id: string, key: string | undefined, flags:
 export async function removeProvider(id: string, st: Style, out: (s: string) => void = console.log): Promise<number> {
   if (!configured().some((p) => p.id === id)) {
     out(`${st.red('✖')} No provider "${id}".`);
+    return 2;
+  }
+  if (orgProvider(id)) {
+    out(`${st.red('✖')} ${id} is provided by your organization's policy and cannot be removed or disabled. Forget your key with: localpilot providers key ${id} --remove-key`);
     return 2;
   }
   const mine = cliProviders();

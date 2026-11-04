@@ -931,3 +931,10 @@ body.vscode-light svg[viewBox="0 0 16 16"], html.light body svg[viewBox="0 0 16 
 .mcp-item .desc { margin-top: 2px; }
 .mcp-params { display: inline-flex; flex-wrap: wrap; gap: 4px; } .mcp-params span { font-family: var(--mono); font-size: 11px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
 .mcp-params b { color: var(--error-text); font-weight: 600; } .mcp-params i { font-style: normal; opacity: .75; }
+/* Organisation policy: a lock next to whatever managed-settings.json decides. */
+.lock { display: inline-flex; align-items: center; margin-left: 6px; color: var(--muted); vertical-align: middle; cursor: help; }
+.lock svg { width: 12px; height: 12px; }
+.field.locked .ctl { opacity: .7; }
+.field.locked .ctl :disabled, .seg button:disabled { cursor: not-allowed; }
+.seg button:disabled { opacity: .45; }
+.prov.managed .prov-head { cursor: pointer; }

@@ -240,8 +240,8 @@ export function policyAndSettingsLayers(org: { servers: Record<string, Record<st
 }
 
 /** A `localpilot.mcpServers` entry switched on or off: both `enabled` and Cline's `disabled` are cleared before the switch is set. */
-export function withMcpEnabled<T extends Record<string, unknown>>(entry: T, enabled: boolean): T {
-  const next: Record<string, unknown> = { ...entry };
+export function withMcpEnabled<T extends object>(entry: T, enabled: boolean): T {
+  const next = { ...entry } as Record<string, unknown>;
   delete next.enabled;
   delete next.disabled;
   if (!enabled) {

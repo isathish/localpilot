@@ -4,7 +4,8 @@ import * as vscode from 'vscode';
 import type { McpServerConfig } from '../config';
 import { parseJsonc } from '../agent/jsonc';
 import { splitArgs } from '../agent/commands';
-import { loadMcpFiles, McpLayer, McpSource, mcpTrustKey, mergeMcpLayers, normalizeMcpServers, setMcpFileServerEnabled, userMcpFile, writeJsonAtomic } from '../mcp/config';
+import { getManagedPolicy, ManagedPolicy, managedMcpServers } from '../agent/managedPolicy';
+import { loadMcpFiles, McpLayer, McpSource, mcpTrustKey, mergeMcpLayers, normalizeMcpServers, policyAndSettingsLayers, setMcpFileServerEnabled, userMcpFile, withMcpEnabled, writeJsonAtomic } from '../mcp/config';
 import type { Style } from './providers';
 
 /**
@@ -249,22 +250,33 @@ export interface McpCmdOptions {
   authenticate?: (name: string, cfg: McpServerConfig) => Promise<string>;
   /** The user server file (tests). */
   userFile?: string;
+  /** The organization policy (tests); read from its deployed file otherwise. */
+  policy?: ManagedPolicy;
 }
 
 type Entry = McpServerConfig & { source: McpSource; file?: string };
 
+function orgServers(o: McpCmdOptions) {
+  return managedMcpServers(o.policy ?? getManagedPolicy());
+}
+
+/** The same layers the running servers come from: the organization's first, then the setting, the files and plugins. */
 async function layers(o: McpCmdOptions): Promise<McpLayer[]> {
-  const settings = normalizeMcpServers({ mcpServers: vscode.workspace.getConfiguration('localpilot').get<Record<string, McpServerConfig>>('mcpServers', {}) ?? {} });
+  const setting = vscode.workspace.getConfiguration('localpilot').get<Record<string, unknown>>('mcpServers', {}) ?? {};
   const files = await loadMcpFiles([o.cwd], o.userFile ?? userMcpFile());
-  return [{ source: 'settings', servers: settings.servers, problems: settings.problems }, ...files, { source: 'plugin', servers: o.pluginServers ?? {}, problems: [] }];
+  return [...policyAndSettingsLayers(orgServers(o), setting), ...files, { source: 'plugin', servers: o.pluginServers ?? {}, problems: [] }];
 }
 
 function scopeFile(scope: McpScope, o: McpCmdOptions): string {
   return scope === 'project' ? path.join(o.cwd, '.mcp.json') : o.userFile ?? userMcpFile();
 }
 
-function where(e: Entry): string {
-  return e.source === 'settings' ? 'the localpilot.mcpServers setting' : e.source === 'plugin' ? 'a plugin' : e.file ?? e.source;
+function where(e: Pick<Entry, 'source' | 'file'>): string {
+  return e.source === 'managed' ? 'your organization\'s policy' : e.source === 'settings' ? 'the localpilot.mcpServers setting' : e.source === 'plugin' ? 'a plugin' : e.file ?? e.source;
+}
+
+function sourceLabel(r: { source: McpSource; file?: string }): string {
+  return r.source === 'managed' ? 'organization policy' : r.source === 'settings' ? 'localpilot.mcpServers setting' : r.source === 'plugin' ? 'plugin' : r.file ?? r.source;
 }
 
 /** One row per server in force (the first definition of a name wins), with the definitions it hides. */
@@ -278,7 +290,7 @@ export function mcpListRows(all: McpLayer[], isTrusted?: (key: string) => boolea
     target: e.url ?? [e.command, ...(e.args ?? [])].filter(Boolean).join(' '),
     enabled: e.enabled !== false,
     trusted: e.source === 'project' && isTrusted ? isTrusted(mcpTrustKey(name, e)) : undefined,
-    shadows: all.filter((l) => l.servers[name] && !(l.source === e.source && l.file === e.file)).map((l) => l.file ?? l.source),
+    shadows: all.filter((l) => l.servers[name] && !(l.source === e.source && l.file === e.file)).map((l) => sourceLabel(l)),
     envKeys: Object.keys(e.env ?? {}),
     headerKeys: Object.keys(e.headers ?? {}),
   }));
@@ -300,7 +312,7 @@ async function list(o: McpCmdOptions, json: boolean): Promise<number> {
   for (const r of rows) {
     const state = !r.enabled ? st.dim('disabled') : r.trusted === false ? st.yellow('asks before starting') : st.green('enabled');
     out(`${r.enabled ? st.green('●') : st.dim('○')} ${st.bold(r.name)} ${st.dim(r.transport)}  ${r.target}`);
-    out(`  ${state} · ${st.dim(r.source === 'settings' ? 'localpilot.mcpServers setting' : r.source === 'plugin' ? 'plugin' : r.file ?? r.source)}${r.envKeys.length ? st.dim(` · env ${r.envKeys.join(', ')}`) : ''}${r.headerKeys.length ? st.dim(` · headers ${r.headerKeys.join(', ')}`) : ''}${r.shadows.length ? st.dim(` · overrides ${r.shadows.join(', ')}`) : ''}`);
+    out(`  ${state} · ${st.dim(sourceLabel(r))}${r.envKeys.length ? st.dim(` · env ${r.envKeys.join(', ')}`) : ''}${r.headerKeys.length ? st.dim(` · headers ${r.headerKeys.join(', ')}`) : ''}${r.shadows.length ? st.dim(` · overrides ${r.shadows.join(', ')}`) : ''}`);
   }
   for (const l of problems) {
     out(`${st.red('✖')} invalid MCP configuration in ${l.file ?? l.source}:\n${l.problems.map((p) => `  ${p}`).join('\n')}`);
@@ -338,7 +350,7 @@ async function remove(a: McpCliArgs, o: McpCmdOptions): Promise<number> {
   }
   if (!removed.length) {
     const e = mergeMcpLayers(await layers(o))[a.name!];
-    (o.err ?? console.error)(`${o.st.red('✖')} ${e ? `"${a.name}" is defined in ${where(e)}${e.source === 'settings' ? ': remove it from your settings' : e.source === 'plugin' ? ': switch the plugin off with localpilot plugin disable' : ''}` : `No MCP server named "${a.name}"${a.scope ? ` in ${files[0]}` : ''}`}`);
+    (o.err ?? console.error)(`${o.st.red('✖')} ${e ? `"${a.name}" is defined in ${where(e)}${e.source === 'managed' ? ': switch it off with localpilot mcp disable' : e.source === 'settings' ? ': remove it from your settings' : e.source === 'plugin' ? ': switch the plugin off with localpilot plugin disable' : ''}` : `No MCP server named "${a.name}"${a.scope ? ` in ${files[0]}` : ''}`}`);
     return 1;
   }
   for (const f of removed) {
@@ -357,17 +369,25 @@ async function toggle(a: McpCliArgs, o: McpCmdOptions, enabled: boolean): Promis
     (o.err ?? console.error)(`${o.st.red('✖')} "${a.name}" comes from a plugin: switch the plugin off instead (localpilot plugin disable)`);
     return 1;
   }
-  if (e.source === 'settings') {
+  if (e.source === 'managed') {
+    if (!enabled && orgServers(o).alwaysEnabled.includes(a.name!)) {
+      (o.err ?? console.error)(`${o.st.red('✖')} "${a.name}" is required by your organization's policy and cannot be switched off`);
+      return 1;
+    }
+    // The policy file is not the user's to edit: the switch is a `{ "enabled": false }` entry in the user's settings.
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const map = { ...(cfg.inspect<Record<string, McpServerConfig>>('mcpServers')?.globalValue ?? {}) };
+    if (enabled) {
+      delete map[a.name!];
+    } else {
+      map[a.name!] = { enabled: false };
+    }
+    await cfg.update('mcpServers', Object.keys(map).length ? map : undefined, vscode.ConfigurationTarget.Global);
+  } else if (e.source === 'settings') {
     // The CLI writes ~/.localpilot/config.json, whose value is merged over VS Code's settings.
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const map = { ...(cfg.get<Record<string, McpServerConfig>>('mcpServers', {}) ?? {}) };
-    const next: McpServerConfig = { ...(map[a.name!] ?? {}) };
-    if (enabled) {
-      delete next.enabled;
-    } else {
-      next.enabled = false;
-    }
-    map[a.name!] = next;
+    map[a.name!] = withMcpEnabled(map[a.name!] ?? {}, enabled);
     await cfg.update('mcpServers', map, vscode.ConfigurationTarget.Global);
   } else if (e.file) {
     await setMcpFileServerEnabled(e.file, a.name!, enabled);

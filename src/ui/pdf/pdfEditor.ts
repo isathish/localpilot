@@ -158,7 +158,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
   async resolveCustomEditor(doc: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
     const { webview } = panel;
-    const key = doc.uri.toString();
+    // One viewer per file: links with different #page fragments must find it.
+    const key = doc.uri.with({ fragment: '' }).toString();
     const subs: vscode.Disposable[] = [];
     let pending = 0;
     let force = false;

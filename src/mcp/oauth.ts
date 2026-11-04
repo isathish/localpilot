@@ -56,6 +56,14 @@ interface StoredAuth {
   scope?: string;
 }
 
+/** The token endpoint answered with an error (`code` is the OAuth `error`, e.g. `invalid_grant`). */
+export class OAuthTokenError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = 'OAuthTokenError';
+  }
+}
+
 /** Loopback ports tried in turn for the redirect. */
 export const OAUTH_CALLBACK_PORTS = [1456, 1457, 1458, 1459, 1460, 1461];
 export const OAUTH_CALLBACK_PATH = '/mcp/oauth/callback';
@@ -236,7 +244,7 @@ export async function tokenRequest(server: AuthServerMetadata, client: OAuthClie
   }
   if (!res.ok || typeof j.access_token !== 'string') {
     const why = typeof j.error === 'string' ? `${j.error}${typeof j.error_description === 'string' ? `: ${j.error_description}` : ''}` : text.slice(0, 300);
-    throw new Error(`token request failed: ${res.status} ${why}`);
+    throw new OAuthTokenError(`token request failed: ${res.status} ${why}`, res.status, typeof j.error === 'string' ? j.error : undefined);
   }
   const expiresIn = Number(j.expires_in);
   return {
@@ -339,8 +347,8 @@ export class McpOAuth {
     return this.opts.fetch ?? fetch;
   }
 
-  private async load(resource: string): Promise<StoredAuth> {
-    const hit = this.cache.get(resource);
+  private async load(resource: string, fresh = false): Promise<StoredAuth> {
+    const hit = fresh ? undefined : this.cache.get(resource);
     if (hit) {
       return hit;
     }
@@ -385,7 +393,10 @@ export class McpOAuth {
     return (await this.refresh(resource))?.access_token;
   }
 
-  /** One refresh per server at a time; a refused refresh forgets the tokens. */
+  /**
+   * One refresh per server at a time (per process). Only a refused refresh token (`invalid_grant`) forgets the tokens,
+   * and not when another window or the CLI has already rotated them; a network or server error keeps them.
+   */
   private refresh(resource: string): Promise<OAuthTokens | undefined> {
     const running = this.refreshing.get(resource);
     if (running) {
@@ -403,7 +414,15 @@ export class McpOAuth {
         return tokens;
       } catch (e) {
         this.opts.log?.(`OAuth: refreshing the token for ${resource} failed: ${e instanceof Error ? e.message : String(e)}`);
-        await this.save(resource, { ...a, tokens: undefined });
+        const stored = await this.load(resource, true);
+        const t = stored.tokens;
+        if (t?.access_token && (t.refresh_token !== a.tokens.refresh_token || t.access_token !== a.tokens.access_token)) {
+          this.opts.log?.(`OAuth: another window refreshed the token for ${resource}`);
+          return t;
+        }
+        if (e instanceof OAuthTokenError && (e.status === 400 || e.status === 401) && (e.code === 'invalid_grant' || e.code === 'invalid_token' || e.code === 'unauthorized_client')) {
+          await this.save(resource, { ...stored, tokens: undefined });
+        }
         return undefined;
       }
     })().finally(() => this.refreshing.delete(resource));

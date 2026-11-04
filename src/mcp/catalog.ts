@@ -274,9 +274,11 @@ export async function addMcpFileServer(file: string, name: string, cfg: McpServe
     }
     raw = parsed as Record<string, unknown>;
   }
-  const servers = raw.mcpServers && typeof raw.mcpServers === 'object' && !Array.isArray(raw.mcpServers) ? (raw.mcpServers as Record<string, unknown>) : {};
-  if (name in servers) {
+  // A flat file (`{ "name": { … } }`, read as a server map by the loader) gets the server at the top level.
+  const nested = (!!raw.mcpServers && typeof raw.mcpServers === 'object' && !Array.isArray(raw.mcpServers)) || !Object.keys(raw).length;
+  const servers = nested ? ((raw.mcpServers as Record<string, unknown> | undefined) ?? {}) : raw;
+  if (Object.prototype.hasOwnProperty.call(servers, name)) {
     throw new Error(`"${name}" is already defined in ${file}`);
   }
-  await writeJsonAtomic(file, { ...raw, mcpServers: { ...servers, [name]: cfg } });
+  await writeJsonAtomic(file, nested ? { ...raw, mcpServers: { ...servers, [name]: cfg } } : { ...raw, [name]: cfg });
 }

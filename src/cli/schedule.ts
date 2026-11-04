@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parseDuration } from './headless';
-import { Style } from './providers';
+import type { Style } from './providers';
 
 /**
  * Scheduled agents: `localpilot schedule create nightly --cron "0 3 * * *" --prompt "…"`. Schedules live in
@@ -249,10 +249,29 @@ ${cal.map(dict).join('\n')}
 
 const winQuote = (s: string) => (/^[\w@%+=:,./\\-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`);
 
+/** Task Scheduler's limit on a task's command line (`/TR`). */
+const SCHTASKS_TR_MAX = 261;
+
+/**
+ * Pure: the `/TR` command. A launcher that needs environment variables (VS Code's own binary runs the CLI only with
+ * ELECTRON_RUN_AS_NODE=1) runs through `cmd` so they are set first; too long a command is refused.
+ */
+function schtasksCommand(cmd: string, env: Record<string, string> | undefined): string {
+  const vars = Object.entries(env ?? {});
+  if (vars.some(([k, v]) => !/^\w+$/.test(k) || /["%\r\n]/.test(v))) {
+    throw new Error("The launcher needs environment values Task Scheduler cannot carry. Install the `localpilot` command (LocalPilot: Install 'localpilot' CLI in PATH) and create the schedule again.");
+  }
+  const tr = vars.length ? `cmd /d /s /c "${vars.map(([k, v]) => `set "${k}=${v}"&& `).join('')}${cmd}"` : cmd;
+  if (tr.length > SCHTASKS_TR_MAX) {
+    throw new Error(`The scheduled command is longer than Task Scheduler's ${SCHTASKS_TR_MAX} characters. Install the \`localpilot\` command (LocalPilot: Install 'localpilot' CLI in PATH) and create the schedule again.`);
+  }
+  return tr;
+}
+
 /** Pure: `schtasks /Create` arguments for the expressions Task Scheduler can express; throws for the others. */
 export function schtasksArgs(s: Pick<Schedule, 'name' | 'cron'>, l: Launcher): string[] {
   const c = parseCron(s.cron);
-  const tr = [l.command, ...l.args, 'schedule', 'run', s.name].map(winQuote).join(' ');
+  const tr = schtasksCommand([l.command, ...l.args, 'schedule', 'run', s.name].map(winQuote).join(' '), l.env);
   const base = ['/Create', '/F', '/TN', `LocalPilot\\${s.name}`, '/TR', tr];
   const pad = (n: number) => String(n).padStart(2, '0');
   const step = (list: number[] | null, size: number): number | undefined => {

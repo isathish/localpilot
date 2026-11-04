@@ -103,7 +103,8 @@ export function parseCommandFile(file: string, raw: string, opts: { source: Cust
     body: body.trim(),
     source: opts.source,
     plugin: opts.plugin,
-    ...(alwaysEnabled(meta) ? { alwaysEnabled: true } : ruleCondition(meta).disabled ? { disabled: true } : {}),
+    // Only the organisation's commands can be locked on.
+    ...(opts.source === 'managed' && alwaysEnabled(meta) ? { alwaysEnabled: true } : ruleCondition(meta).disabled ? { disabled: true } : {}),
   };
 }
 
@@ -406,7 +407,7 @@ export function indexCommands(list: CustomCommand[]): Map<string, CustomCommand>
  * skill of that name, then a custom command or workflow; without one, the first custom command or workflow named
  * inside the message is expanded where it stands (`inline`).
  */
-export function resolveSlashMessage(text: string, commands: CustomCommand[], skills: { name: string }[]): { skill: string; task: string } | { command: CustomCommand; args: string; inline?: SlashToken } | undefined {
+export function resolveSlashMessage(text: string, commands: CustomCommand[], skills: { name: string; source?: string }[]): { skill: string; task: string } | { command: CustomCommand; args: string; inline?: SlashToken } | undefined {
   const byInvoke = indexCommands(commands);
   const m = /^\/([\w.:@-]+)\s*([\s\S]*)$/.exec(text.trim());
   if (m) {

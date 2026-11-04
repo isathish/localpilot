@@ -38,7 +38,7 @@ Mentions in the input are highlighted. <kbd>Backspace</kbd> right after a mentio
 
 ## The context meter
 
-The ring at the bottom right of the composer shows how much of the model's context window is in use. It turns amber above 65% and red above 85%. Click it to compact the conversation now; `/compact` does the same. `/context` prints the token count, window size, message count and number of compactions.
+The ring at the bottom right of the composer shows how much of the model's context window is in use. It turns amber above 65% and red above 85%. Hover it (or focus it with the keyboard) for a breakdown: tokens used, the window, what remains, this chat's prompt and output tokens, cache reads and writes, and where auto-compaction starts (`localpilot.compactionThreshold`, or *off*). Click it and confirm **Compact** to compact the conversation now; `/compact` does the same. While the agent is running the ring is dimmed and compacting waits until it finishes. `/context` prints the token count, window size, message count and number of compactions.
 
 Next to the ring, `↑12.3k ↓1.1k` shows the tokens this chat has sent (cached input included) and received, and `$0.0123` its cost on a cloud model with a known price. Hover the ring or the pill for the breakdown: cache reads and writes, requests, subagents' share, or *local · free* for models on your machine. The CLI prints the same after each turn, for example `(13.4k tok · $0.0100)`.
 

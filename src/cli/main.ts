@@ -81,7 +81,7 @@ import { cmdHistory, findSession, newestFirst, openCliStore, pickSession, resume
 import { cmdHistoryImport } from './historyImport';
 import { cliLauncher, cmdSchedule } from './schedule';
 import { createScheduleTool } from '../tools/schedule';
-import { serveAcp } from './acp';
+import { AcpHost, AcpServer, acpApprovalOverrides, serveAcp } from './acp';
 import { teamPrompt } from '../agent/teamBrief';
 import { sessionSlash } from './slash/sessions';
 import { infoSlash } from './slash/info';
@@ -231,7 +231,7 @@ interface Args {
   /** Apply security-sensitive settings from the workspace's .vscode/settings.json. */
   trustWorkspace?: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history' | 'config' | 'mcp';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history' | 'config' | 'mcp' | 'acp';
   /** `mcp …`: the words after `mcp` (it parses its own flags). */
   mcpArgv?: string[];
   /** `--json` without a file: NDJSON events for one-shot runs, JSON output for `config` and `doctor`. */
@@ -312,6 +312,7 @@ function parseArgs(argv: string[]): Args {
     else if (x === '-v' || x === '--verbose') {a.verbose = true;}
     else if (x === '--ide' || x === '--vscode') {a.cmd = 'ide';}
     else if (x === '--settings') {a.cmd = 'settings';}
+    else if (x === '--acp') {a.cmd = 'acp';}
     else if (x === '--setup') {a.cmd = 'setup';}
     else if (x === '-h' || x === '--help') {a.cmd = 'help';}
     else if (x === '--version' || x === '-V') {a.cmd = 'version';}
@@ -699,7 +700,8 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
     case 'repo_graph': return `Import graph: ${s(a.action)}${a.path ? ` ${s(a.path)}` : ''}`;
     case 'security_scan': return `Security scan${Array.isArray(a.kinds) && a.kinds.length ? `: ${s(a.kinds.join(', '))}` : ''}${a.path ? ` in ${s(a.path)}` : ''}`;
     case 'repos': return `Repos: ${s(a.action)}${a.command ? ` $ ${s(a.command, 60)}` : a.query ? ` "${s(a.query, 40)}"` : ''}${Array.isArray(a.repos) && a.repos.length ? ` in ${s(a.repos.join(', '), 40)}` : ''}`;
-    case 'team_board': return `Board: ${s(a.action)}${a.id ? ` ${s(a.id)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}`;
+    case 'team_board': return `Board: ${s(a.action)}${a.id ? ` ${s(a.id)}` : ''}${a.title ? ` "${s(a.title, 60)}"` : ''}${a.to ? ` to ${s(a.to, 40)}` : ''}`;
+    case 'schedule': return `Schedule: ${s(a.action)}${a.name ? ` ${s(a.name)}` : ''}${a.cron ? ` (${s(a.cron)})` : ''}`;
     case 'git_status': return `Git ${s(a.action || 'status')}${a.path ? ` ${s(a.path)}` : ''}`;
     case 'git_commit': return `Commit${a.branch ? ` on ${s(a.branch)}` : ''}: ${s(String(a.message ?? '').split('\n')[0], 70)}`;
     case 'git_push': return 'Push branch';
@@ -858,6 +860,7 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const termOnly = (list: typeof editorTools) => list.map((t) => (noLsp.has(t.definition.name) ? { ...t, execute: async () => ({ content: "Not available in the terminal (no language server). Run the project's type checker, linter or tests with run_command (e.g. npx tsc --noEmit, eslint, pytest); use grep_search or repo_graph for definitions and references.", isError: true }) } : t));
   tools.registerAll([...fsTools, ...notebookTools, applyPatchTool, ...pdfTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
+  tools.registerAll([createScheduleTool(() => cliLauncher())]);
   await skills.refresh();
   let mcp: McpManager | undefined;
   const pluginMcp = pluginParts.mcpServers();
@@ -1723,6 +1726,95 @@ function doctorLog(): number {
   return 0;
 }
 
+/** `--acp`: LocalPilot as an Agent Client Protocol agent on stdio. The editor shows the chat and answers approvals. */
+async function cmdAcp(args: Args): Promise<number> {
+  let server: AcpServer | undefined;
+  // Nothing is approved without the editor unless --yes: settings that allow a kind always ask the client here.
+  if (!args.yes) {
+    Object.assign(cliOverrides, acpApprovalOverrides(getConfig().approvals));
+    setWorkspaceRoot(args.cwd);
+  }
+  // Subagents ask through boot's callback (no session of the client's): their prompts go to the session that runs them.
+  const core = await boot(args, () => undefined, async (_sid, title, detail, kind, opts) => {
+    const sid = server?.activeSessionId();
+    return sid && server ? server.approve(sid, title, detail, kind as Parameters<AcpServer['approve']>[3], opts) : false;
+  });
+  const stores = new Map<string, SessionStore>();
+  const storeFor = async (cwd: string): Promise<SessionStore> => {
+    const key = path.resolve(cwd);
+    let st = stores.get(key);
+    if (!st) {
+      st = await openCliStore(key, args.dataDir, core.log);
+      stores.set(key, st);
+    }
+    return st;
+  };
+  let turnKey = 0;
+  const host: AcpHost = {
+    version: VERSION,
+    autoApprove: () => args.yes,
+    defaultModel: () => getConfig().defaultModel,
+    models: async () => (await core.providers.listModels().catch(() => [] as ModelInfo[])).map((m) => ({ id: m.id, name: m.name })),
+    newSession: async (cwd) => {
+      const s = (await storeFor(cwd)).create(args.model ?? getConfig().defaultModel, args.mode);
+      core.sessions.set(s.id, s);
+      return s;
+    },
+    loadSession: async (id, cwd) => {
+      const st = await storeFor(cwd);
+      const hit = findSession(newestFirst(st.list()), id).session;
+      const s = hit ? st.get(hit.id) : undefined;
+      if (s) {
+        core.sessions.set(s.id, s);
+      }
+      return s;
+    },
+    run: async (r) => {
+      const st = await storeFor(r.cwd);
+      const control = new RunControl(r.session.id, undefined, r.signal);
+      const checkpoint = (turnKey = nextTurnKey(r.session, turnKey));
+      core.tracker.beginTurn(r.session.id, checkpoint);
+      let completed = true;
+      let error: { message: string; kind?: string } | undefined;
+      try {
+        await core.runner.run({
+          session: r.session,
+          userMessage: { role: 'user', content: r.text, ...(r.images.length ? { images: r.images } : {}), meta: { checkpoint } },
+          modelRef: r.session.model || undefined,
+          signal: control.signal,
+          control,
+          workspaceRoot: path.resolve(r.cwd) === path.resolve(args.cwd) ? undefined : r.cwd,
+          emit: (e) => {
+            const p = (e.payload && typeof e.payload === 'object' ? e.payload : {}) as Record<string, unknown>;
+            if (e.type === 'error' && !p.childId) {
+              error = { message: String(p.message ?? p.latest ?? e.payload ?? 'error'), kind: typeof p.kind === 'string' ? p.kind : undefined };
+            }
+            if (e.type === 'turn_end' && !p.childId) {
+              completed = p.completed !== false;
+            }
+            r.emit(e);
+          },
+          requestApproval: r.requestApproval,
+        });
+      } finally {
+        control.dispose();
+        st.save(r.session);
+        await st.flush(r.session);
+      }
+      return { text: '', completed, error };
+    },
+  };
+  const served = serveAcp(host);
+  server = served.server;
+  process.stderr.write(`LocalPilot ${VERSION}: Agent Client Protocol on stdio (${args.cwd})\n`);
+  await served.done;
+  for (const st of stores.values()) {
+    st.dispose();
+  }
+  await shutdown(core);
+  return 0;
+}
+
 async function cmdDoctor(core: Core, args?: Args): Promise<void> {
   const newer = versionNotice(VERSION, newestInstalledExtension());
   if (args?.json) {
@@ -1835,6 +1927,11 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
 }
 
 async function main(): Promise<void> {
+  // `schedule …` parses its own options (--cron, --prompt…) and only manages files and the OS scheduler.
+  if (process.argv[2] === 'schedule') {
+    process.exitCode = await cmdSchedule(process.argv.slice(3), STYLE, cliLauncher());
+    return;
+  }
   const args = parseArgs(process.argv.slice(2));
   if (!args.cmd && args.json) {
     ndjson = new NdjsonWriter();
@@ -1957,6 +2054,10 @@ async function main(): Promise<void> {
     });
     store.dispose();
     return;
+  }
+  if (args.cmd === 'acp') {
+    process.exitCode = await cmdAcp(args);
+    process.exit(process.exitCode);
   }
 
   // A one-shot run whose output goes to a pipe or file prints the answer only, as with -p.
@@ -2299,7 +2400,7 @@ async function main(): Promise<void> {
   const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
   /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
   let shiftTab = false;
-  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
   const completer = createCompleter({
     commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
     root: () => runRoot(),
@@ -2436,6 +2537,36 @@ async function main(): Promise<void> {
       case 'mode':
         if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|multitask|debug|plan|ask`)); }
         return true;
+      case 'team': {
+        // `/team <task>`: a coordinator brief in Multitask mode (the session stays in it, as with /mode).
+        if (!arg) {
+          console.log(dim('usage: /team <task>  — split the task for background workers and the shared board (multitask mode)'));
+          return true;
+        }
+        if (session.mode !== 'multitask') {
+          core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: 'multitask', source: 'cli' });
+          session.mode = 'multitask';
+          console.log(dim('mode → multitask'));
+        }
+        rl!.setPrompt('');
+        current = new RunControl(session.id);
+        try {
+          const run = runTurn(core, session, teamPrompt(arg), pendingFiles, renderer, rl, current, { display: line });
+          currentRun = run;
+          await run;
+          pendingFiles = [];
+          changesSummary(core, session);
+        } catch (e) {
+          renderer.error(e instanceof Error ? e.message : String(e));
+        } finally {
+          leftovers(current);
+          current = undefined;
+          currentRun = undefined;
+          process.stdout.write('\n');
+          rl!.setPrompt(promptText());
+        }
+        return true;
+      }
       case 'model': {
         if (!arg) { console.log(dim(`model is ${session.model}`)); return true; }
         const models = await core.providers.listModels();

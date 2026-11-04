@@ -109,7 +109,8 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
       return;
     }
     const rule = await readRule(file);
-    const always = rule !== undefined && alwaysEnabled(rule.meta);
+    // Only the organisation's rules can be locked on; a project's own `alwaysEnabled` is ignored.
+    const always = scope === 'managed' && rule !== undefined && alwaysEnabled(rule.meta);
     const disabled = !!rule?.condition.disabled && !always;
     if (rule === undefined || (disabled && !opts.includeDisabled)) {
       return;

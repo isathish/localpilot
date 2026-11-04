@@ -46,7 +46,7 @@ These keys work in the chat view. On Windows and Linux, read <kbd>⌘</kbd> as <
 
 | Key | Action |
 |---|---|
-| <kbd>Esc</kbd> | Close the open picker. With no picker open, stop the running agent |
+| <kbd>Esc</kbd> | Close the open picker. With no picker, approval or text field in the way, stop the running agent, wherever the focus is in the chat |
 | <kbd>⌥Esc</kbd> | Pause the running agent after its current step, or resume it |
 | <kbd>Y</kbd> / <kbd>A</kbd> / <kbd>N</kbd> | Answer a permission prompt: allow once / allow for this session / deny (<kbd>Esc</kbd> also denies) |
 

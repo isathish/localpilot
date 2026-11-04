@@ -80,11 +80,31 @@ A workspace's `.mcp.json` runs commands from the repository, so LocalPilot asks 
 
 A file with errors shows a notification that lists the problem in each server, with an **Open file** button. The servers that are valid still start.
 
+To edit the configuration as JSON, run **LocalPilot: Edit MCP Configuration…** (also the **Edit configuration…** button in **Settings → MCP servers**). Pick your `mcp.json`, the workspace's `.mcp.json` (one entry per folder in a multi-root workspace) or `settings.json`. A file that does not exist yet is created as `{ "mcpServers": {} }`; `settings.json` opens at `localpilot.mcpServers`.
+
+### Catalog
+
+The **Browse** tab of **Settings → MCP servers** lists about 30 popular servers (filesystem, git, GitHub, PostgreSQL, SQLite, Playwright, fetch, memory, Context7, Sentry, Linear, Notion…), with a search box and tag filters. **Install** asks whether to run it locally or connect to its hosted server when it offers both, then asks for the values it needs. API keys go to your OS keychain and the server gets a `${secret:mcp.<name>.<VAR>}` reference; paths and other plain values are written as typed. The server is added to `~/.localpilot/mcp.json` and starts at once. If the name is taken, it gets `-2`, `-3`…
+
+**Refresh from the MCP registry** adds the servers listed at `registry.modelcontextprotocol.io`. It is fetched only when you click it; the catalog itself ships with LocalPilot.
+
+In the CLI a `${secret:NAME}` reference resolves from the `LOCALPILOT_KEY_<NAME>` environment variable, so set that for catalog servers you run from the terminal.
+
 ### Remote servers
 
 For a remote server without an explicit `type`, LocalPilot first speaks Streamable HTTP, the current MCP transport: it posts each request to the URL, accepts JSON or event-stream replies, and keeps the session the server assigns (`Mcp-Session-Id`). If the server refuses that with a 4xx error other than 401 or 403, LocalPilot connects again with HTTP+SSE at the same URL, as the MCP specification recommends for older servers. An authentication error is reported as it is, not retried. Each server's card in Settings shows which transport it uses.
 
 After the handshake LocalPilot also opens the server's standalone event stream (a `GET` with `Accept: text/event-stream` and the session id), on which a server sends notifications nobody asked for. A server without one answers 404 or 405, which is fine. A stream that drops is reopened with a growing delay, up to 30 seconds.
+
+#### Signing in (OAuth)
+
+A remote server that answers `401` with a `WWW-Authenticate` header needs you to sign in. Its card in **Settings → MCP servers** shows **Authenticate**; you can also run **LocalPilot: Sign In to MCP Server…** or, in a terminal, `localpilot mcp auth <name>`. LocalPilot then follows the MCP authorization spec (OAuth 2.1):
+
+1. it reads the server's protected-resource metadata, then its authorization server's metadata;
+2. it registers itself as a client, unless the server has `"oauthClient": { "clientId": "…", "clientSecret": "…" }` (Claude Code's `oauth` is read too);
+3. it opens your browser with a PKCE (S256) sign-in and waits up to 10 minutes for the redirect to `http://127.0.0.1:<1456–1461>/mcp/oauth/callback`.
+
+If you register a client yourself, allow those six redirect URIs. The tokens are stored per server URL in VS Code's secret storage (in `~/.localpilot/secrets.json`, readable only by you, for the CLI), so every window reuses them. They are refreshed before they expire and sent as `Authorization: Bearer …`. A server whose `headers` already set `Authorization` never goes through OAuth. When the server refuses the refresh token, the server shows **Authenticate** again; a network or server error keeps you signed in, and a token another window already refreshed is reused.
 
 [Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can add servers through their `.mcp.json`, local or remote (`{ "type": "http", "url": …, "headers": … }`, the same format as Claude Code). Those appear as `plugin:server`.
 
@@ -94,6 +114,7 @@ After the handshake LocalPilot also opens the server's standalone event stream (
 - A server that announces new or removed tools (`notifications/tools/list_changed`) has its tools listed again 300 ms after the last announcement. Only that server's tools are registered again; the others are left alone. Changed resource and prompt lists are fetched again the same way.
 - Log messages a server sends (`notifications/message`) appear in the LocalPilot log under `[mcp:<name>]`, at the matching level.
 - A request that runs longer than the server's `timeout` fails with `MCP request to "<server>" timed out after Ns. Raise "timeout" for this server in <file>.` The server form in **Settings → MCP** has a **Timeout** list (30 s to 1 hour).
+- A local server whose script is in the workspace restarts 500 ms after the script changes, so a rebuilt server is picked up without a click. LocalPilot watches the `.js`, `.mjs`, `.cjs` or `.py` file named in its command or arguments, or a file under `build/` or `dist/` (not `node_modules`), even before it is built, so the first build starts it. Turn this off with `localpilot.mcp.watchServerFiles`; the change applies to running servers at once.
 - To restart them yourself, run **LocalPilot: Reload Skills, Subagents & MCP Servers**. The notification shows how many MCP tools were registered.
 - **Settings → MCP** shows every server, including those from `.mcp.json` files and plugins, with a status dot (yellow while connecting or restarting), a **Restart** button and, when a server fails, its error with **Retry**. Expand a connected server to see its **Tools** (parameters, with required ones marked `*`), **Resources** (URI, name and MIME type, plus templates) and **Prompts** (name and arguments).
 - The server button in the chat composer opens a list of servers with a switch to turn each on or off (written where the server is defined: the setting or its `.mcp.json` / `mcp.json` file), a status dot, a restart button and a link to **Settings → MCP**. It shows how many MCP tools are offered to the model, since each one adds to the prompt.

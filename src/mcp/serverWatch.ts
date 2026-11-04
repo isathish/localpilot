@@ -49,21 +49,30 @@ export class McpServerFileWatcher {
 
   constructor(private readonly onChange: (server: string, file: string) => void, private readonly debounceMs = 500) {}
 
-  /** Starts (or replaces) the watch of one server's files; an empty list stops it. Missing files are skipped. */
+  /**
+   * Starts (or replaces) the watch of one server's files; an empty list stops it. A missing file (a script not built
+   * yet) is watched through its nearest existing folder, so creating it, or its `dist/` folder, counts as a change.
+   */
   watch(server: string, files: string[]): void {
-    const existing = files.filter((f) => fs.existsSync(f));
-    const key = existing.slice().sort().join('\n');
+    const byDir = new Map<string, Map<string, string>>();
+    for (const f of files) {
+      let dir = path.dirname(f);
+      let name = path.basename(f);
+      while (!fs.existsSync(dir) && path.dirname(dir) !== dir) {
+        name = path.basename(dir);
+        dir = path.dirname(dir);
+      }
+      if (fs.existsSync(dir) && !byDir.get(dir)?.has(name)) {
+        byDir.set(dir, (byDir.get(dir) ?? new Map<string, string>()).set(name, f));
+      }
+    }
+    const key = [...byDir].flatMap(([dir, names]) => [...names.keys()].map((n) => path.join(dir, n))).sort().join('\n');
     if (this.servers.get(server)?.key === key) {
       return;
     }
     this.unwatch(server);
-    if (!existing.length) {
+    if (!byDir.size) {
       return;
-    }
-    const byDir = new Map<string, Map<string, string>>();
-    for (const f of existing) {
-      const dir = path.dirname(f);
-      byDir.set(dir, (byDir.get(dir) ?? new Map()).set(path.basename(f), f));
     }
     const entry: { watchers: fs.FSWatcher[]; timer?: ReturnType<typeof setTimeout>; key: string } = { watchers: [], key };
     for (const [dir, names] of byDir) {
@@ -77,6 +86,8 @@ export class McpServerFileWatcher {
           entry.timer = setTimeout(() => {
             entry.timer = undefined;
             if (this.servers.get(server) === entry) {
+              // A folder that was missing may exist now: watch closer to the files.
+              this.watch(server, files);
               this.onChange(server, file);
             }
           }, this.debounceMs);

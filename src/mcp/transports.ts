@@ -268,6 +268,9 @@ export class StreamableHttpTransport implements Transport {
   private async runStream(own: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([this.ctl.signal, own]);
     let failures = 0;
+    // A 404 on the very first GET means the server has no standalone stream (some answer 404, not 405); only a
+    // stream that was open before and now 404s points at a restarted server that forgot the session.
+    let everOpened = false;
     while (!signal.aborted) {
       let opened = 0;
       const sid = this.session;
@@ -280,7 +283,7 @@ export class StreamableHttpTransport implements Transport {
         const type = res.headers.get('content-type') ?? '';
         if (!res.ok || !type.includes('text/event-stream') || !res.body) {
           await res.body?.cancel().catch(() => undefined);
-          if (res.status === 404 && sid && this.onSessionExpired) {
+          if (res.status === 404 && sid && everOpened && this.onSessionExpired) {
             if (!signal.aborted && sid === this.session) {
               this.debug('event stream: session expired');
               this.onSessionExpired();
@@ -294,6 +297,7 @@ export class StreamableHttpTransport implements Transport {
           throw new Error(`${res.status} ${res.statusText}`);
         }
         opened = Date.now();
+        everOpened = true;
         this.debug('event stream open');
         await readStream(res.body, (e) => {
           if (e.event === 'message') {

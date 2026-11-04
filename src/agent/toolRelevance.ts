@@ -9,7 +9,8 @@ import * as path from 'path';
  */
 const TOPICS: { tools: string[]; words: RegExp; workspace?: (root: string, repos: number) => boolean }[] = [
   { tools: ['git_commit', 'git_push', 'pull_request', 'ci_status'], words: /\b(commit\w*|push\w*|merg\w*|git|ship|publish\w*|upload\w*|pull[ -]?requests?|PRs?|branch\w*|ci|workflows?|actions|checks?|pipelines?|builds? (?:failed|failing|broke|is red)|github|gitlab|git_commit|git_push|pull_request|ci_status|release\w*)\b/i },
-  { tools: ['team_board'], words: /\b(board|team_board|backlog|hand ?off|handoff|claim|split (it|this|the work)|for others|teammates?|workers?)\b/i, workspace: (root) => !!root && fs.existsSync(path.join(root, '.localpilot', 'board')) },
+  { tools: ['team_board'], words: /\b(board|team_board|backlog|hand ?off|handoff|claim|split (it|this|the work)|for others|teammates?|workers?|team|inbox|mailbox|broadcast)\b/i, workspace: (root) => !!root && fs.existsSync(path.join(root, '.localpilot', 'board')) },
+  { tools: ['schedule'], words: /\b(schedul\w*|cron\w*|crontab|recurring|every (night|day|morning|evening|hour|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+ (minutes?|hours?))|nightly|daily|weekly|hourly|periodic\w*)\b/i },
   { tools: ['repos'], words: /\b(repos|repositories|repository|multi[- ]?repo|monorepo|across (the )?projects)\b/i, workspace: (_root, repos) => repos > 1 },
   { tools: ['read_pdf'], words: /\.pdf\b|\bpdfs?\b|read_pdf/i, workspace: (root) => !!root && hasPdf(root) },
   { tools: ['notebook_edit'], words: /\.ipynb\b|\bnotebooks?\b|\bjupyter\b|notebook_edit/i },

@@ -65,6 +65,7 @@ suite('Slash commands: names, workflows, skills and inline commands', () => {
     assert.deepStrictEqual(pickSlashTarget(builtin, { name: 'scan' }), { command: builtin });
     assert.deepStrictEqual(pickSlashTarget(custom, { name: 'review' }), { skill: { name: 'review' } });
     assert.deepStrictEqual(pickSlashTarget(custom, undefined), { command: custom });
+    assert.deepStrictEqual(pickSlashTarget(custom, { name: 'review', source: 'builtin' }), { command: custom }, 'a bundled skill does not shadow the project command');
     assert.strictEqual(pickSlashTarget(undefined, undefined), undefined);
     const cmds = [custom, ...builtinCommands()];
     assert.deepStrictEqual(resolveSlashMessage('/review src/a.ts', cmds, [{ name: 'review' }]), { skill: 'review', task: 'src/a.ts' });
