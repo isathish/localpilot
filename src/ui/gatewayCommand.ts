@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ProviderConfig } from '../types';
+import { editableProviders } from '../config';
 import { freePort, portInUse, which } from '../providers/colibriSetup';
 import { checkGatewayPrereqs, gatewayDashboard, gatewayEnv, GatewayId, gatewayModels, GatewayModels, GATEWAYS, installCommand, needsProviders, nodeVersion, startCommand } from '../providers/gatewaySetup';
 import { findPreset } from '../providers/presets';
@@ -54,7 +55,7 @@ export class GatewayLauncher implements vscode.Disposable {
 
   /** Adds the gateway's provider (from its preset) or updates its port; always marked cloud. */
   private async ensureProvider(id: GatewayId, port: number): Promise<ProviderConfig> {
-    const list = [...(this.settings.get<ProviderConfig[]>('providers', []) ?? [])];
+    const { list, target } = editableProviders();
     // Located in this same list: each settings read returns fresh objects, so an object from another read is never found.
     const at = list.findIndex((p) => p.id === id);
     const i = at >= 0 ? at : list.findIndex((p) => new RegExp(`:${GATEWAYS[id].defaultPort}(/|$)`).test(p.baseUrl));
@@ -69,7 +70,7 @@ export class GatewayLauncher implements vscode.Disposable {
       list.push(cfg);
     }
     if (JSON.stringify(existing) !== JSON.stringify(cfg)) {
-      await this.settings.update('providers', list, vscode.ConfigurationTarget.Global);
+      await this.settings.update('providers', list, target);
     }
     return cfg;
   }

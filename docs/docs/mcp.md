@@ -67,6 +67,8 @@ For a remote server without an explicit `type`, LocalPilot first speaks Streamab
 
 ## Approvals
 
+In the read-only Ask and Plan modes, for read-only subagents and for the Multitask coordinator, LocalPilot offers only the MCP tools the server annotates with `readOnlyHint: true`; any other MCP tool may change files or remote state, so it is offered only in modes that can edit, such as Agent.
+
 MCP tool calls follow the `localpilot.approvals.network` policy (default `always`). Set it to `ask` to confirm each call. In a `settings.json` file you can also allow, prompt for or deny specific servers and tools with `mcp__server` or `mcp__server__tool` [permission rules]({{ '/docs/claude-code-compatibility/' | relative_url }}#permission-rules).
 
 An MCP server is a program you choose to run, and it can contact any service it is built for. See [Privacy]({{ '/privacy/' | relative_url }}).

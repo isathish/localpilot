@@ -8,7 +8,7 @@ import { ChangeTracker } from '../agent/changeTracker';
 import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
-import { WorkspaceContext } from '../context/workspaceContext';
+import { currentEditor, WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry } from '../providers/registry';
 import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, UserAnswer, UserQuestion } from '../types';
@@ -71,6 +71,8 @@ export type ToWebview =
   | { type: 'paused'; sessionId: string; childId?: string; agent?: string; paused: boolean; holding: boolean }
   /** A message typed while the agent was busy was queued; the loop reports `steer` when it is injected. */
   | { type: 'steerQueued'; sessionId: string; id: string; content: string; images?: string[] }
+  /** A message waits for a manual compaction to finish before it starts a run. */
+  | { type: 'sendQueued'; sessionId: string }
   | {
       type: 'changes';
       sessionId: string;
@@ -177,8 +179,8 @@ export interface Sink {
   post(msg: ToWebview): void;
   /** Whether the user can currently see this surface; approvals raised while nothing is visible also get a notification. */
   visible?: () => boolean;
-  /** False when this surface cannot show approval or question cards (the @localpilot participant). */
-  canPrompt?: boolean;
+  /** The surface shows prompts for this session natively (the @localpilot participant) instead of as cards. */
+  handlesPrompts?: (sessionId: string) => boolean;
 }
 
 /** An approval the agent is waiting on; kept so a re-created webview can show the prompt again and a hidden one can mirror it as a notification. */
@@ -187,6 +189,8 @@ interface PendingApproval {
   title: string;
   detail: string;
   kind: string;
+  /** Required by the organization's policy: answered each time, never remembered for the session. */
+  mandatory?: boolean;
   resolve: (ok: boolean) => void;
   /** A native notification for this prompt is already on screen. */
   mirrored: boolean;
@@ -216,6 +220,8 @@ const REPLAY_BYTES_LIMIT = 6_000_000;
 export class ChatController implements vscode.Disposable {
   private sinks = new Set<Sink>();
   private runs = new Map<string, RunControl>();
+  /** Sessions whose current run was stopped by the user, so a queued task records `cancelled` rather than done/failed. */
+  private readonly stoppedByUser = new Set<string>();
   private replays = new Map<string, RunReplay>();
   private offers = new Map<string, SkillOffer>();
   private approvals = new Map<string, PendingApproval>();
@@ -282,6 +288,8 @@ export class ChatController implements vscode.Disposable {
     store.inUse = (id) => this.runs.has(id) || id === this.activeSessionId;
     this.disposables.push(
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
+      // Retention pruning and history clearing drop chats in the store: release their snapshots too.
+      store.onDidDelete((id) => tracker.forget(id)),
       providers.onDidChange(() => void this.pushModels()),
       providers.onDidRemoveModels((ids) => this.dropRemovedModels(ids)),
       // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
@@ -311,7 +319,7 @@ export class ChatController implements vscode.Disposable {
     this.openFilesTimer = setTimeout(() => this.broadcast(this.openFilesMsg()), 250);
   }
   private openFilesMsg(): ToWebview {
-    const ed = vscode.window.activeTextEditor;
+    const ed = currentEditor();
     this.lastSelection = !!ed && ed.selections.some((x) => !x.isEmpty);
     const active = ed && ed.document.uri.scheme === 'file' ? vscode.workspace.asRelativePath(ed.document.uri) : undefined;
     return { type: 'openFiles', files: this.workspace.openEditors(), active, selection: this.lastSelection };
@@ -337,11 +345,13 @@ export class ChatController implements vscode.Disposable {
   }
 
   private anySurfaceVisible(): boolean {
-    return this.promptSurfaces().some((s) => !s.visible || s.visible());
+    return [...this.sinks].some((s) => !s.handlesPrompts && (!s.visible || s.visible()));
   }
 
-  private promptSurfaces(): Sink[] {
-    return [...this.sinks].filter((s) => s.canPrompt !== false);
+  /** True when prompts of this session need native UI: the participant owns it, or no surface can show cards. */
+  private promptsNative(sessionId: string): boolean {
+    const s = [...this.sinks];
+    return s.some((x) => x.handlesPrompts?.(sessionId)) || !s.some((x) => !x.handlesPrompts);
   }
 
   /** Prefills the composer (used by Settings → "Create skill" and other entry points). */
@@ -654,11 +664,11 @@ export class ChatController implements vscode.Disposable {
   /** Whether this session's agent should work in an isolated worktree, per `localpilot.worktrees.mode`. */
   private shouldIsolate(session: Session): boolean {
     const mode = getConfig().worktrees.mode;
-    return !!this.worktrees && !!this.workspace.root && (mode === 'always' || (mode === 'parallel' && !!session.isolated));
+    return !!this.worktrees && !!this.workspace.root && !session.direct && (mode === 'always' || (mode === 'parallel' && !!session.isolated));
   }
 
   /** Create the session's worktree if it needs one and does not have it yet. Quietly falls back to the workspace outside git. */
-  private async ensureWorktree(session: Session, status: (text: string) => void): Promise<void> {
+  private async ensureWorktree(session: Session, status: (text: string) => void, signal?: AbortSignal): Promise<void> {
     if (!this.worktrees || !this.workspace.root || !this.shouldIsolate(session)) {
       return;
     }
@@ -677,11 +687,20 @@ export class ChatController implements vscode.Disposable {
       const started = Date.now();
       // In a subfolder of the repository the agent works in the same subfolder of the copy.
       const subdir = path.relative(repo, this.workspace.root);
-      session.worktree = await this.worktrees.create(repo, session.id, { progress: status, subdir, owner: this.worktreeOwner });
+      const wt = await this.worktrees.create(repo, session.id, { progress: status, signal, subdir, owner: this.worktreeOwner });
+      // Stopped, or the chat was deleted, while the copy was being made: nothing will use it.
+      if (signal?.aborted || !this.store.get(session.id)) {
+        await this.worktrees.remove(wt).catch((e) => this.log.warn(`worktree for ${session.id} could not be removed: ${String(e)}`));
+        return;
+      }
+      session.worktree = wt;
       session.isolated = true;
       this.store.save(session);
       this.telemetry?.record({ type: 'worktree', action: 'create', durationMs: Date.now() - started });
     } catch (e) {
+      if (signal?.aborted) {
+        return;
+      }
       this.log.warn(`worktree for ${session.id} could not be created, editing the workspace directly: ${String(e)}`);
       this.broadcast({ type: 'toast', level: 'error', text: `Could not create an isolated worktree (${e instanceof Error ? e.message : String(e)}); this chat edits the workspace directly.` });
     }
@@ -694,16 +713,30 @@ export class ChatController implements vscode.Disposable {
     if (!session?.worktree || !this.worktrees) {
       return undefined;
     }
+    const run = this.runs.get(sessionId);
+    if (run && !run.holding) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Pause or stop the agent before applying its changes.' });
+      return undefined;
+    }
     const wt = session.worktree;
     try {
       const res = await this.worktrees.apply(wt, (fsPath) => this.tracker.beforeChange(fsPath, sessionId));
       this.applyConflicts.set(sessionId, res.conflicts);
       this.telemetry?.record({ type: 'worktree', action: 'apply', files: res.files.length, conflicts: res.conflicts.length });
       // Further work in the worktree is measured from here, so applying again never re-applies these changes.
-      await this.worktrees.rebase(wt);
+      let rebaseError: string | undefined;
+      try {
+        await this.worktrees.rebase(wt);
+      } catch (e) {
+        rebaseError = e instanceof Error ? e.message : String(e);
+      }
       this.store.save(session);
       this.tracker.keep(sessionId); // applied = the user's decision; the workspace diff is now visible in git itself
       this.pushChanges(sessionId);
+      if (rebaseError) {
+        this.broadcast({ type: 'toast', level: 'error', text: `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'}, but the new base could not be recorded: ${rebaseError}` });
+        return { files: res.files.length, conflicts: res.conflicts };
+      }
       this.broadcast({
         type: 'toast',
         level: res.conflicts.length ? 'error' : 'info',
@@ -727,10 +760,16 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Throw the session's worktree away (its unapplied changes with it). A later message creates a fresh one. */
-  async discardWorktree(sessionId: string): Promise<void> {
+  async discardWorktree(sessionId: string, opts: { confirm?: boolean } = {}): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session?.worktree || !this.worktrees) {
       return;
+    }
+    if (opts.confirm) {
+      const n = (await this.worktrees.changes(session.worktree).catch(() => [])).length;
+      if (n && (await vscode.window.showWarningMessage(`Discard the agent's ${n} unapplied file change${n === 1 ? '' : 's'}?`, { modal: true }, 'Discard')) !== 'Discard') {
+        return;
+      }
     }
     if (this.runs.has(sessionId)) {
       this.stop(sessionId);
@@ -903,7 +942,8 @@ export class ChatController implements vscode.Disposable {
 
   /** Delete worktrees left behind by sessions that no longer exist (e.g. after a crash). */
   async pruneWorktrees(): Promise<number> {
-    if (!this.worktrees || !this.workspace.root) {
+    await this.loaded.catch(() => undefined);
+    if (!this.store.loadedOk || !this.worktrees || !this.workspace.root) {
       return 0;
     }
     const repo = await this.worktrees.repoRoot(this.workspace.root);
@@ -980,7 +1020,7 @@ export class ChatController implements vscode.Disposable {
       }
       case 'deleteSession':
         this.stop(msg.id);
-        this.tracker.keep(msg.id);
+        this.tracker.forget(msg.id);
         await this.runner.hooks?.sessionEnd(msg.id, 'other', this.sessionRoot(msg.id));
         await this.dropWorktree(msg.id);
         await this.store.delete(msg.id);
@@ -1077,7 +1117,7 @@ export class ChatController implements vscode.Disposable {
           report(true);
           if (sid) {
             const s = this.store.peek(sid);
-            const last = s?.messages.slice().reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages);
+            const last = s?.messages.slice().reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages && !m.meta?.toolResults);
             const prompt = String(last?.meta?.display ?? last?.content ?? '').replace(/^\/skill \S+\s*/, '').trim();
             this.setOffers(sid, { ...this.offers.get(sid), available: undefined, ready: { name: one.name, prompt } });
           }
@@ -1123,14 +1163,15 @@ export class ChatController implements vscode.Disposable {
       case 'approval': {
         const pending = this.approvals.get(msg.id);
         if (pending) {
-          if (msg.approved && msg.remember) {
+          const remember = msg.approved && msg.remember && !pending.mandatory;
+          if (remember) {
             this.rememberApproval(pending.sessionId, pending.kind);
           }
           this.settleApproval(msg.id, msg.approved);
-          if (msg.approved && msg.remember) {
+          if (remember) {
             // Parallel workers may already be waiting on the same kind of action.
             for (const [id, other] of [...this.approvals]) {
-              if (other.sessionId === pending.sessionId && other.kind === pending.kind) {
+              if (other.sessionId === pending.sessionId && other.kind === pending.kind && !other.mandatory) {
                 this.settleApproval(id, true);
               }
             }
@@ -1224,7 +1265,7 @@ export class ChatController implements vscode.Disposable {
       }
       case 'attachRef':
         // Special context chip (e.g. @terminal) added from a command outside the webview.
-        this.broadcast({ type: 'toast', level: 'info', text: `attach:@${msg.ref.replace(/^@/, '')}` });
+        this.broadcast({ type: 'toast', level: 'info', text: `attach:${msg.ref.replace(/^@/, '')}` });
         return;
       case 'attachActive':
       case 'pickAttachment':
@@ -1285,6 +1326,7 @@ export class ChatController implements vscode.Disposable {
           s.compactions = 0;
           s.todos = [];
           s.workingSet = [];
+          this.tracker.dropTurnsFrom(s.id, 0);
           this.store.save(s);
           this.broadcast(this.sessionMsg(s));
         }
@@ -1380,7 +1422,7 @@ export class ChatController implements vscode.Disposable {
         await this.applyWorktree(msg.sessionId);
         return;
       case 'discardWorktree':
-        await this.discardWorktree(msg.sessionId);
+        await this.discardWorktree(msg.sessionId, { confirm: true });
         return;
       case 'openWorktree': {
         const s = this.store.get(msg.sessionId);
@@ -1450,6 +1492,9 @@ export class ChatController implements vscode.Disposable {
     s.messages = s.messages.slice(0, messageIndex);
     s.contextTokens = 0;
     this.store.save(s);
+    if (!revertFiles && key !== undefined) {
+      this.tracker.dropTurnsFrom(s.id, key); // the removed turns can no longer be restored
+    }
     this.broadcast(this.sessionMsg(s));
     if (revertFiles) {
       this.pushChanges(s.id);
@@ -1734,18 +1779,7 @@ export class ChatController implements vscode.Disposable {
     } else if (slash !== undefined) {
       return slash;
     }
-    if (images?.length) {
-      try {
-        const { model } = await this.providers.resolve(session.model);
-        if (!model.supportsVision) {
-          this.broadcast({ type: 'toast', level: 'error', text: `${model.name} cannot read images — pick a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl, llava…)` });
-          return '';
-        }
-      } catch {
-        /* resolve errors surface below */
-      }
-    }
-
+    this.stoppedByUser.delete(sessionId);
     const control = new RunControl(sessionId);
     this.runs.set(sessionId, control);
     this.replays.set(sessionId, { base: session.messages.length, startedAt: Date.now(), items: [], bytes: 0, truncated: false });
@@ -1756,24 +1790,48 @@ export class ChatController implements vscode.Disposable {
     this.runStatus.set(sessionId, 'Starting…');
     this.broadcast({ type: 'running', sessionId, running: true });
     this._onDidChangeRuns.fire();
+    const endEarly = (): string => {
+      this.runs.delete(sessionId);
+      this.replays.delete(sessionId);
+      this.runStatus.delete(sessionId);
+      this.deliverLeftovers(sessionId, control);
+      this.broadcast({ type: 'running', sessionId, running: false });
+      this._onDidChangeRuns.fire();
+      return '';
+    };
+    if (images?.length) {
+      // Routing sends an image turn to a vision model when the chat's own cannot see; refuse only when none can.
+      let blind: string | undefined;
+      try {
+        const { model } = await this.providers.route({ modelRef: opts.modelRef ?? session.model, needsVision: true, signal: control.signal });
+        blind = model.supportsVision ? undefined : model.name;
+      } catch {
+        /* routing errors surface in the run itself */
+      }
+      if (blind || control.aborted) {
+        if (blind && !control.aborted) {
+          this.broadcast({ type: 'toast', level: 'error', text: `${blind} cannot read images — pick a vision model (gemma4, nemotron-3.5-bolt, qwen2.5vl, llava…)` });
+        }
+        endEarly();
+        // The message never became part of the chat: give its text back and drop the bubble the view already shows.
+        this.broadcast({ type: 'draft', text: opts.display ?? text });
+        this.broadcast(this.sessionMsg(session));
+        return '';
+      }
+    }
     await this.ensureWorktree(session, (t) => {
       this.runStatus.set(sessionId, t);
       this.broadcast({ type: 'event', event: { sessionId, type: 'status', payload: t } });
       this._onDidChangeRuns.fire();
-    });
+    }, control.signal);
     if (control.aborted) {
-      this.runs.delete(sessionId);
-      this.replays.delete(sessionId);
-      this.runStatus.delete(sessionId);
-      this.broadcast({ type: 'running', sessionId, running: false });
-      this._onDidChangeRuns.fire();
-      return '';
+      return endEarly();
     }
 
     const corrected = opts.display ? { text, fixes: [] } : await this.correctNames(sessionId, text);
     text = corrected.text;
     let content = text;
-    const attachedBlocks = await this.readAttachments(attachments);
+    const attachedBlocks = await this.readAttachments(attachments, session);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }
@@ -1820,7 +1878,7 @@ export class ChatController implements vscode.Disposable {
             void this.savePlan(session, String((e.payload as { text?: string })?.text ?? ''));
           }
         },
-        requestApproval: (title, detail, kind) => this.requestApproval(sessionId, title, detail, kind),
+        requestApproval: (title, detail, kind, opts) => this.requestApproval(sessionId, title, detail, kind, opts),
         // Unattended runs (task queue) have nobody to answer: ask_user falls back to the agent's recommendations.
         askUser: opts.unattended ? async () => null : (questions) => this.requestQuestions(sessionId, questions),
         unattended: opts.unattended,
@@ -1839,6 +1897,7 @@ export class ChatController implements vscode.Disposable {
         this.replays.delete(sessionId);
         this.runStatus.delete(sessionId);
       }
+      this.deliverLeftovers(sessionId, control);
       this.store.save(session);
       this.broadcast({ type: 'running', sessionId, running: false });
       this._onDidChangeRuns.fire();
@@ -1870,18 +1929,26 @@ export class ChatController implements vscode.Disposable {
       return '';
     }
     let idx = session.messages.length - 1;
-    while (idx >= 0 && !(session.messages[idx].role === 'user' && !session.messages[idx].meta?.hidden && !session.messages[idx].meta?.toolImages && !session.messages[idx].meta?.summary)) {
+    while (idx >= 0 && !(session.messages[idx].role === 'user' && !session.messages[idx].meta?.hidden && !session.messages[idx].meta?.toolImages && !session.messages[idx].meta?.toolResults && !session.messages[idx].meta?.summary)) {
       idx--;
     }
     if (idx < 0) {
       return '';
     }
     const last = session.messages[idx];
+    const removed = session.messages.slice(idx);
     session.messages = session.messages.slice(0, idx);
     this.store.save(session);
     this.broadcast(this.sessionMsg(session));
     // Attachments are already inlined in the stored content, so send it verbatim with no new attachments.
-    return this.send(sessionId, last.content.replace(/\n\n\[\d+ images? attached\]$/, ''), [], last.images);
+    const result = await this.send(sessionId, last.content.replace(/\n\n\[\d+ images? attached\]$/, ''), [], last.images);
+    if (session.messages[idx]?.role !== 'user') {
+      // The run never started (cancelled, refused): put the exchange back instead of losing it.
+      session.messages.splice(idx, 0, ...removed);
+      this.store.save(session);
+      this.broadcast(this.sessionMsg(session));
+    }
+    return result;
   }
 
   /** Start a new session for an externally supplied prompt (CLI / URI handler). */
@@ -1920,7 +1987,7 @@ export class ChatController implements vscode.Disposable {
    * Runs one task-queue entry as its own chat and resolves when the agent finishes. `isolated` puts it in a
    * worktree (under `worktrees.mode: parallel`) so tasks running side by side do not edit the same checkout.
    */
-  async runQueuedTask(task: { prompt: string; mode: Session['mode']; model?: string }, started: (sessionId: string) => void, isolated: boolean): Promise<{ ok: boolean; error?: string }> {
+  async runQueuedTask(task: { prompt: string; mode: Session['mode']; model?: string }, started: (sessionId: string) => void, isolated: boolean): Promise<{ ok: boolean; error?: string; cancelled?: boolean }> {
     const s = this.createSession(task.mode);
     s.title = task.prompt.slice(0, 60);
     s.isolated = isolated;
@@ -1937,6 +2004,9 @@ export class ChatController implements vscode.Disposable {
     });
     try {
       const text = await this.send(s.id, task.prompt, [], undefined, { modelRef: task.model, unattended: true });
+      if (this.stoppedByUser.delete(s.id)) {
+        return { ok: false, cancelled: true, error: 'Stopped by the user.' };
+      }
       return text.trim() && !error ? { ok: true } : { ok: false, error: error ?? 'The agent stopped without an answer.' };
     } finally {
       off.dispose();
@@ -1970,7 +2040,7 @@ export class ChatController implements vscode.Disposable {
     }
     for (const s of this.store.list()) {
       if (!keep.has(s.id)) {
-        this.tracker.keep(s.id);
+        this.tracker.forget(s.id);
         this.sessionApprovalMemory.delete(s.id);
         if (s.messageCount) {
           await this.runner.hooks?.sessionEnd(s.id, 'other', this.sessionRoot(s.id));
@@ -1989,6 +2059,9 @@ export class ChatController implements vscode.Disposable {
   }
 
   stop(sessionId: string): void {
+    if (this.runs.has(sessionId)) {
+      this.stoppedByUser.add(sessionId);
+    }
     this.runs.get(sessionId)?.stop();
     for (const [id, pending] of this.approvals) {
       if (pending.sessionId === sessionId) {
@@ -2027,8 +2100,9 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Reads the attachments of a message; any that could not be read are reported in one toast instead of being dropped silently. */
-  private async readAttachments(attachments: string[]): Promise<string[]> {
-    const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
+  private async readAttachments(attachments: string[], session?: Session): Promise<string[]> {
+    const root = session?.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
+    const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a, root)));
     const failed = attachments.filter((_, i) => !blocks[i]);
     if (failed.length) {
       this.broadcast({ type: 'toast', level: 'warn', text: `Could not attach ${failed.join(', ')}` });
@@ -2045,6 +2119,13 @@ export class ChatController implements vscode.Disposable {
     const original = text;
     // The run ended (or never started) before the message could be queued: send it as a new turn instead of dropping it.
     const fallback = async () => {
+      // A stopped run lingers in `runs` until its cleanup finishes; steering into it again would loop.
+      for (let i = 0; i < 100 && c && this.runs.get(sessionId) === c; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (c && this.runs.get(sessionId) === c) {
+        return false;
+      }
       await this.send(sessionId, original, attachments, images);
       return true;
     };
@@ -2053,7 +2134,7 @@ export class ChatController implements vscode.Disposable {
     }
     text = (await this.correctNames(sessionId, text)).text;
     let content = text;
-    const attachedBlocks = await this.readAttachments(attachments);
+    const attachedBlocks = await this.readAttachments(attachments, this.store.get(sessionId));
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }
@@ -2061,11 +2142,29 @@ export class ChatController implements vscode.Disposable {
       return fallback();
     }
     const id = `steer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    c.steer({ role: 'user', content, images, meta: { steerId: id } });
+    if (!c.steer({ role: 'user', content, images, meta: { steerId: id } })) {
+      return fallback();
+    }
     this.broadcast({ type: 'steerQueued', sessionId, id, content: text, images });
     this.runStatus.set(sessionId, c.holding ? 'Paused · 1 message waiting' : 'Will take your message into account at the next step');
     this._onDidChangeRuns.fire();
     return true;
+  }
+
+  /** Messages queued for a run that ended before taking them: a follow-up turn, or back to the composer when it was stopped. */
+  private deliverLeftovers(sessionId: string, control: RunControl): void {
+    const left = control.close();
+    if (!left.length) {
+      return;
+    }
+    const joined = left.map((m) => m.content).join('\n\n');
+    const images = left.flatMap((m) => m.images ?? []);
+    if (!control.aborted) {
+      void this.send(sessionId, joined, [], images.length ? images : undefined).catch(() => undefined);
+      return;
+    }
+    this.broadcast({ type: 'draft', text: joined });
+    this.broadcast({ type: 'toast', level: 'warn', text: 'Your queued message was not delivered — it is back in the composer.' });
   }
 
   private onControlChange(sessionId: string, c: RunControl): void {
@@ -2088,17 +2187,20 @@ export class ChatController implements vscode.Disposable {
     this._onDidChangeRuns.fire();
   }
 
-  requestApproval(sessionId: string, title: string, detail: string, kind: string): Promise<boolean> {
+  requestApproval(sessionId: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }): Promise<boolean> {
+    // An organization floor for this kind (or a policy that forbids bypassing prompts) is never answered from session memory.
+    const managed = getManagedPolicy(this.log);
+    const mandatory = !!opts?.mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
     const remembered = this.sessionApprovalMemory.get(sessionId);
-    if (remembered?.has(kind)) {
+    if (remembered?.has(kind) && !mandatory) {
       return Promise.resolve(true);
     }
     const id = `${sessionId}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     return new Promise<boolean>((resolve) => {
-      this.approvals.set(id, { sessionId, title, detail, kind, resolve, mirrored: false });
-      if (this.promptSurfaces().length === 0) {
-        // No surface that can show the card (none attached, or only the @localpilot participant) — fall back to a native dialog.
-        void vscode.window.showWarningMessage(`${title}\n${detail}`.slice(0, 1000), { modal: true }, 'Allow', 'Allow for session').then((choice) => {
+      this.approvals.set(id, { sessionId, title, detail, kind, mandatory, resolve, mirrored: false });
+      if (this.promptsNative(sessionId)) {
+        // The @localpilot participant runs this session, or no surface can show the card — fall back to a native dialog.
+        void vscode.window.showWarningMessage(`${title}\n${detail}`.slice(0, 1000), { modal: true }, ...(mandatory ? ['Allow'] : ['Allow', 'Allow for session'])).then((choice) => {
           if (!this.approvals.has(id)) {
             return; // the run was stopped meanwhile
           }
@@ -2129,10 +2231,11 @@ export class ChatController implements vscode.Disposable {
 
   /**
    * Shows the agent's questions as a card in the chat and waits for the answers (`null` = skipped). Resolves
-   * undefined at once when no chat surface is attached, so ask_user falls back to native pickers.
+   * undefined at once when no chat surface can show the card (or the @localpilot participant runs this session), so
+   * ask_user falls back to native pickers.
    */
   requestQuestions(sessionId: string, questions: UserQuestion[]): Promise<UserAnswer[] | null | undefined> {
-    if (this.promptSurfaces().length === 0) {
+    if (this.promptsNative(sessionId)) {
       return Promise.resolve(undefined);
     }
     const id = `${sessionId}:q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -2179,7 +2282,7 @@ export class ChatController implements vscode.Disposable {
       pending.mirrored = true;
       const session = this.store.get(pending.sessionId);
       void vscode.window
-        .showWarningMessage(`LocalPilot${session ? ` · ${session.title}` : ''}: ${pending.title}`, 'Allow', 'Allow for session', 'Deny', 'Show chat')
+        .showWarningMessage(`LocalPilot${session ? ` · ${session.title}` : ''}: ${pending.title}`, ...(pending.mandatory ? ['Allow', 'Deny', 'Show chat'] : ['Allow', 'Allow for session', 'Deny', 'Show chat']))
         .then((choice) => {
           if (!this.approvals.has(id)) {
             return; // already answered in the webview
@@ -2251,7 +2354,7 @@ export class ChatController implements vscode.Disposable {
         // Both kinds of standing context: the instruction files you write, and the notes the agent saved itself.
         void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => {
           const on = getConfig().memoryEnabled;
-          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
+          const filesPart = files.length ? `**Instruction files in force** (in prompt order)\n${files.map((f) => `- \`${f.label}\` (${f.scope}${f.note ? `, ${f.note}: over the instruction size cap` : ''})`).join('\n')}` : 'No instruction files found. Create `CLAUDE.md` or `AGENTS.md` in the workspace, `.claude/CLAUDE.md`, `CLAUDE.local.md` for personal notes, or `~/.claude/CLAUDE.md` for every project. Lines with `@path` import other files.';
           const shown = notes.slice(0, 30);
           const notesPart = !on
             ? '**Memory notes** are off (`localpilot.memory.enabled`).'
@@ -2399,6 +2502,10 @@ export class ChatController implements vscode.Disposable {
       if (!prompt) {
         this.broadcast({ type: 'toast', level: 'error', text: `${cmd.invoke}: the command file has no prompt body.` });
         return;
+      }
+      if (cmd.source === 'builtin' && (cmd.name === 'pr' || cmd.name === 'fix-ci') && !session.worktree) {
+        session.direct = true;
+        this.store.save(session);
       }
       await this.send(session.id, prompt, [], undefined, { modelRef: cmd.model, permissionAllow: cmd.allowedTools, display: typed.trim() });
     } catch (e) {

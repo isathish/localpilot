@@ -12,7 +12,7 @@ export class ModelStallError extends Error {
 
 const OVERFLOW = /context (length|window|size)|too (long|large|many tokens)|exceeds? .*(limit|maximum|context)|maximum context|prompt is too long|input length|num_ctx|token limit|reduce the length/i;
 const UNROUTABLE = /no (eligible|available|healthy|matching|valid) (route|provider|account|target|deployment|connection)s?|no providers? (are |is )?(configured|connected|available)|all (providers|accounts|targets|routes) (failed|exhausted|unavailable)|no deployments? available|invalid model name passed in model=/i;
-const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits/i;
+const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits|insufficient (credits|balance|funds)/i;
 const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
 
 export function classifyModelError(e: unknown): ModelFailure {
@@ -47,8 +47,24 @@ export function classifyModelError(e: unknown): ModelFailure {
     return 'other';
   }
   const msg = e instanceof Error ? `${e.message} ${(e as { cause?: { message?: string; code?: string } }).cause?.message ?? ''} ${(e as { cause?: { code?: string } }).cause?.code ?? ''}` : String(e);
+  // Errors sent inside the stream as plain text. The tool-call check comes first: its message quotes the model's raw output.
+  if (/error parsing tool call/i.test(msg)) {
+    return 'toolcall';
+  }
+  if (QUOTA.test(msg)) {
+    return 'quota';
+  }
+  if (UNROUTABLE.test(msg)) {
+    return 'unroutable';
+  }
   if (OVERFLOW.test(msg)) {
     return 'overflow';
+  }
+  if (/rate.?limit|too many requests/i.test(msg)) {
+    return 'ratelimit';
+  }
+  if (/overloaded|internal server error|service unavailable|bad gateway/i.test(msg)) {
+    return 'server';
   }
   if (NETWORK.test(msg)) {
     return 'network';
@@ -158,9 +174,10 @@ export function onAbort(signal: AbortSignal | undefined, fn: () => void): () => 
   if (!signal) {
     return () => undefined;
   }
-  // An already-aborted signal never fires 'abort' again, so run the handler now.
+  // An already-aborted signal never fires 'abort' again, so run the handler — in a microtask, because callers
+  // usually declare what the handler touches (`const off = onAbort(…)`, a timer) after this call returns.
   if (signal.aborted) {
-    fn();
+    queueMicrotask(fn);
     return () => undefined;
   }
   signal.addEventListener('abort', fn, { once: true });

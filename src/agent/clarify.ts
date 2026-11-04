@@ -95,7 +95,7 @@ export function assessRequest(content: string, opts: AssessOptions = {}): Reques
 }
 
 /** Workspace signals that usually disambiguate a vague request: what the user is looking at and working on. */
-export async function gatherRequestContext(workspace: WorkspaceContext, session?: Pick<Session, 'workingSet' | 'todos' | 'messages'>): Promise<string> {
+export async function gatherRequestContext(workspace: WorkspaceContext, session?: Pick<Session, 'workingSet' | 'todos' | 'messages'>, root?: string): Promise<string> {
   const parts: string[] = [];
   const editor = workspace.activeEditorContext();
   parts.push(`## Editor\n${editor || 'No active editor.'}`);
@@ -110,7 +110,7 @@ export async function gatherRequestContext(workspace: WorkspaceContext, session?
   if (todos.length) {
     parts.push(`## Open checklist items\n${todos.map((t: TodoItem) => `- [${t.status}] ${t.title}`).join('\n')}`);
   }
-  const lastTurns = (session?.messages ?? []).filter((m) => (m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages) || (m.role === 'assistant' && m.content.trim())).slice(-4, -1);
+  const lastTurns = (session?.messages ?? []).filter((m) => (m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages && !m.meta?.toolResults) || (m.role === 'assistant' && m.content.trim())).slice(-4, -1);
   if (lastTurns.length) {
     parts.push(`## Recent conversation\n${lastTurns.map((m) => `${m.role}: ${userText(m.content).replace(/\s+/g, ' ').slice(0, 240)}`).join('\n')}`);
   }
@@ -118,7 +118,7 @@ export async function gatherRequestContext(workspace: WorkspaceContext, session?
   if (errors) {
     parts.push(`## Current errors (Problems panel)\n${errors}`);
   }
-  const git = await workspace.gitSummary();
+  const git = await workspace.gitSummary(2500, root ?? workspace.root);
   if (git) {
     parts.push(`## Uncommitted changes\n${git}`);
   }
@@ -151,7 +151,7 @@ export function createGatherContextTool(workspace: WorkspaceContext, sessions?: 
     },
     async execute(_args, ctx) {
       const session = sessions?.get(ctx.sessionId.split('::')[0]);
-      const snapshot = await gatherRequestContext(workspace, session ?? (ctx.todos ? { todos: ctx.todos.get(), messages: [], workingSet: [] } : undefined));
+      const snapshot = await gatherRequestContext(workspace, session ?? (ctx.todos ? { todos: ctx.todos.get(), messages: [], workingSet: [] } : undefined), ctx.workspaceRoot);
       return { content: `${snapshot}\n\nUse this to decide the target; state your interpretation ("Understood as: …") and proceed.` };
     },
   };

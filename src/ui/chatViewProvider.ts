@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ChatController, FromWebview, ToWebview } from './chatController';
+import { currentEditor } from '../context/workspaceContext';
 
 /** Where the chat lives; mirrors the `localpilot.chat.location` setting. */
 export type ChatLocation = 'sidebar' | 'secondarySidebar' | 'panel' | 'editor';
@@ -282,7 +283,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async handleAttachment(m: FromWebview, sink: { post: (m: ToWebview) => void }): Promise<void> {
     if (m.type === 'attachActive') {
-      const ed = vscode.window.activeTextEditor;
+      const ed = currentEditor();
       if (!ed) {
         return sink.post({ type: 'toast', level: 'error', text: 'No active editor' });
       }

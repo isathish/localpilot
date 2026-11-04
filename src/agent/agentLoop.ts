@@ -4,6 +4,7 @@ import { ContextManager, effectiveContextWindow, FitResult, tokenCalibration } f
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
+import { isCloudProvider } from '../providers/cloud';
 import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
@@ -31,7 +32,8 @@ import { runDigest, saveRunMemories } from './autoMemory';
 import { irrelevantTools } from './toolRelevance';
 import { listRepos } from './repos';
 
-export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>) => Promise<boolean>;
+/** `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies. */
+export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: { mandatory?: boolean }) => Promise<boolean>;
 
 /** Per-run permission/hook policy handed to tool execution. */
 interface ToolPolicy {
@@ -43,6 +45,8 @@ interface ToolPolicy {
   sessionId: string;
   /** Asks the user regardless of the approval settings (an `ask` rule or hook verdict). */
   ask: ApprovalHandler;
+  /** Like `ask`, for a prompt the organization's policy requires. */
+  askMandatory: ApprovalHandler;
   signal: AbortSignal;
 }
 
@@ -204,14 +208,31 @@ export class AgentRunner {
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
 
-    const route = await this.providers.route({
-      role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
-      modelRef: o.modelRef ?? session.model,
-      fresh: true,
-      needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
-      spread: o.spreadModels ?? (depth > 0 || !(o.modelRef ?? session.model)),
-      load: this.loadFor(session.id),
-    });
+    let route: Awaited<ReturnType<ProviderRegistry['route']>>;
+    try {
+      route = await this.providers.route({
+        role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
+        modelRef: o.modelRef ?? session.model,
+        fresh: true,
+        needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
+        spread: o.spreadModels ?? (depth > 0 || !(o.modelRef ?? session.model)),
+        load: this.loadFor(session.id),
+        signal: o.signal,
+      });
+    } catch (e) {
+      if (o.signal.aborted) {
+        throw e;
+      }
+      // No model to answer (server down, model missing): keep the prompt and the error in the chat so Retry has something to resend.
+      const friendly = e instanceof Error ? e.message : String(e);
+      this.log.error(`model routing failed: ${friendly}`);
+      session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
+      session.messages.push({ role: 'assistant', content: `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
+      emit({ sessionId: session.id, type: 'error', payload: friendly });
+      const err = e instanceof Error ? e : new Error(friendly);
+      (err as Error & { reported?: boolean }).reported = true;
+      throw err;
+    }
     const { provider } = route;
     // One number for the budget and for the request: the window the model is actually given (the setting, capped by
     // the model; 0 = the model's full native window). Budgeting against the native window while sending a smaller
@@ -231,7 +252,10 @@ export class AgentRunner {
     // change the chat's model either.
     // Subagent sessions are ephemeral: record what actually answered so the parent can report or quarantine it.
     const ownChoice = !!session.model && (!o.modelRef || o.modelRef === session.model);
-    if (depth > 0 || (ownChoice && (!route.reason || route.fallback) && !route.spread)) {
+    // A cloud model standing in for a local (or unknown) one is never written into the chat: the next turn tries the local one again.
+    const wantedCfg = session.model ? cfg.providers.find((p) => session.model!.startsWith(`${p.id}/`)) : undefined;
+    const cloudForLocal = route.fallback && !!model.remote && !(wantedCfg && isCloudProvider(wantedCfg));
+    if (depth > 0 || (ownChoice && (!route.reason || route.fallback) && !route.spread && !cloudForLocal)) {
       session.model = model.id;
     }
 
@@ -240,7 +264,7 @@ export class AgentRunner {
 
     const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
     // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
-    const recent = [...session.messages.filter((m) => m.role === 'user').slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
+    const recent = [...session.messages.filter((m) => m.role === 'user' && !m.meta?.toolResults && !m.meta?.toolImages).slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
     // Shared state (the board, repos.json) lives in the real checkout, not in an isolated worktree.
     const root = this.workspace.root ?? o.workspaceRoot;
     // Once offered in a chat, a tool stays offered: tool definitions sit at the start of the prompt, and a list that
@@ -286,6 +310,9 @@ export class AgentRunner {
 
     const wasEmpty = session.messages.length === 0;
     const turnMessage: ChatMessage = { ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } };
+    if (nativeTools) {
+      closeDanglingToolCalls(session.messages);
+    }
     session.messages.push(turnMessage);
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
@@ -326,7 +353,7 @@ export class AgentRunner {
       });
       if (!assessment.clear) {
         status('Interpreting the request…');
-        const snapshot = await gatherRequestContext(this.workspace, session);
+        const snapshot = await gatherRequestContext(this.workspace, session, o.workspaceRoot);
         session.messages.push({ role: 'user', content: clarificationSteer(assessment, snapshot), meta: { timestamp: Date.now(), hidden: true } });
         emit({ sessionId: session.id, type: 'clarify', payload: { reasons: assessment.reasons } });
       }
@@ -382,7 +409,7 @@ export class AgentRunner {
         const enabled = this.skills.enabledSkills;
         // Already in context: load_skill results and skills preloaded into earlier hidden messages.
         const loaded = new Set(
-          session.messages.flatMap((m) => ((m.role === 'tool' && m.toolName === 'load_skill') || (m.role === 'user' && m.meta?.hidden) ? [...m.content.matchAll(/<skill name="([^"]+)"/g)].map((x) => x[1]) : []))
+          session.messages.flatMap((m) => ((m.role === 'tool' && m.toolName === 'load_skill') || (m.role === 'user' && (m.meta?.hidden || m.meta?.toolResults)) ? [...m.content.matchAll(/<skill name="([^"]+)"/g)].map((x) => x[1]) : []))
         );
         const suggestions = quiet && !forced ? { skills: [] as SkillMatch[], create: undefined } : this.learner ? await this.learner.observeRequest(request, enabled) : { skills: recommendSkills(request, enabled), create: undefined };
         let fresh: SkillMatch[] = suggestions.skills.filter((s) => !loaded.has(s.name));
@@ -523,7 +550,7 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'todos', payload: items });
         },
       },
-      requestApproval: (title, detail, kind) => this.gateApproval(kind, cfg.approvals[kind], () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot, request: o.userMessage.content, signal: o.signal }),
+      requestApproval: (title, detail, kind, opts) => this.gateApproval(kind, cfg.approvals[kind], (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory }),
       askUser: depth === 0 ? o.askUser : undefined,
     };
     const policy: ToolPolicy = {
@@ -533,7 +560,8 @@ export class AgentRunner {
       root: hookRoot,
       sessionId: session.id,
       // An `ask` rule still goes through auto mode's reviewer; only an explicit `deny` skips the model.
-      ask: (title, detail, kind) => this.gateApproval(kind, 'ask', () => o.requestApproval(title, detail, kind), emit, session.id, { title, detail, root: hookRoot, request: o.userMessage.content, signal: o.signal }),
+      ask: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory }),
+      askMandatory: (title, detail, kind) => this.gateApproval(kind, 'ask', (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: true }),
       signal: o.signal,
     };
     /** Times a Stop / SubagentStop hook sent the agent back to work this turn. */
@@ -557,7 +585,7 @@ export class AgentRunner {
     const MAX_NUDGES = 2;
     let malformedNudged = false;
     let toolCallRepairs = 0;
-    /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused. */
+    /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused; reset after a successful edit. */
     const callCounts = new Map<string, number>();
     let completed = false;
     /** Hold here while the user has the run paused; the step that was in flight has finished by now. */
@@ -579,6 +607,9 @@ export class AgentRunner {
       }
       for (const m of queued) {
         session.messages.push({ ...m, meta: { ...m.meta, timestamp: Date.now(), steer: true } });
+      }
+      if (!model.supportsVision && queued.some((m) => m.images?.length)) {
+        status('This model cannot see images — the image was not sent; switch to a vision model.');
       }
       emit({ sessionId: session.id, type: 'steer', payload: { ids: queued.map((m) => m.meta?.steerId).filter(Boolean), count: queued.length } });
       status('Taking your new instructions into account…');
@@ -669,7 +700,7 @@ export class AgentRunner {
         try {
           const stream = provider.chat({
             model: model.modelId,
-            messages: withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext),
+            messages: withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext, !model.supportsVision),
             tools: nativeTools && toolDefs.length ? toolDefs : undefined,
             temperature: cfg.temperature,
             maxTokens: cfg.maxOutputTokens,
@@ -853,7 +884,7 @@ export class AgentRunner {
       // parsing text whenever no native call arrived — restricted to known tool names.
       let malformedCalls: string[] = [];
       if (toolDefs.length && !calls.length) {
-        const parsed = extractTextToolCalls(text, nativeTools ? new Set(toolDefs.map((t) => t.name)) : undefined, toolDefs);
+        const parsed = extractTextToolCalls(text, new Set(toolDefs.map((t) => t.name)), toolDefs);
         if (parsed.calls.length) {
           calls.push(...parsed.calls);
           text = parsed.remainder;
@@ -935,6 +966,10 @@ export class AgentRunner {
             continue;
           }
         }
+        // A message typed while the stop hooks ran.
+        if (!o.signal.aborted && !control.aborted && injectSteering()) {
+          continue;
+        }
         completed = true;
         break;
       }
@@ -955,7 +990,7 @@ export class AgentRunner {
       this.unassign(session.id);
       // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
       const coordinatorFirst = session.mode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
-      const results = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
+      const { messages: results, perCall } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -966,10 +1001,10 @@ export class AgentRunner {
         const kind = toolList.find((t) => t.definition.name === c.name)?.approvalKind;
         return kind === 'write' || kind === 'delete' || kind === 'terminal' || DELEGATION_TOOLS.has(c.name);
       }).length;
-      delegationsExecuted += calls.filter((c) => DELEGATION_TOOLS.has(c.name) && !results.find((r) => r.toolCallId === c.id)?.content.startsWith('Nothing to run')).length;
+      delegationsExecuted += calls.filter((c) => DELEGATION_TOOLS.has(c.name) && !perCall.find((r) => r.toolCallId === c.id)?.content.startsWith('Nothing to run')).length;
       for (const c of calls) {
         if (c.name === 'load_skill') {
-          const loadedName = /<skill name="([^"]+)"/.exec(results.find((r) => r.toolCallId === c.id)?.content ?? '')?.[1];
+          const loadedName = /<skill name="([^"]+)"/.exec(perCall.find((r) => r.toolCallId === c.id)?.content ?? '')?.[1];
           if (loadedName && !activeSkills.has(loadedName)) {
             activeSkills.add(loadedName);
             toolCtx.skills = [...activeSkills];
@@ -1148,7 +1183,7 @@ export class AgentRunner {
       list = list.filter((t) => (!t.approvalKind || t.approvalKind === 'network') && (!t.definition.name.startsWith('mcp_') || t.readOnly));
     } else if (mode === 'multitask') {
       // The coordinator reads, plans, delegates and verifies; only its workers edit files.
-      list = list.filter((t) => t.approvalKind !== 'write' && t.approvalKind !== 'delete');
+      list = list.filter((t) => t.approvalKind !== 'write' && t.approvalKind !== 'delete' && (!t.definition.name.startsWith('mcp_') || t.readOnly));
     }
     return list;
   }
@@ -1188,7 +1223,7 @@ export class AgentRunner {
     mode = 'agent',
     policy?: ToolPolicy,
     coordinatorFirst = false
-  ): Promise<ChatMessage[]> {
+  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[] }> {
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
@@ -1246,12 +1281,14 @@ export class AgentRunner {
             // A project allow skips the prompt, unless the organisation set an approval floor for this kind of action.
             callCtx = { ...ctx, requestApproval: async () => !ctx.signal.aborted };
           } else if (decision === 'ask') {
-            callCtx = { ...ctx, requestApproval: policy.ask };
+            // An organization `ask` must reach the user every time.
+            const ask = org.decision === 'ask' ? policy.askMandatory : policy.ask;
+            callCtx = { ...ctx, requestApproval: ask };
             // Tools that never ask for approval themselves (reads, searches) would run straight through an `ask`
             // rule (`Read(.env)`): prompt here, before the call.
             if (!tool.approvalKind) {
               const target = Object.values(args).find((v) => typeof v === 'string') as string | undefined;
-              if (!(await policy.ask(`${call.name}${target ? ` ${target.slice(0, 80)}` : ''}`, `Requires approval: ${reason}`, 'write'))) {
+              if (!(await ask(`${call.name}${target ? ` ${target.slice(0, 80)}` : ''}`, `Requires approval: ${reason}`, 'write'))) {
                 result = { content: `The user declined ${call.name} (${reason}). Nothing was done.`, isError: true };
               }
             }
@@ -1300,16 +1337,27 @@ export class AgentRunner {
       const args = parseArgs(call.arguments);
       const tool = byName.get(call.name);
       emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+      const key = callKey(call.name, args);
       if (callCounts) {
-        const key = callKey(call.name, args);
         const n = (callCounts.get(key) ?? 0) + 1;
         callCounts.set(key, n);
         if (n > MAX_IDENTICAL_CALLS) {
-          const content = `Refused: this exact call (${call.name} with the same arguments) has already been made ${n - 1} times this turn and would return the same result. Use the earlier result, change the arguments, or take a different approach — if you are finished, answer the user.`;
+          const content = `Refused: this exact call (${call.name} with the same arguments) has already been made ${n - 1} times since the last change and would return the same result. Use the earlier result, change the arguments, or take a different approach — if you are finished, answer the user.`;
           emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content } });
           return { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } };
         }
       }
+      // An edit can change what reads, tests and diagnostics return, so earlier identical calls no longer count.
+      const afterEdit = (r: { msg: ChatMessage; isError: boolean }) => {
+        if (callCounts && !r.isError && (tool?.approvalKind === 'write' || tool?.approvalKind === 'delete' || DELEGATION_TOOLS.has(call.name))) {
+          for (const k of [...callCounts.keys()]) {
+            if (k !== key) {
+              callCounts.delete(k);
+            }
+          }
+        }
+        return r;
+      };
       const cacheKey = tool?.parallelSafe ? `${call.name}:${JSON.stringify(args)}` : undefined;
       if (cacheKey) {
         const inflight = cache.get(cacheKey);
@@ -1319,7 +1367,7 @@ export class AgentRunner {
           emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: false, durationMs: 0, content: hit.content, cached: true } });
           return { ...hit, toolCallId: call.id, meta: { timestamp: Date.now() } };
         }
-        const p = execute(call, tool, args).then((r) => {
+        const p = execute(call, tool, args).then(afterEdit).then((r) => {
           if (r.isError) {
             cache.delete(cacheKey);
           }
@@ -1329,7 +1377,7 @@ export class AgentRunner {
         return p;
       }
       cache.clear();
-      return (await execute(call, tool, args)).msg;
+      return (await execute(call, tool, args).then(afterEdit)).msg;
     };
 
     // Parallel-safe tools run concurrently; mutating tools run sequentially in order, after reads.
@@ -1357,21 +1405,24 @@ export class AgentRunner {
       : undefined;
     if (!nativeTools) {
       // Text protocol: tool results go back as a single user message (with any captured images attached to it).
-      return [{ role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages } }];
+      const carrier: ChatMessage = { role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages, toolResults: calls.map((c) => c.id) } };
+      return { messages: [carrier], perCall: ordered };
     }
-    return imageMsg ? [...ordered, imageMsg] : ordered;
+    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered };
   }
 
   private async gateApproval(
     kind: NonNullable<Tool['approvalKind']>,
     mode: ApprovalMode,
-    ask: () => Promise<boolean>,
+    ask: (mandatory: boolean) => Promise<boolean>,
     emit: (e: AgentEvent) => void,
     sessionId: string,
-    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal }
+    info?: { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal; mandatory?: boolean }
   ): Promise<boolean> {
     const managed = getManagedPolicy(this.log);
-    const floored = flooredApproval(managed, kind, mode);
+    const base = flooredApproval(managed, kind, mode);
+    const floored = info?.mandatory && base === 'always' ? 'ask' : base;
+    const mandatory = !!info?.mandatory || managed.approvals[kind] === 'ask';
     const decided = (ok: boolean, by: string) => {
       audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: ok, by }, info?.root, this.log);
       return ok;
@@ -1391,7 +1442,7 @@ export class AgentRunner {
       return decided(false, managed.approvals[kind] === 'never' ? 'policy' : 'setting');
     }
     const auto = getConfig().autoMode;
-    if (auto.enabled && info && this.autoReviewer && !managed.disableBypassPermissions) {
+    if (auto.enabled && info && this.autoReviewer && !managed.disableBypassPermissions && !mandatory) {
       emit({ sessionId, type: 'status', payload: `Auto mode: reviewing "${info.title.slice(0, 60)}"…` });
       const v = await this.autoReviewer.review({ kind, title: info.title, detail: info.detail, request: info.request ?? '', signal: info.signal }, auto.model);
       if (sig?.aborted) {
@@ -1411,7 +1462,7 @@ export class AgentRunner {
     if (sig?.aborted) {
       return decided(false, 'stopped');
     }
-    const asked = ask();
+    const asked = ask(mandatory);
     const stopped = new Promise<boolean>((r) => {
       const off = onAbort(sig, () => r(false));
       void asked.finally(off).catch(() => undefined);
@@ -1430,10 +1481,49 @@ export function isImplementPlanRequest(text: string): boolean {
  * user message. Earlier turns go out exactly as they did before, so the server reuses its KV cache for all of them.
  * When compaction has folded the turn's message into a summary, the context rides on the system prompt instead.
  */
-export function withTurnContext(system: string, history: ChatMessage[], turnMessage: ChatMessage, turnContext: string): ChatMessage[] {
+export function withTurnContext(system: string, history: ChatMessage[], turnMessage: ChatMessage, turnContext: string, dropImages = false): ChatMessage[] {
   const at = turnContext ? history.indexOf(turnMessage) : -1;
   const head: ChatMessage = { role: 'system', content: turnContext && at < 0 ? `${system}\n\n${turnContext}` : system };
-  return [head, ...history.map((m, i) => (i === at ? { ...stripMeta(m), content: `${turnContext}\n\n${m.content}` } : stripMeta(m)))];
+  const out = (m: ChatMessage) => (dropImages ? withoutImages(stripMeta(m)) : stripMeta(m));
+  return [head, ...history.map((m, i) => (i === at ? { ...out(m), content: `${turnContext}\n\n${out(m).content}` } : out(m)))];
+}
+
+/** For a model that cannot see: the images leave the request (the transcript keeps them) and a note says so. */
+function withoutImages(m: ChatMessage): ChatMessage {
+  if (!m.images?.length) {
+    return m;
+  }
+  const { images, ...rest } = m;
+  return { ...rest, content: `${m.content}\n\n[${images.length} image${images.length === 1 ? '' : 's'} omitted: the current model cannot see images]` };
+}
+
+/** A session saved mid-batch (window closed or reloaded) keeps tool calls without results; give each one so the history stays well-formed. */
+export function closeDanglingToolCalls(messages: ChatMessage[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const calls = messages[i].role === 'assistant' ? messages[i].toolCalls : undefined;
+    if (!calls?.length) {
+      continue;
+    }
+    const answered = new Set<string>();
+    let end = i + 1;
+    let last = i;
+    for (; end < messages.length; end++) {
+      const m = messages[end];
+      if (m.role === 'tool') {
+        if (m.toolCallId) {
+          answered.add(m.toolCallId);
+        }
+        last = end;
+      } else if (!(m.role === 'user' && m.meta?.toolImages)) {
+        break;
+      }
+    }
+    const missing = calls.filter((c) => !answered.has(c.id));
+    if (missing.length) {
+      messages.splice(last + 1, 0, ...missing.map((c): ChatMessage => ({ role: 'tool', toolCallId: c.id, toolName: c.name, content: 'Interrupted: this tool did not finish (the window was closed or reloaded).', meta: { timestamp: Date.now() } })));
+      i = last + missing.length;
+    }
+  }
 }
 
 function stripMeta(m: ChatMessage): ChatMessage {

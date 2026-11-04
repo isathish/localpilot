@@ -23,6 +23,9 @@ const SUBAGENT_CONTRACT = `# You are a subagent
  */
 export type ScopedApprovalHandler = (sessionId: string, ...args: Parameters<ApprovalHandler>) => ReturnType<ApprovalHandler>;
 
+/** Tools whose effects a from-scratch rerun on another model would repeat. */
+const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path', 'run_command', 'git_commit', 'run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
+
 const strList = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map(String).map((x) => x.trim()).filter(Boolean) : typeof v === 'string' && v.trim() ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
 
 export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit: (e: AgentEvent) => void, approval: ScopedApprovalHandler): Tool[] {
@@ -189,6 +192,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // left to the router): when it is saturated the router may run this worker on a comparable idle model instead.
     const spreadable = !modelRef && !def.model;
     let fellBack = false;
+    /** True once the child changed something (edited, ran a command, delegated): it can no longer start over elsewhere. */
+    let mutated = false;
     /** False when the child's turn hit its step limit instead of reaching a final answer. */
     let completed = true;
     const attempt = () =>
@@ -207,11 +212,16 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         depth: ctx.depth + 1,
         signal: control.signal,
         control,
-        requestApproval: (title, detail, kind) => approval(ctx.sessionId, title, detail, kind),
+        requestApproval: (title, detail, kind, opts) => approval(ctx.sessionId, title, detail, kind, opts),
         // Child progress is forwarded under the parent's session id so the UI can nest it.
         emit: (e) => {
           if (e.type === 'turn_end') {
             completed = (e.payload as { completed?: boolean } | undefined)?.completed !== false;
+          } else if (e.type === 'tool_end') {
+            const p = e.payload as { name?: string; isError?: boolean } | undefined;
+            if (p?.name && !p.isError && MUTATING_TOOLS.has(p.name)) {
+              mutated = true;
+            }
           }
           emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type });
         },
@@ -229,7 +239,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         // A router-chosen side model (read-only pick, or a spread onto an idle model) that stalls is retried on the
         // parent's model; an explicitly chosen model, or the parent's own, is not second-guessed.
         const onSideModel = (routedElsewhere || spreadable) && !!ctx.modelRef && !!child.model && child.model !== ctx.modelRef;
-        if (!onSideModel || control.aborted || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
+        if (!onSideModel || mutated || control.aborted || !(kind === 'stall' || kind === 'network' || kind === 'server')) {
           throw e;
         }
         fellBack = true;
@@ -431,7 +441,14 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           isError: true,
         };
       }
-      const stillWaiting = remaining.map((t) => `${t.id} (waiting for ${(t.dependsOn ?? []).filter((d) => !satisfied.has(d)).join(', ')} — an item without an agent; do it yourself, then re-run)`);
+      const remainingIds = new Set(remaining.map((t) => t.id));
+      const stillWaiting = remaining.map((t) => {
+        const unmet = (t.dependsOn ?? []).filter((d) => d !== t.id && !satisfied.has(d));
+        const manual = unmet.filter((d) => !remainingIds.has(d));
+        return manual.length
+          ? `${t.id} (waiting for ${manual.join(', ')} — an item without an agent; do it yourself, then re-run)`
+          : `${t.id} (waiting for item ${unmet.join(', ')}, which is still waiting itself)`;
+      });
       const byId = new Map(runnable.map((t, i) => [t.id, i]));
       outcomes.sort((a, b) => (byId.get(a.t.id) ?? 0) - (byId.get(b.t.id) ?? 0));
       const out = outcomes.map(({ t, content, ok }) => `## ${t.id}. ${t.title} (${t.agent})${ok ? '' : ' — FAILED'}\n${content}`);

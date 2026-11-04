@@ -18,15 +18,15 @@ import { ProjectSettingsManager } from './agent/settings';
 import { HookRunner } from './agent/hooks';
 import { PluginManager } from './agent/plugins';
 import { CommandManager } from './agent/commands';
-import { getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
+import { editableProviders, getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
 import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
-import { autoDetectProviders } from './providers/discovery';
+import { autoDetectProviders, recommendModel } from './providers/discovery';
 import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ollamaUp } from './providers/modelManager';
 import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
-import { secretRefs } from './providers/cloud';
+import { isCloudProvider, secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
 import { ColibriLauncher } from './ui/colibriCommand';
 import { GatewayLauncher } from './ui/gatewayCommand';
@@ -42,7 +42,7 @@ import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
 import { terminalTools } from './tools/terminal';
 import { webTools } from './tools/web';
-import { ModelInfo, ProviderConfig, Session } from './types';
+import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
@@ -199,9 +199,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // A run that needs a model on a local Ollama that is installed but stopped starts it instead of failing.
   providers.startLocalServer = async (p) => {
     if (p.type !== 'ollama' || !isLocalUrl(p.baseUrl) || !(await findOllamaBinary())) {
-      return false;
+      return undefined;
     }
-    const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'LocalPilot: starting Ollama…' }, () => modelManager.startOllama());
+    const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'LocalPilot: starting Ollama…' }, () => modelManager.startOllama(p.id));
     if (job.status !== 'done') {
       log.warn(`Could not start Ollama: ${job.error ?? job.status}`);
       return false;
@@ -256,6 +256,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(supervisor);
   supervisor.start();
 
+  // Settings first (plugins may be disabled there), then plugins (they contribute skills, agents, commands, hooks,
+  // MCP servers), then everything that reads them. Assigned before the chat hosts exist so an early webview waits
+  // for the sessions instead of seeing an empty store.
+  controller.loaded = (async () => {
+    await projectSettings.reload();
+    await plugins.refresh();
+    projectSettings.pluginLayers = plugins.settingsLayers();
+    await projectSettings.reload();
+    await Promise.all([store.load(), skills.refresh(), commands.refresh()]);
+  })();
+
   // Register the chat hosts before anything is awaited: VS Code shows a bare progress bar in the view until the
   // provider exists, so this must not queue behind session/skill loading or model discovery.
   const view = new ChatViewProvider(context, controller);
@@ -298,16 +309,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(markdownViewer);
   tools.register(createShowMarkdownTool(markdownViewer, (p) => (path.isAbsolute(p) ? vscode.Uri.file(p) : workspace.root ? vscode.Uri.joinPath(vscode.Uri.file(workspace.root), p) : undefined)));
 
-  // Settings first (plugins may be disabled there), then plugins (they contribute skills, agents, commands, hooks,
-  // MCP servers), then everything that reads them.
-  await projectSettings.reload();
-  await plugins.refresh();
-  projectSettings.pluginLayers = plugins.settingsLayers();
-  await projectSettings.reload();
-  await (controller.loaded = Promise.all([store.load(), skills.refresh(), commands.refresh()]));
+  await controller.loaded;
   // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start —
   // only once the sessions are loaded, so a live chat's worktree is never mistaken for an orphan.
-  setTimeout(() => void controller.pruneWorktrees().then((n) => n && log.info(`removed ${n} orphaned worktree(s)`)), 5000);
+  void controller.loaded
+    .then(() => new Promise((r) => setTimeout(r, 5000)))
+    .then(() => controller.pruneWorktrees())
+    .then((n) => n && log.info(`removed ${n} orphaned worktree(s)`))
+    .catch((e) => log.warn(`worktree prune: ${e instanceof Error ? e.message : String(e)}`));
   /** Background refreshes must never surface as unhandled rejections: one failing layer is logged, the others still apply. */
   const refresh = (what: string, p: Promise<unknown>) => void p.catch((e) => log.warn(`${what}: ${e instanceof Error ? e.message : String(e)}`));
   refresh('mcp', mcp.reload());
@@ -449,14 +458,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const quietDefaults = context.globalState.get<string[]>(DEFAULT_HINT_KEY, []);
     // A default missing from an Ollama server is uninstalled, not offline: the registry clears it back to Auto.
     const defaultPid = cfg.defaultModel.split('/')[0];
-    const ollamaDefault = providers.get(defaultPid)?.type === 'ollama' && report.results.some((r) => r.ok && r.id === defaultPid);
-    if (cfg.defaultModel && !ollamaDefault && available.length && !available.some((m) => m.id === cfg.defaultModel) && report.recommended && !quietDefaults.includes(cfg.defaultModel)) {
+    const defaultProvider = providers.get(defaultPid);
+    const ollamaDefault = defaultProvider?.type === 'ollama' && report.results.some((r) => r.ok && r.id === defaultPid);
+    // A stopped Ollama on this machine is started on demand by the first request: nothing is unavailable.
+    const loopback = (url: string) => {
+      try {
+        return /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(new URL(url).hostname);
+      } catch {
+        return false;
+      }
+    };
+    const startable = defaultProvider?.type === 'ollama' && loopback(defaultProvider.baseUrl) && !!(await findOllamaBinary().catch(() => undefined));
+    if (cfg.defaultModel && !ollamaDefault && !startable && available.length && !available.some((m) => m.id === cfg.defaultModel) && !quietDefaults.includes(cfg.defaultModel)) {
       const missing = cfg.defaultModel;
+      // Never suggest sending prompts off the machine in place of a local default.
+      const local = report.results.filter((r) => r.ok && r.enabled && !isCloudProvider({ ...r, cloud: cfg.providers.find((p) => p.id === r.id)?.cloud })).flatMap((r) => r.models);
+      const replacement = recommendModel(local);
       void vscode.window
-        .showWarningMessage(`Default model "${missing}" is not available right now; LocalPilot will use ${report.recommended.split('/').pop()} meanwhile.`, 'Make it the default', "Don't ask again")
+        .showWarningMessage(
+          replacement ? `Default model "${missing}" is not available right now; LocalPilot will use ${replacement.split('/').pop()} meanwhile.` : `Default model "${missing}" is not available right now.`,
+          ...(replacement ? ['Make it the default'] : []),
+          "Don't ask again"
+        )
         .then(async (pick) => {
-          if (pick === 'Make it the default') {
-            await setDefaultModel(report.recommended!);
+          if (pick === 'Make it the default' && replacement) {
+            await setDefaultModel(replacement);
           } else if (pick === "Don't ask again") {
             await context.globalState.update(DEFAULT_HINT_KEY, [...quietDefaults, missing].slice(-50));
           }
@@ -814,8 +840,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       view.reveal();
       const action = await vscode.window.showInformationMessage(`${pick.label.replace(/^\$\([^)]*\)\s*/, '')}: ${pick.description}`, ...(g.kind === 'bestOf' ? ['Apply this result', 'Apply and discard the others'] : ['Apply this result']));
       if (action) {
-        await controller.applyWorktree(pick.session.id);
+        const res = await controller.applyWorktree(pick.session.id);
         if (action === 'Apply and discard the others') {
+          if (!res) {
+            void vscode.window.showWarningMessage('Apply failed — the other results were kept.');
+            return;
+          }
+          if (res.conflicts.length && (await vscode.window.showWarningMessage('Applied with conflicts. Discard the other results anyway?', { modal: true }, 'Discard')) !== 'Discard') {
+            return;
+          }
           for (const s of sessions) {
             if (s.id !== pick.session.id) {
               await controller.discardWorktree(s.id);
@@ -965,7 +998,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.queue.remove', (arg?: unknown) => taskQueue.remove(queueTaskArg(arg) ?? ''));
   cmd('localpilot.queue.clearFinished', () => taskQueue.clearFinished());
   cmd('localpilot.stopSession', (arg?: unknown) => controller.stop(sessionIdArg(arg) ?? ''));
-  cmd('localpilot.stopAll', () => controller.runningSessionIds.forEach((id) => controller.stop(id)));
+  cmd('localpilot.stopAll', () => {
+    // Pause first so stopping a queued task's chat does not let the queue start the next one.
+    const hadQueued = !taskQueue.paused && taskQueue.pendingCount > 0;
+    taskQueue.setPaused(true);
+    controller.runningSessionIds.forEach((id) => controller.stop(id));
+    if (hadQueued) {
+      void vscode.window.showInformationMessage('Queue paused — Resume Queue to continue.', 'Resume Queue').then((r) => r && taskQueue.setPaused(false));
+    }
+  });
   cmd('localpilot.pauseSession', (arg?: unknown) => controller.pause(sessionIdArg(arg) ?? ''));
   cmd('localpilot.resumeSession', (arg?: unknown) => controller.resume(sessionIdArg(arg) ?? ''));
   cmd('localpilot.togglePause', (arg?: unknown) => {
@@ -1119,11 +1160,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         // Nothing to run models on: install Ollama in the background (user-space, no sudo/UAC) and continue with the
         // starter download — the whole thing is one click. The progress notification has Cancel.
         if (o.installRuntime === false) {
-          settingsPanel.show('settings', 'providers');
+          void vscode.window.showWarningMessage('No model runtime is installed or running.', 'Install Ollama', 'Open Providers').then((p) => {
+            if (p === 'Install Ollama') {
+              void vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
+            } else if (p === 'Open Providers') {
+              settingsPanel.show('settings', 'providers');
+            }
+          });
           return r;
         }
-        vscode.window.setStatusBarMessage(`LocalPilot: installing Ollama and ${plan.agent.entry.name} ${plan.agent.variant.tag} (${plan.agent.variant.gb} GB) for this ${profile.ramGb} GB machine…`, 6000);
-        return vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
+        if (o.installRuntime === undefined && r.runtimes.find((rt) => rt.target === 'ollama')?.installed === false) {
+          vscode.window.setStatusBarMessage(`LocalPilot: installing Ollama and ${plan.agent.entry.name} ${plan.agent.variant.tag} (${plan.agent.variant.gb} GB) for this ${profile.ramGb} GB machine…`, 6000);
+          return vscode.commands.executeCommand('localpilot.autoSetupModels', { ...o, installRuntime: true });
+        }
+        void vscode.window.showErrorMessage('Model setup could not find or start a model runtime.', 'Show logs', 'Open Models').then((p) => (p === 'Show logs' ? log.show() : p && settingsPanel.show('settings', 'models')));
+        return r;
       }
       case 'error':
         void vscode.window.showErrorMessage(`Model setup failed: ${r.error}`, 'Show logs', 'Open Models').then((p) => (p === 'Show logs' ? log.show() : p && settingsPanel.show('settings', 'models')));
@@ -1223,7 +1274,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   cmd('localpilot.setProviderApiKey', async (providerId?: unknown) => {
     const cfg = vscode.workspace.getConfiguration('localpilot');
-    const list = cfg.get<ProviderConfig[]>('providers', []);
+    const { list, target: scope } = editableProviders();
     let target = typeof providerId === 'string' ? list.find((p) => p.id === providerId) : undefined;
     if (!target) {
       const picked = await vscode.window.showQuickPick(
@@ -1251,7 +1302,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       }
       return out;
     });
-    await cfg.update('providers', next, vscode.ConfigurationTarget.Global);
+    await cfg.update('providers', next, scope);
     await providerSecrets.prune();
     await providers.listModels(true).catch(() => []);
     vscode.window.setStatusBarMessage(`LocalPilot: API key for ${target.displayName || id} ${ref ? 'saved' : 'removed'}`, 2500);
@@ -1727,6 +1778,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     view.reveal();
     const s = store.create(getConfig().defaultModel, 'agent');
     s.title = 'Commit message';
+    s.direct = true;
     await controller.handle({ type: 'selectSession', id: s.id });
     void controller.send(s.id, 'Run `git diff --cached` (fall back to `git diff` if nothing is staged) and write a conventional commit message for the changes. Output only the message in a code block.');
   });

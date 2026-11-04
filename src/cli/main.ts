@@ -34,7 +34,7 @@ import { WorkspaceContext } from '../context/workspaceContext';
 import { McpManager } from '../mcp/mcpManager';
 import { createProvider, ProviderRegistry } from '../providers/registry';
 import { findOllamaBinary, launchOllama, ollamaServerEnv } from '../providers/ollamaLauncher';
-import { isRemoteUrl } from '../providers/cloud';
+import { isLoopbackUrl } from '../providers/cloud';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
@@ -47,14 +47,14 @@ import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { setSecretValues } from '../providers/cloud';
-import { ask, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
+import { ask, withPromptLock, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
-import { LEASE_MS, TeamBoard } from '../agent/teamBoard';
+import { LEASE_MS, TeamBoard, canFinish } from '../agent/teamBoard';
 import { boardOwner, teamBoardTool } from '../tools/teamBoard';
 import { reposTool } from '../tools/repos';
 import { securityScanTool } from '../tools/security';
-import { formatFindings, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
+import { formatFindings, ScanResult, scanWorkspace, SEVERITY_ORDER, toSarif } from '../security/scan';
 import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, removePlugin, scaffoldPlugin, searchPlugins, setPluginEnabled, validatePlugin } from '../agent/pluginInstaller';
 
 declare const __LOCALPILOT_VERSION__: string | undefined;
@@ -168,13 +168,22 @@ interface Args {
   /** Work in an isolated git worktree; one-shot runs apply the result automatically unless --no-apply. */
   isolate: boolean;
   apply: boolean;
+  /** A usage error found while parsing (unknown option, bad value): main prints it and exits 2. */
+  error?: string;
 }
 function parseArgs(argv: string[]): Args {
   const a: Args = { prompt: '', mode: 'agent', files: [], yes: false, cwd: process.cwd(), print: false, mcp: true, verbose: false, user: false, install: false, isolate: false, apply: true, provider: {}, evalOpts: { models: [], tasks: [], keep: false }, workOpts: { once: false }, scanOpts: { failOn: 'high', offline: false }, project: false };
   const words: string[] = [];
+  // `--name=value` is the same as `--name value` (up to a `--`, after which everything is prompt text).
+  const end = argv.indexOf('--');
+  argv = argv.flatMap((x, i) => ((end < 0 || i < end) && /^--[\w-]+=/.test(x) ? [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1)] : [x]));
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     const next = () => argv[++i] ?? '';
+    if (x === '--') {
+      words.push(...argv.slice(i + 1));
+      break;
+    }
     if (x === '--ask') {a.mode = 'ask';}
     else if (x === '--plan') {a.mode = 'plan';}
     else if (x === '--multitask') {a.mode = 'multitask';}
@@ -183,7 +192,6 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--no-apply') {a.apply = false;}
     else if (x === '--agent') {a.mode = 'agent';}
     else if (x === '-m' || x === '--model') {a.model = next();}
-    else if (x.startsWith('--model=')) {a.model = x.slice(8);}
     else if (x === '-f' || x === '--file') {a.files.push(next());}
     else if (x === '-y' || x === '--yes') {a.yes = true;}
     else if (x === '-C' || x === '--cwd') {a.cwd = path.resolve(next());}
@@ -213,7 +221,14 @@ function parseArgs(argv: string[]): Args {
     else if (x === 'scan' && !words.length && !a.cmd) {a.cmd = 'scan';}
     else if (x === 'plugin' && !words.length && !a.cmd) {a.cmd = 'plugin'; a.pluginAction = argv[i + 1] && !argv[i + 1].startsWith('-') ? argv[++i] : 'list';}
     else if (x === '--project') {a.project = true;}
-    else if (x === '--fail-on') {const v = next(); a.scanOpts.failOn = (['low', 'medium', 'high', 'critical', 'none'].includes(v) ? v : 'high') as Args['scanOpts']['failOn'];}
+    else if (x === '--fail-on') {
+      const v = next();
+      if (['low', 'medium', 'high', 'critical', 'none'].includes(v)) {
+        a.scanOpts.failOn = v as Args['scanOpts']['failOn'];
+      } else {
+        a.error = a.error ?? `--fail-on must be one of low, medium, high, critical, none${v ? ` (got "${v}")` : ''}`;
+      }
+    }
     else if (x === '--sarif') {a.scanOpts.sarif = next();}
     else if (x === '--offline') {a.scanOpts.offline = true;}
     else if (x === '--once') {a.workOpts.once = true;}
@@ -227,6 +242,7 @@ function parseArgs(argv: string[]): Args {
     else if (x === 'skill' && !words.length && !a.cmd && ['search', 'find'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-search'; i++;}
     else if (x === 'skill' && !words.length && !a.cmd && ['install', 'add'].includes(argv[i + 1] ?? '')) {a.cmd = 'skill-install'; i++;}
     else if (!x.startsWith('-') && !words.length && !a.cmd && ['models', 'doctor', 'help', 'version'].includes(x)) {a.cmd = x as Args['cmd'];}
+    else if (x.startsWith('-') && x.length > 1) {a.error = a.error ?? `unknown option ${x}`;}
     else {words.push(x);}
   }
   a.prompt = words.join(' ').trim();
@@ -236,7 +252,18 @@ function parseArgs(argv: string[]): Args {
 // ------------------------------------------------------------------ VS Code hand-off (previous CLI behaviour)
 function openInVsCode(pathname: string, params: Record<string, string>, cwd: string): never {
   const cp = require('child_process') as typeof import('child_process');
-  const q = Object.entries(params).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const crypto = require('crypto') as typeof import('crypto');
+  const extra: Record<string, string> = { v: '2' };
+  if (pathname === 'run') {
+    // The extension trusts a run request only through this one-time file; a bare link (from a web page) asks first.
+    const id = crypto.randomBytes(8).toString('hex');
+    const dir = path.join(os.homedir(), '.localpilot', 'handoff');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ ...params, at: Date.now() }), { mode: 0o600 });
+    extra.id = id;
+  }
+  // Values are encoded twice: VS Code decodes the query once before the handler splits it on '&'.
+  const q = Object.entries({ ...params, ...extra }).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(encodeURIComponent(v))}`).join('&');
   const url = `vscode://localpilot.localpilot-agent/${pathname}${q ? `?${q}` : ''}`;
   const code = process.env.LOCALPILOT_CODE_BIN || 'code';
   const r = cp.spawnSync(code, ['--open-url', url, cwd], { stdio: 'inherit' });
@@ -545,13 +572,20 @@ interface Core {
   commands: CustomCommand[];
 }
 
-async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string) => Promise<boolean>): Promise<Core> {
+/** Stop what keeps the process alive (MCP servers, Redis telemetry) after a subcommand or one-shot run. */
+async function shutdown(core: Core): Promise<void> {
+  core.mcp?.dispose();
+  await core.telemetry.flush().catch(() => undefined);
+  core.telemetryRemote?.dispose();
+}
+
+async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }) => Promise<boolean>): Promise<Core> {
   const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
   const providers = new ProviderRegistry(log);
   // A run that needs a model on a local Ollama that is installed but stopped starts it (same as in VS Code).
   providers.startLocalServer = async (p) => {
-    if (p.type !== 'ollama' || isRemoteUrl(p.baseUrl) || !(await findOllamaBinary())) {
-      return false;
+    if (p.type !== 'ollama' || !isLoopbackUrl(p.baseUrl) || !(await findOllamaBinary())) {
+      return undefined;
     }
     const base = p.baseUrl.replace(/\/+$/, '');
     process.stderr.write(dim(`Starting Ollama at ${base}…\n`));
@@ -616,39 +650,67 @@ function newSession(mode: Session['mode'], model: string): Session {
   return { id: `cli-${now.toString(36)}`, title: 'CLI session', createdAt: now, updatedAt: now, model, mode, messageCount: 0, messages: [], contextTokens: 0, compactions: 0, attachments: [], todos: [], workingSet: [] };
 }
 
-async function approval(title: string, detail: string, kind: string, rl?: readline.Interface): Promise<boolean> {
-  if (isAutoApprove()) {
+/** The signal of the run in progress, for approvals asked by subagents (they go through boot's callback). */
+let activeSignal: AbortSignal | undefined;
+/** Whether the last runTurn reached a final answer (false when it stopped at the step limit). */
+let lastTurnCompleted = true;
+
+/** Kinds of action the user answered "always" for in this session. */
+const alwaysKinds = new Set<string>();
+const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network' };
+
+async function approval(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean> {
+  // A prompt the organization's policy requires (a floor for this kind, or no bypassing at all) is never answered by --yes or an earlier "always".
+  const managed = getManagedPolicy();
+  const mandatory = !!opts?.mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
+  const preApproved = () => !mandatory && (isAutoApprove() || alwaysKinds.has(kind));
+  if (preApproved()) {
     return true;
   }
   if (!process.stdin.isTTY) {
-    process.stdout.write(`${yellow('!')} ${title} — denied (no TTY; pass --yes to auto-approve)\n`);
+    process.stdout.write(`${yellow('!')} ${title} — denied (${mandatory ? `your organization's policy requires an answer${isAutoApprove() ? ' even with --yes' : ''}; no TTY` : 'no TTY; pass --yes to auto-approve'})\n`);
     return false;
   }
-  const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network' };
-  const body = detail.split('\n').slice(0, 24).map((l) => `  ${dim('│')} ${l}`).join('\n');
-  process.stdout.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
-  setReadline(rl);
-  const a = (await ask(`  ${amber('Allow?')} ${dim('[y]es · [n]o · [a]lways this session')} `))?.trim().toLowerCase() ?? 'n';
-  if (a === 'a' || a === 'always') {
-    setAutoApprove(true);
-    return true;
-  }
-  return a === 'y' || a === 'yes';
+  // One prompt at a time: the block printed is the one being answered, and an "always" answer covers the queued ones.
+  return withPromptLock(async () => {
+    if (preApproved()) {
+      return true;
+    }
+    if (signal?.aborted) {
+      return false;
+    }
+    const body = detail.split('\n').slice(0, 24).map((l) => `  ${dim('│')} ${l}`).join('\n');
+    process.stdout.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
+    setReadline(rl);
+    const a = (await ask(`  ${amber('Allow?')} ${dim(mandatory ? '[y]es · [n]o' : `[y]es · [n]o · [a]lways for ${KIND[kind] ?? kind} this session`)} `, signal))?.trim().toLowerCase() ?? 'n';
+    if (!mandatory && (a === 'a' || a === 'always')) {
+      alwaysKinds.add(kind);
+      return true;
+    }
+    return a === 'y' || a === 'yes';
+  });
 }
 
 /**
  * ask_user in the terminal: numbered options with their explanations; answer with numbers ("2", "1,3" for multi-select)
  * or your own words, Enter takes the recommended option. Ctrl+D skips (the agent goes with its recommendations).
  */
-async function askQuestions(questions: UserQuestion[], rl?: readline.Interface): Promise<UserAnswer[] | null> {
+async function askQuestions(questions: UserQuestion[], rl?: readline.Interface, signal?: AbortSignal): Promise<UserAnswer[] | null> {
+  return withPromptLock(() => askQuestionsNow(questions, rl, signal));
+}
+
+async function askQuestionsNow(questions: UserQuestion[], rl: readline.Interface | undefined, signal: AbortSignal | undefined): Promise<UserAnswer[] | null> {
   setReadline(rl);
   const answers: UserAnswer[] = [];
   for (const [i, q] of questions.entries()) {
+    if (signal?.aborted) {
+      return null;
+    }
     const n = questions.length > 1 ? dim(` (${i + 1}/${questions.length})`) : '';
     const opts = q.options.map((o, k) => `  ${amber(String(k + 1))}. ${bold(o.label)}${o.label === q.recommended ? ` ${amber('(recommended)')}` : ''}${o.description ? `\n     ${dim(o.description)}` : ''}`).join('\n');
     const hint = q.options.length ? dim(`${q.multiSelect ? 'numbers separated by commas' : 'a number'}, or your own words${q.recommended ? ' · Enter = recommended' : ''}`) : dim('your answer');
     process.stdout.write(`\n${yellow('?')}${n} ${q.header ? `${dim(`[${q.header}]`)} ` : ''}${bold(q.question)}\n${opts}${opts ? '\n' : ''}  ${hint}\n`);
-    const a = await ask('  > ');
+    const a = await ask('  > ', signal);
     if (a === undefined) {
       return null;
     }
@@ -667,13 +729,16 @@ async function askQuestions(questions: UserQuestion[], rl?: readline.Interface):
 
 async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string } = {}): Promise<string> {
   let content = text;
-  const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f)));
+  const root = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
+  const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f, root)));
   if (blocks.some(Boolean)) {
     content = `${blocks.filter(Boolean).join('\n\n')}\n\n${text}`;
   }
   const userMessage: ChatMessage = { role: 'user', content, meta: opts.display ? { display: opts.display } : undefined };
   core.tracker.beginTurn(session.id, session.messages.length);
+  activeSignal = control.signal;
   let final = '';
+  lastTurnCompleted = true;
   // Pause / resume feedback, for the main run and for subagents the user paused or stopped individually.
   const offControl = control.onDidChange((c) => {
     const who = c === control ? '' : `${c.label ?? 'subagent'}: `;
@@ -724,19 +789,24 @@ async function runTurn(core: Core, session: Session, text: string, files: string
         case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
         case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
         case 'error': r.error(String(e.payload)); break;
-        case 'turn_end': final = String(p.text ?? ''); break;
+        case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; break;
       }
     },
-    requestApproval: (title, detail, kind) => approval(title, detail, kind, rl),
+    requestApproval: (title, detail, kind, opts) => approval(title, detail, kind, rl, control.signal, opts),
     // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
-    askUser: process.stdin.isTTY && !isAutoApprove() ? (questions) => askQuestions(questions, rl) : undefined,
-  }).finally(offControl);
+    askUser: process.stdin.isTTY && !isAutoApprove() ? (questions) => askQuestions(questions, rl, control.signal) : undefined,
+  }).finally(() => {
+    offControl();
+    if (activeSignal === control.signal) {
+      activeSignal = undefined;
+    }
+  });
   r.end();
   return final || result;
 }
 
 /** Create an isolated worktree for the CLI session (seeded with the checkout's uncommitted work) and route tools into it. */
-async function isolate(core: Core, session: Session, cwd: string, r: Renderer): Promise<{ info: WorktreeInfo; mgr: WorktreeManager } | undefined> {
+async function isolate(core: Core, session: Session, cwd: string, r: Renderer, signal?: AbortSignal): Promise<{ info: WorktreeInfo; mgr: WorktreeManager } | undefined> {
   const mgr = new WorktreeManager(getConfig().worktrees.location, core.log);
   const repo = await mgr.repoRoot(cwd);
   if (!repo) {
@@ -745,7 +815,19 @@ async function isolate(core: Core, session: Session, cwd: string, r: Renderer): 
   // Started in a subfolder of the repository: work in the same subfolder of the copy. CLI worktrees are never pruned
   // by the extension.
   const real = (() => { try { return fs.realpathSync.native(cwd); } catch { return path.resolve(cwd); } })();
-  const info = await mgr.create(repo, session.id, { progress: (t) => r.status(t), subdir: path.relative(repo, real), owner: 'cli' });
+  let info: WorktreeInfo;
+  try {
+    info = await mgr.create(repo, session.id, { progress: (t) => r.status(t), signal, subdir: path.relative(repo, real), owner: 'cli' });
+  } catch (e) {
+    if (signal?.aborted) {
+      return undefined; // stopped while the copy was being made; create() already removed it
+    }
+    throw e;
+  }
+  if (signal?.aborted) {
+    await mgr.remove(info).catch(() => undefined);
+    return undefined;
+  }
   session.worktree = info; // runTurn routes the tools into it
   r.note(`Isolated: working in ${info.path} (your checkout stays untouched)`);
   return { info, mgr };
@@ -958,7 +1040,14 @@ async function cmdPlugin(core: Core, args: Args, renderer: Renderer): Promise<nu
 /** `localpilot scan`: the security scan for a terminal or CI job; exit 1 when a finding reaches --fail-on. */
 async function cmdScan(args: Args, renderer: Renderer): Promise<number> {
   const o = args.scanOpts;
-  const r = await scanWorkspace(args.cwd, { kinds: { dependencies: !o.offline, secrets: true, code: true }, path: args.prompt || undefined, progress: (t) => renderer.status(t) });
+  let r: ScanResult;
+  try {
+    r = await scanWorkspace(args.cwd, { kinds: { dependencies: !o.offline, secrets: true, code: true }, path: args.prompt ? path.resolve(args.cwd, args.prompt) : undefined, progress: (t) => renderer.status(t) });
+  } catch (e) {
+    renderer.status('');
+    console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
   renderer.status('');
   console.log(formatFindings(r, 200));
   const fs = await import('fs');
@@ -986,6 +1075,14 @@ async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<numb
   process.once('SIGINT', () => ctl.abort());
   let done = 0;
   let idleSince = 0;
+  let consecutiveFailures = 0;
+  const failures = new Map<string, number>();
+  try {
+    await core.providers.resolve(getConfig().defaultModel);
+  } catch (e) {
+    console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}\n${dim('Run `localpilot doctor` to see which servers are reachable, or `localpilot --setup` to configure one in VS Code.')}`);
+    return 2;
+  }
   console.log(`${BRAND} working on the shared board in ${args.cwd}${args.workOpts.once ? ' (one task)' : ''} — Ctrl+C to stop\n`);
   while (!ctl.signal.aborted && (args.workOpts.max === undefined || done < args.workOpts.max)) {
     const session = newSession(args.mode, getConfig().defaultModel);
@@ -993,11 +1090,35 @@ async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<numb
     const owner = boardOwner(session.id);
     const task = await board.claim(owner);
     if (!task) {
+      core.sessions.delete(session.id);
       const all = await board.list();
-      // Others are still working (or their tasks unblock ours later): wait for them; otherwise the board is finished.
-      const pending = all.some((t) => t.status === 'claimed' || (t.status === 'open' && t.dependsOn.every((d) => all.find((x) => x.id === d)?.status !== 'failed')));
+      // Others are still working on live claims: wait for them; otherwise the board is finished (or blocked).
+      const now = Date.now();
+      const finishable = canFinish(all);
+      const pending = all.some((t) => t.status === 'claimed' && !!t.leaseUntil && Date.parse(t.leaseUntil) >= now) || all.some((t) => t.status === 'open' && finishable.has(t.id));
       if (args.workOpts.once || !pending) {
         console.log(dim(all.length ? `Nothing left to take (${all.filter((t) => t.status === 'done').length}/${all.length} done).` : 'The board is empty: add tasks with the team_board tool or as .localpilot/board/<id>.md.'));
+        const byId = new Map(all.map((t) => [t.id, t]));
+        // Whether following open, unfinishable prerequisites from `from` leads back to `id` (a dependsOn cycle).
+        const loops = (id: string, from: string, seen = new Set<string>()): boolean => {
+          if (from === id) {
+            return true;
+          }
+          if (seen.has(from)) {
+            return false;
+          }
+          seen.add(from);
+          return (byId.get(from)?.dependsOn ?? []).some((d) => byId.get(d)?.status === 'open' && !finishable.has(d) && loops(id, d, seen));
+        };
+        for (const t of all.filter((x) => x.status === 'open')) {
+          const unmet = t.dependsOn
+            .map((d) => ({ d, dep: byId.get(d) }))
+            .filter((x) => x.dep?.status !== 'done')
+            .map((x) => (!x.dep ? `${x.d} (unknown dependency)` : x.dep.status === 'failed' ? `${x.d} (failed prerequisite)` : x.dep.status === 'open' && !finishable.has(x.d) ? `${x.d} (${loops(t.id, x.d) ? 'circular dependsOn' : 'blocked'})` : `${x.d} (${x.dep.status})`));
+          if (unmet.length) {
+            console.log(dim(`  ${finishable.has(t.id) ? 'waiting' : 'cannot run'}: ${t.id} waits on ${unmet.join(', ')}`));
+          }
+        }
         break;
       }
       idleSince ||= Date.now();
@@ -1008,10 +1129,11 @@ async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<numb
     idleSince = 0;
     console.log(`${amber('●')} ${bold(task.id)} ${task.title} ${dim(`(${owner})`)}`);
     // Keep the claim alive while the agent works, so a long task is not taken over by another worker.
-    const heartbeat = setInterval(() => void board.update(task.id, owner, { renew: true }), LEASE_MS / 3);
+    const heartbeat = setInterval(() => void board.update(task.id, owner, { renew: true }).catch((e) => renderer.status(`lease renew failed: ${e}`)), LEASE_MS / 3);
     const notes = task.notes.filter((n) => n.text !== 'claimed').map((n) => `- ${n.by}: ${n.text}`).join('\n');
     const prompt = `You are working on "${task.title}" (id ${task.id}) from the team's shared task board.\n\n${task.brief}${notes ? `\n\nNotes from earlier work on it:\n${notes}` : ''}\n\nDo the work and verify it. Then call team_board with action "complete", id "${task.id}" and a summary of what changed and how you verified it. If you cannot finish, call team_board "release" with a note saying what is done and what is left (or "fail" with the reason if it cannot be done).`;
     let ok = true;
+    let reported = false;
     let final = '';
     try {
       const run = new RunControl(session.id);
@@ -1020,20 +1142,59 @@ async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<numb
       final = await runTurn(core, session, prompt, [], renderer, undefined, run, { display: `board: ${task.id}` }).finally(() => ctl.signal.removeEventListener('abort', stop));
     } catch (e) {
       ok = false;
+      reported = !!(e as { reported?: boolean } | undefined)?.reported;
       final = e instanceof Error ? e.message : String(e);
     } finally {
       clearInterval(heartbeat);
     }
     // The agent normally closes its own claim; if it did not, close it from the outcome so the task never stays stuck.
+    const completed = ok && lastTurnCompleted;
+    const failedTimes = ok ? 0 : (failures.get(task.id) ?? 0) + 1;
+    if (!ok) {
+      if (!reported) {
+        renderer.error(final);
+      }
+      failures.set(task.id, failedTimes);
+    }
     const after = await board.get(task.id);
     if (after?.status === 'claimed' && after.owner === owner) {
-      await board.update(task.id, owner, ctl.signal.aborted || !ok ? { note: `released: ${ctl.signal.aborted ? 'the worker was stopped' : final.slice(0, 300)}`, status: 'open' } : { note: 'completed (closed by the worker)', status: 'done', result: final.slice(0, 2000) });
+      await board.update(task.id, owner, ctl.signal.aborted
+        ? { note: 'released: the worker was stopped', status: 'open' }
+        : !ok && failedTimes >= 3
+          ? { status: 'failed', note: `failed: ${final.slice(0, 300)}`, result: final.slice(0, 2000) }
+          : !ok
+            ? { note: `released: ${final.slice(0, 300)}`, status: 'open' }
+            : !completed
+              ? { note: `released: stopped at the step limit — ${final.slice(0, 300)}`, status: 'open' }
+              : { note: 'completed (closed by the worker)', status: 'done', result: final.slice(0, 2000) });
     }
+    core.sessions.delete(session.id);
     const end = await board.get(task.id);
     console.log(`  ${end?.status === 'done' ? green('✔ done') : end?.status === 'failed' ? red('✖ failed') : dim(`↩ ${end?.status ?? '?'}`)}\n`);
     done++;
     if (args.workOpts.once) {
       break;
+    }
+    if (ok) {
+      consecutiveFailures = 0;
+    } else if (!ctl.signal.aborted) {
+      consecutiveFailures++;
+      if (consecutiveFailures >= 5) {
+        console.error(`${red('✖')} Stopping: ${consecutiveFailures} tasks in a row failed.`);
+        return 1;
+      }
+      // Back off before the next claim so a failing model or server is not hammered in a tight loop.
+      const wait = Math.min(5_000 * 2 ** (consecutiveFailures - 1), 5 * 60_000);
+      renderer.status(`Retrying in ${Math.round(wait / 1000)} s…`);
+      await new Promise<void>((r) => {
+        const wake = () => {
+          clearTimeout(timer);
+          ctl.signal.removeEventListener('abort', wake);
+          r();
+        };
+        const timer = setTimeout(wake, wait);
+        ctl.signal.addEventListener('abort', wake, { once: true });
+      });
     }
   }
   return 0;
@@ -1201,6 +1362,10 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.error) {
+    console.error(`${red('✖')} ${args.error}\n${dim('See: localpilot --help')}`);
+    process.exit(2);
+  }
   if (args.cmd === 'help') {
     console.log(HELP);
     return;
@@ -1234,46 +1399,52 @@ async function main(): Promise<void> {
   // Keys for `${secret:id}` references: VS Code keeps them in the OS keychain, the CLI in its own key file.
   setSecretValues(readCliKeys());
   if (args.cmd === 'providers') {
-    process.exitCode = await cmdProviders(args);
+    process.exitCode = await cmdProviders(args).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
     return;
   }
 
   const quiet = args.print || (!args.prompt && !process.stdin.isTTY);
   const renderer = new Renderer(args.verbose, quiet);
+  // The scan needs no agent: never start MCP servers (including repository plugins' commands) for it.
+  if (args.cmd === 'scan') {
+    process.exitCode = await cmdScan(args, renderer);
+    process.exit(process.exitCode ?? 0);
+  }
+  if (['models', 'plugin', 'skill-install', 'skill-search'].includes(args.cmd ?? '')) {
+    args.mcp = false;
+  }
   let rl: readline.Interface | undefined;
   const core = await boot(args, (e) => {
     if (e.type === 'status' && typeof e.payload === 'string') {
       renderer.status(e.payload);
     }
-  }, (_sid, title, detail, kind) => approval(title, detail, kind, rl));
+  }, (_sid, title, detail, kind, opts) => approval(title, detail, kind, rl, activeSignal, opts));
 
-  if (args.cmd === 'models') {
-    return cmdModels(core);
-  }
-  if (args.cmd === 'skill-install') {
-    return cmdSkillInstall(core, args, renderer);
-  }
-  if (args.cmd === 'skill-search') {
-    return cmdSkillSearch(core, args, renderer);
-  }
-  if (args.cmd === 'doctor') {
-    return cmdDoctor(core);
-  }
-  if (args.cmd === 'eval') {
-    process.exitCode = await cmdEval(core, args);
-    return;
-  }
-  if (args.cmd === 'plugin') {
-    process.exitCode = await cmdPlugin(core, args, renderer);
-    return;
-  }
-  if (args.cmd === 'scan') {
-    process.exitCode = await cmdScan(args, renderer);
-    return;
-  }
-  if (args.cmd === 'work') {
-    process.exitCode = await cmdWork(core, args, renderer);
-    return;
+  // Subcommands end the process when done: MCP servers or Redis telemetry would otherwise keep it alive.
+  if (['models', 'skill-install', 'skill-search', 'doctor', 'eval', 'plugin', 'work'].includes(args.cmd ?? '')) {
+    try {
+      if (args.cmd === 'models') {
+        await cmdModels(core);
+      } else if (args.cmd === 'skill-install') {
+        await cmdSkillInstall(core, args, renderer);
+      } else if (args.cmd === 'skill-search') {
+        await cmdSkillSearch(core, args, renderer);
+      } else if (args.cmd === 'doctor') {
+        await cmdDoctor(core);
+      } else if (args.cmd === 'eval') {
+        process.exitCode = await cmdEval(core, args);
+      } else if (args.cmd === 'plugin') {
+        process.exitCode = await cmdPlugin(core, args, renderer);
+      } else {
+        process.exitCode = await cmdWork(core, args, renderer);
+      }
+    } finally {
+      await shutdown(core);
+    }
+    process.exit(process.exitCode ?? 0);
   }
 
   // Resolve the model up front so a missing server fails fast with a useful message.
@@ -1286,6 +1457,9 @@ async function main(): Promise<void> {
   }
   const session = newSession(args.mode, modelInfo.id);
   core.sessions.set(session.id, session);
+  /** Where the agent works: the isolated copy of the start folder, or the start folder itself. */
+  const runRoot = (): string => (session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : args.cwd);
+  const notGit = `--isolate needs a git repository (${args.cwd} is not one)`;
   const cwdLabel = vscode.workspace.asRelativePath(args.cwd) === args.cwd ? path.basename(args.cwd) : args.cwd;
   /** `/name args` as a one-shot prompt runs the custom command (like `claude -p "/cmd"`); anything else is sent as typed. */
   const prepare = async (text: string): Promise<{ text: string; opts: { modelRef?: string; permissionAllow?: string[]; display?: string } }> => {
@@ -1302,7 +1476,7 @@ async function main(): Promise<void> {
     if (!custom) {
       return { text, opts: {} };
     }
-    const { prompt, notes } = await expandCommand(custom, m![2], { root: session.worktree?.path ?? args.cwd });
+    const { prompt, notes } = await expandCommand(custom, m![2], { root: runRoot() });
     notes.forEach((n) => process.stderr.write(`${yellow('!')} ${n}\n`));
     return { text: prompt, opts: { modelRef: custom.model, permissionAllow: custom.allowedTools, display: text.trim() } };
   };
@@ -1316,7 +1490,14 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => ctl.stop());
     // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
     process.on('SIGTSTP', () => ctl.togglePause());
-    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
+    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal) : undefined;
+    if (ctl.signal.aborted) {
+      process.exit(130);
+    }
+    if (args.isolate && !wt) {
+      console.error(`${red('✖')} ${notGit}`);
+      process.exit(2);
+    }
     const prepared = await prepare(args.prompt);
     const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
     if (quiet) {
@@ -1352,12 +1533,19 @@ async function main(): Promise<void> {
       process.stdin.on('data', (d) => (s += d));
       process.stdin.on('end', () => resolve(s));
     });
+    const ctl = new RunControl(session.id);
+    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal) : undefined;
+    if (args.isolate && !wt) {
+      console.error(`${red('✖')} ${notGit}`);
+      process.exit(2);
+    }
     const prepared = await prepare(input.trim());
-    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, new RunControl(session.id), prepared.opts);
+    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
     process.stdout.write(answer.trimEnd() + '\n');
-    core.mcp?.dispose();
-    await core.telemetry.flush();
-    core.telemetryRemote?.dispose();
+    if (wt) {
+      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, true);
+    }
+    await shutdown(core);
     return;
   }
 
@@ -1367,6 +1555,18 @@ async function main(): Promise<void> {
   let current: RunControl | undefined;
   let pendingFiles = [...args.files];
   let isolated: { info: WorktreeInfo; mgr: WorktreeManager } | undefined = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
+  if (args.isolate && !isolated) {
+    console.log(yellow(`${notGit} — this session works in place`));
+  }
+  /** Lines typed after the run stopped, or steering it never took: they become the next prompt. */
+  const deferred: string[] = [];
+  const leftovers = (ctl: RunControl | undefined): void => {
+    const left = ctl?.close().map((m) => m.content) ?? [];
+    if (left.length) {
+      renderer.note(`↩ ${left.length === 1 ? 'your queued message was' : `${left.length} queued messages were`} not delivered — sending ${left.length === 1 ? 'it' : 'them'} next`);
+      deferred.unshift(...left);
+    }
+  };
   rl.on('SIGINT', () => {
     if (current) {
       current.stop();
@@ -1385,10 +1585,10 @@ async function main(): Promise<void> {
   rl.on('close', () => {
     core.mcp?.dispose();
     if (isolated) {
-      process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — run \`localpilot --isolate\` again or apply it with git\n`));
+      process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — apply it with: git -C ${isolated.info.path} add -AN && git -C ${isolated.info.path} diff --binary ${isolated.info.base} | git -C ${isolated.info.repo} apply\n`));
     }
     process.stdout.write(dim('bye\n'));
-    void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', isolated?.info.path ?? args.cwd) : Promise.resolve())
+    void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', runRoot()) : Promise.resolve())
       ?.then(() => core.telemetry.flush())
       .finally(() => {
         core.telemetryRemote?.dispose();
@@ -1432,7 +1632,7 @@ async function main(): Promise<void> {
         return true;
       }
       case 'clear':
-        await core.runner.hooks?.sessionEnd(session.id, 'clear', isolated?.info.path ?? args.cwd);
+        await core.runner.hooks?.sessionEnd(session.id, 'clear', runRoot());
         session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
@@ -1448,6 +1648,7 @@ async function main(): Promise<void> {
         } catch (e) {
           renderer.error(e instanceof Error ? e.message : String(e));
         } finally {
+          leftovers(current);
           current = undefined;
           process.stdout.write('\n');
           rl!.setPrompt(PROMPT);
@@ -1471,7 +1672,7 @@ async function main(): Promise<void> {
       default: {
         const custom = indexCommands(core.commands).get(`/${cmd}`);
         if (custom) {
-          const { prompt, notes } = await expandCommand(custom, arg, { root: session.worktree?.path ?? args.cwd });
+          const { prompt, notes } = await expandCommand(custom, arg, { root: runRoot() });
           notes.forEach((n) => console.log(yellow(`  ${n}`)));
           if (!prompt) { console.log(red(`${custom.invoke}: the command file has no prompt body`)); return true; }
           rl!.setPrompt('');
@@ -1483,6 +1684,7 @@ async function main(): Promise<void> {
           } catch (e) {
             renderer.error(e instanceof Error ? e.message : String(e));
           } finally {
+            leftovers(current);
             current = undefined;
             process.stdout.write('\n');
             rl!.setPrompt(PROMPT);
@@ -1495,20 +1697,7 @@ async function main(): Promise<void> {
     }
   };
 
-  rl.prompt();
-  const PROMPT = `${amber('◆')} `;
-  rl.on('line', async (raw) => {
-    const line = raw.trim();
-    if (current) {
-      // Typed while the agent works: queue it for the next step rather than refusing or waiting.
-      if (line) {
-        current.steer({ role: 'user', content: line });
-        renderer.note(`↩ queued for the agent: ${line.slice(0, 80)}${current.paused ? ' (Ctrl+Z to resume)' : ''}`);
-      }
-      return;
-    }
-    if (!line) { rl!.prompt(); return; }
-    if (line.startsWith('/')) { await slash(line); rl!.prompt(); return; }
+  const runPrompt = async (line: string): Promise<void> => {
     // The input stays live during the run so Ctrl+C / Ctrl+Z / steering lines keep working; only the prompt goes away.
     rl!.setPrompt('');
     current = new RunControl(session.id);
@@ -1519,11 +1708,40 @@ async function main(): Promise<void> {
     } catch (e) {
       renderer.error(e instanceof Error ? e.message : String(e));
     } finally {
+      leftovers(current);
       current = undefined;
       process.stdout.write('\n');
       rl!.setPrompt(PROMPT);
-      rl!.prompt();
     }
+  };
+  /** Prompts the next queued lines (typed too late to steer the last run), or shows the prompt. */
+  const next = async (): Promise<void> => {
+    while (deferred.length && !current) {
+      await runPrompt(deferred.splice(0).join('\n\n'));
+    }
+    rl!.prompt();
+  };
+
+  rl.prompt();
+  const PROMPT = `${amber('◆')} `;
+  rl.on('line', async (raw) => {
+    const line = raw.trim();
+    if (current) {
+      // Typed while the agent works: queue it for the next step rather than refusing or waiting.
+      if (line) {
+        if (!current.aborted && current.steer({ role: 'user', content: line })) {
+          renderer.note(`↩ queued for the agent: ${line.slice(0, 80)}${current.paused ? ' (Ctrl+Z to resume)' : ''}`);
+        } else {
+          deferred.push(line);
+          renderer.note(`↩ the run is ending — this runs next: ${line.slice(0, 80)}`);
+        }
+      }
+      return;
+    }
+    if (!line) { rl!.prompt(); return; }
+    if (line.startsWith('/')) { await slash(line); await next(); return; }
+    await runPrompt(line);
+    await next();
   });
 }
 

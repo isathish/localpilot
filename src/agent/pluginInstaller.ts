@@ -1,7 +1,8 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runCmd } from '../tools/git';
+import { runCmd, validBranch } from '../tools/git';
 import { getManagedPolicy, isManaged } from './managedPolicy';
 import { PluginInfo, readPlugin } from './plugins';
 import { parseJsonc } from './settings';
@@ -73,18 +74,32 @@ async function git(args: string[], cwd: string | undefined, signal?: AbortSignal
 /** A shallow checkout of `url` at `ref`/`sha` into `dir` (fetched again when `refresh`). */
 export async function checkout(url: string, dir: string, opts: { ref?: string; sha?: string; refresh?: boolean; signal?: AbortSignal } = {}): Promise<string> {
   downloadsAllowed();
+  if (url.startsWith('-')) {
+    throw new Error(`unsupported git URL ${url}`);
+  }
   const have = fs.existsSync(path.join(dir, '.git'));
-  if (have && !opts.refresh) {
+  // A cache left by a failed fetch has no commit: fetch again rather than use it.
+  if (have && !opts.refresh && (await runCmd('git', ['rev-parse', '--verify', '-q', 'HEAD'], dir, opts.signal)).code === 0) {
     return dir;
   }
-  if (!have) {
-    await fs.promises.mkdir(dir, { recursive: true });
+  // A commit pins exactly; a ref (tag or branch) next; else the default branch.
+  const fetch = async () => {
+    await git(['fetch', '-q', '--depth', '1', 'origin', '--end-of-options', opts.sha ?? opts.ref ?? 'HEAD'], dir, opts.signal);
+    await git(['checkout', '-q', '--force', 'FETCH_HEAD'], dir, opts.signal);
+  };
+  if (have) {
+    await fetch();
+    return dir;
+  }
+  await fs.promises.mkdir(dir, { recursive: true });
+  try {
     await git(['init', '-q'], dir, opts.signal);
     await git(['remote', 'add', 'origin', url], dir, opts.signal);
+    await fetch();
+  } catch (e) {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw e;
   }
-  // A commit pins exactly; a ref (tag or branch) next; else the default branch.
-  await git(['fetch', '-q', '--depth', '1', 'origin', opts.sha ?? opts.ref ?? 'HEAD'], dir, opts.signal);
-  await git(['checkout', '-q', '--force', 'FETCH_HEAD'], dir, opts.signal);
   return dir;
 }
 
@@ -139,11 +154,17 @@ export async function resolvePluginDir(entry: MarketplaceEntry, market: Marketpl
   if (typeof s === 'string') {
     return within(market.dir, s);
   }
-  const url = s.source === 'github' ? gitUrl(s.repo) : s.url;
+  if ((s.ref !== undefined && (typeof s.ref !== 'string' || !validBranch(s.ref))) || (s.sha !== undefined && (typeof s.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(s.sha)))) {
+    throw new Error(`${entry.name}: invalid ref/sha`);
+  }
+  const raw = s.source === 'github' ? undefined : typeof s.url === 'string' ? s.url : undefined;
+  // A plain path as a source URL is only trusted from a marketplace that is itself a local folder.
+  const url = s.source === 'github' ? (typeof s.repo === 'string' ? gitUrl(s.repo) : undefined) : raw && (gitUrl(raw) ?? (!gitUrl(market.spec) && !raw.startsWith('-') ? raw : undefined));
   if (!url) {
     throw new Error(`${entry.name}: unsupported source ${JSON.stringify(s)}`);
   }
-  const dir = await checkout(url, path.join(marketplaceCache(), 'sources', `${cacheKey(url)}-${(s.sha ?? s.ref ?? 'head').slice(0, 12)}`), { ref: s.ref, sha: s.sha, signal });
+  const hash = crypto.createHash('sha256').update(`${url}\n${s.sha ?? s.ref ?? ''}`).digest('hex').slice(0, 12);
+  const dir = await checkout(url, path.join(marketplaceCache(), 'sources', `${cacheKey(url)}-${hash}`), { ref: s.ref, sha: s.sha, refresh: !s.sha, signal });
   return s.source === 'git-subdir' ? within(dir, s.path) : dir;
 }
 
@@ -188,10 +209,21 @@ export interface InstallResult {
 export async function installPlugin(entry: MarketplaceEntry, market: Marketplace, dest: string, opts: { signal?: AbortSignal; confirm?: (p: PluginInfo, d: ReturnType<typeof describePlugin>) => Promise<boolean> } = {}): Promise<InstallResult | undefined> {
   downloadsAllowed();
   const name = entry.name.replace(/[^\w.-]+/g, '-');
+  if (!name || name === '.' || name === '..' || !/^[A-Za-z0-9][\w.-]*$/.test(name)) {
+    throw new Error(`${entry.name}: invalid plugin name`);
+  }
+  const target = path.join(dest, name);
+  if (path.dirname(path.resolve(target)) !== path.resolve(dest)) {
+    throw new Error(`${entry.name}: invalid plugin name`);
+  }
   const src = await resolvePluginDir(entry, market, opts.signal);
-  const staging = path.join(path.dirname(dest), `.plugin-staging-${process.pid}-${Date.now().toString(36)}`);
+  await fs.promises.mkdir(dest, { recursive: true });
+  const staging = path.join(dest, `.plugin-staging-${process.pid}-${Date.now().toString(36)}`);
   try {
     const files = await copyDir(src, staging);
+    if (!files) {
+      throw new Error(`${entry.name}: the download contained no files`);
+    }
     // A non-strict entry describes the plugin itself: give the copy a manifest so it loads like any other.
     const manifest = path.join(staging, '.claude-plugin', 'plugin.json');
     if (!fs.existsSync(manifest)) {
@@ -205,8 +237,6 @@ export async function installPlugin(entry: MarketplaceEntry, market: Marketplace
     if (opts.confirm && !(await opts.confirm(plugin, describePlugin(plugin)))) {
       return undefined;
     }
-    const target = path.join(dest, name);
-    await fs.promises.mkdir(dest, { recursive: true });
     await fs.promises.rm(target, { recursive: true, force: true });
     await fs.promises.rename(staging, target);
     return { name, dir: target, files, plugin: (await readPlugin(target, 'user')) ?? plugin };
@@ -251,18 +281,28 @@ export async function setPluginEnabled(settingsFile: string, name: string, enabl
     try {
       obj = (parseJsonc(text) as Record<string, unknown>) ?? {};
     } catch (e) {
-      throw new Error(`Cannot update ${settingsFile}: it is not valid JSON (${(e as Error).message})`);
+      throw new Error(`${settingsFile}: cannot parse (${(e as Error).message}); fix the file and try again`);
+    }
+    if (typeof obj !== 'object' || Array.isArray(obj)) {
+      throw new Error(`${settingsFile}: cannot parse (not a JSON object); fix the file and try again`);
     }
   }
   const ep = { ...((obj.enabledPlugins as Record<string, boolean>) ?? {}) };
   if (enabled) {
     delete ep[name];
+    for (const k of Object.keys(ep)) {
+      if (k.startsWith(`${name}@`) && ep[k] === false) {
+        delete ep[k];
+      }
+    }
   } else {
     ep[name] = false;
   }
   obj.enabledPlugins = ep;
   await fs.promises.mkdir(path.dirname(settingsFile), { recursive: true });
-  await fs.promises.writeFile(settingsFile, `${JSON.stringify(obj, null, 2)}\n`);
+  const tmp = `${settingsFile}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, `${JSON.stringify(obj, null, 2)}\n`);
+  await fs.promises.rename(tmp, settingsFile);
 }
 
 // ------------------------------------------------------------------ authoring

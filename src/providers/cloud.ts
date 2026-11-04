@@ -91,6 +91,17 @@ export function isCloudProvider(cfg: Pick<ProviderConfig, 'baseUrl' | 'cloud'> &
   return cfg.cloud ?? (cfg.type === 'anthropic' || isRemoteUrl(cfg.baseUrl));
 }
 
+/** True for a server on this machine (localhost, 127.0.0.0/8, ::1): one LocalPilot can start itself. */
+export function isLoopbackUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127\./.test(host);
+}
+
 /** True for servers outside this machine and the private network: requests to them leave the user's control. */
 export function isRemoteUrl(url: string): boolean {
   let host: string;

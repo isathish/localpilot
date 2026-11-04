@@ -6,10 +6,10 @@ import * as path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as vscode from 'vscode';
-import { DEFAULT_PROVIDERS, forgetModel, getConfig } from '../config';
+import { DEFAULT_PROVIDERS, editableProviders, forgetModel, getConfig } from '../config';
 import { ProviderConfig } from '../types';
 import { CatalogPick, InstallTarget, installId, starterPlan } from './catalog';
-import { isRemoteUrl, resolveApiKey } from './cloud';
+import { isLoopbackUrl, isRemoteUrl, resolveApiKey } from './cloud';
 import { withTimeout } from './http';
 import { createProvider, ProviderRegistry } from './registry';
 import { getSystemProfile, SystemProfile } from './system';
@@ -351,7 +351,7 @@ export class ModelManager implements vscode.Disposable {
 
   private ollamaBase(providerId?: string): { id: string; baseUrl: string; headers: Record<string, string> } {
     const cfg = getConfig();
-    const c = (providerId ? cfg.providers.find((p) => p.id === providerId && p.type === 'ollama') : undefined) ?? cfg.providers.find((p) => p.type === 'ollama' && !isRemoteUrl(p.baseUrl)) ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
+    const c = (providerId ? cfg.providers.find((p) => p.id === providerId && p.type === 'ollama') : undefined) ?? cfg.providers.find((p) => p.type === 'ollama' && isLoopbackUrl(p.baseUrl)) ?? cfg.providers.find((p) => p.type === 'ollama' && !isRemoteUrl(p.baseUrl)) ?? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')!;
     const key = resolveApiKey(c);
     return { id: c.id, baseUrl: c.baseUrl.replace(/\/+$/, ''), headers: key ? { authorization: `Bearer ${key}` } : {} };
   }
@@ -488,14 +488,14 @@ export class ModelManager implements vscode.Disposable {
   }
 
   /** Starts the Ollama server (menu-bar app on macOS/Windows, `ollama serve` otherwise) with parallel slots and waits until it answers. */
-  async startOllama(): Promise<ModelJob> {
+  async startOllama(providerId?: string): Promise<ModelJob> {
     // One start at a time: the router, the supervisor and a setup can all ask for it within a second.
     const running = this.activeJobs.find((j) => j.kind === 'start' && j.target === 'ollama');
     if (running) {
       return this.waitFor(running.id);
     }
     const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…');
-    const { baseUrl } = this.ollamaBase();
+    const { baseUrl } = this.ollamaBase(providerId);
     const r = await launchOllama({
       baseUrl,
       up: () => ollamaUp(baseUrl),
@@ -757,14 +757,21 @@ export class ModelManager implements vscode.Disposable {
       let startedNow = false;
       let target: InstallTarget | undefined = opts.target && runtimes.find((r) => r.target === opts.target && r.running) ? opts.target : undefined;
       target ??= runtimes.find((r) => r.target === 'ollama' && r.running)?.target ?? runtimes.find((r) => r.running && r.target !== 'lmstudio')?.target;
+      let startError: string | undefined;
       if (!target) {
         const ollama = runtimes.find((r) => r.target === 'ollama')!;
         if (ollama.installed) {
           this.update(job, { detail: 'Starting Ollama…' });
           const started = await this.startOllama();
+          if (this.aborts.get(job.id)?.signal.aborted || started.status === 'cancelled') {
+            this.finish(job, 'cancelled');
+            return { status: 'cancelled' };
+          }
           if (started.status === 'done') {
             target = 'ollama';
             startedNow = true;
+          } else {
+            startError = started.error ?? 'Ollama is installed but did not start';
           }
         } else if (opts.installRuntime) {
           this.update(job, { detail: 'Installing Ollama…' });
@@ -780,6 +787,13 @@ export class ModelManager implements vscode.Disposable {
         }
       }
       target ??= runtimes.find((r) => r.target === 'lmstudio' && r.running)?.target;
+      if (this.aborts.get(job.id)?.signal.aborted) {
+        this.finish(job, 'cancelled');
+        return { status: 'cancelled' };
+      }
+      if (!target && startError) {
+        throw new Error(startError);
+      }
       if (!target) {
         this.finish(job, 'done');
         runtimes = await this.detectRuntimes();
@@ -866,13 +880,13 @@ export class ModelManager implements vscode.Disposable {
   private async ensureProvider(target: InstallTarget, runtimes: RuntimeStatus[]): Promise<void> {
     const rt = runtimes.find((r) => r.target === target)!;
     const cfg = vscode.workspace.getConfiguration('localpilot');
-    const list = cfg.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
+    const { list, target: scope } = editableProviders();
     const existing = rt.providerId ? list.find((p) => p.id === rt.providerId) : undefined;
     if (existing && existing.enabled !== false) {
       return;
     }
     const next = existing ? list.map((p) => (p.id === existing.id ? { ...p, enabled: undefined } : p)) : [...list, target === 'ollama' ? DEFAULT_PROVIDERS.find((p) => p.type === 'ollama')! : target === 'docker' ? { id: 'docker', type: 'openai' as const, baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' } : DEFAULT_PROVIDERS.find((p) => p.id === 'lmstudio')!];
-    await cfg.update('providers', next.map((p) => (p.enabled === undefined ? Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)) : p)), vscode.ConfigurationTarget.Global);
+    await cfg.update('providers', next.map((p) => (p.enabled === undefined ? Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)) : p)), scope);
     // Let the registry pick up the new provider before we list models.
     await sleep(50);
   }

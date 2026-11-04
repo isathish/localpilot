@@ -4,14 +4,37 @@ import { Tool, ToolContext, ToolDefinition, ToolResult } from '../types';
 /** Central registry of tools available to the agent (built-in + MCP + dynamic). */
 export class ToolRegistry implements vscode.Disposable {
   private tools = new Map<string, Tool>();
+  /** Tools shadowed by a later registration under the same name; restored when that one is disposed. */
+  private shadowed = new Map<string, Tool[]>();
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
   register(tool: Tool): vscode.Disposable {
-    this.tools.set(tool.definition.name, tool);
+    const name = tool.definition.name;
+    const prev = this.tools.get(name);
+    if (prev && prev !== tool) {
+      this.shadowed.set(name, [...(this.shadowed.get(name) ?? []), prev]);
+    }
+    this.tools.set(name, tool);
     this._onDidChange.fire();
     return new vscode.Disposable(() => {
-      this.tools.delete(tool.definition.name);
+      const stack = this.shadowed.get(name) ?? [];
+      if (this.tools.get(name) === tool) {
+        const restored = stack.pop();
+        if (restored) {
+          this.tools.set(name, restored);
+        } else {
+          this.tools.delete(name);
+        }
+      } else {
+        const i = stack.indexOf(tool);
+        if (i >= 0) {
+          stack.splice(i, 1);
+        }
+      }
+      if (!stack.length) {
+        this.shadowed.delete(name);
+      }
       this._onDidChange.fire();
     });
   }
@@ -50,6 +73,7 @@ export class ToolRegistry implements vscode.Disposable {
   dispose(): void {
     this._onDidChange.dispose();
     this.tools.clear();
+    this.shadowed.clear();
   }
 }
 

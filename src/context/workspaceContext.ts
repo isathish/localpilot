@@ -24,6 +24,52 @@ const STACK_MARKERS: [RegExp, string][] = [
   [/^(jest|vitest|playwright|cypress)\.config\.[cm]?[jt]s$/, 'test config'],
 ];
 
+/** Enough of a text editor to read the file and its selection from. */
+export type EditorState = Pick<vscode.TextEditor, 'document' | 'selection' | 'selections'>;
+
+const isTextScheme = (uri: vscode.Uri) => uri.scheme === 'file' || uri.scheme === 'untitled';
+let lastEditor: { uri: vscode.Uri; selections: readonly vscode.Selection[] } | undefined;
+let editorTracking: vscode.Disposable | undefined;
+
+function rememberEditor(ed: vscode.TextEditor | undefined): void {
+  if (ed && isTextScheme(ed.document.uri)) {
+    lastEditor = { uri: ed.document.uri, selections: ed.selections };
+  }
+}
+
+/** Remembers the last focused text editor, so focusing the chat (e.g. as an editor tab) keeps the editor context. */
+function trackEditors(): vscode.Disposable {
+  if (!editorTracking) {
+    rememberEditor(vscode.window.activeTextEditor);
+    const subs = [vscode.window.onDidChangeActiveTextEditor(rememberEditor), vscode.window.onDidChangeTextEditorSelection((e) => rememberEditor(e.textEditor))];
+    editorTracking = new vscode.Disposable(() => {
+      subs.forEach((d) => d.dispose());
+      editorTracking = undefined;
+    });
+  }
+  return editorTracking;
+}
+
+/** The active text editor or, when focus is elsewhere (chat tab, panel), the last text editor that is still open. */
+export function currentEditor(): EditorState | undefined {
+  const active = vscode.window.activeTextEditor;
+  if (active && isTextScheme(active.document.uri)) {
+    return active;
+  }
+  const last = lastEditor;
+  if (!last) {
+    return active;
+  }
+  const key = last.uri.toString();
+  const visible = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === key);
+  if (visible) {
+    return visible;
+  }
+  const inTab = vscode.window.tabGroups.all.some((g) => g.tabs.some((t) => t.input instanceof vscode.TabInputText && t.input.uri.toString() === key));
+  const document = inTab ? vscode.workspace.textDocuments.find((d) => d.uri.toString() === key) : undefined;
+  return document ? { document, selection: last.selections[0], selections: last.selections } : active;
+}
+
 /** Lightweight workspace context: file tree snapshot, open editors, selections, diagnostics summary. */
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
@@ -32,6 +78,7 @@ export class WorkspaceContext implements vscode.Disposable {
   private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[] };
   private readonly watcher: vscode.FileSystemWatcher;
   private readonly rulesWatcher: vscode.FileSystemWatcher;
+  private readonly editorTracking = trackEditors();
 
   constructor(private readonly log: vscode.LogOutputChannel) {
     this.watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
@@ -53,6 +100,7 @@ export class WorkspaceContext implements vscode.Disposable {
   dispose(): void {
     this.watcher.dispose();
     this.rulesWatcher.dispose();
+    this.editorTracking.dispose();
   }
 
   get root(): string | undefined {
@@ -87,35 +135,36 @@ export class WorkspaceContext implements vscode.Disposable {
   }
 
   /** `git status` + `git diff` for the @git mention. */
-  async gitContext(maxChars = 16000): Promise<string> {
-    const root = this.root;
+  async gitContext(maxChars = 16000, root = this.root): Promise<string> {
     if (!root) {
       return '';
     }
     try {
       const [status, diff, staged] = await Promise.all([
-        runProcess('git', ['status', '--short', '--branch'], root),
-        runProcess('git', ['diff', '--stat'], root),
-        runProcess('git', ['diff', '--cached'], root),
+        runProcess('git', ['--no-optional-locks', 'status', '--short', '--branch'], root),
+        runProcess('git', ['--no-optional-locks', 'diff', '--stat'], root),
+        runProcess('git', ['--no-optional-locks', 'diff', '--cached'], root),
       ]);
-      let out = `<git>\n# status\n${status.trim()}\n\n# unstaged (stat)\n${diff.trim() || '(none)'}\n\n# staged diff\n${staged.trim() || '(none)'}\n</git>`;
-      if (out.length > maxChars) {
-        out = out.slice(0, maxChars) + '\n…(truncated)';
+      const head = `<git>\n# status\n${status.trim()}\n\n# unstaged (stat)\n${diff.trim() || '(none)'}\n\n# staged diff\n`;
+      const tail = '\n</git>';
+      const marker = '\n…(truncated)';
+      let body = staged.trim() || '(none)';
+      if (head.length + body.length + tail.length > maxChars) {
+        body = body.slice(0, Math.max(0, maxChars - head.length - marker.length - tail.length)) + marker;
       }
-      return out;
+      return head + body + tail;
     } catch (e) {
       return `<git>Not a git repository or git unavailable: ${String(e)}</git>`;
     }
   }
 
   /** Short `git status` + `diff --stat`: enough to tell what the user is currently working on. */
-  async gitSummary(maxChars = 2500): Promise<string> {
-    const root = this.root;
+  async gitSummary(maxChars = 2500, root = this.root): Promise<string> {
     if (!root) {
       return '';
     }
     try {
-      const [status, stat] = await Promise.all([runProcess('git', ['status', '--short', '--branch'], root, undefined, 5000), runProcess('git', ['diff', '--stat', 'HEAD'], root, undefined, 5000)]);
+      const [status, stat] = await Promise.all([runProcess('git', ['--no-optional-locks', 'status', '--short', '--branch'], root, undefined, 5000), runProcess('git', ['--no-optional-locks', 'diff', '--stat', 'HEAD'], root, undefined, 5000)]);
       const out = [status.trim(), stat.trim()].filter(Boolean).join('\n');
       return out.length > maxChars ? out.slice(0, maxChars) + '\n…(truncated)' : out;
     } catch {
@@ -123,16 +172,19 @@ export class WorkspaceContext implements vscode.Disposable {
     }
   }
 
-  async fileTree(maxEntries = 400): Promise<string> {
-    if (this.treeCache && this.treeCache.max === maxEntries && Date.now() - this.treeCache.at < 5 * 60_000) {
+  /** `root` lists another folder (an isolated worktree) instead of the workspace; those listings are not cached. */
+  async fileTree(maxEntries = 400, root?: string): Promise<string> {
+    if (!root && this.treeCache && this.treeCache.max === maxEntries && Date.now() - this.treeCache.at < 5 * 60_000) {
       return this.treeCache.text;
     }
-    const files = await vscode.workspace.findFiles('**/*', TREE_EXCLUDE, maxEntries);
-    const root = this.root;
-    const rel = files.map((f) => (root ? path.relative(root, f.fsPath) : f.fsPath)).sort();
+    const files = await vscode.workspace.findFiles(root ? new vscode.RelativePattern(vscode.Uri.file(root), '**/*') : '**/*', TREE_EXCLUDE, maxEntries);
+    const base = root ?? this.root;
+    const rel = files.map((f) => (base ? path.relative(base, f.fsPath) : f.fsPath)).sort();
     const truncated = files.length >= maxEntries ? `\n... (truncated at ${maxEntries} entries; use file_search/grep_search for more)` : '';
     const text = rel.join('\n') + truncated;
-    this.treeCache = { text, max: maxEntries, at: Date.now() };
+    if (!root) {
+      this.treeCache = { text, max: maxEntries, at: Date.now() };
+    }
     return text;
   }
 
@@ -236,7 +288,7 @@ export class WorkspaceContext implements vscode.Disposable {
   }
 
   activeEditorContext(): string {
-    const ed = vscode.window.activeTextEditor;
+    const ed = currentEditor();
     if (!ed) {
       return '';
     }
@@ -253,7 +305,7 @@ export class WorkspaceContext implements vscode.Disposable {
 
   /** True when the active editor has a non-empty selection ("this" then has an obvious referent). */
   hasSelection(): boolean {
-    const ed = vscode.window.activeTextEditor;
+    const ed = currentEditor();
     return !!ed && !ed.selection.isEmpty;
   }
 
@@ -264,20 +316,22 @@ export class WorkspaceContext implements vscode.Disposable {
       .filter((x): x is string => !!x);
   }
 
-  diagnosticsSummary(max = 20): string {
-    const all = vscode.languages.getDiagnostics();
-    const lines: string[] = [];
-    for (const [uri, diags] of all) {
+  /** Diagnostics at `minSeverity` or worse; with warnings included each line is tagged and errors come first. */
+  diagnosticsSummary(max = 20, minSeverity = vscode.DiagnosticSeverity.Error): string {
+    const found: { severity: vscode.DiagnosticSeverity; line: string }[] = [];
+    for (const [uri, diags] of vscode.languages.getDiagnostics()) {
       for (const d of diags) {
-        if (d.severity === vscode.DiagnosticSeverity.Error) {
-          lines.push(`${vscode.workspace.asRelativePath(uri)}:${d.range.start.line + 1}: ${d.message}`);
-          if (lines.length >= max) {
-            return lines.join('\n');
-          }
+        if (d.severity <= minSeverity) {
+          found.push({ severity: d.severity, line: `${vscode.workspace.asRelativePath(uri)}:${d.range.start.line + 1}: ${d.message}` });
         }
       }
     }
-    return lines.join('\n');
+    const tagged = minSeverity > vscode.DiagnosticSeverity.Error;
+    return found
+      .sort((a, b) => a.severity - b.severity)
+      .slice(0, max)
+      .map((f) => (tagged ? `[${f.severity === vscode.DiagnosticSeverity.Error ? 'Error' : 'Warning'}] ${f.line}` : f.line))
+      .join('\n');
   }
 
   /**
@@ -304,24 +358,42 @@ export class WorkspaceContext implements vscode.Disposable {
     return candidates[0];
   }
 
-  /** Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. */
+  /** A path inside `root`: relative refs resolve against it and absolute main-checkout paths are remapped into it. */
+  private inRoot(p: string, root: string): string {
+    if (!path.isAbsolute(p)) {
+      return path.join(root, p);
+    }
+    const own = path.relative(root, p);
+    if (!own.startsWith('..') && !path.isAbsolute(own)) {
+      return p;
+    }
+    const main = this.root;
+    const rel = main ? path.relative(main, p) : '..';
+    return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? path.join(root, rel) : rel === '' ? root : p;
+  }
+
   /** Supplies the last terminal command + output for `@terminal` (set by the extension; absent in the CLI). */
   terminalContext?: () => string;
 
-  async readAttachment(ref: string): Promise<string> {
-    switch (ref) {
+  /**
+   * Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. `root` (an
+   * isolated chat's worktree folder) replaces the main checkout for relative paths, @git and @workspace.
+   */
+  async readAttachment(ref: string, root?: string): Promise<string> {
+    const special = ref.replace(/^@/, '');
+    switch (special) {
       case 'terminal':
         return this.terminalContext?.() ?? '<terminal_output>Terminal context is only available inside VS Code.</terminal_output>';
       case 'workspace':
-        return `<workspace_tree root="${this.root ?? ''}">\n${await this.fileTree()}\n</workspace_tree>`;
+        return `<workspace_tree root="${root ?? this.root ?? ''}">\n${await this.fileTree(400, root)}\n</workspace_tree>`;
       case 'problems': {
-        const d = this.diagnosticsSummary(60);
-        return `<problems>\n${d || 'No errors reported.'}\n</problems>`;
+        const d = this.diagnosticsSummary(60, vscode.DiagnosticSeverity.Warning);
+        return `<problems>\n${d || 'No errors or warnings reported.'}\n</problems>`;
       }
       case 'git':
-        return this.gitContext();
+        return this.gitContext(16000, root ?? this.root);
       case 'selection': {
-        const ed = vscode.window.activeTextEditor;
+        const ed = currentEditor();
         if (!ed) {
           return '';
         }
@@ -340,16 +412,20 @@ export class WorkspaceContext implements vscode.Disposable {
       return '';
     }
     const [, p, start, end] = m;
-    if (!vscode.workspace.workspaceFolders?.length && !path.isAbsolute(p)) {
+    if (!root && !vscode.workspace.workspaceFolders?.length && !path.isAbsolute(p)) {
       return '';
     }
-    const uri = await this.resolveRef(p);
+    const uri = root ? vscode.Uri.file(this.inRoot(p, root)) : await this.resolveRef(p);
+    const label = (u: vscode.Uri) => {
+      const r = root ? path.relative(root, u.fsPath) : undefined;
+      return r !== undefined && r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : vscode.workspace.asRelativePath(u);
+    };
     try {
       // Directories: attach a listing instead of failing.
       const stat = await vscode.workspace.fs.stat(uri);
       if (stat.type === vscode.FileType.Directory) {
         const entries = await vscode.workspace.fs.readDirectory(uri);
-        return `<directory path="${vscode.workspace.asRelativePath(uri)}">\n${entries.map(([n, t]) => (t === vscode.FileType.Directory ? `${n}/` : n)).join('\n')}\n</directory>`;
+        return `<directory path="${label(uri)}">\n${entries.map(([n, t]) => (t === vscode.FileType.Directory ? `${n}/` : n)).join('\n')}\n</directory>`;
       }
       const doc = await vscode.workspace.openTextDocument(uri);
       let text = doc.getText();
@@ -362,9 +438,9 @@ export class WorkspaceContext implements vscode.Disposable {
       const MAX = 60_000;
       if (text.length > MAX) {
         const shownLines = text.slice(0, MAX).split('\n').length;
-        text = `${text.slice(0, MAX)}\n… [attachment cut at ${MAX.toLocaleString()} of ${text.length.toLocaleString()} characters; read the rest with read_file from line ${(start ? Number(start) : 1) + shownLines}]`;
+        text = `${text.slice(0, MAX)}\n… [attachment cut at ${MAX.toLocaleString()} of ${text.length.toLocaleString()} characters; read the rest with read_file from line ${(start ? Number(start) : 1) + shownLines - 1}]`;
       }
-      return `<attachment path="${vscode.workspace.asRelativePath(uri)}"${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
+      return `<attachment path="${label(uri)}"${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
     } catch (e) {
       this.log.warn(`attachment read failed: ${ref}: ${String(e)}`);
       return '';

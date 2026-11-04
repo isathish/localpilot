@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DEFAULT_SKILL_REPOSITORIES } from './agent/skillCatalog';
 import { ApprovalMode, ProviderConfig, ThinkingLevel } from './types';
+import { DEFAULT_PROVIDERS } from './providers/defaultProviders';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -118,12 +119,22 @@ export interface LocalPilotConfig {
 
 const SECTION = 'localpilot';
 
-export const DEFAULT_PROVIDERS: ProviderConfig[] = [
-  { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' },
-  { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' },
-  { id: 'llamacpp', type: 'openai', baseUrl: 'http://localhost:8080/v1', displayName: 'llama.cpp server' },
-  { id: 'vllm', type: 'openai', baseUrl: 'http://localhost:8000/v1', displayName: 'vLLM / Unsloth' },
-];
+export { DEFAULT_PROVIDERS };
+
+/** The providers list to edit and where to save it: arrays do not merge across scopes, so edits go back to the scope that defines the list. */
+export function providerScope(i: { globalValue?: ProviderConfig[]; workspaceValue?: ProviderConfig[]; workspaceFolderValue?: ProviderConfig[] } | undefined): { list: ProviderConfig[]; target: vscode.ConfigurationTarget } {
+  if (i?.workspaceFolderValue) {
+    return { list: [...i.workspaceFolderValue], target: vscode.ConfigurationTarget.WorkspaceFolder };
+  }
+  if (i?.workspaceValue) {
+    return { list: [...i.workspaceValue], target: vscode.ConfigurationTarget.Workspace };
+  }
+  return { list: [...(i?.globalValue ?? DEFAULT_PROVIDERS)], target: vscode.ConfigurationTarget.Global };
+}
+
+export function editableProviders(): { list: ProviderConfig[]; target: vscode.ConfigurationTarget } {
+  return providerScope(vscode.workspace.getConfiguration(SECTION).inspect<ProviderConfig[]>('providers'));
+}
 
 export function getConfig(): LocalPilotConfig {
   const c = vscode.workspace.getConfiguration(SECTION);

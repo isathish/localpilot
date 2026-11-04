@@ -8,6 +8,8 @@ import { evaluatePermission } from './permissions';
 import { PluginSource } from './plugins';
 import { emptySettings } from './settings';
 import { onAbort } from './resilience';
+import { killTree } from '../tools/terminal';
+import { shellInvocation } from '../terminal/shell';
 
 /**
  * Custom slash commands in the Claude Code format: a markdown file whose body is the prompt, with optional
@@ -111,24 +113,51 @@ export interface ExpandOptions {
 }
 
 function runShell(command: string, cwd: string | undefined, signal?: AbortSignal): Promise<string> {
-  const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : process.env.SHELL ?? '/bin/sh';
-  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
+  const sh = shellInvocation(command, { login: true });
   return new Promise((resolve) => {
     let out = '';
-    const child = cp.spawn(shell, args, { cwd, env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1' }, windowsHide: true });
-    const t = setTimeout(() => child.kill('SIGKILL'), 30_000);
-    const off = onAbort(signal, () => child.kill('SIGKILL'));
-    child.on('close', off);
-    child.stdout.on('data', (d: Buffer) => (out.length < 60_000 ? (out += d.toString()) : undefined));
-    child.stderr.on('data', (d: Buffer) => (out.length < 60_000 ? (out += d.toString()) : undefined));
-    child.on('error', (e) => {
+    const child = cp.spawn(sh.file, sh.args, { cwd, env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1' }, windowsHide: true, windowsVerbatimArguments: sh.windowsVerbatimArguments, detached: process.platform !== 'win32' });
+    child.stdin.on('error', () => undefined);
+    child.stdin.end();
+    let done = false;
+    let grace: NodeJS.Timeout | undefined;
+    let backstop: NodeJS.Timeout | undefined;
+    const finish = (text: string) => {
+      if (done) {
+        return;
+      }
+      done = true;
       clearTimeout(t);
-      resolve(`(failed: ${e.message})`);
+      clearTimeout(grace);
+      clearTimeout(backstop);
+      off();
+      resolve(text);
+    };
+    const result = (code: number | null) => out.trim() + (code ? `\n[exit code ${code}]` : '');
+    const kill = () => {
+      killTree(child);
+      backstop ??= setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(result(null));
+      }, 1000);
+    };
+    const t = setTimeout(kill, 30_000);
+    const off = onAbort(signal, kill);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (d: string) => (out.length < 60_000 ? (out += d) : undefined));
+    child.stderr.on('data', (d: string) => (out.length < 60_000 ? (out += d) : undefined));
+    child.on('error', (e) => finish(`(failed: ${e.message})`));
+    // Background processes started by the command can keep the pipes open after the shell exits.
+    child.on('exit', (code) => {
+      grace ??= setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(result(code));
+      }, 500);
     });
-    child.on('close', (code) => {
-      clearTimeout(t);
-      resolve(out.trim() + (code ? `\n[exit code ${code}]` : ''));
-    });
+    child.on('close', (code) => finish(result(code)));
   });
 }
 

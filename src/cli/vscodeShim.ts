@@ -12,6 +12,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 import { stripJsonc } from '../agent/jsonc';
+import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
+import { shellInvocation } from '../terminal/shell';
 
 // ------------------------------------------------------------------ primitives
 export class Disposable {
@@ -134,6 +136,14 @@ export class Diagnostic {
   constructor(readonly range: Range, readonly message: string, readonly severity = 0) {}
 }
 export class SymbolInformation {}
+export class RelativePattern {
+  readonly baseUri: Uri;
+  readonly base: string;
+  constructor(base: Uri | string | { uri: Uri }, readonly pattern: string) {
+    this.baseUri = typeof base === 'string' ? Uri.file(base) : base instanceof Uri ? base : base.uri;
+    this.base = this.baseUri.fsPath;
+  }
+}
 export class TabInputText {
   constructor(readonly uri: Uri) {}
 }
@@ -212,7 +222,7 @@ export class TextDocument {
   }
   lineAt(line: number | Position): { text: string; lineNumber: number; range: Range; isEmptyOrWhitespace: boolean } {
     const n = typeof line === 'number' ? line : line.line;
-    const text = this.text.split('\n')[n] ?? '';
+    const text = (this.text.split('\n')[n] ?? '').replace(/\r$/, '');
     return { text, lineNumber: n, range: new Range(n, 0, n, text.length), isEmptyOrWhitespace: !text.trim() };
   }
   positionAt(offset: number): Position {
@@ -282,12 +292,33 @@ export const USER_SETTINGS_PATH = (() => {
 })();
 export const CLI_SETTINGS_PATH = path.join(os.homedir(), '.localpilot', 'config.json');
 
+/** Settings files that exist but do not parse: their settings are ignored and the CLI refuses to overwrite them. */
+const brokenFiles = new Set<string>();
 function readJsonc(file: string): Record<string, unknown> {
+  let raw: string;
   try {
-    const raw = fs.readFileSync(file, 'utf8');
-    return JSON.parse(stripJsonc(raw)) as Record<string, unknown>;
+    raw = fs.readFileSync(file, 'utf8');
   } catch {
     return {};
+  }
+  try {
+    const v = raw.trim() ? JSON.parse(stripJsonc(raw)) : {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+      throw new Error('not a JSON object');
+    }
+    brokenFiles.delete(file);
+    return v as Record<string, unknown>;
+  } catch (e) {
+    if (!brokenFiles.has(file)) {
+      brokenFiles.add(file);
+      process.stderr.write(`\x1b[33m!\x1b[0m ${file} is not valid JSON (${e instanceof Error ? e.message : String(e)}); its settings are ignored until it is fixed.\n`);
+    }
+    return {};
+  }
+}
+function assertWritable(file: string): void {
+  if (brokenFiles.has(file)) {
+    throw new Error(`fix ${file} first: it is not valid JSON`);
   }
 }
 
@@ -297,7 +328,7 @@ export const cliOverrides: Record<string, unknown> = {};
 function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, prefix = ''): void {
   for (const [k, v] of Object.entries(obj)) {
     const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers'].includes(key.split('.').pop()!)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos'].includes(key.split('.').pop()!)) {
       flatten(v as Record<string, unknown>, into, key);
     } else {
       into[key] = v;
@@ -346,12 +377,12 @@ export function loadSettings(workspaceRoot?: string): void {
   for (const [k, v] of Object.entries(cli)) {
     const key = k.replace(/^localpilot\./, '');
     // Providers added from the CLI join VS Code's list by id instead of replacing it, so both keep working.
-    settings[key] = key === 'providers' ? mergeProviders(settings.providers, v) : v;
+    settings[key] = key === 'providers' ? mergeProviders(settings.providers ?? DEFAULT_PROVIDERS, v) : v;
   }
   Object.assign(settings, cliOverrides);
 }
 
-/** `over` entries replace or extend same-id entries of `base` field by field; new ids are appended. */
+/** `over` entries replace or extend same-id entries of `base` field by field; new ids are appended (patches of unknown ids are dropped). */
 export function mergeProviders(base: unknown, over: unknown): unknown {
   if (!Array.isArray(over)) {
     return base;
@@ -361,7 +392,7 @@ export function mergeProviders(base: unknown, over: unknown): unknown {
     const i = out.findIndex((p) => p.id === o?.id);
     if (i >= 0) {
       out[i] = { ...out[i], ...o };
-    } else if (o && typeof o === 'object') {
+    } else if (o && typeof o === 'object' && o.type && o.baseUrl) {
       out.push({ ...o });
     }
   }
@@ -374,6 +405,7 @@ export function readCliConfig(): Record<string, unknown> {
 }
 
 export async function writeCliConfig(cfg: Record<string, unknown>): Promise<void> {
+  assertWritable(CLI_SETTINGS_PATH);
   await fsp.mkdir(path.dirname(CLI_SETTINGS_PATH), { recursive: true });
   await fsp.writeFile(CLI_SETTINGS_PATH, JSON.stringify(cfg, null, 2) + '\n');
   loadSettings(workspaceRoot);
@@ -393,6 +425,7 @@ export function readCliKeys(): Record<string, string> {
 
 export async function writeCliKey(name: string, key: string | undefined): Promise<void> {
   const keys = readCliKeys();
+  assertWritable(CLI_KEYS_PATH);
   if (key) {
     keys[name] = key;
   } else {
@@ -418,15 +451,47 @@ export function setAutoApprove(v: boolean): void {
 export function isAutoApprove(): boolean {
   return autoApprove;
 }
-export async function ask(question: string): Promise<string | undefined> {
-  if (!process.stdin.isTTY) {
+/** Terminal prompts run one at a time, in order: parallel tool calls and subagents queue instead of sharing a line. */
+let promptChain: Promise<unknown> = Promise.resolve();
+export function withPromptLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = promptChain.then(fn, fn);
+  promptChain = run.catch(() => undefined);
+  return run;
+}
+/** Read one line; undefined without a TTY, on Ctrl+D (interface closed) or when `signal` aborts (the run was stopped). */
+export async function ask(question: string, signal?: AbortSignal): Promise<string | undefined> {
+  if (!process.stdin.isTTY || signal?.aborted) {
     return undefined;
   }
+  // One-shot runs have no REPL interface: a temporary one per prompt (closed after, so the terminal is back in
+  // cooked mode and Ctrl+C / Ctrl+Z reach the run). Callers hold withPromptLock, so these never overlap.
   const own = !rl;
   const r = rl ?? readline.createInterface({ input: process.stdin, output: process.stdout });
+  if (own) {
+    // Ctrl+C at the prompt stops the run (the one-shot SIGINT handler) instead of being swallowed by readline.
+    r.on('SIGINT', () => {
+      if (process.listenerCount('SIGINT')) {
+        process.emit('SIGINT');
+      } else {
+        r.close();
+        process.kill(process.pid, 'SIGINT');
+      }
+    });
+  }
+  let cleanup = () => {};
   try {
-    return await new Promise<string>((resolve) => r.question(question, resolve));
+    return await new Promise<string | undefined>((resolve) => {
+      const done = () => resolve(undefined);
+      r.once('close', done);
+      signal?.addEventListener('abort', done, { once: true });
+      cleanup = () => {
+        r.off('close', done);
+        signal?.removeEventListener('abort', done);
+      };
+      r.question(question, signal ? { signal } : {}, resolve);
+    });
   } finally {
+    cleanup();
     if (own) {
       r.close();
     }
@@ -440,7 +505,7 @@ export function setWorkspaceRoot(root: string | undefined): void {
   loadSettings(workspaceRoot);
 }
 
-function globToRegExp(glob: string): RegExp {
+function globSource(glob: string): string {
   let re = '';
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -459,14 +524,22 @@ function globToRegExp(glob: string): RegExp {
     } else if (c === '?') {
       re += '[^/]';
     } else if (c === '{') {
-      const end = glob.indexOf('}', i);
-      re += `(?:${glob.slice(i + 1, end).split(',').map((s) => s.trim().replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '(?:.*/)?').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*')).join('|')})`;
+      const end = glob.indexOf('}', i + 1);
+      if (end < 0) {
+        re += '\\{';
+        continue;
+      }
+      re += `(?:${glob.slice(i + 1, end).split(',').map((s) => globSource(s.trim())).join('|')})`;
       i = end;
     } else {
-      re += c.replace(/[.+^$()|[\]\\]/g, '\\$&');
+      re += c.replace(/[.+^$()|[\]\\{}]/g, '\\$&');
     }
   }
-  return new RegExp(`^${re}$`);
+  return re;
+}
+
+export function globToRegExp(glob: string): RegExp {
+  return new RegExp(`^${globSource(glob)}$`);
 }
 
 async function walk(dir: string, rel: string, include: RegExp, exclude: RegExp | undefined, out: Uri[], max: number): Promise<void> {
@@ -523,6 +596,7 @@ export const workspace = {
       async update(key: string, value: unknown): Promise<void> {
         // CLI-side changes (e.g. default model) go to ~/.localpilot/config.json; VS Code's settings.json is never written.
         const cfg = readJsonc(CLI_SETTINGS_PATH);
+        assertWritable(CLI_SETTINGS_PATH);
         if (value === undefined) {
           delete cfg[prefix + key];
         } else {
@@ -573,12 +647,15 @@ export const workspace = {
     }
     return true;
   },
-  async findFiles(include: string, exclude?: string | null, maxResults = 10_000): Promise<Uri[]> {
-    if (!workspaceRoot) {
+  async findFiles(include: string | RelativePattern, exclude?: string | RelativePattern | null, maxResults = 10_000): Promise<Uri[]> {
+    // A RelativePattern searches its own folder (an isolated worktree), not the workspace root.
+    const base = typeof include === 'string' ? workspaceRoot : include.baseUri.fsPath || include.base;
+    if (!base) {
       return [];
     }
+    const glob = (g: string | RelativePattern): RegExp => globToRegExp(typeof g === 'string' ? g : g.pattern);
     const out: Uri[] = [];
-    await walk(workspaceRoot, '', globToRegExp(include), exclude ? globToRegExp(exclude) : undefined, out, maxResults);
+    await walk(base, '', glob(include), exclude ? glob(exclude) : undefined, out, maxResults);
     return out;
   },
   fs: {
@@ -673,7 +750,7 @@ async function pick(icon: string, msg: string, items: unknown[]): Promise<string
   if (autoApprove) {
     return labels[0];
   }
-  const a = await ask(`${icon} ${msg}\n  [${labels.map((l, i) => `${i + 1}:${l}`).join('  ')}] > `);
+  const a = await withPromptLock(() => ask(`${icon} ${msg}\n  [${labels.map((l, i) => `${i + 1}:${l}`).join('  ')}] > `));
   if (a === undefined) {
     return undefined;
   }
@@ -714,14 +791,16 @@ export const window = {
   showWarningMessage: (msg: string, ...items: unknown[]) => pick('!', msg, items),
   showErrorMessage: (msg: string, ...items: unknown[]) => pick('✖', msg, items),
   async showInputBox(opts?: { prompt?: string; title?: string; value?: string }): Promise<string | undefined> {
-    const a = await ask(`\x1b[33m?\x1b[0m ${opts?.title ? `${opts.title}: ` : ''}${opts?.prompt ?? ''} `);
+    const a = await withPromptLock(() => ask(`\x1b[33m?\x1b[0m ${opts?.title ? `${opts.title}: ` : ''}${opts?.prompt ?? ''} `));
     return a === undefined ? undefined : a || opts?.value;
   },
   async showQuickPick(items: (string | { label: string })[] | Promise<(string | { label: string })[]>, opts?: { title?: string; placeHolder?: string }): Promise<any> {
     const list = await items;
     const labels = list.map((i) => (typeof i === 'string' ? i : i.label).replace(/\$\([^)]*\)\s*/g, ''));
-    process.stdout.write(`\x1b[33m?\x1b[0m ${opts?.title ?? opts?.placeHolder ?? 'Choose'}\n${labels.map((l, i) => `  ${i + 1}. ${l}`).join('\n')}\n`);
-    const a = await ask('  > ');
+    const a = await withPromptLock(() => {
+      process.stdout.write(`\x1b[33m?\x1b[0m ${opts?.title ?? opts?.placeHolder ?? 'Choose'}\n${labels.map((l, i) => `  ${i + 1}. ${l}`).join('\n')}\n`);
+      return ask('  > ');
+    });
     if (a === undefined || !a.trim()) {
       return undefined;
     }
@@ -737,7 +816,8 @@ export const window = {
       show() {},
       sendText(text: string) {
         const cwd = typeof opts === 'object' && opts.cwd ? (typeof opts.cwd === 'string' ? opts.cwd : opts.cwd.fsPath) : workspaceRoot;
-        const child = cp.spawn(process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : process.env.SHELL ?? '/bin/sh', process.platform === 'win32' ? ['/c', text] : ['-lc', text], { cwd, detached: true, stdio: 'ignore' });
+        const sh = shellInvocation(text, { login: true });
+        const child = cp.spawn(sh.file, sh.args, { cwd, detached: true, stdio: 'ignore', windowsVerbatimArguments: sh.windowsVerbatimArguments });
         child.unref();
         process.stdout.write(`\x1b[2m↗ started in background (pid ${child.pid}): ${text}\x1b[0m\n`);
       },

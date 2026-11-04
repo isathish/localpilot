@@ -307,6 +307,8 @@
   function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
   const S = (key) => (state.data && state.data.settings[key]) || { value: undefined, default: undefined, scope: 'default' };
   const val = (key) => S(key).value;
+  /** The value stored in the selected scope (not the merged one), so an edit never copies the other scope's value into it. */
+  const ownValue = (key) => { const s = S(key); return state.scope === 'workspace' ? (s.workspaceValue ?? s.userValue ?? s.default) : (s.userValue ?? s.default); };
   function set(key, value) { state.pendingSave = Date.now(); post({ type: 'set', key, value, scope: state.scope }); }
   /** Brief "Saved" acknowledgement in the header after a setting round-trips through VS Code. */
   function flashSaved() {
@@ -583,10 +585,17 @@
   const head = (sec, title, lead) => { sec.innerHTML = `<h1>${esc(title)}</h1><p class="lead">${lead}</p>${policyNote(['Agent & approvals', 'Providers', 'Skills & subagents', 'MCP servers', 'Web search'].includes(title))}`; };
 
   // ------------------------------------------------------------------ providers
-  function providersList() { const v = val('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }
+  function providersList() { const v = ownValue('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }
   function saveProviders(list) { set('providers', list); }
   function secProviders(sec) {
     head(sec, 'Providers', 'Local servers keep your code on this machine; cloud providers receive what you send them. Automatic picks prefer local models.');
+    sec.querySelector('h1').insertAdjacentHTML('beforeend', scopeBadge('providers'));
+    if (state.scope === 'user' && S('providers').workspaceValue !== undefined) {
+      const note = el('div', 'empty', 'This workspace’s <code>.vscode/settings.json</code> defines its own provider list, which replaces the User list shown here. ');
+      const go = el('button', 'btn sm', 'Edit workspace providers');
+      go.onclick = () => { state.scope = 'workspace'; render(); };
+      note.appendChild(go); sec.appendChild(note);
+    }
     const list = providersList();
     const bar = el('div', 'btnrow');
     bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
@@ -1656,6 +1665,8 @@
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the Network approval policy.');
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
+    // Shown merged; written from the selected scope's own map so the other scope's servers are never copied into it.
+    const own = () => ({ ...((state.scope === 'workspace' ? S('mcpServers').workspaceValue : S('mcpServers').userValue) || {}) });
     const status = new Map((state.data.mcp || []).map((s) => [s.name, s]));
     const names = Object.keys(servers);
     const list = el('div');
@@ -1670,7 +1681,7 @@
       c.innerHTML = `<div class="prov-head"><span class="dot ${s.enabled === false ? '' : tools !== undefined ? 'ok' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' '))}</span></div><div class="prov-meta">${tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : s.enabled === false ? '<span class="badge">disabled</span>' : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
       if (err && s.enabled !== false) { c.appendChild(el('div', 'prov-result err', `${I.x} ${esc(err)}`)); }
       disclosure(c.querySelector('.prov-head'), open, `${name} server settings`, () => { state.expanded = open ? null : `mcp:${name}`; render(); });
-      if (open) { c.appendChild(mcpForm(name, s, servers)); }
+      if (open) { c.appendChild(mcpForm(name, s, servers, own)); }
       list.appendChild(c);
     }
     sec.appendChild(list);
@@ -1686,18 +1697,19 @@
       const parts = raw.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
       if (!name || !parts.length) { toast('Name and a command or URL are required', 'error'); return; }
       if (servers[name]) { toast(`“${name}” already exists`, 'error'); return; }
-      servers[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0].replace(/"/g, ''), args: parts.slice(1).map((a) => a.replace(/"/g, '')) };
+      const next = own();
+      next[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0].replace(/"/g, ''), args: parts.slice(1).map((a) => a.replace(/"/g, '')) };
       state.expanded = `mcp:${name}`;
-      set('mcpServers', servers);
+      set('mcpServers', next);
     };
     f.appendChild(ctl); add.appendChild(f); sec.appendChild(add);
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reconnect servers</button><span class="muted small">Servers start when LocalPilot activates and after you reload.</span>`;
     sec.appendChild(bar);
   }
-  function mcpForm(name, s, servers) {
+  function mcpForm(name, s, servers, own) {
     const body = el('div', 'prov-body');
-    const upd = (patch) => { servers[name] = { ...s, ...patch }; for (const k of Object.keys(servers[name])) { if (servers[name][k] === undefined) { delete servers[name][k]; } } set('mcpServers', servers); };
+    const upd = (patch) => { const next = own(); next[name] = { ...(next[name] || servers[name] || {}), ...patch }; for (const k of Object.keys(next[name])) { if (next[name][k] === undefined) { delete next[name][k]; } } set('mcpServers', next); };
     const row = (label, desc, input) => { const f = el('div', 'field'); f.innerHTML = `<div><div class="lbl">${esc(label)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`; const ctl = el('div', 'ctl'); ctl.appendChild(input); f.appendChild(ctl); return f; };
     const cmd = el('input'); cmd.type = 'text'; cmd.value = s.command || ''; cmd.onchange = () => upd({ command: cmd.value.trim() });
     const args = el('input'); args.type = 'text'; args.value = (s.args || []).join(' '); args.placeholder = 'space-separated'; args.onchange = () => upd({ args: args.value.trim() ? args.value.trim().split(/\s+/) : undefined });
@@ -1723,7 +1735,11 @@
     body.appendChild(row('Enabled', '', en));
     const foot = el('div', 'prov-foot');
     foot.innerHTML = `<span class="spacer"></span><button class="btn danger">${I.trash}Remove</button>`;
-    foot.querySelector('button').onclick = () => { delete servers[name]; state.expanded = null; set('mcpServers', servers); };
+    foot.querySelector('button').onclick = () => {
+      const next = own();
+      if (!(name in next)) { toast(`“${name}” is defined in ${state.scope === 'workspace' ? 'User' : 'Workspace'} settings — switch scope to remove it`, 'error'); return; }
+      delete next[name]; state.expanded = null; set('mcpServers', next);
+    };
     body.appendChild(foot);
     return body;
   }

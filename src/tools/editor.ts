@@ -1,34 +1,71 @@
 import * as vscode from 'vscode';
 import { Tool, UserAnswer, UserQuestion } from '../types';
-import { resolveWorkspacePath } from './fs';
+import * as path from 'path';
+import { displayPath, resolveWorkspacePath } from './fs';
+import { currentEditor } from '../context/workspaceContext';
 
-/** Resolves when the language server next publishes diagnostics for `uri` (plus a short settle), or after `maxMs`. */
-function waitForDiagnostics(uri: vscode.Uri, maxMs: number): Promise<void> {
+/**
+ * Resolves true when the language server publishes diagnostics for `uri` (after a short settle), false after `maxMs`
+ * without one or when the host has no diagnostics event.
+ */
+function waitForDiagnostics(uri: vscode.Uri, maxMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
     let sub: vscode.Disposable | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (): void => {
+    const finish = (seen: boolean): void => {
       if (!done) {
         done = true;
         clearTimeout(timer);
         sub?.dispose();
-        resolve();
+        resolve(seen);
       }
     };
     // Subscribe before arming the timeout: a host without the event (the CLI) must not leave a timer that later
     // touches an unassigned `sub` and takes the process down.
     if (typeof vscode.languages.onDidChangeDiagnostics !== 'function') {
-      return resolve();
+      return resolve(false);
     }
     sub = vscode.languages.onDidChangeDiagnostics((e) => {
       if (e.uris.some((u) => u.toString() === uri.toString())) {
-        setTimeout(finish, 120);
+        setTimeout(() => finish(true), 120);
       }
     });
-    timer = setTimeout(finish, maxMs);
+    timer = setTimeout(() => finish(false), maxMs);
   });
 }
+
+interface TsDiagnostic {
+  start?: { line: number; offset: number };
+  text?: string;
+  category?: string;
+}
+
+/** Asks the TypeScript server directly (it checks files without an open tab); [] when it is unavailable. */
+async function tsServerDiagnostics(uri: vscode.Uri): Promise<vscode.Diagnostic[]> {
+  const out: vscode.Diagnostic[] = [];
+  for (const cmd of ['syntacticDiagnosticsSync', 'semanticDiagnosticsSync']) {
+    try {
+      const res = await vscode.commands.executeCommand<{ body?: TsDiagnostic[] } | undefined>('typescript.tsserverRequest', cmd, { file: uri });
+      for (const d of Array.isArray(res?.body) ? res.body : []) {
+        const line = Math.max(0, (d.start?.line ?? 1) - 1);
+        const col = Math.max(0, (d.start?.offset ?? 1) - 1);
+        const severity = d.category === 'error' ? vscode.DiagnosticSeverity.Error : d.category === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information;
+        const diag = new vscode.Diagnostic(new vscode.Range(line, col, line, col), String(d.text ?? ''), severity);
+        diag.source = 'ts';
+        out.push(diag);
+      }
+    } catch {
+      /* no TypeScript server or command */
+    }
+  }
+  return out;
+}
+
+const isInside = (file: string, root: string): boolean => {
+  const r = path.relative(root, file);
+  return !r.startsWith('..') && !path.isAbsolute(r);
+};
 
 export const getDiagnosticsTool: Tool = {
   parallelSafe: true,
@@ -46,29 +83,54 @@ export const getDiagnosticsTool: Tool = {
   async execute(args, ctx) {
     const sev = String(args.severity ?? 'error');
     const minSev = sev === 'all' ? vscode.DiagnosticSeverity.Hint : sev === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error;
+    const verify = "Verify with the project's type-check or lint via run_command (e.g. npx tsc --noEmit, npm run lint).";
     let entries: [vscode.Uri, vscode.Diagnostic[]][];
+    let unchecked: vscode.Uri | undefined;
+    let scopedOut = false;
     if (typeof args.path === 'string' && args.path) {
       const uri = resolveWorkspacePath(args.path, ctx);
       // Ensure the document is open so the language server has analysed it, then give it a moment to
       // report — returning as soon as diagnostics for this file change instead of always waiting the maximum.
-      await vscode.workspace.openTextDocument(uri);
-      await waitForDiagnostics(uri, 400);
-      entries = [[uri, vscode.languages.getDiagnostics(uri)]];
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const published = await waitForDiagnostics(uri, 1500);
+      let diags = vscode.languages.getDiagnostics(uri);
+      if (!diags.length && !published && /^(typescript|javascript)(react)?$/.test(doc.languageId)) {
+        diags = await tsServerDiagnostics(uri);
+      }
+      if (!diags.length && !published) {
+        unchecked = uri;
+      }
+      entries = [[uri, diags]];
     } else {
       entries = vscode.languages.getDiagnostics();
+      // An isolated worktree is not a workspace folder: the main checkout's diagnostics do not describe its files.
+      const root = ctx.workspaceRoot;
+      if (root && !vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === root)) {
+        entries = entries.filter(([uri]) => isInside(uri.fsPath, root));
+        scopedOut = !entries.some(([, d]) => d.length);
+      }
     }
     const lines: string[] = [];
     for (const [uri, diags] of entries) {
       for (const d of diags) {
         if (d.severity <= minSev) {
-          lines.push(`${vscode.workspace.asRelativePath(uri)}:${d.range.start.line + 1}:${d.range.start.character + 1} [${vscode.DiagnosticSeverity[d.severity]}] ${d.message}${d.source ? ` (${d.source})` : ''}`);
+          lines.push(`${displayPath(uri, ctx)}:${d.range.start.line + 1}:${d.range.start.character + 1} [${vscode.DiagnosticSeverity[d.severity]}] ${d.message}${d.source ? ` (${d.source})` : ''}`);
         }
         if (lines.length >= 200) {
           break;
         }
       }
     }
-    return { content: lines.length ? lines.join('\n') : 'No diagnostics.' };
+    if (lines.length) {
+      return { content: lines.join('\n') };
+    }
+    if (unchecked) {
+      return { content: `No diagnostics were published for ${displayPath(unchecked, ctx)} — the language server may not have checked it (files without an editor tab are often not validated, and the CLI has no language servers). ${verify}` };
+    }
+    if (scopedOut) {
+      return { content: `No diagnostics for files in this worktree — language servers check the main checkout, not the isolated worktree. ${verify}` };
+    }
+    return { content: 'No diagnostics.' };
   },
 };
 
@@ -80,7 +142,7 @@ export const openEditorsTool: Tool = {
     parameters: { type: 'object', properties: {} },
   },
   async execute() {
-    const ed = vscode.window.activeTextEditor;
+    const ed = currentEditor();
     const open = vscode.window.tabGroups.all
       .flatMap((g) => g.tabs)
       .map((t) => (t.input instanceof vscode.TabInputText ? vscode.workspace.asRelativePath(t.input.uri) : null))

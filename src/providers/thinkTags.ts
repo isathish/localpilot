@@ -11,6 +11,9 @@ export class ThinkTagSplitter {
   private buf = '';
 
   push(chunk: string): { type: 'thinking' | 'text'; text: string }[] {
+    if (typeof chunk !== 'string') {
+      return [];
+    }
     if (this.mode === 'text') {
       return chunk ? [{ type: 'text', text: chunk }] : [];
     }

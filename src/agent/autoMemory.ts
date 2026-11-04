@@ -77,7 +77,7 @@ export async function extractMemories(
     { role: 'user', content: `${existing ? `Existing notes:\n${existing.slice(0, 2000)}\n\n` : ''}Task:\n${digest}` },
   ];
   let out = '';
-  for await (const ev of o.provider.chat({ model: o.model, messages, temperature: 0, think: false, maxTokens: 400, contextWindow: Math.min(o.contextWindow, 16_384), keepAlive: o.keepAlive, signal: o.signal })) {
+  for await (const ev of o.provider.chat({ model: o.model, messages, temperature: 0, think: false, maxTokens: 400, contextWindow: o.contextWindow, keepAlive: o.keepAlive, signal: o.signal })) {
     if (ev.type === 'text') {
       out += ev.text;
     }

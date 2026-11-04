@@ -48,21 +48,46 @@ export function newLines(existing: string, addition: string): { text: string; du
   return { text: kept.join('\n').replace(/\n{3,}/g, '\n\n'), duplicates };
 }
 
-/** Fits a note into `max` characters by dropping its oldest paragraphs (keeping a leading heading); cuts as a last resort. */
+/**
+ * Fits a note into `max` characters by dropping its oldest paragraphs, then its oldest lines (keeping a leading
+ * heading line). The newest text always survives; `dropped` counts the paragraphs and lines removed.
+ */
 export function fitNote(text: string, max: number): { text: string; dropped: number } {
+  text = text.replace(/\r\n?/g, '\n');
   if (text.length <= max) {
     return { text, dropped: 0 };
   }
   const blocks = text.trim().split(/\n{2,}/);
-  const head = /^#/.test(blocks[0]) && blocks.length > 1 ? [blocks.shift()!] : [];
+  const head: string[] = [];
+  if (/^#/.test(blocks[0])) {
+    const [first, ...rest] = blocks[0].split('\n');
+    head.push(first);
+    if (rest.join('\n').trim()) {
+      blocks[0] = rest.join('\n').trim();
+    } else {
+      blocks.shift();
+    }
+  }
   let dropped = 0;
   const size = () => [...head, ...blocks].join('\n\n').length + 1;
   while (blocks.length > 1 && size() > max) {
     blocks.shift();
     dropped++;
   }
+  if (blocks.length && size() > max) {
+    const lines = blocks[0].split('\n');
+    while (lines.length > 1 && size() > max) {
+      lines.shift();
+      blocks[0] = lines.join('\n');
+      dropped++;
+    }
+  }
   const out = `${[...head, ...blocks].join('\n\n')}\n`;
-  return { text: out.length > max ? `${out.slice(0, max - 1).trimEnd()}\n` : out, dropped };
+  if (out.length <= max) {
+    return { text: out, dropped };
+  }
+  // A single line (or the heading alone) is still too long: keep its end, where the newest text is.
+  return { text: `${out.slice(out.length - max).trimStart()}`, dropped: dropped + 1 };
 }
 
 /**
@@ -92,6 +117,24 @@ export class MemoryStore {
 
   private safeName(name: string): string {
     return name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'note';
+  }
+
+  /** The note file for `name`: a listed entry matching exactly, then case-insensitively, then by safe name; else the safe name. */
+  private async resolve(dir: vscode.Uri, name: string): Promise<vscode.Uri> {
+    let stems: string[] = [];
+    try {
+      stems = (await vscode.workspace.fs.readDirectory(dir))
+        .filter(([f, t]) => t === vscode.FileType.File && f.endsWith('.md'))
+        .map(([f]) => f.replace(/\.md$/, ''));
+    } catch {
+      /* no memory dir yet */
+    }
+    const safe = this.safeName(name);
+    const hit =
+      stems.find((s) => s === name) ??
+      stems.find((s) => s.toLowerCase() === name.toLowerCase()) ??
+      stems.find((s) => this.safeName(s) === safe);
+    return vscode.Uri.joinPath(dir, hit !== undefined ? `${hit}.md` : `${safe}.md`);
   }
 
   async list(): Promise<MemoryNote[]> {
@@ -130,7 +173,7 @@ export class MemoryStore {
       if (!dir) {
         continue;
       }
-      const uri = vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
+      const uri = await this.resolve(dir, name);
       try {
         const stat = await vscode.workspace.fs.stat(uri);
         return await this.readUri(uri, stat.mtime);
@@ -151,10 +194,11 @@ export class MemoryStore {
       throw new Error('No workspace folder open; use scope "global".');
     }
     await vscode.workspace.fs.createDirectory(dir);
-    const uri = vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
+    let uri = vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
     let text = content.trim() + '\n';
     let duplicateLines = 0;
     if (mode === 'append') {
+      uri = await this.resolve(dir, name);
       const existing = (await this.read(name, scope)) ?? '';
       const fresh = newLines(existing, content);
       duplicateLines = fresh.duplicates;
@@ -168,22 +212,30 @@ export class MemoryStore {
     await vscode.workspace.fs.writeFile(uri, Buffer.from(fit.text, 'utf8'));
     this.cache.delete(uri.toString());
     this.log.info(`memory: wrote ${scope}/${this.safeName(name)} (${fit.text.length} chars${fit.dropped ? `, dropped ${fit.dropped} old paragraph(s)` : ''}${duplicateLines ? `, skipped ${duplicateLines} duplicate line(s)` : ''})`);
-    const pruned = lim ? await this.prune(scope, lim.maxNotes, this.safeName(name)) : [];
+    const pruned = lim ? await this.prune(scope, lim.maxNotes, path.basename(uri.path)) : [];
     return { path: uri.fsPath, unchanged: false, duplicateLines, droppedBlocks: fit.dropped, pruned };
   }
 
-  /** Removes the least recently updated notes beyond `max` in a scope; never README or `keep`. */
+  /** Removes the least recently updated notes beyond `max` in a scope; never README or the file `keep`. */
   private async prune(scope: MemoryScope, max: number, keep: string): Promise<string[]> {
+    const dir = this.dir(scope);
     const notes = (await this.list()).filter((n) => n.scope === scope);
-    if (notes.length <= max) {
+    if (!dir || notes.length <= max) {
       return [];
     }
-    // `list()` is newest first, so the tail of the candidates is the least recently updated.
-    const candidates = notes.filter((n) => n.name !== keep && n.name.toLowerCase() !== 'readme');
+    // `list()` is newest first, so walk the candidates from the least recently updated.
+    const candidates = notes.filter((n) => `${n.name}.md` !== keep && n.name.toLowerCase() !== 'readme').reverse();
     const removed: string[] = [];
-    for (const n of candidates.slice(-(notes.length - max))) {
-      if (await this.delete(n.name, scope)) {
+    for (const n of candidates) {
+      if (removed.length >= notes.length - max) {
+        break;
+      }
+      try {
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `${n.name}.md`));
+        this.cache.delete(vscode.Uri.joinPath(dir, `${n.name}.md`).toString());
         removed.push(n.name);
+      } catch {
+        /* try the next candidate */
       }
     }
     if (removed.length) {
@@ -198,7 +250,10 @@ export class MemoryStore {
       return false;
     }
     try {
-      await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`));
+      const uri = await this.resolve(dir, name);
+      await vscode.workspace.fs.stat(uri);
+      await vscode.workspace.fs.delete(uri);
+      this.cache.delete(uri.toString());
       return true;
     } catch {
       return false;
@@ -253,7 +308,7 @@ export class MemoryStore {
     if (hit && hit.mtime === mtime) {
       return hit.text;
     }
-    const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+    const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8').replace(/\r\n?/g, '\n');
     this.cache.set(key, { text, mtime });
     return text;
   }
@@ -284,7 +339,7 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
       }
       const notes = [
         r.duplicateLines ? `skipped ${r.duplicateLines} line(s) it already had` : '',
-        r.droppedBlocks ? `dropped its ${r.droppedBlocks} oldest paragraph(s) to stay under the size limit — keep notes short` : '',
+        r.droppedBlocks ? `dropped ${r.droppedBlocks} of its oldest paragraph(s) or line(s) to stay under the size limit — keep notes short` : '',
         r.pruned.length ? `removed the oldest notes to stay under the note limit: ${r.pruned.join(', ')}` : '',
       ].filter(Boolean);
       return { content: `Saved memory "${args.name}" (${scope}) → ${vscode.workspace.asRelativePath(r.path)}${notes.length ? ` (${notes.join('; ')})` : ''}` };
@@ -363,7 +418,22 @@ export const manageTodosTool: Tool = {
       return { content: 'Todo list is not available in this context.' };
     }
     const previous = new Map(ctx.todos.get().map((t) => [t.id, t]));
-    const items = Array.isArray(args.todos) ? (args.todos as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown; dependsOn?: unknown; skills?: unknown }[]) : [];
+    const bad = { content: 'manage_todos needs todos: an array of {id, title, status}. The checklist was not changed.', isError: true };
+    let raw: unknown = args.todos;
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return bad;
+      }
+    }
+    if (raw === undefined && Array.isArray(args)) {
+      raw = args;
+    }
+    if (!Array.isArray(raw)) {
+      return bad;
+    }
+    const items = (raw as unknown[]).map((t) => (typeof t === 'string' ? { title: t } : t && typeof t === 'object' ? t : {})) as { id?: unknown; title?: unknown; status?: unknown; agent?: unknown; prompt?: unknown; model?: unknown; dependsOn?: unknown; skills?: unknown }[];
     const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
     const ids = new Set(items.map((t, i) => String(t.id ?? i + 1)));
     const clean: TodoItem[] = items
@@ -385,6 +455,9 @@ export const manageTodosTool: Tool = {
           result: old?.result,
         };
       });
+    if (items.length && !clean.length) {
+      return bad;
+    }
     ctx.todos.set(clean);
     const done = clean.filter((t) => t.status === 'done').length;
     const delegable = clean.filter((t) => t.status === 'pending' && t.agent).length;

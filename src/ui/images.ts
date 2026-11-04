@@ -11,13 +11,13 @@ export interface ImageAttachment {
   mime: string;
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
 
 export async function pickImages(): Promise<ImageAttachment[]> {
   const picked = await vscode.window.showOpenDialog({
     canSelectMany: true,
     openLabel: 'Attach image',
-    filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
+    filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
   });
   const out: ImageAttachment[] = [];
   for (const uri of picked ?? []) {

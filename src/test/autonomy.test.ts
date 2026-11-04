@@ -2,8 +2,9 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { AutoReviewer, hardRisk, parseVerdict } from '../agent/autoReviewer';
-import { fitNote, newLines } from '../agent/memory';
+import { fitNote, MemoryStore, newLines } from '../agent/memory';
 import { QueueTask, TaskQueue } from '../agent/taskQueue';
 import { backoffMs, MAX_FAILURES, ServiceSupervisor } from '../providers/supervisor';
 import type { ProviderRegistry } from '../providers/registry';
@@ -144,6 +145,16 @@ suite('Auto mode reviewer', () => {
     assert.strictEqual(hardRisk('write', 'Edit src/env.ts', ''), undefined);
   });
 
+  test('hard rules catch Windows deletes, git discards with options and .git itself', () => {
+    for (const cmd of ['rmdir /s /q src', 'Remove-Item -Recurse -Force src', 'git -C . reset --hard', 'git clean -d -f', 'rm -rf .git', 'RD /S /Q build', 'git checkout -- .', 'git restore src/a.ts', 'cat secrets.json > out.txt']) {
+      assert.ok(hardRisk('terminal', 'Run command', cmd), `expected "${cmd}" to need the user`);
+    }
+    for (const cmd of ['npm test', 'git restore --staged src/a.ts', 'cat .gitignore']) {
+      assert.strictEqual(hardRisk('terminal', 'Run command', cmd), undefined, `expected "${cmd}" to go to the reviewer`);
+    }
+    assert.ok(hardRisk('delete', 'Delete .git', ''));
+  });
+
   test('only a clear allow approves; anything else asks', () => {
     assert.deepStrictEqual(parseVerdict('{"decision":"allow","reason":"runs the tests"}'), { allow: true, reason: 'runs the tests' });
     assert.strictEqual(parseVerdict('<think>hmm {"decision":"allow"}</think>{"decision":"block","reason":"outside"}').allow, false);
@@ -228,5 +239,38 @@ suite('Memory limits', () => {
     assert.ok(!r.text.includes('one '));
     assert.ok(r.dropped >= 2);
     assert.deepStrictEqual(fitNote('short\n', 400), { text: 'short\n', dropped: 0 });
+  });
+
+  test('oversized notes keep the heading and the newest text, whatever the line endings', () => {
+    const crlf = `# Notes\r\n${Array.from({ length: 30 }, (_, i) => `- fact number ${i}`).join('\r\n')}\r\n- newest fact\r\n`;
+    const r = fitNote(crlf, 200);
+    assert.ok(r.text.length <= 200);
+    assert.ok(r.text.startsWith('# Notes\n'));
+    assert.ok(r.text.includes('- newest fact'));
+    assert.ok(!r.text.includes('\r'));
+    assert.ok(r.dropped > 0);
+    const flat = `${Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n')}\nlast line\n`;
+    const f = fitNote(flat, 100);
+    assert.ok(f.text.length <= 100);
+    assert.ok(f.text.trimEnd().endsWith('last line'));
+    assert.ok(f.dropped > 0);
+  });
+
+  test('hand-written notes with spaces and capitals can be read and deleted', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mem-'));
+    try {
+      await fs.mkdir(path.join(tmp, 'memory'));
+      const file = path.join(tmp, 'memory', 'Deploy Notes.md');
+      await fs.writeFile(file, '# Deploy\n- Use the blue pipeline\n');
+      const log = { info: () => undefined, warn: () => undefined, error: () => undefined } as unknown as vscode.LogOutputChannel;
+      const memory = new MemoryStore(vscode.Uri.file(tmp), log);
+      assert.ok((await memory.list()).some((n) => n.name === 'Deploy Notes' && n.scope === 'global'));
+      assert.ok((await memory.read('Deploy Notes', 'global'))?.includes('blue pipeline'));
+      assert.strictEqual(await memory.delete('Deploy Notes', 'global'), true);
+      await assert.rejects(fs.stat(file));
+      assert.strictEqual(await memory.delete('Deploy Notes', 'global'), false);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });

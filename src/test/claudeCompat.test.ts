@@ -3,7 +3,8 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { applyHookResult, execHook, hookMatches, HookOutcome, HookRunner } from '../agent/hooks';
-import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, expandAgentTools, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, splitCommandChain } from '../agent/permissions';
+import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, expandAgentTools, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, registerMcpToolOrigin, forgetMcpToolOrigin, splitCommandChain } from '../agent/permissions';
+import { installPlugin, loadMarketplace, resolvePluginDir } from '../agent/pluginInstaller';
 import { emptySettings, loadProjectSettings, mergeSettings, normalizeSettings, parseJsonc } from '../agent/settings';
 import { discoverCommands, expandCommand, indexCommands, parseCommandFile, splitArgs, splitRules } from '../agent/commands';
 import { buildInstructions, collectInstructionFiles, resolveImports } from '../context/instructions';
@@ -38,6 +39,9 @@ suite('Claude Code compatibility: settings.json', () => {
     assert.deepStrictEqual(parseJsonc('{"a": "// not a comment", "b": "say \\"/*\\" ok"}'), { a: '// not a comment', b: 'say "/*" ok' });
     assert.deepStrictEqual(parseJsonc('\ufeff{"a":1}'), { a: 1 });
     assert.deepStrictEqual(parseJsonc('{ // c\n "a": 1, /* b */ }'), { a: 1 });
+    assert.deepStrictEqual(parseJsonc('{"a": "**/*.pyc", "b": 1, "c": "**/dist"}'), { a: '**/*.pyc', b: 1, c: '**/dist' });
+    assert.deepStrictEqual(parseJsonc('{"a": 1, // note\n "b": 2}'), { a: 1, b: 2 });
+    assert.deepStrictEqual(parseJsonc('{"a": "x // y ,}", "b": 2}'), { a: 'x // y ,}', b: 2 });
   });
 
   test('readTsPaths keeps globs in a create-next-app tsconfig', () => {
@@ -123,6 +127,50 @@ suite('Claude Code compatibility: permission rules', () => {
     assert.strictEqual(evaluatePermission(perm, 'run_command', { command: 'npm ci && curl x' }).decision, 'none');
     // …and any denied segment denies it.
     assert.strictEqual(evaluatePermission(perm, 'run_command', { command: 'npm ci && rm -rf dist' }).decision, 'deny');
+  });
+
+  test("MCP servers with '_' in the name and Task(agent) rules on parallel tools", () => {
+    const deny = (spec: string, tool: string, args: Record<string, unknown> = {}) => evaluatePermission({ ...emptySettings().permissions, deny: [spec] }, tool, args).decision;
+    registerMcpToolOrigin('mcp_my_db_run_query', 'my_db', 'run_query');
+    try {
+      assert.strictEqual(deny('mcp__my_db', 'mcp_my_db_run_query'), 'deny');
+      assert.strictEqual(deny('mcp__my_db__run_query', 'mcp_my_db_run_query'), 'deny');
+      assert.strictEqual(deny('mcp__my', 'mcp_my_db_run_query'), 'none');
+      assert.strictEqual(canonicalToolName('mcp_my_db_run_query'), 'mcp__my_db__run_query');
+    } finally {
+      forgetMcpToolOrigin('mcp_my_db_run_query');
+    }
+    assert.strictEqual(deny('Task(coder)', 'run_parallel_subagents', { tasks: [{ agent: 'explore' }, { agent: 'coder' }] }), 'deny');
+    assert.strictEqual(deny('Task(coder)', 'run_parallel_subagents', { tasks: [{ agent: 'explore' }] }), 'none');
+    const allow = evaluatePermission({ ...emptySettings().permissions, allow: ['Task(coder)'] }, 'run_parallel_subagents', { tasks: [{ agent: 'coder' }, { agent: 'explore' }] }).decision;
+    assert.strictEqual(allow, 'none', 'allow needs every task to match');
+  });
+
+  test('command chains: background &, substitutions, quoting and prefix word boundaries', () => {
+    const allow = (spec: string, command: string) => evaluatePermission({ ...emptySettings().permissions, allow: [spec] }, 'run_command', { command }).decision;
+    const deny = (spec: string, command: string) => evaluatePermission({ ...emptySettings().permissions, deny: [spec] }, 'run_command', { command }).decision;
+    assert.strictEqual(allow('Bash(npm test:*)', 'npm test & npm publish'), 'none');
+    assert.strictEqual(deny('Bash(rm:*)', 'npm run build & rm -rf dist'), 'deny');
+    for (const c of ['echo $(rm x)', 'echo "$(rm x)"', 'echo `rm x`', 'echo <(rm x)']) {
+      assert.strictEqual(allow('Bash(echo:*)', c), 'none', c);
+    }
+    assert.strictEqual(allow('Bash(npm test:*)', 'npm test <(rm x)'), 'none');
+    assert.strictEqual(deny('Bash(rm:*)', 'echo $(rm -rf x)'), 'deny');
+    assert.strictEqual(deny('Bash(rm:*)', 'echo "$(ls $(rm -rf x))"'), 'deny');
+    assert.strictEqual(allow('Bash(echo:*)', "echo '$(rm x)'"), 'allow', 'single quotes are literal');
+    assert.strictEqual(splitCommandChain("echo 'a\\' ; rm -rf x").length, 2);
+    assert.strictEqual(allow('Bash(git status:*)', 'git statusfoo'), 'none');
+    assert.strictEqual(allow('Bash(git status:*)', 'git status -s'), 'allow');
+    assert.deepStrictEqual(splitCommandChain('a && b'), ['a', 'b']);
+    assert.deepStrictEqual(splitCommandChain('npm test 2>&1 | tee log &> out'), ['npm test 2>&1', 'tee log &> out']);
+    assert.strictEqual(allow('Bash(npm test:*)', 'npm test 2>&1'), 'allow');
+    assert.deepStrictEqual(splitCommandChain('git status & rm -rf build'), ['git status', 'rm -rf build']);
+    assert.deepStrictEqual(splitCommandChain('a |& b'), ['a', 'b']);
+    assert.deepStrictEqual(splitCommandChain('cmd 2>&1 | tee x'), ['cmd 2>&1', 'tee x']);
+    for (const c of ['git status & rm -rf build', 'git status $(rm -rf build)', 'git status `rm x`', 'git status %COMSPEC%', 'git status @(rm x)']) {
+      assert.notStrictEqual(allow('Bash(git status:*)', c), 'allow', c);
+    }
+    assert.strictEqual(deny('Bash(curl:*)', 'echo & curl https://x'), 'deny');
   });
 
   test('path specifiers: relative, root-anchored, home, absolute, directory prefix, any-depth basenames', () => {
@@ -251,6 +299,19 @@ suite('Claude Code compatibility: hooks', () => {
     assert.ok(slow.timedOut);
   });
 
+  (posix ? test : test.skip)('a timeout or abort kills the whole hook process tree promptly', async function () {
+    this.timeout(10_000);
+    let t = Date.now();
+    const timed = await execHook({ type: 'command', command: 'sleep 5; echo x', timeout: 1 }, {}, {});
+    assert.ok(timed.timedOut);
+    assert.ok(Date.now() - t < 2500, `took ${Date.now() - t} ms`);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 200);
+    t = Date.now();
+    await execHook({ type: 'command', command: 'sleep 5; echo x' }, {}, { signal: ac.signal });
+    assert.ok(Date.now() - t < 1500, `took ${Date.now() - t} ms`);
+  });
+
   (posix ? test : test.skip)('SessionEnd fires with the reason as matcher key, cannot block, and is skipped when unconfigured', async function () {
     this.timeout(10_000);
     const dir = await tmp('session-end');
@@ -288,6 +349,15 @@ suite('Claude Code compatibility: custom slash commands', () => {
     assert.deepStrictEqual(c.allowedTools, ['Bash(gh issue view:*)']);
     assert.strictEqual(c.model, 'ollama/qwen3');
     assert.deepStrictEqual(splitArgs('123 "two words" x'), ['123', 'two words', 'x']);
+  });
+
+  test('front-matter: BOM and CRLF, column-0 lists, block scalars, indented multi-line values', () => {
+    assert.strictEqual(parseFrontMatter('\uFEFF---\r\nname: a\r\n---\r\nbody').meta.name, 'a');
+    assert.deepStrictEqual(parseFrontMatter('---\ntools:\n- read_file\n- grep_search\nname: x\n---\n').meta, { tools: ['read_file', 'grep_search'], name: 'x' });
+    assert.strictEqual(parseFrontMatter('---\ndescription: >-\n  one\n  two\n---\n').meta.description, 'one two');
+    assert.strictEqual(parseFrontMatter('---\ndescription: |\n  a\n  b\n---\n').meta.description, 'a\nb\n');
+    assert.strictEqual(parseFrontMatter('---\ndescription:\n  Converts PDFs\n  and forms\nname: pdf\n---\n').meta.description, 'Converts PDFs and forms');
+    assert.deepStrictEqual(parseFrontMatter('---\ntools:\n  - item\n  - "b"\n---\n').meta.tools, ['item', 'b']);
   });
 
   test('expansion: $ARGUMENTS and $n, permitted !`cmd` runs, unpermitted is skipped, @file inlines', async () => {
@@ -388,6 +458,22 @@ suite('Claude Code compatibility: CLAUDE.md hierarchy and imports', () => {
     assert.ok(out.includes('L4'));
     assert.ok(!out.includes('L6'));
   });
+
+  test('the size cap keeps the highest-precedence files and cuts the user file', async () => {
+    const home = await tmp('caphome');
+    const root = await tmp('caproot');
+    await write(path.join(home, '.claude', 'CLAUDE.md'), `USER START ${'u'.repeat(13_000)}`);
+    await write(path.join(root, 'AGENTS.md'), 'PROJECT AGENTS RULES');
+    const { text, files } = await buildInstructions([root], { home, maxChars: 12_000 });
+    assert.ok(text.includes('PROJECT AGENTS RULES'), 'project file survives the cap');
+    assert.ok(text.includes('USER START'), 'the user file is truncated, not dropped');
+    assert.ok(text.length <= 12_000, `within the cap: ${text.length}`);
+    assert.ok(text.indexOf('USER START') < text.indexOf('PROJECT AGENTS RULES'), 'prompt order is kept');
+    assert.deepStrictEqual(
+      files.map((f) => `${f.label}:${f.note ?? 'full'}`),
+      ['~/.claude/CLAUDE.md:truncated', 'AGENTS.md:full']
+    );
+  });
 });
 
 suite('Claude Code compatibility: plugins', () => {
@@ -422,5 +508,34 @@ suite('Claude Code compatibility: plugins', () => {
     assert.deepStrictEqual(Object.keys(src.mcpServers()), ['alpha:srv', 'alpha:remote']);
     assert.strictEqual(src.settingsLayers().length, 1);
     assert.strictEqual(src.commandFiles()[0].plugin.name, 'alpha');
+  });
+
+  test('Claude Code marketplace catalogs are not plugins until installed_plugins.json lists them', async () => {
+    const home = await tmp('plughome2');
+    const root = await tmp('plugroot2');
+    const mkt = path.join(home, '.claude', 'plugins', 'marketplaces', 'mkt');
+    const gamma = path.join(mkt, 'plugins', 'gamma');
+    await write(path.join(mkt, '.claude-plugin', 'marketplace.json'), '{"name":"mkt","plugins":[{"name":"gamma","source":"./plugins/gamma"}]}');
+    await write(path.join(gamma, '.claude-plugin', 'plugin.json'), '{"name":"gamma"}');
+    assert.ok(!(await discoverPlugins([root], { home })).some((p) => p.name === 'gamma'));
+    await write(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'gamma@mkt': [{ scope: 'user', installPath: gamma }] } }));
+    const g = (await discoverPlugins([root], { home })).find((p) => p.name === 'gamma');
+    assert.ok(g && g.enabled && g.root === gamma);
+  });
+
+  test('install refuses unsafe names and git options in a source ref', async () => {
+    const base = await tmp('plugmarket');
+    const market = path.join(base, 'market');
+    await write(path.join(market, '.claude-plugin', 'marketplace.json'), '{"name":"m","plugins":[{"name":"..","source":"./p"}]}');
+    await write(path.join(market, 'p', 'commands', 'x.md'), 'x');
+    const dest = path.join(base, 'home', 'plugins');
+    await write(path.join(dest, 'kept', '.claude-plugin', 'plugin.json'), '{"name":"kept"}');
+    await write(path.join(base, 'home', 'sentinel'), 'keep me');
+    const m = await loadMarketplace(market);
+    await assert.rejects(installPlugin(m.plugins[0], m, dest), /invalid plugin name/);
+    assert.ok(await fs.stat(path.join(dest, 'kept', '.claude-plugin', 'plugin.json')));
+    assert.strictEqual(await fs.readFile(path.join(base, 'home', 'sentinel'), 'utf8'), 'keep me');
+    const entry = { name: 'evil', source: { source: 'url' as const, url: 'https://x/y.git', ref: '--upload-pack=touch /tmp/x' } };
+    await assert.rejects(resolvePluginDir(entry, m), /invalid ref\/sha/);
   });
 });

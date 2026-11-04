@@ -971,6 +971,8 @@
     const results = new Map();
     for (const m of s.messages) {
       if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); }
+      // Text-protocol models get every result of a step in one user message: split it back into the tool rows' results.
+      if (m.role === 'user' && m.meta && m.meta.toolResults) { const parts = [...m.content.matchAll(/<tool_result name="[^"]*">\n?([\s\S]*?)\n?<\/tool_result>/g)].map((x) => x[1]); m.meta.toolResults.forEach((id, k) => { const c = parts[k]; if (c !== undefined) { results.set(id, { content: c, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(c) || /\[exit code [1-9]/.test(c) }); } }); }
       // Images captured by tools travel in a user-role carrier message; attach them to the originating step instead of showing a bubble.
       if (m.role === 'user' && m.meta && m.meta.toolImages && m.images) { m.meta.toolImages.forEach((id, k) => { const r = results.get(id) || { content: '', isError: false }; r.image = { data: m.images[k], mime: 'image/png' }; results.set(id, r); }); }
     }
@@ -995,7 +997,7 @@
         if (prev && prev.classList.contains('assistant')) { const bodies = prev.querySelectorAll(':scope > .body'); const last = bodies[bodies.length - 1]; if (last) { last.classList.add('retracted'); } prev.appendChild(nudgeNote(m.meta.nudge)); }
         return;
       }
-      if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.hidden))) { return; }
+      if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.toolResults || m.meta.hidden))) { return; }
       if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       if (m.role === 'user' && m.meta && m.meta.steer) {
         const prev = els.messages.lastElementChild;
@@ -1571,16 +1573,18 @@
     if (state.session && !all.some((s) => s.id === state.session.id)) { all.push(summaryOf(state.session)); }
     // Until 'init' arrives every chat is a tab; afterwards the open set is explicit (and persisted across view reloads).
     const open = state.openTabs || new Set(all.map((s) => s.id));
-    for (const s of all) { if (s.id === active || state.running.has(s.id) || state.attention.has(s.id) || state.unread.has(s.id)) { open.add(s.id); } }
-    const list = all.filter((s) => open.has(s.id)).sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || ((a.createdAt || 0) - (b.createdAt || 0)) || a.id.localeCompare(b.id));
+    const forced = (s) => s.id === active || state.running.has(s.id) || state.attention.has(s.id) || state.unread.has(s.id);
+    for (const s of all) { if (forced(s)) { open.add(s.id); } }
+    let list = all.filter((s) => open.has(s.id));
     if (list.length > MAX_TABS) {
-      // Too many open: keep pinned, running and the active chat; drop the oldest idle ones from the bar (still in "All chats").
-      const keep = new Set(list.filter((s) => s.pinned || s.id === active || state.running.has(s.id)).map((s) => s.id));
+      // Too many open: keep pinned, active, running and flagged chats (these may exceed the cap; the strip scrolls) and drop the oldest idle ones from the bar (still in "All chats").
+      const keep = new Set(list.filter((s) => s.pinned || forced(s)).map((s) => s.id));
       for (const s of list.slice().sort((a, b) => b.updatedAt - a.updatedAt)) { if (keep.size >= MAX_TABS) { break; } keep.add(s.id); }
-      for (const s of list) { if (!keep.has(s.id)) { open.delete(s.id); } }
+      for (const id of [...open]) { if (!keep.has(id)) { open.delete(id); } }
       state.openTabs = open;
-      return tabList();
+      list = list.filter((s) => keep.has(s.id));
     }
+    list.sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || ((a.createdAt || 0) - (b.createdAt || 0)) || a.id.localeCompare(b.id));
     return { list, active, hidden: all.length - list.length, all };
   }
   function tabTitle(s) {
@@ -1668,8 +1672,8 @@
     saveDraft(state.session && state.session.id);
     state.loadingTab = id; state.unread.delete(id);
     if (state.openTabs) { state.openTabs.add(id); }
-    renderTabs();
     post({ type: 'selectSession', id });
+    renderTabs();
     clearTimeout(selectTab.timer);
     selectTab.timer = setTimeout(() => { if (state.loadingTab === id) { state.loadingTab = null; renderTabs(); toast('Could not open that chat', 'error'); } }, 8000);
   }
@@ -2150,9 +2154,12 @@
     if (wt) {
       if (undoAll) { undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
       if (keepAll) { keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
+      // Applying while the agent still edits would fold its in-flight edits into the new base; wait for a pause or the end.
+      const p = state.paused.get(s.id); const busy = state.running.has(s.id) && !(p && p.holding);
+      if (keepAll) { keepAll.disabled = busy; if (busy) { keepAll.title = 'Pause or stop the agent before applying its changes'; } }
     } else {
       if (undoAll) { undoAll.title = 'Reject all changes'; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.dataset.a = 'undoAll'; }
-      if (keepAll) { keepAll.title = 'Accept all changes'; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; }
+      if (keepAll) { keepAll.title = 'Accept all changes'; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; keepAll.disabled = false; }
     }
     const sig = `${s.id}|${wt ? 'wt' : ''}|${files.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}`).join('|')}`;
     if (sig === changesSig) { return; }
@@ -2178,8 +2185,15 @@
     if (!file || !/^image\//.test(file.type)) { return; }
     if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); return; }
     const reader = new FileReader();
-    reader.onload = () => { const img = new Image(); img.onload = () => { const MAX = 1568; const k = Math.min(1, MAX / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); state.images.push({ name: file.name || `pasted-${Date.now().toString(36)}.png`, data: c.toDataURL('image/png').split(',')[1], mime: 'image/png' }); renderChips(); updateSendEnabled(); els.input.focus(); }; img.src = reader.result; };
+    reader.onload = () => addImageUrl(file.name || `pasted-${Date.now().toString(36)}.png`, reader.result);
     reader.readAsDataURL(file);
+  }
+  /** Downscales to 1568 px max and re-encodes as PNG, so the bytes always match the image/png label. */
+  function addImageUrl(name, url) {
+    const img = new Image();
+    img.onload = () => { if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); return; } const MAX = 1568; const k = Math.min(1, MAX / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); state.images.push({ name, data: c.toDataURL('image/png').split(',')[1], mime: 'image/png' }); renderChips(); updateSendEnabled(); els.input.focus(); };
+    img.onerror = () => toast(`Could not read image ${name}`, 'error');
+    img.src = url;
   }
   function addAttachment(ref) { if (!state.attachments.includes(ref)) { state.attachments.push(ref); renderChips(); } els.input.focus(); }
 
@@ -2445,8 +2459,7 @@
       // React before the host acknowledges: Stop and the progress bar appear now; a watchdog undoes it if nothing comes back.
       const sid = state.session.id;
       setRunning(true);
-      clearTimeout(state.pendingSend.get(sid));
-      state.pendingSend.set(sid, setTimeout(() => { state.pendingSend.delete(sid); if (!state.running.has(sid) && state.session && state.session.id === sid) { setRunning(false); toast('The request did not start — check the LocalPilot output log and try again', 'error'); } }, 10000));
+      armSendWatchdog(sid, 10000);
     }
     state.drafts.delete(state.session.id);
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); scrollToBottom(true);
@@ -2585,6 +2598,10 @@
     if (state.session && state.session.id === sid) { if (live.dirty) { scheduleRender(live); } scrollToBottom(true); updateJump(); }
     renderTabs();
   }
+  function armSendWatchdog(sid, ms) {
+    clearTimeout(state.pendingSend.get(sid));
+    state.pendingSend.set(sid, setTimeout(() => { state.pendingSend.delete(sid); if (!state.running.has(sid) && state.session && state.session.id === sid) { setRunning(false); toast('The request did not start — check the LocalPilot output log and try again', 'error'); } }, ms));
+  }
   function dispatch(m) {
     switch (m.type) {
       case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
@@ -2594,7 +2611,7 @@
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
         if (switching && prev) { saveDraft(prev); }
         state.session = m.session; state.session.liveFrom = m.liveFrom; state.session.offers = m.offers; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
-        renderSession(); renderChanges(); renderTasks(); renderTabs(); dismissBoot();
+        dismissBoot(); renderSession(); renderChanges(); renderTasks(); renderTabs();
         if (switching) { closeMenu(); restoreDraft(m.session.id); const y = state.scroll.get(m.session.id); if (y !== undefined && !state.running.has(m.session.id)) { els.messages.scrollTop = y; } }
         // Don't yank focus away from a rename box, popover search or anything else the user is typing in.
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
@@ -2616,10 +2633,14 @@
         if (m.childId) { laneSetPaused(m.sessionId, m.childId, m.paused, m.holding); break; }
         state.paused.set(m.sessionId, { paused: m.paused, holding: m.holding });
         noteStatus(m.sessionId, m.paused ? (m.holding ? 'Paused' : 'Pausing after this step…') : 'Resuming…');
-        if (state.session && state.session.id === m.sessionId) { syncPause(); setStatus(state.status.get(m.sessionId) || ''); }
+        if (state.session && state.session.id === m.sessionId) { syncPause(); setStatus(state.status.get(m.sessionId) || ''); renderChanges(); }
         renderTabs();
         break;
       }
+      case 'sendQueued':
+        // A manual compaction holds the message back; give it time so the "did not start" watchdog stays quiet.
+        if (state.pendingSend.has(m.sessionId)) { armSendWatchdog(m.sessionId, 200000); if (state.session && state.session.id === m.sessionId) { setStatus('Waiting for compaction…'); } }
+        break;
       case 'steerQueued': {
         const live = ensureLive(m.sessionId);
         live.root.appendChild(steerRow(m.content, m.images, m.id, true));
@@ -2634,7 +2655,7 @@
         state.scroll.delete(m.sessionId);
         if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
         else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
-        if (isActive) { setRunning(m.running); renderTasks(); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
+        if (isActive) { setRunning(m.running); renderTasks(); renderChanges(); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
         break;
       }
@@ -2670,7 +2691,7 @@
         break;
       }
       case 'openLauncher': openParallelComposer(m.kind); break;
-      case 'image': if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); break; } state.images.push(m.image); renderChips(); updateSendEnabled(); els.input.focus(); break;
+      case 'image': if (state.images.length >= 4) { toast('Up to 4 images per message', 'error'); break; } addImageUrl(m.image.name, `data:${m.image.mime};base64,${m.image.data}`); break;
       case 'replay': applyReplay(m); break;
     }
   }

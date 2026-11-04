@@ -191,7 +191,11 @@ export function createAnalyzeWorkspaceTool(maxShards: () => number): Tool {
         return { content: 'path must stay inside the workspace.', isError: true };
       }
       const parts = Math.max(1, Math.min(8, Number(args.shards) || maxShards()));
-      const files = await vscode.workspace.findFiles(sub ? `${sub}/**/*` : '**/*', EXCLUDE, MAX_FILES);
+      // An isolated worktree is not a workspace folder, so a plain glob would search the main checkout instead.
+      const inWorkspace = vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === root);
+      const files = inWorkspace
+        ? await vscode.workspace.findFiles(sub ? `${sub}/**/*` : '**/*', EXCLUDE, MAX_FILES)
+        : await vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(base), '**/*'), new vscode.RelativePattern(vscode.Uri.file(base), EXCLUDE), MAX_FILES);
       const rel = files.map((f) => path.relative(base, f.fsPath)).filter((p) => p && !p.startsWith('..'));
       const analysis = summarizeWorkspace(sub || root, rel, parts, files.length >= MAX_FILES);
       // Manifests at the root and one level down (monorepo packages), read concurrently.

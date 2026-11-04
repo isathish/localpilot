@@ -68,6 +68,31 @@ export async function defaultBranch(cwd: string): Promise<string | undefined> {
   return undefined;
 }
 
+/** Pure: `paths` as an array, a JSON-array string or a comma/newline-separated string; drops empty and option-like entries. */
+export function parsePaths(v: unknown): string[] {
+  let list: unknown[] = [];
+  if (Array.isArray(v)) {
+    list = v;
+  } else if (typeof v === 'string' && v.trim()) {
+    try {
+      const j: unknown = JSON.parse(v);
+      list = Array.isArray(j) ? j : v.split(/[,\n]/);
+    } catch {
+      list = v.split(/[,\n]/);
+    }
+  }
+  return list.map((x) => String(x).trim()).filter((x) => x && !x.startsWith('-'));
+}
+
+/** Pure: the approval text for committing everything — new files first, capped at 40 lines. */
+export function commitAllPreview(porcelain: string): string {
+  const lines = porcelain.split('\n').filter((l) => l.trim());
+  const isNew = (l: string) => l.startsWith('??') || l[0] === 'A' || l[1] === 'A';
+  const sorted = [...lines.filter(isNew), ...lines.filter((l) => !isNew(l))];
+  const shown = sorted.slice(0, 40);
+  return ['Stages and commits ALL changes below (including untracked files)', ...shown, ...(sorted.length > shown.length ? [`+${sorted.length - shown.length} more`] : [])].join('\n');
+}
+
 export const gitStatusTool: Tool = {
   parallelSafe: true,
   definition: {
@@ -93,7 +118,7 @@ export const gitStatusTool: Tool = {
     const p = typeof args.path === 'string' && args.path.trim() ? ['--', args.path.trim()] : [];
     switch (String(args.action ?? 'status')) {
       case 'diff': {
-        const r = await runCmd('git', ['diff', '--no-color', '--stat', '--patch', ...(args.staged ? ['--cached'] : []), ...p], cwd, ctx.signal);
+        const r = await runCmd('git', ['--no-optional-locks', 'diff', '--no-color', '--stat', '--patch', ...(args.staged ? ['--cached'] : []), ...p], cwd, ctx.signal);
         return r.code === 0 ? { content: r.out.trim() ? clip(r.out) : `No ${args.staged ? 'staged' : 'unstaged'} changes.` } : fail(r, 'git diff');
       }
       case 'log': {
@@ -106,7 +131,7 @@ export const gitStatusTool: Tool = {
         return r.code === 0 ? { content: clip(r.out.trim(), 6000) } : fail(r, 'git branch');
       }
       default: {
-        const r = await runCmd('git', ['status', '--porcelain=v1', '--branch', '--untracked-files=normal'], cwd, ctx.signal);
+        const r = await runCmd('git', ['--no-optional-locks', 'status', '--porcelain=v1', '--branch', '--untracked-files=normal'], cwd, ctx.signal);
         if (r.code !== 0) {
           return fail(r, 'git status');
         }
@@ -144,15 +169,15 @@ export const gitCommitTool: Tool = {
     if (branch && !validBranch(branch)) {
       return { content: `"${branch}" is not a valid branch name (letters, digits, . _ - /; no spaces or "..").`, isError: true };
     }
-    const paths = Array.isArray(args.paths) ? args.paths.map(String).filter((x) => x.trim() && !x.startsWith('-')) : [];
-    const status = await runCmd('git', ['status', '--porcelain=v1'], cwd, ctx.signal);
+    const paths = parsePaths(args.paths);
+    const status = await runCmd('git', ['--no-optional-locks', 'status', '--porcelain=v1'], cwd, ctx.signal);
     if (status.code !== 0) {
       return fail(status, 'git status');
     }
     if (!status.out.trim()) {
       return { content: 'Nothing to commit: the working tree is clean.' };
     }
-    if (!(await ctx.requestApproval(`Commit${branch ? ` on new branch ${branch}` : ''}: ${message.split('\n')[0].slice(0, 70)}`, `${paths.length ? paths.join('\n') : status.out.trim().split('\n').slice(0, 30).join('\n')}`, 'write'))) {
+    if (!(await ctx.requestApproval(`Commit${branch ? ` on new branch ${branch}` : ''}: ${message.split('\n')[0].slice(0, 70)}`, paths.length ? paths.join('\n') : commitAllPreview(status.out), 'write'))) {
       return { content: 'The user declined the commit. Nothing was committed.', isError: true };
     }
     if (branch) {
@@ -165,7 +190,8 @@ export const gitCommitTool: Tool = {
     if (add.code !== 0) {
       return fail(add, 'git add');
     }
-    const c = await runCmd('git', ['commit', '--file=-'], cwd, ctx.signal, 120_000, `${message}\n`);
+    // --only with paths: files the user staged earlier stay out of this commit.
+    const c = await runCmd('git', paths.length ? ['commit', '--only', '--file=-', '--', ...paths] : ['commit', '--file=-'], cwd, ctx.signal, 120_000, `${message}\n`);
     if (c.code !== 0) {
       return fail(c, 'git commit');
     }
@@ -199,6 +225,10 @@ export const gitPushTool: Tool = {
     if (branch === def && args.allow_default_branch !== true) {
       return { content: `Refused: ${branch} is the default branch. Commit on a feature branch (git_commit with branch="fix/…") and open a pull request, or pass allow_default_branch=true only if the user explicitly asked to push to ${branch}.`, isError: true };
     }
+    const unpushed = await runCmd('git', ['log', '--format=%ae', 'HEAD', '--not', '--remotes'], cwd, ctx.signal);
+    if (unpushed.out.split('\n').some((l) => l.trim() === 'localpilot@localhost')) {
+      return { content: "Refused: this branch contains LocalPilot's internal worktree snapshot commit (your uncommitted work at the time the isolated copy was made). Apply the changes to the workspace and commit and push from there.", isError: true };
+    }
     if (!(await ctx.requestApproval(`Push ${branch} to ${remote}`, `git push --set-upstream ${remote} ${branch}`, 'terminal'))) {
       return { content: 'The user declined the push.', isError: true };
     }
@@ -229,13 +259,19 @@ export const pullRequestTool: Tool = {
         base: { type: 'string', description: 'create: target branch (default: the repository default)' },
         draft: { type: 'boolean' },
         number: { type: 'integer', description: 'PR number for view/comment (default: the current branch\'s PR)' },
+        branch: { type: 'string', description: 'view/comment: the PR of this head branch (when number is not given)' },
       },
       required: ['action'],
     },
   },
   async execute(args, ctx) {
     const action = String(args.action ?? 'view');
-    const num = Number(args.number) > 0 ? [String(Math.floor(Number(args.number)))] : [];
+    const prBranch = typeof args.branch === 'string' && validBranch(args.branch.trim()) ? args.branch.trim() : '';
+    const num = Number(args.number) > 0 ? [String(Math.floor(Number(args.number)))] : prBranch ? [prBranch] : [];
+    const detachedMsg = { content: 'This workspace is on a detached HEAD (isolated copy), so the current branch and its pull request are unknown. Pass number=<PR number> or branch="<name>".', isError: true };
+    if ((action === 'view' || action === 'comment') && !num.length && !(await runCmd('git', ['branch', '--show-current'], rootOf(ctx))).out.trim()) {
+      return detachedMsg;
+    }
     if (action === 'list') {
       const r = await gh(['pr', 'list', '--limit', '20', '--json', 'number,title,headRefName,author,isDraft,reviewDecision', '--template', '{{range .}}#{{.number}} {{.title}} ({{.headRefName}}, {{.author.login}}{{if .isDraft}}, draft{{end}}{{if .reviewDecision}}, {{.reviewDecision}}{{end}})\n{{end}}'], ctx);
       return r.code === 0 ? { content: r.out.trim() || 'No open pull requests.' } : ghFailed(r, 'gh pr list');
@@ -243,6 +279,9 @@ export const pullRequestTool: Tool = {
     if (action === 'view') {
       const r = await gh(['pr', 'view', ...num, '--json', 'number,title,state,isDraft,url,headRefName,baseRefName,reviewDecision,mergeable,statusCheckRollup,comments,reviews'], ctx);
       if (r.code !== 0) {
+        if (/not on any branch/i.test(r.err)) {
+          return detachedMsg;
+        }
         return /no pull requests found/i.test(r.err) ? { content: 'No pull request for this branch yet. Push it (git_push) and use action "create".' } : ghFailed(r, 'gh pr view');
       }
       return { content: formatPr(JSON.parse(r.out)) };
@@ -255,11 +294,11 @@ export const pullRequestTool: Tool = {
       if (!body) {
         return { content: 'body is required.', isError: true };
       }
-      if (!(await ctx.requestApproval(`Comment on pull request ${num[0] ? `#${num[0]}` : 'for this branch'}`, body.slice(0, 600), 'terminal'))) {
+      if (!(await ctx.requestApproval(`Comment on pull request ${num[0] ? (prBranch && num[0] === prBranch ? `of ${prBranch}` : `#${num[0]}`) : 'for this branch'}`, body.slice(0, 600), 'terminal'))) {
         return { content: 'The user declined the comment.', isError: true };
       }
       const r = await gh(['pr', 'comment', ...num, '--body-file', '-'], ctx, body);
-      return r.code === 0 ? { content: `Commented: ${r.out.trim()}` } : ghFailed(r, 'gh pr comment');
+      return r.code === 0 ? { content: `Commented: ${r.out.trim()}` } : /not on any branch/i.test(r.err) ? detachedMsg : ghFailed(r, 'gh pr comment');
     }
     if (action === 'create') {
       const title = String(args.title ?? '').trim();
@@ -338,14 +377,17 @@ export const ciStatusTool: Tool = {
     const action = String(args.action ?? 'runs');
     const branch = typeof args.branch === 'string' && validBranch(args.branch.trim()) ? args.branch.trim() : (await runCmd('git', ['branch', '--show-current'], cwd)).out.trim();
     let runId = Number(args.run_id) > 0 ? String(Math.floor(Number(args.run_id))) : '';
+    if (!branch && (action === 'runs' || !runId)) {
+      return { content: 'This workspace is on a detached HEAD (isolated copy), so the current branch is unknown. Pass branch="<name>" or run_id.', isError: true };
+    }
     if (action === 'runs' || !runId) {
-      const r = await gh(['run', 'list', ...(branch ? ['--branch', branch] : []), '--limit', '10', '--json', 'databaseId,workflowName,status,conclusion,headSha,displayTitle,createdAt,event'], ctx);
+      const r = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,workflowName,status,conclusion,headSha,headBranch,displayTitle,createdAt,event'], ctx);
       if (r.code !== 0) {
         return ghFailed(r, 'gh run list');
       }
-      const runs = JSON.parse(r.out) as { databaseId: number; workflowName: string; status: string; conclusion: string; headSha: string; displayTitle: string; createdAt: string; event: string }[];
+      const runs = JSON.parse(r.out) as { databaseId: number; workflowName: string; status: string; conclusion: string; headSha: string; headBranch?: string; displayTitle: string; createdAt: string; event: string }[];
       if (action === 'runs') {
-        return { content: runs.length ? `Workflow runs${branch ? ` on ${branch}` : ''}:\n${runs.map((x) => `${x.databaseId}  ${x.workflowName}: ${x.status === 'completed' ? x.conclusion : x.status}  ${x.headSha.slice(0, 7)} ${x.displayTitle.slice(0, 60)} (${x.event}, ${x.createdAt.slice(0, 16).replace('T', ' ')})`).join('\n')}` : `No workflow runs${branch ? ` for ${branch}` : ''}.` };
+        return { content: runs.length ? `Workflow runs${branch ? ` on ${branch}` : ''}:\n${runs.map((x) => `${x.databaseId}  ${x.workflowName}: ${x.status === 'completed' ? x.conclusion : x.status}  ${x.headBranch ? `${x.headBranch} ` : ''}${x.headSha.slice(0, 7)} ${x.displayTitle.slice(0, 60)} (${x.event}, ${x.createdAt.slice(0, 16).replace('T', ' ')})`).join('\n')}` : `No workflow runs${branch ? ` for ${branch}` : ''}.` };
       }
       const failed = runs.find((x) => x.conclusion === 'failure');
       if (!failed) {

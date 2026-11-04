@@ -25,6 +25,10 @@ export interface ParsedFile {
   imports: string[];
   /** Top-level definitions: name and 1-based line. */
   symbols: { name: string; kind: string; line: number }[];
+  /** Java/Kotlin package or C# namespace declared in the file. */
+  pkg?: string;
+  /** Python `from X import a`: `X.a`, an edge only when it names a module file (never counted as external). */
+  optionalImports?: string[];
 }
 
 export function langOf(file: string): Lang | undefined {
@@ -34,6 +38,8 @@ export function langOf(file: string): Lang | undefined {
 /** Imports and top-level symbols of one file. Regex-based: robust to syntax errors and fast enough for whole repos. */
 export function parseSource(text: string, lang: Lang): ParsedFile {
   const imports = new Set<string>();
+  const optional = new Set<string>();
+  let pkg: string | undefined;
   const symbols: ParsedFile['symbols'] = [];
   const add = (re: RegExp, group = 1) => {
     for (const m of text.matchAll(re)) {
@@ -58,13 +64,24 @@ export function parseSource(text: string, lang: Lang): ParsedFile {
       add(/\bimport\(\s*['"]([^'"\n]+)['"]\s*\)/g);
       sym(/^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\*?|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)/, (m) => m[1].replace('*', ''));
       break;
-    case 'py':
-      for (const m of text.matchAll(/^\s*from\s+([.\w]+)\s+import\s+([^\n#]+)/gm)) {
+    case 'py': {
+      const from = (mod: string, list: string) => {
+        const names = list.replace(/#[^\n]*/g, '').replace(/[()\\]/g, '').split(',').map((s) => s.trim().split(/\s+as\s+/)[0]).filter((n) => /^\w+$/.test(n));
         // `from . import a, b` names modules, not symbols: record each so the package's submodules resolve.
-        if (/^\.+$/.test(m[1])) {
-          m[2].replace(/[()]/g, '').split(',').map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean).forEach((n) => imports.add(`${m[1]}${n}`));
+        if (/^\.+$/.test(mod)) {
+          names.forEach((n) => imports.add(`${mod}${n}`));
         } else {
-          imports.add(m[1]);
+          // `from pkg import a` may name the submodule pkg/a.py or just a symbol of pkg.
+          imports.add(mod);
+          names.forEach((n) => optional.add(`${mod}.${n}`));
+        }
+      };
+      for (const m of text.matchAll(/^\s*from\s+([.\w]+)\s+import\s*\(([^)]*)\)/gm)) {
+        from(m[1], m[2]);
+      }
+      for (const m of text.matchAll(/^\s*from\s+([.\w]+)\s+import\s+([^\n#]+)/gm)) {
+        if (!m[2].trimStart().startsWith('(')) {
+          from(m[1], m[2]);
         }
       }
       for (const m of text.matchAll(/^\s*import\s+([\w., ]+)/gm)) {
@@ -72,6 +89,7 @@ export function parseSource(text: string, lang: Lang): ParsedFile {
       }
       sym(/^(def|class|async def)\s+([A-Za-z_]\w*)/, (m) => (m[1] === 'class' ? 'class' : 'function'));
       break;
+    }
     case 'go':
       add(/^\s*import\s+(?:\w+\s+)?"([^"]+)"/gm);
       for (const block of text.matchAll(/^\s*import\s*\(([\s\S]*?)\)/gm)) {
@@ -88,15 +106,17 @@ export function parseSource(text: string, lang: Lang): ParsedFile {
       sym(/^\s*(?:pub(?:\([^)]*\))?\s+)?(fn|struct|enum|trait|type|const|static)\s+([A-Za-z_]\w*)/, (m) => m[1]);
       break;
     case 'java':
-      add(/^\s*import\s+(?:static\s+)?([\w.]+?)(?:\.\*)?\s*;?\s*$/gm);
+      add(/^\s*import\s+(?:static\s+)?([\w.]+?)(?:\.\*)?(?:\s+as\s+\w+)?\s*;?\s*$/gm);
+      pkg = /^\s*package\s+([\w.]+)/m.exec(text)?.[1];
       sym(/^\s*(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|final\s+|open\s+|data\s+|sealed\s+)*(class|interface|enum|object|record|fun)\s+([A-Za-z_]\w*)/, (m) => m[1]);
       break;
     case 'cs':
       add(/^\s*using\s+(?:static\s+)?([\w.]+)\s*;/gm);
+      pkg = /^\s*namespace\s+([\w.]+)/m.exec(text)?.[1];
       sym(/^\s*(?:public\s+|internal\s+|private\s+|protected\s+|static\s+|sealed\s+|abstract\s+|partial\s+)*(class|interface|struct|enum|record)\s+([A-Za-z_]\w*)/, (m) => m[1]);
       break;
   }
-  return { imports: [...imports], symbols };
+  return { imports: [...imports], symbols, ...(pkg ? { pkg } : {}), ...(optional.size ? { optionalImports: [...optional] } : {}) };
 }
 
 export interface RepoGraph {
@@ -153,7 +173,14 @@ export function resolveImport(spec: string, from: string, lang: Lang, has: (p: s
     case 'py': {
       const dots = /^\.+/.exec(spec)?.[0].length ?? 0;
       const rest = spec.slice(dots).replace(/\./g, '/');
-      const bases = dots ? [path.posix.join(dir, ...Array(dots - 1).fill('..'), rest)] : [rest, `src/${rest}`];
+      const bases = dots ? [path.posix.join(dir, ...Array(dots - 1).fill('..'), rest)] : [];
+      if (!dots) {
+        // Absolute imports: the importing file's folders (nearest first, each also with src/), then the root.
+        for (let d = dir; d !== '.' && d !== '/' && d; d = path.posix.dirname(d)) {
+          bases.push(`${d}/${rest}`, `${d}/src/${rest}`);
+        }
+        bases.push(rest, `src/${rest}`);
+      }
       for (const b of bases) {
         const hit = tryAll(b, ['.py', '/__init__.py']);
         if (hit) {
@@ -166,7 +193,7 @@ export function resolveImport(spec: string, from: string, lang: Lang, has: (p: s
       if (!ctx.goModule || !(spec === ctx.goModule || spec.startsWith(`${ctx.goModule}/`))) {
         return undefined;
       }
-      // A Go import names a package (folder): the edge goes to its first file, which stands for the package.
+      // A Go import names a package (folder): the caller links every file in it.
       return `${spec.slice(ctx.goModule.length + 1) || '.'}/`;
     }
     case 'rs': {
@@ -187,8 +214,17 @@ export function resolveImport(spec: string, from: string, lang: Lang, has: (p: s
       return undefined;
     }
     case 'java':
-    case 'cs':
-      return ctx.javaIndex?.get(spec) ?? ctx.javaIndex?.get(spec.split('.').slice(0, -1).join('.'));
+    case 'cs': {
+      // The longest prefix naming a type: `a.b.Outer.Inner`, static `a.b.C.member`.
+      const segs = spec.split('.');
+      for (let n = segs.length; n >= Math.min(2, segs.length); n--) {
+        const hit = ctx.javaIndex?.get(segs.slice(0, n).join('.'));
+        if (hit) {
+          return hit;
+        }
+      }
+      return undefined;
+    }
   }
 }
 
@@ -290,14 +326,19 @@ export function assembleGraph(root: string, parsed: Map<string, ParsedFile>, ctx
   const has = (p: string) => parsed.has(p);
   // Java/Kotlin/C#: a fully qualified name maps to the file declaring that type in that package/namespace.
   const javaIndex = new Map<string, string>();
-  // Go: a package folder maps to its first file.
-  const goPkg = new Map<string, string>();
+  const pkgIndex = new Map<string, string[]>();
+  // Go: a package folder maps to all its (non-test) files.
+  const goPkgFiles = new Map<string, string[]>();
   for (const f of files) {
     const lang = langOf(f);
     if (lang === 'go' && !/_test\.go$/.test(f)) {
       const d = `${path.posix.dirname(f)}/`;
-      if (!goPkg.has(d)) {
-        goPkg.set(d, f);
+      goPkgFiles.set(d, [...(goPkgFiles.get(d) ?? []), f]);
+    }
+    if (lang === 'java' || lang === 'cs') {
+      const pkg = packageName(f, parsed.get(f)!);
+      if (pkg) {
+        pkgIndex.set(pkg, [...(pkgIndex.get(pkg) ?? []), f]);
       }
     }
   }
@@ -319,16 +360,38 @@ export function assembleGraph(root: string, parsed: Map<string, ParsedFile>, ctx
   for (const f of files) {
     const lang = langOf(f)!;
     const out = new Set<string>();
-    for (const spec of parsed.get(f)!.imports) {
-      let target = resolveImport(spec, f, lang, has, { ...ctx, javaIndex });
-      if (target?.endsWith('/')) {
-        target = goPkg.get(target);
-      }
-      if (target && target !== f) {
+    const link = (target: string) => {
+      if (target !== f) {
         out.add(target);
         const r = rdeps.get(target) ?? new Set<string>();
         r.add(f);
         rdeps.set(target, r);
+      }
+    };
+    const p = parsed.get(f)!;
+    if (lang === 'go' && /_test\.go$/.test(f)) {
+      // A package's own tests depend on every file of it.
+      (goPkgFiles.get(`${path.posix.dirname(f)}/`) ?? []).forEach(link);
+    }
+    for (const spec of p.optionalImports ?? []) {
+      const target = resolveImport(spec, f, lang, has, ctx);
+      if (target) {
+        link(target);
+      }
+    }
+    for (const spec of p.imports) {
+      const target = resolveImport(spec, f, lang, has, { ...ctx, javaIndex });
+      const many = target?.endsWith('/')
+        ? goPkgFiles.get(target)
+        : !target && (lang === 'java' || lang === 'cs')
+          ? pkgIndex.get(spec) ?? pkgIndex.get(spec.replace(/\.\*$/, ''))
+          : undefined;
+      if (many?.length) {
+        many.forEach(link);
+      } else if (target && !target.endsWith('/')) {
+        link(target);
+      } else if (!target && (lang === 'java' || lang === 'cs') && spec.split('.').some((_, i, segs) => pkgIndex.has(segs.slice(0, i + 1).join('.')))) {
+        // Inside a workspace package but unresolved (a type the index does not know): not an external dependency.
       } else if (!target && !isLocalSpec(spec, lang)) {
         const pkg = packageOf(spec, lang);
         if (pkg) {
@@ -345,9 +408,12 @@ export function assembleGraph(root: string, parsed: Map<string, ParsedFile>, ctx
 
 const packageDecl = new WeakMap<ParsedFile, string | undefined>();
 function packageName(file: string, p: ParsedFile): string | undefined {
-  // The package is not kept by parseSource; derive it from the path as Java/Kotlin layouts do (src/main/java/a/b/C.java).
+  if (p.pkg) {
+    return p.pkg;
+  }
+  // No declaration: derive it from the path as Maven/Gradle layouts do (src/main/java/a/b/C.java).
   if (!packageDecl.has(p)) {
-    const m = /(?:^|\/)(?:java|kotlin|src)\/(.+)\/[^/]+$/.exec(file);
+    const m = /(?:^|\/)src\/[^/]+\/(?:java|kotlin)\/(.+)\/[^/]+$/.exec(file) ?? /(?:^|\/)(?:java|kotlin|src)\/(.+)\/[^/]+$/.exec(file);
     packageDecl.set(p, m ? m[1].replace(/\//g, '.') : undefined);
   }
   return packageDecl.get(p);

@@ -1,6 +1,7 @@
 import type { RoutingConfig } from '../config';
 import type { ModelRole } from '../providers/catalog';
 import { SubagentDefinition } from '../types';
+import { expandAgentTools } from './permissions';
 
 /**
  * Subagents shipped with LocalPilot. A workspace or user agent file with the same name replaces the built-in one.
@@ -196,12 +197,27 @@ export function resolveAgentName(requested: string, known: Iterable<string>): st
   return partial.length === 1 ? partial[0] : undefined;
 }
 
+/**
+ * A Claude Code agent's `tools:` list in LocalPilot tool names (`Read` → read_file, list_dir, … plus the read-only
+ * context tools; `Bash` → run_command; `Edit` / `Write` → edit_file, write_file, …). Our own names pass through.
+ */
+export function localToolNames(names: string[]): string[] {
+  const out = new Set(expandAgentTools(names));
+  if (names.some((n) => n.trim().replace(/\(.*\)$/s, '').trim() === 'Read')) {
+    ['gather_context', 'get_editor_state', 'analyze_workspace'].forEach((t) => out.add(t));
+  }
+  return [...out];
+}
+
 /** Picks the routing role and model for a child: explicit model → agent file model → routing.coding / routing.fast → the parent's model. */
 export function routeSubagent(def: SubagentDefinition, explicit: string | undefined, parentModel: string | undefined, routing: RoutingConfig): { role: ModelRole; modelRef?: string } {
   const readOnly = !!def.tools && !def.tools.some((t) => MUTATING_TOOLS.has(t));
   const role: ModelRole = readOnly ? 'fast' : 'agent';
-  if (explicit || def.model) {
-    return { role, modelRef: explicit ?? def.model };
+  // Claude Code model aliases: `inherit` pins the parent's model, family names fall through to normal routing.
+  const alias = def.model?.trim().toLowerCase();
+  const fileModel = alias && /^(inherit|sonnet|opus|haiku)$/.test(alias) ? (alias === 'inherit' ? parentModel : undefined) : def.model;
+  if (explicit || fileModel) {
+    return { role, modelRef: explicit ?? fileModel };
   }
   if (!routing.enabled) {
     return { role, modelRef: parentModel };

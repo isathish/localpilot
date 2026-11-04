@@ -41,6 +41,7 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.ven
 
 /** Exact versions from one lockfile; [] for files it does not understand. */
 export function parseLockfile(file: string, text: string): Dependency[] {
+  text = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const base = path.basename(file);
   const out: Dependency[] = [];
   const add = (ecosystem: Dependency['ecosystem'], name: string, version: string) => {
@@ -105,9 +106,11 @@ export function parseLockfile(file: string, text: string): Dependency[] {
         add('Go', m[1], m[2].replace(/\+incompatible$/, ''));
       }
     } else if (base === 'Gemfile.lock') {
-      const specs = /^ {2}specs:\n([\s\S]*?)(?:\n\S|\n\n|(?![\s\S]))/m.exec(text)?.[1] ?? '';
-      for (const m of specs.matchAll(/^ {4}([\w.-]+) \(([\w.]+)(?:-[\w-]+)?\)$/gm)) {
-        add('RubyGems', m[1], m[2]);
+      // Every GEM section (Bundler writes one per gem source); GIT, PATH and PLUGIN SOURCE gems are not on RubyGems.
+      for (const sec of text.matchAll(/^GEM\n(?: {2}\S.*\n)*? {2}specs:\n((?: {4}.*(?:\n|$))*)/gm)) {
+        for (const m of sec[1].matchAll(/^ {4}([\w.-]+) \(([\w.]+)(?:-[\w-]+)?\)$/gm)) {
+          add('RubyGems', m[1], m[2]);
+        }
       }
     }
   } catch {
@@ -131,13 +134,54 @@ interface OsvVuln {
   details?: string;
   aliases?: string[];
   severity?: { type: string; score: string }[];
-  database_specific?: { severity?: string };
-  affected?: { package?: { name?: string; ecosystem?: string }; ranges?: { events?: { introduced?: string; fixed?: string }[] }[]; database_specific?: { severity?: string }; ecosystem_specific?: { severity?: string } }[];
+  database_specific?: { severity?: string; 'malicious-packages-origins'?: unknown };
+  affected?: { package?: { name?: string; ecosystem?: string }; ranges?: { events?: { introduced?: string; fixed?: string }[] }[]; database_specific?: { severity?: string; informational?: string }; ecosystem_specific?: { severity?: string } }[];
+}
+
+const CVSS3_WEIGHTS: Record<string, Record<string, number>> = {
+  AV: { N: 0.85, A: 0.62, L: 0.55, P: 0.2 },
+  AC: { L: 0.77, H: 0.44 },
+  UI: { N: 0.85, R: 0.62 },
+  C: { H: 0.56, L: 0.22, N: 0 },
+  I: { H: 0.56, L: 0.22, N: 0 },
+  A: { H: 0.56, L: 0.22, N: 0 },
+};
+
+/** Pure: CVSS v3.x base score from a vector (`CVSS:3.1/AV:N/AC:L/…`), undefined when it is not one. */
+export function cvss3BaseScore(vector: string): number | undefined {
+  if (!/^CVSS:3\.\d\//.test(vector)) {
+    return undefined;
+  }
+  const m = Object.fromEntries(vector.split('/').slice(1).map((p) => p.split(':') as [string, string]));
+  const changed = m.S === 'C';
+  const pr = ({ N: 0.85, L: changed ? 0.68 : 0.62, H: changed ? 0.5 : 0.27 } as Record<string, number>)[m.PR];
+  const w = (k: string) => CVSS3_WEIGHTS[k][m[k]];
+  const [av, ac, ui, c, i, a] = ['AV', 'AC', 'UI', 'C', 'I', 'A'].map(w);
+  if ([av, ac, ui, c, i, a, pr].some((x) => x === undefined) || (m.S !== 'U' && !changed)) {
+    return undefined;
+  }
+  const iss = 1 - (1 - c) * (1 - i) * (1 - a);
+  const impact = changed ? 7.52 * (iss - 0.029) - 3.25 * Math.pow(iss - 0.02, 15) : 6.42 * iss;
+  if (impact <= 0) {
+    return 0;
+  }
+  const exploitability = 8.22 * av * ac * pr * ui;
+  // CVSS v3.1 Roundup: smallest one-decimal number >= the input, computed in integers to dodge float error.
+  const roundup = (x: number) => {
+    const n = Math.round(x * 100_000);
+    return n % 10_000 === 0 ? n / 100_000 : (Math.floor(n / 10_000) + 1) / 10;
+  };
+  return roundup(Math.min(changed ? 1.08 * (impact + exploitability) : impact + exploitability, 10));
 }
 
 /** Pure: an OSV record's severity on our four-step scale (GitHub's label, else the CVSS base score, else medium). */
 export function osvSeverity(v: OsvVuln): Severity {
-  const label = (v.database_specific?.severity ?? v.affected?.find((a) => a.database_specific?.severity || a.ecosystem_specific?.severity)?.database_specific?.severity ?? '').toUpperCase();
+  // OpenSSF malicious-packages records (MAL-…): the package itself is malware.
+  if (v.id.startsWith('MAL-') || v.database_specific?.['malicious-packages-origins']) {
+    return 'critical';
+  }
+  const labelled = v.affected?.find((a) => a.database_specific?.severity || a.ecosystem_specific?.severity);
+  const label = (v.database_specific?.severity ?? labelled?.database_specific?.severity ?? labelled?.ecosystem_specific?.severity ?? '').toUpperCase();
   if (label === 'CRITICAL') {
     return 'critical';
   }
@@ -150,9 +194,14 @@ export function osvSeverity(v: OsvVuln): Severity {
   if (label === 'LOW') {
     return 'low';
   }
-  const score = Number(/(?:^|\/)(\d+(?:\.\d+)?)$/.exec(v.severity?.find((s) => /CVSS/.test(s.type))?.score ?? '')?.[1]);
+  const raw = v.severity?.find((s) => /CVSS/.test(s.type))?.score ?? '';
+  const score = cvss3BaseScore(raw) ?? Number(/(?:^|\/)(\d+(?:\.\d+)?)$/.exec(raw)?.[1]);
   if (Number.isFinite(score) && score > 0) {
     return score >= 9 ? 'critical' : score >= 7 ? 'high' : score >= 4 ? 'medium' : 'low';
+  }
+  // RustSec informational advisories (unmaintained, unsound) are not exploitable vulnerabilities.
+  if (v.affected?.some((a) => a.database_specific?.informational)) {
+    return 'low';
   }
   return 'medium';
 }
@@ -217,7 +266,7 @@ export async function checkDependencies(deps: Dependency[], opts: { fetchImpl?: 
       }
       keys.forEach((k) => seen.add(k));
       const fixes = osvFixes(v, dep);
-      out.push({ kind: 'dependency', severity: osvSeverity(v), id: v.id, title: v.summary ?? v.details?.split('\n')[0]?.slice(0, 120) ?? v.id, file: dep.file, package: { ecosystem: dep.ecosystem, name: dep.name, version: dep.version }, fix: fixes.length ? `upgrade ${dep.name} to ${fixes.join(' or ')}` : 'no fixed version published yet', aliases: v.aliases?.filter((a) => a.startsWith('CVE-')) });
+      out.push({ kind: 'dependency', severity: osvSeverity(v), id: v.id, title: v.summary ?? v.details?.split('\n')[0]?.slice(0, 120) ?? v.id, file: dep.file, package: { ecosystem: dep.ecosystem, name: dep.name, version: dep.version }, fix: v.id.startsWith('MAL-') ? 'remove this package or pin a version not listed as malicious' : fixes.length ? `upgrade ${dep.name} to ${fixes.join(' or ')}` : 'no fixed version published yet', aliases: v.aliases?.filter((a) => a.startsWith('CVE-')) });
     }
   }
   return out;
@@ -344,12 +393,30 @@ export interface ScanResult {
   files: number;
   /** A part that could not run (e.g. OSV.dev unreachable), with the reason. */
   skipped: string[];
+  /** The kinds that ran. */
+  kinds?: { dependencies: boolean; secrets: boolean; code: boolean };
 }
 
 export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promise<ScanResult> {
   const kinds = { dependencies: opts.kinds?.dependencies ?? true, secrets: opts.kinds?.secrets ?? true, code: opts.kinds?.code ?? true };
-  const prefix = opts.path?.replace(/^\.?\/+|\/+$/g, '') ?? '';
-  const files = (await trackedFiles(root)).filter((f) => (!prefix || f === prefix || f.startsWith(`${prefix}/`)) && !f.split('/').some((s) => SKIP_DIRS.has(s)));
+  let rel = (opts.path ?? '').trim();
+  if (path.isAbsolute(rel)) {
+    rel = path.relative(root, rel);
+  }
+  rel = rel.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  if (rel === '.') {
+    rel = '';
+  }
+  if (rel === '..' || rel.startsWith('../')) {
+    throw new Error('path is outside the workspace');
+  }
+  if (rel && !fs.existsSync(path.join(root, rel))) {
+    throw new Error(`No such file or folder: ${rel}`);
+  }
+  const files = (await trackedFiles(root)).filter((f) => (!rel || f === rel || f.startsWith(`${rel}/`)) && !f.split('/').some((s) => SKIP_DIRS.has(s)));
+  if (rel && !files.length) {
+    throw new Error(`No files under "${rel}"`);
+  }
   const findings: Finding[] = [];
   const skipped: string[] = [];
   let deps: Dependency[] = [];
@@ -366,6 +433,7 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
       }
     }
   }
+  let read = 0;
   if (kinds.secrets || kinds.code) {
     opts.progress?.(`Reading ${files.length} files…`);
     for (const f of files) {
@@ -385,18 +453,20 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
       if (text.includes('\0')) {
         continue;
       }
+      read++;
       findings.push(...scanText(f, text, { secrets: kinds.secrets, code: kinds.code }));
     }
   }
   findings.sort((a, b) => SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity) || a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0));
-  return { root, findings, dependencies: deps.length, files: files.length, skipped };
+  return { root, findings, dependencies: deps.length, files: read, skipped, kinds };
 }
 
 // ------------------------------------------------------------------ reports (pure)
 
 export function formatFindings(r: ScanResult, max = 60): string {
   const by = (s: Severity) => r.findings.filter((f) => f.severity === s).length;
-  const head = `${r.findings.length ? `${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}` : 'No findings'} (${SEVERITY_ORDER.slice().reverse().map((s) => `${by(s)} ${s}`).join(', ')}) — ${r.dependencies} dependencies checked against OSV.dev, ${r.files} files scanned.${r.skipped.length ? `\nSkipped: ${r.skipped.join('; ')}` : ''}`;
+  const notRun = r.kinds ? (['dependencies', 'secrets', 'code'] as const).filter((k) => !r.kinds![k]) : [];
+  const head = `${r.findings.length ? `${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}` : 'No findings'} (${SEVERITY_ORDER.slice().reverse().map((s) => `${by(s)} ${s}`).join(', ')}) — ${r.dependencies} dependencies checked against OSV.dev, ${r.files} files scanned.${notRun.length ? ` ${notRun.join(' and ')} not checked.` : ''}${r.skipped.length ? `\nSkipped: ${r.skipped.join('; ')}` : ''}`;
   const rows = r.findings.slice(0, max).map((f) => {
     const where = `${f.file}${f.line ? `:${f.line}` : ''}`;
     return f.kind === 'dependency'

@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
+import { createHash } from 'crypto';
 import { getConfig, McpServerConfig, onConfigChange } from '../config';
 import { ToolRegistry } from '../tools/registry';
 import { Tool, ToolDefinition } from '../types';
 import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
+import { forgetMcpToolOrigin, mcpToolOrigin, registerMcpToolOrigin } from '../agent/permissions';
 import { resolveApiKey } from '../providers/cloud';
 import { expandHeaders, HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
 
@@ -243,7 +245,16 @@ export class McpManager implements vscode.Disposable {
       await client.start();
       this.clients.set(name, client);
       this.errors.delete(name);
-      this.registrations.set(name, this.tools.registerAll(client.tools.map((t) => this.toTool(client, t))));
+      const tools = client.tools.map((t) => this.toTool(client, t));
+      const forget = new vscode.Disposable(() =>
+        tools.forEach((t, i) => {
+          const o = mcpToolOrigin(t.definition.name);
+          if (o && o.server === name && o.tool === client.tools[i].name) {
+            forgetMcpToolOrigin(t.definition.name);
+          }
+        })
+      );
+      this.registrations.set(name, vscode.Disposable.from(this.tools.registerAll(tools), forget));
       client.onDown = (err) => this.serverDown(name, cfg, client, err);
       return true;
     } catch (e) {
@@ -297,10 +308,20 @@ export class McpManager implements vscode.Disposable {
   }
 
   private toTool(client: McpClient, t: McpToolInfo): Tool {
-    const safe = `${client.name}_${t.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
+    const full = `${client.name}_${t.name}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    let registeredName = `mcp_${full.slice(0, 60)}`;
+    const owner = mcpToolOrigin(registeredName);
+    const taken = owner ? owner.server !== client.name || owner.tool !== t.name : !!this.tools.get(registeredName);
+    if (full.length > 60 || taken) {
+      // Cut or clashing names get a hash of the real server/tool so two tools never share (and overwrite) one name.
+      const hash = createHash('sha1').update(`${client.name}/${t.name}`).digest('hex').slice(0, 8);
+      registeredName = `mcp_${full.slice(0, 51)}_${hash}`;
+      this.log.info(`MCP tool ${client.name}/${t.name} registered as ${registeredName}`);
+    }
+    registerMcpToolOrigin(registeredName, client.name, t.name);
     return {
       definition: {
-        name: `mcp_${safe}`,
+        name: registeredName,
         description: `[MCP ${client.name}] ${t.description ?? t.name}`,
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },

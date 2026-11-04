@@ -45,6 +45,9 @@ export class SessionStore implements vscode.Disposable {
   private changeTimer?: NodeJS.Timeout;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
+  private readonly _onDidDelete = new vscode.EventEmitter<string>();
+  /** Fires with the id of every deleted session (explicit delete, clear history, retention pruning). */
+  readonly onDidDelete = this._onDidDelete.event;
   /** How many full transcripts to keep in memory; read on every eviction so the setting applies live. */
   maxInMemory: () => number = () => 16;
   /** Sessions that must stay in memory (running, active). */
@@ -54,6 +57,9 @@ export class SessionStore implements vscode.Disposable {
     const base = ctx.storageUri ?? ctx.globalStorageUri;
     this.dir = vscode.Uri.joinPath(base, 'sessions');
   }
+
+  /** True once `load()` read the sessions folder; worktree pruning must not run against a store that failed to load. */
+  loadedOk = false;
 
   async load(): Promise<void> {
     // Only the newest transcripts are kept while reading, so start-up never holds the whole history at once.
@@ -94,6 +100,7 @@ export class SessionStore implements vscode.Disposable {
       for (const id of empty) {
         await this.delete(id, false);
       }
+      this.loadedOk = true;
     } catch (e) {
       this.log.error(`Failed to load sessions: ${String(e)}`);
     }
@@ -183,7 +190,7 @@ export class SessionStore implements vscode.Disposable {
     }
     const parts: { role: 'user' | 'assistant'; text: string; lower: string }[] = [];
     for (const m of this.peek(id)?.messages ?? []) {
-      if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages) {
+      if ((m.role !== 'user' && m.role !== 'assistant') || m.meta?.hidden || m.meta?.summary || m.meta?.toolImages || m.meta?.toolResults) {
         continue;
       }
       const text = (m.role === 'user' ? userText(m.content) : m.content).slice(0, 20_000);
@@ -291,6 +298,7 @@ export class SessionStore implements vscode.Disposable {
     } catch {
       /* already gone */
     }
+    this._onDidDelete.fire(id);
     if (notify) {
       this._onDidChange.fire();
     }
@@ -358,7 +366,7 @@ export class SessionStore implements vscode.Disposable {
     s.messageCount = s.messages.length;
     if (s.title === 'New chat') {
       // The first thing the user said — their own words, not the attachment or context blocks the UI prepended.
-      const firstUser = s.messages.find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages);
+      const firstUser = s.messages.find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages && !m.meta?.toolResults);
       if (firstUser) {
         s.title = userText(firstUser.content).replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
       }
@@ -463,5 +471,6 @@ export class SessionStore implements vscode.Disposable {
     this.saveTimers.clear();
     clearTimeout(this.changeTimer);
     this._onDidChange.dispose();
+    this._onDidDelete.dispose();
   }
 }

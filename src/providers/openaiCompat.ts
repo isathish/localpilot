@@ -10,6 +10,7 @@ import {
 import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
+import { imageMime } from './imageMime';
 import { ThinkTagSplitter } from './thinkTags';
 
 /** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
@@ -38,15 +39,26 @@ interface OpenAIModel {
 interface OpenAIChunk {
   choices?: {
     delta?: {
-      content?: string | null;
+      /** Mistral reasoning models stream a list of parts (thinking / text) instead of a string. */
+      content?: string | Array<{ type?: string; text?: string; thinking?: Array<{ text?: string }> | string }> | null;
       reasoning_content?: string | null;
       reasoning?: string | null;
-      tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[];
+      tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: Record<string, unknown> }[];
     };
     finish_reason?: string | null;
   }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number };
-  error?: { message?: string } | string;
+  error?: { message?: string; code?: string | number; type?: string; status?: number } | string;
+}
+
+/** An error sent inside the stream: an HttpError when it carries a status, so it is retried like the same error sent as a response. */
+function streamError(error: NonNullable<OpenAIChunk['error']>, url: string): Error {
+  if (typeof error === 'string') {
+    return new Error(error);
+  }
+  const code = Number(error.status ?? error.code);
+  const status = Number.isInteger(code) && code >= 400 && code < 600 ? code : error.type === 'server_error' ? 500 : error.type === 'rate_limit_exceeded' || error.code === 'rate_limit_exceeded' ? 429 : undefined;
+  return status ? new HttpError(status, JSON.stringify(error), url) : new Error(error.message ?? 'provider error');
 }
 
 /**
@@ -167,7 +179,7 @@ export class OpenAICompatProvider implements LLMProvider {
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
     const body: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages.map(toOpenAIMessage),
+      messages: opts.messages.map((m) => toOpenAIMessage(m, isGeminiUrl(this.baseUrl))),
       stream: true,
       stream_options: { include_usage: true },
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -187,16 +199,22 @@ export class OpenAICompatProvider implements LLMProvider {
     }
     if (typeof opts.think === 'string') {
       body.reasoning_effort = opts.think;
+    } else if (opts.think === false && !this.remote) {
+      // Qwen3-style chat templates (vLLM, SGLang, llama.cpp --jinja) read this to skip reasoning.
+      body.chat_template_kwargs = { enable_thinking: false };
     }
 
-    // Accumulate streamed tool-call fragments by index.
-    const pending = new Map<number, { id: string; name: string; args: string }>();
+    // Accumulate streamed tool-call fragments by index. Some servers (Gemini) send complete calls without an index, and
+    // some gateways send index 0 for every call: those get keys above any real index, in arrival order.
+    const pending = new Map<number, { id: string; name: string; args: string; extra?: Record<string, unknown> }>();
+    let lastKey: number | undefined;
+    let nextFree = 1000;
     let finish: string | undefined;
     const split = new ThinkTagSplitter();
 
     for await (const chunk of this.stream(opts.model, body, opts.signal)) {
       if (chunk.error) {
-        throw new Error(typeof chunk.error === 'string' ? chunk.error : chunk.error.message ?? 'provider error');
+        throw streamError(chunk.error, `${this.baseUrl}/chat/completions`);
       }
       if (chunk.usage) {
         yield { type: 'usage', promptTokens: chunk.usage.prompt_tokens, completionTokens: chunk.usage.completion_tokens };
@@ -207,12 +225,34 @@ export class OpenAICompatProvider implements LLMProvider {
         if (reasoning) {
           yield { type: 'thinking', text: reasoning };
         }
-        if (d?.content) {
-          yield* split.push(d.content);
+        const c = d?.content;
+        if (typeof c === 'string' && c) {
+          yield* split.push(c);
+        } else if (Array.isArray(c)) {
+          for (const part of c) {
+            if (part?.type === 'thinking') {
+              const text = typeof part.thinking === 'string' ? part.thinking : (part.thinking ?? []).map((t) => (typeof t?.text === 'string' ? t.text : '')).join('');
+              if (text) {
+                yield { type: 'thinking', text };
+              }
+            } else if (part?.type === 'text' && typeof part.text === 'string') {
+              yield* split.push(part.text);
+            }
+          }
         }
         for (const tc of d?.tool_calls ?? []) {
-          const idx = tc.index ?? 0;
-          const cur = pending.get(idx) ?? { id: tc.id ?? newId(), name: '', args: '' };
+          const latest = lastKey === undefined ? undefined : pending.get(lastKey);
+          let key: number;
+          if (typeof tc.index === 'number') {
+            const at = pending.get(tc.index);
+            key = at?.id && tc.id && tc.id !== at.id ? nextFree++ : tc.index;
+          } else if (!latest || (tc.id && tc.id !== latest.id) || (tc.function?.name && latest.name)) {
+            key = nextFree++;
+          } else {
+            key = lastKey!;
+          }
+          lastKey = key;
+          const cur = pending.get(key) ?? { id: tc.id || newId(), name: '', args: '' };
           if (tc.id) {
             cur.id = tc.id;
           }
@@ -222,7 +262,10 @@ export class OpenAICompatProvider implements LLMProvider {
           if (tc.function?.arguments) {
             cur.args += tc.function.arguments;
           }
-          pending.set(idx, cur);
+          if (tc.extra_content) {
+            cur.extra = { ...cur.extra, ...tc.extra_content };
+          }
+          pending.set(key, cur);
         }
         if (d?.tool_calls?.length) {
           yield { type: 'progress' };
@@ -234,7 +277,7 @@ export class OpenAICompatProvider implements LLMProvider {
     }
     yield* split.flush();
     for (const [, tc] of [...pending.entries()].sort((a, b) => a[0] - b[0])) {
-      yield { type: 'tool_call', call: { id: tc.id, name: tc.name, arguments: tc.args || '{}' } };
+      yield { type: 'tool_call', call: { id: tc.id, name: tc.name, arguments: tc.args || '{}', ...(tc.extra ? { extra: tc.extra } : {}) } };
     }
     yield { type: 'done', finishReason: finish };
   }
@@ -336,9 +379,19 @@ const PARAM_FIXES: ParamFix[] = [
   dropParam('response_format', /response_format|json_schema/i),
   dropParam('tool_choice', /tool_choice/i),
   dropParam('stop', /\bstop\b/i),
+  dropParam('chat_template_kwargs', /chat_template_kwargs|enable_thinking/i),
 ];
 
-function toOpenAIMessage(m: ChatMessage): Record<string, unknown> {
+function isGeminiUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname === 'generativelanguage.googleapis.com';
+  } catch {
+    return false;
+  }
+}
+
+/** `gemini`: Gemini 3 rejects a replayed tool call without its thought signature; calls from elsewhere skip the check. */
+function toOpenAIMessage(m: ChatMessage, gemini = false): Record<string, unknown> {
   if (m.role === 'tool') {
     return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
   }
@@ -346,13 +399,16 @@ function toOpenAIMessage(m: ChatMessage): Record<string, unknown> {
   if (m.images?.length && m.role === 'user') {
     out.content = [
       { type: 'text', text: m.content },
-      ...m.images.map((b64) => ({ type: 'image_url', image_url: { url: `data:image/png;base64,${b64}` } })),
+      ...m.images.map((b64) => ({ type: 'image_url', image_url: { url: `data:${imageMime(b64)};base64,${b64}` } })),
     ];
   } else {
     out.content = m.content ?? '';
   }
   if (m.toolCalls?.length) {
-    out.tool_calls = m.toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } }));
+    out.tool_calls = m.toolCalls.map((tc) => {
+      const extra = tc.extra ?? (gemini ? { google: { thought_signature: 'skip_thought_signature_validator' } } : undefined);
+      return { id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments }, ...(extra ? { extra_content: extra } : {}) };
+    });
     if (!m.content) {
       out.content = null;
     }

@@ -1,10 +1,13 @@
 import * as assert from 'assert';
+import * as cp from 'child_process';
+import { existsSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { createDirTool, deleteTool, diffPreview, displayPath, editFileTool, fsTools, listDirTool, readFileTool, resolveWorkspacePath, writeFileTool } from '../tools/fs';
-import { fileSearchTool, grepSearchTool, looksLikeRegex } from '../tools/search';
+import { fileSearchTool, findRipgrep, grepSearchTool, looksLikeRegex } from '../tools/search';
+import { createAnalyzeWorkspaceTool } from '../tools/workspace';
 import { getDiagnosticsTool, openEditorsTool, openFileTool } from '../tools/editor';
 import { ToolContext } from '../types';
 import { ChangeTracker } from '../agent/changeTracker';
@@ -150,6 +153,66 @@ suite('Filesystem tools', () => {
     assert.match(await fs.readFile(file, 'utf8'), /return 10;/, 'declined edits leave the file alone');
   });
 
+  test('write_file and edit_file refuse missing or non-string text instead of writing an empty string', async () => {
+    const c = ctx();
+    const file = path.join(dir, 'args.ts');
+    await fs.writeFile(file, 'const a = 1;\n');
+    let r = await writeFileTool.execute({ path: rel('args.ts') }, c);
+    assert.ok(r.isError && /needs "content"/.test(r.content), r.content);
+    r = await writeFileTool.execute({ path: rel('args.ts'), content: { a: 1 } }, c);
+    assert.ok(r.isError && /needs "content"/.test(r.content), r.content);
+    assert.strictEqual(await fs.readFile(file, 'utf8'), 'const a = 1;\n');
+    assert.strictEqual(c.approvals.length, 0, 'nothing is asked before the arguments are valid');
+
+    r = await writeFileTool.execute({ path: rel('args.json'), content: { a: 1, b: [2] } }, c);
+    assert.ok(!r.isError && /written as JSON/.test(r.content), r.content);
+    assert.strictEqual(await fs.readFile(path.join(dir, 'args.json'), 'utf8'), '{\n  "a": 1,\n  "b": [\n    2\n  ]\n}\n');
+
+    r = await editFileTool.execute({ path: rel('args.ts'), old_text: 'const a = 1;' }, c);
+    assert.ok(r.isError && /needs "old_text"/.test(r.content), r.content);
+    assert.strictEqual(await fs.readFile(file, 'utf8'), 'const a = 1;\n');
+
+    r = await editFileTool.execute({ path: rel('args.ts'), old_string: 'const a = 1;', new_string: 'const a = 2;' }, c);
+    assert.ok(!r.isError, r.content);
+    assert.strictEqual(await fs.readFile(file, 'utf8'), 'const a = 2;\n');
+  });
+
+  test('edit_file matches multi-line old_text in CRLF files and keeps their line endings', async () => {
+    const c = ctx();
+    const file = path.join(dir, 'crlf.ts');
+    await fs.writeFile(file, 'function a() {\r\n  return 1;\r\n}\r\n');
+    let r = await editFileTool.execute({ path: rel('crlf.ts'), old_text: 'function a() {\n  return 1;\n}', new_text: 'function a() {\n  return 2;\n}' }, c);
+    assert.ok(!r.isError, r.content);
+    assert.strictEqual(await fs.readFile(file, 'utf8'), 'function a() {\r\n  return 2;\r\n}\r\n');
+
+    // Indentation drift on top of CRLF: the whitespace-insensitive fallback still finds it.
+    r = await editFileTool.execute({ path: rel('crlf.ts'), old_text: 'function a() {\n    return 2;\n}', new_text: 'function a() {\n    return 3;\n}' }, c);
+    assert.ok(!r.isError, r.content);
+    assert.strictEqual(await fs.readFile(file, 'utf8'), 'function a() {\r\n  return 3;\r\n}\r\n');
+
+    // Appending keeps CRLF: no lone "\n" ends up in the file.
+    r = await editFileTool.execute({ path: rel('crlf.ts'), old_text: '', new_text: 'const b = 1;\nconst c = 2;\n' }, c);
+    assert.ok(!r.isError, r.content);
+    const appended = await fs.readFile(file, 'utf8');
+    assert.ok(appended.includes('const b = 1;\r\nconst c = 2;'), JSON.stringify(appended));
+    assert.ok(!/(^|[^\r])\n/.test(appended), JSON.stringify(appended));
+  });
+
+  test('edit_file adapts new_text to the file indentation when it matched ignoring whitespace', async () => {
+    const c = ctx();
+    const py = path.join(dir, 'indent.py');
+    await fs.writeFile(py, 'class A:\n    def f(self):\n        return 1\n\n    def g(self):\n        return 2\n');
+    let r = await editFileTool.execute({ path: rel('indent.py'), old_text: '  def f(self):\n    return 1', new_text: '  def f(self):\n    x = 1\n    return x' }, c);
+    assert.ok(!r.isError && /indentation adapted/.test(r.content), r.content);
+    assert.strictEqual(await fs.readFile(py, 'utf8'), 'class A:\n    def f(self):\n        x = 1\n        return x\n\n    def g(self):\n        return 2\n');
+
+    const tabs = path.join(dir, 'tabs.ts');
+    await fs.writeFile(tabs, 'function a() {\n\tif (x) {\n\t\treturn 1;\n\t}\n}\n');
+    r = await editFileTool.execute({ path: rel('tabs.ts'), old_text: '    if (x) {\n        return 1;\n    }', new_text: '    if (x) {\n        return 2;\n    }' }, c);
+    assert.ok(!r.isError, r.content);
+    assert.strictEqual(await fs.readFile(tabs, 'utf8'), 'function a() {\n\tif (x) {\n\t\treturn 2;\n\t}\n}\n');
+  });
+
   test('list_dir, create_directory and delete_path', async () => {
     const c = ctx();
     await fs.mkdir(path.join(dir, 'ls/sub'), { recursive: true });
@@ -250,6 +313,24 @@ suite('Search tools', () => {
     assert.ok(empty.isError);
   });
 
+  test('grep_search looks inside dot-folders such as .github', async () => {
+    await fs.mkdir(path.join(sdir, '.github/workflows'), { recursive: true });
+    await fs.writeFile(path.join(sdir, '.github/workflows/x.yml'), 'name: ci\n# lp-dotfolder-marker-7731\n');
+    const r = await grepSearchTool.execute({ query: 'lp-dotfolder-marker-7731', include_pattern: `${base()}/**` }, ctx());
+    assert.ok(!r.isError && /\.github\/workflows\/x\.yml:2:/.test(r.content), r.content);
+  });
+
+  test('findRipgrep finds the ripgrep VS Code ships', async function () {
+    const appRoot = vscode.env.appRoot;
+    const bundled = ['node_modules.asar.unpacked', 'node_modules'].some((d) => ['ripgrep-universal', 'ripgrep'].some((p) => existsSync(path.join(appRoot, d, '@vscode', p))));
+    const onPath = await new Promise<boolean>((resolve) => cp.execFile('rg', ['--version'], (e) => resolve(!e)));
+    if (!bundled && !onPath) {
+      this.skip();
+    }
+    const rg = await findRipgrep();
+    assert.ok(rg, 'a ripgrep binary was found');
+  });
+
   test('looksLikeRegex spots escaped metacharacters and alternation but not plain words', () => {
     assert.ok(looksLikeRegex('def foo\\('));
     assert.ok(looksLikeRegex('(a|b)'));
@@ -257,6 +338,23 @@ suite('Search tools', () => {
     assert.ok(looksLikeRegex('[A-Z]+'));
     assert.ok(!looksLikeRegex('plain words'));
     assert.ok(!looksLikeRegex('getUser('), 'an unbalanced paren is not a valid regex');
+  });
+});
+
+suite('Workspace tools', () => {
+  test('analyze_workspace counts the files of an isolated root outside the workspace', async () => {
+    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-aw-'));
+    try {
+      await fs.mkdir(path.join(wt, 'src'), { recursive: true });
+      await fs.writeFile(path.join(wt, 'package.json'), JSON.stringify({ name: 'lp-aw-pkg', scripts: { build: 'tsc' } }));
+      await fs.writeFile(path.join(wt, 'src/a.ts'), 'export const a = 1;\n');
+      const r = await createAnalyzeWorkspaceTool(() => 2).execute({}, ctx({ workspaceRoot: wt }));
+      assert.ok(!r.isError, r.content);
+      assert.doesNotMatch(r.content, / 0 files/, r.content);
+      assert.match(r.content, /Manifests:\n\s+package\.json: lp-aw-pkg/, r.content);
+    } finally {
+      await fs.rm(wt, { recursive: true, force: true });
+    }
   });
 });
 
@@ -300,7 +398,7 @@ suite('Editor tools', () => {
       assert.match(warnings.content, /meh thing/);
       coll.clear();
       const none = await getDiagnosticsTool.execute({ path: path.basename(file), severity: 'all' }, c);
-      assert.strictEqual(none.content, 'No diagnostics.');
+      assert.match(none.content, /^No diagnostics were published for .*diag-\d+\.txt .*run_command/, 'an unchecked file is not reported as clean');
     } finally {
       coll.dispose();
       await vscode.commands.executeCommand('workbench.action.closeAllEditors');

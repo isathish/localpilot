@@ -4,6 +4,7 @@ import { isImplementPlanRequest } from '../agent/agentLoop';
 import { builtinAgents } from '../agent/builtinAgents';
 import { manageTodosTool } from '../agent/memory';
 import { balancedShards, nextWave, ParallelPool } from '../agent/parallel';
+import { BoardStatus, BoardTask, canFinish, parseTask, serializeTask } from '../agent/teamBoard';
 import { createAgentTools } from '../agent/subagents';
 import { formatAnalysis, summarizeManifest, summarizeWorkspace } from '../tools/workspace';
 import { AgentEvent, TodoItem, Tool, ToolContext } from '../types';
@@ -39,6 +40,46 @@ suite('Parallel execution: dependency waves, sharding and plan handoff', () => {
     assert.deepStrictEqual(w.cyclic.map((i) => i.id).sort(), ['a', 'b']);
     const self = nextWave([{ id: 'a', dependsOn: ['a'] }], new Set(), new Set());
     assert.deepStrictEqual(self.ready.map((i) => i.id), ['a'], 'a self-dependency is ignored');
+  });
+
+  test('nextWave does not call a chain waiting on an outside item a cycle', () => {
+    const w = nextWave([{ id: 'B', dependsOn: ['A'] }, { id: 'C', dependsOn: ['B'] }], new Set(), new Set());
+    assert.deepStrictEqual(w.ready, []);
+    assert.deepStrictEqual(w.cyclic, []);
+    const cycle = nextWave([{ id: 'A', dependsOn: ['B'] }, { id: 'B', dependsOn: ['A'] }, { id: 'D', dependsOn: ['X'] }], new Set(), new Set());
+    assert.deepStrictEqual(cycle.cyclic.map((i) => i.id).sort(), ['A', 'B'], 'a real cycle is still reported');
+  });
+
+  test('board task files survive repeated rewrites (quoted titles, headings in brief and result)', () => {
+    const t: BoardTask = {
+      id: 'dark-mode',
+      title: 'Add "dark mode" \\ toggle',
+      status: 'done',
+      priority: 2,
+      dependsOn: ['base'],
+      createdBy: 'ann@host · "w1"',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+      owner: 'bob@host · w2',
+      brief: 'Do it.\n\n## Steps\n1. one\n2. two',
+      notes: [{ at: '2026-01-01T00:00:00Z', by: 'bob@host', text: 'claimed' }],
+      result: 'Done.\n\n## Summary\nChanged the theme.',
+    };
+    let cur = t;
+    for (let i = 0; i < 5; i++) {
+      cur = parseTask(t.id, serializeTask(cur));
+    }
+    assert.deepStrictEqual(cur, { ...t, leaseUntil: undefined });
+  });
+
+  test('canFinish leaves out board tasks blocked transitively by a failed or unknown prerequisite or a cycle', () => {
+    const task = (id: string, status: BoardStatus, dependsOn: string[] = []): BoardTask => ({ id, title: id, status, priority: 5, dependsOn, createdBy: 't', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', brief: '', notes: [] });
+    const board = (a: BoardStatus) => [task('A', a), task('B', 'open', ['A']), task('C', 'open', ['B']), task('D', 'open', ['missing']), task('E', 'open', ['F']), task('F', 'open', ['E'])];
+    const blocked = canFinish(board('failed'));
+    assert.deepStrictEqual(['B', 'C', 'D', 'E', 'F'].filter((id) => blocked.has(id)), []);
+    const ok = canFinish(board('done'));
+    assert.ok(ok.has('A') && ok.has('B') && ok.has('C'), 'a done prerequisite lets its chain finish');
+    assert.ok(!ok.has('D') && !ok.has('E') && !ok.has('F'));
   });
 
   test('balancedShards keeps items whole and balances weight', () => {

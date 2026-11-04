@@ -80,12 +80,27 @@ export const grepSearchTool: Tool = {
         if (include) {
           rgArgs.push('--glob', include);
         }
-        for (const g of ['!node_modules', '!.git', '!dist', '!out', '!build']) {
+        // --hidden: dot-folders such as .github hold real sources; the VCS folders stay excluded.
+        rgArgs.push('--hidden');
+        for (const g of ['!node_modules', '!.git', '!.hg', '!.svn', '!dist', '!out', '!build']) {
           rgArgs.push('--glob', g);
         }
         rgArgs.push('-e', query, '.');
-        const out = await runProcess(rg, rgArgs, root, ctx.signal);
-        return out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
+        // Exit 2 also means "some files could not be read" alongside real matches: keep them.
+        let stderr: string | undefined;
+        const out = await runProcess(rg, rgArgs, root, ctx.signal, 60_000, [0, 1, 2], (code, err) => {
+          if (code === 2) {
+            stderr = err.trim();
+          }
+        });
+        const found = out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
+        if (stderr !== undefined && !found.length) {
+          throw new Error(stderr || 'ripgrep exited with code 2');
+        }
+        if (stderr) {
+          found.push(`(ripgrep reported: ${stderr.split('\n')[0]})`);
+        }
+        return found;
       }
       // Fallback: naive JS search (slower, but dependency-free).
       // This runs the model's pattern in-process, where nothing can interrupt one regex test: a nested quantifier such
@@ -119,7 +134,12 @@ export const grepSearchTool: Tool = {
       return results;
     };
     let isRegex = Boolean(args.is_regex);
-    let lines = await search(isRegex);
+    let lines: string[];
+    try {
+      lines = await search(isRegex);
+    } catch (e) {
+      return { content: `grep_search failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+    }
     // Models routinely send an escaped regex ("def foo\(") without is_regex; a literal search then looks for a
     // backslash and finds nothing. Retry as a regex before reporting no matches.
     if (!lines.length && !isRegex && looksLikeRegex(query) && !ctx.signal.aborted) {
@@ -192,15 +212,28 @@ export const findReferencesTool: Tool = {
 };
 
 let rgPath: string | null | undefined;
+let rgCheckedAt = 0;
 export async function findRipgrep(): Promise<string | null> {
-  if (rgPath !== undefined) {
+  // A miss is re-probed after a while (rg may be installed meanwhile); a hit is kept.
+  if (rgPath || (rgPath === null && Date.now() - rgCheckedAt < 5 * 60_000)) {
     return rgPath;
   }
+  const appRoot = vscode.env.appRoot;
+  const exe = `rg${process.platform === 'win32' ? '.exe' : ''}`;
+  const target = `${process.platform}-${process.arch}`;
+  // Recent VS Code builds ship @vscode/ripgrep-universal (one binary per platform folder); older ones @vscode/ripgrep.
   const candidates = [
-    `${vscode.env.appRoot}/node_modules/@vscode/ripgrep/bin/rg`,
-    `${vscode.env.appRoot}/node_modules.asar.unpacked/@vscode/ripgrep/bin/rg`,
+    ...(appRoot
+      ? [
+          `${appRoot}/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/${target}/${exe}`,
+          `${appRoot}/node_modules/@vscode/ripgrep-universal/bin/${target}/${exe}`,
+          `${appRoot}/node_modules/@vscode/ripgrep/bin/${exe}`,
+          `${appRoot}/node_modules.asar.unpacked/@vscode/ripgrep/bin/${exe}`,
+        ]
+      : []),
     'rg',
   ];
+  rgCheckedAt = Date.now();
   for (const c of candidates) {
     try {
       await runProcess(c, ['--version'], undefined);
@@ -214,7 +247,15 @@ export async function findRipgrep(): Promise<string | null> {
   return null;
 }
 
-export function runProcess(cmd: string, args: string[], cwd?: string, signal?: AbortSignal, timeoutMs = 60_000): Promise<string> {
+export function runProcess(
+  cmd: string,
+  args: string[],
+  cwd?: string,
+  signal?: AbortSignal,
+  timeoutMs = 60_000,
+  okCodes: readonly number[] = [0, 1],
+  onExit?: (code: number | null, stderr: string) => void
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = cp.spawn(cmd, args, { cwd, shell: false });
     let out = '';
@@ -231,7 +272,8 @@ export function runProcess(cmd: string, args: string[], cwd?: string, signal?: A
     child.on('close', (code) => {
       clearTimeout(t);
       // ripgrep exits 1 when there are no matches.
-      if (code === 0 || code === 1) {
+      if (code !== null && okCodes.includes(code)) {
+        onExit?.(code, err);
         resolve(out);
       } else {
         reject(new Error(err || `exit code ${code}`));

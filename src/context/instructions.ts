@@ -29,6 +29,8 @@ export interface InstructionFile {
   /** Shown in the prompt as the section label, e.g. `CLAUDE.md`, `../CLAUDE.md`, `~/.claude/CLAUDE.md`. */
   label: string;
   scope: 'user' | 'ancestor' | 'project' | 'local';
+  /** Set by buildInstructions when the size cap cut this file short or left it out. */
+  note?: 'truncated' | 'omitted';
 }
 
 async function readIfFile(file: string): Promise<string | undefined> {
@@ -166,11 +168,14 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
 /** Front-matter of .mdc / rule files is metadata, not instructions. */
 const stripFrontMatter = (s: string) => s.replace(/^---[\s\S]*?\n---\s*/, '');
 
-/** The concatenated instruction text for the prompt, capped at `maxChars`. */
+/**
+ * The concatenated instruction text for the prompt, capped at `maxChars`. The budget goes to the highest-precedence
+ * files first (local, then project, ancestors, user), so an oversized user file cannot crowd out the project's rules.
+ */
 export async function buildInstructions(roots: string[], opts: { home?: string; maxChars?: number } = {}): Promise<{ text: string; files: InstructionFile[] }> {
   const home = opts.home ?? os.homedir();
   const files = await collectInstructionFiles(roots, home);
-  const parts: string[] = [];
+  const parts: { file: InstructionFile; text: string }[] = [];
   for (const f of files) {
     const raw = await readIfFile(f.file);
     if (raw === undefined) {
@@ -180,10 +185,24 @@ export async function buildInstructions(roots: string[], opts: { home?: string; 
     const own = f.scope === 'ancestor' ? path.dirname(f.file).replace(/[\\/]\.(claude|localpilot)$/, '') : undefined;
     const text = (await resolveImports(stripFrontMatter(raw), f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
     if (text) {
-      parts.push(`<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${text}`);
+      parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${text}` });
     }
   }
-  const joined = parts.join('\n\n');
-  const max = opts.maxChars ?? 12_000;
-  return { text: joined.length > max ? `${joined.slice(0, max)}\n…(rules truncated)` : joined, files };
+  const marker = '\n…(truncated)';
+  const notes = new Map<InstructionFile, InstructionFile['note']>();
+  let budget = opts.maxChars ?? 12_000;
+  const kept: string[] = [];
+  for (const p of [...parts].reverse()) {
+    if (p.text.length <= budget) {
+      kept.unshift(p.text);
+      budget -= p.text.length + 2;
+    } else if (budget > 200) {
+      kept.unshift(p.text.slice(0, budget - marker.length) + marker);
+      notes.set(p.file, 'truncated');
+      budget = 0;
+    } else {
+      notes.set(p.file, 'omitted');
+    }
+  }
+  return { text: kept.join('\n\n'), files: files.map((f) => (notes.has(f) ? { ...f, note: notes.get(f) } : f)) };
 }

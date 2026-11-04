@@ -196,8 +196,8 @@ export async function readPlugin(root: string, source: PluginInfo['source'], ena
   };
 }
 
-/** Finds plugin folders below `dir`: manifests, marketplace listings, and nested checkouts up to MAX_DEPTH. */
-export async function findPluginRoots(dir: string, depth = MAX_DEPTH, seen = new Set<string>()): Promise<string[]> {
+/** Finds plugin folders below `dir`: manifests, marketplace listings, and nested checkouts up to MAX_DEPTH (not into `skip` folder names). */
+export async function findPluginRoots(dir: string, depth = MAX_DEPTH, seen = new Set<string>(), skip?: Set<string>): Promise<string[]> {
   const out: string[] = [];
   if (depth < 0 || seen.has(dir)) {
     return out;
@@ -211,7 +211,7 @@ export async function findPluginRoots(dir: string, depth = MAX_DEPTH, seen = new
   if (market?.plugins && Array.isArray(market.plugins)) {
     for (const p of market.plugins) {
       if (typeof p?.source === 'string' && !/^https?:|^git@|^github:/.test(p.source)) {
-        out.push(...(await findPluginRoots(path.resolve(dir, p.source), depth - 1, seen)));
+        out.push(...(await findPluginRoots(path.resolve(dir, p.source), depth - 1, seen, skip)));
       }
     }
     if (out.length) {
@@ -228,8 +228,28 @@ export async function findPluginRoots(dir: string, depth = MAX_DEPTH, seen = new
     return out;
   }
   for (const e of entries) {
-    if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) {
-      out.push(...(await findPluginRoots(path.join(dir, e.name), depth - 1, seen)));
+    if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.') && !skip?.has(e.name)) {
+      out.push(...(await findPluginRoots(path.join(dir, e.name), depth - 1, seen, skip)));
+    }
+  }
+  return out;
+}
+
+const CLAUDE_SKIP = new Set(['marketplaces', 'cache']);
+
+/** Install folders listed in Claude Code's installed_plugins.json (`{ plugins: { 'name@mkt': { installPath } | [{ installPath }] } }`). */
+async function claudeInstalledPlugins(dir: string): Promise<string[]> {
+  const data = await readJson(path.join(dir, 'installed_plugins.json'));
+  const plugins = data && typeof data === 'object' ? (data as { plugins?: unknown }).plugins : undefined;
+  if (!plugins || typeof plugins !== 'object') {
+    return [];
+  }
+  const out: string[] = [];
+  for (const v of Object.values(plugins as Record<string, unknown>)) {
+    const entry = (Array.isArray(v) ? v[v.length - 1] : v) as { installPath?: unknown } | undefined;
+    const p = entry && typeof entry === 'object' && typeof entry.installPath === 'string' ? entry.installPath : undefined;
+    if (p && (await exists(path.join(p, MANIFEST)))) {
+      out.push(p);
     }
   }
   return out;
@@ -237,13 +257,13 @@ export async function findPluginRoots(dir: string, depth = MAX_DEPTH, seen = new
 
 export async function discoverPlugins(roots: string[], opts: { home?: string; extraDirs?: string[]; enabledPlugins?: Record<string, boolean> } = {}): Promise<PluginInfo[]> {
   const home = opts.home ?? os.homedir();
-  const scan: { dir: string; source: PluginInfo['source']; self?: boolean }[] = [];
+  const scan: { dir: string; source: PluginInfo['source']; self?: boolean; claude?: boolean }[] = [];
   for (const r of roots) {
     scan.push({ dir: r, source: 'workspace', self: true });
     scan.push({ dir: path.join(r, '.claude', 'plugins'), source: 'workspace' });
     scan.push({ dir: path.join(r, '.localpilot', 'plugins'), source: 'workspace' });
   }
-  scan.push({ dir: path.join(home, '.claude', 'plugins'), source: 'user' });
+  scan.push({ dir: path.join(home, '.claude', 'plugins'), source: 'user', claude: true });
   scan.push({ dir: path.join(home, '.localpilot', 'plugins'), source: 'user' });
   for (const d of opts.extraDirs ?? []) {
     scan.push({ dir: d.replace(/^~/, home), source: 'user' });
@@ -251,7 +271,12 @@ export async function discoverPlugins(roots: string[], opts: { home?: string; ex
   const seen = new Set<string>();
   const out: PluginInfo[] = [];
   for (const s of scan) {
-    const pluginRoots = s.self ? ((await exists(path.join(s.dir, MANIFEST))) ? [s.dir] : []) : await findPluginRoots(s.dir);
+    // Claude Code keeps catalog clones (marketplaces/) and a versioned cache (cache/) there: only what it installed counts.
+    const pluginRoots = s.self
+      ? (await exists(path.join(s.dir, MANIFEST))) ? [s.dir] : []
+      : s.claude
+        ? [...(await claudeInstalledPlugins(s.dir)), ...(await findPluginRoots(s.dir, MAX_DEPTH, new Set(), CLAUDE_SKIP))]
+        : await findPluginRoots(s.dir);
     for (const pr of pluginRoots) {
       if (seen.has(pr)) {
         continue;

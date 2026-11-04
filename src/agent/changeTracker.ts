@@ -66,6 +66,11 @@ export class ChangeTracker implements vscode.Disposable {
     if (this.changes.has(key) && !needTurnSnap) {
       return;
     }
+    // Directories have no text snapshot: tracking one would list it as added and undo would claim to revert it.
+    const stat = await Promise.resolve(vscode.workspace.fs.stat(vscode.Uri.file(fsPath))).catch(() => undefined);
+    if (stat && stat.type & vscode.FileType.Directory) {
+      return;
+    }
     let current: string | undefined;
     try {
       const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fsPath);
@@ -90,6 +95,31 @@ export class ChangeTracker implements vscode.Disposable {
   /** Mark the start of a user turn (index of the user message) so edits can be rolled back to it. */
   beginTurn(sessionId: string, turn: number): void {
     this.currentTurn.set(ChangeTracker.rootSession(sessionId), turn);
+  }
+
+  /** Release everything held for a session (it was deleted): pending changes stay on disk as they are, snapshots go. */
+  forget(sessionId: string): void {
+    const sid = ChangeTracker.rootSession(sessionId);
+    for (const [k, c] of this.changes) {
+      if (c.sessionId === sid) {
+        this.changes.delete(k);
+      }
+    }
+    this.turns.delete(sid);
+    this.currentTurn.delete(sid);
+    this._onDidChange.fire();
+    this.decorateVisible();
+  }
+
+  /** Drop the checkpoint snapshots of `turn` and later (those messages were removed, so nothing can restore them). */
+  dropTurnsFrom(sessionId: string, turn: number): void {
+    const byTurn = this.turns.get(ChangeTracker.rootSession(sessionId));
+    for (const t of [...(byTurn?.keys() ?? [])]) {
+      if (t >= turn) {
+        byTurn!.delete(t);
+      }
+    }
+    this._onDidChange.fire();
   }
 
   /** Which turns of a session have file snapshots (i.e. are restorable checkpoints). */

@@ -5,11 +5,15 @@ import { AddressInfo } from 'net';
 import * as vscode from 'vscode';
 import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
+import { imageMime } from '../providers/imageMime';
+import { OpenAICompatProvider } from '../providers/openaiCompat';
 import { isSaturated, pickAlternative, pickForRole, preferResident, ProviderRegistry, scoreForRole } from '../providers/registry';
 import { briefDescription } from '../agent/skills';
 import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB } from '../providers/system';
 import type { LocalPilotApi } from '../extension';
-import { ModelInfo } from '../types';
+import { ModelInfo, StreamEvent } from '../types';
+import { classifyModelError } from '../agent/resilience';
+import { HttpError } from '../providers/http';
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
 interface FakeModel {
@@ -703,6 +707,36 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     }
   });
 
+  test('auto-setup reports an installed Ollama that does not start instead of asking again', async function () {
+    this.timeout(30_000);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prevProviders = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    const mm = new ModelManager(reg, log);
+    try {
+      await cfg.update('providers', [{ id: 'dead', type: 'ollama', baseUrl: 'http://127.0.0.1:9' }], vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      const stub = mm as unknown as { detectRuntimes: () => Promise<unknown[]>; startOllama: () => Promise<unknown> };
+      stub.detectRuntimes = async () => [
+        { target: 'ollama', label: 'Ollama', installed: true, running: false },
+        { target: 'docker', label: 'Docker', installed: false, running: false },
+        { target: 'lmstudio', label: 'LM Studio', installed: false, running: false },
+      ];
+      const startJob = (status: string) => ({ id: 's', kind: 'start', target: 'ollama', model: 'Ollama', status, error: status === 'error' ? 'boom' : undefined, progress: -1, detail: '', startedAt: Date.now() });
+      stub.startOllama = async () => startJob('error');
+      const failed = await mm.autoSetup({ force: true });
+      assert.strictEqual(failed.status, 'error');
+      assert.match((failed as { error: string }).error, /boom/);
+      stub.startOllama = async () => startJob('cancelled');
+      const cancelled = await mm.autoSetup({ force: true });
+      assert.strictEqual(cancelled.status, 'cancelled');
+    } finally {
+      mm.dispose();
+      reg.dispose();
+      await cfg.update('providers', prevProviders, vscode.ConfigurationTarget.Global);
+    }
+  });
+
   test('changing providers while a model listing is in flight lists the new providers, not the old ones', async function () {
     this.timeout(30_000);
     // An OpenAI-style server that answers /v1/models slowly, so the first listing is still running when the setting changes.
@@ -813,5 +847,68 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
     }
+  });
+
+  /** Streams each chunk as an SSE event from a fake /chat/completions and returns what the provider made of it. */
+  async function streamChunks(chunks: unknown[]): Promise<StreamEvent[]> {
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(`${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`);
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    try {
+      const p = new OpenAICompatProvider({ id: 'fake', type: 'openai', baseUrl: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1` });
+      const out: StreamEvent[] = [];
+      for await (const ev of p.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] })) {
+        out.push(ev);
+      }
+      return out;
+    } finally {
+      srv.close();
+    }
+  }
+  const callsOf = (evs: StreamEvent[]) => evs.flatMap((e) => (e.type === 'tool_call' ? [{ name: e.call.name, args: e.call.arguments }] : []));
+
+  test('OpenAI-compatible streams keep index-less parallel tool calls apart and join indexed fragments', async () => {
+    const a = { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } };
+    const b = { id: 'c2', type: 'function', function: { name: 'list_dir', arguments: '{"path":"src"}' } };
+    const want = [{ name: 'read_file', args: '{"path":"a.ts"}' }, { name: 'list_dir', args: '{"path":"src"}' }];
+    assert.deepStrictEqual(callsOf(await streamChunks([{ choices: [{ delta: { tool_calls: [a, b] } }] }])), want, 'both in one chunk');
+    assert.deepStrictEqual(callsOf(await streamChunks([{ choices: [{ delta: { tool_calls: [a] } }] }, { choices: [{ delta: { tool_calls: [b] } }] }])), want, 'one chunk per call');
+    const frags = [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'x', function: { name: 'read_file', arguments: '' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"pa' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"a.ts"}' } }] } }] },
+    ];
+    assert.deepStrictEqual(callsOf(await streamChunks(frags)), [want[0]], 'indexed fragments join');
+  });
+
+  test('OpenAI-compatible streams read Mistral content lists as thinking and text', async () => {
+    const evs = await streamChunks([
+      { choices: [{ delta: { content: [{ type: 'thinking', thinking: [{ type: 'text', text: 'Let me ' }] }] } }] },
+      { choices: [{ delta: { content: [{ type: 'thinking', thinking: [{ type: 'text', text: 'think.' }] }, { type: 'text', text: 'Hello' }] } }] },
+      { choices: [{ delta: { content: ' world' } }] },
+    ]);
+    const join = (t: string) => evs.map((e) => (e.type === t && 'text' in e ? e.text : '')).join('');
+    assert.strictEqual(join('thinking'), 'Let me think.');
+    assert.strictEqual(join('text'), 'Hello world');
+  });
+
+  test('errors sent inside the stream are classified for retry', async () => {
+    assert.strictEqual(classifyModelError(new Error('error parsing tool call: raw=\'{"path":"src",}\', err=network aborted')), 'toolcall');
+    assert.strictEqual(classifyModelError(new Error('Overloaded')), 'server');
+    assert.strictEqual(classifyModelError(new Error('Rate limit reached, try again later')), 'ratelimit');
+    assert.strictEqual(classifyModelError(new Error('Insufficient credits on this account')), 'quota');
+    assert.strictEqual(classifyModelError(new HttpError(529, '{"type":"overloaded_error","message":"Overloaded"}', 'http://x')), 'server');
+    await assert.rejects(streamChunks([{ error: { message: 'upstream failed', type: 'server_error' } }]), (e: unknown) => e instanceof HttpError && e.status === 500 && classifyModelError(e) === 'server');
+  });
+
+  test('imageMime recognises PNG, JPEG, GIF and WebP data', () => {
+    const b64 = (bytes: number[] | string) => Buffer.from(typeof bytes === 'string' ? Buffer.from(bytes, 'latin1') : bytes).toString('base64');
+    assert.strictEqual(imageMime(b64([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])), 'image/png');
+    assert.strictEqual(imageMime(b64([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])), 'image/jpeg');
+    assert.strictEqual(imageMime(b64('GIF89a\x01\x00')), 'image/gif');
+    assert.strictEqual(imageMime(b64('RIFF\x24\x00\x00\x00WEBPVP8 ')), 'image/webp');
+    assert.strictEqual(imageMime(b64('RIFF\x24\x00\x00\x00WAVEfmt ')), 'image/png', 'a RIFF file that is not WebP');
   });
 });

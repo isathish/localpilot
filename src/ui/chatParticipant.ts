@@ -5,22 +5,18 @@ import { ALL_MODES, Session } from '../types';
 
 /**
  * Registers `@localpilot` in the built-in VS Code Chat view so users can reach the local agent from the
- * standard chat UI as well. Each VS Code chat thread is mapped to a LocalPilot session.
+ * standard chat UI as well. Each VS Code chat thread runs one LocalPilot session, whose id is carried in the response
+ * metadata and read back from the thread history on the next turn.
  */
 export function registerChatParticipant(ctx: vscode.ExtensionContext, controller: ChatController): void {
-  const threadToSession = new Map<string, string>();
-
   const handler: vscode.ChatRequestHandler = async (request, chatCtx, stream, token) => {
-    // Derive a stable key for this VS Code chat thread from the first turn's prompt.
-    const first = chatCtx.history.find((h) => h instanceof vscode.ChatRequestTurn) as vscode.ChatRequestTurn | undefined;
-    const key = first ? `${first.prompt}|${first.command ?? ''}` : `${request.prompt}|${Date.now()}`;
-    let sessionId = threadToSession.get(key);
+    const prev = [...chatCtx.history].reverse().find((h): h is vscode.ChatResponseTurn => h instanceof vscode.ChatResponseTurn && typeof (h.result.metadata as { sessionId?: unknown } | undefined)?.sessionId === 'string');
+    let sessionId = (prev?.result.metadata as { sessionId?: string } | undefined)?.sessionId;
     if (!sessionId || !controller.store.get(sessionId)) {
       const mode = (ALL_MODES as readonly string[]).includes(request.command ?? '') ? (request.command as Session['mode']) : 'agent';
       const s = controller.store.create(getConfig().defaultModel, mode);
       s.title = `[chat] ${request.prompt.slice(0, 50)}`;
       sessionId = s.id;
-      threadToSession.set(key, sessionId);
     }
     const session = controller.store.get(sessionId)!;
     if (request.command && (ALL_MODES as readonly string[]).includes(request.command)) {
@@ -39,33 +35,41 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
 
     const sink = {
       // Approvals and ask_user cannot be shown in the VS Code chat stream; they use native dialogs instead.
-      canPrompt: false,
+      handlesPrompts: (sid: string) => sid === sessionId,
       post: (m: import('./chatController').ToWebview) => {
         if (m.type !== 'event' || m.event.sessionId !== sessionId) {
           return;
         }
         const e = m.event;
+        // Worker events arrive under this session wrapped as { childId, agent, inner, data }; only tool starts are surfaced.
+        const sub = e.payload as { childId?: string; agent?: string; data?: { name?: string; args?: Record<string, unknown> } } | undefined;
+        if (sub && typeof sub === 'object' && 'childId' in sub) {
+          if (e.type === 'tool_start' && sub.data?.name) {
+            stream.progress(`${sub.agent ?? 'subagent'}: ${sub.data.name} ${summarise(sub.data.args)}`);
+          }
+          return;
+        }
         switch (e.type) {
           case 'assistant_delta':
             stream.markdown(String(e.payload));
             break;
           case 'tool_start': {
-            // Worker events arrive wrapped as { childId, agent, inner, data }.
-            const p = e.payload as { childId?: string; agent?: string; data?: unknown } | undefined;
-            const inner = (p?.childId ? p.data : p) as { name?: string; args?: Record<string, unknown> } | undefined;
-            if (inner?.name) {
-              stream.progress(`${p?.childId ? `${p.agent}: ` : ''}${inner.name} ${summarise(inner.args)}`);
+            const p = e.payload as { name?: string; args?: unknown } | undefined;
+            if (p?.name) {
+              stream.progress(`${p.name} ${summarise(p.args)}`);
             }
             break;
           }
           case 'tool_end': {
-            const p = e.payload as { childId?: string; data?: unknown } | undefined;
-            const inner = (p?.childId ? p.data : p) as { name?: string; isError?: boolean; data?: { path?: string } } | undefined;
+            const inner = e.payload as { name?: string; isError?: boolean; data?: { path?: string } } | undefined;
             if (inner?.data?.path) {
               stream.reference(vscode.Uri.file(inner.data.path));
             }
             break;
           }
+          case 'approval_request':
+            stream.progress('Waiting for your approval…');
+            break;
           case 'status':
             if (typeof e.payload === 'string') {
               stream.progress(e.payload);
@@ -112,6 +116,10 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
     const cancel = token.onCancellationRequested(() => controller.stop(sessionId!));
     try {
       await controller.send(sessionId, request.prompt, attachments);
+    } catch (err) {
+      const md = new vscode.MarkdownString(`\n\n> $(warning) ${err instanceof Error ? err.message : String(err)}`);
+      md.supportThemeIcons = true;
+      stream.markdown(md);
     } finally {
       cancel.dispose();
       detach.dispose();
@@ -130,8 +138,11 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
   ctx.subscriptions.push(participant);
 }
 
-function summarise(args: Record<string, unknown> | undefined): string {
-  const a = args ?? {};
+function summarise(args: unknown): string {
+  if (!args || typeof args !== 'object') {
+    return '';
+  }
+  const a = args as Record<string, unknown>;
   const v = a.path ?? a.query ?? a.command ?? a.pattern ?? a.url ?? '';
   return typeof v === 'string' ? v.slice(0, 60) : '';
 }

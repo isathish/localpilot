@@ -4,6 +4,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { WorktreeManager } from '../agent/worktrees';
+import { gitPushTool } from '../tools/git';
 
 function git(args: string[], cwd: string): string {
   return cp.execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
@@ -157,6 +158,18 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     }
   });
 
+  test('git_push refuses a branch that carries the worktree snapshot commit', async () => {
+    const wt = await mgr.create(repo, 'session-push');
+    try {
+      git(['switch', '-q', '-c', 'feat/x'], wt.path);
+      const r = await gitPushTool.execute({}, { sessionId: 't', signal: new AbortController().signal, requestApproval: async () => true, progress: () => undefined, trackChange: async () => undefined, depth: 0, workspaceRoot: wt.path });
+      assert.ok(r.isError, r.content);
+      assert.match(r.content, /snapshot/);
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
   test('apply falls back to a 3-way merge and reports conflicts instead of giving up', async () => {
     const wt = await mgr.create(repo, 'session-4');
     try {
@@ -245,6 +258,36 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
       assert.strictEqual(info.subdir, path.join('packages', 'app'));
       assert.strictEqual(wt.subdir, info.subdir);
       assert.strictEqual(await fs.readFile(path.join(info.path, info.subdir!, 'index.ts'), 'utf8'), 'export {};\n');
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('an untracked nested repository is copied into the worktree (without its .git)', async () => {
+    const inner = path.join(repo, 'libs', 'inner');
+    await fs.mkdir(inner, { recursive: true });
+    initRepo(inner);
+    await fs.writeFile(path.join(inner, 'lib.ts'), 'export const x = 1;\n');
+    const progress: string[] = [];
+    const wt = await mgr.create(repo, 'nested', { progress: (t) => progress.push(t) });
+    try {
+      assert.strictEqual(await fs.readFile(path.join(wt.path, 'libs', 'inner', 'lib.ts'), 'utf8'), 'export const x = 1;\n');
+      await assert.rejects(fs.stat(path.join(wt.path, 'libs', 'inner', '.git')), 'the nested .git is not copied');
+      assert.ok(!progress.some((p) => /Not copied/.test(p)), progress.join('\n'));
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('create ignores the user\'s commit signing for its internal snapshot commits', async () => {
+    git(['config', 'commit.gpgsign', 'true'], repo);
+    git(['config', 'gpg.program', 'false'], repo);
+    const wt = await mgr.create(repo, 'signed');
+    try {
+      assert.ok(/^[0-9a-f]{40}$/.test(wt.base));
+      await fs.writeFile(path.join(wt.path, 'more.txt'), 'x\n');
+      await mgr.rebase(wt);
+      assert.deepStrictEqual(await mgr.changes(wt), []);
     } finally {
       await mgr.remove(wt);
     }

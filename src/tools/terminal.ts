@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../config';
+import { shellInvocation } from '../terminal/shell';
 import { Tool } from '../types';
 import { displayPath, resolveWorkspacePath } from './fs';
 
@@ -84,10 +85,11 @@ export const runCommandTool: Tool = {
         return { content: `$ ${command}\n${cleaned || '(no output)'}\n[exit code ${r.exitCode ?? 'null'}]`, isError: r.exitCode !== 0, data: { exitCode: r.exitCode ?? null, terminal: true } };
       }
     }
-    const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : process.env.SHELL ?? '/bin/zsh';
+    const sh = shellInvocation(command, { login: true });
     return new Promise((resolve) => {
-      const child = cp.spawn(shell, process.platform === 'win32' ? ['/c', command] : ['-lc', command], {
+      const child = cp.spawn(sh.file, sh.args, {
         cwd,
+        windowsVerbatimArguments: sh.windowsVerbatimArguments,
         env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', FORCE_COLOR: '0', NO_COLOR: '1' },
         // Own process group so a timeout/stop can take down everything the command started, not just the shell.
         detached: process.platform !== 'win32',
@@ -128,7 +130,7 @@ export const runCommandTool: Tool = {
 
 /** Removes CSI colour/cursor codes and OSC sequences (titles, hyperlinks, shell-integration 633/133 markers). */
 /** Kill the shell and every process it started (servers, watchers, test runners). */
-function killTree(child: cp.ChildProcess): void {
+export function killTree(child: cp.ChildProcess): void {
   // No exitCode check: the shell may be gone while a backgrounded child still holds the output pipes.
   if (child.pid === undefined) {
     return;

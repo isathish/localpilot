@@ -1,6 +1,6 @@
 import * as cp from 'child_process';
 import * as vscode from 'vscode';
-import { DEFAULT_PROVIDERS } from '../config';
+import { DEFAULT_PROVIDERS, editableProviders } from '../config';
 import { ProviderConfig } from '../types';
 import { isRemoteUrl, missingKeyReason, resolveApiKey } from './cloud';
 import { COLIBRI_DEFAULT_PORT } from './colibri';
@@ -271,7 +271,7 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
   if (added.length && opts.write !== false) {
     // Probing takes seconds: merge into the list as it is now, so a provider added meanwhile (Settings, Start
     // Gateway, setup) is kept, and a server that was added meanwhile is not added twice.
-    const current = vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
+    const { list: current, target } = editableProviders();
     const urls = new Set(current.map((p) => norm(p.baseUrl)));
     const taken = new Set(current.map((p) => p.id));
     const fresh = added.filter((a) => !urls.has(norm(a.baseUrl))).map((a) => {
@@ -283,8 +283,12 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
       return { ...a, id };
     });
     added.splice(0, added.length, ...fresh);
-    if (fresh.length) {
-      await vscode.workspace.getConfiguration('localpilot').update('providers', [...current, ...fresh], vscode.ConfigurationTarget.Global);
+    if (fresh.length && target !== vscode.ConfigurationTarget.Global) {
+      // A workspace list overrides the user one: leave the workspace file alone.
+      log.info(`auto-detect: found ${fresh.map((a) => `${a.id} (${a.baseUrl})`).join(', ')} but this workspace defines localpilot.providers; not adding`);
+      added.splice(0);
+    } else if (fresh.length) {
+      await vscode.workspace.getConfiguration('localpilot').update('providers', [...current, ...fresh], target);
       log.info(`auto-detect: added ${fresh.map((a) => `${a.id} (${a.baseUrl})`).join(', ')}`);
     }
   }

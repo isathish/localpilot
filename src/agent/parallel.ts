@@ -52,7 +52,6 @@ export interface Wave<T> {
  * satisfied, failed nor part of `items` stay out of every bucket (they wait for work someone else must do).
  */
 export function nextWave<T extends WaveItem>(items: readonly T[], satisfied: ReadonlySet<string>, failed: ReadonlySet<string>): Wave<T> {
-  const inSet = new Set(items.map((i) => i.id));
   const ready: T[] = [];
   const blocked: T[] = [];
   const waiting: T[] = [];
@@ -66,11 +65,20 @@ export function nextWave<T extends WaveItem>(items: readonly T[], satisfied: Rea
       waiting.push(item);
     }
   }
-  // A cycle is a waiting item whose unmet deps are all themselves waiting items in this set.
+  // Waiting items that can still run: their unmet deps are outside this set or (transitively) can run themselves.
+  // The rest wait only on each other — a cycle.
   const waitingIds = new Set(waiting.map((w) => w.id));
-  const cyclic = ready.length
-    ? []
-    : waiting.filter((w) => (w.dependsOn ?? []).filter((d) => !satisfied.has(d)).every((d) => waitingIds.has(d) && inSet.has(d)));
+  const live = new Set<string>();
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const w of waiting) {
+      if (!live.has(w.id) && (w.dependsOn ?? []).every((d) => d === w.id || satisfied.has(d) || !waitingIds.has(d) || live.has(d))) {
+        live.add(w.id);
+        grew = true;
+      }
+    }
+  }
+  const cyclic = ready.length ? [] : waiting.filter((w) => !live.has(w.id));
   return { ready, blocked, cyclic };
 }
 

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { getConfig } from '../config';
+import { effectiveContextWindow } from '../context/contextManager';
 import type { ProviderRegistry } from '../providers/registry';
 
 export type ApprovalKind = 'terminal' | 'write' | 'delete' | 'network';
@@ -26,24 +28,26 @@ export interface AutoVerdict {
  * positive costs one prompt, a false negative could cost the user's data.
  */
 const RISKY_COMMANDS: [RegExp, string][] = [
-  [/\brm\s+(?:-\w*\s+)*-\w*[rR]\w*\b|\brm\s.*--recursive\b|\brm\s+(?:-\w*\s+)*-\w*f\w*\s+[~/*]/, 'recursive or forced delete'],
-  [/\bsudo\b|\bdoas\b|\brunas\b/, 'raises privileges'],
-  [/\bgit\s+push\b/, 'publishes to a remote'],
-  [/\bgit\s+(?:reset\s+--hard|clean\s+-\w*f|checkout\s+--\s+\.|restore\s+(?:--\S+\s+)*\.(?:\s|$)|branch\s+-D|stash\s+(?:drop|clear))/, 'discards work'],
-  [/\b(?:curl|wget|iwr|Invoke-WebRequest)\b[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\biex\b/, 'runs a downloaded script'],
+  [/\brm\s+(?:-\w*\s+)*-\w*[rR]\w*\b|\brm\s.*--recursive\b|\brm\s+(?:-\w*\s+)*-\w*f\w*\s+[~/*]/i, 'recursive or forced delete'],
+  [/\b(?:rd|rmdir)\b.*\/s\b|\b(?:del|erase)\b.*\/s\b|\b(?:remove-item|ri)\b.*\s-r(?:ecurse)?\b|\bfind\b.*\s-delete\b|\brimraf\b/i, 'recursive or forced delete'],
+  [/\bsudo\b|\bdoas\b|\brunas\b/i, 'raises privileges'],
+  [/\bgit\b.*\bpush\b/i, 'publishes to a remote'],
+  [/\bgit\b.*\breset\b.*--hard|\bgit\b.*\bcheckout\b.*(?:\s-f\b|--force|\s\.(?:\s|$)|--\s+\.)|\bgit\b.*\brestore\b(?!.*--staged)|\bgit\b.*\bclean\b.*(?:\s-[a-z]*f|--force)|\bgit\b.*\bstash\s+(?:drop|clear)\b/i, 'discards work'],
+  [/\bgit\b.*\bbranch\s+(?:-\w*D|--delete\s+--force|--force\s+--delete)/, 'discards work'],
+  [/\b(?:curl|wget|iwr|Invoke-WebRequest)\b[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\biex\b/i, 'runs a downloaded script'],
   [/\bmkfs\b|\bdd\s+if=|\bdiskutil\s+erase|\bformat\s+[a-z]:/i, 'writes a disk directly'],
   [/:\(\)\s*\{\s*:\s*\|\s*:/, 'fork bomb'],
-  [/\bchmod\s+(?:-\w+\s+)*[0-7]?777\b|\bchown\s+-R\b/, 'changes permissions broadly'],
-  [/\b(?:shutdown|reboot|halt|poweroff)\b|\bkillall\b|\bpkill\b/, 'stops the machine or other processes'],
-  [/\b(?:npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+(?:release|pr\s+merge|repo\s+delete)\b|\bvsce\s+publish\b/, 'publishes a package or release'],
+  [/\bchmod\s+(?:-\w+\s+)*[0-7]?777\b|\bchown\s+-R\b/i, 'changes permissions broadly'],
+  [/\b(?:shutdown|reboot|halt|poweroff)\b|\bkillall\b|\bpkill\b/i, 'stops the machine or other processes'],
+  [/\b(?:npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+(?:release|pr\s+merge|repo\s+delete)\b|\bvsce\s+publish\b/i, 'publishes a package or release'],
   [/\b(?:drop|truncate)\s+(?:table|database|schema)\b/i, 'destroys database data'],
-  [/\bkubectl\s+(?:delete|apply)\b|\bterraform\s+(?:apply|destroy)\b|\bhelm\s+(?:uninstall|delete)\b/, 'changes live infrastructure'],
-  [/\bdocker\s+(?:system|volume|image)\s+prune\b|\bdocker\s+rm\s+-f\b/, 'deletes containers or data'],
-  [/\b(?:ssh|scp|rsync)\s+\S*@/, 'connects to another machine'],
-  [/>\s*\/dev\/sd|>\s*\/etc\//, 'overwrites system files'],
+  [/\bkubectl\s+(?:delete|apply)\b|\bterraform\s+(?:apply|destroy)\b|\bhelm\s+(?:uninstall|delete)\b/i, 'changes live infrastructure'],
+  [/\bdocker\s+(?:system|volume|image)\s+prune\b|\bdocker\s+rm\s+-f\b/i, 'deletes containers or data'],
+  [/\b(?:ssh|scp|rsync)\s+\S*@/i, 'connects to another machine'],
+  [/>\s*\/dev\/sd|>\s*\/etc\//i, 'overwrites system files'],
 ];
 
-const SENSITIVE_PATHS = /(?:^|[\s/\\])(?:(?:\.ssh|\.git|\.aws|\.gnupg)[/\\]|(?:\.env(?:\.[\w-]+)?|id_(?:rsa|ed25519|ecdsa)|\.npmrc|\.pypirc|\.netrc|credentials(?:\.json)?|secrets?\.(?:json|ya?ml|toml))(?=\s|$|[/\\]))/i;
+const SENSITIVE_PATHS = /(?:^|[\s/\\'"=])(?:(?:\.ssh|\.git|\.aws|\.gnupg)(?=[/\\\s'"]|$)|(?:\.env(?:\.[\w-]+)?|id_(?:rsa|ed25519|ecdsa)|\.npmrc|\.pypirc|\.netrc|credentials(?:\.json)?|secrets?\.(?:json|ya?ml|toml))(?=[\s'"]|$|[/\\]))/i;
 
 /** Why auto mode must ask about this action, or undefined when the reviewer may decide. */
 export function hardRisk(kind: ApprovalKind, title: string, detail: string): string | undefined {
@@ -53,6 +57,9 @@ export function hardRisk(kind: ApprovalKind, title: string, detail: string): str
       if (re.test(text)) {
         return why;
       }
+    }
+    if (SENSITIVE_PATHS.test(` ${detail} `)) {
+      return 'touches secrets or git internals';
     }
   }
   if ((kind === 'write' || kind === 'delete') && SENSITIVE_PATHS.test(` ${title} `)) {
@@ -110,9 +117,9 @@ export class AutoReviewer {
     req.signal?.addEventListener('abort', onOuter);
     try {
       const { provider, model } = await this.providers.route({ role: 'fast', modelRef: modelRef || undefined });
-      const user = `User's request:\n${req.request.slice(0, 2000)}\n\nAction (${req.kind}): ${req.title}\n${req.detail.slice(0, 3000)}`;
+      const user = `User's request:\n${req.request.length > 2000 ? `…${req.request.slice(-2000)}` : req.request}\n\nAction (${req.kind}): ${req.title}\n${req.detail.slice(0, 3000)}`;
       let out = '';
-      for await (const ev of provider.chat({ model: model.modelId, messages: [{ role: 'system', content: REVIEW_PROMPT }, { role: 'user', content: user }], temperature: 0, think: false, maxTokens: 200, contextWindow: model.contextWindow, signal: abort.signal })) {
+      for await (const ev of provider.chat({ model: model.modelId, messages: [{ role: 'system', content: REVIEW_PROMPT }, { role: 'user', content: user }], temperature: 0, think: false, maxTokens: 200, contextWindow: effectiveContextWindow(model, getConfig().contextWindow), keepAlive: getConfig().keepAlive || undefined, signal: abort.signal })) {
         if (ev.type === 'text') {
           out += ev.text;
         }

@@ -66,6 +66,17 @@ suite('LocalPilot MCP client', () => {
         depth: 0,
       });
       assert.ok(declined.isError && /declined/.test(declined.content), 'MCP calls honour approvals and permission rules');
+      assert.ok(!tool.readOnly, 'a tool without readOnlyHint counts as able to change state');
+      const blocked = await tool.execute({ text: 'hello' }, {
+        sessionId: 't',
+        signal: new AbortController().signal,
+        requestApproval: async () => true,
+        progress: () => undefined,
+        trackChange: async () => undefined,
+        depth: 0,
+        readOnly: true,
+      });
+      assert.ok(blocked.isError && /read-only|Plan\/Ask/.test(blocked.content), 'read-only modes refuse MCP tools not annotated read-only');
     } finally {
       mcp.dispose();
     }

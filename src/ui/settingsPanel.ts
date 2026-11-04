@@ -5,7 +5,7 @@ import { CatalogEntry, SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
 import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
-import { DEFAULT_PROVIDERS, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
+import { editableProviders, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
 import { isRemoteUrl, keyStatus, KeyStatus } from '../providers/cloud';
 import { sanitizeProviderConfig } from '../providers/sanitize';
@@ -675,11 +675,12 @@ export class SettingsPanel implements vscode.Disposable {
     const cfg = vscode.workspace.getConfiguration('localpilot');
     if (m.providers?.length) {
       // Merge: keep everything the user already configured, add newly detected servers.
-      const existing = cfg.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS).map(sanitizeProvider);
+      const { list, target } = editableProviders();
+      const existing = list.map(sanitizeProvider);
       const known = new Set(existing.map((p) => p.baseUrl.replace(/\/+$/, '')));
       const added = m.providers.map(sanitizeProvider).filter((p) => !known.has(p.baseUrl));
       if (added.length) {
-        await cfg.update('providers', [...existing, ...added], vscode.ConfigurationTarget.Global);
+        await cfg.update('providers', [...existing, ...added], target);
       }
     }
     if (m.model) {

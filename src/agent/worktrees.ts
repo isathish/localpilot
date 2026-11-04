@@ -111,6 +111,7 @@ export class WorktreeManager {
     }
     progress('Preparing an isolated copy of the repository…');
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD'], repo).catch(() => '')).trim();
+    opts.signal?.throwIfAborted();
     if (head) {
       await git(['worktree', 'add', '--detach', dir, head], repo);
     } else {
@@ -119,44 +120,72 @@ export class WorktreeManager {
         await git(['worktree', 'add', '--orphan', '-b', `localpilot-${id}`, dir], repo);
       });
     }
-    // Carry the user's work in progress over: tracked modifications as a patch, untracked (non-ignored) files as copies.
-    if (head) {
-      const patch = await gitBuffer(['diff', '--binary', 'HEAD'], repo);
-      if (patch.length) {
-        const file = path.join(os.tmpdir(), `localpilot-seed-${process.pid}-${Date.now()}.patch`);
-        await fs.promises.writeFile(file, patch);
-        try {
-          await git(['apply', '--whitespace=nowarn', file], dir);
-        } catch (e) {
-          this.log.warn(`worktree ${id}: could not carry over uncommitted changes: ${String(e)}`);
-        } finally {
-          await fs.promises.rm(file, { force: true });
+    try {
+      opts.signal?.throwIfAborted();
+      // Carry the user's work in progress over: tracked modifications as a patch, untracked (non-ignored) files as copies.
+      if (head) {
+        const patch = await gitBuffer(['diff', '--binary', 'HEAD'], repo);
+        if (patch.length) {
+          const file = path.join(os.tmpdir(), `localpilot-seed-${process.pid}-${Date.now()}.patch`);
+          await fs.promises.writeFile(file, patch);
+          try {
+            await git(['apply', '--whitespace=nowarn', file], dir);
+          } catch (e) {
+            this.log.warn(`worktree ${id}: could not carry over uncommitted changes: ${String(e)}`);
+          } finally {
+            await fs.promises.rm(file, { force: true });
+          }
         }
       }
-    }
-    const untracked = (await git(['ls-files', '--others', '--exclude-standard', '-z'], repo)).split('\0').filter(Boolean);
-    for (const rel of untracked) {
-      const src = path.join(repo, rel);
-      const dst = path.join(dir, rel);
-      try {
-        await fs.promises.mkdir(path.dirname(dst), { recursive: true });
-        await fs.promises.copyFile(src, dst);
-      } catch {
-        /* unreadable or vanished file: skip */
+      opts.signal?.throwIfAborted();
+      const untracked = (await git(['ls-files', '--others', '--exclude-standard', '-z'], repo)).split('\0').filter(Boolean);
+      const notCopied: string[] = [];
+      for (const rel of untracked) {
+        const src = path.join(repo, rel);
+        const dst = path.join(dir, rel);
+        try {
+          await fs.promises.mkdir(path.dirname(dst), { recursive: true });
+          if (rel.endsWith('/')) {
+            // A nested repository: copy its files, not its .git.
+            await fs.promises.cp(src, dst, { recursive: true, filter: (p) => path.basename(p) !== '.git' });
+          } else {
+            await fs.promises.copyFile(src, dst);
+          }
+        } catch {
+          notCopied.push(rel);
+        }
       }
+      if (notCopied.length) {
+        const shown = notCopied.slice(0, 10).join(', ') + (notCopied.length > 10 ? ` and ${notCopied.length - 10} more` : '');
+        progress(`Not copied into the isolated workspace: ${shown}`);
+        this.log.warn(`worktree ${id}: not copied: ${notCopied.join(', ')}`);
+      }
+      const submodules = (await git(['ls-files', '-s', '-z'], repo).catch(() => ''))
+        .split('\0')
+        .filter((l) => l.startsWith('160000'))
+        .map((l) => l.slice(l.indexOf('\t') + 1));
+      for (const sub of submodules) {
+        progress(`Submodule ${sub} is not available in the isolated copy; edits there will not be applied`);
+        this.log.warn(`worktree ${id}: submodule ${sub} is not available in the isolated copy`);
+      }
+      opts.signal?.throwIfAborted();
+      await this.runSetup(repo, dir, progress, opts.signal, opts.setupTimeoutMs ?? 10 * 60_000);
+      opts.signal?.throwIfAborted();
+      // Record the seeded + set-up state as the base commit so only the agent's own changes show up later.
+      await git(['add', '-A'], dir);
+      await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: workspace snapshot (base)'], dir);
+      const base = (await git(['rev-parse', 'HEAD'], dir)).trim();
+      // Only a folder inside the repository is a subfolder of the copy.
+      const subdir = opts.subdir && !path.isAbsolute(opts.subdir) && !opts.subdir.split(/[\\/]/).includes('..') ? path.normalize(opts.subdir) : undefined;
+      const info: WorktreeInfo = { path: dir, base, repo, createdAt: Date.now(), subdir, owner: opts.owner };
+      // Bookkeeping lives next to the worktree, not inside it, so it never shows up as a change.
+      await fs.promises.writeFile(`${dir}.json`, JSON.stringify({ id, repo, base, createdAt: info.createdAt, subdir: info.subdir, owner: info.owner }));
+      this.log.info(`worktree ${id}: created at ${dir} (base ${base.slice(0, 8)})`);
+      return info;
+    } catch (e) {
+      await this.removePath(repo, dir);
+      throw e;
     }
-    await this.runSetup(repo, dir, progress, opts.signal, opts.setupTimeoutMs ?? 10 * 60_000);
-    // Record the seeded + set-up state as the base commit so only the agent's own changes show up later.
-    await git(['add', '-A'], dir);
-    await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'LocalPilot: workspace snapshot (base)'], dir);
-    const base = (await git(['rev-parse', 'HEAD'], dir)).trim();
-    // Only a folder inside the repository is a subfolder of the copy.
-    const subdir = opts.subdir && !path.isAbsolute(opts.subdir) && !opts.subdir.split(/[\\/]/).includes('..') ? path.normalize(opts.subdir) : undefined;
-    const info: WorktreeInfo = { path: dir, base, repo, createdAt: Date.now(), subdir, owner: opts.owner };
-    // Bookkeeping lives next to the worktree, not inside it, so it never shows up as a change.
-    await fs.promises.writeFile(`${dir}.json`, JSON.stringify({ id, repo, base, createdAt: info.createdAt, subdir: info.subdir, owner: info.owner }));
-    this.log.info(`worktree ${id}: created at ${dir} (base ${base.slice(0, 8)})`);
-    return info;
   }
 
   /** Reads `.localpilot/worktrees.json` of the repository. */
@@ -174,10 +203,12 @@ export class WorktreeManager {
     const setup = this.readSetup(repo);
     const commands = [...(setup?.setup ?? []), ...((process.platform === 'win32' ? setup?.['setup-windows'] : setup?.['setup-unix']) ?? [])].filter((c) => typeof c === 'string' && c.trim());
     for (const command of commands) {
+      signal?.throwIfAborted();
       progress(`Setting up the isolated copy: ${command}`);
       try {
         await shell(command, dir, signal, timeoutMs);
       } catch (e) {
+        signal?.throwIfAborted();
         this.log.warn(`worktree setup "${command}" failed: ${String(e)}`);
         progress(`Setup command failed (continuing): ${command}`);
       }
@@ -288,7 +319,7 @@ export class WorktreeManager {
   /** Make the worktree's current state its new base (after applying), so later diffs show only new work. */
   async rebase(wt: WorktreeInfo): Promise<void> {
     await git(['add', '-A'], wt.path);
-    await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'LocalPilot: applied to workspace'], wt.path);
+    await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace'], wt.path);
     wt.base = (await git(['rev-parse', 'HEAD'], wt.path)).trim();
     const meta = `${wt.path}.json`;
     try {
@@ -389,9 +420,29 @@ async function git(args: string[], cwd: string): Promise<string> {
 
 function shell(command: string, cwd: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = cp.spawn(command, { cwd, shell: true, stdio: 'ignore' });
-    const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    const off = onAbort(signal, () => child.kill('SIGKILL'));
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+      return;
+    }
+    // Its own process group, so a timeout or Stop ends what the command started, not just the shell.
+    const child = cp.spawn(command, { cwd, shell: true, stdio: 'ignore', detached: process.platform !== 'win32' });
+    const killTree = () => {
+      if (!child.pid || child.exitCode !== null) {
+        child.kill('SIGKILL');
+        return;
+      }
+      if (process.platform === 'win32') {
+        cp.spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).on('error', () => child.kill('SIGKILL'));
+        return;
+      }
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
+    const t = setTimeout(killTree, timeoutMs);
+    const off = onAbort(signal, killTree);
     child.on('close', off);
     child.on('error', (e) => {
       clearTimeout(t);

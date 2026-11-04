@@ -6,6 +6,7 @@ import { thinkFor } from '../agent/thinking';
 import { ollamaThink, OllamaProvider } from '../providers/ollama';
 import { askUserTool, formatAnswers, parseQuestions } from '../tools/editor';
 import { ToolContext } from '../types';
+import { ChatController } from '../ui/chatController';
 
 suite('Conversation: questions before work and thinking per task', () => {
   test('auto thinking: deep for Plan/Debug, medium for the agent, light for Ask and subagents, none for helpers', () => {
@@ -104,5 +105,15 @@ suite('Conversation: questions before work and thinking per task', () => {
     } finally {
       srv.close();
     }
+  });
+
+  test('@localpilot sessions answer approvals and questions natively instead of waiting for a card', async () => {
+    const c = Object.create(ChatController.prototype) as any;
+    c.sinks = new Set([{ post() {}, handlesPrompts: (s: string) => s === 'p1' }]);
+    assert.strictEqual(await c.requestQuestions('p1', [{ question: 'q', options: [] }]), undefined);
+    assert.strictEqual(c.promptsNative('other'), true, 'no card surface attached');
+    c.sinks.add({ post() {} });
+    assert.strictEqual(c.promptsNative('p1'), true);
+    assert.strictEqual(c.promptsNative('other'), false);
   });
 });

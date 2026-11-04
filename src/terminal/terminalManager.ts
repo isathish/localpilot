@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { stripAnsi } from '../tools/terminal';
 
@@ -147,7 +148,9 @@ export class TerminalManager implements vscode.Disposable {
     if (existing && existing.exitStatus === undefined) {
       return existing;
     }
-    const term = vscode.window.createTerminal({ name: 'LocalPilot Agent', cwd, ...this.brand(), isTransient: true });
+    // Nobody answers prompts in the agent terminal: pagers print straight through and editors exit at once.
+    const env = { CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', GH_PAGER: 'cat', MANPAGER: 'cat', AWS_PAGER: '', GIT_EDITOR: 'true', VISUAL: 'true', EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no', GIT_TERMINAL_PROMPT: '0' };
+    const term = vscode.window.createTerminal({ name: 'LocalPilot Agent', cwd, env, ...this.brand(), isTransient: true });
     this.agentTerminals.set(sessionId, term);
     return term;
   }
@@ -191,15 +194,15 @@ export class TerminalManager implements vscode.Disposable {
     if (signal.aborted) {
       return { output: 'Not run: the user stopped the run.', exitCode: undefined };
     }
-    const inCwd = si.cwd?.fsPath === cwd ? command : `cd ${quote(cwd)} && ${command}`;
+    const inCwd = samePath(si.cwd?.fsPath, cwd) ? command : inDir(cwd, command, (term.state as { shell?: string }).shell ?? vscode.env.shell);
     const exec = si.executeCommand(inCwd);
     let output = '';
     let exitCode: number | undefined;
+    let sub: vscode.Disposable | undefined;
     const done = new Promise<'done'>((resolve) => {
-      const sub = vscode.window.onDidEndTerminalShellExecution((e) => {
+      sub = vscode.window.onDidEndTerminalShellExecution((e) => {
         if (e.execution === exec) {
           exitCode = e.exitCode;
-          sub.dispose();
           resolve('done');
         }
       });
@@ -214,11 +217,19 @@ export class TerminalManager implements vscode.Disposable {
     const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), timeoutMs));
     const aborted = new Promise<'aborted'>((r) => signal.addEventListener('abort', () => r('aborted'), { once: true }));
     const result = await Promise.race([done, timeout, aborted]);
+    sub?.dispose();
     if (result !== 'done') {
       term.sendText('\u0003', false); // Ctrl+C the running command
       output += `\n[${result === 'timeout' ? `timed out after ${timeoutMs / 1000}s` : 'cancelled'}]`;
     }
     await Promise.race([reader, new Promise((r) => setTimeout(r, 500))]);
+    if (result !== 'done') {
+      // ^C may not reach a pager or prompt that grabbed the TTY: never hand a possibly stuck shell to the next command.
+      term.dispose();
+      if (this.agentTerminals.get(sessionId) === term) {
+        this.agentTerminals.delete(sessionId);
+      }
+    }
     return { output: stripAnsi(output).replace(/\r\n?/g, '\n'), exitCode };
   }
 
@@ -228,6 +239,28 @@ export class TerminalManager implements vscode.Disposable {
   }
 }
 
-function quote(p: string): string {
-  return process.platform === 'win32' ? `"${p}"` : `'${p.replace(/'/g, `'\\''`)}'`;
+/** Whether two directories are the same; on Windows case and separators do not matter. */
+export function samePath(a: string | undefined, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (a === undefined) {
+    return false;
+  }
+  if (platform === 'win32') {
+    return path.win32.relative(a, b) === '';
+  }
+  const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+  return trim(a) === trim(b);
+}
+
+/** `command` run in `cwd`, in the syntax of the terminal's shell (PowerShell 5.1 has no `&&`). */
+export function inDir(cwd: string, command: string, shell: string | undefined, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') {
+    const name = shell ? path.win32.basename(shell) : '';
+    if (!shell || /^(pwsh|powershell)(\.exe)?$/i.test(name)) {
+      return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; if ($?) { ${command} }`;
+    }
+    if (/^cmd(\.exe)?$/i.test(name)) {
+      return `cd /d "${cwd}" && ${command}`;
+    }
+  }
+  return `cd '${cwd.replace(/'/g, `'\\''`)}' && ${command}`;
 }

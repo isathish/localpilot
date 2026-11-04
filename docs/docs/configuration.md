@@ -136,7 +136,7 @@ Administrators can deploy a policy that users and projects cannot override. Loca
 | Linux | `/etc/localpilot/managed-settings.json` |
 | Windows | `%ProgramData%\LocalPilot\managed-settings.json` |
 
-The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, for testing or a non-standard deployment. Changes apply within a few seconds, without restarting VS Code. A policy only tightens: it never grants anything a user's own settings refuse.
+The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, for testing or a non-standard deployment; it is used only when the system file above does not exist, so it cannot replace a deployed policy. Changes apply within a few seconds, without restarting VS Code. A policy only tightens: it never grants anything a user's own settings refuse.
 
 ```jsonc
 {

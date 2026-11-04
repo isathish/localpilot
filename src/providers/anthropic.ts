@@ -1,6 +1,7 @@
 import { ChatMessage, ChatRequestOptions, CompletionRequestOptions, LLMProvider, ModelInfo, ProviderConfig, StreamEvent, ToolCall } from '../types';
 import { completeViaChat, isCloudProvider, knownContextWindow, resolveApiKey } from './cloud';
 import { getJson, HttpError, newId, streamSse, withTimeout } from './http';
+import { imageMime } from './imageMime';
 
 const API_VERSION = '2023-06-01';
 
@@ -30,8 +31,11 @@ interface AnthropicEvent {
   content_block?: { type: string; id?: string; name?: string; text?: string; thinking?: string; signature?: string; data?: string };
   delta?: { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string; stop_reason?: string };
   usage?: { output_tokens?: number };
-  error?: { message?: string };
+  error?: { type?: string; message?: string };
 }
+
+/** HTTP status equivalent of an error event sent inside the stream, so it is retried like the same error sent as a response. */
+const STREAM_ERROR_STATUS: Record<string, number> = { overloaded_error: 529, api_error: 500, rate_limit_error: 429, request_too_large: 413, authentication_error: 401, permission_error: 403, billing_error: 402, invalid_request_error: 400 };
 
 /**
  * How a Claude model takes the `thinking` option:
@@ -143,7 +147,7 @@ export class AnthropicProvider implements LLMProvider {
     for await (const ev of this.stream(body, messages, opts.signal)) {
       switch (ev.type) {
         case 'error':
-          throw new Error(ev.error?.message ?? 'provider error');
+          throw new HttpError(STREAM_ERROR_STATUS[ev.error?.type ?? ''] ?? 500, JSON.stringify(ev.error ?? { message: 'provider error' }), `${this.baseUrl}/messages`);
         case 'message_start': {
           const u = ev.message?.usage;
           promptTokens = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : undefined;
@@ -379,7 +383,7 @@ export function toAnthropicMessages(input: ChatMessage[], thinkingFor?: (callId:
         push('assistant', blocks);
       }
     } else {
-      const blocks: Block[] = (m.images ?? []).map((data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }));
+      const blocks: Block[] = (m.images ?? []).map((data) => ({ type: 'image', source: { type: 'base64', media_type: imageMime(data), data } }));
       if (m.content?.trim()) {
         blocks.push({ type: 'text', text: m.content });
       }

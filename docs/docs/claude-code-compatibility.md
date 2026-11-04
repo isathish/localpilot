@@ -60,7 +60,7 @@ A rule is `Tool` or `Tool(specifier)`, using Claude Code's tool names.
 | `Task(agent)`, `Skill(name)` | Subagent runs, skill loads |
 | `run_command(git *)`, `read_file` | Any LocalPilot tool name, used directly |
 
-**Chained shell commands.** A command such as `a && b | c` is allowed only if every part is allowed. It is denied if any part is denied.
+**Chained shell commands.** `&&`, `||`, `;`, `|`, `|&`, `&` and newlines split a command into parts. A command such as `a && b | c` is allowed only if every part is allowed. It is denied if any part is denied. A command that contains `$(…)`, backticks or process substitution (`<(…)`, `>(…)`) is never auto-allowed by an allow rule; you are asked instead.
 
 **Path patterns** for `Edit`, `Write` and `Read`:
 

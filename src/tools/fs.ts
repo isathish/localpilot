@@ -19,6 +19,14 @@ export function displayPath(uri: vscode.Uri, ctx: ToolContext): string {
   if (ctx.workspaceRoot && isWithin(uri.fsPath, ctx.workspaceRoot)) {
     return path.relative(ctx.workspaceRoot, uri.fsPath) || '.';
   }
+  // Another workspace folder or registered repository: relative to the agent's root so the path resolves back to the
+  // same file (asRelativePath would prefix the folder name, e.g. `api/src/index.ts`, which lands in folder #1).
+  if (ctx.workspaceRoot) {
+    const others = [...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath), ...registeredRepoPaths(ctx.mainRoot ?? ctx.workspaceRoot)];
+    if (others.some((r) => isWithin(uri.fsPath, r))) {
+      return path.relative(ctx.workspaceRoot, uri.fsPath);
+    }
+  }
   return vscode.workspace.asRelativePath(uri, false);
 }
 
@@ -112,7 +120,17 @@ export const writeFileTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    const content = typeof args.content === 'string' ? args.content : '';
+    let content: string;
+    let note = '';
+    if (typeof args.content === 'string') {
+      content = args.content;
+    } else if (args.content !== null && typeof args.content === 'object' && /\.jsonc?$/i.test(uri.fsPath)) {
+      // Models sometimes pass a JSON file's content as the parsed object instead of its text.
+      content = `${JSON.stringify(args.content, null, 2)}\n`;
+      note = ' (content was an object; written as JSON)';
+    } else {
+      return { content: 'write_file needs "content": the complete file text as a string. Nothing was written.', isError: true };
+    }
     let exists = true;
     try {
       const st = await vscode.workspace.fs.stat(uri);
@@ -143,7 +161,7 @@ export const writeFileTool: Tool = {
     }
     const doc = await vscode.workspace.openTextDocument(uri);
     await doc.save();
-    return { content: `${exists ? 'Updated' : 'Created'} ${displayPath(uri, ctx)} (${doc.lineCount} lines).`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
+    return { content: `${exists ? 'Updated' : 'Created'} ${displayPath(uri, ctx)} (${doc.lineCount} lines).${note}`, data: { path: uri.fsPath, kind: exists ? 'update' : 'create' } };
   },
 };
 
@@ -165,8 +183,13 @@ export const editFileTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
-    let oldText = typeof args.old_text === 'string' ? args.old_text : '';
-    let newText = typeof args.new_text === 'string' ? args.new_text : '';
+    const rawOld = args.old_text ?? args.old_string;
+    const rawNew = args.new_text ?? args.new_string;
+    if (typeof rawOld !== 'string' || typeof rawNew !== 'string') {
+      return { content: 'edit_file needs "old_text" (exact text to replace, "" to append) and "new_text" (replacement) as strings. Nothing was changed.', isError: true };
+    }
+    let oldText = rawOld;
+    let newText = rawNew;
     let note = '';
     let doc: vscode.TextDocument;
     try {
@@ -179,13 +202,20 @@ export const editFileTool: Tool = {
       return { content: `${displayPath(uri, ctx)} does not exist, so there is nothing to replace. Use write_file to create it.`, isError: true };
     }
     const text = doc.getText();
+    // Models write "\n"; a CRLF file only matches (and stays consistent) with its own line endings.
+    const crlf = text.includes('\r\n');
+    const eol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : s);
+    const lf = (s: string) => s.replace(/\r\n/g, '\n');
     // Small models copy read_file's line-number gutter ("   12 | ") into old_text/new_text; take it off before matching.
-    const bare = !text.includes(oldText) ? stripGutter(oldText) : undefined;
-    if (bare !== undefined && text.includes(bare)) {
+    const bare = !text.includes(eol(oldText)) ? stripGutter(lf(oldText)) : undefined;
+    if (bare !== undefined && text.includes(eol(bare))) {
       oldText = bare;
-      newText = stripGutter(newText) ?? newText;
+      newText = stripGutter(lf(newText)) ?? newText;
       note = ' (the "NN | " line-number prefixes from read_file were removed from old_text/new_text — leave them out next time)';
     }
+    oldText = eol(oldText);
+    newText = eol(newText);
+    let replaced = oldText;
     let range: vscode.Range;
     if (!oldText) {
       range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
@@ -197,7 +227,15 @@ export const editFileTool: Tool = {
         if (!loose) {
           return { content: `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`, isError: true };
         }
-        range = new vscode.Range(doc.positionAt(loose.start), doc.positionAt(loose.end));
+        // The match starts after the line's indentation; replace from the line start and give new_text the file's indentation.
+        const lineStart = text.lastIndexOf('\n', loose.start - 1) + 1;
+        const start = /^[ \t]*$/.test(text.slice(lineStart, loose.start)) ? lineStart : loose.start;
+        replaced = text.slice(start, loose.end);
+        if (start === lineStart) {
+          newText = eol(reindent(lf(oldText), lf(replaced), lf(newText)));
+        }
+        note = ' (matched ignoring whitespace; indentation adapted to the file — re-read and check)';
+        range = new vscode.Range(doc.positionAt(start), doc.positionAt(loose.end));
       } else {
         if (text.indexOf(oldText, first + 1) >= 0) {
           return { content: 'old_text matches more than once; include more surrounding context to make it unique.', isError: true };
@@ -205,13 +243,13 @@ export const editFileTool: Tool = {
         range = new vscode.Range(doc.positionAt(first), doc.positionAt(first + oldText.length));
       }
     }
-    const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview(oldText, newText), 'write');
+    const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview(lf(replaced), lf(newText)), 'write');
     if (!ok) {
       return { content: 'User declined the edit.', isError: true };
     }
     await ctx.trackChange(uri.fsPath);
     const edit = new vscode.WorkspaceEdit();
-    edit.replace(uri, range, oldText ? newText : `\n${newText}`);
+    edit.replace(uri, range, oldText ? newText : `${crlf ? '\r\n' : '\n'}${newText}`);
     if (!(await vscode.workspace.applyEdit(edit))) {
       return { content: `Failed to apply the edit to ${displayPath(uri, ctx)} (the file may be read-only or changed underneath). Re-read it and retry.`, isError: true };
     }
@@ -292,8 +330,47 @@ export function stripGutter(text: string): string | undefined {
   return lines.map((l) => l.replace(gutter, '')).join('\n');
 }
 
+/**
+ * `newText` re-indented for a whitespace-insensitive match: each indentation used in `oldText` maps to the file's
+ * indentation on the matching line; other lines swap the common old indentation for the first matched line's.
+ */
+function reindent(oldText: string, matched: string, newText: string): string {
+  const indentOf = (l: string) => /^[ \t]*/.exec(l)![0];
+  const oldLines = oldText.split('\n').filter((l) => l.trim());
+  const fileLines = matched.split('\n').filter((l) => l.trim());
+  const map = new Map<string, string>();
+  if (oldLines.length === fileLines.length) {
+    oldLines.forEach((l, i) => {
+      if (!map.has(indentOf(l))) {
+        map.set(indentOf(l), indentOf(fileLines[i]));
+      }
+    });
+  }
+  const oldIndent = oldLines.map(indentOf).reduce((a, b) => {
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) {
+      i++;
+    }
+    return a.slice(0, i);
+  }, oldLines.length ? indentOf(oldLines[0]) : '');
+  const fileIndent = indentOf(matched);
+  return newText
+    .split('\n')
+    .map((l) => {
+      if (!l.trim()) {
+        return l;
+      }
+      const mapped = map.get(indentOf(l));
+      if (mapped !== undefined) {
+        return mapped + l.slice(indentOf(l).length);
+      }
+      return l.startsWith(oldIndent) ? fileIndent + l.slice(oldIndent.length) : l;
+    })
+    .join('\n');
+}
+
 function fuzzyFind(haystack: string, needle: string): { start: number; end: number } | undefined {
-  const norm = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
+  const norm = (s: string) => s.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
   const n = norm(needle);
   if (!n) {
     return undefined;
@@ -304,6 +381,9 @@ function fuzzyFind(haystack: string, needle: string): { start: number; end: numb
   let prevSpace = false;
   for (let i = 0; i < haystack.length; i++) {
     const ch = haystack[i];
+    if (ch === '\r' && haystack[i + 1] === '\n') {
+      continue;
+    }
     if (ch === ' ' || ch === '\t') {
       if (prevSpace) {
         continue;

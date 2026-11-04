@@ -7,17 +7,24 @@ import { ALL_MODES, Session } from '../types';
 
 const EXT_ID = 'localpilot.localpilot-agent';
 
+/** Run requests the CLI wrote to ~/.localpilot/handoff are trusted for this long. */
+const HANDOFF_TTL_MS = 2 * 60_000;
+
 /**
  * `localpilot` terminal command. The shell shim forwards the prompt to VS Code through a
  * `vscode://localpilot.localpilot-agent/run?...` URI, so `localpilot "fix the failing tests"`
  * opens LocalPilot in the current workspace and starts an agent — like the `cursor`/`claude` CLIs.
  * Also handles `/new`, `/settings?section=…`, `/setup` and `/terminal?run=…` deep links (`localpilot --settings`, `localpilot --setup`).
+ * Any page can open such a link, so a run is trusted only when it carries the id of a fresh one-time file the CLI
+ * wrote under ~/.localpilot/handoff; otherwise its files are limited to the workspace and the user confirms it first.
+ * Commands for the terminal are always confirmed.
  */
 export function registerUriHandler(ctx: vscode.ExtensionContext, controller: ChatController, reveal: () => void): void {
   ctx.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
         // `uri.query` is already percent-decoded by VS Code; parse it ourselves so '+' and '%' in prompts survive.
+        // CLI links (v=2) encode values twice so a '&' or '=' inside a prompt survives that first decode.
         const params = new Map<string, string>();
         for (const part of uri.query.split('&')) {
           const eq = part.indexOf('=');
@@ -25,18 +32,40 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
             params.set(part.slice(0, eq), part.slice(eq + 1));
           }
         }
-        const prompt = (params.get('prompt') ?? '').trim();
-        const mode = ((ALL_MODES as readonly string[]).includes(params.get('mode') ?? '') ? params.get('mode') : 'agent') as Session['mode'];
-        const files = (params.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
-        reveal();
+        if (params.get('v') === '2') {
+          for (const [k, v] of params) {
+            try {
+              params.set(k, decodeURIComponent(v));
+            } catch {
+              // keep the raw value
+            }
+          }
+        }
+        const handoff = uri.path === '/run' ? await readHandoff(params.get('id')) : undefined;
+        const src = handoff ?? params;
+        const prompt = (src.get('prompt') ?? '').trim();
+        const mode = ((ALL_MODES as readonly string[]).includes(src.get('mode') ?? '') ? src.get('mode') : 'agent') as Session['mode'];
+        let files = (src.get('files') ?? '').split(',').map((f) => f.trim()).filter(Boolean);
         if (uri.path === '/run' && prompt) {
-          const parallel = params.get('parallel') === '1';
+          const parallel = src.get('parallel') === '1';
+          if (!handoff) {
+            files = files.filter(insideWorkspace);
+            const detail = `Mode: ${mode}${parallel ? ' (parallel)' : ''}\n\n${prompt.slice(0, 500)}${prompt.length > 500 ? '…' : ''}${files.length ? `\n\nFiles: ${files.join(', ')}` : ''}`;
+            const ok = await vscode.window.showWarningMessage('Run this request from a link?', { modal: true, detail }, 'Run');
+            if (ok !== 'Run') {
+              return;
+            }
+          }
+          reveal();
           if (parallel) {
             await controller.runParallel(prompt.split('|').map((t) => t.trim()).filter(Boolean), mode);
           } else {
             await controller.runPrompt(prompt, mode, files);
           }
-        } else if (uri.path === '/new') {
+          return;
+        }
+        reveal();
+        if (uri.path === '/new') {
           await controller.handle({ type: 'newSession', mode });
         } else if (uri.path === '/settings') {
           // vscode://localpilot.localpilot-agent/settings?section=providers
@@ -44,12 +73,44 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
         } else if (uri.path === '/setup') {
           await vscode.commands.executeCommand('localpilot.openWelcome');
         } else if (uri.path === '/terminal') {
-          // vscode://localpilot.localpilot-agent/terminal?run=localpilot%20--help — open the LocalPilot terminal, optionally running a command.
-          await vscode.commands.executeCommand('localpilot.openTerminal', params.get('run') ?? undefined);
+          // vscode://localpilot.localpilot-agent/terminal?run=localpilot%20--help — open the LocalPilot terminal, running the command once confirmed.
+          const run = params.get('run') || undefined;
+          const ok = run ? (await vscode.window.showWarningMessage('Run this command from a link?', { modal: true, detail: run }, 'Run')) === 'Run' : false;
+          await vscode.commands.executeCommand('localpilot.openTerminal', ok ? run : undefined);
         }
       },
     })
   );
+}
+
+/** Reads and deletes the one-time run request the CLI wrote; undefined when missing, malformed or stale. */
+async function readHandoff(id: string | undefined): Promise<Map<string, string> | undefined> {
+  if (!id || !/^[0-9a-f]{16,}$/.test(id)) {
+    return undefined;
+  }
+  const file = path.join(os.homedir(), '.localpilot', 'handoff', `${id}.json`);
+  try {
+    const raw = await fs.readFile(file, 'utf8');
+    await fs.rm(file, { force: true });
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof data.at !== 'number' || Math.abs(Date.now() - data.at) > HANDOFF_TTL_MS) {
+      return undefined;
+    }
+    return new Map(Object.entries(data).filter((e): e is [string, string] => typeof e[1] === 'string'));
+  } catch {
+    return undefined;
+  }
+}
+
+/** A link's file is accepted only when it is relative and stays inside a workspace folder. */
+function insideWorkspace(f: string): boolean {
+  if (path.isAbsolute(f)) {
+    return false;
+  }
+  return (vscode.workspace.workspaceFolders ?? []).some((w) => {
+    const rel = path.relative(w.uri.fsPath, path.resolve(w.uri.fsPath, f));
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
 }
 
 /** Shell shim + env for the `localpilot` command. Exported so the LocalPilot terminal profile can put it on PATH without installing. */

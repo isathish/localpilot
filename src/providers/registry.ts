@@ -6,7 +6,7 @@ import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
-import { isCloudProvider, isRemoteUrl, onSecretsChanged, resolveApiKey } from './cloud';
+import { isCloudProvider, isLoopbackUrl, onSecretsChanged, resolveApiKey } from './cloud';
 import { getManagedPolicy, providerAllowed } from '../agent/managedPolicy';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
@@ -31,6 +31,8 @@ export interface RouteRequest {
    * when the chosen model is saturated, a comparable idle model that fits in memory alongside may answer instead.
    */
   spread?: boolean;
+  /** The run's Stop: waiting for a local server to start ends at once (the start itself goes on in the background). */
+  signal?: AbortSignal;
 }
 
 export interface ModelLoad {
@@ -67,6 +69,8 @@ export class ProviderRegistry implements vscode.Disposable {
   /** Serialized config each provider was built from, so unchanged providers (and their model-info caches) survive a settings change. */
   private providerConfigs = new Map<string, string>();
   private modelCache: ModelInfo[] = [];
+  /** Provider each bare model id was last listed on, so a `defaultModel` without a provider prefix still finds its server. */
+  private readonly providerOfModel = new Map<string, string>();
   /** Providers whose health check passed in the last discovery. */
   private reachable = new Set<string>();
   /** Local-only provider health metrics for the dashboard. */
@@ -75,9 +79,10 @@ export class ProviderRegistry implements vscode.Disposable {
   usageBonus?: UsageBonus;
   /**
    * Starts a configured local model server that is installed but not running (Ollama), resolving true once it
-   * answers. Set by the extension and the CLI; without it a stopped server is reported, not started.
+   * answers, false when starting it failed, undefined when it declined without trying (not a server it can start).
+   * Set by the extension and the CLI; without it a stopped server is reported, not started.
    */
-  startLocalServer?: (provider: ProviderConfig) => Promise<boolean>;
+  startLocalServer?: (provider: ProviderConfig) => Promise<boolean | undefined>;
   private readonly starting = new Map<string, Promise<boolean>>();
   private readonly startFailedAt = new Map<string, number>();
   private lastRefresh = 0;
@@ -291,6 +296,9 @@ export class ProviderRegistry implements vscode.Disposable {
     const changed = models.length !== this.modelCache.length || models.some((m, i) => !this.modelCache[i] || sig(m) !== sig(this.modelCache[i]));
     const gone = this.vanished(listed, this.modelCache);
     this.modelCache = models;
+    for (const m of models) {
+      this.providerOfModel.set(m.modelId, m.providerId);
+    }
     this.reachable = reachable;
     this.lastRefresh = Date.now();
     if (changed) {
@@ -435,13 +443,12 @@ export class ProviderRegistry implements vscode.Disposable {
    * The configured local Ollama a pick needs that did not answer the last discovery: the wanted model's own provider,
    * or (for Auto, or a wanted model nobody serves) the first one when no local model is available at all.
    */
-  private stoppedLocalServer(wanted: string | undefined, models: ModelInfo[]): ProviderConfig | undefined {
+  private stoppedLocalServer(pid: string | undefined, models: ModelInfo[]): ProviderConfig | undefined {
     const providers = getConfig().providers;
-    const stopped = providers.filter((p) => p.enabled !== false && p.type === 'ollama' && !isRemoteUrl(p.baseUrl) && !this.reachable.has(p.id));
+    const stopped = providers.filter((p) => p.enabled !== false && p.type === 'ollama' && isLoopbackUrl(p.baseUrl) && !this.reachable.has(p.id));
     if (!stopped.length) {
       return undefined;
     }
-    const pid = wanted && wanted.includes('/') ? wanted.slice(0, wanted.indexOf('/')) : undefined;
     const own = pid ? stopped.find((p) => p.id === pid) : undefined;
     if (own) {
       return own;
@@ -462,15 +469,33 @@ export class ProviderRegistry implements vscode.Disposable {
     return stopped && (await this.startServer(stopped)) ? this.listModels(true) : models;
   }
 
+  /**
+   * The provider a model reference belongs to: its `provider/` prefix when that names a configured provider, else
+   * the provider that last listed the bare id, else the configured local Ollama.
+   */
+  private providerIdOf(ref: string, providers: ProviderConfig[]): string | undefined {
+    const slash = ref.indexOf('/');
+    if (slash > 0 && providers.some((p) => p.id === ref.slice(0, slash))) {
+      return ref.slice(0, slash);
+    }
+    return this.providerOfModel.get(ref) ?? providers.find((p) => p.enabled !== false && p.type === 'ollama' && isLoopbackUrl(p.baseUrl))?.id;
+  }
+
   /** Starts a stopped local server once at a time; after a failure it is not tried again for a minute. */
-  private startServer(p: ProviderConfig): Promise<boolean> {
+  private async startServer(p: ProviderConfig): Promise<boolean> {
     const start = this.startLocalServer;
     if (!start) {
-      return Promise.resolve(false);
+      return false;
     }
     const failedAt = this.startFailedAt.get(p.id);
     if (failedAt && Date.now() - failedAt < 60_000) {
-      return Promise.resolve(false);
+      // Started by hand since the failed attempt: use it rather than waiting out the minute.
+      if (!(await this.providers.get(p.id)?.healthCheck().catch(() => false))) {
+        return false;
+      }
+      this.startFailedAt.delete(p.id);
+      this.invalidate();
+      return true;
     }
     let run = this.starting.get(p.id);
     if (!run) {
@@ -485,10 +510,10 @@ export class ProviderRegistry implements vscode.Disposable {
           if (ok) {
             this.startFailedAt.delete(p.id);
             this.invalidate();
-          } else {
+          } else if (ok === false) {
             this.startFailedAt.set(p.id, Date.now());
           }
-          return ok;
+          return ok === true;
         });
       this.starting.set(p.id, run);
     }
@@ -518,11 +543,12 @@ export class ProviderRegistry implements vscode.Disposable {
     const roleOverride =
       role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
     const wanted = req.modelRef || roleOverride || cfg.defaultModel;
+    const wantedPid = wanted ? this.providerIdOf(wanted, cfg.providers) : undefined;
     // A local server that is installed but stopped is started, rather than failing the run or quietly falling back
     // to another model, which may be a cloud one.
     if (!models.some((m) => m.id === wanted || m.modelId === wanted)) {
-      const stopped = this.stoppedLocalServer(wanted, models);
-      if (stopped && (await this.startServer(stopped))) {
+      const stopped = this.stoppedLocalServer(wantedPid, models);
+      if (stopped && (await untilAborted(this.startServer(stopped), req.signal))) {
         models = await this.listModels(true);
       }
     }
@@ -595,12 +621,11 @@ export class ProviderRegistry implements vscode.Disposable {
     }
     // A model on this machine was asked for: when its server is down, falling back to a cloud model would send the
     // code off the machine without the user choosing that. Say what is wrong instead.
-    const wantedPid = wanted && wanted.includes('/') ? wanted.slice(0, wanted.indexOf('/')) : undefined;
     const wantedCfg = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
     if (fallback && model.remote && wantedCfg && !isCloudProvider(wantedCfg)) {
       const failed = this.startFailedAt.has(wantedCfg.id);
       throw new Error(
-        `${wanted.slice(wantedPid!.length + 1)} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
+        `${wanted.startsWith(`${wantedCfg.id}/`) ? wanted.slice(wantedCfg.id.length + 1) : wanted} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
       );
     }
     // Parallel work: a saturated model makes every extra run queue behind the others, so Auto picks and workers
@@ -829,4 +854,20 @@ export function pickAlternative(
   // Fewest runs first; then a model already in memory (starts answering at once), then the better score.
   const loaded = (m: ModelInfo) => (resident.has(m.id) ? 1 : 0);
   return candidates.sort((a, b) => (load.assigned.get(a.id) ?? 0) - (load.assigned.get(b.id) ?? 0) || loaded(b) - loaded(a) || scoreOf(b) - scoreOf(a))[0];
+}
+
+/** `p`, or a rejection with an AbortError as soon as `signal` aborts (`p` itself keeps running). */
+function untilAborted<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return p;
+  }
+  const aborted = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+  if (signal.aborted) {
+    return Promise.reject(aborted());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(aborted());
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }

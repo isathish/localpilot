@@ -7,6 +7,8 @@ export interface ToolCall {
   name: string;
   /** Raw JSON string of arguments as emitted by the model. */
   arguments: string;
+  /** Provider metadata echoed back with the call (e.g. Gemini thought signatures in `extra_content`). */
+  extra?: Record<string, unknown>;
 }
 
 export interface ChatMessage {
@@ -35,6 +37,8 @@ export interface ChatMessage {
     nudge?: string;
     /** User-role carrier for images produced by tools (browser_screenshot); lists the originating tool call ids. */
     toolImages?: string[];
+    /** Text protocol: user-role carrier of tool results; lists the tool call ids whose results it holds. */
+    toolResults?: string[];
     /** A user message typed while the agent was running/paused and injected at a step boundary. */
     steer?: boolean;
     /** Correlates a steering message with the "queued" bubble the UI showed before it was injected. */
@@ -216,7 +220,7 @@ export interface ToolContext {
   mainRoot?: string;
   signal: AbortSignal;
   /** Ask the user to approve a dangerous action. Resolves true when approved. */
-  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network'): Promise<boolean>;
+  requestApproval(title: string, detail: string, kind: 'terminal' | 'write' | 'delete' | 'network', opts?: { mandatory?: boolean }): Promise<boolean>;
   /** Stream progress text to the UI. */
   progress(text: string): void;
   /** Snapshot a file before modifying it so the user can review/undo the agent's changes. */
@@ -318,6 +322,8 @@ export interface SessionSummary {
   worktree?: import('./agent/worktrees').WorktreeInfo;
   /** Set when the session was started as part of a parallel batch, so `worktrees.mode = parallel` isolates it. */
   isolated?: boolean;
+  /** Runs against the real checkout even when worktrees.mode isolates chats (git-facing work: commit message, /pr, /fix-ci). */
+  direct?: boolean;
   /** Sessions started together on the same prompt (Best of N): compared and one result applied. */
   group?: { id: string; kind: 'bestOf' | 'batch'; prompt: string; size: number };
   /** Per-chat skill behaviour overriding the global setting (see SessionSkills). */

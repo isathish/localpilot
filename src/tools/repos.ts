@@ -71,7 +71,7 @@ export const reposTool: Tool = {
     switch (String(args.action ?? 'list')) {
       case 'list': {
         const rows = await pool.map(chosen, async (r) => {
-          const st = await runCmd('git', ['status', '--porcelain=v1', '--branch'], r.path, ctx.signal, 20_000);
+          const st = await runCmd('git', ['--no-optional-locks', 'status', '--porcelain=v1', '--branch'], r.path, ctx.signal, 20_000);
           if (st.code !== 0) {
             return `${r.name}  ${r.path}  (not a git repository)`;
           }

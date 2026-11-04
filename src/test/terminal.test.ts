@@ -6,7 +6,11 @@ import { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { TerminalManager } from '../terminal/terminalManager';
+import { globToRegExp, RelativePattern as ShimRP, Uri as ShimUri, workspace as shimWs } from '../cli/vscodeShim';
+import { shellInvocation } from '../terminal/shell';
+import { inDir, samePath, TerminalManager } from '../terminal/terminalManager';
+import { runCommandTool } from '../tools/terminal';
+import { ToolContext } from '../types';
 
 const EXT_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -168,6 +172,8 @@ function mockScripted(turns: ({ tool: string; args: Record<string, unknown> } | 
 
 suite('LocalPilot CLI (dist/cli.js)', () => {
   const cli = path.join(EXT_ROOT, 'dist', 'cli.js');
+  // The built-in local providers are merged in too; turn them off so a server on this machine cannot affect the tests.
+  const noDefaults = ['ollama', 'lmstudio', 'llamacpp', 'vllm'].map((id) => ({ id, enabled: false }));
   let home: string;
   const run = (args: string[], opts: { cwd?: string; input?: string } = {}) =>
     new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
@@ -207,7 +213,7 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
   test('exits with a clear error when no model server is reachable', async function () {
     this.timeout(30_000);
     await fs.mkdir(path.join(home, '.localpilot'), { recursive: true });
-    await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'dead', type: 'openai', baseUrl: 'http://127.0.0.1:9/v1' }] }));
+    await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'dead', type: 'openai', baseUrl: 'http://127.0.0.1:9/v1' }, ...noDefaults] }));
     const r = await run(['--no-mcp', '-p', 'hello']);
     assert.strictEqual(r.code, 2);
     assert.match(r.err, /No local models found|unreachable|doctor/i);
@@ -217,7 +223,7 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
     this.timeout(60_000);
     const srv = await mockOpenAI('The answer is **42**.');
     try {
-      await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'mock', type: 'openai', baseUrl: srv.url, displayName: 'Mock' }], defaultModel: 'mock/mock-coder' }));
+      await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'mock', type: 'openai', baseUrl: srv.url, displayName: 'Mock' }, ...noDefaults], defaultModel: 'mock/mock-coder' }));
       const models = await run(['models']);
       assert.strictEqual(models.code, 0, models.err);
       assert.match(models.out, /mock\/mock-coder/);
@@ -240,12 +246,48 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
     }
   });
 
+  test('providers lists the built-in local providers, and providers add keeps them', async function () {
+    this.timeout(60_000);
+    const file = path.join(home, '.localpilot', 'config.json');
+    try {
+      await fs.rm(file, { force: true });
+      const before = await run(['providers']);
+      assert.match(before.out, /ollama/, before.out + before.err);
+      assert.doesNotMatch(before.out, /No providers configured/);
+      await run(['providers', 'add', 'anthropic', '--key', 'x']);
+      const after = await run(['providers']);
+      assert.match(after.out, /ollama/, after.out + after.err);
+      assert.match(after.out, /anthropic/, after.out + after.err);
+    } finally {
+      await fs.rm(file, { force: true });
+      await fs.rm(path.join(home, '.localpilot', 'keys.json'), { force: true });
+    }
+  });
+
+  test('scan rejects unknown options and bad --fail-on values, and scans "." as the whole workspace', async function () {
+    this.timeout(60_000);
+    const ws = path.join(home, 'ws-scan');
+    await fs.mkdir(ws, { recursive: true });
+    await fs.writeFile(path.join(ws, 'a.js'), 'export const a = 1;\n');
+    const bad = await run(['scan', '--offline', '--fail-on=nope'], { cwd: ws });
+    assert.strictEqual(bad.code, 2, bad.out + bad.err);
+    assert.match(bad.err, /--fail-on must be one of/);
+    const unknown = await run(['scan', '--offline', '--yess'], { cwd: ws });
+    assert.strictEqual(unknown.code, 2, unknown.out + unknown.err);
+    assert.match(unknown.err, /unknown option --yess/);
+    const dot = await run(['scan', '--offline', '--fail-on=none', '.'], { cwd: ws });
+    assert.strictEqual(dot.code, 0, dot.out + dot.err);
+    assert.doesNotMatch(dot.out, /\b0 files/);
+    const missing = await run(['scan', '--offline', 'no-such-dir'], { cwd: ws });
+    assert.strictEqual(missing.code, 2, missing.out + missing.err);
+  });
+
   test('get_diagnostics works in the CLI (no language servers) and does not crash the process', async function () {
     this.timeout(60_000);
     const srv = await mockScripted([{ tool: 'get_diagnostics', args: { path: 'a.js' } }, { text: 'No problems found.' }]);
     try {
       await fs.mkdir(path.join(home, '.localpilot'), { recursive: true });
-      await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'mock', type: 'openai', baseUrl: srv.url }], defaultModel: 'mock/mock-coder' }));
+      await fs.writeFile(path.join(home, '.localpilot', 'config.json'), JSON.stringify({ providers: [{ id: 'mock', type: 'openai', baseUrl: srv.url }, ...noDefaults], defaultModel: 'mock/mock-coder' }));
       const ws = path.join(home, 'ws-diag');
       await fs.mkdir(ws, { recursive: true });
       await fs.writeFile(path.join(ws, 'a.js'), 'export const a = 1;\n');
@@ -256,6 +298,77 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
       assert.ok(srv.chats >= 2, 'the tool result went back to the model');
     } finally {
       srv.close();
+    }
+  });
+});
+
+suite('CLI shim', () => {
+  test('findFiles with a RelativePattern searches its own folder and honours the exclude pattern', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lp-shim-')));
+    try {
+      await fs.mkdir(path.join(dir, 'a'), { recursive: true });
+      await fs.mkdir(path.join(dir, 'node_modules'), { recursive: true });
+      await fs.writeFile(path.join(dir, 'a', 'b.ts'), 'export {};\n');
+      await fs.writeFile(path.join(dir, 'node_modules', 'x.ts'), 'export {};\n');
+      const found = await shimWs.findFiles(new ShimRP(ShimUri.file(dir), '**/*.ts'), new ShimRP(ShimUri.file(dir), '{**/node_modules/**}'));
+      assert.deepStrictEqual(found.map((u) => u.fsPath), [path.join(dir, 'a', 'b.ts')]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('globToRegExp treats an unclosed brace literally and expands ** inside braces', () => {
+    assert.ok(globToRegExp('src/**/*.{ts,tsx').test('src/a/b.{ts,tsx'));
+    const alt = globToRegExp('{**/dist/**,**/*.min.js}');
+    assert.ok(alt.test('a/b/dist/x.js'));
+    assert.ok(alt.test('a/b/c.min.js'));
+    assert.ok(globToRegExp('**/*.{ts,tsx}').test('a/b/c.tsx'));
+  });
+});
+
+suite('Shell invocation', () => {
+  test('the agent terminal changes directory in the syntax of its shell and compares Windows paths loosely', () => {
+    assert.ok(samePath('c:\\Users\\x\\wt', 'C:\\Users\\x\\wt', 'win32'));
+    assert.ok(samePath('/a/b/', '/a/b', 'linux'));
+    assert.ok(!samePath('/a/B', '/a/b', 'linux'));
+    assert.ok(!samePath(undefined, '/a', 'linux'));
+    const ps = inDir("C:\\it's\\wt", 'npm test', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'win32');
+    assert.ok(!ps.includes('&&'), ps);
+    assert.ok(ps.startsWith('Set-Location -LiteralPath '), ps);
+    assert.ok(ps.includes("it''s"), ps);
+    assert.ok(inDir('C:\\wt', 'npm test', undefined, 'win32').startsWith('Set-Location'));
+    assert.strictEqual(inDir('C:\\wt', 'npm test', 'cmd.exe', 'win32'), 'cd /d "C:\\wt" && npm test');
+    assert.strictEqual(inDir("/tmp/it's", 'ls', '/bin/zsh', 'darwin'), "cd '/tmp/it'\\''s' && ls");
+  });
+
+  test('child-process shells keep cmd.exe quotes intact and fall back to an existing POSIX shell', () => {
+    const win = shellInvocation('git commit -m "a b"', { platform: 'win32', env: { ComSpec: 'C:\\Windows\\system32\\cmd.exe' } });
+    assert.strictEqual(win.file, 'C:\\Windows\\system32\\cmd.exe');
+    assert.deepStrictEqual(win.args, ['/d', '/s', '/c', '"git commit -m "a b""']);
+    assert.strictEqual(win.windowsVerbatimArguments, true);
+    assert.strictEqual(shellInvocation('ls', { platform: 'linux', env: {}, exists: (p) => p === '/bin/sh' }).file, '/bin/sh');
+    const zsh = shellInvocation('ls', { platform: 'linux', env: { SHELL: '/bin/zsh' }, exists: (p) => p === '/bin/bash', login: true });
+    assert.strictEqual(zsh.file, '/bin/bash');
+    assert.deepStrictEqual(zsh.args, ['-lc', 'ls']);
+  });
+
+  test('run_command without the integrated terminal runs quoted arguments through the shell', async function () {
+    if (process.platform === 'win32') {
+      this.skip();
+    }
+    this.timeout(30_000);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect<boolean>('terminal.runInIntegratedTerminal')?.globalValue;
+    await cfg.update('terminal.runInIntegratedTerminal', false, vscode.ConfigurationTarget.Global);
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lp-shell-')));
+    try {
+      const ctx: ToolContext = { sessionId: 't', workspaceRoot: dir, signal: new AbortController().signal, depth: 0, progress: () => undefined, trackChange: async () => undefined, requestApproval: async () => true };
+      const r = await runCommandTool.execute({ command: `"${process.execPath}" -e "console.log('a b')"` }, ctx);
+      assert.ok(r.content.includes('a b'), r.content);
+      assert.ok(!r.isError, r.content);
+    } finally {
+      await cfg.update('terminal.runInIntegratedTerminal', prev, vscode.ConfigurationTarget.Global);
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });

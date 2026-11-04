@@ -44,17 +44,10 @@ export interface ManagedPolicy {
 
 const NONE: ManagedPolicy = { permissions: { deny: [], ask: [], allow: [] }, approvals: {}, disableBypassPermissions: false, allowCloudProviders: true, allowWebAccess: true, allowSkillInstall: true };
 
-export function managedPolicyPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
-  if (env.LOCALPILOT_MANAGED_SETTINGS) {
-    return env.LOCALPILOT_MANAGED_SETTINGS;
-  }
-  if (platform === 'darwin') {
-    return '/Library/Application Support/LocalPilot/managed-settings.json';
-  }
-  if (platform === 'win32') {
-    return path.win32.join(env.ProgramData ?? 'C:\\ProgramData', 'LocalPilot', 'managed-settings.json');
-  }
-  return '/etc/localpilot/managed-settings.json';
+export function managedPolicyPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = fs.existsSync): string {
+  const system = platform === 'darwin' ? '/Library/Application Support/LocalPilot/managed-settings.json' : platform === 'win32' ? path.win32.join(env.ProgramData ?? 'C:\\ProgramData', 'LocalPilot', 'managed-settings.json') : '/etc/localpilot/managed-settings.json';
+  // The environment can point elsewhere only where no administrator deployed a policy: it must not replace one.
+  return env.LOCALPILOT_MANAGED_SETTINGS && !exists(system) ? env.LOCALPILOT_MANAGED_SETTINGS : system;
 }
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()) : []);

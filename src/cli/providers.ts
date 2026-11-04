@@ -4,6 +4,7 @@ import { isCloudProvider, isRemoteUrl, keyStatus, resolveApiKey, secretEnvName, 
 import { probeProvider, ProbeResult } from '../providers/discovery';
 import { findPreset, PROVIDER_PRESETS, PresetGroup, presetFor } from '../providers/presets';
 import { ProviderConfig } from '../types';
+import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { CLI_KEYS_PATH, CLI_SETTINGS_PATH, readCliConfig, writeCliConfig, writeCliKey } from './vscodeShim';
 
@@ -32,7 +33,7 @@ const GROUP_LABEL: Record<PresetGroup, string> = { local: 'On this machine', gat
 
 /** Every configured provider, disabled ones included (getConfig() drops those). */
 function configured(): ProviderConfig[] {
-  return vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', []) ?? [];
+  return vscode.workspace.getConfiguration('localpilot').get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS) ?? [];
 }
 
 /** Providers written by the CLI itself (~/.localpilot/config.json), as stored. */
@@ -99,9 +100,9 @@ export async function listProviders(st: Style, out: (s: string) => void = consol
       const state = keyMissing ? keyText(p, st) : `${probeLine(r, st)}${cloud || p.apiKey ? `  ${keyText(p, st)}` : ''}`;
       if (opts.compact) {
         // doctor: one line per provider, as before cloud providers existed.
-        out(`${dot} ${st.bold((p.displayName || p.id).padEnd(22))} ${st.dim(p.baseUrl.padEnd(34))} ${state}${cloud ? st.yellow('  cloud') : ''}`);
+        out(`${dot} ${st.bold((p.displayName || p.id).padEnd(22))} ${st.dim((p.baseUrl ?? '').padEnd(34))} ${state}${cloud ? st.yellow('  cloud') : ''}`);
       } else {
-        out(`  ${dot} ${st.bold((p.displayName || p.id).padEnd(22))} ${st.cyan(p.id.padEnd(14))} ${st.dim(`${p.type.padEnd(9)} ${p.baseUrl}`)}`);
+        out(`  ${dot} ${st.bold((p.displayName || p.id).padEnd(22))} ${st.cyan(p.id.padEnd(14))} ${st.dim(`${(p.type ?? '?').padEnd(9)} ${p.baseUrl ?? ''}`)}`);
         out(`      ${state}`);
       }
     }
@@ -175,15 +176,18 @@ export async function addProvider(target: string, flags: ProviderFlags, st: Styl
     : { id: flags.id || (target.replace(/^https?:\/\//i, '').split(/[/:]/)[0] || 'custom'), type: 'openai', baseUrl: target, displayName: flags.name };
   const taken = new Set(configured().map((p) => p.id));
   let id = (flags.id || base.id).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-  if (!flags.id) {
+  // Adding a preset that is one of the built-in local servers updates that entry instead of creating "ollama-2".
+  const existing = configured().find((p) => p.id === id);
+  const builtin = !flags.id && !!existing && DEFAULT_PROVIDERS.some((d) => d.id === id && d.baseUrl === existing.baseUrl);
+  if (!flags.id && !builtin) {
     for (let n = 2; taken.has(id); n++) {
       id = `${base.id}-${n}`;
     }
-  } else if (taken.has(id)) {
+  } else if (flags.id && taken.has(id)) {
     out(`${st.red('✖')} A provider with id "${id}" already exists. Pick another with --id, or change it: localpilot providers key ${id}`);
     return 2;
   }
-  const cfg: ProviderConfig = { ...base, id };
+  const cfg: ProviderConfig = { ...base, id, ...(builtin && existing?.enabled === false ? { enabled: true } : {}) };
   if (flags.url) {
     cfg.baseUrl = flags.url;
   }
@@ -282,10 +286,12 @@ export async function removeProvider(id: string, st: Style, out: (s: string) => 
     await saveCliProviders(mine.filter((p) => p.id !== id));
     await writeCliKey(id, undefined);
   }
-  // Still listed: it comes from VS Code's settings, which the CLI never writes.
+  // Still listed: it comes from VS Code's settings or the built-in defaults, which the CLI never writes.
   if (configured().some((p) => p.id === id)) {
     await patchProvider(id, { enabled: false });
-    out(`${st.green('✓')} ${id} is defined in VS Code settings: disabled it for the CLI. Remove it in VS Code under Settings → Providers.`);
+    const p = configured().find((x) => x.id === id);
+    const builtin = DEFAULT_PROVIDERS.some((d) => d.id === id && d.baseUrl === p?.baseUrl);
+    out(`${st.green('✓')} ${builtin ? `${id} is a built-in default: disabled it for the CLI. Re-enable it with: localpilot providers add ${id}` : `${id} is defined in VS Code settings: disabled it for the CLI. Remove it in VS Code under Settings → Providers.`}`);
     return 0;
   }
   out(`${st.green('✓')} Removed ${id} and its stored key`);

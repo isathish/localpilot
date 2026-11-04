@@ -77,35 +77,46 @@ export function serializeTask(t: BoardTask): string {
 export function parseTask(id: string, text: string): BoardTask {
   const { meta, body } = parseFrontMatter(text);
   const str = (v: unknown) => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v));
-  const unq = (v: unknown) => {
-    const s = str(v).trim();
-    try {
-      return s.startsWith('"') ? (JSON.parse(s) as string) : s;
-    } catch {
-      return s;
+  // parseFrontMatter only strips the outer quotes; read JSON-quoted values from the raw lines so escapes round-trip.
+  const rawFm = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? '';
+  const unq = (key: string) => {
+    const raw = new RegExp(`^${key}:\\s*(".*")\\s*$`, 'm').exec(rawFm)?.[1];
+    if (raw) {
+      try {
+        const v: unknown = JSON.parse(raw);
+        if (typeof v === 'string') {
+          return v;
+        }
+      } catch {
+        /* not JSON: use the plain value */
+      }
     }
+    return str(meta[key]).trim();
   };
-  const sections = body.split(/^## /m);
-  const brief = sections[0].trim();
-  const notesSec = sections.find((s) => s.startsWith('Notes')) ?? '';
-  const resultSec = sections.find((s) => s.startsWith('Result'));
+  // Only exact `## Notes` / `## Result` lines start a section, so headings inside the brief or result survive.
+  const head = /^## (Notes|Result)\s*$/m.exec(body);
+  const brief = (head ? body.slice(0, head.index) : body).trim();
+  const rest = head ? body.slice(head.index) : '';
+  const resultHead = /^## Result\s*$/m.exec(rest);
+  const notesSec = head?.[1] === 'Notes' ? (resultHead ? rest.slice(0, resultHead.index) : rest) : '';
+  const resultSec = resultHead ? rest.slice(resultHead.index + resultHead[0].length) : undefined;
   const notes = [...notesSec.matchAll(/^- (\S+) · ([^:]+): (.*)$/gm)].map((m) => ({ at: m[1], by: m[2].trim(), text: m[3].trim() }));
   const deps = Array.isArray(meta.dependsOn) ? meta.dependsOn.map(String) : str(meta.dependsOn).replace(/[[\]]/g, '').split(',').map((s) => s.trim()).filter(Boolean);
   const status = str(meta.status) as BoardStatus;
   return {
     id: str(meta.id) || id,
-    title: unq(meta.title) || brief.split('\n')[0].slice(0, 80) || id,
+    title: (unq('title') || brief.split('\n')[0].slice(0, 80) || id).slice(0, 120),
     status: ['open', 'claimed', 'done', 'failed'].includes(status) ? status : 'open',
     priority: Number.isFinite(Number(meta.priority)) ? Number(meta.priority) : 5,
     dependsOn: deps,
-    createdBy: unq(meta.createdBy),
+    createdBy: unq('createdBy'),
     createdAt: str(meta.createdAt),
     updatedAt: str(meta.updatedAt),
-    owner: unq(meta.owner) || undefined,
+    owner: unq('owner') || undefined,
     leaseUntil: str(meta.leaseUntil) || undefined,
     brief,
     notes,
-    result: resultSec ? resultSec.replace(/^Result\s*/, '').trim() : undefined,
+    result: resultSec !== undefined ? resultSec.trim() || undefined : undefined,
   };
 }
 
@@ -113,6 +124,24 @@ export function parseTask(id: string, text: string): BoardTask {
 export function claimable(t: BoardTask, all: BoardTask[], now = Date.now()): boolean {
   const free = t.status === 'open' || (t.status === 'claimed' && (!t.leaseUntil || Date.parse(t.leaseUntil) < now));
   return free && t.dependsOn.every((d) => all.find((x) => x.id === d)?.status === 'done');
+}
+
+/**
+ * Pure: ids of tasks that are finished or can still finish — done or claimed, plus every open task whose prerequisites
+ * all can. Open tasks left out wait (transitively) on a failed or unknown task, or on a dependency cycle.
+ */
+export function canFinish(all: BoardTask[]): Set<string> {
+  const ok = new Set(all.filter((t) => t.status === 'done' || t.status === 'claimed').map((t) => t.id));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const t of all) {
+      if (t.status === 'open' && !ok.has(t.id) && t.dependsOn.every((d) => ok.has(d))) {
+        ok.add(t.id);
+        grew = true;
+      }
+    }
+  }
+  return ok;
 }
 
 /** Pure: the next task to take — lowest priority number, then oldest. */

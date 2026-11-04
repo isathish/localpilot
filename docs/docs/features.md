@@ -64,7 +64,7 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
   - Bursts of reads and searches fold into one row.
   - Web results show as link cards.
 - **Every answer shows its model and speed,** with Copy, **Regenerate** and Open as document. A failed answer keeps **Retry** and **Change model**.
-- **Sessions.** Chats are saved per workspace, with a history panel, fork, pin, rename and export to Markdown. **Edit** any of your messages, or **Restore checkpoint** to rewind files and conversation.
+- **Sessions.** Chats are saved per workspace, with a history panel, fork, pin, rename and export to Markdown. **Edit** any of your messages, or **Restore checkpoint** to rewind files and conversation. Restore checkpoint applies to chats that edit the workspace directly; in an isolated worktree chat use **Discard**, or **Edit** to rewind only the conversation.
 - **Slash commands.** `/help`, `/model`, `/mode`, `/compact`, `/clear`, `/skills`, `/agents`, `/commands`, `/skill`, `/agent`, `/memory`, `/permissions`, `/hooks`, `/context`.
 - **The chat goes where you want it.** Primary or Secondary Side Bar, bottom Panel or an editor tab (**Move Chat To…**). It works the same in each, down to narrow widths.
 

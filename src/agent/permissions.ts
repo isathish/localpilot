@@ -62,11 +62,30 @@ const PATH_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'Delete', 'Read', 'LS'
 /** Tools that change files: `acceptEdits` mode auto-approves these. */
 export const EDIT_FAMILY = new Set(['Edit', 'MultiEdit', 'Write', 'Delete', 'NotebookEdit']);
 
+/** Registered MCP tool name → the configured server key and the server's own tool name (names may contain '_'). */
+const mcpOrigins = new Map<string, { server: string; tool: string }>();
+
+export function registerMcpToolOrigin(name: string, server: string, tool: string): void {
+  mcpOrigins.set(name, { server, tool });
+}
+
+export function forgetMcpToolOrigin(name: string): void {
+  mcpOrigins.delete(name);
+}
+
+export function mcpToolOrigin(name: string): { server: string; tool: string } | undefined {
+  return mcpOrigins.get(name);
+}
+
 /** Claude Code's canonical name for one of our tools (`run_command` → `Bash`); MCP tools map to `mcp__server__tool`. */
 export function canonicalToolName(name: string): string {
   const alias = TOOL_ALIASES[name]?.[0];
   if (alias) {
     return alias;
+  }
+  const origin = mcpOrigins.get(name);
+  if (origin) {
+    return `mcp__${origin.server}__${origin.tool}`;
   }
   const mcp = /^mcp_(.+)$/.exec(name);
   if (mcp) {
@@ -100,8 +119,11 @@ export function expandAgentTools(list: string[]): string[] {
 /** Every name a rule may use for this tool: our own, the Claude aliases, and `mcp__server` / `mcp__server__tool`. */
 export function toolNames(name: string): string[] {
   const names = [name, ...(TOOL_ALIASES[name] ?? [])];
+  const origin = mcpOrigins.get(name);
   const mcp = /^mcp_([^_]+)_(.+)$/.exec(name);
-  if (mcp) {
+  if (origin) {
+    names.push(`mcp__${origin.server}__${origin.tool}`, `mcp__${origin.server}`);
+  } else if (mcp) {
     names.push(`mcp__${mcp[1]}__${mcp[2]}`, `mcp__${mcp[1]}`);
   } else if (name.startsWith('mcp_')) {
     names.push(`mcp__${name.slice(4).replace(/_/, '__')}`);
@@ -190,36 +212,114 @@ export function matchPathRule(spec: string, target: string, root: string | undef
   return candidates.some((c) => res.some((re) => re.test(c)));
 }
 
-/** Split a shell line into the simple commands it chains (`a && b | c`), outside quotes. */
+/** Split a shell line into the simple commands it chains (`a && b | c`, `a & b`), outside quotes. */
 export function splitCommandChain(command: string): string[] {
   const parts: string[] = [];
   let cur = '';
   let quote: string | undefined;
+  const split = () => {
+    parts.push(cur);
+    cur = '';
+  };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
-    if (quote) {
+    if (quote === "'") {
+      // No escapes inside single quotes.
       cur += c;
-      if (c === quote && command[i - 1] !== '\\') {
-        quote = undefined;
-      }
+      quote = c === "'" ? undefined : quote;
       continue;
     }
+    if (c === '\\' && i + 1 < command.length) {
+      cur += c + command[++i];
+      continue;
+    }
+    if (quote) {
+      cur += c;
+      quote = c === quote ? undefined : quote;
+      continue;
+    }
+    const prev = command[i - 1];
+    const next = command[i + 1];
     if (c === '"' || c === "'") {
       quote = c;
       cur += c;
-    } else if ((c === '&' && command[i + 1] === '&') || (c === '|' && command[i + 1] === '|')) {
-      parts.push(cur);
-      cur = '';
+    } else if ((c === '&' && next === '&') || (c === '|' && (next === '|' || next === '&'))) {
+      split();
       i++;
     } else if (c === ';' || c === '|' || c === '\n') {
-      parts.push(cur);
-      cur = '';
+      split();
+    } else if (c === '&' && prev !== '>' && prev !== '<' && next !== '>') {
+      // A lone `&` backgrounds and runs what follows; `2>&1`, `&>` and `<&` are redirects.
+      split();
     } else {
       cur += c;
     }
   }
-  parts.push(cur);
+  split();
   return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/** Index of the `)` closing a group whose body starts at `from` (the end of the text when it is unbalanced). */
+function closingParen(s: string, from: number): number {
+  let depth = 1;
+  let quote: string | undefined;
+  for (let i = from; i < s.length; i++) {
+    const c = s[i];
+    if (quote === "'") {
+      quote = c === "'" ? undefined : quote;
+    } else if (c === '\\') {
+      i++;
+    } else if (quote) {
+      quote = c === quote ? undefined : quote;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '(') {
+      depth++;
+    } else if (c === ')' && --depth === 0) {
+      return i;
+    }
+  }
+  return s.length;
+}
+
+/** The commands a shell line runs inside `$(...)`, backticks, `<(...)` and `>(...)` (outermost only). */
+export function commandSubstitutions(command: string): string[] {
+  const subs: string[] = [];
+  let quote: string | undefined;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") {
+      quote = c === "'" ? undefined : quote;
+      continue;
+    }
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    const next = command[i + 1];
+    if ((c === '$' && next === '(') || (!quote && (c === '<' || c === '>') && next === '(')) {
+      const end = closingParen(command, i + 2);
+      subs.push(command.slice(i + 2, end));
+      i = end;
+    } else if (c === '`') {
+      let end = i + 1;
+      while (end < command.length && command[end] !== '`') {
+        end += command[end] === '\\' ? 2 : 1;
+      }
+      subs.push(command.slice(i + 1, end));
+      i = end;
+    } else if (quote) {
+      quote = c === quote ? undefined : quote;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    }
+  }
+  return subs.filter((x) => x.trim());
+}
+
+/** True when the line runs or expands something a rule cannot see: `$(…)`, backticks, `<(…)`/`>(…)`, cmd `%VAR%`/`!VAR!`, PowerShell `@(…)`. */
+export function hasSubstitution(command: string): boolean {
+  return commandSubstitutions(command).length > 0 || /%[A-Za-z_]\w*%|![A-Za-z_]\w*!|@\(/.test(command);
 }
 
 /** `Bash(npm run test:*)` is a prefix; `Bash(git status)` exact; `*` wildcards anywhere. */
@@ -228,7 +328,8 @@ export function matchCommandRule(spec: string, command: string): boolean {
   const s = spec.trim().replace(/\s+/g, ' ');
   if (s.endsWith(':*')) {
     const prefix = s.slice(0, -2);
-    return cmd === prefix || cmd.startsWith(prefix + ' ') || cmd.startsWith(prefix);
+    // A word boundary: `git status:*` is not `git statusfoo` (`test:*` still covers `test:unit` scripts).
+    return cmd === prefix || cmd.startsWith(prefix + ' ') || cmd.startsWith(prefix + ':');
   }
   if (s.includes('*')) {
     const re = new RegExp(`^${s.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
@@ -300,14 +401,24 @@ export function ruleMatches(rule: PermissionRule, toolName: string, args: Record
   if (!rule.specifier) {
     return true;
   }
+  if ((toolName === 'run_parallel_subagents' || toolName === 'run_todos_parallel') && Array.isArray(args.tasks)) {
+    const agents = (args.tasks as unknown[]).map((t) => (t && typeof t === 'object' && typeof (t as { agent?: unknown }).agent === 'string' ? (t as { agent: string }).agent : ''));
+    const one = (a: string) => matchCommandRule(rule.specifier!, a);
+    return mode === 'allow' ? agents.length > 0 && agents.every(one) : agents.some(one);
+  }
   const target = specifierTarget(toolName, args);
   if (!target) {
     return false;
   }
   if (target.kind === 'command') {
-    const parts = splitCommandChain(target.value);
     const one = (c: string) => matchCommandRule(rule.specifier!, c);
-    return mode === 'allow' ? parts.length > 0 && parts.every(one) : parts.some(one);
+    if (mode === 'allow') {
+      // What a substitution runs is not what the rule names: never allowed by a rule.
+      const parts = splitCommandChain(target.value);
+      return !hasSubstitution(target.value) && parts.length > 0 && parts.every(one);
+    }
+    const all = (cmd: string): string[] => [...splitCommandChain(cmd), ...commandSubstitutions(cmd).flatMap(all)];
+    return all(target.value).some(one);
   }
   if (target.kind === 'url') {
     return matchDomainRule(rule.specifier, target.value);

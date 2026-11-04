@@ -75,7 +75,7 @@ Every read, search, edit and command shows up as it happens. Before anything ris
 
 ### 5 · Review the diff. Apply or discard.
 
-Every edit is snapshotted. Open a side-by-side diff per file, accept or reject per file or per session, and **Restore checkpoint** on any message to rewind files and conversation together. Tests run in a real terminal you can read.
+Every edit is snapshotted. Open a side-by-side diff per file, accept or reject per file or per session, and **Restore checkpoint** on any message to rewind files and conversation together (isolated worktree chats use Discard instead, or Edit to rewind only the conversation). Tests run in a real terminal you can read.
 
 <p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/review-diff.png" alt="Side-by-side diff of cart.js: the agent's one-line fix to applyDiscount, with Apply to workspace and Discard in the chat" width="880"></p>
 

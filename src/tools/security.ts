@@ -11,7 +11,7 @@ export const securityScanTool: Tool = {
     parameters: {
       type: 'object',
       properties: {
-        kinds: { type: 'array', items: { type: 'string', enum: ['dependencies', 'secrets', 'code'] }, description: 'Default: all three' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['dependencies', 'secrets', 'code', 'all'] }, description: 'Default: all three' },
         path: { type: 'string', description: 'Limit to a workspace-relative folder' },
       },
     },
@@ -21,12 +21,25 @@ export const securityScanTool: Tool = {
     if (!root) {
       return { content: 'No workspace folder open.', isError: true };
     }
-    const k = Array.isArray(args.kinds) && args.kinds.length ? new Set(args.kinds.map(String)) : undefined;
+    let k: Set<string> | undefined;
+    if (Array.isArray(args.kinds) && args.kinds.length) {
+      const alias: Record<string, string[]> = { all: ['dependencies', 'secrets', 'code'], dependencies: ['dependencies'], dependency: ['dependencies'], secrets: ['secrets'], secret: ['secrets'], code: ['code'] };
+      const bad = args.kinds.map((x) => String(x).trim().toLowerCase()).filter((x) => !alias[x]);
+      if (bad.length) {
+        return { content: `Unknown kinds: ${bad.join(', ')}. Valid values: "dependencies", "secrets", "code" or "all".`, isError: true };
+      }
+      k = new Set(args.kinds.flatMap((x) => alias[String(x).trim().toLowerCase()]));
+    }
     // Only the dependency check leaves the machine (package names and versions go to OSV.dev).
     if ((!k || k.has('dependencies')) && !(await ctx.requestApproval('Check dependencies against OSV.dev', 'Package names and versions from the lockfiles are sent to api.osv.dev; no code leaves the machine.', 'network'))) {
       return { content: 'The user declined the online dependency check. Run again with kinds ["secrets", "code"] for the offline checks.', isError: true };
     }
-    const r = await scanWorkspace(root, { kinds: k ? { dependencies: k.has('dependencies'), secrets: k.has('secrets'), code: k.has('code') } : undefined, path: typeof args.path === 'string' ? args.path : undefined, signal: ctx.signal, progress: (t) => ctx.progress(t) });
+    let r;
+    try {
+      r = await scanWorkspace(root, { kinds: k ? { dependencies: k.has('dependencies'), secrets: k.has('secrets'), code: k.has('code') } : undefined, path: typeof args.path === 'string' ? args.path : undefined, signal: ctx.signal, progress: (t) => ctx.progress(t) });
+    } catch (e) {
+      return { content: `Scan failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+    }
     return { content: formatFindings(r), data: { findings: r.findings.length } };
   },
 };

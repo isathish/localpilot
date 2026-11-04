@@ -1,4 +1,6 @@
 import * as cp from 'child_process';
+import { shellInvocation } from '../terminal/shell';
+import { killTree } from '../tools/terminal';
 import { HookCommand, HookEvent, HookMatcher, ProjectSettings } from './settings';
 
 /**
@@ -101,9 +103,13 @@ export interface HookExecResult {
 
 /** Runs one hook command with the event JSON on stdin. */
 export function execHook(hook: HookCommand, input: unknown, opts: { cwd?: string; env?: Record<string, string>; signal?: AbortSignal }): Promise<HookExecResult> {
-  const command = hook.pluginRoot ? hook.command.replace(/\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT/g, hook.pluginRoot) : hook.command;
-  const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : '/bin/sh';
-  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
+  let command = hook.pluginRoot ? hook.command.replace(/\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT/g, hook.pluginRoot) : hook.command;
+  const projectDir = opts.env?.CLAUDE_PROJECT_DIR;
+  if (process.platform === 'win32' && projectDir) {
+    // cmd.exe does not expand $VARS.
+    command = command.replace(/\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR/g, projectDir);
+  }
+  const sh = shellInvocation(command, { posixShell: '/bin/sh' });
   const timeoutMs = (hook.timeout ?? DEFAULT_TIMEOUT_S) * 1000;
   return new Promise((resolve) => {
     let stdout = '';
@@ -111,42 +117,72 @@ export function execHook(hook: HookCommand, input: unknown, opts: { cwd?: string
     let timedOut = false;
     let child: cp.ChildProcess;
     try {
-      child = cp.spawn(shell, args, {
+      child = cp.spawn(sh.file, sh.args, {
         cwd: opts.cwd,
         env: { ...process.env, ...(opts.env ?? {}), ...(hook.pluginRoot ? { CLAUDE_PLUGIN_ROOT: hook.pluginRoot } : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        windowsVerbatimArguments: sh.windowsVerbatimArguments,
+        detached: process.platform !== 'win32',
       });
     } catch (e) {
       resolve({ code: null, stdout: '', stderr: e instanceof Error ? e.message : String(e), timedOut: false });
       return;
     }
+    let done = false;
+    let grace: NodeJS.Timeout | undefined;
+    let backstop: NodeJS.Timeout | undefined;
+    const finish = (code: number | null) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(grace);
+      clearTimeout(backstop);
+      opts.signal?.removeEventListener('abort', onAbort);
+      resolve({ code, stdout, stderr, timedOut });
+    };
+    // A killed group may leave the pipes open (or never report 'exit'): give up on it after a second.
+    const kill = () => {
+      killTree(child);
+      backstop ??= setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(null);
+      }, 1000);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      kill();
     }, timeoutMs);
-    const onAbort = () => child.kill('SIGKILL');
+    const onAbort = () => kill();
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    child.stdout?.on('data', (d: Buffer) => {
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
       if (stdout.length < MAX_STDOUT) {
-        stdout += d.toString();
+        stdout += d;
       }
     });
-    child.stderr?.on('data', (d: Buffer) => {
+    child.stderr?.on('data', (d: string) => {
       if (stderr.length < MAX_STDOUT) {
-        stderr += d.toString();
+        stderr += d;
       }
     });
     child.on('error', (e) => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      resolve({ code: null, stdout, stderr: stderr || e.message, timedOut });
+      stderr ||= e.message;
+      finish(null);
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      resolve({ code, stdout, stderr, timedOut });
+    // A background process the hook started can hold the pipes open after the shell exits: don't wait for it.
+    child.on('exit', (code) => {
+      grace ??= setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(code);
+      }, 500);
     });
+    child.on('close', (code) => finish(code));
     for (const s of [child.stdin, child.stdout, child.stderr]) {
       s?.on('error', () => undefined);
     }

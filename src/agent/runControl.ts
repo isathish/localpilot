@@ -21,6 +21,7 @@ export class RunControl {
   private readonly listeners = new Set<RunControlListener>();
   private readonly waiters = new Set<() => void>();
   private readonly queue: ChatMessage[] = [];
+  private closed = false;
   readonly children = new Map<string, RunControl>();
   /** Set by the loop while it is actually holding at a step boundary (as opposed to a pause being requested). */
   get holding(): boolean {
@@ -107,13 +108,23 @@ export class RunControl {
     }
   }
 
-  /** Queue a user message for the loop to append at its next step boundary. */
-  steer(message: ChatMessage): void {
+  /** Queue a user message for the loop to append at its next step boundary; false once the run has ended or was stopped. */
+  steer(message: ChatMessage): boolean {
+    if (this.closed || this.aborted) {
+      return false;
+    }
     this.queue.push(message);
     this.notify();
+    return true;
   }
 
   takeSteering(): ChatMessage[] {
+    return this.queue.splice(0);
+  }
+
+  /** The run has ended: refuse further steering and return the messages the loop never took. */
+  close(): ChatMessage[] {
+    this.closed = true;
     return this.queue.splice(0);
   }
 

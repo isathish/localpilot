@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { probeProvider, recommendModel, sanitizeMcpServers, sanitizeProvider } from '../ui/settingsPanel';
 import { resolveApiKey } from '../providers/cloud';
 import { ProviderSecrets } from '../providers/secrets';
+import { DEFAULT_PROVIDERS, providerScope } from '../config';
 
 /** Minimal Ollama look-alike: enough of /api/version, /api/tags and /api/show for discovery. */
 function fakeOllama(): Promise<{ url: string; close(): void }> {
@@ -262,5 +263,23 @@ suite('LocalPilot settings & setup', () => {
       secrets.dispose();
       changed.dispose();
     }
+  });
+
+  test('provider edits go back to the scope that defines the providers list', () => {
+    const user = [{ id: 'u', type: 'ollama' as const, baseUrl: 'http://u' }];
+    const ws = [{ id: 'w', type: 'ollama' as const, baseUrl: 'http://w' }];
+    const folder = [{ id: 'f', type: 'ollama' as const, baseUrl: 'http://f' }];
+    const inWs = providerScope({ globalValue: user, workspaceValue: ws });
+    assert.strictEqual(inWs.target, vscode.ConfigurationTarget.Workspace);
+    assert.deepStrictEqual(inWs.list, ws);
+    const inUser = providerScope({ globalValue: user });
+    assert.strictEqual(inUser.target, vscode.ConfigurationTarget.Global);
+    assert.deepStrictEqual(inUser.list, user);
+    const none = providerScope(undefined);
+    assert.strictEqual(none.target, vscode.ConfigurationTarget.Global);
+    assert.deepStrictEqual(none.list, DEFAULT_PROVIDERS);
+    const inFolder = providerScope({ globalValue: user, workspaceValue: ws, workspaceFolderValue: folder });
+    assert.strictEqual(inFolder.target, vscode.ConfigurationTarget.WorkspaceFolder);
+    assert.deepStrictEqual(inFolder.list, folder);
   });
 });

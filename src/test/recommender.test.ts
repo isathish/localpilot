@@ -8,7 +8,7 @@ import { setSkillEnabled } from '../config';
 import * as vscode from 'vscode';
 import { describeSource, discoverSkills, findSkillDirs, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { AUTO_INSTALL_MIN_SCORE, CatalogEntry, SkillCatalog, sourceFor } from '../agent/skillCatalog';
-import { resolveAgentName, routeSubagent } from '../agent/builtinAgents';
+import { localToolNames, resolveAgentName, routeSubagent } from '../agent/builtinAgents';
 import { builtinAgents } from '../agent/builtinAgents';
 import { pickForRole, scoreForRole } from '../providers/registry';
 import { ModelInfo } from '../types';
@@ -181,6 +181,14 @@ suite('Subagent routing', () => {
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: true }).modelRef, undefined, 'router picks the fast model');
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: true, fast: 'session' }).modelRef, 'ollama/big');
     assert.strictEqual(routeSubagent(explore, undefined, 'ollama/big', { enabled: false }).modelRef, 'ollama/big');
+  });
+
+  test('Claude Code agent tool names and model aliases', () => {
+    const tools = localToolNames(['Read', 'Bash']);
+    assert.ok(tools.includes('read_file') && tools.includes('run_command') && tools.includes('gather_context'), tools.join());
+    assert.strictEqual(routeSubagent({ ...coder, tools: localToolNames(['Read', 'Edit']) }, undefined, 'ollama/big', { enabled: true }).role, 'agent');
+    assert.strictEqual(routeSubagent({ ...coder, model: 'inherit' }, undefined, 'ollama/big', { enabled: true }).modelRef, 'ollama/big');
+    assert.notStrictEqual(routeSubagent({ ...coder, model: 'sonnet' }, undefined, 'ollama/big', { enabled: true }).modelRef, 'sonnet');
   });
 
   test('Claude Code worker names resolve to coder and unknown names stay unresolved', () => {

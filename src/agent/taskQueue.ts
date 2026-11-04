@@ -31,7 +31,7 @@ export interface QueueTaskInput {
 }
 
 /** Runs one task as an agent chat. Calls `started` with the chat id first, then resolves when the run ends. */
-export type QueueRunner = (task: QueueTask, started: (sessionId: string) => void) => Promise<{ ok: boolean; error?: string }>;
+export type QueueRunner = (task: QueueTask, started: (sessionId: string) => void) => Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
 
 interface QueueFile {
   version: 1;
@@ -247,7 +247,7 @@ export class TaskQueue implements vscode.Disposable {
       this.changed();
     };
     void this.runner(t, started)
-      .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      .catch((e: unknown): { ok: boolean; error?: string; cancelled?: boolean } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
       .then((r) => {
         if (this.runTokens.get(t.id) !== token) {
           return;
@@ -255,8 +255,8 @@ export class TaskQueue implements vscode.Disposable {
         this.runTokens.delete(t.id);
         this.running.delete(t.id);
         if (t.status === 'running') {
-          t.status = r.ok ? 'done' : 'failed';
-          t.error = r.ok ? undefined : r.error || 'The agent stopped without an answer.';
+          t.status = r.cancelled ? 'cancelled' : r.ok ? 'done' : 'failed';
+          t.error = r.ok ? undefined : r.cancelled ? r.error || 'Stopped by the user.' : r.error || 'The agent stopped without an answer.';
         }
         t.endedAt = Date.now();
         this.log?.info(`Task queue: ${t.id} ${t.status}${t.error ? ` — ${t.error}` : ''}`);

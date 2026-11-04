@@ -3,12 +3,14 @@ import * as path from 'path';
 import * as os from 'os';
 import { getConfig } from '../config';
 import { Skill, SubagentDefinition } from '../types';
-import { builtinAgents } from './builtinAgents';
+import { builtinAgents, localToolNames } from './builtinAgents';
 import { parseFrontMatter } from './frontMatter';
-import { expandAgentTools } from './permissions';
 import type { PluginSource } from './plugins';
 
 export { parseFrontMatter } from './frontMatter';
+
+/** A front-matter value as text (a list is joined; anything else is empty). */
+const str = (v: unknown): string => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(' ') : '');
 
 /**
  * Skills are folders containing a SKILL.md with YAML front-matter (`name`, `description`) and a markdown body
@@ -197,13 +199,13 @@ export class SkillManager implements vscode.Disposable {
       try {
         const raw = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(skillPath))).toString('utf8');
         const { meta, body } = parseFrontMatter(raw);
-        const skillName = (meta.name as string) || name;
+        const skillName = str(meta.name) || name;
         if (into.has(skillName)) {
           continue; // earlier (higher priority) wins
         }
         into.set(skillName, {
           name: skillName,
-          description: (meta.description as string) || body.split('\n').find((l) => l.trim())?.slice(0, 200) || '',
+          description: str(meta.description) || body.split('\n').find((l) => l.trim())?.slice(0, 200) || '',
           path: skillPath,
           dir: path.join(dir, name),
           body,
@@ -229,16 +231,19 @@ export class SkillManager implements vscode.Disposable {
       try {
         const raw = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(path.join(dir, file)))).toString('utf8');
         const { meta, body } = parseFrontMatter(raw);
-        const name = (meta.name as string) || file.replace(/\.md$/, '');
+        const name = str(meta.name) || file.replace(/\.md$/, '');
         const list = (v: unknown): string[] | undefined => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : Array.isArray(v) ? (v as unknown[]).map(String).filter(Boolean) : undefined);
         const declared = list(meta.tools);
-        const tools = declared ? expandAgentTools(declared) : undefined;
-        if (declared?.length && !tools?.length) {
+        let tools = declared ? localToolNames(declared) : undefined;
+        if (declared && !declared.length) {
+          this.log.warn(`${file}: tools: is empty — the agent gets no restriction`);
+          tools = undefined;
+        } else if (declared?.length && !tools?.length) {
           this.log.warn(`Agent ${file}: none of its tools (${declared.join(', ')}) are known; it gets no tools`);
         }
-        // Claude Code's `inherit` / `default` and family names are not model ids here: the child inherits or is routed.
-        const model = typeof meta.model === 'string' && !/^(inherit|default|sonnet|opus|haiku)$/i.test(meta.model.trim()) ? meta.model.trim() || undefined : undefined;
-        into.set(name, { name, description: (meta.description as string) || '', systemPrompt: body.trim(), tools, skills: list(meta.skills), model, source });
+        // Claude Code's `default` and family names are not model ids here: the child is routed (`inherit` pins the parent's, see routeSubagent).
+        const model = !/^(default|sonnet|opus|haiku)$/i.test(str(meta.model).trim()) ? str(meta.model).trim() || undefined : undefined;
+        into.set(name, { name, description: str(meta.description), systemPrompt: body.trim(), tools, skills: list(meta.skills), model, source });
       } catch (e) {
         this.log.warn(`Failed to load agent ${file}: ${String(e)}`);
       }
@@ -323,7 +328,7 @@ function editDistance(a: string, b: string): number {
  * as "USE FOR: …" / "USE WHEN …" that only matter for matching, which runs on the full description.
  */
 export function briefDescription(description: string, max = 150): string {
-  const flat = description.replace(/\s+/g, ' ').trim();
+  const flat = String(description ?? '').replace(/\s+/g, ' ').trim();
   const head = flat.split(/\s+(?:USE (?:FOR|WHEN)\b|TRIGGERS?\b|Triggers? on\b|DO NOT USE\b|SKIP\b)/)[0].trim();
   const sentence = /^.+?(?<!\b(?:e\.g|i\.e|etc|vs|cf|incl|approx))[.!?](?=\s+[A-Z("'`]|$)/.exec(head)?.[0] ?? head;
   if (sentence.length <= max) {
