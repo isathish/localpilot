@@ -220,6 +220,8 @@ export class ChatController implements vscode.Disposable {
   /** ask_user prompts waiting for the user, by id. */
   private questions = new Map<string, { sessionId: string; questions: UserQuestion[]; resolve: (a: UserAnswer[] | null | undefined) => void; mirrored: boolean }>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
+  /** Change-tracker turn key of the last run started; keys only increase so Restore checkpoint survives compaction, /clear and Edit. */
+  private lastCheckpoint = 0;
   private activeSessionId?: string;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly _onDidChangeActive = new vscode.EventEmitter<Session | undefined>();
@@ -1399,7 +1401,9 @@ export class ChatController implements vscode.Disposable {
     if (!target || target.role !== 'user') {
       return;
     }
-    const reverted = revertFiles ? await this.tracker.restoreToTurn(s.id, messageIndex) : 0;
+    const key = target.meta?.checkpoint;
+    // Worktree-isolated runs never snapshot into the tracker; their changes live in the worktree until applied or discarded.
+    const reverted = revertFiles && key !== undefined && !s.worktree ? await this.tracker.restoreToTurn(s.id, key) : 0;
     const prompt = target.content.replace(/<[a-z_]+[^>]*>[\s\S]*?<\/[a-z_]+>\s*/g, '').replace(/\n\n\[\d+ images? attached\]$/, '').trim();
     s.messages = s.messages.slice(0, messageIndex);
     s.contextTokens = 0;
@@ -1412,7 +1416,13 @@ export class ChatController implements vscode.Disposable {
     this.broadcast({
       type: 'toast',
       level: 'info',
-      text: revertFiles ? (reverted ? `Restored checkpoint — reverted ${reverted} file${reverted === 1 ? '' : 's'}` : 'Restored checkpoint') : 'Edit the message and send it again — later turns were removed, files were kept',
+      text: !revertFiles
+        ? 'Edit the message and send it again — later turns were removed, files were kept'
+        : s.worktree
+          ? "Rewound the conversation — files in the isolated worktree were not reverted; use Discard to drop the agent's changes"
+          : reverted
+            ? `Restored checkpoint — reverted ${reverted} file${reverted === 1 ? '' : 's'}`
+            : 'Rewound the conversation — no file changes were recorded for this message',
     });
   }
 
@@ -1693,7 +1703,8 @@ export class ChatController implements vscode.Disposable {
     this.replays.set(sessionId, { base: session.messages.length, startedAt: Date.now(), items: [], bytes: 0, truncated: false });
     this.offers.delete(sessionId);
     control.onDidChange((c) => this.onControlChange(sessionId, c));
-    this.tracker.beginTurn(sessionId, session.messages.length);
+    const checkpoint = (this.lastCheckpoint = Math.max(Date.now(), this.lastCheckpoint + 1));
+    this.tracker.beginTurn(sessionId, checkpoint);
     this.runStatus.set(sessionId, 'Starting…');
     this.broadcast({ type: 'running', sessionId, running: true });
     this._onDidChangeRuns.fire();
@@ -1714,14 +1725,14 @@ export class ChatController implements vscode.Disposable {
     const corrected = opts.display ? { text, fixes: [] } : await this.correctNames(sessionId, text);
     text = corrected.text;
     let content = text;
-    const attachedBlocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
+    const attachedBlocks = await this.readAttachments(attachments);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }
     if (images?.length) {
       content = `${content}\n\n[${images.length} image${images.length === 1 ? '' : 's'} attached]`;
     }
-    const meta: ChatMessage['meta'] = opts.display || corrected.fixes.length ? { ...(opts.display ? { display: opts.display } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) } : undefined;
+    const meta: ChatMessage['meta'] = { checkpoint, ...(opts.display ? { display: opts.display } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
     const userMessage: ChatMessage = { role: 'user', content, images, meta };
 
     try {
@@ -1961,6 +1972,16 @@ export class ChatController implements vscode.Disposable {
     return c ? c.togglePause() : undefined;
   }
 
+  /** Reads the attachments of a message; any that could not be read are reported in one toast instead of being dropped silently. */
+  private async readAttachments(attachments: string[]): Promise<string[]> {
+    const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
+    const failed = attachments.filter((_, i) => !blocks[i]);
+    if (failed.length) {
+      this.broadcast({ type: 'toast', level: 'warn', text: `Could not attach ${failed.join(', ')}` });
+    }
+    return blocks;
+  }
+
   /** Queue a user message for a running (or paused) agent; it is appended at the next step boundary. */
   async steer(sessionId: string, text: string, attachments: string[] = [], images?: string[]): Promise<boolean> {
     const c = this.runs.get(sessionId);
@@ -1969,7 +1990,7 @@ export class ChatController implements vscode.Disposable {
     }
     text = (await this.correctNames(sessionId, text)).text;
     let content = text;
-    const attachedBlocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a)));
+    const attachedBlocks = await this.readAttachments(attachments);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }

@@ -52,6 +52,8 @@ export interface ChatMessage {
     display?: string;
     /** Misspelled names in the request that were corrected to real workspace names before it was sent. */
     corrections?: { from: string; to: string }[];
+    /** On a user message: the change-tracker turn key that Restore checkpoint reverts to. */
+    checkpoint?: number;
   };
 }
 

@@ -280,6 +280,30 @@ export class WorkspaceContext implements vscode.Disposable {
     return lines.join('\n');
   }
 
+  /**
+   * Maps an attachment path to a file: absolute paths as-is; in multi-root workspaces `asRelativePath` prefixes the
+   * folder name, so a leading segment naming a folder picks that folder; otherwise the first folder that has the file.
+   */
+  private async resolveRef(p: string): Promise<vscode.Uri> {
+    if (path.isAbsolute(p)) {
+      return vscode.Uri.file(p);
+    }
+    const folders = vscode.workspace.workspaceFolders!;
+    const [head, ...rest] = p.split('/');
+    const named = folders.length > 1 && rest.length ? folders.find((f) => f.name === head) : undefined;
+    const candidates = named ? [vscode.Uri.joinPath(named.uri, rest.join('/'))] : [];
+    candidates.push(...folders.map((f) => vscode.Uri.joinPath(f.uri, p)));
+    for (const uri of candidates) {
+      try {
+        await vscode.workspace.fs.stat(uri);
+        return uri;
+      } catch {
+        /* try the next folder */
+      }
+    }
+    return candidates[0];
+  }
+
   /** Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. */
   /** Supplies the last terminal command + output for `@terminal` (set by the extension; absent in the CLI). */
   terminalContext?: () => string;
@@ -319,7 +343,7 @@ export class WorkspaceContext implements vscode.Disposable {
     if (!vscode.workspace.workspaceFolders?.length && !path.isAbsolute(p)) {
       return '';
     }
-    const uri = path.isAbsolute(p) ? vscode.Uri.file(p) : vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, p);
+    const uri = await this.resolveRef(p);
     try {
       // Directories: attach a listing instead of failing.
       const stat = await vscode.workspace.fs.stat(uri);
