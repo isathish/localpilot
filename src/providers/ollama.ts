@@ -240,9 +240,9 @@ export class OllamaProvider implements LLMProvider {
     await postJson(`${this.baseUrl}/api/chat`, body, this.headers, signal);
   }
 
-  async loadedModels(signal?: AbortSignal): Promise<string[]> {
-    const res = await getJson<{ models?: { name?: string; model?: string }[] }>(`${this.baseUrl}/api/ps`, this.headers, withTimeout(1500, signal));
-    return (res.models ?? []).map((m) => m.name ?? m.model ?? '').filter(Boolean);
+  async loadedModels(signal?: AbortSignal): Promise<{ id: string; bytes?: number }[]> {
+    const res = await getJson<{ models?: { name?: string; model?: string; size?: number }[] }>(`${this.baseUrl}/api/ps`, this.headers, withTimeout(1500, signal));
+    return (res.models ?? []).map((m) => ({ id: m.name ?? m.model ?? '', bytes: typeof m.size === 'number' && m.size > 0 ? m.size : undefined })).filter((m) => m.id);
   }
 }
 

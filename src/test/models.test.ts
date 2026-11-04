@@ -296,19 +296,34 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     // Memory: on a 16 GB laptop the 14b coder plus a 12b Gemma do not fit side by side, so the run queues instead of thrashing.
     const laptop = buildProfile({ platform: 'win32', arch: 'x64', cpuCores: 8, ramGb: 16, vramGb: 0 });
     assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), laptop), undefined);
-    // …but a model that is already loaded (has a run on it, with a free slot) is always a fine neighbour.
-    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1, 'gemma4:12b': 1 }, ['qwen2.5-coder:14b']), laptop)?.modelId, 'gemma4:12b');
+    // A model already loaded (it has a run, with a free slot) adds no weights: a fine neighbour where the pair fits…
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1, 'gemma4:12b': 1 }, ['qwen2.5-coder:14b']), profile)?.modelId, 'gemma4:12b');
+    // …but on the laptop the two already overflow the memory budget, and more concurrent work there is what kills the
+    // server mid-request, so the run queues.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1, 'gemma4:12b': 1 }, ['qwen2.5-coder:14b']), laptop), undefined);
     // Image turns only spread to a model that can see.
     assert.strictEqual(pickAlternative([gemma, coder], gemma, 'agent', load({ 'gemma4:12b': 1 }, ['gemma4:12b']), profile, true), undefined);
     // Quality floor: a much weaker model is not "comparable" even when idle.
     const weak = m('tinyllama:1.1b', { sizeBytes: 0.7e9 });
     assert.strictEqual(pickAlternative([big, weak], big, 'agent', load({ 'qwen2.5-coder:32b': 1 }, ['qwen2.5-coder:32b']), profile), undefined);
-    // The least loaded comparable model wins; ties go to the better score.
-    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 4, 'gemma4:12b': 2, 'qwen2.5-coder:32b': 1 }), profile)?.modelId, 'qwen2.5-coder:32b');
-    // A model already resident in memory (idle, but loaded per the server) costs no extra memory and no load time:
-    // fine as a neighbour on the laptop, and preferred over an equally idle model that would have to load first.
+    // The least loaded comparable model wins; ties go to the better score (on a machine where all three fit)…
+    const workstation = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 16, ramGb: 128, vramGb: 0 });
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 4, 'gemma4:12b': 2, 'qwen2.5-coder:32b': 1 }), workstation)?.modelId, 'qwen2.5-coder:32b');
+    // …while on the 36 GB Mac those three (about 41 GB) are already over budget: no more concurrent work, the run queues.
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 4, 'gemma4:12b': 2, 'qwen2.5-coder:32b': 1 }), profile), undefined);
+    // A model already resident in memory (idle, but loaded per the server) costs no extra weights and no load time:
+    // a fine neighbour where the pair fits, and preferred over an equally idle model that would have to load first.
     const resident = new Set(['ollama/gemma4:12b']);
-    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), laptop, false, undefined, resident)?.modelId, 'gemma4:12b');
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), profile, false, undefined, resident)?.modelId, 'gemma4:12b');
+    assert.strictEqual(pickAlternative(models, coder, 'agent', load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']), laptop, false, undefined, resident), undefined, 'loaded or not, the pair overflows the laptop');
+    // What the server reports beats the estimate from the weights. On a 36 GB Mac, gemma4:12b took 13.1 GB with its
+    // context cache and a resident 27B model 19.5 GB (32.6 GB together): sending work to both at once crashed Ollama.
+    const q27 = m('qwen3.8:27b', { sizeBytes: 18.2e9 });
+    const sizes = new Map([['ollama/gemma4:12b', 13.1], ['ollama/qwen3.8:27b', 19.5]]);
+    const gemmaBusy = load({ 'gemma4:12b': 1 }, ['gemma4:12b']);
+    assert.strictEqual(pickAlternative([gemma, q27], gemma, 'agent', gemmaBusy, profile, false, undefined, new Set(sizes.keys()), sizes), undefined, 'both resident but over budget: queue on gemma');
+    assert.strictEqual(pickAlternative([gemma, q27], gemma, 'agent', gemmaBusy, profile, false, undefined, new Set(['ollama/gemma4:12b']), new Map([['ollama/gemma4:12b', 13.1]])), undefined, 'the 27B model (~20 GB) does not fit beside 13.1 GB');
+    assert.strictEqual(pickAlternative([gemma, q27], gemma, 'agent', gemmaBusy, profile, false, undefined, new Set(['ollama/gemma4:12b']), new Map([['ollama/gemma4:12b', 4]]))?.modelId, 'qwen3.8:27b', 'it does beside a small resident footprint');
     const coder2 = m('qwen3:14b', { sizeBytes: 9e9 });
     const pool = [coder, coder2, gemma];
     const busy = load({ 'qwen2.5-coder:14b': 1 }, ['qwen2.5-coder:14b']);

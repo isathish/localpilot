@@ -284,6 +284,16 @@ export async function discoverCommands(roots: string[], opts: { home?: string; p
 }
 
 /** Lookup table by invocation: `/ns:name` always, plus `/name` when no other command claims it. */
+/** `/skill <name> <task>`: the prompt the chat and the CLI run (the agent loop preloads a skill named this way). */
+export function skillTaskPrompt(skill: string, task: string): string {
+  return `Use the "${skill}" skill for this task: ${task.trim() || 'follow the skill instructions.'}\nIts instructions are loaded for you; perform every step the skill describes using the tools, then report what you did.`;
+}
+
+/** `/agent <name> <task>`: the prompt that hands the task to that subagent. */
+export function agentTaskPrompt(agent: string, task: string): string {
+  return `Delegate this to the "${agent}" subagent via run_subagent and relay its report: ${task.trim()}`;
+}
+
 export function indexCommands(list: CustomCommand[]): Map<string, CustomCommand> {
   const byInvoke = new Map<string, CustomCommand>();
   for (const c of list) {

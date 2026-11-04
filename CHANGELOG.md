@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **`/skill <name> <task>` and `/agent <name> <task>` work again.** Since 1.5.0 they did nothing: the command started its task as a second message while the first was still being handled, and the guard against double sends turned it into a steering note for a run that never existed. The task now runs as the chat's request itself (the chat shows the command as typed), starts at once, and the skill is preloaded as before. The CLI gains both commands too (`/skill greeting …` in a session, or `localpilot -p "/skill greeting …"`), which its own install message already pointed to.
+- **Parallel work no longer runs a machine out of memory.** When the model a chat used was busy, LocalPilot could send the extra work to a second large model even though the two together did not fit; on a 36 GB Mac, gemma4:12b (13 GB with its context cache) next to a 27B model (19.5 GB) made Ollama die mid-request. The memory check now uses the size Ollama reports for each loaded model (context cache included) instead of an estimate from the weights, and a machine already over its budget gets no extra concurrent work: the run waits for the busy model instead.
+
 ## 1.5.1 — 2026-11-04
 
 ### Fixed

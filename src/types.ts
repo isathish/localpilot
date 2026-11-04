@@ -157,8 +157,8 @@ export interface LLMProvider {
   healthCheck(signal?: AbortSignal): Promise<boolean>;
   /** Load the model into memory ahead of the first request so the first token arrives sooner (optional, best effort). */
   warm?(model: string, opts: WarmOptions, signal?: AbortSignal): Promise<void>;
-  /** Provider-local ids of the models currently loaded in memory (Ollama `/api/ps`); absent = unknown. */
-  loadedModels?(signal?: AbortSignal): Promise<string[]>;
+  /** Models currently loaded in memory (Ollama `/api/ps`): provider-local id and the memory each takes, context cache included; absent = unknown. */
+  loadedModels?(signal?: AbortSignal): Promise<{ id: string; bytes?: number }[]>;
 }
 
 export interface ProviderConfig {

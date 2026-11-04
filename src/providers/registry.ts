@@ -347,6 +347,8 @@ export class ProviderRegistry implements vscode.Disposable {
   private readonly warmed = new Map<string, number>();
 
   private resident: ReadonlySet<string> = new Set();
+  /** Memory each resident model takes as its server reports it (GB, context cache included). */
+  private residentGb: ReadonlyMap<string, number> = new Map();
   private residentAt = 0;
   private residentProbe?: Promise<ReadonlySet<string>>;
 
@@ -360,13 +362,17 @@ export class ProviderRegistry implements vscode.Disposable {
     }
     this.residentProbe ??= (async () => {
       const out = new Set<string>();
+      const sizes = new Map<string, number>();
       await Promise.all(
         this.all
           .filter((p) => p.loadedModels && (this.reachable.has(p.id) || !this.lastRefresh))
           .map(async (p) => {
             try {
-              for (const id of await p.loadedModels!()) {
-                out.add(`${p.id}/${id}`);
+              for (const m of await p.loadedModels!()) {
+                out.add(`${p.id}/${m.id}`);
+                if (m.bytes) {
+                  sizes.set(`${p.id}/${m.id}`, m.bytes / 1024 ** 3);
+                }
               }
             } catch {
               /* unknown — treat as nothing loaded */
@@ -374,6 +380,7 @@ export class ProviderRegistry implements vscode.Disposable {
           })
       );
       this.resident = out;
+      this.residentGb = sizes;
       this.residentAt = Date.now();
       return out;
     })().finally(() => {
@@ -567,7 +574,7 @@ export class ProviderRegistry implements vscode.Disposable {
         // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model —
         // unless it is not loaded and would not fit next to what is, then the model in memory does the job.
         const small = pickForRole(healthy, 'fast', profile, false, bonus);
-        const fast = small && preferResident(small, healthy, 'fast', resident, profile, bonus);
+        const fast = small && preferResident(small, healthy, 'fast', resident, profile, bonus, this.residentGb);
         if (fast && fast.id !== model.id && fast.supportsTools) {
           reason = fast === small ? `Read-only subagent — using ${fast.name}` : `Read-only subagent — using ${fast.name}, already in memory (${small.name} would not fit alongside)`;
           model = fast;
@@ -576,7 +583,7 @@ export class ProviderRegistry implements vscode.Disposable {
     }
     if (!model && role === 'fast') {
       const small = pickForRole(healthy, 'fast', profile, false, bonus);
-      model = small && preferResident(small, healthy, 'fast', resident, profile, bonus);
+      model = small && preferResident(small, healthy, 'fast', resident, profile, bonus, this.residentGb);
     }
     if (!model) {
       model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(models, 'agent', profile, false, bonus);
@@ -601,7 +608,7 @@ export class ProviderRegistry implements vscode.Disposable {
     // explicit choice for a chat is never second-guessed — callers pass `spread` only when it was not one).
     let spread = false;
     if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
-      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident);
+      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident, this.residentGb);
       if (alt) {
         const n = req.load.assigned.get(model.id) ?? 0;
         reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
@@ -744,12 +751,13 @@ export function pickForRole(models: ModelInfo[], role: ModelRole, profile?: Syst
  * models that are would exceed this machine's model budget, use the best resident model that can do the job. Loading
  * a second model there means swapping, which costs far more time than the smaller model saves.
  */
-export function preferResident(pick: ModelInfo, models: ModelInfo[], role: ModelRole, resident: ReadonlySet<string>, profile?: SystemProfile, bonus?: UsageBonus): ModelInfo {
+export function preferResident(pick: ModelInfo, models: ModelInfo[], role: ModelRole, resident: ReadonlySet<string>, profile?: SystemProfile, bonus?: UsageBonus, residentGb: ReadonlyMap<string, number> = new Map()): ModelInfo {
   if (!profile || !resident.size || resident.has(pick.id)) {
     return pick;
   }
   const loaded = models.filter((m) => resident.has(m.id));
-  const loadedGb = loaded.reduce((sum, m) => sum + (modelFootprintGb(m) ?? 0), 0);
+  // What the server reports for a loaded model (context cache included) beats the estimate from its weights.
+  const loadedGb = [...resident].reduce((sum, id) => sum + (residentGb.get(id) ?? modelFootprintGb(models.find((m) => m.id === id) ?? ({} as ModelInfo)) ?? 0), 0);
   const gb = modelFootprintGb(pick);
   if (gb === undefined || loadedGb + gb <= profile.modelBudgetGb) {
     return pick;
@@ -779,16 +787,28 @@ function paramsB(m: ModelInfo): number | undefined {
  * footprints are known — small enough to sit in memory next to the models already in use, so a second model does
  * not evict the first and make both slower. Undefined when nothing qualifies: the caller then queues as before.
  */
-export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: ModelRole, load: ModelLoad, profile?: SystemProfile, needsVision?: boolean, bonus?: UsageBonus, resident: ReadonlySet<string> = new Set()): ModelInfo | undefined {
+export function pickAlternative(
+  models: ModelInfo[],
+  chosen: ModelInfo,
+  role: ModelRole,
+  load: ModelLoad,
+  profile?: SystemProfile,
+  needsVision?: boolean,
+  bonus?: UsageBonus,
+  resident: ReadonlySet<string> = new Set(),
+  residentGb: ReadonlyMap<string, number> = new Map()
+): ModelInfo | undefined {
   if (!isSaturated(chosen, load)) {
     return undefined;
   }
   const scoreOf = (m: ModelInfo) => scoreForRole(m, role, profile, bonus);
   const floor = scoreOf(chosen) - COMPARABLE_SCORE_GAP;
   const chosenB = paramsB(chosen);
-  // Memory already committed: every distinct model with at least one run assigned (the chosen one included).
-  const inUse = models.filter((m) => (load.assigned.get(m.id) ?? 0) > 0 || m.id === chosen.id);
-  const committedGb = inUse.reduce((sum, m) => sum + (modelFootprintGb(m) ?? 0), 0);
+  // Memory already committed: every model loaded right now (at the size its server reports, context cache included)
+  // and every model with a run on it, the chosen one included.
+  const sizeOf = (id: string) => residentGb.get(id) ?? modelFootprintGb(models.find((m) => m.id === id) ?? ({} as ModelInfo)) ?? 0;
+  const committed = new Set([chosen.id, ...resident, ...models.filter((m) => (load.assigned.get(m.id) ?? 0) > 0).map((m) => m.id)]);
+  const committedGb = [...committed].reduce((sum, id) => sum + sizeOf(id), 0);
   const candidates = models
     .filter((m) => m.id !== chosen.id && !isSaturated(m, load))
     .filter((m) => (!chosen.supportsTools || m.supportsTools) && (!needsVision || m.supportsVision))
@@ -798,11 +818,13 @@ export function pickAlternative(models: ModelInfo[], chosen: ModelInfo, role: Mo
       return chosenB === undefined || b === undefined || b >= chosenB * COMPARABLE_SIZE_RATIO;
     })
     .filter((m) => {
-      if (!profile || (load.assigned.get(m.id) ?? 0) > 0 || resident.has(m.id)) {
-        return true; // already loaded, or no machine profile to judge by
+      if (!profile) {
+        return true; // no machine profile to judge by
       }
-      const gb = modelFootprintGb(m);
-      return gb === undefined || committedGb + gb <= profile.modelBudgetGb * 1.1;
+      // A loaded model adds no weights, but it still has to fit: two big models answering at once on a machine that
+      // is already over its budget is what runs it out of memory (Ollama dies mid-request). Then the run queues.
+      const extra = committed.has(m.id) ? 0 : residentGb.get(m.id) ?? modelFootprintGb(m);
+      return extra === undefined || committedGb + extra <= profile.modelBudgetGb * 1.1;
     });
   // Fewest runs first; then a model already in memory (starts answering at once), then the better score.
   const loaded = (m: ModelInfo) => (resident.has(m.id) ? 1 : 0);

@@ -25,7 +25,7 @@ import { createAgentTools } from '../agent/subagents';
 import { loadProjectSettings, ProjectSettings } from '../agent/settings';
 import { HookRunner } from '../agent/hooks';
 import { discoverPlugins, PluginInfo, pluginSource } from '../agent/plugins';
-import { CustomCommand, discoverCommands, expandCommand, indexCommands } from '../agent/commands';
+import { agentTaskPrompt, CustomCommand, discoverCommands, expandCommand, indexCommands, skillTaskPrompt } from '../agent/commands';
 import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
@@ -124,6 +124,7 @@ ${bold('In a session')}
   /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins)   /permissions   /hooks   settings.json rules
+  /skill <name> <task>   run a task with a skill preloaded   /agent <name> <task>   hand a task to a subagent (also as -p "/skill …")
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
   anything you type while a run is going is handed to the agent at its next step.
 
@@ -777,6 +778,23 @@ function modelLine(m: ModelInfo, def: string): string {
   return `  ${m.id === def ? amber('●') : dim('○')} ${bold(m.id.padEnd(44))} ${dim(`${Math.round(m.contextWindow / 1024)}k`)}  ${tags}`;
 }
 
+/** `/skill <name> <task>` or `/agent <name> <task>`: the prompt to run, or why it cannot run (same prompts as the chat). */
+function taskCommand(core: Core, kind: string, rest: string): { prompt: string } | { error: string } | undefined {
+  const [name, ...task] = rest.trim().split(/\s+/);
+  if (!name) {
+    return undefined;
+  }
+  if (kind === 'agent') {
+    return core.skills.getAgent(name) ? { prompt: agentTaskPrompt(name, task.join(' ')) } : { error: `Unknown subagent "${name}". Subagents: ${core.skills.allAgents.map((a) => a.name).join(', ')}` };
+  }
+  const skill = core.skills.resolveSkill(name)?.skill;
+  if (!skill) {
+    const similar = core.skills.similarSkillNames(name);
+    return { error: `Unknown skill "${name}".${similar.length ? ` Did you mean ${similar.join(', ')}?` : ''} Install one with: localpilot skill install <owner/repo|url>` };
+  }
+  return { prompt: skillTaskPrompt(skill.name, task.join(' ')) };
+}
+
 async function cmdModels(core: Core): Promise<void> {
   await core.providers.listModels(true);
   const models = await core.providers.listModelsStartingLocal();
@@ -1257,6 +1275,14 @@ async function main(): Promise<void> {
   /** `/name args` as a one-shot prompt runs the custom command (like `claude -p "/cmd"`); anything else is sent as typed. */
   const prepare = async (text: string): Promise<{ text: string; opts: { modelRef?: string; permissionAllow?: string[]; display?: string } }> => {
     const m = /^\/([\w:-]+)\s*([\s\S]*)$/.exec(text.trim());
+    const task = m && (m[1] === 'skill' || m[1] === 'agent') ? taskCommand(core, m[1], m[2]) : undefined;
+    if (task) {
+      if ('error' in task) {
+        console.error(`${red('✖')} ${task.error}`);
+        process.exit(2);
+      }
+      return { text: task.prompt, opts: { display: text.trim() } };
+    }
     const custom = m ? indexCommands(core.commands).get(`/${m[1]}`) : undefined;
     if (!custom) {
       return { text, opts: {} };
@@ -1395,6 +1421,24 @@ async function main(): Promise<void> {
         session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
+      case 'skill': case 'agent': {
+        const task = taskCommand(core, cmd, arg);
+        if (!task || 'error' in task) { console.log(task ? red(task.error) : dim(`usage: /${cmd} <name> <task>`)); return true; }
+        rl!.setPrompt('');
+        current = new RunControl(session.id);
+        try {
+          await runTurn(core, session, task.prompt, pendingFiles, renderer, rl, current, { display: line });
+          pendingFiles = [];
+          changesSummary(core, session);
+        } catch (e) {
+          renderer.error(e instanceof Error ? e.message : String(e));
+        } finally {
+          current = undefined;
+          process.stdout.write('\n');
+          rl!.setPrompt(PROMPT);
+        }
+        return true;
+      }
       case 'commands':
         console.log(core.commands.length ? core.commands.map((c) => `  ${bold(c.invoke)}${c.argumentHint ? ` ${dim(c.argumentHint)}` : ''}  ${c.description}${c.plugin ? dim(`  (plugin ${c.plugin})`) : ''}`).join('\n') : dim('no custom commands — add markdown files under .localpilot/commands or .claude/commands'));
         return true;

@@ -258,6 +258,9 @@ suite('LocalPilot end-to-end (real local model)', () => {
 
   test('the active editor is attached as context and the model reasons about it', async function () {
     this.timeout(240_000);
+    // Its own fixture, so the test also runs alone (mocha --grep) or in any order.
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'src', 'billing.py'), 'def compute_total(items):\n    return sum(i.price * i.qty for i in items)\n', 'utf8');
     const doc = await vscode.workspace.openTextDocument(path.join(root, 'src', 'billing.py'));
     await vscode.window.showTextDocument(doc);
     const id = await api.runPrompt('What is the name of the function in the attached file? Answer with the function name only, no tools.', 'ask', ['selection']);

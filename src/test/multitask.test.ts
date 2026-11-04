@@ -315,6 +315,35 @@ suite('Multitasking: every parallel mode end to end (scripted model)', function 
     }
   });
 
+  test('/skill and /agent run their task in the same run: started at once, shown as typed, skill preloaded', async () => {
+    await set('worktrees.mode', 'off');
+    const dir = path.join(root, '.localpilot', 'skills', 'greet');
+    try {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: greet\ndescription: Say hello in the house style\n---\n# Greet\n\nReply with the single word OK.\n', 'utf8');
+      await vscode.commands.executeCommand('localpilot.reloadSkills');
+      const id = await api.runPrompt('/skill greet say hello', 'agent');
+      assert.ok(api.runningSessionIds.includes(id), 'the run is registered when runPrompt returns, not dropped or deferred');
+      await waitIdle([id]);
+      const msgs = api.getSession(id)!.messages;
+      const user = msgs.find((m) => m.role === 'user' && !m.meta?.hidden);
+      assert.strictEqual(user?.meta?.display, '/skill greet say hello', `the chat shows the command as typed: ${transcript(id)}`);
+      assert.match(user!.content, /Use the "greet" skill for this task: say hello/);
+      assert.ok(msgs.some((m) => m.role === 'user' && m.meta?.hidden && /<skill name="greet"/.test(m.content)), `skill preloaded: ${transcript(id)}`);
+      assert.match(lastText(id), /OK/);
+
+      const id2 = await api.runPrompt('/agent explore list the files', 'agent');
+      assert.ok(api.runningSessionIds.includes(id2), 'the /agent run starts at once too');
+      await waitIdle([id2]);
+      const u2 = api.getSession(id2)!.messages.find((m) => m.role === 'user' && !m.meta?.hidden);
+      assert.strictEqual(u2?.meta?.display, '/agent explore list the files');
+      assert.match(u2!.content, /Delegate this to the "explore" subagent via run_subagent/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      await set('worktrees.mode', 'parallel');
+    }
+  });
+
   (process.platform === 'win32' ? test.skip : test)('CLI --multitask: the same coordinator and workers from the terminal', async () => {
     const cli = path.join(vscode.extensions.getExtension('localpilot.localpilot-agent')!.extensionPath, 'dist', 'cli.js');
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mt-home-'));

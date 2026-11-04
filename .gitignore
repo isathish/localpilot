@@ -6,4 +6,5 @@ node_modules
 
 # Generated at deploy time from Google Analytics (scripts/ga-pageviews.mjs)
 docs/_data/pageviews.json
-.vscode-test.tmp.mjs
+# Temporary test-runner configs (.vscode-test.tmp.mjs, .vscode-test.e2e.mjs…); .vscode-test.mjs itself is tracked
+.vscode-test.*.mjs

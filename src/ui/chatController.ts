@@ -21,7 +21,7 @@ import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPro
 import { quickPrompt } from './inlineEdit';
 import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { findRipgrep, runProcess } from '../tools/search';
-import { CommandManager, CustomCommand, expandCommand } from '../agent/commands';
+import { agentTaskPrompt, CommandManager, CustomCommand, expandCommand, skillTaskPrompt } from '../agent/commands';
 import * as path from 'path';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { formatBoard, TeamBoard } from '../agent/teamBoard';
@@ -1640,9 +1640,13 @@ export class ChatController implements vscode.Disposable {
       for (let i = 0; i < 50 && !this.runs.has(sessionId) && this.starting.has(sessionId); i++) {
         await new Promise((r) => setTimeout(r, 100));
       }
-      // Busy: the message becomes a steering instruction for the running agent instead of being refused.
-      await this.steer(sessionId, text, attachments, images);
-      return '';
+      if (this.runs.has(sessionId) || this.starting.has(sessionId)) {
+        // Busy: the message becomes a steering instruction for the running agent instead of being refused.
+        await this.steer(sessionId, text, attachments, images);
+        return '';
+      }
+      // The other send ended without starting a run (a slash command answered locally, a start that was cancelled):
+      // steering would drop this message, so it starts a run of its own.
     }
     // A manual compaction rewrites the history when it finishes; a turn started meanwhile would be dropped by it.
     const compaction = this.compacting.get(sessionId);
@@ -1660,7 +1664,11 @@ export class ChatController implements vscode.Disposable {
 
   private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean }): Promise<string> {
     const slash = opts.display ? undefined : this.handleSlash(session, text);
-    if (slash !== undefined) {
+    if (typeof slash === 'object') {
+      // `/skill <name> <task>` and `/agent <name> <task>` become the prompt of this same run; the chat shows what was typed.
+      opts = { ...opts, display: text.trim() };
+      text = slash.rewrite;
+    } else if (slash !== undefined) {
       return slash;
     }
     if (images?.length) {
@@ -2105,7 +2113,8 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Slash commands handled locally (no model call). Returns undefined when the text is a normal prompt. */
-  private handleSlash(session: Session, text: string): string | undefined {
+  /** Returns the reply to a command handled here, `{ rewrite }` for a command that runs as a rewritten prompt, or undefined for a normal prompt. */
+  private handleSlash(session: Session, text: string): string | { rewrite: string } | undefined {
     const m = /^\/([\w:-]+)\s*(.*)$/s.exec(text.trim());
     if (!m) {
       return undefined;
@@ -2264,16 +2273,14 @@ export class ChatController implements vscode.Disposable {
           return say(`Unknown skill "${name}".${disabled}${similar.length ? ` Did you mean ${similar.map((s) => `\`${s}\``).join(', ')}?` : ''} Try /skills.${hint}`);
         }
         const skill = resolved.skill;
-        void this.send(session.id, `Use the "${skill.name}" skill for this task: ${task.join(' ') || 'follow the skill instructions.'}\nIts instructions are loaded for you; perform every step the skill describes using the tools, then report what you did.`);
-        return '';
+        return { rewrite: skillTaskPrompt(skill.name, task.join(' ')) };
       }
       case 'agent': {
         const [name, ...task] = rest.trim().split(/\s+/);
         if (!this.skills.getAgent(name)) {
           return say(`Unknown subagent "${name}". Try /agents.`);
         }
-        void this.send(session.id, `Delegate this to the "${name}" subagent via run_subagent and relay its report: ${task.join(' ')}`);
-        return '';
+        return { rewrite: agentTaskPrompt(name, task.join(' ')) };
       }
       default: {
         const custom = this._commands?.get(cmd);
