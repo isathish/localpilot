@@ -1,0 +1,12 @@
+# Check text files out with LF on every platform: tests compare and lift source text (media/*.js parity checks),
+# and the webviews are served as written. Binary assets are never converted.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.vsix binary
