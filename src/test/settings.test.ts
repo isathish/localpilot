@@ -259,6 +259,35 @@ suite('LocalPilot settings & setup', () => {
       await secrets.prune([local]);
       assert.strictEqual(vault.has('localpilot.provider.openai-test'), false, 'the key of a removed provider is deleted');
       assert.strictEqual(resolveApiKey(openai), undefined);
+      // A re-added provider with the same id gets its own name instead of overwriting the stored key.
+      const [first] = await secrets.protect([{ id: 'openai-x', type: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'K1' }]);
+      assert.strictEqual(first.apiKey, '${secret:openai-x}');
+      const [, second] = await secrets.protect([first, { id: 'openai-x', type: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'K2' }]);
+      assert.strictEqual(second.apiKey, '${secret:openai-x-2}');
+      assert.strictEqual(vault.get('localpilot.provider.openai-x'), 'K1');
+      await secrets.prune([], ['other']);
+      assert.strictEqual(vault.get('localpilot.provider.openai-x'), 'K1', 'only the names a write dropped are pruned');
+    } finally {
+      secrets.dispose();
+      changed.dispose();
+    }
+  });
+
+  test('pruning provider keys keeps keys owned by other workspaces; workspace keys get their own name', async () => {
+    const vault = new Map<string, string>([['localpilot.provider.other.ws-0000abcd', 'sk-other'], ['localpilot.provider.old-user', 'sk-old']]);
+    const changed = new vscode.EventEmitter<vscode.SecretStorageChangeEvent>();
+    const storage = { get: async (k: string) => vault.get(k), store: async (k: string, v: string) => void vault.set(k, v), delete: async (k: string) => void vault.delete(k), keys: async () => [...vault.keys()], onDidChange: changed.event } as unknown as vscode.SecretStorage;
+    const memo = new Map<string, unknown>([['localpilot.providerSecretOwners', { 'other.ws-0000abcd': '0000abcd', 'old-user': 'user' }]]);
+    const state = { get: (k: string, d?: unknown) => (memo.has(k) ? memo.get(k) : d), update: async (k: string, v: unknown) => void memo.set(k, v), keys: () => [...memo.keys()] } as unknown as vscode.Memento;
+    const secrets = new ProviderSecrets(storage, state);
+    try {
+      await secrets.prune([]);
+      assert.strictEqual(vault.get('localpilot.provider.other.ws-0000abcd'), 'sk-other', "another workspace's key is kept");
+      assert.strictEqual(vault.has('localpilot.provider.old-user'), false, 'a stale user key is deleted');
+      const [ws] = await secrets.protect([{ id: 'openai-ws', type: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-ws' }], 'workspace');
+      assert.match(ws.apiKey!, /^\$\{secret:openai-ws\.ws-[0-9a-f]{8}\}$/);
+      await secrets.prune([]);
+      assert.strictEqual(vault.size, 1, "this workspace's unreferenced key is deleted, the other workspace's is kept");
     } finally {
       secrets.dispose();
       changed.dispose();

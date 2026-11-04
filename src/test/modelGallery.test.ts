@@ -145,6 +145,10 @@ suite('LocalPilot model gallery: Docker Hub and Hugging Face registries', () => 
     assert.deepStrictEqual(keys(['model-q4_k_m.gguf']), ['q4_k_m']);
     assert.deepStrictEqual(keys(['gemma-3-4b-it.gguf']), ['latest'], 'a single unlabelled file is the default');
     assert.deepStrictEqual(keys(['Q4_K_M/a-00001-of-00002.gguf', 'Q4_K_M/a-00002-of-00002.gguf']), ['Q4_K_M']);
+    assert.deepStrictEqual(keys(['M-Q4_K_M.gguf', 'M-Q4_K_S.gguf']), ['Q4_K_M', 'Q4_K_S'], 'a shared quant prefix is not cut');
+    assert.deepStrictEqual(keys(['M-IQ4_XS.gguf', 'M-IQ4_NL.gguf']), ['IQ4_XS', 'IQ4_NL']);
+    assert.deepStrictEqual(keys(['M-Q4_0.gguf', 'M-Q4_K_M.gguf']), ['Q4_0', 'Q4_K_M']);
+    assert.deepStrictEqual(keys(['coder-base.gguf', 'coder-instruct.gguf']), ['base', 'instruct']);
     assert.deepStrictEqual(sizesFromName('Qwen3-30B-A3B-Instruct-GGUF'), ['30b-a3b']);
     assert.deepStrictEqual(sizesFromName('gemma-3n-E4B-it-GGUF'), ['e4b']);
     assert.deepStrictEqual(sizesFromName('Llama-3.2-1B-Instruct-GGUF'), ['1b']);

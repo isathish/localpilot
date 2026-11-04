@@ -6,6 +6,7 @@ import { findRepo, listRepos, RepoInfo } from '../agent/repos';
 import { Tool, ToolContext } from '../types';
 import { runCmd } from './git';
 import { onAbort } from '../agent/resilience';
+import { killTree } from './terminal';
 
 /** The repositories in reach of this run (see agent/repos.ts). */
 export function reposFor(ctx: Pick<ToolContext, 'workspaceRoot' | 'mainRoot'>): RepoInfo[] {
@@ -20,22 +21,56 @@ const tail = (s: string, lines = 30) => {
 };
 
 function shell(command: string, cwd: string, signal: AbortSignal, timeoutMs: number): Promise<{ code: number; out: string }> {
+  if (signal.aborted) {
+    return Promise.resolve({ code: -1, out: 'Cancelled' });
+  }
   return new Promise((resolve) => {
-    const child = cp.spawn(command, { cwd, shell: true, env: { ...process.env, CI: '1', GIT_TERMINAL_PROMPT: '0' } });
+    const child = cp.spawn(command, {
+      cwd,
+      shell: true,
+      env: { ...process.env, CI: '1', GIT_TERMINAL_PROMPT: '0' },
+      // Own process group so a timeout/stop takes down what the command started, not just /bin/sh.
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let out = '';
-    const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    child.stdout.on('data', (d) => (out += d.toString()));
-    child.stderr.on('data', (d) => (out += d.toString()));
-    const off = onAbort(signal, () => child.kill('SIGKILL'));
-    child.on('close', off);
-    child.on('error', (e) => {
-      clearTimeout(t);
-      resolve({ code: -1, out: e.message });
+    let done = false;
+    let killed = false;
+    const finish = (code: number, text: string) => {
+      if (!done) {
+        done = true;
+        clearTimeout(t);
+        off();
+        resolve({ code, out: text });
+      }
+    };
+    const kill = () => {
+      killed = true;
+      killTree(child);
+    };
+    const t = setTimeout(kill, timeoutMs);
+    const push = (d: string) => {
+      if (out.length < 200_000) {
+        out += d;
+      }
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', push);
+    child.stderr.on('data', push);
+    const off = onAbort(signal, kill);
+    child.on('error', (e) => finish(-1, e.message));
+    child.on('exit', (code) => {
+      if (killed) {
+        // A grandchild that escaped the kill can hold the pipes open, so 'close' may never come.
+        setTimeout(() => {
+          child.stdout.destroy();
+          child.stderr.destroy();
+          finish(code ?? -1, `${out}\n[killed]`);
+        }, 2000).unref();
+      }
     });
-    child.on('close', (code) => {
-      clearTimeout(t);
-      resolve({ code: code ?? -1, out });
-    });
+    child.on('close', (code) => finish(code ?? -1, killed ? `${out}\n[killed]` : out));
   });
 }
 

@@ -23,6 +23,7 @@ import {
   setupArgs,
   statusProgress,
 } from '../providers/colibriSetup';
+import { terminalShell } from '../providers/gatewaySetup';
 
 const TERMINAL = 'LocalPilot · colibri';
 
@@ -260,7 +261,7 @@ export class ColibriLauncher implements vscode.Disposable {
     const slots = Math.min(cfg.colibri.kvSlots, Math.max(1, cfg.parallel.maxConcurrency));
     this.terminal?.dispose();
     // setup and start take no --kv-slots; `coli serve` reads COLI_KV_SLOTS from its environment.
-    this.terminal = vscode.window.createTerminal({ name: TERMINAL, cwd, env: slots > 1 ? { COLI_KV_SLOTS: String(slots) } : undefined });
+    this.terminal = vscode.window.createTerminal({ name: TERMINAL, cwd, env: slots > 1 ? { COLI_KV_SLOTS: String(slots) } : undefined, ...terminalShell() });
     this.terminal.show(true);
     this.terminal.sendText(command);
     this.host.log.info(`colibri: ${command}`);
@@ -322,7 +323,7 @@ export class ColibriLauncher implements vscode.Disposable {
     const cfg = getConfig().colibri;
     const launcher = findColibri({ configured: cfg.path });
     if (launcher) {
-      await runColi(launcher, ['stop'], 30_000);
+      await runColi(launcher, ['stop'], 30_000).catch(() => undefined);
     }
     if (this.terminal) {
       this.terminal.sendText('\u0003', false);

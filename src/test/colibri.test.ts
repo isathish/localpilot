@@ -4,7 +4,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { probePort } from '../providers/colibriSetup';
+import { probePort, runColi } from '../providers/colibriSetup';
 
 /**
  * A stand-in for a colibri checkout: `c/coli` behaves like the real launcher where LocalPilot relies on it.
@@ -44,6 +44,12 @@ const calls = (dir: string) =>
   fs.existsSync(path.join(dir, 'calls.log'))
     ? fs.readFileSync(path.join(dir, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; kv: string | null })
     : [];
+
+suite('colibri: runColi', () => {
+  test('a launcher that cannot be spawned resolves undefined instead of throwing', async () => {
+    assert.strictEqual(await runColi({ kind: 'path', command: 'coli\0bad', prefix: [] }, ['status']), undefined);
+  });
+});
 
 suite('colibri: Start / Stop colibri end to end (fake colibri checkout)', function () {
   this.timeout(120_000);

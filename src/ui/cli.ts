@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { existsSync, readFileSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -117,6 +118,7 @@ function insideWorkspace(f: string): boolean {
 export function cliShim(ctx: vscode.ExtensionContext): { posix: string; windows: string; env: Record<string, string> } {
   const codeBin = detectCodeBinary();
   const cliJs = vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'cli.js').fsPath;
+  const settingsJson = vscode.Uri.joinPath(ctx.globalStorageUri, 'cli-settings.json').fsPath;
   const electron = process.execPath; // the extension host binary runs plain Node when ELECTRON_RUN_AS_NODE=1
   const posix = `#!/usr/bin/env bash
 # LocalPilot CLI — the LocalPilot coding agent in your terminal. \`localpilot --help\` for usage.
@@ -135,7 +137,7 @@ if [ -z "$CLI" ] || [ ! -f "$CLI" ]; then
   fi
 fi
 [ -f "$CLI" ] || { echo "localpilot: cannot find the LocalPilot extension (dist/cli.js). Reinstall from the VS Code Marketplace." >&2; exit 1; }
-export LOCALPILOT_CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"
+${codeBin ? `export LOCALPILOT_CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"\n` : ''}export LOCALPILOT_VSCODE_SETTINGS="\${LOCALPILOT_VSCODE_SETTINGS:-${settingsJson}}"
 if command -v node >/dev/null 2>&1; then
   exec node "$CLI" "$@"
 fi
@@ -149,12 +151,16 @@ set "CLI=%LOCALPILOT_CLI%"\r
 if not exist "%CLI%" set "CLI=${cliJs.replace(/\\/g, '\\\\')}"\r
 if not exist "%CLI%" for /f "delims=" %%D in ('dir /b /ad /o-n "%USERPROFILE%\\.vscode\\extensions\\${EXT_ID}-*" 2^>nul') do if not defined FOUND if exist "%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" ( set "CLI=%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" & set FOUND=1 )\r
 if not exist "%CLI%" ( echo localpilot: cannot find the LocalPilot extension ^(dist\\cli.js^). Reinstall from the VS Code Marketplace. 1>&2 & exit /b 1 )\r
-if not defined LOCALPILOT_CODE_BIN set "LOCALPILOT_CODE_BIN=${codeBin.replace(/\\/g, '\\\\')}"\r
-where node >nul 2>nul && ( node "%CLI%" %* & exit /b %ERRORLEVEL% )\r
+${codeBin ? `if not defined LOCALPILOT_CODE_BIN set "LOCALPILOT_CODE_BIN=${codeBin.replace(/\\/g, '\\\\')}"\r\n` : ''}if not defined LOCALPILOT_VSCODE_SETTINGS set "LOCALPILOT_VSCODE_SETTINGS=${settingsJson.replace(/\\/g, '\\\\')}"\r
+where node >nul 2>nul || goto :electron\r
+node "%CLI%" %*\r
+exit /b %ERRORLEVEL%\r
+:electron\r
 set ELECTRON_RUN_AS_NODE=1\r
 "${electron.replace(/\\/g, '\\\\')}" "%CLI%" %*\r
+exit /b %ERRORLEVEL%\r
 `;
-  return { posix, windows, env: { LOCALPILOT_CLI: cliJs, LOCALPILOT_CODE_BIN: codeBin } };
+  return { posix, windows, env: { LOCALPILOT_CLI: cliJs, ...(codeBin ? { LOCALPILOT_CODE_BIN: codeBin } : {}), LOCALPILOT_VSCODE_SETTINGS: settingsJson } };
 }
 
 /** Writes the `localpilot` shim into ~/.local/bin (or %USERPROFILE%\bin on Windows) and explains PATH setup. */
@@ -193,8 +199,22 @@ function detectCodeBinary(): string {
       return `${m[1]}/Contents/Resources/app/bin/code`;
     }
   }
-  if (process.platform === 'win32') {
-    return path.join(appRoot, 'bin', 'code.cmd');
+  // The launcher lives in <install>/bin, two levels above <install>/resources/app, named after the product.
+  let name = 'code';
+  try {
+    name = (JSON.parse(readFileSync(path.join(appRoot, 'product.json'), 'utf8')) as { applicationName?: string }).applicationName || 'code';
+  } catch {
+    // keep the default
   }
-  return path.join(appRoot, 'bin', 'code');
+  const ext = process.platform === 'win32' ? '.cmd' : '';
+  const dirs = [path.join(path.dirname(process.execPath), 'bin'), path.resolve(appRoot, '..', '..', 'bin'), path.resolve(appRoot, '..', '..', '..', 'bin')];
+  for (const dir of dirs) {
+    for (const n of [...new Set([name, 'code', 'code-insiders'])]) {
+      const bin = path.join(dir, n + ext);
+      if (existsSync(bin)) {
+        return bin;
+      }
+    }
+  }
+  return '';
 }

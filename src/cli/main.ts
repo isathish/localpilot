@@ -35,6 +35,7 @@ import { McpManager } from '../mcp/mcpManager';
 import { createProvider, ProviderRegistry } from '../providers/registry';
 import { findOllamaBinary, launchOllama, ollamaServerEnv } from '../providers/ollamaLauncher';
 import { isLoopbackUrl } from '../providers/cloud';
+import { browserInspectTool, browserScreenshotTool } from '../tools/browser';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
@@ -47,7 +48,7 @@ import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { setSecretValues } from '../providers/cloud';
-import { ask, withPromptLock, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, USER_SETTINGS_PATH } from './vscodeShim';
+import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
 import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard, canFinish } from '../agent/teamBoard';
@@ -130,7 +131,7 @@ ${bold('In a session')}
   Ctrl+C stops the current run; press it again to quit. Ctrl+Z pauses after the current step (again to resume);
   anything you type while a run is going is handed to the agent at its next step.
 
-${bold('Settings')} read from ${dim(USER_SETTINGS_PATH)}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
+${bold('Settings')} read from ${dim(userSettingsPath())}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
 ${bold('API keys')} \${env:NAME} works everywhere. Keys VS Code keeps in your OS keychain (\${secret:id}) are read here from
 ${dim(CLI_KEYS_PATH)} (set with \`localpilot providers key <id>\`) or LOCALPILOT_KEY_<ID>.
 Log: ${dim(LOG_FILE)}`;
@@ -265,8 +266,17 @@ function openInVsCode(pathname: string, params: Record<string, string>, cwd: str
   // Values are encoded twice: VS Code decodes the query once before the handler splits it on '&'.
   const q = Object.entries({ ...params, ...extra }).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(encodeURIComponent(v))}`).join('&');
   const url = `vscode://localpilot.localpilot-agent/${pathname}${q ? `?${q}` : ''}`;
-  const code = process.env.LOCALPILOT_CODE_BIN || 'code';
-  const r = cp.spawnSync(code, ['--open-url', url, cwd], { stdio: 'inherit' });
+  // On Windows the launcher is a .cmd that needs a shell; quoting keeps the '&' in the query from splitting the command.
+  const launch = (bin: string) => process.platform === 'win32'
+    ? cp.spawnSync(`"${bin}"`, ['--open-url', `"${url}"`, `"${cwd}"`], { stdio: 'inherit', shell: true })
+    : cp.spawnSync(bin, ['--open-url', url, cwd], { stdio: 'inherit' });
+  let code = process.env.LOCALPILOT_CODE_BIN || 'code';
+  let r = launch(code);
+  // cmd.exe reports a missing program as exit status 9009 instead of ENOENT.
+  if (code !== 'code' && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' || (process.platform === 'win32' && r.status === 9009))) {
+    code = 'code';
+    r = launch(code);
+  }
   if (r.error) {
     console.error(red(`Could not launch VS Code (${code}): ${r.error.message}. Set LOCALPILOT_CODE_BIN to your 'code' binary.`));
     process.exit(1);
@@ -496,7 +506,7 @@ class Renderer {
     this.clearStatus();
     this.flushPending();
     this.breakLine();
-    process.stdout.write(`${red('✖')} ${s}\n`);
+    (this.quiet ? process.stderr : process.stdout).write(`${red('✖')} ${s}\n`);
   }
   end(): void {
     const rest = this.filter.flush();
@@ -595,6 +605,13 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
       up: () => createProvider({ id: 'probe', type: 'ollama', baseUrl: base }).healthCheck().catch(() => false),
       env: ollamaServerEnv({ maxConcurrency: cfg.parallel.maxConcurrency, flashAttention: cfg.ollama.flashAttention, kvCacheType: cfg.ollama.kvCacheType }),
     });
+    if (!r.ok && r.pid) {
+      try {
+        process.kill(r.pid);
+      } catch {
+        // already gone
+      }
+    }
     process.stderr.write(r.ok ? dim('Ollama is running.\n') : `${red('✖')} Could not start Ollama: ${r.error ?? 'unknown error'}\n`);
     return r.ok;
   };
@@ -632,7 +649,10 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   skills.plugins = pluginParts;
   const commands = await discoverCommands(roots, { plugins: pluginParts, log });
   const sessions = new Map<string, Session>();
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
+  // No language server in the terminal: these would silently report nothing, so point the model at real checks instead.
+  const noLsp = new Set(['get_diagnostics', 'find_symbol', 'find_references']);
+  const termOnly = (list: typeof editorTools) => list.map((t) => (noLsp.has(t.definition.name) ? { ...t, execute: async () => ({ content: "Not available in the terminal (no language server). Run the project's type checker, linter or tests with run_command (e.g. npx tsc --noEmit, eslint, pytest); use grep_search or repo_graph for definitions and references.", isError: true }) } : t));
+  tools.registerAll([...fsTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
@@ -655,20 +675,32 @@ let activeSignal: AbortSignal | undefined;
 /** Whether the last runTurn reached a final answer (false when it stopped at the step limit). */
 let lastTurnCompleted = true;
 
-/** Kinds of action the user answered "always" for in this session. */
+/** Kinds of action the user answered "always" for in this session (never deletes or destructive commands). */
 const alwaysKinds = new Set<string>();
+/** --print / piped runs: prompts go to stderr so stdout carries the answer only. */
+let promptToStderr = false;
+/** -p is non-interactive: approvals are denied (unless --yes) and ask_user takes the recommendations. */
+let printMode = false;
+/** --yes was passed (an "always" answer does not stop ask_user from asking). */
+let yesMode = false;
 const KIND: Record<string, string> = { terminal: 'terminal', write: 'file edit', delete: 'delete', network: 'network' };
 
 async function approval(title: string, detail: string, kind: string, rl?: readline.Interface, signal?: AbortSignal, opts?: { mandatory?: boolean }): Promise<boolean> {
   // A prompt the organization's policy requires (a floor for this kind, or no bypassing at all) is never answered by --yes or an earlier "always".
   const managed = getManagedPolicy();
   const mandatory = !!opts?.mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
-  const preApproved = () => !mandatory && (isAutoApprove() || alwaysKinds.has(kind));
+  const rememberable = kind !== 'delete' && !/destructive/i.test(title);
+  const preApproved = () => !mandatory && (isAutoApprove() || (rememberable && alwaysKinds.has(kind)));
   if (preApproved()) {
     return true;
   }
+  const out = promptToStderr ? process.stderr : process.stdout;
+  if (printMode) {
+    process.stderr.write(`${yellow('!')} ${title} — denied (-p is non-interactive${mandatory ? '' : '; pass --yes'})\n`);
+    return false;
+  }
   if (!process.stdin.isTTY) {
-    process.stdout.write(`${yellow('!')} ${title} — denied (${mandatory ? `your organization's policy requires an answer${isAutoApprove() ? ' even with --yes' : ''}; no TTY` : 'no TTY; pass --yes to auto-approve'})\n`);
+    out.write(`${yellow('!')} ${title} — denied (${mandatory ? `your organization's policy requires an answer${isAutoApprove() ? ' even with --yes' : ''}; no TTY` : 'no TTY; pass --yes to auto-approve'})\n`);
     return false;
   }
   // One prompt at a time: the block printed is the one being answered, and an "always" answer covers the queued ones.
@@ -680,11 +712,13 @@ async function approval(title: string, detail: string, kind: string, rl?: readli
       return false;
     }
     const body = detail.split('\n').slice(0, 24).map((l) => `  ${dim('│')} ${l}`).join('\n');
-    process.stdout.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
+    out.write(`\n${yellow('!')} ${bold(title)} ${dim(`(${KIND[kind] ?? kind})`)}\n${body}${detail.split('\n').length > 24 ? `\n  ${dim('│ …')}` : ''}\n`);
     setReadline(rl);
-    const a = (await ask(`  ${amber('Allow?')} ${dim(mandatory ? '[y]es · [n]o' : `[y]es · [n]o · [a]lways for ${KIND[kind] ?? kind} this session`)} `, signal))?.trim().toLowerCase() ?? 'n';
+    const a = (await ask(`  ${amber('Allow?')} ${dim(mandatory ? '[y]es · [n]o' : rememberable ? `[y]es · [n]o · [a]lways allow ${KIND[kind] ?? kind} this session` : '[y]es · [n]o')} `, signal))?.trim().toLowerCase() ?? 'n';
     if (!mandatory && (a === 'a' || a === 'always')) {
-      alwaysKinds.add(kind);
+      if (rememberable) {
+        alwaysKinds.add(kind);
+      }
       return true;
     }
     return a === 'y' || a === 'yes';
@@ -709,7 +743,7 @@ async function askQuestionsNow(questions: UserQuestion[], rl: readline.Interface
     const n = questions.length > 1 ? dim(` (${i + 1}/${questions.length})`) : '';
     const opts = q.options.map((o, k) => `  ${amber(String(k + 1))}. ${bold(o.label)}${o.label === q.recommended ? ` ${amber('(recommended)')}` : ''}${o.description ? `\n     ${dim(o.description)}` : ''}`).join('\n');
     const hint = q.options.length ? dim(`${q.multiSelect ? 'numbers separated by commas' : 'a number'}, or your own words${q.recommended ? ' · Enter = recommended' : ''}`) : dim('your answer');
-    process.stdout.write(`\n${yellow('?')}${n} ${q.header ? `${dim(`[${q.header}]`)} ` : ''}${bold(q.question)}\n${opts}${opts ? '\n' : ''}  ${hint}\n`);
+    (promptToStderr ? process.stderr : process.stdout).write(`\n${yellow('?')}${n} ${q.header ? `${dim(`[${q.header}]`)} ` : ''}${bold(q.question)}\n${opts}${opts ? '\n' : ''}  ${hint}\n`);
     const a = await ask('  > ', signal);
     if (a === undefined) {
       return null;
@@ -752,56 +786,60 @@ async function runTurn(core: Core, session: Session, text: string, files: string
       r.note(`▶ ${who}resumed`);
     }
   });
-  const result = await core.runner.run({
-    session,
-    userMessage,
-    modelRef: opts.modelRef,
-    permissionAllow: opts.permissionAllow,
-    signal: control.signal,
-    control,
-    workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
-    isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
-    emit: (e) => {
-      const p = e.payload as Record<string, unknown>;
-      switch (e.type) {
-        case 'assistant_delta': r.text(String(e.payload)); break;
-        case 'thinking_delta': r.status(`Thinking… ${dim(String(e.payload).replace(/\s+/g, ' ').slice(-60))}`); break;
-        case 'status': if (typeof e.payload === 'string') {r.status(e.payload);} break;
-        case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {});} break;
-        case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
-        case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
-        case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
-        case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
-        case 'skill_suggestions': {
-          const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined;
-          const inst = p.installed as { name: string; repo: string; dir: string } | undefined; const avail = p.available as { name: string; repo: string } | undefined;
-          const pre = (p.preloaded as { name: string; reason: string }[]) ?? [];
-          if (inst) {r.note(`Installed skill "${inst.name}" from ${inst.repo} → ${inst.dir}`);}
-          if (pre.length) {r.note(`Using skill${pre.length === 1 ? '' : 's'}: ${pre.map((s) => `${s.name}${s.reason === 'pinned' ? ' (pinned)' : s.reason === 'forced' ? ' (requested)' : ''}`).join(', ')}`);}
-          if (sk.length) {r.note(`Skills that may apply: ${sk.map((s) => s.name).join(', ')}`);}
-          if (avail) {r.note(`"${avail.name}" from ${avail.repo} matches this request but is not installed — localpilot skill search ${avail.name} --install`);}
-          if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);}
-          break;
+  let result: string;
+  try {
+    result = await core.runner.run({
+      session,
+      userMessage,
+      modelRef: opts.modelRef,
+      permissionAllow: opts.permissionAllow,
+      signal: control.signal,
+      control,
+      workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
+      isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
+      emit: (e) => {
+        const p = e.payload as Record<string, unknown>;
+        switch (e.type) {
+          case 'assistant_delta': r.text(String(e.payload)); break;
+          case 'thinking_delta': r.status(`Thinking… ${dim(String(e.payload).replace(/\s+/g, ' ').slice(-60))}`); break;
+          case 'status': if (typeof e.payload === 'string') {r.status(e.payload);} break;
+          case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {});} break;
+          case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
+          case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
+          case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
+          case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
+          case 'skill_suggestions': {
+            const sk = (p.skills as { name: string }[]) ?? []; const cr = p.create as { slug: string; count: number } | undefined;
+            const inst = p.installed as { name: string; repo: string; dir: string } | undefined; const avail = p.available as { name: string; repo: string } | undefined;
+            const pre = (p.preloaded as { name: string; reason: string }[]) ?? [];
+            if (inst) {r.note(`Installed skill "${inst.name}" from ${inst.repo} → ${inst.dir}`);}
+            if (pre.length) {r.note(`Using skill${pre.length === 1 ? '' : 's'}: ${pre.map((s) => `${s.name}${s.reason === 'pinned' ? ' (pinned)' : s.reason === 'forced' ? ' (requested)' : ''}`).join(', ')}`);}
+            if (sk.length) {r.note(`Skills that may apply: ${sk.map((s) => s.name).join(', ')}`);}
+            if (avail) {r.note(`"${avail.name}" from ${avail.repo} matches this request but is not installed — localpilot skill search ${avail.name} --install`);}
+            if (cr) {r.note(`"${cr.slug}" requests have come up ${cr.count}× without a skill — ask me to create one (.localpilot/skills/${cr.slug}/SKILL.md)`);}
+            break;
+          }
+          case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
+          case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
+          case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
+          case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
+          case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
+          case 'error': r.error(String(e.payload)); break;
+          case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; break;
         }
-        case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
-        case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
-        case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
-        case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
-        case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
-        case 'error': r.error(String(e.payload)); break;
-        case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; break;
-      }
-    },
-    requestApproval: (title, detail, kind, opts) => approval(title, detail, kind, rl, control.signal, opts),
-    // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
-    askUser: process.stdin.isTTY && !isAutoApprove() ? (questions) => askQuestions(questions, rl, control.signal) : undefined,
-  }).finally(() => {
+      },
+      requestApproval: (title, detail, kind, opts) => approval(title, detail, kind, rl, control.signal, opts),
+      // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
+      askUser: process.stdin.isTTY && !yesMode && !printMode ? (questions) => askQuestions(questions, rl, control.signal) : undefined,
+    });
+  } finally {
     offControl();
     if (activeSignal === control.signal) {
       activeSignal = undefined;
     }
-  });
-  r.end();
+    // Flush the stream filter even when the run rejects, so a dangling fence or <tool_call> does not leak into the next turn.
+    r.end();
+  }
   return final || result;
 }
 
@@ -833,10 +871,40 @@ async function isolate(core: Core, session: Session, cwd: string, r: Renderer, s
   return { info, mgr };
 }
 
-/** Apply the worktree's result to the checkout (or not), report, and remove the worktree. */
-async function finishIsolated(wt: { info: WorktreeInfo; mgr: WorktreeManager }, apply: boolean, r: Renderer, quiet: boolean): Promise<void> {
-  const changes = await wt.mgr.changes(wt.info).catch(() => []);
+/** Read piped stdin to the end, keeping at most `cap` characters (a note marks the cut). */
+function readStdin(cap = 200_000): Promise<string> {
+  return new Promise<string>((resolve) => {
+    let s = '';
+    let truncated = false;
+    process.stdin.on('data', (d) => {
+      if (s.length < cap) {
+        s += d;
+      } else {
+        truncated = true;
+      }
+    });
+    process.stdin.on('end', () => resolve(s.length > cap || truncated ? `${s.slice(0, cap)}\n[… stdin truncated at ${cap.toLocaleString()} characters]` : s));
+  });
+}
+
+/** Report a failed worktree step without a stack trace and end the process. */
+async function fatal(core: Core, e: unknown): Promise<never> {
+  console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+  core.mcp?.dispose();
+  await core.telemetry.flush();
+  process.exit(1);
+}
+
+/** Apply the worktree's result to the checkout (or not), report, and remove the worktree; false when it was kept. */
+async function finishIsolated(wt: { info: WorktreeInfo; mgr: WorktreeManager }, apply: boolean, r: Renderer, quiet: boolean): Promise<boolean> {
   const say = (s: string) => (quiet ? process.stderr.write(`${s}\n`) : console.log(s));
+  let changes: Awaited<ReturnType<WorktreeManager['changes']>>;
+  try {
+    changes = await wt.mgr.changes(wt.info);
+  } catch (e) {
+    say(yellow(`could not read the isolated worktree's changes (${e instanceof Error ? e.message : String(e)}); left in ${wt.info.path}`));
+    return false;
+  }
   if (!changes.length) {
     say(dim('isolated worktree: no changes'));
   } else if (apply) {
@@ -850,9 +918,10 @@ async function finishIsolated(wt: { info: WorktreeInfo; mgr: WorktreeManager }, 
     for (const c of changes) {
       say(`  ${c.kind === 'create' ? green('A') : c.kind === 'delete' ? red('D') : yellow('M')} ${c.path}  ${dim(`+${c.added} −${c.removed}`)}`);
     }
-    return; // keep the worktree for the user to inspect
+    return false; // keep the worktree for the user to inspect
   }
   await wt.mgr.remove(wt.info);
+  return true;
 }
 
 function changesSummary(core: Core, session: Session): void {
@@ -1039,7 +1108,11 @@ async function cmdPlugin(core: Core, args: Args, renderer: Renderer): Promise<nu
 
 /** `localpilot scan`: the security scan for a terminal or CI job; exit 1 when a finding reaches --fail-on. */
 async function cmdScan(args: Args, renderer: Renderer): Promise<number> {
-  const o = args.scanOpts;
+  const o = { ...args.scanOpts };
+  if (!o.offline && !getManagedPolicy().allowWebAccess) {
+    o.offline = true;
+    console.error(dim("Dependency check skipped: web access is disabled by your organization's policy."));
+  }
   let r: ScanResult;
   try {
     r = await scanWorkspace(args.cwd, { kinds: { dependencies: !o.offline, secrets: true, code: true }, path: args.prompt ? path.resolve(args.cwd, args.prompt) : undefined, progress: (t) => renderer.status(t) });
@@ -1058,11 +1131,16 @@ async function cmdScan(args: Args, renderer: Renderer): Promise<number> {
   if (o.json) {
     await fs.promises.writeFile(o.json, JSON.stringify(r, null, 2));
   }
-  if (o.failOn === 'none') {
-    return 0;
+  const at = SEVERITY_ORDER.indexOf(o.failOn as (typeof SEVERITY_ORDER)[number]);
+  const code = o.failOn !== 'none' && r.findings.some((f) => SEVERITY_ORDER.indexOf(f.severity) >= at) ? 1 : 0;
+  // An incomplete dependency check must not pass a CI gate.
+  // Notes about lockfiles the scan does not read are informational, not a failed check.
+  const depSkip = o.offline ? undefined : r.skipped.find((t) => t.startsWith('dependencies:') && !/not checked$|no supported lockfile found$/.test(t));
+  if (depSkip) {
+    console.error(`${red('✖')} ${depSkip}`);
+    return code || 2;
   }
-  const at = SEVERITY_ORDER.indexOf(o.failOn);
-  return r.findings.some((f) => SEVERITY_ORDER.indexOf(f.severity) >= at) ? 1 : 0;
+  return code;
 }
 
 /**
@@ -1262,7 +1340,7 @@ async function cmdEval(core: Core, args: Args): Promise<number> {
 
 async function cmdDoctor(core: Core): Promise<void> {
   console.log(`${BRAND} ${dim(`v${VERSION}`)} doctor\n`);
-  console.log(`${bold('Settings')}\n  ${dim(USER_SETTINGS_PATH)}\n  ${dim(CLI_SETTINGS_PATH)}`);
+  console.log(`${bold('Settings')}\n  ${dim(userSettingsPath())}\n  ${dim(CLI_SETTINGS_PATH)}`);
   const cfg = getConfig();
   console.log(`  default model: ${cfg.defaultModel || dim('auto')}   approvals: terminal=${cfg.approvals.terminal} write=${cfg.approvals.write} delete=${cfg.approvals.delete} network=${cfg.approvals.network}`);
   const org = getManagedPolicy();
@@ -1407,6 +1485,12 @@ async function main(): Promise<void> {
   }
 
   const quiet = args.print || (!args.prompt && !process.stdin.isTTY);
+  if (quiet || !process.stdout.isTTY) {
+    setPromptOutput(process.stderr);
+    promptToStderr = true;
+  }
+  printMode = args.print && !args.yes;
+  yesMode = args.yes;
   const renderer = new Renderer(args.verbose, quiet);
   // The scan needs no agent: never start MCP servers (including repository plugins' commands) for it.
   if (args.cmd === 'scan') {
@@ -1489,8 +1573,14 @@ async function main(): Promise<void> {
     const ctl = new RunControl(session.id);
     process.once('SIGINT', () => ctl.stop());
     // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
-    process.on('SIGTSTP', () => ctl.togglePause());
-    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal) : undefined;
+    // Children in our process group (hooks, git, rg) were stopped by the tty too; continue them right away.
+    process.on('SIGTSTP', () => {
+      ctl.togglePause();
+      if (process.platform !== 'win32') {
+        try { process.kill(0, 'SIGCONT'); } catch { /* ignore */ }
+      }
+    });
+    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal).catch((e) => fatal(core, e)) : undefined;
     if (ctl.signal.aborted) {
       process.exit(130);
     }
@@ -1498,7 +1588,12 @@ async function main(): Promise<void> {
       console.error(`${red('✖')} ${notGit}`);
       process.exit(2);
     }
+    // `cmd | localpilot "review this"`: the piped input goes with the prompt (or the /skill, /agent or command's task).
+    const input = process.stdin.isTTY ? '' : (await readStdin()).trim();
     const prepared = await prepare(args.prompt);
+    if (input) {
+      prepared.text = `${prepared.text}\n\n\`\`\`\n${input}\n\`\`\``;
+    }
     const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
     if (quiet) {
       process.stdout.write(answer.trimEnd() + '\n');
@@ -1509,7 +1604,7 @@ async function main(): Promise<void> {
       }
     }
     if (wt) {
-      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet);
+      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, quiet).catch((e) => fatal(core, e));
     }
     // The automatic memory save runs after the answer; give it a moment before the process ends.
     if (!ctl.signal.aborted) {
@@ -1528,31 +1623,37 @@ async function main(): Promise<void> {
   // Interactive REPL --------------------------------------------------------
   if (!process.stdin.isTTY) {
     // Piped stdin: treat the whole input as one prompt.
-    const input = await new Promise<string>((resolve) => {
-      let s = '';
-      process.stdin.on('data', (d) => (s += d));
-      process.stdin.on('end', () => resolve(s));
-    });
+    const input = await readStdin();
     const ctl = new RunControl(session.id);
-    const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal) : undefined;
-    if (args.isolate && !wt) {
-      console.error(`${red('✖')} ${notGit}`);
-      process.exit(2);
+    // First Ctrl+C stops the run (and the process groups it started); a second one exits right away.
+    process.once('SIGINT', () => {
+      ctl.stop();
+      process.once('SIGINT', () => process.exit(130));
+    });
+    try {
+      const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal).catch((e) => fatal(core, e)) : undefined;
+      if (args.isolate && !wt) {
+        console.error(`${red('✖')} ${notGit}`);
+        process.exit(2);
+      }
+      const prepared = await prepare(input.trim());
+      const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
+      process.stdout.write(answer.trimEnd() + '\n');
+      if (wt) {
+        await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, true).catch((e) => fatal(core, e));
+      }
+    } finally {
+      await shutdown(core);
     }
-    const prepared = await prepare(input.trim());
-    const answer = await runTurn(core, session, prepared.text, args.files, renderer, undefined, ctl, prepared.opts);
-    process.stdout.write(answer.trimEnd() + '\n');
-    if (wt) {
-      await finishIsolated(wt, args.apply && !ctl.signal.aborted, renderer, true);
-    }
-    await shutdown(core);
-    return;
+    process.exit(ctl.signal.aborted ? 130 : 0);
   }
 
   process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Ctrl+C to stop a run, Ctrl+Z to pause it, /exit to quit.')}\n\n`);
   rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: `${amber('◆')} `, historySize: 200 });
   setReadline(rl);
   let current: RunControl | undefined;
+  let currentRun: Promise<unknown> | undefined;
+  let busy = false;
   let pendingFiles = [...args.files];
   let isolated: { info: WorktreeInfo; mgr: WorktreeManager } | undefined = args.isolate ? await isolate(core, session, args.cwd, renderer) : undefined;
   if (args.isolate && !isolated) {
@@ -1571,6 +1672,8 @@ async function main(): Promise<void> {
     if (current) {
       current.stop();
       process.stdout.write(`\n${dim('stopped')}\n`);
+    } else if (busy) {
+      process.stdout.write(`\n${dim('wait for the current command to finish')}\n`);
     } else {
       process.stdout.write('\n');
       rl!.close();
@@ -1582,7 +1685,13 @@ async function main(): Promise<void> {
       current.togglePause();
     }
   });
-  rl.on('close', () => {
+  rl.on('close', async () => {
+    // Ctrl+D mid-run: stop the agent (and its run_command process groups) before exiting.
+    const wasRunning = !!current;
+    if (current) {
+      current.stop();
+      await Promise.race([currentRun?.catch(() => undefined), new Promise((r) => setTimeout(r, 5000))]);
+    }
     core.mcp?.dispose();
     if (isolated) {
       process.stdout.write(yellow(`isolated worktree kept at ${isolated.info.path} — apply it with: git -C ${isolated.info.path} add -AN && git -C ${isolated.info.path} diff --binary ${isolated.info.base} | git -C ${isolated.info.repo} apply\n`));
@@ -1592,7 +1701,7 @@ async function main(): Promise<void> {
       ?.then(() => core.telemetry.flush())
       .finally(() => {
         core.telemetryRemote?.dispose();
-        process.exit(0);
+        process.exit(wasRunning ? 130 : 0);
       });
   });
 
@@ -1626,14 +1735,20 @@ async function main(): Promise<void> {
       }
       case 'apply': case 'discard': {
         if (!isolated) { console.log(dim('this session is not isolated — /isolate first')); return true; }
-        await finishIsolated(isolated, cmd === 'apply', renderer, false);
+        if (cmd === 'apply') {
+          if (!(await finishIsolated(isolated, true, renderer, false))) { return true; }
+        } else {
+          const changes = await isolated.mgr.changes(isolated.info).catch(() => []);
+          await isolated.mgr.remove(isolated.info);
+          console.log(yellow(`discarded the isolated worktree${changes.length ? ` (${changes.length} changed file${changes.length === 1 ? '' : 's'})` : ''}`));
+        }
         isolated = undefined;
         session.worktree = undefined;
         return true;
       }
       case 'clear':
         await core.runner.hooks?.sessionEnd(session.id, 'clear', runRoot());
-        session.messages = []; session.contextTokens = 0; session.todos = []; console.log(dim('conversation cleared')); return true;
+        session.messages = []; session.contextTokens = 0; session.todos = []; alwaysKinds.clear(); console.log(dim('conversation cleared')); return true;
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
       case 'skill': case 'agent': {
@@ -1642,7 +1757,8 @@ async function main(): Promise<void> {
         rl!.setPrompt('');
         current = new RunControl(session.id);
         try {
-          await runTurn(core, session, task.prompt, pendingFiles, renderer, rl, current, { display: line });
+          currentRun = runTurn(core, session, task.prompt, pendingFiles, renderer, rl, current, { display: line });
+          await currentRun;
           pendingFiles = [];
           changesSummary(core, session);
         } catch (e) {
@@ -1650,6 +1766,7 @@ async function main(): Promise<void> {
         } finally {
           leftovers(current);
           current = undefined;
+          currentRun = undefined;
           process.stdout.write('\n');
           rl!.setPrompt(PROMPT);
         }
@@ -1678,7 +1795,8 @@ async function main(): Promise<void> {
           rl!.setPrompt('');
           current = new RunControl(session.id);
           try {
-            await runTurn(core, session, prompt, pendingFiles, renderer, rl, current, { modelRef: custom.model, permissionAllow: custom.allowedTools, display: line });
+            currentRun = runTurn(core, session, prompt, pendingFiles, renderer, rl, current, { modelRef: custom.model, permissionAllow: custom.allowedTools, display: line });
+            await currentRun;
             pendingFiles = [];
             changesSummary(core, session);
           } catch (e) {
@@ -1686,6 +1804,7 @@ async function main(): Promise<void> {
           } finally {
             leftovers(current);
             current = undefined;
+            currentRun = undefined;
             process.stdout.write('\n');
             rl!.setPrompt(PROMPT);
           }
@@ -1702,7 +1821,8 @@ async function main(): Promise<void> {
     rl!.setPrompt('');
     current = new RunControl(session.id);
     try {
-      await runTurn(core, session, line, pendingFiles, renderer, rl, current);
+      currentRun = runTurn(core, session, line, pendingFiles, renderer, rl, current);
+      await currentRun;
       pendingFiles = [];
       changesSummary(core, session);
     } catch (e) {
@@ -1710,6 +1830,7 @@ async function main(): Promise<void> {
     } finally {
       leftovers(current);
       current = undefined;
+      currentRun = undefined;
       process.stdout.write('\n');
       rl!.setPrompt(PROMPT);
     }
@@ -1738,8 +1859,23 @@ async function main(): Promise<void> {
       }
       return;
     }
+    if (busy) {
+      if (line) { renderer.note('busy — wait for the current command to finish'); }
+      return;
+    }
     if (!line) { rl!.prompt(); return; }
-    if (line.startsWith('/')) { await slash(line); await next(); return; }
+    if (line.startsWith('/')) {
+      busy = true;
+      try {
+        await slash(line);
+      } catch (e) {
+        renderer.error(e instanceof Error ? e.message : String(e));
+      } finally {
+        busy = false;
+      }
+      await next();
+      return;
+    }
     await runPrompt(line);
     await next();
   });

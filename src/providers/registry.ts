@@ -6,7 +6,7 @@ import { effectiveContextWindow } from '../context/contextManager';
 import { lookupCatalog, ModelRole, modelFootprintGb } from './catalog';
 import { streamsFromDisk } from './colibri';
 import { AnthropicProvider } from './anthropic';
-import { isCloudProvider, isLoopbackUrl, onSecretsChanged, resolveApiKey } from './cloud';
+import { isCloudProvider, isLoopbackUrl, isRemoteUrl, onSecretsChanged, resolveApiKey } from './cloud';
 import { getManagedPolicy, providerAllowed } from '../agent/managedPolicy';
 import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
@@ -33,6 +33,8 @@ export interface RouteRequest {
   spread?: boolean;
   /** The run's Stop: waiting for a local server to start ends at once (the start itself goes on in the background). */
   signal?: AbortSignal;
+  /** Start a stopped local server the pick needs (default true); display-only callers pass false. */
+  start?: boolean;
 }
 
 export interface ModelLoad {
@@ -59,6 +61,8 @@ export interface Route {
   reason?: string;
   /** True when the requested model was unavailable (offline/disabled) and a substitute was chosen for good. */
   fallback?: boolean;
+  /** The wanted model's provider did not answer the last discovery: the substitute is for this turn only. */
+  unavailable?: boolean;
   /** True when the model was chosen only because the intended one was busy: the next run should route again. */
   spread?: boolean;
 }
@@ -265,13 +269,18 @@ export class ProviderRegistry implements vscode.Disposable {
     const results = await Promise.allSettled(
       probed.map(async (p) => {
         const started = Date.now();
-        if (!(await p.healthCheck())) {
+        // A cloud API is always up: its listing is the health check (a separate one would download it twice).
+        const remote = isRemoteUrl(p.baseUrl);
+        if (!remote && !(await p.healthCheck())) {
           this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: 'unreachable' });
           return [];
         }
-        reachable.add(p.id);
+        if (!remote) {
+          reachable.add(p.id);
+        }
         try {
           const list = await p.listModels();
+          reachable.add(p.id);
           listed.set(p.id, list);
           this.telemetry?.record({ type: 'health', provider: p.id, ok: true, durationMs: Date.now() - started, models: list.length });
           return list;
@@ -323,7 +332,7 @@ export class ProviderRegistry implements vscode.Disposable {
     const out = new Set<string>();
     for (const m of previous) {
       const now = authoritative(m.providerId);
-      if (now && !has(now, m.id)) {
+      if (now?.length && !has(now, m.id)) {
         out.add(m.id);
       }
     }
@@ -401,10 +410,10 @@ export class ProviderRegistry implements vscode.Disposable {
    * Loads the model a request is about to use so the first token is not preceded by a weight load (often 5–30 s for a
    * local model). Best effort: throttled per model, silent on failure, and a no-op for providers without a load API.
    */
-  async warm(modelRef: string | undefined, role: ModelRole = 'agent', signal?: AbortSignal): Promise<void> {
+  async warm(modelRef: string | undefined, role: ModelRole = 'agent', signal?: AbortSignal, start = true): Promise<void> {
     let route: Route;
     try {
-      route = await this.route({ modelRef, role });
+      route = await this.route({ modelRef, role, start });
     } catch {
       return;
     }
@@ -546,7 +555,7 @@ export class ProviderRegistry implements vscode.Disposable {
     const wantedPid = wanted ? this.providerIdOf(wanted, cfg.providers) : undefined;
     // A local server that is installed but stopped is started, rather than failing the run or quietly falling back
     // to another model, which may be a cloud one.
-    if (!models.some((m) => m.id === wanted || m.modelId === wanted)) {
+    if (req.start !== false && !models.some((m) => m.id === wanted || m.modelId === wanted)) {
       const stopped = this.stoppedLocalServer(wantedPid, models);
       if (stopped && (await untilAborted(this.startServer(stopped), req.signal))) {
         models = await this.listModels(true);
@@ -562,10 +571,11 @@ export class ProviderRegistry implements vscode.Disposable {
     let model = find(wanted);
     let reason: string | undefined;
     let fallback = false;
+    let unavailable = false;
 
     if (!model && wanted && wanted.includes('/')) {
-      // A reachable provider that lists no models (no /models endpoint) may still serve the referenced model;
-      // one that lists models but not this one, or that is offline, does not — fall back below instead.
+      // A provider that answered the last discovery but listed no models (an empty listing) may still serve the
+      // referenced model; one that lists models but not this one, or that did not answer, does not — fall back below.
       const providerId = wanted.slice(0, wanted.indexOf('/'));
       const listsModels = models.some((m) => m.providerId === providerId);
       const unlisted = listsModels || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow > 0 ? cfg.contextWindow : 32768, cfg.maxOutputTokens);
@@ -574,7 +584,11 @@ export class ProviderRegistry implements vscode.Disposable {
       }
     }
     if (!model && wanted && models.length) {
-      reason = `${wanted.split('/').pop()} is not available — using the best model that is`;
+      const pc = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
+      unavailable = !!pc && pc.enabled !== false && !this.reachable.has(pc.id);
+      reason = unavailable && pc
+        ? `${pc.displayName ?? pc.id} is not answering — using the best model that is for this turn`
+        : `${wanted.split('/').pop()} is not available — using the best model that is`;
       fallback = true;
     }
     if (model && cfg.routing.enabled) {
@@ -653,7 +667,7 @@ export class ProviderRegistry implements vscode.Disposable {
         this.noted.add(key);
       }
     }
-    return { provider, model, reason, fallback, spread };
+    return { provider, model, reason, fallback, unavailable, spread };
   }
 
   /** Allow referencing a model not in discovery (e.g. provider with no /models endpoint). */

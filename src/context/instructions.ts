@@ -52,7 +52,8 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
   const out: InstructionFile[] = [];
   const seen = new Set<string>();
   const push = async (file: string, label: string, scope: InstructionFile['scope']) => {
-    const key = path.resolve(file);
+    // By real path, so a symlinked AGENTS.md -> CLAUDE.md is included (and counted against the cap) once.
+    const key = await fs.realpath(file).catch(() => path.resolve(file));
     if (seen.has(key)) {
       return;
     }

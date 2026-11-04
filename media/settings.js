@@ -309,13 +309,18 @@
   const val = (key) => S(key).value;
   /** The value stored in the selected scope (not the merged one), so an edit never copies the other scope's value into it. */
   const ownValue = (key) => { const s = S(key); return state.scope === 'workspace' ? (s.workspaceValue ?? s.userValue ?? s.default) : (s.userValue ?? s.default); };
-  function set(key, value) { state.pendingSave = Date.now(); post({ type: 'set', key, value, scope: state.scope }); }
+  function set(key, value) {
+    state.pendingSave = Date.now();
+    post({ type: 'set', key, value, scope: state.scope });
+    if (state.scope === 'user' && S(key).workspaceValue !== undefined) { toast(`Saved to User settings, but this workspace overrides ${key} — switch to Workspace to change the value in effect`, 'error'); }
+  }
   /** Brief "Saved" acknowledgement in the header after a setting round-trips through VS Code. */
   function flashSaved() {
     const t = app.querySelector('.top .saved'); if (!t) { return; }
     t.classList.add('show'); clearTimeout(flashSaved.timer); flashSaved.timer = setTimeout(() => t.classList.remove('show'), 1400);
   }
-  function reset(key) { post({ type: 'reset', key, scope: state.scope === 'workspace' ? 'workspace' : 'user' }); }
+  /** Resets the scope that defines the value in effect, whichever scope is selected. */
+  function reset(key) { state.pendingSave = Date.now(); post({ type: 'reset', key, scope: S(key).scope === 'workspace' ? 'workspace' : 'user' }); }
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   const scopeBadge = (key) => { const s = S(key).scope; return s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`; };
   const resetBtn = (key) => (S(key).scope === 'default' ? '' : `<button class="reset" data-reset="${esc(key)}" title="Reset to default">${I.undo}</button>`);
@@ -849,7 +854,7 @@
     const auto = el('div', 'sys-foot');
     const starter = d.starter.agent ? `${d.starter.agent}${d.starter.completion ? ` + ${d.starter.completion} for completions` : ''}${d.starter.vision ? ` + ${d.starter.vision} for images` : ''}` : 'a coder model sized for this machine';
     auto.innerHTML = `<button class="btn ${anyModels ? '' : 'brand'}" id="auto" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${anyModels ? 'Install starter set' : 'Set up automatically'}</button><span class="hint" ${setupJob ? `data-job-detail="${esc(setupJob.id)}"` : ''}>${esc(setupJob ? setupJob.detail : `Picks for this machine: ${starter}. Starts or installs Ollama when needed.`)}</span>`;
-    auto.querySelector('#auto').onclick = () => post({ type: 'autoSetup', installRuntime: false });
+    auto.querySelector('#auto').onclick = () => { const ol = d.runtimes.find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol && !ol.installed) }); };
     sys.appendChild(auto);
     sys.appendChild(field('models.autoSetup', 'Offer automatic setup', 'When LocalPilot starts and finds no local model, offer to install Ollama and a starter model.', 'toggle'));
     sec.appendChild(sys);

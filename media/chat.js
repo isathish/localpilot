@@ -271,7 +271,8 @@
     const keep = []; const hold = (html) => { keep.push(html); return `\u0000${keep.length - 1}\u0000`; };
     let s = esc(md);
     s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`));
-    s = s.replace(/!\[([^\]]*)\]\(((?:https?:|data:image\/)[^)\s]+)\)/g, (_, alt, src) => hold(`<img class="md-img" src="${src}" alt="${alt}" title="${alt}">`));
+    // Only inline data images render; a remote one would load (and leak) without a click, so it becomes a link.
+    s = s.replace(/!\[([^\]]*)\]\(((?:https?:|data:image\/)[^)\s]+)\)/g, (_, alt, src) => hold(src.startsWith('data:') ? `<img class="md-img" src="${src}" alt="${alt}" title="${alt}">` : `<a href="${src}" title="${src}">Image: ${(/^https?:\/\/([^/?#]+)/.exec(src) || [])[1] || src}</a>`));
     s = s.replace(/\[([^\]]+)\]\(((?:https?:|vscode:|command:)[^)\s]+)\)/g, (_, t, u) => hold(`<a href="${u}" title="${u}">${t}</a>`));
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>"')\]]+?)(?=[.,;:!?]?(?:[\s)]|$))/g, (m, pre, u) => `${pre}${hold(`<a href="${u}">${u}</a>`)}`);
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1<em>$2</em>').replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1<em>$2</em>');
@@ -306,9 +307,9 @@
       if (/^\s*>/.test(line)) { flush(); const buf = []; while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++; } out.push(`<blockquote>${renderMarkdown(buf.join('\n'))}</blockquote>`); continue; }
       if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
         flush(); const items = [];
-        while (i < lines.length && (/^\s*(?:[-*+]|\d+[.)])\s+/.test(lines[i]) || (/^\s+\S/.test(lines[i]) && items.length) || (lines[i].trim() === '' && i + 1 < lines.length && /^\s+(?:[-*+]|\d+[.)])\s+/.test(lines[i + 1])))) {
+        while (i < lines.length && (/^\s*(?:[-*+]|\d+[.)])\s+/.test(lines[i]) || (/^\s+\S/.test(lines[i]) && items.length) || (lines[i].trim() === '' && i + 1 < lines.length && /^\s*(?:[-*+]|\d+[.)])\s+/.test(lines[i + 1])))) {
           const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
-          if (m) { items.push({ depth: m[1].replace(/\t/g, '  ').length, ordered: /\d/.test(m[2]), text: m[3] }); } else if (lines[i].trim()) { items[items.length - 1].text += '\n' + lines[i].trim(); }
+          if (m) { items.push({ depth: m[1].replace(/\t/g, '  ').length, ordered: /\d/.test(m[2]), start: parseInt(m[2], 10), text: m[3] }); } else if (lines[i].trim()) { items[items.length - 1].text += '\n' + lines[i].trim(); }
           i++;
         }
         out.push(renderList(items));
@@ -332,15 +333,17 @@
   function renderList(items) {
     let pos = 0;
     const build = (depth) => {
-      const ordered = items[pos].ordered; let html = '';
+      const { ordered, start } = items[pos]; let html = '';
       while (pos < items.length && items[pos].depth >= depth) {
         if (items[pos].depth > depth) { html = html.replace(/<\/li>$/, '') + build(items[pos].depth) + '</li>'; continue; }
         const it = items[pos++];
         html += `<li class="${/^\[[ xX]\]\s/.test(it.text) ? 'task-item' : ''}">${inline(it.text).replace(/\n/g, '<br>')}</li>`;
       }
-      return `<${ordered ? 'ol' : 'ul'}>${html}</${ordered ? 'ol' : 'ul'}>`;
+      return ordered ? `<ol${start !== 1 ? ` start="${start}"` : ''}>${html}</ol>` : `<ul>${html}</ul>`;
     };
-    return build(items[0].depth);
+    let html = '';
+    while (pos < items.length) { html += build(items[pos].depth); }
+    return html;
   }
 
   // ------------------------------------------------------------------ diff
@@ -586,7 +589,7 @@
     // The diff body is parsed into the DOM only when the card is expanded (most edits in a long transcript never are).
     card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed"></div>`;
     card.__diff = d.html;
-    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
+    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open, sessionId: state.session && state.session.id }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
   }
@@ -770,7 +773,7 @@
     if ((tc.name === 'run_parallel_subagents' || tc.name === 'run_todos_parallel') && result) { const h = subHostSettled(tc.name, a, result); if (h) { h.dataset.callId = tc.id; container.appendChild(h); return h; } }
     if (tc.name === 'run_todos_parallel' && !result) {
       const wanted = Array.isArray(a.ids) ? new Set(a.ids.map(String)) : null;
-      const tasks = ((state.session && state.session.todos) || []).filter((t) => t.agent && t.status !== 'done' && (!wanted || wanted.has(String(t.id)))).map((t) => ({ agent: t.agent, prompt: t.title }));
+      const tasks = (state.session && Array.isArray(state.session.todos) ? state.session.todos : []).filter((t) => t.agent && t.status !== 'done' && (!wanted || wanted.has(String(t.id)))).map((t) => ({ agent: t.agent, prompt: t.title }));
       const h = subHost(tc.name, a, tasks); h.dataset.callId = tc.id; container.appendChild(h); return h;
     }
     if (tc.name === 'run_subagent') { const c = subagentCard(a.agent, a.prompt, a.model); c.dataset.callId = tc.id; if (result) { finishSubagent(c, result.isError ? '' : result.content, result.isError ? result.content : ''); c.open = false; } container.appendChild(c); return c; }
@@ -967,7 +970,10 @@
     els.messages.dataset.sid = s ? s.id : '';
     if (!s) { return; }
     syncMode(); syncModel(); syncSkills(); updateCtx();
-    if (!s.messages.length) { renderEmpty(); }
+    // While the agent runs, the messages it has appended so far are drawn by the live turn (built from the event
+    // stream, replayed on reopen) — drawing them from the transcript as well showed every step twice after a tab switch.
+    const inFlight = state.running.has(s.id) || state.live.has(s.id) || state.pendingSend.has(s.id);
+    if (!s.messages.length && !inFlight) { renderEmpty(); }
     const results = new Map();
     for (const m of s.messages) {
       if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); }
@@ -984,9 +990,6 @@
       if (st.steps || st.workers) { const w = workStrip(); cur.el.insertBefore(w, cur.el.firstChild); settleWork(cur.el, w, st, cur.dur || (cur.end && cur.start ? cur.end - cur.start : 0), false); }
       cur = null;
     };
-    // While the agent runs, the messages it has appended so far are drawn by the live turn (built from the event
-    // stream, replayed on reopen) — drawing them from the transcript as well showed every step twice after a tab switch.
-    const inFlight = state.running.has(s.id) || state.live.has(s.id) || state.pendingSend.has(s.id);
     const cutoff = inFlight && typeof s.liveFrom === 'number' ? s.liveFrom : s.messages.length;
     s.messages.forEach((m, i) => {
       if (i >= cutoff) { return; }
@@ -1195,7 +1198,7 @@
       root.appendChild(work); root.appendChild(steps); root.appendChild(body);
       live = { sid: sessionId, root, work, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), subTools: new Map(), timer: 0, startedAt: Date.now(), phase: '', durationMs: 0, failed: false };
       state.live.set(sessionId, live);
-      if (state.session && state.session.id === sessionId) { els.messages.appendChild(root); }
+      if (state.session && state.session.id === sessionId) { for (const e of els.messages.querySelectorAll(':scope > .empty')) { e.remove(); } els.messages.appendChild(root); }
       if (!workTicker) { workTicker = setInterval(tickWork, 1000); }
     }
     return live;
@@ -1342,7 +1345,23 @@
     state.live.delete(sessionId);
   }
   function handleEvent(e) {
-    const sid = e.sessionId; const live = ensureLive(sid); const visible = state.session && state.session.id === sid;
+    const sid = e.sessionId; const visible = state.session && state.session.id === sid;
+    // Events outside a run (memory saved after it, a custom command's preparation) must not open a live turn nobody ends.
+    if (!state.running.has(sid) && !state.pendingSend.has(sid) && !state.live.has(sid)) {
+      if (e.type === 'memory') { if (visible && e.payload && e.payload.saved && e.payload.saved.length) { toast(`Saved to memory: ${e.payload.saved.join(', ')}`, 'info'); } }
+      else if (e.type === 'context') { if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } }
+      else if (e.type === 'error' && visible) { toast(String(e.payload), 'error'); }
+      return;
+    }
+    const live = ensureLive(sid);
+    // A worker's events forwarded under this chat's id; only the kinds drawn on its lane are handled below.
+    const child = e.payload && typeof e.payload === 'object' && e.payload.childId && e.type !== 'subagent_start' && e.type !== 'subagent_end';
+    if (child && !['status', 'tool_start', 'tool_end', 'model_request'].includes(e.type)) {
+      const d = e.payload.data;
+      if (e.type === 'error') { childStatus(live, sid, e.payload.childId, e.payload.agent, String(d), visible); }
+      else if (e.type === 'retry' && d) { childStatus(live, sid, e.payload.childId, e.payload.agent, `retrying ${d.attempt}/${d.max}`, visible); }
+      return;
+    }
     switch (e.type) {
       case 'assistant_delta': live.text += e.payload; noteStream(live, String(e.payload).length); setPhase(live, 'Writing'); scheduleRender(live); break;
       case 'steer': {
@@ -1436,7 +1455,7 @@
         }
         state.modelOf.set(sid, e.payload.model); if (e.payload.queued) { noteStatus(sid, `Waiting for ${e.payload.name} — busy with ${e.payload.queued} other chat${e.payload.queued === 1 ? '' : 's'}…`); } scheduleBg(); break;
       }
-      case 'todos': if (state.session && state.session.id === sid) { state.session.todos = e.payload || []; renderTasks(); } break;
+      case 'todos': if (state.session && state.session.id === sid) { state.session.todos = Array.isArray(e.payload) ? e.payload : []; renderTasks(); } break;
       case 'nudge': {
         // The reply so far claimed or announced an action that never happened. It stays, dimmed and labelled, and whatever
         // the model streams next starts in a fresh body — never glued onto the retracted sentence.
@@ -1657,12 +1676,14 @@
   // Composer isolation: each tab keeps its own draft, attachments, images and scroll offset while you switch around.
   function saveDraft(sid) {
     if (!sid) { return; }
-    if (els.input.value || state.attachments.length || state.images.length) { state.drafts.set(sid, { text: els.input.value, attachments: [...state.attachments], images: [...state.images] }); } else { state.drafts.delete(sid); }
+    const text = improving && improving.sid === sid ? improving.original : els.input.value;
+    if (text || state.attachments.length || state.images.length) { state.drafts.set(sid, { text, attachments: [...state.attachments], images: [...state.images] }); } else { state.drafts.delete(sid); }
     state.scroll.set(sid, els.messages.scrollTop);
   }
   function restoreDraft(sid) {
     const d = state.drafts.get(sid);
     els.input.value = d ? d.text : ''; state.attachments = d ? [...d.attachments] : []; state.images = d ? [...d.images] : [];
+    const locked = !!improving && improving.sid === sid; els.input.readOnly = locked; els.box.classList.toggle('improving', locked);
     renderChips(); autoGrow(); updateSendEnabled();
   }
   /** Optimistic switch: the clicked tab is selected and marked busy right away; the extension answers with the session. */
@@ -2114,7 +2135,7 @@
   /** Per-session open/closed choice for the Tasks panel, once the user has toggled it. */
   const tasksUserOpen = new Map();
   function renderTasks() {
-    const todos = (state.session && state.session.todos) || [];
+    const todos = state.session && Array.isArray(state.session.todos) ? state.session.todos : [];
     els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { tasksSig = ''; return; }
     const done = todos.filter((t) => t.status === 'done').length;
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
@@ -2247,7 +2268,10 @@
   // The composer and the menu handle their own Escape.
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && menuState && e.target !== els.input && !els.popover.contains(e.target)) { e.preventDefault(); closeMenu(); } }, true);
   // The popover is position:fixed from its anchor; scrolling or resizing would leave it floating detached.
-  els.messages.addEventListener('scroll', () => { if (menuState) { closeMenu(); } }, { passive: true });
+  // Only the user's own scrolling closes a popover; auto-scroll while streaming must not.
+  for (const ev of ['wheel', 'touchmove']) {
+    els.messages.addEventListener(ev, () => { if (menuState) { closeMenu(); } }, { passive: true });
+  }
   window.addEventListener('resize', () => { if (menuState) { closeMenu(); } });
 
   els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
@@ -2359,7 +2383,11 @@
     const { original } = improving; improving = null;
     els.improve.classList.remove('busy'); els.improve.title = 'Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent.';
     els.input.readOnly = false; els.box.classList.remove('improving');
-    if (!onTab) { return; }
+    if (!onTab) {
+      const d = state.drafts.get(m.sessionId); const text = m.error || !m.text ? original : m.text;
+      state.drafts.set(m.sessionId, d ? { ...d, text } : { text, attachments: [], images: [] });
+      return;
+    }
     if (m.error || !m.text) {
       els.input.value = original;
       if (m.error && m.error !== 'cancelled') { toast(m.error, 'error'); }
@@ -2435,7 +2463,7 @@
     return d;
   }
   function sendCurrent(fromSuggestion) {
-    if (improving) { toast('Still improving the prompt — wait for it, or click the sparkle to cancel'); return; }
+    if (improving && state.session && improving.sid === state.session.id) { toast('Still improving the prompt — wait for it, or click the sparkle to cancel'); return; }
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
     if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) {
@@ -2483,15 +2511,16 @@
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); improvePrompt(); return; }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && improveUndo && els.input.value === improveUndo.improved) { e.preventDefault(); els.input.value = improveUndo.original; improveUndo = null; autoGrow(); updateSendEnabled(); return; }
-    if (improving && e.key === 'Enter') { e.preventDefault(); return; }
+    if (improving && state.session && improving.sid === state.session.id && e.key === 'Enter') { e.preventDefault(); return; }
     if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
     // Shift+Tab rotates the mode (Agent → Multitask → Debug → Plan → Ask), like Cursor.
     if (e.key === 'Tab' && e.shiftKey && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; setMode(next); toast(`${MODES[next].label} mode`); return; }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !els.input.value.trim() && state.session && els.messages.querySelector('.plancard') && !state.running.has(state.session.id)) { e.preventDefault(); post({ type: 'buildPlan', sessionId: state.session.id }); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
+    if (e.defaultPrevented) { return; }
     if (e.key === 'Escape' && e.altKey && state.session && state.running.has(state.session.id)) { e.preventDefault(); togglePause(); return; }
     if (e.key === 'Escape' && state.session && state.running.has(state.session.id)) { post({ type: 'stop', sessionId: state.session.id }); return; }
-    if (e.key === 'ArrowUp' && !els.input.value && state.history.length) { e.preventDefault(); state.histIdx = Math.min(state.histIdx + 1, state.history.length - 1); els.input.value = state.history[state.histIdx]; autoGrow(); updateSendEnabled(); }
+    if (e.key === 'ArrowUp' && !e.altKey && !e.metaKey && !e.ctrlKey && !els.input.value && state.history.length) { e.preventDefault(); state.histIdx = Math.min(state.histIdx + 1, state.history.length - 1); els.input.value = state.history[state.histIdx]; autoGrow(); updateSendEnabled(); }
     if (e.key === 'ArrowDown' && state.histIdx >= 0 && els.input.value === state.history[state.histIdx]) { e.preventDefault(); state.histIdx--; els.input.value = state.histIdx >= 0 ? state.history[state.histIdx] : ''; autoGrow(); updateSendEnabled(); }
   });
   els.input.addEventListener('paste', (e) => { const items = [...((e.clipboardData && e.clipboardData.items) || [])].filter((it) => /^image\//.test(it.type)); if (items.length) { e.preventDefault(); items.forEach((it) => addImageFile(it.getAsFile())); } });
@@ -2512,8 +2541,8 @@
   els.box.addEventListener('drop', (e) => { e.preventDefault(); els.box.classList.remove('drop'); const files = [...(e.dataTransfer.files || [])]; const imgs = files.filter((f) => /^image\//.test(f.type)); imgs.forEach(addImageFile); if (!imgs.length) { for (const u of (e.dataTransfer.getData('text/uri-list') || '').split(/\r?\n/).filter(Boolean)) { post({ type: 'attachUri', uri: u }); } } });
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
-    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { post({ type: 'applyCodeToFile', code: text }); } return; }
-    const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined }); return; }
+    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { const pl = code.closest('.code').querySelector('.path-link'); post({ type: 'applyCodeToFile', code: text, path: pl ? pl.dataset.path : undefined }); } return; }
+    const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined, sessionId: state.session && state.session.id }); return; }
     const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
     const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
     const a = e.target.closest('a[href]'); if (a) { e.preventDefault(); post({ type: 'openExternal', url: a.getAttribute('href') }); }
@@ -2521,12 +2550,12 @@
   document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); }
-    if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); openContextMenu(); }
+    if (mod && e.key.toLowerCase() === 'i' && !e.defaultPrevented && e.target !== els.input) { e.preventDefault(); openContextMenu(); }
     if (e.target && e.target.classList && e.target.classList.contains('rename')) { return; }
-    if (e.altKey && !mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); cycleTab(e.key === 'ArrowDown' ? 1 : -1); }
-    if (e.altKey && !mod && /^[1-9]$/.test(e.key)) { const { list } = tabList(); const t = list[Number(e.key) - 1]; if (t) { e.preventDefault(); selectTab(t.id); } }
-    if (mod && e.altKey && e.key.toLowerCase() === 't') { e.preventDefault(); els.newTab.click(); }
-    if (mod && e.altKey && e.key.toLowerCase() === 'w') { const id = activeId(); if (id && !state.running.has(id)) { e.preventDefault(); closeTab(id); } }
+    if (e.altKey && !mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); e.stopPropagation(); cycleTab(e.key === 'ArrowDown' ? 1 : -1); }
+    if (e.altKey && !mod && /^Digit[1-9]$/.test(e.code)) { const { list } = tabList(); const t = list[Number(e.code.slice(5)) - 1]; if (t) { e.preventDefault(); e.stopPropagation(); selectTab(t.id); } }
+    if (mod && e.altKey && e.code === 'KeyT') { e.preventDefault(); e.stopPropagation(); els.newTab.click(); }
+    if (mod && e.altKey && e.code === 'KeyW') { const id = activeId(); if (id && !state.running.has(id)) { e.preventDefault(); e.stopPropagation(); closeTab(id); } }
   });
 
   // ------------------------------------------------------------------ messages from the extension
@@ -2588,6 +2617,9 @@
    */
   function applyReplay(m) {
     const sid = m.sessionId;
+    // Live events that reached this webview before the replay are part of it; start the turn over so nothing doubles.
+    const old = state.live.get(sid);
+    if (old) { clearTimeout(old.timer); old.root.remove(); state.live.delete(sid); }
     const live = ensureLive(sid);
     if (m.startedAt) { live.startedAt = m.startedAt; }
     if (m.truncated && !live.root.querySelector('.note.replay')) { live.root.insertBefore(el('div', 'note replay', 'Earlier steps of this run are not shown — the full transcript appears when it finishes.'), live.steps); }
@@ -2600,7 +2632,18 @@
   }
   function armSendWatchdog(sid, ms) {
     clearTimeout(state.pendingSend.get(sid));
-    state.pendingSend.set(sid, setTimeout(() => { state.pendingSend.delete(sid); if (!state.running.has(sid) && state.session && state.session.id === sid) { setRunning(false); toast('The request did not start — check the LocalPilot output log and try again', 'error'); } }, ms));
+    state.pendingSend.set(sid, setTimeout(() => { if (!state.running.has(sid)) { const shown = state.session && state.session.id === sid; rejectSend(sid); if (shown) { toast('The request did not start — check the LocalPilot output log and try again', 'error'); } } else { state.pendingSend.delete(sid); } }, ms));
+  }
+  /** A send that never became a run: drop its placeholder turn and the bubble drawn for it. */
+  function rejectSend(sid) {
+    clearTimeout(state.pendingSend.get(sid)); state.pendingSend.delete(sid);
+    if (state.running.has(sid)) { return; }
+    const live = state.live.get(sid);
+    if (live) { clearTimeout(live.timer); live.root.remove(); state.live.delete(sid); }
+    if (state.session && state.session.id === sid) {
+      const last = els.messages.lastElementChild; if (last && last.matches('.turn.user.fresh')) { last.remove(); }
+      setRunning(false);
+    }
   }
   function dispatch(m) {
     switch (m.type) {
@@ -2637,6 +2680,7 @@
         renderTabs();
         break;
       }
+      case 'sendRejected': rejectSend(m.sessionId); break;
       case 'sendQueued':
         // A manual compaction holds the message back; give it time so the "did not start" watchdog stays quiet.
         if (state.pendingSend.has(m.sessionId)) { armSendWatchdog(m.sessionId, 200000); if (state.session && state.session.id === m.sessionId) { setStatus('Waiting for compaction…'); } }
@@ -2719,7 +2763,7 @@
     d.querySelector('pre').textContent = a.detail;
     const answer = (act) => { post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session' }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
     // Y/A/N answer the oldest pending prompt only; with several queued, one keypress must not resolve them all.
-    const key = (e) => { if (e.defaultPrevented || els.approvals.firstElementChild !== d) { return; } if (e.target === els.input && els.input.value) { return; } if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); };
+    const key = (e) => { if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d) { return; } if (e.target === els.input && els.input.value) { return; } if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; } const k = e.key.toLowerCase(); if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); e.stopPropagation(); };
     d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (!b) { return; } if (b.dataset.a === 'open') { selectTab(a.sessionId); return; } answer(b.dataset.a); };
     document.addEventListener('keydown', key, true);
     d._dispose = () => document.removeEventListener('keydown', key, true);
@@ -2765,11 +2809,11 @@
       inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); inp.blur(); } };
     });
     const key = (e) => {
-      if (e.defaultPrevented || els.approvals.firstElementChild !== d) { return; }
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d) { return; }
       if (e.target === els.input && els.input.value) { return; }
       if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; }
-      if (/^[1-9]$/.test(e.key)) { const qi = qs.findIndex((_, i) => !answered(i)); const at = qi < 0 ? qs.length - 1 : qi; const oi = +e.key - 1; if (qs[at] && qs[at].options && oi < qs[at].options.length) { pick(at, oi); e.preventDefault(); } return; }
-      if (e.key === 'Enter' && !submitBtn.disabled) { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+      if (/^[1-9]$/.test(e.key)) { const qi = qs.findIndex((_, i) => !answered(i)); const at = qi < 0 ? qs.length - 1 : qi; const oi = +e.key - 1; if (qs[at] && qs[at].options && oi < qs[at].options.length) { pick(at, oi); e.preventDefault(); e.stopPropagation(); } return; }
+      if (e.key === 'Enter' && !submitBtn.disabled) { e.preventDefault(); e.stopPropagation(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
     };
     document.addEventListener('keydown', key, true);
     d._dispose = () => document.removeEventListener('keydown', key, true);

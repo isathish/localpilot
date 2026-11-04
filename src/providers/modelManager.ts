@@ -215,13 +215,13 @@ export class ModelManager implements vscode.Disposable {
   }
 
   /** Resolves with the job once it is no longer running. */
-  private waitFor(jobId: string): Promise<ModelJob> {
+  private waitFor(jobId: string, like?: Pick<ModelJob, 'kind' | 'target' | 'model'>): Promise<ModelJob> {
     return new Promise((resolve) => {
       const check = () => {
         const job = this.jobs.get(jobId);
         if (!job || job.status !== 'running') {
           sub.dispose();
-          resolve(job ?? ({ id: jobId, kind: 'start', target: 'ollama', model: 'Ollama', status: 'error', progress: -1, detail: 'Failed', error: 'The job was cleared', startedAt: Date.now() } satisfies ModelJob));
+          resolve(job ?? ({ id: jobId, kind: like?.kind ?? 'start', target: like?.target ?? 'ollama', model: like?.model ?? 'Ollama', status: 'error', progress: -1, detail: 'Failed', error: 'The job was cleared', startedAt: Date.now() } satisfies ModelJob));
         }
       };
       const sub = this._onDidChange.event(check);
@@ -284,10 +284,17 @@ export class ModelManager implements vscode.Disposable {
 
   // ------------------------------------------------------------------ jobs
 
-  private start(kind: JobKind, target: InstallTarget, model: string, detail = 'Starting…'): ModelJob {
+  private start(kind: JobKind, target: InstallTarget, model: string, detail = 'Starting…', parent?: AbortSignal): ModelJob {
     const job: ModelJob = { id: `${kind}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, kind, target, model, status: 'running', progress: -1, detail, startedAt: Date.now() };
     this.jobs.set(job.id, job);
-    this.aborts.set(job.id, new AbortController());
+    const ctrl = new AbortController();
+    // A child job (setup's start/install/pull) stops with its parent.
+    if (parent?.aborted) {
+      ctrl.abort();
+    } else {
+      parent?.addEventListener('abort', () => ctrl.abort(), { once: true });
+    }
+    this.aborts.set(job.id, ctrl);
     this._onDidChange.fire();
     return job;
   }
@@ -315,7 +322,7 @@ export class ModelManager implements vscode.Disposable {
       const signal = this.aborts.get(job.id)!.signal;
       let child: cp.ChildProcess;
       try {
-        child = cp.spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+        child = cp.spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32', windowsHide: true });
       } catch (e) {
         return reject(e);
       }
@@ -333,7 +340,17 @@ export class ModelManager implements vscode.Disposable {
       };
       child.stdout?.on('data', onData);
       child.stderr?.on('data', onData);
-      const onAbort = () => child.kill();
+      const onAbort = () => {
+        child.stdout?.off('data', onData);
+        child.stderr?.off('data', onData);
+        // With shell: true on Windows the child is cmd.exe; kill the whole tree so the download stops too.
+        if (process.platform === 'win32' && child.pid) {
+          cp.spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => child.kill());
+        } else {
+          child.kill();
+        }
+        reject(new Error('cancelled'));
+      };
       signal.addEventListener('abort', onAbort, { once: true });
       child.on('error', (e) => {
         signal.removeEventListener('abort', onAbort);
@@ -357,12 +374,12 @@ export class ModelManager implements vscode.Disposable {
   }
 
   /** Downloads a model onto a runtime. Resolves with the finished job (status tells success). */
-  async pull(target: InstallTarget, model: string, providerId?: string): Promise<ModelJob> {
+  async pull(target: InstallTarget, model: string, providerId?: string, parent?: AbortSignal): Promise<ModelJob> {
     const dup = this.activeJobs.find((j) => j.kind === 'pull' && j.target === target && j.model === model);
     if (dup) {
-      return dup;
+      return this.waitFor(dup.id, dup);
     }
-    const job = this.start('pull', target, model, 'Connecting…');
+    const job = this.start('pull', target, model, 'Connecting…', parent);
     try {
       if (target === 'ollama') {
         await this.ollamaPull(job, providerId);
@@ -374,6 +391,10 @@ export class ModelManager implements vscode.Disposable {
       return this.finish(job, 'done');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (/cancel|abort/i.test(msg) && target !== 'ollama') {
+        // The CLI may have finished writing the model before it was stopped.
+        this.registry.invalidate();
+      }
       return this.finish(job, /cancel|abort/i.test(msg) ? 'cancelled' : 'error', /cancel|abort/i.test(msg) ? undefined : msg);
     }
   }
@@ -488,13 +509,13 @@ export class ModelManager implements vscode.Disposable {
   }
 
   /** Starts the Ollama server (menu-bar app on macOS/Windows, `ollama serve` otherwise) with parallel slots and waits until it answers. */
-  async startOllama(providerId?: string): Promise<ModelJob> {
+  async startOllama(providerId?: string, parent?: AbortSignal): Promise<ModelJob> {
     // One start at a time: the router, the supervisor and a setup can all ask for it within a second.
     const running = this.activeJobs.find((j) => j.kind === 'start' && j.target === 'ollama');
     if (running) {
-      return this.waitFor(running.id);
+      return this.waitFor(running.id, running);
     }
-    const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…');
+    const job = this.start('start', 'ollama', 'Ollama', 'Starting Ollama…', parent);
     const { baseUrl } = this.ollamaBase(providerId);
     const r = await launchOllama({
       baseUrl,
@@ -503,7 +524,7 @@ export class ModelManager implements vscode.Disposable {
       signal: this.aborts.get(job.id)?.signal,
       onWait: (sec) => this.update(job, { detail: `Waiting for Ollama at ${baseUrl}… (${sec.toFixed(0)}s)` }),
     });
-    if (r.pid) {
+    if (r.ok && r.pid) {
       this.servePid = r.pid;
     }
     return r.ok ? this.finish(job, 'done') : this.finish(job, r.cancelled ? 'cancelled' : 'error', r.error);
@@ -532,24 +553,39 @@ export class ModelManager implements vscode.Disposable {
       );
     }
     const up = () => createProvider({ id: 'probe', type: 'ollama', baseUrl }).healthCheck().catch(() => false);
+    let stopped = false;
     if (this.servePid) {
-      try {
-        process.kill(this.servePid);
-      } catch {
-        /* already gone */
-      }
+      const pid = this.servePid;
       this.servePid = undefined;
+      if (process.platform === 'win32') {
+        stopped = (await runProcess('taskkill', ['/PID', String(pid), '/T', '/F'], { timeoutMs: 6000 }).catch(() => undefined))?.code === 0;
+      } else {
+        try {
+          process.kill(pid);
+          stopped = true;
+        } catch {
+          /* already gone: stop whatever else is serving */
+        }
+      }
+    }
+    if (stopped) {
+      // The server LocalPilot started; the wait below confirms nothing else still answers.
     } else if (process.platform === 'darwin') {
       await which('osascript', ['-e', 'tell application "Ollama" to quit'], 6000);
       await which('pkill', ['-x', 'ollama'], 4000);
     } else if (process.platform === 'win32') {
-      await which('taskkill', ['/F', '/IM', 'ollama app.exe'], 6000);
-      await which('taskkill', ['/F', '/IM', 'ollama.exe'], 6000);
+      // Shell-less, or cmd.exe splits "ollama app.exe". The tray app first, or it respawns the server.
+      await runProcess('taskkill', ['/F', '/T', '/IM', 'ollama app.exe'], { timeoutMs: 6000 }).catch(() => undefined);
+      await runProcess('taskkill', ['/F', '/T', '/IM', 'ollama.exe'], { timeoutMs: 6000 }).catch(() => undefined);
     } else {
       await which('pkill', ['-x', 'ollama'], 4000);
     }
     for (let i = 0; i < 20 && (await up()); i++) {
       await sleep(500);
+    }
+    if (await up()) {
+      const job = this.start('start', 'ollama', 'Ollama', 'Restarting Ollama…');
+      return this.finish(job, 'error', `Ollama is still running (managed by Docker, a service or another app) — set OLLAMA_NUM_PARALLEL=${ModelManager.ollamaParallelSlots()} where it runs and restart it there.`);
     }
     return this.startOllama();
   }
@@ -560,8 +596,8 @@ export class ModelManager implements vscode.Disposable {
    * Linux: `ollama-linux-<arch>.tgz` → ~/.local/share/localpilot/ollama (user space). Then starts the server.
    * Falls back to the interactive terminal script only if the background path fails.
    */
-  async installOllama(): Promise<ModelJob> {
-    const job = this.start('install-runtime', 'ollama', 'Ollama', 'Preparing download…');
+  async installOllama(parent?: AbortSignal): Promise<ModelJob> {
+    const job = this.start('install-runtime', 'ollama', 'Ollama', 'Preparing download…', parent);
     const signal = this.aborts.get(job.id)!.signal;
     const mb = (n: number) => `${(n / 1048576).toFixed(0)} MB`;
     const onProgress = (what: string) => (done: number, total?: number) => this.update(job, { progress: total ? done / total : -1, detail: `${what} · ${mb(done)}${total ? ` / ${mb(total)}` : ''}` });
@@ -593,12 +629,6 @@ export class ModelManager implements vscode.Disposable {
       if (signal.aborted) {
         return this.finish(job, 'cancelled');
       }
-      this.update(job, { progress: -1, detail: 'Installed — starting the server…' });
-      const started = await this.startOllama();
-      if (started.status !== 'done') {
-        throw new Error(started.error ?? 'Ollama installed but failed to start');
-      }
-      return this.finish(job, 'done');
     } catch (e) {
       if (signal.aborted) {
         return this.finish(job, 'cancelled');
@@ -606,6 +636,16 @@ export class ModelManager implements vscode.Disposable {
       this.log.warn(`background Ollama install failed: ${e instanceof Error ? e.message : String(e)} — falling back to the terminal installer`);
       return this.installOllamaInTerminal(job, e instanceof Error ? e.message : String(e));
     }
+    // Installed: a server that does not start is reported as such, not retried through the installer.
+    this.update(job, { progress: -1, detail: 'Installed — starting the server…' });
+    const started = await this.startOllama(undefined, signal);
+    if (started.status === 'done') {
+      return this.finish(job, 'done');
+    }
+    if (started.status === 'cancelled' || signal.aborted) {
+      return this.finish(job, 'cancelled');
+    }
+    return this.finish(job, 'error', `Ollama is installed but did not start: ${started.error ?? 'no answer'}`);
   }
 
   /**
@@ -694,13 +734,16 @@ export class ModelManager implements vscode.Disposable {
 
   /** Interactive fallback: runs the platform installer script in a visible terminal and waits for the server. */
   private async installOllamaInTerminal(job: ModelJob, reason: string): Promise<ModelJob> {
-    this.update(job, { progress: -1, detail: `Background install failed (${reason}) — running the installer in a terminal…` });
-    const script = ollamaInstallCommand(process.platform, ModelManager.ollamaParallelSlots());
-    const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama', shellPath: script.shellPath, shellArgs: script.shellArgs });
-    term.show(true);
-    // Give the shell a moment to start before pasting the script (PowerShell in particular drops early input).
-    await sleep(process.platform === 'win32' ? 1500 : 400);
-    term.sendText(script.command, true);
+    // The background install may have got far enough: then only the start below is needed, not the script.
+    if (!(await findOllamaBinary())) {
+      this.update(job, { progress: -1, detail: `Background install failed (${reason}) — running the installer in a terminal…` });
+      const script = ollamaInstallCommand(process.platform, ModelManager.ollamaParallelSlots());
+      const term = vscode.window.createTerminal({ name: 'LocalPilot · install Ollama', shellPath: script.shellPath, shellArgs: script.shellArgs });
+      term.show(true);
+      // Give the shell a moment to start before pasting the script (PowerShell in particular drops early input).
+      await sleep(process.platform === 'win32' ? 1500 : 400);
+      term.sendText(script.command, true);
+    }
     try {
       for (let i = 0; i < 200; i++) {
         if (this.aborts.get(job.id)?.signal.aborted) {
@@ -712,7 +755,10 @@ export class ModelManager implements vscode.Disposable {
         }
         if (await findOllamaBinary()) {
           this.update(job, { detail: 'Installed — starting the server…' });
-          const started = await this.startOllama();
+          const started = await this.startOllama(undefined, this.aborts.get(job.id)?.signal);
+          if (started.status === 'cancelled') {
+            return this.finish(job, 'cancelled');
+          }
           if (started.status !== 'done') {
             throw new Error(started.error ?? 'Ollama installed but failed to start');
           }
@@ -746,6 +792,8 @@ export class ModelManager implements vscode.Disposable {
     }
     this.setupRunning = true;
     const job = this.start('setup', opts.target ?? 'ollama', 'Starter models', 'Checking installed models…');
+    // Cancelling the setup also stops the start, install or download it is waiting on.
+    const setupSignal = this.aborts.get(job.id)!.signal;
     try {
       const existing = await this.registry.listModels(true);
       if (existing.length && !opts.force) {
@@ -762,8 +810,8 @@ export class ModelManager implements vscode.Disposable {
         const ollama = runtimes.find((r) => r.target === 'ollama')!;
         if (ollama.installed) {
           this.update(job, { detail: 'Starting Ollama…' });
-          const started = await this.startOllama();
-          if (this.aborts.get(job.id)?.signal.aborted || started.status === 'cancelled') {
+          const started = await this.startOllama(undefined, setupSignal);
+          if (setupSignal.aborted || started.status === 'cancelled') {
             this.finish(job, 'cancelled');
             return { status: 'cancelled' };
           }
@@ -775,7 +823,7 @@ export class ModelManager implements vscode.Disposable {
           }
         } else if (opts.installRuntime) {
           this.update(job, { detail: 'Installing Ollama…' });
-          const inst = await this.installOllama();
+          const inst = await this.installOllama(setupSignal);
           if (inst.status === 'done') {
             target = 'ollama';
           } else if (inst.status === 'cancelled') {
@@ -829,7 +877,7 @@ export class ModelManager implements vscode.Disposable {
         const label = `${step.pick.entry.name} ${step.pick.variant.tag}`;
         if (!has(ref)) {
           this.update(job, { detail: `Downloading ${label} (${step.pick.variant.gb} GB) — ${i + 1}/${steps.length}`, progress: -1 });
-          const pulled = await this.pull(target, ref, providerId);
+          const pulled = await this.pull(target, ref, providerId, setupSignal);
           if (pulled.status === 'cancelled') {
             this.finish(job, 'cancelled');
             return { status: 'cancelled' };
@@ -852,6 +900,10 @@ export class ModelManager implements vscode.Disposable {
         } else {
           result.vision = id;
         }
+      }
+      if (setupSignal.aborted) {
+        this.finish(job, 'cancelled');
+        return { status: 'cancelled' };
       }
       const cfg = vscode.workspace.getConfiguration('localpilot');
       const current = cfg.get<string>('defaultModel', '');

@@ -78,9 +78,8 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     }
 
     const prefixRange = new vscode.Range(new vscode.Position(Math.max(0, position.line - 120), 0), position);
-    const suffixRange = new vscode.Range(position, new vscode.Position(Math.min(document.lineCount - 1, position.line + 40), 0));
     const prefix = document.getText(prefixRange);
-    const suffix = document.getText(suffixRange);
+    const suffix = document.getText(suffixRange(document, position));
     const key = `${docKey}:${document.languageId}:${prefix.slice(-600)}|${suffix.slice(0, 300)}`;
     let completion = this.cached(key);
     const language = document.languageId;
@@ -184,6 +183,39 @@ export function shouldTrigger(linePrefix: string, lineSuffix: string, deleting: 
   return true;
 }
 
+/** Text after the cursor sent as the FIM suffix: up to 40 lines, ending at the end of the last one (not its start). */
+export function suffixRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range {
+  const endLine = Math.min(document.lineCount - 1, position.line + 40);
+  return new vscode.Range(position, document.lineAt(endLine).range.end);
+}
+
+/** Indexes of closing brackets and quotes in `t` that pair an opener earlier in `t`. */
+function matchedClosers(t: string): number[] {
+  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+  const stack: string[] = [];
+  const out: number[] = [];
+  let quote: string | undefined;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === '\\') {
+      i++;
+    } else if (quote) {
+      if (c === quote) {
+        out.push(i);
+        quote = undefined;
+      }
+    } else if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+    } else if (c === '(' || c === '[' || c === '{') {
+      stack.push(c);
+    } else if (pairs[c] && stack[stack.length - 1] === pairs[c]) {
+      stack.pop();
+      out.push(i);
+    }
+  }
+  return out;
+}
+
 export function postProcess(text: string, lineSuffix: string): string {
   let t = text.replace(/\r/g, '');
   // Strip FIM sentinel tokens some servers echo back.
@@ -192,10 +224,13 @@ export function postProcess(text: string, lineSuffix: string): string {
   if (after) {
     // Mid-line: ghost text is a single line, and must not repeat what already follows the cursor —
     // either verbatim ("foo(|)" → "bar)") or as an overlapping tail ("foo(|)" → "bar(x))").
+    // A closer that pairs an opener inside the completion ("getValue()") is part of it, never a repeat.
     t = t.split('\n')[0];
+    const matched = matchedClosers(t);
+    const free = (from: number, to: number) => !matched.some((i) => i >= from && i < to);
     let overlap = 0;
     for (let k = Math.min(t.length, after.length); k > 0; k--) {
-      if (t.endsWith(after.slice(0, k))) {
+      if (t.endsWith(after.slice(0, k)) && free(t.length - k, t.length)) {
         overlap = k;
         break;
       }
@@ -204,7 +239,7 @@ export function postProcess(text: string, lineSuffix: string): string {
       t = t.slice(0, t.length - overlap);
     } else {
       const idx = t.indexOf(after);
-      if (idx >= 0) {
+      if (idx >= 0 && free(idx, t.length)) {
         t = t.slice(0, idx);
       }
     }

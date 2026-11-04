@@ -54,6 +54,70 @@ suite('LocalPilot prompt cache and model residency', () => {
     }
   });
 
+  test('a failed /api/show is not cached, so the next listing picks up the model capabilities', async () => {
+    let shows = 0;
+    const srv = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/api/tags') {
+          res.end(JSON.stringify({ models: [{ name: 'm:1b', model: 'm:1b', digest: 'd1' }] }));
+          return;
+        }
+        if (shows++ === 0) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: 'busy' }));
+          return;
+        }
+        res.end(JSON.stringify({ capabilities: ['completion', 'tools'] }));
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    try {
+      const p = new OllamaProvider({ id: 'o', type: 'ollama', baseUrl: `http://127.0.0.1:${(srv.address() as AddressInfo).port}` });
+      assert.strictEqual((await p.listModels())[0].supportsTools, false);
+      assert.strictEqual((await p.listModels())[0].supportsTools, true);
+    } finally {
+      srv.close();
+    }
+  });
+
+  test('an Ollama model without insert support completes through chat after the first refusal', async () => {
+    const generated: Record<string, unknown>[] = [];
+    let chats = 0;
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        const b = JSON.parse(body || '{}');
+        if (req.url === '/api/chat') {
+          chats++;
+          res.setHeader('content-type', 'application/x-ndjson');
+          res.end(`${JSON.stringify({ message: { role: 'assistant', content: 'mid' }, done: false })}\n${JSON.stringify({ message: { role: 'assistant', content: '' }, done: true })}\n`);
+          return;
+        }
+        generated.push(b);
+        res.setHeader('content-type', 'application/json');
+        if (b.suffix) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: '"m" does not support insert' }));
+          return;
+        }
+        res.end(JSON.stringify({ response: 'x' }));
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    try {
+      const p = new OllamaProvider({ id: 'o', type: 'ollama', baseUrl: `http://127.0.0.1:${(srv.address() as AddressInfo).port}` });
+      assert.strictEqual(await p.complete({ model: 'm', prompt: 'a', suffix: 'b' }), 'mid');
+      assert.strictEqual(await p.complete({ model: 'm', prompt: 'a', suffix: 'b' }), 'mid');
+      assert.strictEqual(generated.length, 1, 'the second completion skips /api/generate');
+      assert.strictEqual(chats, 2);
+    } finally {
+      srv.close();
+    }
+  });
+
   test('a LocalPilot-started Ollama gets the configured flash attention and KV cache type', async () => {
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const prev = { fa: cfg.inspect('ollama.flashAttention')?.globalValue, kv: cfg.inspect('ollama.kvCacheType')?.globalValue };

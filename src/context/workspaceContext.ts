@@ -443,7 +443,8 @@ export class WorkspaceContext implements vscode.Disposable {
       return `<attachment path="${label(uri)}"${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
     } catch (e) {
       this.log.warn(`attachment read failed: ${ref}: ${String(e)}`);
-      return '';
+      // Say so instead of dropping it: the model and the chat both see which attachment was missing.
+      return `<attachment path="${p.replace(/"/g, '&quot;')}" error="not found"></attachment>`;
     }
   }
 }

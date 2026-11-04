@@ -273,27 +273,46 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
   });
 }
 
+/** The most specific scope that sets `key`, so a write there actually takes effect (User when nothing overrides it). */
+export function configTarget(key: string): vscode.ConfigurationTarget {
+  const i = vscode.workspace.getConfiguration(SECTION).inspect(key);
+  if (i?.workspaceFolderValue !== undefined) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (i?.workspaceValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
+}
+
+/** The string list stored at one scope (not the merged value), so updating it never copies entries across scopes. */
+function listAt(key: string, target: vscode.ConfigurationTarget): string[] {
+  const i = vscode.workspace.getConfiguration(SECTION).inspect<string[]>(key);
+  const v = target === vscode.ConfigurationTarget.WorkspaceFolder ? i?.workspaceFolderValue : target === vscode.ConfigurationTarget.Workspace ? i?.workspaceValue : i?.globalValue;
+  return Array.isArray(v) ? v.filter((s) => typeof s === 'string') : [];
+}
+
 export async function setDefaultModel(modelId: string): Promise<void> {
-  await vscode.workspace.getConfiguration(SECTION).update('defaultModel', modelId, vscode.ConfigurationTarget.Global);
+  await vscode.workspace.getConfiguration(SECTION).update('defaultModel', modelId, configTarget('defaultModel'));
 }
 
 /** Hide or show a model everywhere (pickers, routing, status bar) without touching the server. */
 export async function setModelEnabled(modelId: string, enabled: boolean): Promise<void> {
-  const c = vscode.workspace.getConfiguration(SECTION);
-  const cur = (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string');
+  const target = configTarget('models.disabled');
+  const cur = listAt('models.disabled', target);
   const next = enabled ? cur.filter((id) => id !== modelId) : cur.includes(modelId) ? cur : [...cur, modelId];
   if (next.length !== cur.length) {
-    await c.update('models.disabled', next, vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration(SECTION).update('models.disabled', next, target);
   }
 }
 
 /** Hide or show a skill for the agent (prompt index, load_skill, suggestions) without deleting it from disk. */
 export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
-  const c = vscode.workspace.getConfiguration(SECTION);
-  const cur = (c.get<string[]>('skills.disabled', []) ?? []).filter((s) => typeof s === 'string');
+  const target = configTarget('skills.disabled');
+  const cur = listAt('skills.disabled', target);
   const next = enabled ? cur.filter((n) => n !== name) : cur.includes(name) ? cur : [...cur, name];
   if (next.length !== cur.length) {
-    await c.update('skills.disabled', next, vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration(SECTION).update('skills.disabled', next, target);
   }
 }
 

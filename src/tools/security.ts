@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getManagedPolicy } from '../agent/managedPolicy';
 import { formatFindings, scanWorkspace } from '../security/scan';
 import { Tool } from '../types';
 
@@ -31,6 +32,11 @@ export const securityScanTool: Tool = {
       k = new Set(args.kinds.flatMap((x) => alias[String(x).trim().toLowerCase()]));
     }
     // Only the dependency check leaves the machine (package names and versions go to OSV.dev).
+    const noWeb = !getManagedPolicy().allowWebAccess && (!k || k.has('dependencies'));
+    if (noWeb) {
+      k = new Set(k ?? ['secrets', 'code']);
+      k.delete('dependencies');
+    }
     if ((!k || k.has('dependencies')) && !(await ctx.requestApproval('Check dependencies against OSV.dev', 'Package names and versions from the lockfiles are sent to api.osv.dev; no code leaves the machine.', 'network'))) {
       return { content: 'The user declined the online dependency check. Run again with kinds ["secrets", "code"] for the offline checks.', isError: true };
     }
@@ -40,6 +46,7 @@ export const securityScanTool: Tool = {
     } catch (e) {
       return { content: `Scan failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
-    return { content: formatFindings(r), data: { findings: r.findings.length } };
+    const note = noWeb ? "\n\nDependency check skipped: web access is disabled by your organization's policy." : '';
+    return { content: formatFindings(r) + note, data: { findings: r.findings.length } };
   },
 };

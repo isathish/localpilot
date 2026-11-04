@@ -218,6 +218,22 @@ export interface DetectionReport {
   recommended?: string;
 }
 
+/** Identity of a server URL: loopback aliases, default ports and a trailing `/v1` or `/engines/v1` compare equal. */
+export function endpointKey(u: string): string {
+  try {
+    const url = new URL(u);
+    let host = url.hostname.toLowerCase();
+    if (['127.0.0.1', '[::1]', '::1', '0.0.0.0'].includes(host)) {
+      host = 'localhost';
+    }
+    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+    const path = url.pathname.replace(/\/+$/, '').replace(/(?:\/engines)?\/v1$/i, '');
+    return `${url.protocol}//${host}:${port}${path}`;
+  } catch {
+    return u.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
 /**
  * Probes configured providers, well-known endpoints and Docker containers; merges every reachable
  * server that is not configured yet into `localpilot.providers`. Never removes or edits user entries.
@@ -225,8 +241,7 @@ export interface DetectionReport {
 export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { write?: boolean } = {}): Promise<DetectionReport> {
   const cfg = vscode.workspace.getConfiguration('localpilot');
   const configured = cfg.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
-  const norm = (u: string) => u.replace(/\/+$/, '').toLowerCase();
-  const seen = new Set(configured.map((p) => norm(p.baseUrl)));
+  const seen = new Set(configured.map((p) => endpointKey(p.baseUrl)));
   const ids = new Set(configured.map((p) => p.id));
 
   const docker = discoverDockerProviders();
@@ -234,8 +249,8 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
   const colibriPort = cfg.get<number>('colibri.port', COLIBRI_DEFAULT_PORT);
   const known = colibriPort && colibriPort !== COLIBRI_DEFAULT_PORT ? [...KNOWN_ENDPOINTS, { id: 'colibri', type: 'openai' as const, baseUrl: `http://localhost:${colibriPort}/v1`, displayName: 'colibri' }] : KNOWN_ENDPOINTS;
   for (const k of known) {
-    if (!seen.has(norm(k.baseUrl))) {
-      seen.add(norm(k.baseUrl));
+    if (!seen.has(endpointKey(k.baseUrl))) {
+      seen.add(endpointKey(k.baseUrl));
       candidates.push({ cfg: k, configured: false, source: 'known' });
     }
   }
@@ -244,8 +259,8 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
 
   const dockerCandidates: typeof candidates = [];
   for (const d of await docker) {
-    if (!seen.has(norm(d.baseUrl))) {
-      seen.add(norm(d.baseUrl));
+    if (!seen.has(endpointKey(d.baseUrl))) {
+      seen.add(endpointKey(d.baseUrl));
       dockerCandidates.push({ cfg: d, configured: false, source: 'docker' });
     }
   }
@@ -272,9 +287,9 @@ export async function autoDetectProviders(log: vscode.LogOutputChannel, opts: { 
     // Probing takes seconds: merge into the list as it is now, so a provider added meanwhile (Settings, Start
     // Gateway, setup) is kept, and a server that was added meanwhile is not added twice.
     const { list: current, target } = editableProviders();
-    const urls = new Set(current.map((p) => norm(p.baseUrl)));
+    const urls = new Set(current.map((p) => endpointKey(p.baseUrl)));
     const taken = new Set(current.map((p) => p.id));
-    const fresh = added.filter((a) => !urls.has(norm(a.baseUrl))).map((a) => {
+    const fresh = added.filter((a) => !urls.has(endpointKey(a.baseUrl))).map((a) => {
       let id = a.id;
       for (let n = 2; taken.has(id); n++) {
         id = `${a.id.replace(/-\d+$/, '')}-${n}`;

@@ -4,7 +4,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { gatewayModels } from '../providers/gatewaySetup';
+import { gatewayModels, installAndStartCommand, terminalShell } from '../providers/gatewaySetup';
 import { ProviderConfig } from '../types';
 
 /**
@@ -37,6 +37,18 @@ function freePort(): Promise<number> {
 }
 
 const calls = (dir: string) => (fs.existsSync(path.join(dir, 'calls.log')) ? fs.readFileSync(path.join(dir, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; host: string | null }) : []);
+
+suite('gateways: terminal commands per shell', () => {
+  test('install-and-start uses PowerShell syntax on Windows, && elsewhere', () => {
+    assert.strictEqual(installAndStartCommand('omniroute', 20128, 'win32'), 'npm install -g omniroute; if ($?) { omniroute --port 20128 --no-open --non-interactive }');
+    assert.strictEqual(installAndStartCommand('omniroute', 20128, 'linux'), 'npm install -g omniroute && omniroute --port 20128 --no-open --non-interactive');
+  });
+
+  test('the terminal shell is PowerShell on Windows', () => {
+    assert.strictEqual(terminalShell('win32').shellPath, 'powershell.exe');
+    assert.deepStrictEqual(terminalShell('linux'), {});
+  });
+});
 
 suite('gateways: Start / Stop Gateway end to end (fake omniroute on PATH)', function () {
   this.timeout(120_000);

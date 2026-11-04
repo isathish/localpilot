@@ -223,9 +223,11 @@ async function listMarkdown(dir: string, depth = 2): Promise<{ file: string; sub
   }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isFile() && e.name.endsWith('.md')) {
+    // A symlink counts as what it points to (the depth limit stops link loops).
+    const st = e.isSymbolicLink() ? await fs.stat(p).catch(() => undefined) : e;
+    if (st?.isFile() && e.name.endsWith('.md')) {
       out.push({ file: p, sub: [] });
-    } else if (e.isDirectory() && depth > 1 && !e.name.startsWith('.')) {
+    } else if (st?.isDirectory() && depth > 1 && !e.name.startsWith('.')) {
       for (const x of await listMarkdown(p, depth - 1)) {
         out.push({ file: x.file, sub: [e.name, ...x.sub] });
       }
@@ -267,11 +269,12 @@ argument-hint: [PR number or run id]
 ---
 Make the failing CI checks pass. $ARGUMENTS
 
-1. pull_request "view" (or ci_status "runs") to see which checks fail. If none fail, say so and stop.
-2. ci_status "logs" for the failed run: read the actual error, not just the job name.
-3. Reproduce it locally with run_command (the same command the workflow runs), find the root cause and fix it with the smallest change. Do not disable or skip the failing check.
-4. Run the command again until it passes, then the related tests.
-5. git_commit ("fix: …" explaining the cause) and git_push. Report what failed, why, the fix, and that the checks will run again.`,
+1. If the arguments name a PR number, pull_request "view" with that number, then check it out with run_command \`gh pr checkout <number>\` so you reproduce and fix the PR's code, not the current branch's.
+2. pull_request "view" (or ci_status "runs") to see which checks fail. If none fail, say so and stop.
+3. ci_status "logs" for the failed run: read the actual error, not just the job name.
+4. Reproduce it locally with run_command (the same command the workflow runs), find the root cause and fix it with the smallest change. Do not disable or skip the failing check.
+5. Run the command again until it passes, then the related tests.
+6. Never commit on the default branch: if the current branch is the default branch, pick a short branch name ("fix/…") and pass it to git_commit as \`branch\`. git_commit ("fix: …" explaining the cause) and git_push. Report what failed, why, the fix, and that the checks will run again.`,
 };
 
 export function builtinCommands(): CustomCommand[] {

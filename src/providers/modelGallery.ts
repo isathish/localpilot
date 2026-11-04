@@ -396,9 +396,9 @@ export function groupQuants(allFiles: HfFile[]): Map<string, number> {
       quant = f.path.split('/')[0];
     } else {
       const base = f.path.replace(/-\d{5}-of-\d{5}\.gguf$/i, '.gguf').replace(/\.gguf$/i, '');
-      quant = flat.length > 1 ? base.slice(prefix.length).replace(/^[-_.]+/, '') : quantFromName(base) ?? '';
+      quant = quantFromName(base) ?? (flat.length > 1 ? base.slice(prefix.length).replace(/^[-_.]+/, '') : '');
       if (!quant) {
-        quant = quantFromName(base) ?? 'latest';
+        quant = 'latest';
       }
     }
     out.set(quant, (out.get(quant) ?? 0) + (f.size ?? 0));

@@ -249,6 +249,10 @@ export class TextDocument {
     }
     this.isDirty = true;
   }
+  /** @internal refresh a clean document from disk, keeping the same instance. */
+  _reset(text: string): void {
+    this.text = text;
+  }
   async save(): Promise<boolean> {
     await fsp.mkdir(path.dirname(this.uri.fsPath), { recursive: true });
     await fsp.writeFile(this.uri.fsPath, this.text, 'utf8');
@@ -290,6 +294,24 @@ export const USER_SETTINGS_PATH = (() => {
   }
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'Code', 'User', 'settings.json');
 })();
+/** The extension's snapshot of the active profile's user settings when available, else the first VS Code-family settings.json found. */
+export function userSettingsPath(): string {
+  const snapshot = process.env.LOCALPILOT_VSCODE_SETTINGS;
+  if (snapshot && fs.existsSync(snapshot)) {
+    return snapshot;
+  }
+  if (fs.existsSync(USER_SETTINGS_PATH)) {
+    return USER_SETTINGS_PATH;
+  }
+  const appData = path.dirname(path.dirname(path.dirname(USER_SETTINGS_PATH)));
+  for (const app of ['Code - Insiders', 'Cursor', 'VSCodium', 'Code - OSS', 'Windsurf']) {
+    const file = path.join(appData, app, 'User', 'settings.json');
+    if (fs.existsSync(file)) {
+      return file;
+    }
+  }
+  return USER_SETTINGS_PATH;
+}
 export const CLI_SETTINGS_PATH = path.join(os.homedir(), '.localpilot', 'config.json');
 
 /** Settings files that exist but do not parse: their settings are ignored and the CLI refuses to overwrite them. */
@@ -348,19 +370,24 @@ const isSensitive = (key: string) => SENSITIVE_WORKSPACE_KEYS.some((p) => {
   const base = p.replace(/\.$/, '');
   return key === base || key.startsWith(`${base}.`);
 });
+/** Read only from user settings or ~/.localpilot/config.json, never from a workspace, trusted or not (`scope: application` in VS Code). */
+const isUserOnly = (key: string) => key === 'hooks.enabled' || key === 'approvals' || key.startsWith('approvals.') || key === 'autoMode' || key.startsWith('autoMode.');
 
 export function loadSettings(workspaceRoot?: string): void {
   for (const k of Object.keys(settings)) {
     delete settings[k];
   }
   ignoredWorkspaceSettings.length = 0;
-  const fromVsCode = (file: string, untrusted: boolean) => {
+  const fromVsCode = (file: string, workspace: boolean) => {
     const flat: Record<string, unknown> = {};
     flatten(readJsonc(file), flat);
     for (const [k, v] of Object.entries(flat)) {
       if (k.startsWith('localpilot.')) {
         const key = k.slice('localpilot.'.length);
-        if (untrusted && !trustWorkspace && isSensitive(key)) {
+        if (workspace && isUserOnly(key)) {
+          continue;
+        }
+        if (workspace && !trustWorkspace && isSensitive(key)) {
           ignoredWorkspaceSettings.push(key);
           continue;
         }
@@ -368,7 +395,7 @@ export function loadSettings(workspaceRoot?: string): void {
       }
     }
   };
-  fromVsCode(USER_SETTINGS_PATH, false);
+  fromVsCode(userSettingsPath(), false);
   if (workspaceRoot) {
     fromVsCode(path.join(workspaceRoot, '.vscode', 'settings.json'), true);
   }
@@ -451,6 +478,11 @@ export function setAutoApprove(v: boolean): void {
 export function isAutoApprove(): boolean {
   return autoApprove;
 }
+/** Where prompts and pickers are written: stderr in --print / piped runs, so stdout carries the answer only. */
+let promptOut: NodeJS.WritableStream = process.stdout;
+export function setPromptOutput(s: NodeJS.WritableStream): void {
+  promptOut = s;
+}
 /** Terminal prompts run one at a time, in order: parallel tool calls and subagents queue instead of sharing a line. */
 let promptChain: Promise<unknown> = Promise.resolve();
 export function withPromptLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -466,7 +498,7 @@ export async function ask(question: string, signal?: AbortSignal): Promise<strin
   // One-shot runs have no REPL interface: a temporary one per prompt (closed after, so the terminal is back in
   // cooked mode and Ctrl+C / Ctrl+Z reach the run). Callers hold withPromptLock, so these never overlap.
   const own = !rl;
-  const r = rl ?? readline.createInterface({ input: process.stdin, output: process.stdout });
+  const r = rl ?? readline.createInterface({ input: process.stdin, output: promptOut });
   if (own) {
     // Ctrl+C at the prompt stops the run (the one-shot SIGINT handler) instead of being swallowed by readline.
     r.on('SIGINT', () => {
@@ -576,7 +608,8 @@ export const workspace = {
     return workspaceRoot ? [{ uri: Uri.file(workspaceRoot), name: path.basename(workspaceRoot), index: 0 }] : undefined;
   },
   get textDocuments(): TextDocument[] {
-    return [...docs.values()];
+    // Only unsaved documents: clean ones may be stale, so callers read the disk for those.
+    return [...docs.values()].filter((d) => d.isDirty);
   },
   asRelativePath(p: string | Uri): string {
     const fp = typeof p === 'string' ? p : p.fsPath;
@@ -590,7 +623,10 @@ export const workspace = {
         return (v === undefined ? def : v) as T;
       },
       inspect<T>(key: string) {
-        const v = settings[prefix + key] as T | undefined;
+        // Only what is saved in ~/.localpilot/config.json counts as the user's value; -m and VS Code's settings are not ours to clear.
+        const saved: Record<string, unknown> = {};
+        flatten(readJsonc(CLI_SETTINGS_PATH), saved);
+        const v = (saved[prefix + key] ?? saved[`localpilot.${prefix}${key}`]) as T | undefined;
         return { key, globalValue: v, defaultValue: undefined as T | undefined, workspaceValue: undefined as T | undefined, workspaceFolderValue: undefined as T | undefined };
       },
       async update(key: string, value: unknown): Promise<void> {
@@ -599,6 +635,7 @@ export const workspace = {
         assertWritable(CLI_SETTINGS_PATH);
         if (value === undefined) {
           delete cfg[prefix + key];
+          delete cfg[`localpilot.${prefix}${key}`];
         } else {
           cfg[prefix + key] = value;
         }
@@ -624,6 +661,10 @@ export const workspace = {
       return cached;
     }
     const text = await fsp.readFile(uri.fsPath, 'utf8'); // throws for missing files, like the editor
+    if (cached) {
+      cached._reset(text);
+      return cached;
+    }
     const doc = new TextDocument(uri, text);
     docs.set(uri.fsPath, doc);
     return doc;
@@ -669,7 +710,14 @@ export const workspace = {
     },
     async readDirectory(uri: Uri): Promise<[string, FileType][]> {
       const entries = await fsp.readdir(uri.fsPath, { withFileTypes: true });
-      return entries.map((e) => [e.name, e.isDirectory() ? FileType.Directory : e.isSymbolicLink() ? FileType.SymbolicLink : FileType.File]);
+      // Like VS Code: a symlink reports its target's type plus SymbolicLink, and Unknown when the link is broken.
+      return Promise.all(entries.map(async (e): Promise<[string, FileType]> => {
+        if (!e.isSymbolicLink()) {
+          return [e.name, e.isDirectory() ? FileType.Directory : e.isFile() ? FileType.File : FileType.Unknown];
+        }
+        const st = await fsp.stat(path.join(uri.fsPath, e.name)).catch(() => undefined);
+        return [e.name, st ? (st.isDirectory() ? FileType.Directory : st.isFile() ? FileType.File : FileType.Unknown) | FileType.SymbolicLink : FileType.Unknown];
+      }));
     },
     async stat(uri: Uri): Promise<{ type: FileType; size: number; mtime: number; ctime: number }> {
       const s = await fsp.stat(uri.fsPath);
@@ -744,7 +792,7 @@ function writeLog(level: number, name: string, m: string): void {
 async function pick(icon: string, msg: string, items: unknown[]): Promise<string | undefined> {
   const labels = items.filter((i) => typeof i === 'string') as string[];
   if (!labels.length) {
-    process.stdout.write(`${icon} ${msg}\n`);
+    promptOut.write(`${icon} ${msg}\n`);
     return undefined;
   }
   if (autoApprove) {
@@ -794,15 +842,19 @@ export const window = {
     const a = await withPromptLock(() => ask(`\x1b[33m?\x1b[0m ${opts?.title ? `${opts.title}: ` : ''}${opts?.prompt ?? ''} `));
     return a === undefined ? undefined : a || opts?.value;
   },
-  async showQuickPick(items: (string | { label: string })[] | Promise<(string | { label: string })[]>, opts?: { title?: string; placeHolder?: string }): Promise<any> {
+  async showQuickPick(items: (string | { label: string })[] | Promise<(string | { label: string })[]>, opts?: { title?: string; placeHolder?: string; canPickMany?: boolean }): Promise<any> {
     const list = await items;
     const labels = list.map((i) => (typeof i === 'string' ? i : i.label).replace(/\$\([^)]*\)\s*/g, ''));
     const a = await withPromptLock(() => {
-      process.stdout.write(`\x1b[33m?\x1b[0m ${opts?.title ?? opts?.placeHolder ?? 'Choose'}\n${labels.map((l, i) => `  ${i + 1}. ${l}`).join('\n')}\n`);
-      return ask('  > ');
+      promptOut.write(`\x1b[33m?\x1b[0m ${opts?.title ?? opts?.placeHolder ?? 'Choose'}\n${labels.map((l, i) => `  ${i + 1}. ${l}`).join('\n')}\n`);
+      return ask(opts?.canPickMany ? '  numbers separated by commas > ' : '  > ');
     });
     if (a === undefined || !a.trim()) {
       return undefined;
+    }
+    if (opts?.canPickMany) {
+      const picked = [...new Set(a.split(',').map((x) => Number(x.trim()) - 1))].filter((k) => Number.isInteger(k) && k >= 0 && k < list.length);
+      return picked.length ? picked.map((k) => list[k]) : undefined;
     }
     const n = Number(a);
     const idx = Number.isInteger(n) && n >= 1 && n <= list.length ? n - 1 : labels.findIndex((l) => l.toLowerCase().includes(a.trim().toLowerCase()));
@@ -817,9 +869,9 @@ export const window = {
       sendText(text: string) {
         const cwd = typeof opts === 'object' && opts.cwd ? (typeof opts.cwd === 'string' ? opts.cwd : opts.cwd.fsPath) : workspaceRoot;
         const sh = shellInvocation(text, { login: true });
-        const child = cp.spawn(sh.file, sh.args, { cwd, detached: true, stdio: 'ignore', windowsVerbatimArguments: sh.windowsVerbatimArguments });
+        const child = cp.spawn(sh.file, sh.args, { cwd, detached: true, stdio: 'ignore', windowsVerbatimArguments: sh.windowsVerbatimArguments, windowsHide: true });
         child.unref();
-        process.stdout.write(`\x1b[2m↗ started in background (pid ${child.pid}): ${text}\x1b[0m\n`);
+        promptOut.write(`\x1b[2m↗ started in background (pid ${child.pid}): ${text}\x1b[0m\n`);
       },
       dispose() {},
     };

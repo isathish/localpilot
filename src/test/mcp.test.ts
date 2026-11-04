@@ -3,7 +3,8 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { McpManager } from '../mcp/mcpManager';
+import { McpClient, McpManager } from '../mcp/mcpManager';
+import { expandRefs, StdioTransport } from '../mcp/transports';
 import { ToolRegistry } from '../tools/registry';
 
 /** A complete, tiny MCP server (stdio, JSON-RPC) exposing one `echo` tool — written to disk and run with node. */
@@ -82,6 +83,59 @@ suite('LocalPilot MCP client', () => {
     }
   });
 
+  test('Streamable HTTP starts a new session and retries when the server forgets the old one', async function () {
+    this.timeout(15_000);
+    let inits = 0;
+    let rejected = false;
+    const fetchImpl = (async (_url: string, init: { method?: string; headers?: Record<string, string>; body?: string }) => {
+      if (init.method !== 'POST') {
+        return new Response(null, { status: 204 });
+      }
+      const msg = JSON.parse(init.body ?? '{}') as { id?: number; method?: string };
+      const sid = init.headers?.['mcp-session-id'];
+      const json = (result: unknown, headers: Record<string, string> = {}) =>
+        new Response(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
+      if (msg.method === 'initialize') {
+        inits++;
+        return json({ protocolVersion: '2025-06-18', serverInfo: { name: 'fake', version: '1' } }, { 'mcp-session-id': `s${inits}` });
+      }
+      if (msg.id === undefined) {
+        return new Response(null, { status: 202 });
+      }
+      if (msg.method === 'tools/list') {
+        return json({ tools: [{ name: 'echo' }] });
+      }
+      if (msg.method === 'tools/call') {
+        if (sid === 's1' && !rejected) {
+          rejected = true;
+          return new Response('session not found', { status: 404 });
+        }
+        return json({ content: [{ type: 'text', text: `ok ${sid}` }] });
+      }
+      return json({});
+    }) as unknown as typeof fetch;
+    const stub = { info() {}, warn() {}, debug() {}, error() {} } as unknown as vscode.LogOutputChannel;
+    const client = new McpClient('fake', { url: 'http://127.0.0.1:1/mcp', type: 'http' }, stub, '0.0.0-test', fetchImpl);
+    try {
+      await client.start();
+      const res = await client.callTool('echo', {});
+      assert.strictEqual(res.text, 'ok s2');
+      assert.strictEqual(inits, 2, 'the expired session triggers exactly one new initialize');
+    } finally {
+      client.dispose();
+    }
+  });
+
+  test('expandRefs expands Claude-style ${VAR} and ${VAR:-default}', () => {
+    process.env.LP_TEST_X = 'abc';
+    try {
+      assert.strictEqual(expandRefs('Bearer ${LP_TEST_X}', (r) => r), 'Bearer abc');
+      assert.strictEqual(expandRefs('${LP_MISSING:-def}', (r) => r), 'def');
+    } finally {
+      delete process.env.LP_TEST_X;
+    }
+  });
+
   test('a server that cannot be launched fails fast and reports the error in status', async function () {
     this.timeout(15_000);
     const mcp = new McpManager(new ToolRegistry(), log, '0.0.0-test');
@@ -97,6 +151,19 @@ suite('LocalPilot MCP client', () => {
       assert.match(st[0].error ?? '', /cannot start|ENOENT|not found|exited/i);
     } finally {
       mcp.dispose();
+    }
+  });
+
+  test('stdio transport keeps multi-byte UTF-8 intact across chunk boundaries', async function () {
+    this.timeout(15_000);
+    const t = new StdioTransport({ command: process.execPath, args: ['-e', "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:1,result:{t:'あ'.repeat(40000)}})+'\\n')"] }, undefined, () => undefined);
+    try {
+      const msg = await new Promise<unknown>((resolve, reject) => {
+        t.start(resolve, reject).catch(reject);
+      });
+      assert.strictEqual((msg as { result: { t: string } }).result.t, 'あ'.repeat(40000));
+    } finally {
+      t.close();
     }
   });
 });

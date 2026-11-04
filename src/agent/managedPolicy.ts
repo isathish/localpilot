@@ -24,7 +24,7 @@ export interface ManagedPolicy {
   permissions: { deny: string[]; ask: string[]; allow: string[] };
   /** Floor per approval kind: `ask` = never auto-approved, `never` = always refused. */
   approvals: Partial<Record<ApprovalKind, 'ask' | 'never'>>;
-  /** Forbid `permissions.defaultMode` bypassPermissions/acceptEdits/dontAsk and Auto mode (the model approving for you). */
+  /** Forbid `permissions.defaultMode` bypassPermissions/acceptEdits and Auto mode (the model approving for you). */
   disableBypassPermissions: boolean;
   /** false: providers outside this machine and the private network are not loaded. */
   allowCloudProviders: boolean;

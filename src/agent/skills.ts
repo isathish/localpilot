@@ -192,7 +192,8 @@ export class SkillManager implements vscode.Disposable {
       return;
     }
     for (const [name, type] of entries) {
-      if (type !== vscode.FileType.Directory) {
+      // Bit tests: a symlinked folder is Directory | SymbolicLink.
+      if ((type & vscode.FileType.Directory) === 0) {
         continue;
       }
       const skillPath = path.join(dir, name, 'SKILL.md');
@@ -225,7 +226,7 @@ export class SkillManager implements vscode.Disposable {
       return;
     }
     for (const [file, type] of entries) {
-      if (type !== vscode.FileType.File || !file.endsWith('.md')) {
+      if ((type & vscode.FileType.File) === 0 || !file.endsWith('.md')) {
         continue;
       }
       try {

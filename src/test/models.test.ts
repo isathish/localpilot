@@ -7,13 +7,16 @@ import { catalogForSystem, lookupCatalog, matchesCatalog, MODEL_CATALOG, modelFo
 import { ModelManager, ollamaInstallCommand } from '../providers/modelManager';
 import { imageMime } from '../providers/imageMime';
 import { OpenAICompatProvider } from '../providers/openaiCompat';
+import { AnthropicProvider } from '../providers/anthropic';
 import { isSaturated, pickAlternative, pickForRole, preferResident, ProviderRegistry, scoreForRole } from '../providers/registry';
 import { briefDescription } from '../agent/skills';
-import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB } from '../providers/system';
+import { buildProfile, estimateModelGb, fits, overrideSystemProfile, parameterSizeB, windowsGpu } from '../providers/system';
 import type { LocalPilotApi } from '../extension';
 import { ModelInfo, StreamEvent } from '../types';
 import { classifyModelError } from '../agent/resilience';
 import { HttpError } from '../providers/http';
+import { pairToolCalls } from '../providers/toolPairing';
+import { endpointKey } from '../providers/discovery';
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
 interface FakeModel {
@@ -131,6 +134,13 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     await vscode.extensions.getExtension('localpilot.localpilot-agent')!.activate();
   });
 
+  test('auto-detect treats loopback aliases and /v1 suffixes as the same server', () => {
+    assert.strictEqual(endpointKey('http://127.0.0.1:11434'), endpointKey('http://localhost:11434/'));
+    assert.strictEqual(endpointKey('http://localhost:12434/engines/v1'), endpointKey('http://127.0.0.1:12434'));
+    assert.strictEqual(endpointKey('http://localhost:1234/v1'), endpointKey('http://localhost:1234'));
+    assert.notStrictEqual(endpointKey('http://localhost:11434'), endpointKey('http://localhost:11435'));
+  });
+
   test('system profile derives a model budget and tier from RAM / GPU', () => {
     const m3 = buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 0, gpu: 'Apple M3 Pro' });
     assert.strictEqual(m3.unifiedMemory, true);
@@ -149,6 +159,13 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(parameterSizeB('codestral'), undefined);
     assert.ok(estimateModelGb(7) > 4 && estimateModelGb(7) < 6);
     assert.ok(fits(laptop, 4.7) && !fits(laptop, 9));
+  });
+
+  test('Windows GPU probe ignores the saturated 4 GB WMI size and prefers the 64-bit registry size', () => {
+    assert.strictEqual(windowsGpu(JSON.stringify([{ Name: 'AMD Radeon', Bytes: 4293918720, Wmi: true }])).vramGb, 0);
+    assert.deepStrictEqual(windowsGpu(JSON.stringify([{ Name: 'AMD Radeon RX 7800', Bytes: 17163091968 }, { Name: 'AMD Radeon', Bytes: 4293918720, Wmi: true }])), { vramGb: 16, name: 'AMD Radeon RX 7800' });
+    assert.strictEqual(windowsGpu(JSON.stringify({ Name: 'Intel', Bytes: 2147483648, Wmi: true })).vramGb, 2);
+    assert.strictEqual(windowsGpu('not json').vramGb, 0);
   });
 
   test('starter plan picks the smallest useful set and grows with the machine', () => {
@@ -568,6 +585,32 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     }
   });
 
+  test('an empty Ollama listing (server still starting) does not count as every model uninstalled', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    const removed: string[] = [];
+    reg.onDidRemoveModels((ids) => removed.push(...ids));
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.ok((await reg.listModels(true)).length >= 2);
+      srv.deleted.push(...srv.models.map((m) => m.name));
+      assert.deepStrictEqual(await reg.listModels(true), []);
+      await new Promise((r) => setTimeout(r, 100));
+      assert.deepStrictEqual(removed, []);
+      assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('defaultModel'), 'fake/qwen2.5-coder:14b');
+    } finally {
+      reg.dispose();
+      srv.close();
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
+    }
+  });
+
   test('an Auto chat stays on Auto across turns (each turn is routed again) instead of pinning the first model', async function () {
     this.timeout(60_000);
     const srv = await fakeOllama();
@@ -667,6 +710,28 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       assert.match(ollamaInstallCommand('linux').command, /ollama\.com\/install\.sh/);
       assert.match(ollamaInstallCommand('win32').command, /winget/);
       assert.match(ollamaInstallCommand('darwin').command, /brew/);
+    } finally {
+      mm.dispose();
+      reg.dispose();
+      srv.close();
+      await cfg.update('providers', prevProviders, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('model manager waits for a duplicate pull instead of returning the running job', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prevProviders = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    const mm = new ModelManager(reg, log);
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      const [a, b] = await Promise.all([mm.pull('ollama', 'smollm2:1.7b', 'fake'), mm.pull('ollama', 'smollm2:1.7b', 'fake')]);
+      assert.strictEqual(a.status, 'done', a.error);
+      assert.strictEqual(b.status, 'done', b.error);
+      assert.deepStrictEqual(srv.pulled, ['smollm2:1.7b'], 'the model is downloaded once');
     } finally {
       mm.dispose();
       reg.dispose();
@@ -849,6 +914,35 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     }
   });
 
+  /** Serves `body` from a fake /v1/models and returns what an OpenAI-compatible provider lists from it. */
+  async function listFrom(body: unknown): Promise<ModelInfo[]> {
+    const srv = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    try {
+      return await new OpenAICompatProvider({ id: 'fake', type: 'openai', baseUrl: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1` }).listModels();
+    } finally {
+      srv.close();
+    }
+  }
+
+  test('local OpenAI-compatible servers mark Gemma 4 and Mistral Small 3.2 as able to see images', async () => {
+    const ids = ['ai/gemma4:e4b', 'google/gemma-4-e4b', 'mistral-small-3.2-24b-instruct-2506', 'qwen2.5-coder:7b'];
+    const vision = Object.fromEntries((await listFrom({ data: ids.map((id) => ({ id })) })).map((m) => [m.modelId, m.supportsVision]));
+    assert.deepStrictEqual(vision, { 'ai/gemma4:e4b': true, 'google/gemma-4-e4b': true, 'mistral-small-3.2-24b-instruct-2506': true, 'qwen2.5-coder:7b': false });
+  });
+
+  test('a /models that answers with a bare array (Together AI) lists its chat models only', async () => {
+    const models = await listFrom([
+      { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', type: 'chat' },
+      { id: 'black-forest-labs/FLUX.1-schnell', type: 'image' },
+      { id: 'BAAI/bge-base-en-v1.5', type: 'embedding' },
+    ]);
+    assert.deepStrictEqual(models.map((m) => m.modelId), ['meta-llama/Llama-3.3-70B-Instruct-Turbo']);
+  });
+
   /** Streams each chunk as an SSE event from a fake /chat/completions and returns what the provider made of it. */
   async function streamChunks(chunks: unknown[]): Promise<StreamEvent[]> {
     const srv = http.createServer((_req, res) => {
@@ -901,6 +995,180 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(classifyModelError(new Error('Insufficient credits on this account')), 'quota');
     assert.strictEqual(classifyModelError(new HttpError(529, '{"type":"overloaded_error","message":"Overloaded"}', 'http://x')), 'server');
     await assert.rejects(streamChunks([{ error: { message: 'upstream failed', type: 'server_error' } }]), (e: unknown) => e instanceof HttpError && e.status === 500 && classifyModelError(e) === 'server');
+    await assert.rejects(streamChunks([{ error: { code: 502, message: 'Provider disconnected' } }]), (e: unknown) => e instanceof HttpError && e.status === 502 && classifyModelError(e) === 'server');
+    await assert.rejects(streamChunks([{ error: { message: 'Upstream provider overloaded' } }]), (e: unknown) => e instanceof HttpError && e.status === 502);
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\nevent: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n');
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    try {
+      const p = new AnthropicProvider({ id: 'claude', type: 'anthropic', baseUrl: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, apiKey: 'k' });
+      await assert.rejects(
+        (async () => {
+          for await (const _ of p.chat({ model: 'claude-sonnet-4-5', messages: [{ role: 'user', content: 'hi' }] })) {
+            // drain
+          }
+        })(),
+        (e: unknown) => e instanceof HttpError && e.status === 529 && classifyModelError(e) === 'server'
+      );
+    } finally {
+      srv.close();
+    }
+  });
+
+  /** An OpenAI-style server: `models` on /v1/models (404 when undefined), a one-word answer on /v1/chat/completions. */
+  const openaiServer = (models?: string[]) =>
+    new Promise<{ url: string; close(): Promise<void> }>((resolve) => {
+      const srv = http.createServer((req, res) => {
+        if (req.url?.startsWith('/v1/models')) {
+          res.writeHead(models ? 200 : 404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(models ? { data: models.map((id) => ({ id, object: 'model' })) } : { error: 'not found' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+      });
+      srv.listen(0, '127.0.0.1', () =>
+        resolve({
+          url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`,
+          close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
+        })
+      );
+    });
+
+  test('configured models of a server without /models are listed and routed; a stopped server is not listed', async function () {
+    this.timeout(30_000);
+    const gw = await openaiServer();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    try {
+      await cfg.update('providers', [{ id: 'gw', type: 'openai', baseUrl: gw.url, models: ['my-model'] }], vscode.ConfigurationTarget.Global);
+      assert.ok((await reg.listModels(true)).some((m) => m.id === 'gw/my-model'), 'listed from the configuration');
+      const route = await reg.route({ modelRef: 'gw/my-model' });
+      assert.strictEqual(route.model.id, 'gw/my-model');
+      assert.ok(!route.fallback && !route.reason, String(route.reason));
+      await gw.close();
+      assert.ok(!(await reg.listModels(true)).some((m) => m.providerId === 'gw'), 'a stopped server is not reported as up');
+    } finally {
+      reg.dispose();
+      await gw.close().catch(() => undefined);
+      await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('a provider that misses one check is replaced for that turn only, not for good', async function () {
+    this.timeout(30_000);
+    const [a, b] = await Promise.all([openaiServer(['model-a']), openaiServer(['model-b'])]);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    try {
+      await cfg.update('providers', [{ id: 'A', type: 'openai', baseUrl: a.url }, { id: 'B', type: 'openai', baseUrl: b.url }], vscode.ConfigurationTarget.Global);
+      assert.deepStrictEqual((await reg.listModels(true)).map((m) => m.id).sort(), ['A/model-a', 'B/model-b']);
+      await a.close();
+      await reg.listModels(true);
+      const route = await reg.route({ modelRef: 'A/model-a' });
+      assert.strictEqual(route.model.id, 'B/model-b');
+      assert.ok(route.fallback && route.unavailable, JSON.stringify({ fallback: route.fallback, unavailable: route.unavailable }));
+      assert.match(route.reason ?? '', /not answering/);
+    } finally {
+      reg.dispose();
+      await a.close().catch(() => undefined);
+      await b.close();
+      await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  /** A fake /chat/completions that records each request body; `reject` answers a body with a 400 and that message. */
+  async function recordingServer(reject?: (body: Record<string, unknown>) => string | undefined) {
+    const bodies: Record<string, unknown>[] = [];
+    const srv = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        bodies.push(body);
+        const err = reject?.(body);
+        if (err) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: err } }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    return { bodies, url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close() };
+  }
+
+  const drain = async (it: AsyncIterable<StreamEvent>) => {
+    for await (const _ of it) {
+      // consume
+    }
+  };
+
+  test('Mistral models get 9-character alphanumeric tool-call ids that still pair up', async () => {
+    const srv = await recordingServer();
+    try {
+      const p = new OpenAICompatProvider({ id: 'fake', type: 'openai', baseUrl: srv.url });
+      await drain(
+        p.chat({
+          model: 'mistral-large-latest',
+          messages: [
+            { role: 'user', content: 'go' },
+            { role: 'assistant', content: '', toolCalls: [{ id: 'call_abc123def456gh', name: 'read_file', arguments: '{}' }] },
+            { role: 'tool', toolCallId: 'call_abc123def456gh', content: 'a' },
+            { role: 'assistant', content: '', toolCalls: [{ id: 'toolu_01XYZ', name: 'list_files', arguments: '{}' }] },
+            { role: 'tool', toolCallId: 'toolu_01XYZ', content: 'b' },
+          ],
+        })
+      );
+      const msgs = srv.bodies[0].messages as { role: string; tool_calls?: { id: string }[]; tool_call_id?: string }[];
+      const calls = msgs.flatMap((m) => m.tool_calls?.map((t) => t.id) ?? []);
+      const results = msgs.filter((m) => m.role === 'tool').map((m) => m.tool_call_id);
+      assert.strictEqual(calls.length, 2);
+      for (const id of [...calls, ...results]) {
+        assert.match(String(id), /^[a-zA-Z0-9]{9}$/);
+      }
+      assert.deepStrictEqual(results, calls);
+      assert.notStrictEqual(calls[0], calls[1]);
+    } finally {
+      srv.close();
+    }
+  });
+
+  test('think:false sends reasoning_effort none to cloud servers, dropped once if rejected without losing real levels', async () => {
+    const srv = await recordingServer((b) => (b.reasoning_effort === 'none' ? 'Unsupported value for reasoning_effort' : undefined));
+    try {
+      const p = new OpenAICompatProvider({ id: 'fake', type: 'openai', baseUrl: srv.url, cloud: true });
+      await drain(p.chat({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }], think: false }));
+      assert.strictEqual(srv.bodies[0].reasoning_effort, 'none');
+      assert.strictEqual(srv.bodies.length, 2);
+      assert.strictEqual(srv.bodies[1].reasoning_effort, undefined);
+      await drain(p.chat({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }], think: 'high' }));
+      assert.strictEqual(srv.bodies[2].reasoning_effort, 'high');
+    } finally {
+      srv.close();
+    }
+  });
+
+  test('pairToolCalls turns unanswered tool calls back into text and leaves paired history alone', () => {
+    const text = pairToolCalls([
+      { role: 'user', content: 'read a.ts' },
+      { role: 'assistant', content: 'Reading.', toolCalls: [{ id: 'call_x', name: 'read_file', arguments: '{"path":"a.ts"}' }] },
+      { role: 'user', content: '<tool_result name="read_file">…</tool_result>' },
+    ]);
+    assert.ok(!text.some((m) => m.toolCalls), JSON.stringify(text));
+    assert.match(text[1].content, /<tool_call>\{"name":"read_file","arguments":\{"path":"a\.ts"\}\}<\/tool_call>/);
+    const native = [
+      { role: 'user' as const, content: 'read a.ts' },
+      { role: 'assistant' as const, content: '', toolCalls: [{ id: 'call_y', name: 'read_file', arguments: '{}' }] },
+      { role: 'tool' as const, toolCallId: 'call_y', content: 'x' },
+    ];
+    assert.deepStrictEqual(pairToolCalls(native), native);
   });
 
   test('imageMime recognises PNG, JPEG, GIF and WebP data', () => {

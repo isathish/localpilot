@@ -215,39 +215,67 @@ export const editFileTool: Tool = {
     }
     oldText = eol(oldText);
     newText = eol(newText);
+    const baseNew = newText;
+    // Finds old_text in `t` (exactly once, else whitespace-insensitively); a string is the error to report.
+    const locate = (t: string): { start: number; end: number; replaced: string; newText: string; fuzzy: boolean } | string => {
+      const first = t.indexOf(oldText);
+      if (first < 0) {
+        // Try a whitespace-insensitive match to tolerate indentation drift from the model.
+        const loose = fuzzyFind(t, oldText);
+        if (!loose) {
+          return `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`;
+        }
+        // The match starts after the line's indentation; replace from the line start and give new_text the file's indentation.
+        const lineStart = t.lastIndexOf('\n', loose.start - 1) + 1;
+        const start = /^[ \t]*$/.test(t.slice(lineStart, loose.start)) ? lineStart : loose.start;
+        const replaced = t.slice(start, loose.end);
+        return { start, end: loose.end, replaced, newText: start === lineStart ? eol(reindent(lf(oldText), lf(replaced), lf(baseNew))) : baseNew, fuzzy: true };
+      }
+      if (t.indexOf(oldText, first + 1) >= 0) {
+        return 'old_text matches more than once; include more surrounding context to make it unique.';
+      }
+      return { start: first, end: first + oldText.length, replaced: oldText, newText: baseNew, fuzzy: false };
+    };
     let replaced = oldText;
     let range: vscode.Range;
+    let expected = '';
     if (!oldText) {
       range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
     } else {
-      const first = text.indexOf(oldText);
-      if (first < 0) {
-        // Try a whitespace-insensitive match to tolerate indentation drift from the model.
-        const loose = fuzzyFind(text, oldText);
-        if (!loose) {
-          return { content: `old_text not found in ${displayPath(uri, ctx)}. Re-read the file and retry with the exact text.`, isError: true };
-        }
-        // The match starts after the line's indentation; replace from the line start and give new_text the file's indentation.
-        const lineStart = text.lastIndexOf('\n', loose.start - 1) + 1;
-        const start = /^[ \t]*$/.test(text.slice(lineStart, loose.start)) ? lineStart : loose.start;
-        replaced = text.slice(start, loose.end);
-        if (start === lineStart) {
-          newText = eol(reindent(lf(oldText), lf(replaced), lf(newText)));
-        }
-        note = ' (matched ignoring whitespace; indentation adapted to the file — re-read and check)';
-        range = new vscode.Range(doc.positionAt(start), doc.positionAt(loose.end));
-      } else {
-        if (text.indexOf(oldText, first + 1) >= 0) {
-          return { content: 'old_text matches more than once; include more surrounding context to make it unique.', isError: true };
-        }
-        range = new vscode.Range(doc.positionAt(first), doc.positionAt(first + oldText.length));
+      const m = locate(text);
+      if (typeof m === 'string') {
+        return { content: m, isError: true };
       }
+      replaced = m.replaced;
+      newText = m.newText;
+      if (m.fuzzy) {
+        note = ' (matched ignoring whitespace; indentation adapted to the file — re-read and check)';
+      }
+      range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
+      expected = doc.getText(range);
     }
     const ok = await ctx.requestApproval(`Edit ${displayPath(uri, ctx)}`, diffPreview(lf(replaced), lf(newText)), 'write');
     if (!ok) {
       return { content: 'User declined the edit.', isError: true };
     }
     await ctx.trackChange(uri.fsPath);
+    // The file may have changed while the approval prompt was open: never apply a stale range. Re-opening gets the
+    // live document in the editor and a fresh read from disk in the CLI.
+    try {
+      doc = await vscode.workspace.openTextDocument(uri);
+    } catch {
+      return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+    }
+    if (!oldText) {
+      range = new vscode.Range(doc.lineCount, 0, doc.lineCount, 0);
+    } else if (doc.getText(range) !== expected) {
+      const m = locate(doc.getText());
+      if (typeof m === 'string' || m.replaced !== replaced) {
+        return { content: 'The file changed while waiting for approval — re-read it and retry.', isError: true };
+      }
+      newText = m.newText;
+      range = new vscode.Range(doc.positionAt(m.start), doc.positionAt(m.end));
+    }
     const edit = new vscode.WorkspaceEdit();
     edit.replace(uri, range, oldText ? newText : `${crlf ? '\r\n' : '\n'}${newText}`);
     if (!(await vscode.workspace.applyEdit(edit))) {

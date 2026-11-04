@@ -21,7 +21,7 @@ permalink: /docs/context/
 | `@editors` | The list of open editors |
 | `@terminal` | The last command and output of the active terminal (VS Code only, not the CLI) |
 
-Type `@` to open the mention picker. Use <kbd>↑</kbd> / <kbd>↓</kbd> to move and <kbd>Tab</kbd> to pick. <kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd> opens the **Add context** menu.
+Type `@` to open the mention picker. Use <kbd>↑</kbd> / <kbd>↓</kbd> to move and <kbd>Tab</kbd> to pick. <kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd> opens the **Add context** menu when focus is elsewhere in the chat; in the input it runs **Improve prompt**.
 
 ## The context meter
 

@@ -24,10 +24,16 @@ export interface PromptOptions {
   memory?: string;
   /** Whether memory_save is among this run's tools; when memory is off the prompt must not ask for notes. */
   canSaveMemory?: boolean;
+  /** Whether browser_screenshot / browser_inspect / open_browser are registered (the CLI has no open_browser). */
+  canScreenshot?: boolean;
+  canInspect?: boolean;
+  canOpenBrowser?: boolean;
   /** Files touched so far in this session. */
   workingSet?: string[];
   /** Current checklist, if any. */
   todos?: TodoItem[];
+  /** Unattended run in a throwaway folder (eval): the launching workspace's map and rules do not apply. */
+  unattended?: boolean;
 }
 
 export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
@@ -55,9 +61,9 @@ You have no file-editing tools in this mode — every change goes through a work
 - Form one hypothesis at a time, check it against the code (add a focused log or a small test if needed), then fix the root cause with the smallest change that makes the reproduction pass. Do not paper over symptoms.
 - Re-run the reproduction and the related tests; remove temporary logging. Add a regression test when the project has a test suite.
 - Report: what was wrong, why, what changed (files), and how it was verified.`);
-    parts.push(agentWorkingStyle(o.canSaveMemory !== false));
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false));
   } else if (o.mode === 'agent') {
-    parts.push(agentWorkingStyle(o.canSaveMemory !== false));
+    parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false));
   } else if (o.mode === 'plan') {
     parts.push(`# Plan mode
 You are in read-only planning mode. Investigate the codebase with read/search tools (analyze_workspace first for anything repository-wide, then fan out explore subagents per shard with run_parallel_subagents), then produce the plan BOTH as a manage_todos checklist AND as a short numbered explanation with the files to change and the rationale.
@@ -84,18 +90,18 @@ Answer the user's question directly. You may read files and search the workspace
 - Date: ${new Date().toISOString().slice(0, 10)}
 - Model context window: ~${o.model.contextWindow.toLocaleString()} tokens. Keep tool outputs focused (use line ranges, max_results) to conserve context.`);
 
-  const map = await o.workspace.projectMap();
+  const map = o.unattended ? undefined : await o.workspace.projectMap();
   if (map) {
     parts.push(`# Project map\n${map}\nUse list_dir / read_file for details; the user can attach the full file list with @workspace.`);
   }
 
-  const rules = await o.workspace.loadInstructions();
+  const rules = o.unattended ? undefined : await o.workspace.loadInstructions();
   if (rules) {
     parts.push(`# Project instructions\nThe repository provides these rules. Follow them; they override general defaults.\n${rules}`);
   }
 
   if (o.model.supportsVision) {
-    parts.push(`# Images\nThe user may attach screenshots or images, and browser_screenshot returns rendered web pages as images. Inspect them carefully (UI bugs, error dialogs, layout, diagrams) and reference specific visual details in your answer.`);
+    parts.push(`# Images\nThe user may attach screenshots or images${o.canScreenshot !== false ? ', and browser_screenshot returns rendered web pages as images' : ''}. Inspect them carefully (UI bugs, error dialogs, layout, diagrams) and reference specific visual details in your answer.`);
   }
 
   const skillsIdx = o.canLoadSkills === false ? '' : o.skills.skillsIndex();
@@ -183,7 +189,7 @@ export function buildTurnContext(o: Pick<PromptOptions, 'mode' | 'workspace' | '
 }
 
 /** The autonomous working style shared by Agent and Debug mode. */
-function agentWorkingStyle(canSaveMemory: boolean): string {
+function agentWorkingStyle(canSaveMemory: boolean, canInspect: boolean, canOpenBrowser: boolean): string {
   return `# Working style
 - Work autonomously to complete the task. Gather context with tools before editing; read a file before you modify it.
 - For any task with more than two steps: first call manage_todos with the full plan (all "pending"), then mark each item "in_progress" when you start it and "done" when verified. Keep the list current — the user watches it.
@@ -191,8 +197,7 @@ function agentWorkingStyle(canSaveMemory: boolean): string {
 - Whole-workspace analysis, audits or reviews: call analyze_workspace first (fast, no model call — layout, stacks, manifests and suggested shards), then fan out one explore/reviewer subagent per shard with run_parallel_subagents and merge their reports. Do not read a large repository file by file yourself.
 - Prefer small, precise edits (edit_file) over rewriting whole files. Keep changes minimal and idiomatic to the codebase.
 - After editing, verify: run get_diagnostics and relevant tests/builds via run_command when available.
-- For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports, re-inspect, and use open_browser to show the user.
-- When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
+${canInspect ? `- For web UI work, look at the result: start or reuse the dev server, then call browser_inspect on its URL — it returns a screenshot plus console errors, failed requests, performance and layout problems (and can click/type first to reproduce a flow). Fix what it reports${canOpenBrowser ? ', re-inspect, and use open_browser to show the user' : ' and re-inspect'}.\n` : ''}- When several independent lookups are needed, issue multiple tool calls in a single turn so they run in parallel. Identical read-only calls are cached within a turn — don't re-read unchanged files.
 - Work in visible phases: understand (read, search) → plan (manage_todos for anything with more than two steps) → change (edits) → verify (diagnostics, tests, a browser check for UI) → report. Do not skip verification because the edit looked right.
 - For large or separable subtasks, delegate to subagents with run_subagent / run_parallel_subagents (or checklist items via run_todos_parallel) and integrate their results. Give them everything they need: the goal, the files/symbols involved, constraints and what to return.
 ${canSaveMemory ? "- When you learn something durable about this project (build commands, conventions, gotchas, a library quirk found through research) or the user's preferences, save it with memory_save so future sessions start smarter. Never store secrets.\n" : ''}- Never fabricate file contents, command output or API behaviour. If unsure, check.

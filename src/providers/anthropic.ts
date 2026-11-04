@@ -2,6 +2,7 @@ import { ChatMessage, ChatRequestOptions, CompletionRequestOptions, LLMProvider,
 import { completeViaChat, isCloudProvider, knownContextWindow, resolveApiKey } from './cloud';
 import { getJson, HttpError, newId, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
+import { pairToolCalls } from './toolPairing';
 
 const API_VERSION = '2023-06-01';
 
@@ -92,25 +93,32 @@ export class AnthropicProvider implements LLMProvider {
     try {
       await getJson(`${this.baseUrl}/models?limit=1`, this.headers, withTimeout(4000, signal));
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      // A gateway without a model listing is up; its configured models still serve.
+      return e instanceof HttpError && !!this.explicitModels?.length;
     }
   }
 
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     const listed: AnthropicModel[] = [];
     let after: string | undefined;
-    for (let page = 0; page < 10; page++) {
-      const res = await getJson<{ data?: AnthropicModel[]; has_more?: boolean; last_id?: string }>(
-        `${this.baseUrl}/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`,
-        this.headers,
-        withTimeout(8000, signal)
-      );
-      listed.push(...(res.data ?? []));
-      if (!res.has_more || !res.last_id) {
-        break;
+    try {
+      for (let page = 0; page < 10; page++) {
+        const res = await getJson<{ data?: AnthropicModel[]; has_more?: boolean; last_id?: string }>(
+          `${this.baseUrl}/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`,
+          this.headers,
+          withTimeout(8000, signal)
+        );
+        listed.push(...(res.data ?? []));
+        if (!res.has_more || !res.last_id) {
+          break;
+        }
+        after = res.last_id;
       }
-      after = res.last_id;
+    } catch (e) {
+      if (!(e instanceof HttpError) || !this.explicitModels?.length) {
+        throw e;
+      }
     }
     for (const id of this.explicitModels ?? []) {
       if (!listed.some((m) => m.id === id)) {
@@ -247,6 +255,8 @@ export class AnthropicProvider implements LLMProvider {
         effort('low');
       } else if (opts.think !== undefined) {
         body.thinking = this.unsupported.has('display') ? { type: 'adaptive' } : { type: 'adaptive', display: 'summarized' };
+        // Thinking shares max_tokens with the answer: a small output limit would leave little room for the reply.
+        body.max_tokens = Math.max(Number(body.max_tokens), 16000);
         if (level) {
           effort(level);
         }
@@ -359,7 +369,7 @@ export function toAnthropicMessages(input: ChatMessage[], thinkingFor?: (callId:
       out.push({ role, content: blocks });
     }
   };
-  for (const m of input) {
+  for (const m of pairToolCalls(input)) {
     if (m.role === 'system') {
       if (m.content.trim()) {
         system.push(m.content);

@@ -483,4 +483,16 @@ suite('Skill catalog', () => {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test('processes sharing the cache file keep each other\'s dismissals', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-catalog-merge-'));
+    const opts = { cacheFile: path.join(tmp, 'catalog.json'), repositories: () => [], fetchImpl: (async () => new Response('offline', { status: 503 })) as typeof fetch };
+    const a = new SkillCatalog(opts);
+    const b = new SkillCatalog(opts);
+    await a.dismiss('pdf-tools');
+    await b.dismiss('xlsx');
+    const saved = JSON.parse(await fs.readFile(opts.cacheFile, 'utf8')) as { dismissed: string[] };
+    assert.deepStrictEqual([...saved.dismissed].sort(), ['pdf-tools', 'xlsx']);
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
 });

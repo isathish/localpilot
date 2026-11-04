@@ -18,7 +18,7 @@ import { ProjectSettingsManager } from './agent/settings';
 import { HookRunner } from './agent/hooks';
 import { PluginManager } from './agent/plugins';
 import { CommandManager } from './agent/commands';
-import { editableProviders, getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
+import { configTarget, editableProviders, getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
 import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
@@ -125,6 +125,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const loadSecrets = () => void providerSecrets.load().catch((e) => log.warn(`provider keys: ${e instanceof Error ? e.message : String(e)}`));
   context.subscriptions.push(providerSecrets, onConfigChange(loadSecrets));
   loadSecrets();
+  // The CLI reads this snapshot of the user-level settings, so it follows the active profile and VS Code flavour.
+  const writeCliSettings = () => {
+    const props = (context.extension.packageJSON as { contributes?: { configuration?: { properties?: Record<string, unknown> } } }).contributes?.configuration?.properties ?? {};
+    const conf = vscode.workspace.getConfiguration();
+    const snapshot: Record<string, unknown> = {};
+    for (const key of Object.keys(props)) {
+      const value = conf.inspect(key)?.globalValue;
+      if (value !== undefined) {
+        snapshot[key] = value;
+      }
+    }
+    void Promise.resolve(vscode.workspace.fs.writeFile(vscode.Uri.joinPath(context.globalStorageUri, 'cli-settings.json'), Buffer.from(JSON.stringify(snapshot, null, 2))))
+      .catch((e) => log.warn(`CLI settings snapshot: ${e instanceof Error ? e.message : String(e)}`));
+  };
+  context.subscriptions.push(onConfigChange(writeCliSettings));
+  writeCliSettings();
   const tools = new ToolRegistry();
   const skills = new SkillManager(log, path.join(context.extensionPath, 'skills'));
   const workspace = new WorkspaceContext(log);
@@ -137,7 +153,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
   const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
-  const worktrees = new WorktreeManager(getConfig().worktrees.location, log);
+  const worktrees = new WorktreeManager(() => getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
   // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
@@ -233,6 +249,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
           if (job.status !== 'done') {
             throw new Error(job.error ?? 'did not start');
           }
+          providers.invalidate();
           void providers.listModels(true).catch(() => undefined);
           return true;
         },
@@ -307,7 +324,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const markdownViewer = new MarkdownViewer(context, log);
   controller.markdownViewer = markdownViewer;
   context.subscriptions.push(markdownViewer);
-  tools.register(createShowMarkdownTool(markdownViewer, (p) => (path.isAbsolute(p) ? vscode.Uri.file(p) : workspace.root ? vscode.Uri.joinPath(vscode.Uri.file(workspace.root), p) : undefined)));
+  tools.register(createShowMarkdownTool(markdownViewer));
 
   await controller.loaded;
   // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start —
@@ -326,7 +343,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       refresh('settings', projectSettings.reload());
       refresh('skills', skills.refresh());
       refresh('commands', commands.refresh());
-      refresh('mcp', mcp.reload());
+      refresh('mcp', mcp.reloadIfChanged());
     }),
     projectSettings.onDidChange(() => refresh('plugins', plugins.refresh()))
   );
@@ -393,7 +410,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const cfg = getConfig();
     const models = await providers.listModels().catch(() => []);
     // Show what will actually answer: the router substitutes an offline/disabled default with the best available model.
-    const routed = models.length ? await providers.route({}).catch(() => undefined) : undefined;
+    const routed = models.length ? await providers.route({ start: false }).catch(() => undefined) : undefined;
     const current = routed?.model.id ?? cfg.defaultModel ?? 'no model';
     const pulling = modelManager.activeJobs.find((j) => j.kind === 'pull');
     const running = controller.runningSessionIds.length;
@@ -501,7 +518,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const warmCompletion = () => {
     const cfg = getConfig();
     if (cfg.inlineCompletion.enabled && cfg.prewarm) {
-      void providers.warm(undefined, 'completion').catch(() => undefined);
+      void providers.warm(undefined, 'completion', undefined, false).catch(() => undefined);
     }
   };
   void detection.then(warmCompletion);
@@ -549,7 +566,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
           progress.report({ message: `${job.kind === 'pull' ? `${job.model}: ` : job.kind === 'install-runtime' ? 'Ollama: ' : ''}${job.detail}${job.progress >= 0 ? ` (${Math.round(job.progress * 100)}%)` : ''}` });
         }
       });
-      token.onCancellationRequested(() => modelManager.activeJobs.forEach((j) => modelManager.cancel(j.id)));
+      token.onCancellationRequested(() => modelManager.activeJobs.filter((j) => j.kind === 'setup').forEach((j) => modelManager.cancel(j.id)));
       try {
         return await modelManager.autoSetup(opts);
       } finally {
@@ -965,10 +982,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
   });
   cmd('localpilot.toggleAutoMode', async () => {
-    const on = !getConfig().autoMode.enabled;
-    await vscode.workspace.getConfiguration('localpilot').update('autoMode.enabled', on, vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration('localpilot').update('autoMode.enabled', !getConfig().autoMode.enabled, configTarget('autoMode.enabled'));
     void vscode.window.showInformationMessage(
-      on
+      getConfig().autoMode.enabled
         ? 'Auto mode on: a local reviewer model approves safe actions; risky ones (pushes, sudo, rm -rf, secrets…) still ask you.'
         : 'Auto mode off: actions set to "ask" prompt you again.'
     );
@@ -1291,7 +1307,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return;
     }
     const id = target.id;
-    const ref = key.trim() ? await providerSecrets.store(id, key.trim()) : undefined;
+    const before = secretRefs(target.apiKey);
+    const ref = key.trim() ? (await providerSecrets.protect([{ ...target, apiKey: key.trim() }], scope === vscode.ConfigurationTarget.Global ? 'user' : 'workspace'))[0].apiKey : undefined;
     const next = list.map((p) => {
       if (p.id !== id) {
         return p;
@@ -1303,7 +1320,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return out;
     });
     await cfg.update('providers', next, scope);
-    await providerSecrets.prune();
+    await providerSecrets.prune(undefined, before);
     await providers.listModels(true).catch(() => []);
     vscode.window.setStatusBarMessage(`LocalPilot: API key for ${target.displayName || id} ${ref ? 'saved' : 'removed'}`, 2500);
   });
@@ -1317,8 +1334,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.toggleInlineCompletions', async () => {
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const cur = cfg.get<boolean>('inlineCompletion.enabled', false);
-    await cfg.update('inlineCompletion.enabled', !cur, vscode.ConfigurationTarget.Global);
-    vscode.window.setStatusBarMessage(`LocalPilot inline completions ${!cur ? 'enabled' : 'disabled'}`, 2500);
+    await cfg.update('inlineCompletion.enabled', !cur, configTarget('inlineCompletion.enabled'));
+    vscode.window.setStatusBarMessage(`LocalPilot inline completions ${getConfig().inlineCompletion.enabled ? 'enabled' : 'disabled'}`, 2500);
   });
   cmd('localpilot.createSkill', async (suggestion?: unknown) => {
     const s = suggestion as { slug?: string; topic?: string; count?: number; samples?: string[] } | undefined;

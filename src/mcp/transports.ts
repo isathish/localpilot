@@ -17,14 +17,22 @@ export interface Transport {
   send(m: JsonRpcMessage): Promise<void>;
   /** Told the negotiated protocol version after `initialize` (HTTP sends it as a header). */
   setProtocolVersion?(v: string): void;
+  /** Forgets the server-assigned session (HTTP), so the next `initialize` starts a new one. */
+  resetSession?(): void;
   close(): void;
+}
+
+/** Claude-style `${NAME}` / `${NAME:-default}` from the environment, then `${env:NAME}` / `${secret:NAME}` via `resolve`. */
+export function expandRefs(value: string, resolve: (raw: string) => string | undefined): string {
+  const claude = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_, name: string, def?: string) => process.env[name] ?? def ?? '');
+  return resolve(claude) ?? '';
 }
 
 /** `${env:NAME}` and `${secret:NAME}` (via `resolve`) inside header values, so tokens need not sit in settings.json. */
 export function expandHeaders(headers: Record<string, string> | undefined, resolve: (raw: string) => string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers ?? {})) {
-    const value = resolve(String(v));
+    const value = expandRefs(String(v), resolve);
     if (value) {
       out[k] = value;
     }
@@ -101,6 +109,11 @@ async function readStream(body: ReadableStream<Uint8Array>, onEvent: (e: { event
   }
 }
 
+/** Quotes one token for a Windows command line: wrapped in double quotes when it has whitespace or `"`. */
+export function winQuote(token: string): string {
+  return /[\s"]/.test(token) ? `"${token.replace(/"/g, '\\"')}"` : token;
+}
+
 export class StdioTransport implements Transport {
   readonly kind = 'stdio' as const;
   private child?: cp.ChildProcess;
@@ -111,7 +124,13 @@ export class StdioTransport implements Transport {
   async start(onMessage: (m: JsonRpcMessage) => void, onClose: (err: Error) => void): Promise<void> {
     // `shell: true` on Windows so `npx` / `.cmd` launchers resolve the same way they do in a terminal.
     // Its own process group (POSIX), so stopping it reaches the real server and not only a launcher such as npx.
-    this.child = cp.spawn(this.cfg.command!, this.cfg.args ?? [], { cwd: this.cfg.cwd ?? this.cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', detached: process.platform !== 'win32' });
+    const opts: cp.SpawnOptions = { cwd: this.cfg.cwd ?? this.cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'] };
+    // With shell: true Node joins args with spaces unquoted, so build the quoted command line ourselves.
+    this.child = process.platform === 'win32'
+      ? cp.spawn([this.cfg.command!, ...(this.cfg.args ?? [])].map(winQuote).join(' '), [], { ...opts, shell: true })
+      : cp.spawn(this.cfg.command!, this.cfg.args ?? [], { ...opts, shell: false, detached: true });
+    this.child.stdout!.setEncoding('utf8');
+    this.child.stderr!.setEncoding('utf8');
     const spawned = new Promise<void>((resolve, reject) => {
       this.child!.once('spawn', () => resolve());
       this.child!.once('error', (e) => reject(new Error(`cannot start "${this.cfg.command}": ${e.message}`)));
@@ -121,8 +140,8 @@ export class StdioTransport implements Transport {
     for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
       stream?.on('error', (e: Error) => this.debug(`pipe: ${e.message}`));
     }
-    this.child.stdout!.on('data', (d: Buffer) => {
-      this.buffer += d.toString();
+    this.child.stdout!.on('data', (d: string) => {
+      this.buffer += d;
       let idx: number;
       while ((idx = this.buffer.indexOf('\n')) >= 0) {
         const line = this.buffer.slice(0, idx).trim();
@@ -136,8 +155,8 @@ export class StdioTransport implements Transport {
         }
       }
     });
-    this.child.stderr!.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
+    this.child.stderr!.on('data', (d: string) => {
+      const line = d.trim();
       this.stderrTail = line.slice(-300);
       this.debug(line);
     });
@@ -185,6 +204,15 @@ export class StreamableHttpTransport implements Transport {
 
   setProtocolVersion(v: string): void {
     this.protocol = v;
+  }
+
+  get hasSession(): boolean {
+    return !!this.session;
+  }
+
+  resetSession(): void {
+    this.session = undefined;
+    this.protocol = undefined;
   }
 
   async send(m: JsonRpcMessage): Promise<void> {
@@ -249,30 +277,55 @@ export class SseTransport implements Transport {
   constructor(private readonly url: string, private readonly headers: Record<string, string>, private readonly fetchImpl: typeof fetch = fetch) {}
 
   async start(onMessage: (m: JsonRpcMessage) => void, onClose: (err: Error) => void): Promise<void> {
-    const res = await this.fetchImpl(this.url, { headers: { accept: 'text/event-stream', ...this.headers }, signal: this.ctl.signal });
-    if (!res.ok || !res.body) {
-      throw new HttpError(res.status, `SSE connection failed: ${res.status} ${res.statusText}`);
-    }
-    let gotEndpoint: () => void = () => undefined;
-    const ready = new Promise<void>((resolve, reject) => {
-      gotEndpoint = resolve;
-      setTimeout(() => reject(new Error('the SSE server sent no endpoint event within 15 s')), 15_000);
-    });
-    void readStream(res.body, (e) => {
-      if (e.event === 'endpoint') {
-        this.endpoint = new URL(e.data.trim(), this.url).toString();
-        gotEndpoint();
-      } else if (e.event === 'message') {
-        try {
-          dispatch(e.data, onMessage);
-        } catch {
-          /* malformed event */
-        }
+    // One deadline for the whole connect: response headers and the endpoint event.
+    const timer = setTimeout(() => this.ctl.abort(new Error('the SSE server did not answer within 15 s')), 15_000);
+    try {
+      const res = await this.fetchImpl(this.url, { headers: { accept: 'text/event-stream', ...this.headers }, signal: this.ctl.signal });
+      if (!res.ok || !res.body) {
+        throw new HttpError(res.status, `SSE connection failed: ${res.status} ${res.statusText}`);
       }
-    }, this.ctl.signal)
-      .then(() => !this.ctl.signal.aborted && onClose(new Error('the SSE stream closed')))
-      .catch((e) => !this.ctl.signal.aborted && onClose(e instanceof Error ? e : new Error(String(e))));
-    await ready;
+      let gotEndpoint: () => void = () => undefined;
+      let failed: (e: Error) => void = () => undefined;
+      const ready = new Promise<void>((resolve, reject) => {
+        gotEndpoint = resolve;
+        failed = reject;
+      });
+      const onAbort = () => failed(this.ctl.signal.reason instanceof Error ? this.ctl.signal.reason : new Error('the SSE connection was aborted'));
+      this.ctl.signal.addEventListener('abort', onAbort, { once: true });
+      void readStream(res.body, (e) => {
+        if (e.event === 'endpoint') {
+          this.endpoint = new URL(e.data.trim(), this.url).toString();
+          clearTimeout(timer);
+          gotEndpoint();
+        } else if (e.event === 'message') {
+          try {
+            dispatch(e.data, onMessage);
+          } catch {
+            /* malformed event */
+          }
+        }
+      }, this.ctl.signal)
+        .then(() => {
+          failed(new Error('the SSE stream closed before the endpoint event'));
+          if (!this.ctl.signal.aborted) {
+            onClose(new Error('the SSE stream closed'));
+          }
+        })
+        .catch((e) => {
+          const err = e instanceof Error ? e : new Error(String(e));
+          failed(err);
+          if (!this.ctl.signal.aborted) {
+            onClose(err);
+          }
+        });
+      try {
+        await ready;
+      } finally {
+        this.ctl.signal.removeEventListener('abort', onAbort);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async send(m: JsonRpcMessage): Promise<void> {

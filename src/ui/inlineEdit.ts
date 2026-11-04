@@ -10,7 +10,7 @@ import { ChatMessage } from '../types';
 export async function quickPrompt(
   providers: ProviderRegistry,
   messages: ChatMessage[],
-  opts: { modelRef?: string; signal?: AbortSignal; onDelta?: (t: string) => void; maxTokens?: number; temperature?: number } = {}
+  opts: { modelRef?: string; signal?: AbortSignal; onDelta?: (t: string) => void; onFinish?: (reason?: string) => void; maxTokens?: number; temperature?: number } = {}
 ): Promise<string> {
   const { provider, model } = await providers.resolve(opts.modelRef);
   const cfg = getConfig();
@@ -29,15 +29,43 @@ export async function quickPrompt(
     if (ev.type === 'text') {
       out += ev.text;
       opts.onDelta?.(ev.text);
+    } else if (ev.type === 'done') {
+      opts.onFinish?.(ev.finishReason);
     }
   }
   return out;
 }
 
-/** Extracts the first fenced code block, or the whole text if none. */
-export function extractCode(text: string): string {
-  const m = /```[\w+#.-]*\s*\n([\s\S]*?)\n?```/.exec(text);
-  return (m ? m[1] : text).replace(/\s+$/, '');
+/**
+ * Extracts the first fenced code block (nested fences with an info string stay inside it), or the
+ * whole text if there is no fence. Undefined when the block never closes, i.e. the reply was cut off.
+ */
+export function extractCode(text: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  const fence = /^\s*(`{3,}|~{3,})(.*)$/;
+  const start = lines.findIndex((l) => fence.test(l));
+  if (start < 0) {
+    return text.trim();
+  }
+  const open = fence.exec(lines[start])![1];
+  const stack = [{ ch: open[0], len: open.length }];
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = fence.exec(lines[i]);
+    if (!m) {
+      continue;
+    }
+    const info = m[2].trim();
+    const top = stack[stack.length - 1];
+    if (info) {
+      stack.push({ ch: m[1][0], len: m[1].length });
+    } else if (m[1][0] === top.ch && m[1].length >= top.len) {
+      stack.pop();
+      if (!stack.length) {
+        return lines.slice(start + 1, i).join('\n').replace(/\s+$/, '');
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -50,11 +78,14 @@ export async function inlineEdit(providers: ProviderRegistry, tracker: ChangeTra
     return;
   }
   const doc = ed.document;
-  const hasSel = !ed.selection.isEmpty;
+  const sel = ed.selection;
+  const hasSel = !sel.isEmpty;
+  // A full-line selection ends at column 0 of the next line; that line is not part of it.
+  const selEnd = hasSel && sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line - 1 : sel.end.line;
   // Without a selection, operate on a window around the cursor so the model has something to edit.
-  const range = hasSel
-    ? new vscode.Range(ed.selection.start.line, 0, ed.selection.end.line, doc.lineAt(ed.selection.end.line).text.length)
-    : new vscode.Range(Math.max(0, ed.selection.active.line - 15), 0, Math.min(doc.lineCount - 1, ed.selection.active.line + 15), doc.lineAt(Math.min(doc.lineCount - 1, ed.selection.active.line + 15)).text.length);
+  let range = hasSel
+    ? new vscode.Range(sel.start.line, 0, selEnd, doc.lineAt(selEnd).text.length)
+    : new vscode.Range(Math.max(0, sel.active.line - 15), 0, Math.min(doc.lineCount - 1, sel.active.line + 15), doc.lineAt(Math.min(doc.lineCount - 1, sel.active.line + 15)).text.length);
   const instruction = await vscode.window.showInputBox({
     title: hasSel ? `Edit selection (lines ${range.start.line + 1}–${range.end.line + 1})` : 'Edit code around cursor',
     prompt: 'Describe the change, e.g. "add error handling", "convert to async/await", "write a docstring"',
@@ -65,8 +96,10 @@ export async function inlineEdit(providers: ProviderRegistry, tracker: ChangeTra
     return;
   }
   const target = doc.getText(range);
+  const version = doc.version;
   const before = doc.getText(new vscode.Range(new vscode.Position(Math.max(0, range.start.line - 40), 0), range.start));
-  const after = doc.getText(new vscode.Range(range.end, new vscode.Position(Math.min(doc.lineCount - 1, range.end.line + 40), 0)));
+  const afterLine = Math.min(doc.lineCount - 1, range.end.line + 40);
+  const after = doc.getText(new vscode.Range(range.end, doc.lineAt(afterLine).range.end));
   const rules = await workspace.loadInstructions(4000);
   const messages: ChatMessage[] = [
     {
@@ -81,39 +114,94 @@ Return the replacement code in a single fenced code block and nothing else — n
     },
   ];
 
-  await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: editing…', cancellable: true }, async (progress, token) => {
+  // The progress covers generation only; applying and the Keep/Undo prompt happen after it closes.
+  const code = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: editing…', cancellable: true }, async (progress, token) => {
     const abort = new AbortController();
     const cancel = token.onCancellationRequested(() => abort.abort());
     let chars = 0;
+    let finish: string | undefined;
     try {
-      const raw = await quickPrompt(providers, messages, { signal: abort.signal, onDelta: (t) => { chars += t.length; progress.report({ message: `${chars} chars` }); } });
+      const raw = await quickPrompt(providers, messages, { signal: abort.signal, onDelta: (t) => { chars += t.length; progress.report({ message: `${chars} chars` }); }, onFinish: (r) => { finish = r; } });
       if (token.isCancellationRequested) {
-        return;
+        return undefined;
       }
-      const code = extractCode(raw);
-      if (!code.trim()) {
+      const out = extractCode(raw);
+      if (finish === 'length' || out === undefined) {
+        void vscode.window.showWarningMessage('The reply was cut off; select less or raise localpilot.maxOutputTokens.');
+        return undefined;
+      }
+      if (!out.trim()) {
         void vscode.window.showWarningMessage('LocalPilot returned no code.');
-        return;
+        return undefined;
       }
-      const sid = `inline_${Date.now().toString(36)}`;
-      await tracker.beforeChange(doc.uri.fsPath, sid);
-      await ed.edit((b) => b.replace(range, code));
-      const newEnd = doc.positionAt(doc.offsetAt(range.start) + code.length);
-      ed.selection = new vscode.Selection(range.start, newEnd);
-      const choice = await vscode.window.showInformationMessage(`Applied: ${instruction.slice(0, 60)}`, 'Keep', 'Undo');
-      if (choice === 'Undo') {
-        await tracker.undo(sid);
-      } else if (choice === 'Keep') {
-        tracker.keep(sid);
-      }
+      return out;
     } catch (e) {
       if (!token.isCancellationRequested) {
         void vscode.window.showErrorMessage(`LocalPilot inline edit failed: ${e instanceof Error ? e.message : String(e)}`);
       }
+      return undefined;
     } finally {
       cancel.dispose();
     }
   });
+  if (code === undefined) {
+    return;
+  }
+  if (doc.isClosed) {
+    void vscode.window.showWarningMessage('The document was closed while LocalPilot was editing; nothing was applied.');
+    return;
+  }
+  if (doc.version !== version && doc.getText(range) !== target) {
+    const text = doc.getText();
+    const idx = text.indexOf(target);
+    if (idx < 0 || text.indexOf(target, idx + 1) >= 0) {
+      void vscode.window.showWarningMessage('The code changed while LocalPilot was editing; nothing was applied.');
+      return;
+    }
+    range = new vscode.Range(doc.positionAt(idx), doc.positionAt(idx + target.length));
+  }
+  const isFile = doc.uri.scheme === 'file';
+  const sid = `inline_${Date.now().toString(36)}`;
+  let ok = false;
+  try {
+    if (isFile) {
+      await tracker.beforeChange(doc.uri.fsPath, sid);
+    }
+    const we = new vscode.WorkspaceEdit();
+    we.replace(doc.uri, range, code);
+    ok = await vscode.workspace.applyEdit(we);
+    if (!ok) {
+      void vscode.window.showErrorMessage('LocalPilot inline edit failed: the edit could not be applied.');
+    }
+  } catch (e) {
+    void vscode.window.showErrorMessage(`LocalPilot inline edit failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!ok) {
+    if (isFile) {
+      tracker.keep(sid);
+    }
+    return;
+  }
+  const inserted = new vscode.Range(range.start, doc.positionAt(doc.offsetAt(range.start) + code.length));
+  const active = vscode.window.activeTextEditor;
+  if (active?.document === doc) {
+    active.selection = new vscode.Selection(inserted.start, inserted.end);
+  }
+  const choice = await vscode.window.showInformationMessage(`Applied: ${instruction.slice(0, 60)}`, 'Keep', 'Undo');
+  if (choice === 'Undo') {
+    if (!doc.isClosed && doc.getText(inserted) === code) {
+      const back = new vscode.WorkspaceEdit();
+      back.replace(doc.uri, inserted, target);
+      await vscode.workspace.applyEdit(back);
+      if (isFile) {
+        tracker.keep(sid);
+      }
+    } else if (isFile) {
+      await tracker.undo(sid);
+    }
+  } else if (isFile) {
+    tracker.keep(sid);
+  }
 }
 
 /** Natural language → shell command, with Run / Insert / Copy choices. */
@@ -128,7 +216,7 @@ export async function terminalCommand(providers: ProviderRegistry, workspace: Wo
     { role: 'user', content: ask },
   ];
   const raw = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: generating command…' }, () => quickPrompt(providers, messages, { maxTokens: 300 }));
-  const command = extractCode(raw).split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).join(' && ').trim();
+  const command = (extractCode(raw) ?? '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).join(' && ').trim();
   if (!command) {
     return;
   }

@@ -311,7 +311,19 @@ export function freeDiskGb(dir: string): number | undefined {
 /** Runs `coli <args>` and returns its stdout (best effort: undefined when it fails or times out). */
 export function runColi(l: ColiLauncher, args: string[], timeoutMs = 20_000, env?: NodeJS.ProcessEnv): Promise<string | undefined> {
   return new Promise((resolve) => {
-    cp.execFile(l.command, [...l.prefix, ...args], { cwd: l.folder, timeout: timeoutMs, env: { ...process.env, ...env }, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => resolve(err ? undefined : stdout));
+    const opts: cp.ExecFileOptions = { cwd: l.folder, timeout: timeoutMs, env: { ...process.env, ...env }, windowsHide: true, maxBuffer: 4 * 1024 * 1024 };
+    const done = (err: Error | null, stdout: string | Buffer) => resolve(err ? undefined : String(stdout));
+    try {
+      if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(l.command)) {
+        // Node refuses to spawn .cmd/.bat without a shell (EINVAL); the arguments are fixed literals.
+        const line = [l.command, ...l.prefix, ...args].map((a) => `"${a}"`).join(' ');
+        cp.execFile(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsVerbatimArguments: true }, done);
+      } else {
+        cp.execFile(l.command, [...l.prefix, ...args], opts, done);
+      }
+    } catch {
+      resolve(undefined);
+    }
   });
 }
 

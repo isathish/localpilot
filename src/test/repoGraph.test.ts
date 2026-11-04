@@ -2,7 +2,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildRepoGraph, parseSource } from '../context/repoGraph';
+import { buildRepoGraph, fileKey, parseSource } from '../context/repoGraph';
+import { answerRepoGraph } from '../tools/repoGraph';
 
 /** Builds the graph of a temporary folder holding `files` (path → content). */
 async function graphOf(files: Record<string, string>) {
@@ -68,5 +69,16 @@ suite('LocalPilot repo graph', () => {
     assert.ok(p.imports.includes('.a') && p.imports.includes('.b'));
     assert.ok(p.imports.includes('x'));
     assert.deepStrictEqual(p.optionalImports, ['x.y', 'x.z']);
+  });
+
+  test('fileKey: a path with a directory must match it; folders are reported, not resolved to a file', async () => {
+    const g = await graphOf({ 'src/a.ts': "import { b } from './lib/b';\n", 'src/lib/b.ts': 'export const b = 1;\n' });
+    assert.strictEqual(fileKey(g, 'wrong/dir/a.ts').key, undefined);
+    assert.strictEqual(fileKey(g, 'a.ts').key, 'src/a.ts');
+    assert.strictEqual(fileKey(g, 'lib/b.ts').key, 'src/lib/b.ts');
+    assert.strictEqual(fileKey(g, '../src/a.ts').key, undefined);
+    const dir = answerRepoGraph(g, 'dependents', 'src/lib');
+    assert.ok(dir.isError && /is a folder/.test(dir.content) && dir.content.includes('src/lib/b.ts'));
+    assert.ok(answerRepoGraph(g, 'dependents', 'b.ts').content.startsWith('Resolved "b.ts" to src/lib/b.ts.'));
   });
 });

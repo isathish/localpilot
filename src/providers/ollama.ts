@@ -8,7 +8,7 @@ import {
   StreamEvent,
   WarmOptions,
 } from '../types';
-import { isCloudProvider, resolveApiKey } from './cloud';
+import { completeViaChat, isCloudProvider, resolveApiKey } from './cloud';
 import { getJson, newId, postJson, streamLines, withTimeout } from './http';
 import { ThinkTagSplitter } from './thinkTags';
 
@@ -49,6 +49,8 @@ export class OllamaProvider implements LLMProvider {
   /** Ollama's cloud (ollama.com) rather than a server on this machine or the private network. */
   private readonly remote: boolean;
   private infoCache = new Map<string, ModelInfo>();
+  /** Models that answered a `suffix` with "does not support insert": their FIM goes through chat. */
+  private readonly noInsert = new Set<string>();
 
   constructor(cfg: ProviderConfig) {
     this.id = cfg.id;
@@ -116,12 +118,15 @@ export class OllamaProvider implements LLMProvider {
           supportsVision: caps.includes('vision'),
           // Older Ollama versions list no capabilities at all: unknown, not "cannot think".
           supportsThinking: caps.length ? caps.includes('thinking') : undefined,
-          supportsFim: caps.includes('insert') || /coder|code|starcoder|deepseek/i.test(m.name),
+          supportsFim: caps.length ? caps.includes('insert') : /coder|starcoder|codestral|deepseek-coder/i.test(m.name),
           sizeBytes: !remote && typeof m.size === 'number' && m.size > 0 ? m.size : undefined,
           parameterSize: show?.details?.parameter_size ?? m.details?.parameter_size,
           remote: remote || undefined,
         };
-        this.infoCache.set(key, info);
+        // A failed inspection is retried on the next listing instead of leaving the model without tools/vision.
+        if (show) {
+          this.infoCache.set(key, info);
+        }
         return info;
       });
     return infos.filter((i) => !/embed/i.test(i.modelId));
@@ -200,6 +205,21 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async complete(opts: CompletionRequestOptions): Promise<string> {
+    if (opts.suffix && this.noInsert.has(opts.model)) {
+      return completeViaChat(this, opts);
+    }
+    try {
+      return await this.generate(opts);
+    } catch (e) {
+      if (!opts.suffix || opts.signal?.aborted || !/insert/i.test(e instanceof Error ? e.message : String(e))) {
+        throw e;
+      }
+      this.noInsert.add(opts.model);
+      return completeViaChat(this, opts);
+    }
+  }
+
+  private async generate(opts: CompletionRequestOptions): Promise<string> {
     const res = await postJson<{ response: string }>(
       `${this.baseUrl}/api/generate`,
       {

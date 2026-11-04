@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ProviderConfig } from '../types';
 import { editableProviders } from '../config';
 import { freePort, portInUse, which } from '../providers/colibriSetup';
-import { checkGatewayPrereqs, gatewayDashboard, gatewayEnv, GatewayId, gatewayModels, GatewayModels, GATEWAYS, installCommand, needsProviders, nodeVersion, startCommand } from '../providers/gatewaySetup';
+import { checkGatewayPrereqs, gatewayDashboard, gatewayEnv, GatewayId, gatewayModels, GatewayModels, GATEWAYS, installAndStartCommand, installCommand, needsProviders, nodeVersion, startCommand, terminalShell } from '../providers/gatewaySetup';
 import { findPreset } from '../providers/presets';
 import { resolveApiKey } from '../providers/cloud';
 
@@ -20,6 +20,8 @@ export interface GatewayHost {
  */
 export class GatewayLauncher implements vscode.Disposable {
   private readonly terminals = new Map<GatewayId, vscode.Terminal>();
+  /** Gateways whose start is being waited on; an old terminal alone (pip install, a failed start) does not block a new start. */
+  private readonly starting = new Set<GatewayId>();
   private readonly subs: vscode.Disposable[] = [];
 
   constructor(private readonly host: GatewayHost) {
@@ -91,8 +93,8 @@ export class GatewayLauncher implements vscode.Disposable {
       await this.host.onReady();
       return this.report(id, port, running, true);
     }
-    if (this.terminals.has(id)) {
-      this.terminals.get(id)!.show(true);
+    if (this.starting.has(id)) {
+      this.terminals.get(id)?.show(true);
       void vscode.window.showInformationMessage(`${spec.label} is still starting in its terminal.`);
       return;
     }
@@ -136,10 +138,12 @@ export class GatewayLauncher implements vscode.Disposable {
       }
       if (id === 'litellm') {
         this.terminal(id).sendText(install);
+        // The pip shell is not the gateway's: the next Start gateway opens a fresh terminal for the proxy.
+        this.terminals.delete(id);
         return;
       }
       // npm puts `omniroute` on the terminal's PATH, so the start part uses the bare name.
-      return this.run(id, port, `${install} && ${startCommand(id, { port, exe: spec.bin })}`, 'install');
+      return this.run(id, port, installAndStartCommand(id, port), 'install');
     }
     return this.run(id, port, startCommand(id, { port, exe, config }), 'start');
   }
@@ -179,7 +183,7 @@ export class GatewayLauncher implements vscode.Disposable {
 
   private terminal(id: GatewayId): vscode.Terminal {
     this.terminals.get(id)?.dispose();
-    const t = vscode.window.createTerminal({ name: `LocalPilot · ${GATEWAYS[id].label}`, env: gatewayEnv(id) });
+    const t = vscode.window.createTerminal({ name: `LocalPilot · ${GATEWAYS[id].label}`, env: gatewayEnv(id), ...terminalShell() });
     this.terminals.set(id, t);
     t.show(true);
     return t;
@@ -191,30 +195,36 @@ export class GatewayLauncher implements vscode.Disposable {
     term.sendText(command);
     this.host.log.info(`gateway: ${command}`);
     const key = resolveApiKey(this.provider(id) ?? { apiKey: undefined });
-    const models = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `LocalPilot: ${phase === 'install' ? `installing and starting ${spec.label}` : `starting ${spec.label}`}…`, cancellable: true }, async (progress, token) => {
-      const started = Date.now();
-      const limit = phase === 'install' ? 15 * 60_000 : 5 * 60_000;
-      let closed = false;
-      const sub = vscode.window.onDidCloseTerminal((t) => t === term && (closed = true));
-      try {
-        while (!token.isCancellationRequested && !closed && Date.now() - started < limit) {
-          const m = await gatewayModels(port, key);
-          if (m) {
-            return m;
+    this.starting.add(id);
+    let models: GatewayModels | undefined;
+    try {
+      models = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `LocalPilot: ${phase === 'install' ? `installing and starting ${spec.label}` : `starting ${spec.label}`}…`, cancellable: true }, async (progress, token) => {
+        const started = Date.now();
+        const limit = phase === 'install' ? 15 * 60_000 : 5 * 60_000;
+        let closed = false;
+        const sub = vscode.window.onDidCloseTerminal((t) => t === term && (closed = true));
+        try {
+          while (!token.isCancellationRequested && !closed && Date.now() - started < limit) {
+            const m = await gatewayModels(port, key);
+            if (m) {
+              return m;
+            }
+            progress.report({ message: `${Math.round((Date.now() - started) / 1000)} s — watch its terminal` });
+            await new Promise((r) => setTimeout(r, 2000));
           }
-          progress.report({ message: `${Math.round((Date.now() - started) / 1000)} s — watch its terminal` });
-          await new Promise((r) => setTimeout(r, 2000));
+        } finally {
+          sub.dispose();
         }
-      } finally {
-        sub.dispose();
-      }
-      if (closed) {
-        void vscode.window.showWarningMessage(`The ${spec.label} terminal closed before it answered. Its output shows why; run Start gateway again after fixing it.`);
-      } else if (!token.isCancellationRequested) {
-        void vscode.window.showWarningMessage(`${spec.label} did not answer on port ${port}. Check its terminal.`);
-      }
-      return undefined;
-    });
+        if (closed) {
+          void vscode.window.showWarningMessage(`The ${spec.label} terminal closed before it answered. Its output shows why; run Start gateway again after fixing it.`);
+        } else if (!token.isCancellationRequested) {
+          void vscode.window.showWarningMessage(`${spec.label} did not answer on port ${port}. Check its terminal.`);
+        }
+        return undefined;
+      });
+    } finally {
+      this.starting.delete(id);
+    }
     if (!models) {
       return;
     }

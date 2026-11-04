@@ -2,6 +2,7 @@ import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { Tool, ToolContext } from '../types';
 import { onAbort } from '../agent/resilience';
+import { killTree } from './terminal';
 
 /**
  * Source control and CI for the agent: inspect and commit with `git`, push, open and follow pull requests and read CI
@@ -19,27 +20,47 @@ export function runCmd(cmd: string, args: string[], cwd: string | undefined, sig
   return new Promise((resolve) => {
     let child: cp.ChildProcess;
     try {
-      child = cp.spawn(cmd, args, { cwd, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', GH_NO_UPDATE_NOTIFIER: '1' } });
+      // Own session/process group (no controlling terminal): ssh and hooks cannot prompt into the CLI, and a kill reaches hooks too.
+      child = cp.spawn(cmd, args, { cwd, shell: false, detached: process.platform !== 'win32', windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', GH_NO_UPDATE_NOTIFIER: '1' } });
     } catch (e) {
       resolve({ code: -1, out: '', err: e instanceof Error ? e.message : String(e) });
       return;
     }
     let out = '';
     let err = '';
-    const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    child.stdout?.on('data', (d) => (out += d.toString()));
-    child.stderr?.on('data', (d) => (err += d.toString()));
-    const off = onAbort(signal, () => child.kill('SIGKILL'));
-    child.on('close', off);
-    child.on('error', (e) => {
-      clearTimeout(t);
-      resolve({ code: -1, out, err: (e as NodeJS.ErrnoException).code === 'ENOENT' ? `${cmd}: command not found` : e.message });
-    });
-    child.on('close', (code) => {
-      clearTimeout(t);
-      resolve({ code: code ?? -1, out, err });
-    });
+    let killed = '';
+    let settled = false;
+    const finish = (r: Run) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(t);
+        off();
+        resolve(killed ? { code: -1, out, err: `${killed}${err.trim() ? `\n${err.trim()}` : ''}` } : r);
+      }
+    };
+    const kill = (reason: string) => {
+      if (settled || killed) {
+        return;
+      }
+      killed = reason;
+      killTree(child);
+      // A grandchild that survived may still hold the pipes open; do not wait for 'close' forever.
+      setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({ code: -1, out, err });
+      }, 2000).unref?.();
+    };
+    const t = setTimeout(() => kill(`timed out after ${timeoutMs / 1000}s (hooks may still have been running); nothing was completed`), timeoutMs);
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => (out += d));
+    child.stderr?.on('data', (d: string) => (err += d));
+    const off = onAbort(signal, () => kill('stopped by the user'));
+    child.on('error', (e) => finish({ code: -1, out, err: (e as NodeJS.ErrnoException).code === 'ENOENT' ? `${cmd}: command not found` : e.message }));
+    child.on('close', (code) => finish({ code: code ?? -1, out, err }));
     if (input !== undefined) {
+      child.stdin?.on('error', () => undefined);
       child.stdin?.end(input);
     }
   });
@@ -54,11 +75,23 @@ export function validBranch(name: string): boolean {
   return /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*@\{)[A-Za-z0-9._/-]{1,200}(?<![./])$/.test(name) && !name.endsWith('.lock');
 }
 
-/** The default branch (origin/HEAD, else main/master if they exist). */
-export async function defaultBranch(cwd: string): Promise<string | undefined> {
-  const head = await runCmd('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], cwd);
-  if (head.code === 0 && head.out.trim()) {
-    return head.out.trim().replace(/^origin\//, '');
+const remoteHeads = new Map<string, string | undefined>();
+
+/** The default branch of `remote`: its remote-tracking HEAD if it still exists, else what the remote reports, else main/master. */
+export async function defaultBranch(cwd: string, remote = 'origin'): Promise<string | undefined> {
+  const head = (await runCmd('git', ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`], cwd)).out.trim();
+  if (head && (await runCmd('git', ['rev-parse', '--verify', '--quiet', head], cwd)).code === 0) {
+    return head.replace(`refs/remotes/${remote}/`, '');
+  }
+  // origin/HEAD is only set by clone and goes stale; ask the remote once per session.
+  const cacheKey = `${cwd}\0${remote}`;
+  if (!remoteHeads.has(cacheKey)) {
+    const r = await runCmd('git', ['ls-remote', '--symref', remote, 'HEAD'], cwd, undefined, 15_000);
+    remoteHeads.set(cacheKey, r.code === 0 ? /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.out)?.[1] : undefined);
+  }
+  const reported = remoteHeads.get(cacheKey);
+  if (reported) {
+    return reported;
   }
   for (const b of ['main', 'master']) {
     if ((await runCmd('git', ['rev-parse', '--verify', '--quiet', b], cwd)).code === 0) {
@@ -205,7 +238,7 @@ export const gitPushTool: Tool = {
   approvalKind: 'terminal',
   definition: {
     name: 'git_push',
-    description: 'Push the current branch to its remote (origin by default) and set the upstream. Never force-pushes. Pushing the default branch (main/master) directly is refused unless allow_default_branch is true and the user asked for it — push a feature branch and open a pull request instead.',
+    description: 'Push the current branch to its upstream, or to the remote (origin by default) under the same name and set the upstream. Never force-pushes. Pushing the default branch (main/master) directly is refused unless allow_default_branch is true and the user asked for it — push a feature branch and open a pull request instead.',
     parameters: {
       type: 'object',
       properties: { remote: { type: 'string', description: 'Default origin' }, allow_default_branch: { type: 'boolean' } },
@@ -216,24 +249,42 @@ export const gitPushTool: Tool = {
     if (!cwd) {
       return { content: 'No workspace folder open.', isError: true };
     }
-    const remote = typeof args.remote === 'string' && /^[\w.-]+$/.test(args.remote) ? args.remote : 'origin';
+    let remote = typeof args.remote === 'string' && /^[\w.-]+$/.test(args.remote) ? args.remote : 'origin';
     const branch = (await runCmd('git', ['branch', '--show-current'], cwd)).out.trim();
     if (!branch) {
       return { content: 'Not on a branch (detached HEAD); create one with git_commit branch=… first.', isError: true };
     }
-    const def = await defaultBranch(cwd);
-    if (branch === def && args.allow_default_branch !== true) {
-      return { content: `Refused: ${branch} is the default branch. Commit on a feature branch (git_commit with branch="fix/…") and open a pull request, or pass allow_default_branch=true only if the user explicitly asked to push to ${branch}.`, isError: true };
+    // An existing push destination (e.g. fork/feature) wins over the default remote and the local name.
+    let dest = branch;
+    let setUpstream = true;
+    const push = (await runCmd('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{push}'], cwd)).out.trim();
+    const slash = push.indexOf('/');
+    if (slash > 0 && (typeof args.remote !== 'string' || args.remote === push.slice(0, slash))) {
+      const remotes = (await runCmd('git', ['remote'], cwd)).out.split('\n').map((l) => l.trim());
+      if (remotes.includes(push.slice(0, slash)) && validBranch(push.slice(slash + 1))) {
+        remote = push.slice(0, slash);
+        dest = push.slice(slash + 1);
+        setUpstream = false;
+      }
+    }
+    const def = await defaultBranch(cwd, remote);
+    const protectedBranch = def ? dest === def : ['main', 'master', 'develop', 'trunk', 'dev'].includes(dest);
+    if (protectedBranch && args.allow_default_branch !== true) {
+      return { content: `Refused: ${dest} is ${def ? 'the default branch' : 'likely the default branch'} of ${remote}. Commit on a feature branch (git_commit with branch="fix/…") and open a pull request, or pass allow_default_branch=true only if the user explicitly asked to push to ${dest}.`, isError: true };
     }
     const unpushed = await runCmd('git', ['log', '--format=%ae', 'HEAD', '--not', '--remotes'], cwd, ctx.signal);
     if (unpushed.out.split('\n').some((l) => l.trim() === 'localpilot@localhost')) {
       return { content: "Refused: this branch contains LocalPilot's internal worktree snapshot commit (your uncommitted work at the time the isolated copy was made). Apply the changes to the workspace and commit and push from there.", isError: true };
     }
-    if (!(await ctx.requestApproval(`Push ${branch} to ${remote}`, `git push --set-upstream ${remote} ${branch}`, 'terminal'))) {
+    const pushArgs = ['push', ...(setUpstream ? ['--set-upstream'] : []), remote, `HEAD:refs/heads/${dest}`];
+    if (!(await ctx.requestApproval(`Push ${branch} to ${remote}/${dest}`, `git ${pushArgs.join(' ')}`, 'terminal'))) {
       return { content: 'The user declined the push.', isError: true };
     }
-    const r = await runCmd('git', ['push', '--set-upstream', remote, branch], cwd, ctx.signal, 180_000);
-    return r.code === 0 ? { content: `Pushed ${branch} to ${remote}.\n${(r.err + r.out).trim().split('\n').filter((l) => !/^remote:\s*$/.test(l)).slice(-6).join('\n')}` } : fail(r, 'git push');
+    const r = await runCmd('git', pushArgs, cwd, ctx.signal, 180_000);
+    if (r.code !== 0 && /Permission denied \(publickey\)|Host key verification failed/.test(r.err)) {
+      return { content: `git push failed: SSH could not authenticate without a prompt (${/Host key/.test(r.err) ? 'unknown host key' : 'no usable key'}). Load the key with \`ssh-add\` (or accept the host key) by pushing once in a terminal, then try again.\n${r.err.trim().slice(0, 800)}`, isError: true };
+    }
+    return r.code === 0 ? { content: `Pushed ${branch} to ${remote}/${dest}.\n${(r.err + r.out).trim().split('\n').filter((l) => !/^remote:\s*$/.test(l)).slice(-6).join('\n')}` } : fail(r, 'git push');
   },
 };
 
@@ -377,6 +428,9 @@ export const ciStatusTool: Tool = {
     const action = String(args.action ?? 'runs');
     const branch = typeof args.branch === 'string' && validBranch(args.branch.trim()) ? args.branch.trim() : (await runCmd('git', ['branch', '--show-current'], cwd)).out.trim();
     let runId = Number(args.run_id) > 0 ? String(Math.floor(Number(args.run_id))) : '';
+    let header = `Failed steps of run ${runId}`;
+    let warning = '';
+    let failedJobs: number[] = [];
     if (!branch && (action === 'runs' || !runId)) {
       return { content: 'This workspace is on a detached HEAD (isolated copy), so the current branch is unknown. Pass branch="<name>" or run_id.', isError: true };
     }
@@ -389,11 +443,39 @@ export const ciStatusTool: Tool = {
       if (action === 'runs') {
         return { content: runs.length ? `Workflow runs${branch ? ` on ${branch}` : ''}:\n${runs.map((x) => `${x.databaseId}  ${x.workflowName}: ${x.status === 'completed' ? x.conclusion : x.status}  ${x.headBranch ? `${x.headBranch} ` : ''}${x.headSha.slice(0, 7)} ${x.displayTitle.slice(0, 60)} (${x.event}, ${x.createdAt.slice(0, 16).replace('T', ' ')})`).join('\n')}` : `No workflow runs${branch ? ` for ${branch}` : ''}.` };
       }
-      const failed = runs.find((x) => x.conclusion === 'failure');
+      const isFailed = (c: string | undefined) => /^(failure|timed_out|startup_failure|action_required)$/.test(c ?? '');
+      // Prefer the run of the commit being worked on, even while it is still running, over an older failure.
+      const shas = (await Promise.all([runCmd('git', ['rev-parse', 'HEAD'], cwd), runCmd('git', ['rev-parse', '@{u}'], cwd)])).filter((x) => x.code === 0).map((x) => x.out.trim());
+      let failed: (typeof runs)[number] | undefined;
+      let running: (typeof runs)[number] | undefined;
+      for (const x of runs.filter((y) => shas.includes(y.headSha))) {
+        if (isFailed(x.conclusion)) {
+          failed = x;
+          break;
+        }
+        if (x.status !== 'completed') {
+          const v = await gh(['run', 'view', String(x.databaseId), '--json', 'jobs'], ctx);
+          const jobs = v.code === 0 ? ((JSON.parse(v.out) as { jobs?: { databaseId: number; conclusion?: string }[] }).jobs ?? []) : [];
+          const bad = jobs.filter((j) => isFailed(j.conclusion)).map((j) => j.databaseId);
+          if (bad.length) {
+            failedJobs = bad;
+            failed = x;
+            break;
+          }
+          running ??= x;
+        }
+      }
+      failed ??= runs.find((x) => isFailed(x.conclusion));
       if (!failed) {
         return { content: runs.length ? `No failed run among the latest ${runs.length}${branch ? ` on ${branch}` : ''}: ${runs.slice(0, 3).map((x) => `${x.workflowName} ${x.status === 'completed' ? x.conclusion : x.status}`).join(', ')}.` : 'No workflow runs to read.' };
       }
       runId = String(failed.databaseId);
+      header = `Failed steps of run ${runId} (${failed.workflowName}, ${failed.headSha.slice(0, 7)}, ${failed.createdAt.slice(0, 16).replace('T', ' ')})`;
+      if (!shas.includes(failed.headSha)) {
+        warning = `Warning: this run is for an older commit, not ${shas[0]?.slice(0, 7) ?? 'HEAD'}${running ? `; run ${running.databaseId} (${running.workflowName}) for the current commit is still in progress` : ''}.\n`;
+      } else if (failed.status !== 'completed') {
+        warning = 'The run is still in progress: some jobs are still running.\n';
+      }
     }
     if (action === 'rerun') {
       if (ctx.readOnly) {
@@ -405,11 +487,13 @@ export const ciStatusTool: Tool = {
       const r = await gh(['run', 'rerun', runId, '--failed'], ctx);
       return r.code === 0 ? { content: `Re-running the failed jobs of run ${runId}. Check again with ci_status "runs" in a few minutes.` } : ghFailed(r, 'gh run rerun');
     }
-    const r = await gh(['run', 'view', runId, '--log-failed'], ctx);
-    if (r.code !== 0) {
+    // An unfinished run has no run-level log yet; its finished failed jobs do.
+    const logs = await Promise.all((failedJobs.length ? failedJobs.slice(0, 3).map((j) => ['--job', String(j)]) : [[runId]]).map((sel) => gh(['run', 'view', ...sel, '--log-failed'], ctx)));
+    const r = logs.find((x) => x.code !== 0);
+    if (r) {
       return ghFailed(r, 'gh run view --log-failed');
     }
-    return { content: `Failed steps of run ${runId}:\n${summarizeFailedLog(r.out)}` };
+    return { content: `${header}:\n${warning}${summarizeFailedLog(logs.map((x) => x.out).join('\n'))}` };
   },
 };
 

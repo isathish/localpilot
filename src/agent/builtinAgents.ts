@@ -10,7 +10,7 @@ import { expandAgentTools } from './permissions';
  */
 
 // `load_skill` is read-only: every subagent may pull in a playbook that applies to its brief.
-const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill'];
+const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill', 'repo_graph'];
 const READ_AND_RUN = [...READ_ONLY, 'run_command'];
 
 const REPORT_RULES = `# Report

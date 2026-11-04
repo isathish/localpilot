@@ -6,7 +6,7 @@ import { Tool, ToolDefinition } from '../types';
 import { getManagedPolicy, mcpServerAllowed } from '../agent/managedPolicy';
 import { forgetMcpToolOrigin, mcpToolOrigin, registerMcpToolOrigin } from '../agent/permissions';
 import { resolveApiKey } from '../providers/cloud';
-import { expandHeaders, HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
+import { expandHeaders, expandRefs, HttpError, JsonRpcMessage, SseTransport, StdioTransport, StreamableHttpTransport, Transport, transportKind } from './transports';
 
 interface McpToolInfo {
   name: string;
@@ -40,10 +40,20 @@ export class McpClient implements vscode.Disposable {
 
   private make(kind: 'stdio' | 'http' | 'sse'): Transport {
     const headers = expandHeaders(this.cfg.headers, resolveRef);
-    if (kind === 'stdio') {
-      return new StdioTransport(this.cfg, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, (m) => this.log.debug(`[mcp:${this.name}] ${m}`));
+    const expand = (v: string) => expandRefs(v, resolveRef);
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(this.cfg.env ?? {})) {
+      // A variable that expands to nothing is left out so it does not blank the inherited one.
+      const value = expand(String(v));
+      if (value) {
+        env[k] = value;
+      }
     }
-    return kind === 'http' ? new StreamableHttpTransport(this.cfg.url!, headers, this.fetchImpl) : new SseTransport(this.cfg.url!, headers, this.fetchImpl);
+    const cfg: McpServerConfig = { ...this.cfg, command: this.cfg.command && expand(this.cfg.command), args: this.cfg.args?.map((a) => expand(String(a))), url: this.cfg.url && expand(this.cfg.url), env };
+    if (kind === 'stdio') {
+      return new StdioTransport(cfg, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, (m) => this.log.debug(`[mcp:${this.name}] ${m}`));
+    }
+    return kind === 'http' ? new StreamableHttpTransport(cfg.url!, headers, this.fetchImpl) : new SseTransport(cfg.url!, headers, this.fetchImpl);
   }
 
   async start(): Promise<void> {
@@ -79,23 +89,75 @@ export class McpClient implements vscode.Disposable {
         }
       }
     );
+    const init = await this.handshake(kind);
+    const tools: McpToolInfo[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const res = (await this.request('tools/list', cursor ? { cursor } : {})) as { tools?: McpToolInfo[]; nextCursor?: string };
+      tools.push(...(res?.tools ?? []));
+      cursor = res?.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+    this.tools = tools;
+    this.log.info(`[mcp:${this.name}] ${kind}${this.cfg.url ? ` ${this.cfg.url}` : ''}: ${init?.serverInfo?.name ?? 'server'} ${init?.serverInfo?.version ?? ''} · protocol ${init?.protocolVersion ?? '?'} · ${this.tools.length} tools`);
+  }
+
+  private async handshake(kind: 'stdio' | 'http' | 'sse'): Promise<{ protocolVersion?: string; serverInfo?: { name?: string; version?: string } }> {
     const init = (await this.request('initialize', {
       protocolVersion: kind === 'http' ? '2025-06-18' : '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'LocalPilot', version: this.clientVersion },
     })) as { protocolVersion?: string; serverInfo?: { name?: string; version?: string } };
     if (init?.protocolVersion) {
-      this.transport.setProtocolVersion?.(init.protocolVersion);
+      this.transport?.setProtocolVersion?.(init.protocolVersion);
     }
     await this.notify('notifications/initialized', {});
-    const res = (await this.request('tools/list', {})) as { tools?: McpToolInfo[] };
-    this.tools = res.tools ?? [];
-    this.log.info(`[mcp:${this.name}] ${kind}${this.cfg.url ? ` ${this.cfg.url}` : ''}: ${init?.serverInfo?.name ?? 'server'} ${init?.serverInfo?.version ?? ''} · protocol ${init?.protocolVersion ?? '?'} · ${this.tools.length} tools`);
+    return init;
+  }
+
+  /** One re-handshake shared by every call that found the HTTP session gone. */
+  private reinit?: Promise<void>;
+
+  /**
+   * A request that survives an expired Streamable HTTP session (a server restart, a session timeout): the server
+   * answers 404 (or a 400 naming the session), so the client starts a new session and retries once.
+   */
+  private async requestWithReinit(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown> {
+    const transport = this.transport;
+    const hadSession = transport instanceof StreamableHttpTransport && transport.hasSession;
+    try {
+      return await this.request(method, params, timeoutMs, signal);
+    } catch (e) {
+      const expired = e instanceof HttpError && (e.status === 404 || (e.status === 400 && /session/i.test(e.message)));
+      if (!hadSession || !expired || this.closing || this.transport !== transport) {
+        throw e;
+      }
+      this.log.info(`[mcp:${this.name}] session expired (${e.status}); starting a new one`);
+      this.reinit ??= (async () => {
+        transport.resetSession();
+        await this.handshake('http');
+      })().finally(() => (this.reinit = undefined));
+      try {
+        await this.reinit;
+      } catch (err) {
+        const down = err instanceof Error ? err : new Error(String(err));
+        this.log.warn(`[mcp:${this.name}] could not start a new session: ${down.message}`);
+        if (!this.closing) {
+          this.onDown?.(down);
+        }
+        throw down;
+      }
+      return this.request(method, params, timeoutMs, signal);
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
-    const res = (await this.request('tools/call', { name, arguments: args }, 120_000, signal)) as { content?: { type: string; text?: string; data?: string }[]; isError?: boolean; structuredContent?: unknown };
-    const parts = (res.content ?? []).map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type} content]`));
+    const res = (await this.requestWithReinit('tools/call', { name, arguments: args }, 120_000, signal)) as { content?: { type: string; text?: string; data?: string; uri?: string; resource?: { uri?: string; text?: string } }[]; isError?: boolean; structuredContent?: unknown };
+    const parts = (res.content ?? []).map((c) =>
+      c.type === 'text' ? c.text ?? '' : c.type === 'resource' ? c.resource?.text ?? `[resource ${c.resource?.uri ?? ''}]` : c.type === 'resource_link' ? `[resource ${c.uri ?? ''}]` : `[${c.type} content]`
+    );
     if (!parts.length && res.structuredContent !== undefined) {
       parts.push(JSON.stringify(res.structuredContent, null, 2));
     }
@@ -186,6 +248,9 @@ export class McpManager implements vscode.Disposable {
   private registrations = new Map<string, vscode.Disposable>();
   /** Restart attempts per server since it last ran fine, and their timers. */
   private restarts = new Map<string, { attempts: number; timer?: ReturnType<typeof setTimeout> }>();
+  /** Bumped by every stopAll(), so a start that was in flight then does not register itself afterwards. */
+  private generation = 0;
+  private disposed = false;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   /** Fires after every (re)load so UIs can refresh connection status. */
   readonly onDidChange = this._onDidChange.event;
@@ -196,11 +261,7 @@ export class McpManager implements vscode.Disposable {
   constructor(private readonly tools: ToolRegistry, private readonly log: vscode.LogOutputChannel, private readonly clientVersion = '0.0.0') {
     // Only a change to the servers themselves restarts them. Any other localpilot.* change (a default model, LocalPilot's
     // own auto-tuning) used to stop every server and fail the MCP tool calls in flight.
-    this.configSub = onConfigChange(() => {
-      if (this.signature() !== this.loadedSignature) {
-        void this.reload();
-      }
-    });
+    this.configSub = onConfigChange(() => void this.reloadIfChanged());
   }
 
   /** Reloads run one at a time: a second settings change while servers are still starting must not race `stopAll()` against `start()`. */
@@ -209,6 +270,11 @@ export class McpManager implements vscode.Disposable {
   reload(): Promise<void> {
     this.reloading = this.reloading.then(() => this.doReload()).catch((e) => this.log.error(`MCP reload failed: ${e instanceof Error ? e.message : String(e)}`));
     return this.reloading;
+  }
+
+  /** Restarts the servers only when their configuration changed (a plugin change that adds no server leaves them running). */
+  reloadIfChanged(): Promise<void> {
+    return this.signature() === this.loadedSignature ? this.reloading : this.reload();
   }
 
   private loadedSignature = '';
@@ -239,10 +305,27 @@ export class McpManager implements vscode.Disposable {
     this._onDidChange.fire();
   }
 
-  private async startOne(name: string, cfg: McpServerConfig): Promise<boolean> {
+  private async startOne(name: string, cfg: McpServerConfig, gen = this.generation): Promise<boolean> {
     const client = new McpClient(name, cfg, this.log, this.clientVersion);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await client.start();
+      // One unresponsive server must not stall every reload (and the CLI's start-up).
+      await Promise.race([
+        client.start(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('did not answer within 30 s')), 30_000);
+          timer.unref?.();
+        }),
+      ]);
+      clearTimeout(timer);
+      // Stopped (a reload, dispose) while it was starting: this start no longer counts.
+      if (gen !== this.generation || this.disposed) {
+        client.dispose();
+        return false;
+      }
+      this.registrations.get(name)?.dispose();
+      this.registrations.delete(name);
+      this.clients.get(name)?.dispose();
       this.clients.set(name, client);
       this.errors.delete(name);
       const tools = client.tools.map((t) => this.toTool(client, t));
@@ -255,9 +338,14 @@ export class McpManager implements vscode.Disposable {
         })
       );
       this.registrations.set(name, vscode.Disposable.from(this.tools.registerAll(tools), forget));
-      client.onDown = (err) => this.serverDown(name, cfg, client, err);
+      client.onDown = (err) => this.serverDown(name, client, err);
       return true;
     } catch (e) {
+      clearTimeout(timer);
+      if (gen !== this.generation || this.disposed) {
+        client.dispose();
+        return false;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       this.errors.set(name, msg);
       this.log.error(`MCP server "${name}" failed to start: ${msg}`);
@@ -270,7 +358,7 @@ export class McpManager implements vscode.Disposable {
    * A server that was running went away: its tools are withdrawn (calls would only fail) and it is started again,
    * after 2 s, 10 s and 60 s; after three failed attempts it stays down with the error shown in Settings.
    */
-  private serverDown(name: string, cfg: McpServerConfig, client: McpClient, err: Error): void {
+  private serverDown(name: string, client: McpClient, err: Error): void {
     if (this.clients.get(name) !== client) {
       return;
     }
@@ -278,10 +366,10 @@ export class McpManager implements vscode.Disposable {
     this.registrations.delete(name);
     this.clients.delete(name);
     client.dispose();
-    this.scheduleRestart(name, cfg, err);
+    this.scheduleRestart(name, err);
   }
 
-  private scheduleRestart(name: string, cfg: McpServerConfig, err: Error): void {
+  private scheduleRestart(name: string, err: Error): void {
     const r = this.restarts.get(name) ?? { attempts: 0 };
     const delays = [2_000, 10_000, 60_000];
     if (r.attempts >= delays.length) {
@@ -291,15 +379,28 @@ export class McpManager implements vscode.Disposable {
     }
     this.errors.set(name, `stopped: ${err.message} — restarting`);
     this._onDidChange.fire();
+    const gen = this.generation;
     r.timer = setTimeout(() => {
+      if (gen !== this.generation || this.disposed) {
+        return;
+      }
+      // The settings may have changed since the server went down: start what is configured now, if anything.
+      const current = { ...this.extraServers(), ...getConfig().mcpServers }[name];
+      if (!current || current.enabled === false || !transportKind(current) || !mcpServerAllowed(getManagedPolicy(this.log), name)) {
+        this.restarts.delete(name);
+        return;
+      }
       r.attempts++;
-      void this.startOne(name, cfg).then((ok) => {
+      void this.startOne(name, current, gen).then((ok) => {
+        if (gen !== this.generation || this.disposed) {
+          return;
+        }
         this.log.info(`MCP server "${name}" ${ok ? 'restarted' : 'could not be restarted'} (attempt ${r.attempts})`);
         // A server that then runs for a minute counts as healthy again.
         if (ok) {
           setTimeout(() => this.clients.has(name) && this.restarts.delete(name), 60_000).unref?.();
         } else {
-          this.scheduleRestart(name, cfg, err);
+          this.scheduleRestart(name, err);
         }
         this._onDidChange.fire();
       });
@@ -341,6 +442,7 @@ export class McpManager implements vscode.Disposable {
   }
 
   private stopAll(): void {
+    this.generation++;
     this.registrations.forEach((r) => r.dispose());
     this.registrations.clear();
     this.restarts.forEach((r) => clearTimeout(r.timer));
@@ -360,6 +462,7 @@ export class McpManager implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.configSub.dispose();
     this._onDidChange.dispose();
     this.stopAll();

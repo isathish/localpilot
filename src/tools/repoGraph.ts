@@ -6,14 +6,43 @@ const ACTIONS = ['overview', 'dependents', 'dependencies', 'impact', 'hubs', 'cy
 
 const list = (items: string[], max = 60) => `${items.slice(0, max).join('\n')}${items.length > max ? `\n… and ${items.length - max} more` : ''}`;
 
+/** Test files across ecosystems: test_x.py, x_test.go, x.spec.ts, FooTest.kt, tests/, androidTest/, Foo.UnitTests/… */
+function isTestPath(rel: string): boolean {
+  const parts = rel.split('/');
+  const base = parts.pop()!;
+  const stem = base.replace(/\.[^.]+$/, '');
+  return (
+    /^(tests|conftest)\.py$|^test_.+\.py$|_test\.(go|py)$|\.(test|spec|cy|e2e)\./i.test(base) ||
+    // Case-sensitive suffix so "latest.ts" or "contest/" are not tests.
+    /[a-z0-9_](Tests?|Spec|IT)$/.test(stem) ||
+    parts.some((d) => /^(tests?|__tests__|specs?|e2e|cypress|javatests)$|\.(unit|integration)?tests$/i.test(d) || /[a-z0-9]Tests?$/.test(d))
+  );
+}
+
 /** Text answer for one repo_graph action. Pure, so the CLI, tests and the tool share it. */
 export function answerRepoGraph(g: RepoGraph, action: string, target?: string, depth = 4): { content: string; isError?: boolean } {
+  const r = answer(g, action, target, depth);
+  return g.truncated ? { ...r, content: `${r.content}\n\ngraph incomplete: file limit reached; results may miss files` } : r;
+}
+
+function answer(g: RepoGraph, action: string, target: string | undefined, depth: number): { content: string; isError?: boolean } {
   const needFile = () => {
     if (!target) {
       return { error: `"${action}" needs path: a workspace-relative file.` };
     }
     const k = fileKey(g, target);
-    return k.key ? { key: k.key } : { error: k.suggestions.length ? `"${target}" matches several files — pass one of:\n${k.suggestions.join('\n')}` : `"${target}" is not a source file in the graph (supported: TS/JS, Python, Go, Rust, Java/Kotlin, C#).` };
+    const dir = target.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (k.key) {
+      return { key: k.key, note: k.key !== dir ? `Resolved "${target}" to ${k.key}.\n` : '' };
+    }
+    const inside = dir ? g.files.filter((f) => f.startsWith(`${dir}/`)) : [];
+    if (inside.length) {
+      return { error: `"${target}" is a folder; pass a file inside it, e.g.:\n${inside.slice(0, 5).join('\n')}` };
+    }
+    if (k.suggestions.length) {
+      return { error: `"${target}" does not match exactly one file — did you mean one of:\n${k.suggestions.join('\n')}` };
+    }
+    return { error: `"${target}" is not a source file in the graph (supported: TS/JS, Python, Go, Rust, Java/Kotlin, C#).` };
   };
   switch (action) {
     case 'overview': {
@@ -24,7 +53,7 @@ export function answerRepoGraph(g: RepoGraph, action: string, target?: string, d
       const cycles = findCycles(g, 3);
       return {
         content: [
-          `${g.files.length} source files, ${edges} internal imports, ${g.external.size} external packages, ${g.symbols.size} top-level symbols${g.truncated ? ' (repository truncated at the file limit)' : ''}.`,
+          `${g.files.length} source files, ${edges} internal imports, ${g.external.size} external packages, ${g.symbols.size} top-level symbols.`,
           top.length ? `Most imported (change these with care):\n${top.map((h) => `  ${h.file} ← ${h.importedBy} file${h.importedBy === 1 ? '' : 's'}`).join('\n')}` : '',
           ext.length ? `Main external packages:\n${ext.map(([p, fs]) => `  ${p} (${fs.size} file${fs.size === 1 ? '' : 's'})`).join('\n')}` : '',
           cycles.length ? `Import cycles: ${cycles.length}${cycles.length === 3 ? '+' : ''} (action "cycles" lists them)` : 'No import cycles.',
@@ -40,7 +69,7 @@ export function answerRepoGraph(g: RepoGraph, action: string, target?: string, d
       }
       const set = [...((action === 'dependents' ? g.rdeps : g.deps).get(f.key!) ?? [])].sort();
       const ext = action === 'dependencies' ? [...g.external].filter(([, fs]) => fs.has(f.key!)).map(([p]) => p).sort() : [];
-      return { content: `${f.key} ${action === 'dependents' ? 'is imported by' : 'imports'} ${set.length} file${set.length === 1 ? '' : 's'}${set.length ? `:\n${list(set)}` : '.'}${ext.length ? `\nExternal packages: ${ext.join(', ')}` : ''}` };
+      return { content: `${f.note}${f.key} ${action === 'dependents' ? 'is imported by' : 'imports'} ${set.length} file${set.length === 1 ? '' : 's'}${set.length ? `:\n${list(set)}` : '.'}${ext.length ? `\nExternal packages: ${ext.join(', ')}` : ''}` };
     }
     case 'impact': {
       const f = needFile();
@@ -48,11 +77,15 @@ export function answerRepoGraph(g: RepoGraph, action: string, target?: string, d
         return { content: f.error, isError: true };
       }
       const hit = [...reach(g.rdeps, f.key!, depth)].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
-      const tests = hit.filter(([p]) => /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.|_test\.(go|py)$|test_[^/]+\.py$/.test(p));
+      const tests = hit.filter(([p]) => isTestPath(p));
+      const more = [...reach(g.rdeps, f.key!, depth + 1).values()].filter((d) => d === depth + 1).length;
+      const noTests = more ? `No test file found within ${depth} levels (more importers beyond the depth limit).` : 'No importer was recognised as a test — consider adding one.';
       return {
-        content: hit.length
-          ? `Changing ${f.key} can affect ${hit.length} file${hit.length === 1 ? '' : 's'} (transitive importers, up to ${depth} levels):\n${list(hit.map(([p, d]) => `${'  '.repeat(d - 1)}${p}${d > 1 ? ` (via ${d} hops)` : ''}`))}${tests.length ? `\n\nTests to run (${tests.length}):\n${list(tests.map(([p]) => p), 20)}` : '\n\nNo test file depends on it — consider adding one.'}`
-          : `Nothing in the workspace imports ${f.key}: a change stays local (or it is an entry point loaded another way).`,
+        content: f.note + (hit.length
+          ? `Changing ${f.key} can affect ${hit.length} file${hit.length === 1 ? '' : 's'} (transitive importers, up to ${depth} levels):\n${list(hit.map(([p, d]) => `${'  '.repeat(d - 1)}${p}${d > 1 ? ` (via ${d} hops)` : ''}`))}${more ? `\n${more} more importer(s) beyond depth ${depth} — rerun with depth: ${Math.min(10, depth + 2)}` : ''}${tests.length ? `\n\nTests to run (${tests.length}):\n${list(tests.map(([p]) => p), 20)}` : `\n\n${noTests}`}`
+          : g.truncated
+            ? `No indexed file imports ${f.key}.`
+            : `Nothing in the workspace imports ${f.key}: a change stays local (or it is an entry point loaded another way).`),
       };
     }
     case 'hubs': {

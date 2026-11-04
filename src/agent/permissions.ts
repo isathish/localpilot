@@ -123,6 +123,13 @@ export function toolNames(name: string): string[] {
   const mcp = /^mcp_([^_]+)_(.+)$/.exec(name);
   if (origin) {
     names.push(`mcp__${origin.server}__${origin.tool}`, `mcp__${origin.server}`);
+    const colon = origin.server.indexOf(':');
+    if (colon > 0) {
+      // Plugin servers are keyed `plugin:server`; Claude Code names them `mcp__plugin_<plugin>_<server>`.
+      const safe = (s: string) => s.replace(/[^\w-]/g, '_');
+      const plugin = `plugin_${safe(origin.server.slice(0, colon))}_${safe(origin.server.slice(colon + 1))}`;
+      names.push(`mcp__${safe(origin.server)}__${origin.tool}`, `mcp__${safe(origin.server)}`, `mcp__${plugin}__${origin.tool}`, `mcp__${plugin}`);
+    }
   } else if (mcp) {
     names.push(`mcp__${mcp[1]}__${mcp[2]}`, `mcp__${mcp[1]}`);
   } else if (name.startsWith('mcp_')) {
@@ -448,7 +455,7 @@ export function evaluatePermission(perm: PermissionSettings, toolName: string, a
 }
 
 /** What `permissions.defaultMode` says when no rule matched. */
-export function defaultModeDecision(mode: PermissionSettings['defaultMode'], toolName: string): Decision | 'none' {
+export function defaultModeDecision(mode: PermissionSettings['defaultMode'], toolName: string, approvalKind?: string, effectiveMode?: string): Decision | 'none' {
   if (mode === 'bypassPermissions') {
     return 'allow';
   }
@@ -456,7 +463,8 @@ export function defaultModeDecision(mode: PermissionSettings['defaultMode'], too
     return 'allow';
   }
   if (mode === 'dontAsk') {
-    return 'deny';
+    // Only what would have prompted is refused; reads and auto-approved kinds run as usual.
+    return !approvalKind || effectiveMode === 'always' ? 'none' : 'deny';
   }
   return 'none';
 }

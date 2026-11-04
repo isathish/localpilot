@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as path from 'path';
 import { Tool, ToolContext } from '../types';
 import { displayPath, resolveWorkspacePath } from './fs';
 import { onAbort } from '../agent/resilience';
@@ -11,7 +12,8 @@ function findIn(ctx: ToolContext, pattern: string, max: number): Thenable<vscode
   return inWorkspace ? vscode.workspace.findFiles(pattern, EXCLUDES, max) : vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(root), pattern), new vscode.RelativePattern(vscode.Uri.file(root), EXCLUDES), max);
 }
 
-const EXCLUDES = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/*.min.js,**/*.map}';
+const EXCLUDES =
+  '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/venv/**,**/__pycache__/**,**/.vscode-test/**,**/.next/**,**/coverage/**,**/target/**,**/vendor/**,**/Pods/**,**/*.min.js,**/*.map}';
 
 export const fileSearchTool: Tool = {
   parallelSafe: true,
@@ -27,13 +29,15 @@ export const fileSearchTool: Tool = {
   async execute(args, ctx) {
     const pattern = String(args.pattern ?? '**/*');
     const max = Number(args.max_results ?? 50);
-    const files = await findIn(ctx, pattern, max);
+    const found = await findIn(ctx, pattern, max + 1);
+    const files = found.slice(0, max);
     if (!files.length) {
       // A bare identifier in a glob almost always means the model wanted a content search.
       const looksLikeSymbol = /^(\*\*\/)?[\w.-]+\*?$/.test(pattern) && !/\.[a-z]{1,5}$/i.test(pattern.replace(/\*$/, ''));
       return { content: `No files match ${pattern}.${looksLikeSymbol ? ` file_search only matches file names — to find "${pattern.replace(/^\*\*\//, '').replace(/\*$/, '')}" inside files use grep_search with that text as the query (or find_symbol for definitions).` : ''}` };
     }
-    return { content: files.map((f) => displayPath(f, ctx)).sort().join('\n') };
+    const list = files.map((f) => displayPath(f, ctx)).sort().join('\n');
+    return { content: found.length > max ? `${list}\n(more than ${max} files match; narrow the pattern)` : list };
   },
 };
 
@@ -68,9 +72,9 @@ export const grepSearchTool: Tool = {
     const rg = await findRipgrep();
     const include = typeof args.include_pattern === 'string' && args.include_pattern ? args.include_pattern : undefined;
     const caseSensitive = Boolean(args.case_sensitive);
-    const search = async (isRegex: boolean): Promise<string[]> => {
+    const search = async (isRegex: boolean): Promise<{ lines: string[]; note?: string }> => {
       if (rg) {
-        const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-count', '50', '--max-columns', '300'];
+        const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '--max-count', String(Math.max(max, 50)), '--max-columns', '300'];
         if (!isRegex) {
           rgArgs.push('--fixed-strings');
         }
@@ -93,26 +97,35 @@ export const grepSearchTool: Tool = {
             stderr = err.trim();
           }
         });
-        const found = out.split('\n').filter(Boolean).slice(0, max).map((l) => l.replace(/^\.\//, ''));
+        const all = out.split('\n').filter(Boolean);
+        const found = all.slice(0, max).map((l) => l.replace(/^\.\//, ''));
         if (stderr !== undefined && !found.length) {
           throw new Error(stderr || 'ripgrep exited with code 2');
+        }
+        if (all.length > max) {
+          found.push(`[showing ${max} of ${all.length} matches — narrow with include_pattern or raise max_results]`);
         }
         if (stderr) {
           found.push(`(ripgrep reported: ${stderr.split('\n')[0]})`);
         }
-        return found;
+        return { lines: found };
       }
       // Fallback: naive JS search (slower, but dependency-free).
       // This runs the model's pattern in-process, where nothing can interrupt one regex test: a nested quantifier such
       // as (a+)+ can backtrack for minutes and freeze the extension host. Such patterns are searched as plain text, very
       // long lines (minified code) are skipped, and the whole search stops after 10 s.
-      const files = await findIn(ctx, include ?? '**/*', 2000);
-      const risky = isRegex && /\([^()]*[+*][^()]*\)[+*{]/.test(query);
-      const re = new RegExp(isRegex && !risky ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
+      const files = await findIn(ctx, include ? (include.includes('/') ? include : `**/${include}`) : '**/*', 2000);
+      const pattern = isRegex ? safeRegex(query) : query;
+      const risky = isRegex && riskyRegex(pattern);
+      const re = new RegExp(isRegex && !risky ? pattern : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? '' : 'i');
       const results: string[] = risky ? [`(the pattern has a nested repetition that can hang a search without ripgrep; it was searched as plain text)`] : [];
+      const found = () => results.length - (risky ? 1 : 0);
       const deadline = Date.now() + 10_000;
+      let scanned = 0;
+      let cut = files.length >= 2000;
       for (const f of files) {
-        if (ctx.signal.aborted || results.length >= max || Date.now() > deadline) {
+        if (ctx.signal.aborted || found() >= max || Date.now() > deadline) {
+          cut = true;
           break;
         }
         try {
@@ -122,7 +135,14 @@ export const grepSearchTool: Tool = {
           const bytes = await vscode.workspace.fs.readFile(f);
           const text = Buffer.from(bytes).toString('utf8');
           const lines = text.split('\n');
-          for (let i = 0; i < lines.length && results.length < max; i++) {
+          for (let i = 0; i < lines.length && found() < max; i++) {
+            if (i > 0 && i % 500 === 0) {
+              if (ctx.signal.aborted || Date.now() > deadline) {
+                cut = true;
+                break;
+              }
+              await new Promise((r) => setImmediate(r));
+            }
             if (lines[i].length <= 2000 && re.test(lines[i])) {
               results.push(`${displayPath(f, ctx)}:${i + 1}: ${lines[i].trim().slice(0, 300)}`);
             }
@@ -130,26 +150,33 @@ export const grepSearchTool: Tool = {
         } catch {
           /* skip unreadable */
         }
+        scanned++;
       }
-      return results;
+      cut ||= found() >= max;
+      const note = cut ? `(searched ${scanned} of ${files.length}${files.length >= 2000 ? '+' : ''} files; results may be incomplete — narrow with include_pattern)` : undefined;
+      return { lines: found() ? (note ? [...results, note] : results) : [], note };
     };
     let isRegex = Boolean(args.is_regex);
-    let lines: string[];
+    let res: { lines: string[]; note?: string };
     try {
-      lines = await search(isRegex);
+      res = await search(isRegex);
     } catch (e) {
       return { content: `grep_search failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
     // Models routinely send an escaped regex ("def foo\(") without is_regex; a literal search then looks for a
     // backslash and finds nothing. Retry as a regex before reporting no matches.
-    if (!lines.length && !isRegex && looksLikeRegex(query) && !ctx.signal.aborted) {
+    if (!res.lines.length && !isRegex && looksLikeRegex(query) && !ctx.signal.aborted) {
       isRegex = true;
-      lines = await search(true).catch(() => []);
+      const first = res;
+      res = await search(true).catch(() => first);
     }
-    if (!lines.length) {
+    if (!res.lines.length) {
+      if (res.note) {
+        return { content: `No matches for "${query}" in the files searched ${res.note}` };
+      }
       return { content: `No matches for "${query}"${isRegex ? ' (searched as a regular expression as well)' : ''}. Try a shorter literal such as the bare identifier, or find_symbol for definitions.` };
     }
-    return { content: lines.join('\n') };
+    return { content: res.lines.join('\n') };
   },
 };
 
@@ -166,6 +193,17 @@ export function looksLikeRegex(query: string): boolean {
   }
 }
 
+/** `(.|\s)`-style "any character" groups rewritten to the equivalent `[\s\S]`, which cannot backtrack. */
+function safeRegex(query: string): string {
+  return query.replace(/\((?:\?:)?(?:\.\|\\[sn]|\\s\|\.)\)/g, '[\\s\\S]');
+}
+
+/** Patterns that can backtrack catastrophically: nested quantifiers, quantified groups with alternation or optionals, quantified nested groups. */
+export function riskyRegex(query: string): boolean {
+  const q = safeRegex(query).replace(/\(\?(?:[:=!]|<[=!]|<\w+>)/g, '(');
+  return /\([^()]*[+*][^()]*\)[+*{]/.test(q) || /\([^()]*[|?][^()]*\)[+*{]/.test(q) || /\)[+*?]?\)[+*{]/.test(q);
+}
+
 export const findSymbolTool: Tool = {
   parallelSafe: true,
   definition: {
@@ -173,17 +211,37 @@ export const findSymbolTool: Tool = {
     description: 'Find symbol definitions (classes, functions, variables) across the workspace using the language server.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const syms = (await vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', String(args.query ?? ''))) ?? [];
     if (!syms.length) {
       return { content: 'No symbols found (language server may not be ready).' };
     }
-    return {
-      content: syms
-        .slice(0, 50)
-        .map((s) => `${vscode.SymbolKind[s.kind]} ${s.name}${s.containerName ? ` (in ${s.containerName})` : ''} — ${vscode.workspace.asRelativePath(s.location.uri)}:${s.location.range.start.line + 1}`)
-        .join('\n'),
-    };
+    // An isolated worktree is not indexed: map hits in a workspace folder onto the worktree's copy of the file.
+    const root = ctx.workspaceRoot;
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const isolated = !!root && !folders.includes(root);
+    let mapped = false;
+    const seen = new Set<string>();
+    const rows: string[] = [];
+    for (const s of syms) {
+      let uri = s.location.uri;
+      if (isolated && root) {
+        const folder = folders.find((f) => { const rel = path.relative(f, uri.fsPath); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); });
+        if (folder) {
+          uri = vscode.Uri.file(path.join(root, path.relative(folder, uri.fsPath)));
+          mapped = true;
+        }
+      }
+      const line = s.location.range.start.line + 1;
+      const key = `${uri.fsPath}:${line}`;
+      if (seen.has(key)) {continue;}
+      seen.add(key);
+      rows.push(`${vscode.SymbolKind[s.kind]} ${s.name}${s.containerName ? ` (in ${s.containerName})` : ''} — ${displayPath(uri, ctx)}:${line}`);
+    }
+    const list = rows.slice(0, 50).join('\n');
+    const more = rows.length > 50 ? `\n(showing 50 of ${rows.length})` : '';
+    const note = mapped ? "\n(language-server index reflects the user's checkout; re-read the file before editing)" : '';
+    return { content: `${list}${more}${note}` };
   },
 };
 
@@ -201,13 +259,42 @@ export const findReferencesTool: Tool = {
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(String(args.path), ctx);
     const doc = await vscode.workspace.openTextDocument(uri);
+    const symbol = String(args.symbol);
     const lineIdx = Number(args.line) - 1;
-    const col = doc.lineAt(lineIdx).text.indexOf(String(args.symbol));
-    if (col < 0) {
-      return { content: `Symbol "${args.symbol}" not found on line ${args.line}`, isError: true };
+    if (!Number.isInteger(lineIdx) || lineIdx < 0 || lineIdx >= doc.lineCount) {
+      return { content: `Line ${args.line} is out of range (the file has ${doc.lineCount} lines)`, isError: true };
     }
-    const locs = (await vscode.commands.executeCommand<vscode.Location[]>('vscode.executeReferenceProvider', uri, new vscode.Position(lineIdx, col))) ?? [];
-    return { content: locs.length ? locs.slice(0, 100).map((l) => `${vscode.workspace.asRelativePath(l.uri)}:${l.range.start.line + 1}`).join('\n') : 'No references found.' };
+    // Whole-identifier hits on the line (then the lines around it), so `id` does not land inside `userId`.
+    const word = new RegExp('(?<![\\w$])' + symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w$])', 'g');
+    let positions: vscode.Position[] = [];
+    for (const d of [0, -1, 1, -2, 2]) {
+      const l = lineIdx + d;
+      if (l < 0 || l >= doc.lineCount) {continue;}
+      positions.push(...[...doc.lineAt(l).text.matchAll(word)].map((m) => new vscode.Position(l, m.index ?? 0)));
+      if (d === 0 && positions.length) {break;}
+    }
+    if (!positions.length) {
+      const col = doc.lineAt(lineIdx).text.indexOf(symbol);
+      if (col < 0) {
+        return { content: `Symbol "${symbol}" not found on line ${args.line}`, isError: true };
+      }
+      positions = [new vscode.Position(lineIdx, col)];
+    }
+    let at = positions[0];
+    let locs: vscode.Location[] = [];
+    for (const p of positions) {
+      locs = (await vscode.commands.executeCommand<vscode.Location[]>('vscode.executeReferenceProvider', uri, p)) ?? [];
+      if (locs.length) {
+        at = p;
+        break;
+      }
+    }
+    const head = `References to "${symbol}" (${displayPath(uri, ctx)}:${at.line + 1}:${at.character + 1}):`;
+    if (!locs.length) {
+      return { content: `${head}\nNo references found.` };
+    }
+    const list = locs.slice(0, 100).map((l) => `${displayPath(l.uri, ctx)}:${l.range.start.line + 1}`).join('\n');
+    return { content: `${head}\n${list}${locs.length > 100 ? `\n(showing 100 of ${locs.length})` : ''}` };
   },
 };
 
@@ -261,8 +348,10 @@ export function runProcess(
     let out = '';
     let err = '';
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    child.stdout.on('data', (d) => (out += d.toString()));
-    child.stderr.on('data', (d) => (err += d.toString()));
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (d: string) => (out += d));
+    child.stderr.on('data', (d: string) => (err += d));
     const off = onAbort(signal, () => child.kill('SIGKILL'));
     child.on('close', off);
     child.on('error', (e) => {

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { assessRequest, clarificationSteer, hasContextBlocks, userText } from '../agent/clarify';
-import { builtinAgents, resolveAgentName } from '../agent/builtinAgents';
+import { builtinAgents, resolveAgentName, routeSubagent } from '../agent/builtinAgents';
 
 suite('Request clarification heuristics', () => {
   test('a literal "OK" is not a vague goal', () => {
@@ -115,6 +115,10 @@ suite('Built-in subagents', () => {
       for (const forbidden of ['edit_file', 'write_file', 'run_command', 'delete_path']) {
         assert.ok(!tools.includes(forbidden), `${n} must not have ${forbidden}`);
       }
+      assert.strictEqual(routeSubagent(agents.find((a) => a.name === n)!, undefined, 'ollama/big', { enabled: true }).role, 'fast', `${n} should still be read-only`);
+    }
+    for (const n of ['clarifier', 'explore', 'planner', 'reviewer']) {
+      assert.ok(agents.find((a) => a.name === n)!.tools!.includes('repo_graph'), `${n} should have repo_graph`);
     }
     assert.ok(agents.find((a) => a.name === 'reviewer')!.tools!.includes('run_command'));
     assert.strictEqual(agents.find((a) => a.name === 'coder')!.tools, undefined);

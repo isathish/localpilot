@@ -207,7 +207,8 @@ export async function launchOllama(o: LaunchOptions): Promise<LaunchResult> {
     }
     // A first launch on Windows unpacks runtimes and may show a welcome window before the server listens.
     const waitMs = process.platform === 'win32' ? 90_000 : 30_000;
-    for (let i = 0; i * 500 < waitMs; i++) {
+    const deadline = Date.now() + waitMs;
+    for (let i = 0; Date.now() < deadline; i++) {
       if (o.signal?.aborted) {
         return { ok: false, cancelled: true, pid };
       }

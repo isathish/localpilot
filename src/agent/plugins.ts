@@ -80,9 +80,11 @@ async function listMarkdown(dir: string, depth = 2): Promise<string[]> {
   }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isFile() && e.name.endsWith('.md')) {
+    // A symlink counts as what it points to (the depth limit stops link loops).
+    const st = e.isSymbolicLink() ? await fs.stat(p).catch(() => undefined) : e;
+    if (st?.isFile() && e.name.endsWith('.md')) {
       out.push(p);
-    } else if (e.isDirectory() && depth > 1 && !e.name.startsWith('.')) {
+    } else if (st?.isDirectory() && depth > 1 && !e.name.startsWith('.')) {
       out.push(...(await listMarkdown(p, depth - 1)));
     }
   }

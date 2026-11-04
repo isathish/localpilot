@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { createDirTool, deleteTool, diffPreview, displayPath, editFileTool, fsTools, listDirTool, readFileTool, resolveWorkspacePath, writeFileTool } from '../tools/fs';
-import { fileSearchTool, findRipgrep, grepSearchTool, looksLikeRegex } from '../tools/search';
+import { fileSearchTool, findRipgrep, grepSearchTool, looksLikeRegex, riskyRegex } from '../tools/search';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
 import { getDiagnosticsTool, openEditorsTool, openFileTool } from '../tools/editor';
 import { ToolContext } from '../types';
@@ -287,7 +287,8 @@ suite('Search tools', () => {
     const sym = await fileSearchTool.execute({ pattern: 'greetUser' }, c);
     assert.match(sym.content, /use grep_search with that text/);
     const capped = await fileSearchTool.execute({ pattern: `${base()}/**/*`, max_results: 1 }, c);
-    assert.strictEqual(capped.content.split('\n').length, 1);
+    assert.strictEqual(capped.content.split('\n').length, 2);
+    assert.match(capped.content, /more than 1 files match; narrow the pattern/);
   });
 
   test('grep_search finds text (case-insensitive by default), honours include globs and retries escaped regexes', async () => {
@@ -338,6 +339,15 @@ suite('Search tools', () => {
     assert.ok(looksLikeRegex('[A-Z]+'));
     assert.ok(!looksLikeRegex('plain words'));
     assert.ok(!looksLikeRegex('getUser('), 'an unbalanced paren is not a valid regex');
+  });
+
+  test('riskyRegex flags patterns that can backtrack catastrophically', () => {
+    assert.ok(riskyRegex('(a|aa)+$'));
+    assert.ok(riskyRegex('^(a|a?)+$'));
+    assert.ok(riskyRegex('((a+))+$'));
+    assert.ok(!riskyRegex('foo(bar)?baz'));
+    assert.ok(!riskyRegex('def \\w+'));
+    assert.ok(!riskyRegex('(.|\\s)*'), 'an any-character group is rewritten to [\\s\\S]');
   });
 });
 

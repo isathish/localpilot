@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   ChatMessage,
   ChatRequestOptions,
@@ -7,11 +8,13 @@ import {
   ProviderConfig,
   StreamEvent,
 } from '../types';
+import { lookupCatalog } from './catalog';
 import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
 import { ThinkTagSplitter } from './thinkTags';
+import { pairToolCalls } from './toolPairing';
 
 /** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
 const STOCK_NAMES = /^(vllm( \/ unsloth)?|vllm-\d+)$/i;
@@ -57,7 +60,12 @@ function streamError(error: NonNullable<OpenAIChunk['error']>, url: string): Err
     return new Error(error);
   }
   const code = Number(error.status ?? error.code);
-  const status = Number.isInteger(code) && code >= 400 && code < 600 ? code : error.type === 'server_error' ? 500 : error.type === 'rate_limit_exceeded' || error.code === 'rate_limit_exceeded' ? 429 : undefined;
+  const kind = `${error.code ?? ''} ${error.type ?? ''}`;
+  const status = Number.isInteger(code) && code >= 400 && code < 600 ? code
+    : error.type === 'server_error' ? 500
+    : /rate_limit/i.test(kind) ? 429
+    : /server_error|overloaded|unavailable|timeout|internal|disconnected/i.test(`${kind} ${error.message ?? ''}`) ? 502
+    : undefined;
   return status ? new HttpError(status, JSON.stringify(error), url) : new Error(error.message ?? 'provider error');
 }
 
@@ -76,6 +84,8 @@ export class OpenAICompatProvider implements LLMProvider {
   readonly remote: boolean;
   /** Request parameters a model rejected once (see PARAM_FIXES), re-applied to its later requests. */
   private readonly learnedFixes = new Map<string, Set<string>>();
+  /** Models whose server rejected a `suffix` on `/completions` (llama.cpp, vLLM): their FIM goes through chat. */
+  private readonly noSuffix = new Set<string>();
   private readonly configuredName: string;
   /** Engine the server identified itself as on the last model listing. */
   engine?: 'colibri';
@@ -100,18 +110,20 @@ export class OpenAICompatProvider implements LLMProvider {
     try {
       await getJson(`${this.baseUrl}/models`, this.headers, withTimeout(2500, signal));
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      // A server that answers with an error status (no /models endpoint) is up; its configured models still serve.
+      return e instanceof HttpError && !!this.explicitModels?.length;
     }
   }
 
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     let models: OpenAIModel[] = [];
     try {
-      const res = await getJson<{ data: OpenAIModel[] }>(`${this.baseUrl}/models`, this.headers, withTimeout(5000, signal));
-      models = res.data ?? [];
+      // Together AI answers with a bare array instead of `{ data: [...] }`.
+      const res = await getJson<OpenAIModel[] | { data?: OpenAIModel[] | null }>(`${this.baseUrl}/models`, this.headers, withTimeout(5000, signal));
+      models = Array.isArray(res) ? res : (res?.data ?? []);
     } catch (e) {
-      if (!this.explicitModels?.length) {
+      if (!(e instanceof HttpError) || !this.explicitModels?.length) {
         throw e;
       }
     }
@@ -128,7 +140,7 @@ export class OpenAICompatProvider implements LLMProvider {
     // colibri decodes one request per KV slot; its /health says how many there are.
     const slots = colibri ? colibriSlots(await colibriHealth(this.baseUrl, this.headers, signal)) : undefined;
     return models
-      .filter((m) => m.type !== 'embeddings' && !/embed/i.test(m.id))
+      .filter((m) => !/^(embeddings?|image|rerank|moderation|audio|transcribe|video)$/i.test(m.type ?? '') && !/embed/i.test(m.id))
       // Cloud listings mix in speech, image and moderation models; Mistral flags the ones that cannot chat.
       .filter((m) => !this.remote || (!isNonChatModel(m.id) && capabilityList(m)?.includes('completion_chat') !== false))
       // colibri decision (System One) and picture models cannot chat.
@@ -158,7 +170,8 @@ export class OpenAICompatProvider implements LLMProvider {
             parallelSlots: slots,
           } satisfies ModelInfo;
         }
-        return {
+        const vision = caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? knownVision(m.id) : undefined));
+        const info: ModelInfo = {
           id: `${this.id}/${m.id}`,
           providerId: this.id,
           modelId: m.id,
@@ -168,18 +181,27 @@ export class OpenAICompatProvider implements LLMProvider {
           maxOutputTokens: 8192,
           // Most local OpenAI-compatible servers advertise tool support; we fall back to prompt-based tools otherwise.
           supportsTools: caps ? caps.includes('tool_use') || caps.includes('tools') || caps.includes('function_calling') : m.supported_parameters ? m.supported_parameters.includes('tools') : true,
-          supportsVision: caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? knownVision(m.id) : /vl|vision|llava|pixtral|gemma-3|qwen.*vl/i.test(m.id))),
+          supportsVision: !!vision,
           // Cloud APIs have no `suffix`-style /completions (Mistral and DeepSeek use separate FIM endpoints).
           supportsFim: !this.remote && /coder|code|starcoder|codestral|deepseek/i.test(m.id),
           remote: this.remote || undefined,
-        } satisfies ModelInfo;
+        };
+        // Local servers (Docker Model Runner, LM Studio, llama.cpp) say nothing about vision: go by the catalog, then the name.
+        if (vision === undefined) {
+          info.supportsVision = lookupCatalog(info)?.entry.supportsVision ?? /vl\b|vl-|vision|llava|pixtral|gemma-?3|gemma-?4|nemotron.*bolt|mistral-small-?3\.[12]|llama-?4|qwen.*vl/i.test(m.id);
+        }
+        return info;
       });
   }
 
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
+    const messages = pairToolCalls(opts.messages).map((m) => toOpenAIMessage(m, isGeminiUrl(this.baseUrl)));
+    if (isMistral(this.baseUrl, opts.model)) {
+      mistralToolCallIds(messages);
+    }
     const body: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages.map((m) => toOpenAIMessage(m, isGeminiUrl(this.baseUrl))),
+      messages,
       stream: true,
       stream_options: { include_usage: true },
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -199,7 +221,9 @@ export class OpenAICompatProvider implements LLMProvider {
     }
     if (typeof opts.think === 'string') {
       body.reasoning_effort = opts.think;
-    } else if (opts.think === false && !this.remote) {
+    } else if (opts.think === false && this.remote) {
+      body.reasoning_effort = 'none';
+    } else if (opts.think === false) {
       // Qwen3-style chat templates (vLLM, SGLang, llama.cpp --jinja) read this to skip reasoning.
       body.chat_template_kwargs = { enable_thinking: false };
     }
@@ -316,7 +340,7 @@ export class OpenAICompatProvider implements LLMProvider {
 
   async complete(opts: CompletionRequestOptions): Promise<string> {
     // Cloud APIs have no `/completions` with `suffix` (it is legacy or missing): fill in the middle through chat.
-    if (this.remote) {
+    if (this.remote || (opts.suffix && this.noSuffix.has(opts.model))) {
       return completeViaChat(this, opts);
     }
     const body: Record<string, unknown> = {
@@ -332,8 +356,16 @@ export class OpenAICompatProvider implements LLMProvider {
     if (opts.stop?.length) {
       body.stop = opts.stop;
     }
-    const res = await postJson<{ choices?: { text?: string }[] }>(`${this.baseUrl}/completions`, body, this.headers, opts.signal);
-    return res.choices?.[0]?.text ?? '';
+    try {
+      const res = await postJson<{ choices?: { text?: string }[] }>(`${this.baseUrl}/completions`, body, this.headers, opts.signal);
+      return res.choices?.[0]?.text ?? '';
+    } catch (e) {
+      if (!opts.suffix || opts.signal?.aborted || !/suffix/i.test(e instanceof Error ? e.message : String(e))) {
+        throw e;
+      }
+      this.noSuffix.add(opts.model);
+      return completeViaChat(this, opts);
+    }
   }
 
   async embed(model: string, input: string[]): Promise<number[][]> {
@@ -374,6 +406,16 @@ const PARAM_FIXES: ParamFix[] = [
     },
   },
   dropParam('temperature', /temperature/i),
+  {
+    // Learned fixes replay on every request of the model: drop only the 'none' sent for think:false, not real levels.
+    name: 'reasoning_effort_none',
+    applies: (body, error) => body.reasoning_effort === 'none' && /reasoning/i.test(error),
+    apply: (body) => {
+      if (body.reasoning_effort === 'none') {
+        delete body.reasoning_effort;
+      }
+    },
+  },
   dropParam('reasoning_effort', /reasoning/i),
   dropParam('stream_options', /stream_options|include_usage/i),
   dropParam('response_format', /response_format|json_schema/i),
@@ -387,6 +429,59 @@ function isGeminiUrl(url: string): boolean {
     return new URL(url).hostname === 'generativelanguage.googleapis.com';
   } catch {
     return false;
+  }
+}
+
+function isMistral(url: string, model: string): boolean {
+  try {
+    if (new URL(url).hostname === 'api.mistral.ai') {
+      return true;
+    }
+  } catch {
+    // fall through to the model name
+  }
+  return /mistral|devstral|codestral|magistral|ministral|pixtral|voxtral/i.test(model);
+}
+
+/** Mistral rejects tool-call ids that are not exactly 9 alphanumerics: maps other ids (in place) to stable hashed ones. */
+function mistralToolCallIds(messages: Record<string, unknown>[]): void {
+  const valid = /^[a-zA-Z0-9]{9}$/;
+  const mapped = new Map<string, string>();
+  const used = new Set<string>();
+  for (const m of messages) {
+    for (const tc of (m.tool_calls as { id?: string }[] | undefined) ?? []) {
+      if (tc.id && valid.test(tc.id)) {
+        used.add(tc.id);
+      }
+    }
+    if (typeof m.tool_call_id === 'string' && valid.test(m.tool_call_id)) {
+      used.add(m.tool_call_id);
+    }
+  }
+  const map = (id: string): string => {
+    if (valid.test(id)) {
+      return id;
+    }
+    let out = mapped.get(id);
+    for (let n = 0; !out; n++) {
+      const h = createHash('sha256').update(n ? `${id}#${n}` : id).digest('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 9);
+      if (h.length === 9 && !used.has(h)) {
+        out = h;
+        mapped.set(id, h);
+        used.add(h);
+      }
+    }
+    return out;
+  };
+  for (const m of messages) {
+    for (const tc of (m.tool_calls as { id?: string }[] | undefined) ?? []) {
+      if (tc.id) {
+        tc.id = map(tc.id);
+      }
+    }
+    if (typeof m.tool_call_id === 'string') {
+      m.tool_call_id = map(m.tool_call_id);
+    }
   }
 }
 

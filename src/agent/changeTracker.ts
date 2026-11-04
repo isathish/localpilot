@@ -72,11 +72,20 @@ export class ChangeTracker implements vscode.Disposable {
       return;
     }
     let current: string | undefined;
-    try {
-      const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fsPath);
-      current = doc ? doc.getText() : Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8');
-    } catch {
-      current = undefined;
+    const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === fsPath);
+    if (open) {
+      current = open.getText();
+    } else {
+      // Decode with the encoding VS Code will save it back with on undo/restore; utf8 for what it will not open.
+      try {
+        current = (await vscode.workspace.openTextDocument(vscode.Uri.file(fsPath))).getText();
+      } catch {
+        try {
+          current = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8').replace(/^\uFEFF/, '');
+        } catch {
+          current = undefined;
+        }
+      }
     }
     if (needTurnSnap) {
       const byTurn = this.turns.get(sid) ?? new Map();

@@ -9,6 +9,7 @@ import { classifyModelError } from './resilience';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
 import { findRepo } from './repos';
 import { reposFor } from '../tools/repos';
+import { releaseIntegratedTerminal } from '../tools/terminal';
 
 /** Appended to every subagent persona (built-in or custom). */
 const SUBAGENT_CONTRACT = `# You are a subagent
@@ -114,9 +115,23 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       },
     },
     async execute(args, ctx) {
-      const tasks = Array.isArray(args.tasks) ? (args.tasks as { agent: string; prompt: string; model?: string; skills?: unknown; repo?: unknown }[]) : [];
-      if (!tasks.length) {
+      let raw = args.tasks;
+      if (typeof raw === 'string') {
+        try {
+          raw = JSON.parse(raw);
+        } catch {
+          // reported below as not an array
+        }
+      }
+      const given = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
+      if (!given.length) {
         return { content: 'tasks must be a non-empty array', isError: true };
+      }
+      // Validate every task before any child runs: one malformed task must not throw away the others' reports.
+      const tasks = given.map((t) => ({ ...(t && typeof t === 'object' ? t : {}), prompt: t?.prompt ?? t?.task ?? t?.description })) as { agent: string; prompt: string; model?: string; skills?: unknown; repo?: unknown }[];
+      const invalid = tasks.map((t, i) => (typeof t.agent === 'string' && t.agent.trim() && typeof t.prompt === 'string' && t.prompt.trim() ? '' : `task ${i + 1}: needs "agent" and "prompt" strings`)).filter(Boolean);
+      if (invalid.length) {
+        return { content: `${invalid.join('; ')}. Nothing was run.`, isError: true };
       }
       // Tasks for other repositories run with that repository as their workspace (multi-repository work).
       const repos = tasks.some((t) => typeof t.repo === 'string' && t.repo.trim()) ? reposFor(ctx) : [];
@@ -130,7 +145,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       const inRepo = (t: (typeof tasks)[number], i: number) => (roots[i] ? `You are working in the repository "${roots[i]!.name}" (${roots[i]!.path}). Every relative path is relative to that repository's root: write "server.js", not "${roots[i]!.name}/server.js". Make and verify the change there.\n\n${t.prompt}` : t.prompt);
       const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path, isolatedFrom: undefined } : ctx, roots[i]?.name, strList(t.skills)));
       const out = settled.map((r, i) => {
-        const header = `## Task ${i + 1} (${tasks[i].agent}${roots[i] ? ` in ${roots[i]!.name}` : ''}): ${tasks[i].prompt.slice(0, 80)}`;
+        const header = `## Task ${i + 1} (${tasks[i].agent}${roots[i] ? ` in ${roots[i]!.name}` : ''}): ${String(tasks[i].prompt ?? '').slice(0, 80)}`;
         return r.status === 'fulfilled' ? `${header}\n${r.value.content}` : `${header}\nFAILED: ${String(r.reason)}`;
       });
       return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected' || r.value.isError) };
@@ -229,6 +244,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         maxModelRetries: routedElsewhere && !fellBack ? 0 : undefined,
         // A side model that has not produced a token in a minute is not loading, it is dead; the parent's model is ready.
         firstTokenTimeoutMs: routedElsewhere && !fellBack ? 60_000 : undefined,
+        sideModelOf: routedElsewhere && !fellBack ? ctx.modelRef : undefined,
       });
     try {
       let text: string;
@@ -270,6 +286,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       return { content: `Subagent failed: ${msg}`, isError: true };
     } finally {
       control.dispose();
+      releaseIntegratedTerminal(childId);
     }
   }
 
@@ -307,9 +324,27 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       if (ctx.readOnly) {
         return { content: 'run_todos_parallel executes the plan and is only available in Agent mode. Finish the checklist here; the user can switch to Agent mode and say "implement the plan".', isError: true };
       }
-      let wanted = Array.isArray(args.ids) ? new Set((args.ids as unknown[]).map(String)) : undefined;
+      const parse = (v: unknown): unknown => {
+        if (typeof v !== 'string') {
+          return v;
+        }
+        try {
+          return JSON.parse(v);
+        } catch {
+          return v;
+        }
+      };
+      const selectorGiven = args.tasks !== undefined || args.ids !== undefined;
+      const rawIds = parse(args.ids);
+      const idList = Array.isArray(rawIds) ? rawIds.map(String) : typeof rawIds === 'string' || typeof rawIds === 'number' ? [String(rawIds)] : [];
+      const rawTasks = parse(args.tasks);
       // Inline tasks: turn them into checklist items first, then run exactly those.
-      const inline = Array.isArray(args.tasks) ? (args.tasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown; skills?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
+      const inline = Array.isArray(rawTasks) ? (rawTasks as { title?: unknown; agent?: unknown; prompt?: unknown; dependsOn?: unknown; skills?: unknown }[]).filter((t) => t && typeof t.agent === 'string' && typeof t.prompt === 'string' && String(t.prompt).trim()) : [];
+      if (selectorGiven && !inline.length && !idList.length) {
+        return { content: 'run_todos_parallel: "tasks" must be an array of {title, agent, prompt} and "ids" an array of checklist ids; nothing was run.', isError: true };
+      }
+      // A selector was supplied: never fall back to every pending item.
+      let wanted = selectorGiven ? new Set(idList) : undefined;
       if (inline.length) {
         const bad = unknownAgents(inline.map((t) => String(t.agent)));
         if (bad.unknown.length) {

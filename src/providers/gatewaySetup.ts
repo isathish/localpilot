@@ -62,6 +62,18 @@ export function installCommand(id: GatewayId, platform: NodeJS.Platform = proces
   return platform === 'win32' ? "py -3 -m pip install --user 'litellm[proxy]'" : "python3 -m pip install --user 'litellm[proxy]'";
 }
 
+/** Install then start, in the syntax of the terminal's shell (Windows PowerShell 5.1 has no `&&`). */
+export function installAndStartCommand(id: GatewayId, port: number, platform: NodeJS.Platform = process.platform): string {
+  const install = installCommand(id, platform);
+  const start = startCommand(id, { port, exe: GATEWAYS[id].bin, platform });
+  return platform === 'win32' ? `${install}; if ($?) { ${start} }` : `${install} && ${start}`;
+}
+
+/** Shell for the gateway/colibri terminals: the commands use PowerShell syntax on Windows, whatever the default shell. */
+export function terminalShell(platform: NodeJS.Platform = process.platform): { shellPath?: string; shellArgs?: string[] } {
+  return platform === 'win32' ? { shellPath: 'powershell.exe', shellArgs: ['-NoLogo', '-ExecutionPolicy', 'Bypass'] } : {};
+}
+
 export interface GatewayPrereqs {
   ok: boolean;
   /** What is missing or too old, for the message. */

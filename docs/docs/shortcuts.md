@@ -16,7 +16,8 @@ To change a binding, open **Preferences → Keyboard Shortcuts** in VS Code and 
 | Edit with LocalPilot (inline) | <kbd>⌘⌥K</kbd> | <kbd>Ctrl+Alt+K</kbd> | editor focused and not read-only |
 | Generate terminal command | <kbd>⌘⌥K</kbd> | <kbd>Ctrl+Alt+K</kbd> | terminal focused |
 | Capture screenshot to chat | <kbd>⌘⌥⇧S</kbd> | <kbd>Ctrl+Alt+Shift+S</kbd> | always |
-| Explain selection | <kbd>⌘⇧E</kbd> | <kbd>Ctrl+Shift+E</kbd> | text selected in the editor |
+
+<kbd>⌘⇧L</kbd> / <kbd>Ctrl+Shift+L</kbd> replaces VS Code's **Select All Occurrences**, and <kbd>⌘⇧⌥L</kbd> replaces **Open Quick Chat**. To get those back, open **Keyboard Shortcuts**, search for "LocalPilot: Open Chat" or "LocalPilot: New Chat", and change or remove the binding.
 
 ## Inside the chat
 
@@ -34,7 +35,8 @@ These keys work in the chat view. On Windows and Linux, read <kbd>⌘</kbd> as <
 | <kbd>⇧Tab</kbd> | Rotate the mode: Agent → Multitask → Debug → Plan → Ask (not while the agent runs) |
 | <kbd>⌘Enter</kbd> in an empty input | **Build** the prepared plan shown in the chat |
 | <kbd>⌘L</kbd> | Focus the input |
-| <kbd>⌘I</kbd> | Open the **Add context** menu |
+| <kbd>⌘I</kbd> in the input | **Improve prompt**: rewrite the draft in place (nothing is sent) |
+| <kbd>⌘I</kbd> elsewhere in the chat | Open the **Add context** menu |
 | <kbd>/</kbd> | Slash command picker |
 | <kbd>@</kbd> | Mention picker |
 | <kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>Tab</kbd> or <kbd>Enter</kbd> | Move in a picker / accept |

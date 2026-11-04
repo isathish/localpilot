@@ -75,11 +75,11 @@ export class TerminalManager implements vscode.Disposable {
   }
 
   private async pump(exec: vscode.TerminalShellExecution, rec: TerminalExecutionRecord): Promise<void> {
+    const cap = new OutputCapture(MAX_OUTPUT / 4, (MAX_OUTPUT * 3) / 4);
     try {
       for await (const chunk of exec.read()) {
-        if (rec.output.length < MAX_OUTPUT) {
-          rec.output += chunk;
-        }
+        cap.push(chunk);
+        rec.output = cap.text();
       }
     } catch (err) {
       this.log.debug(`terminal read ended: ${String(err)}`);
@@ -194,9 +194,9 @@ export class TerminalManager implements vscode.Disposable {
     if (signal.aborted) {
       return { output: 'Not run: the user stopped the run.', exitCode: undefined };
     }
-    const inCwd = samePath(si.cwd?.fsPath, cwd) ? command : inDir(cwd, command, (term.state as { shell?: string }).shell ?? vscode.env.shell);
-    const exec = si.executeCommand(inCwd);
-    let output = '';
+    // Always cd: a reused shell may sit in a directory (or a removed worktree) other than the one it reports.
+    const exec = si.executeCommand(inDir(cwd, command, (term.state as { shell?: string }).shell ?? vscode.env.shell));
+    const cap = new OutputCapture();
     let exitCode: number | undefined;
     let sub: vscode.Disposable | undefined;
     const done = new Promise<'done'>((resolve) => {
@@ -209,9 +209,7 @@ export class TerminalManager implements vscode.Disposable {
     });
     const reader = (async () => {
       for await (const chunk of exec.read()) {
-        if (output.length < MAX_OUTPUT) {
-          output += chunk;
-        }
+        cap.push(chunk);
       }
     })();
     const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), timeoutMs));
@@ -220,9 +218,12 @@ export class TerminalManager implements vscode.Disposable {
     sub?.dispose();
     if (result !== 'done') {
       term.sendText('\u0003', false); // Ctrl+C the running command
-      output += `\n[${result === 'timeout' ? `timed out after ${timeoutMs / 1000}s` : 'cancelled'}]`;
     }
     await Promise.race([reader, new Promise((r) => setTimeout(r, 500))]);
+    let output = cap.text();
+    if (result !== 'done') {
+      output += `\n[${result === 'timeout' ? `timed out after ${timeoutMs / 1000}s` : 'cancelled'}]`;
+    }
     if (result !== 'done') {
       // ^C may not reach a pager or prompt that grabbed the TTY: never hand a possibly stuck shell to the next command.
       term.dispose();
@@ -233,9 +234,43 @@ export class TerminalManager implements vscode.Disposable {
     return { output: stripAnsi(output).replace(/\r\n?/g, '\n'), exitCode };
   }
 
+  /** Close the agent terminal of a chat or subagent that is finished (or whose worktree is going away). */
+  release(sessionId: string): void {
+    this.agentTerminals.get(sessionId)?.dispose();
+    this.agentTerminals.delete(sessionId);
+  }
+
   dispose(): void {
+    this.agentTerminals.forEach((t) => t.dispose());
+    this.agentTerminals.clear();
     this.disposables.forEach((d) => d.dispose());
     this._onDidRecord.dispose();
+  }
+}
+
+/** Keeps the start and a rolling end of long output: failures and summaries are reported last. */
+export class OutputCapture {
+  private head = '';
+  private tail = '';
+  private dropped = 0;
+
+  constructor(private readonly headMax = 16_000, private readonly tailMax = 48_000) {}
+
+  push(chunk: string): void {
+    if (this.head.length < this.headMax) {
+      const take = chunk.slice(0, this.headMax - this.head.length);
+      this.head += take;
+      chunk = chunk.slice(take.length);
+    }
+    this.tail += chunk;
+    if (this.tail.length > this.tailMax) {
+      this.dropped += this.tail.length - this.tailMax;
+      this.tail = this.tail.slice(-this.tailMax);
+    }
+  }
+
+  text(): string {
+    return this.dropped ? `${this.head}\n…[${this.dropped} characters of output omitted]…\n${this.tail}` : this.head + this.tail;
   }
 }
 

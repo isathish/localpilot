@@ -79,20 +79,36 @@ async function detectGpu(platform: NodeJS.Platform): Promise<{ vramGb: number; n
     }
   }
   if (platform === 'win32') {
-    const wmi = await run('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress)'], 4000);
-    try {
-      const parsed = JSON.parse(wmi.trim() || '[]') as { Name?: string; AdapterRAM?: number } | { Name?: string; AdapterRAM?: number }[];
-      const list = Array.isArray(parsed) ? parsed : [parsed];
-      const best = list.filter((g) => g.AdapterRAM).sort((a, b) => (b.AdapterRAM ?? 0) - (a.AdapterRAM ?? 0))[0];
-      if (best?.AdapterRAM && best.AdapterRAM > 1024 ** 3) {
-        return { vramGb: Math.round((best.AdapterRAM / 1024 ** 3) * 10) / 10, name: best.Name };
-      }
-    } catch {
-      /* no WMI */
+    // WMI AdapterRAM is a uint32 and saturates at 4 GB; the display class registry key has the 64-bit size.
+    const ps = [
+      `$r = Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' -ErrorAction SilentlyContinue | Where-Object { $_.'HardwareInformation.qwMemorySize' } | ForEach-Object { [pscustomobject]@{ Name = $_.DriverDesc; Bytes = [uint64]$_.'HardwareInformation.qwMemorySize' } };`,
+      `$w = Get-CimInstance Win32_VideoController | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Bytes = [uint64]$_.AdapterRAM; Wmi = $true } };`,
+      '@($r) + @($w) | ConvertTo-Json -Compress',
+    ].join(' ');
+    const gpu = windowsGpu(await run('powershell', ['-NoProfile', '-Command', ps], 6000));
+    if (gpu.vramGb > 0) {
+      return gpu;
     }
   }
   return { vramGb: 0 };
 }
+
+/** Picks the largest GPU from the Windows probe; saturated WMI sizes (uint32 at ~4 GB) count as unknown. */
+export function windowsGpu(json: string): { vramGb: number; name?: string } {
+  try {
+    const parsed = JSON.parse(json.trim() || '[]') as GpuEntry | GpuEntry[];
+    const list = (Array.isArray(parsed) ? parsed : [parsed]).filter((g) => g && typeof g.Bytes === 'number' && !(g.Wmi && g.Bytes >= 0xfff00000));
+    const best = list.sort((a, b) => (b.Bytes ?? 0) - (a.Bytes ?? 0))[0];
+    if (best?.Bytes && best.Bytes > 1024 ** 3) {
+      return { vramGb: Math.round((best.Bytes / 1024 ** 3) * 10) / 10, name: best.Name };
+    }
+  } catch {
+    /* no probe output */
+  }
+  return { vramGb: 0 };
+}
+
+type GpuEntry = { Name?: string; Bytes?: number; Wmi?: boolean };
 
 /** Pure part of profiling so it can be unit-tested with synthetic inputs. */
 export function buildProfile(input: { platform: NodeJS.Platform; arch: string; cpuCores: number; ramGb: number; vramGb: number; gpu?: string }): SystemProfile {

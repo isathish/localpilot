@@ -233,8 +233,24 @@ interface CacheEntry {
   parsed: ParsedFile;
 }
 
-/** One cache per root: an incremental rebuild re-parses only files whose mtime changed. */
+/** One cache per root (the 4 most recently used): an incremental rebuild re-parses only files whose mtime changed. */
 const caches = new Map<string, { files: Map<string, CacheEntry>; graph?: RepoGraph; builtAt: number }>();
+const MAX_ROOTS = 4;
+const building = new Map<string, Promise<RepoGraph>>();
+
+/** Forces the next buildRepoGraph for `root` (or every root) to refresh, e.g. after a tool edited files. */
+export function markRepoGraphStale(root?: string): void {
+  for (const [k, c] of caches) {
+    if (root === undefined || k === root) {
+      c.builtAt = 0;
+    }
+  }
+}
+
+/** Drops the cached graph for `root` (e.g. a removed worktree). */
+export function forgetRepoGraph(root: string): void {
+  caches.delete(root);
+}
 
 async function walk(root: string): Promise<{ files: { rel: string; mtime: number }[]; truncated: boolean }> {
   const out: { rel: string; mtime: number }[] = [];
@@ -271,10 +287,29 @@ async function walk(root: string): Promise<{ files: { rel: string; mtime: number
 /** Builds (or incrementally refreshes) the graph for `root`. Rebuilt at most every `maxAgeMs`. */
 export async function buildRepoGraph(root: string, maxAgeMs = 5_000): Promise<RepoGraph> {
   const cache = caches.get(root) ?? { files: new Map<string, CacheEntry>(), builtAt: 0 };
+  caches.delete(root);
   caches.set(root, cache);
+  for (const k of caches.keys()) {
+    if (caches.size <= MAX_ROOTS) {
+      break;
+    }
+    caches.delete(k);
+  }
+  const inflight = building.get(root);
+  if (inflight) {
+    return inflight;
+  }
   if (cache.graph && Date.now() - cache.builtAt < maxAgeMs) {
     return cache.graph;
   }
+  const p = rebuild(root, cache).finally(() => building.delete(root));
+  building.set(root, p);
+  return p;
+}
+
+async function rebuild(root: string, cache: { files: Map<string, CacheEntry>; graph?: RepoGraph; builtAt: number }): Promise<RepoGraph> {
+  // Marked stale while building (builtAt reset to 0) → the result may miss that edit, so keep it stale.
+  const started = (cache.builtAt = Date.now());
   const { files: listed, truncated } = await walk(root);
   const seen = new Set<string>();
   let goModule: string | undefined;
@@ -305,7 +340,7 @@ export async function buildRepoGraph(root: string, maxAgeMs = 5_000): Promise<Re
     }
   }
   cache.graph = assembleGraph(root, new Map([...cache.files].map(([k, v]) => [k, v.parsed])), { goModule, tsPaths }, truncated);
-  cache.builtAt = Date.now();
+  cache.builtAt = cache.builtAt === started ? Date.now() : 0;
   return cache.graph;
 }
 
@@ -512,10 +547,18 @@ export function hubs(g: RepoGraph, max = 15): { file: string; importedBy: number
 export function fileKey(g: RepoGraph, input: string): { key?: string; suggestions: string[] } {
   const norm = input.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
   const rel = path.isAbsolute(input) ? path.relative(g.root, input).split(path.sep).join('/') : norm;
+  if (rel === '..' || rel.startsWith('../')) {
+    return { suggestions: [] };
+  }
   if (g.deps.has(rel)) {
     return { key: rel, suggestions: [] };
   }
   const base = path.posix.basename(rel);
-  const matches = g.files.filter((f) => f.endsWith(`/${rel}`) || f === rel || path.posix.basename(f) === base || path.posix.basename(f).replace(/\.[^.]+$/, '') === base);
-  return matches.length === 1 ? { key: matches[0], suggestions: [] } : { suggestions: matches.slice(0, 8) };
+  const byName = g.files.filter((f) => path.posix.basename(f) === base || path.posix.basename(f).replace(/\.[^.]+$/, '') === base);
+  if (rel.includes('/')) {
+    // A path with a directory must match that directory; another file of the same name is only a suggestion.
+    const matches = g.files.filter((f) => f === rel || f.endsWith(`/${rel}`));
+    return matches.length === 1 ? { key: matches[0], suggestions: [] } : { suggestions: (matches.length ? matches : byName).slice(0, 8) };
+  }
+  return byName.length === 1 ? { key: byName[0], suggestions: [] } : { suggestions: byName.slice(0, 8) };
 }

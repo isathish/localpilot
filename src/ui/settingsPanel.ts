@@ -7,7 +7,7 @@ import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
 import { editableProviders, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
-import { isRemoteUrl, keyStatus, KeyStatus } from '../providers/cloud';
+import { isRemoteUrl, keyStatus, KeyStatus, secretRefs } from '../providers/cloud';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { ProviderSecrets } from '../providers/secrets';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
@@ -551,12 +551,16 @@ export class SettingsPanel implements vscode.Disposable {
     let clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
     if (key === 'providers' && Array.isArray(clean) && this.secrets) {
       // A pasted key goes to the OS keychain; settings.json keeps a `${secret:<id>}` reference.
-      clean = await this.secrets.protect(clean as ProviderConfig[]);
+      clean = await this.secrets.protect(clean as ProviderConfig[], scope);
     }
-    await vscode.workspace.getConfiguration('localpilot').update(key, clean, scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    // Only keys this write stops referencing may be deleted, never ones another window's settings still use.
+    const own = key === 'providers' ? cfg.inspect<ProviderConfig[]>('providers') : undefined;
+    const before = ((scope === 'user' ? own?.globalValue : own?.workspaceValue) ?? []).flatMap((p) => secretRefs(p?.apiKey));
+    await cfg.update(key, clean, scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace);
     this.log.info(`settings: ${key} ${clean === undefined ? 'reset' : 'updated'} (${scope})`);
     if (key === 'providers') {
-      await this.secrets?.prune();
+      await this.secrets?.prune(undefined, before);
     }
   }
 

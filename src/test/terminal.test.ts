@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { globToRegExp, RelativePattern as ShimRP, Uri as ShimUri, workspace as shimWs } from '../cli/vscodeShim';
 import { shellInvocation } from '../terminal/shell';
-import { inDir, samePath, TerminalManager } from '../terminal/terminalManager';
+import { inDir, OutputCapture, samePath, TerminalManager } from '../terminal/terminalManager';
 import { runCommandTool } from '../tools/terminal';
 import { ToolContext } from '../types';
 
@@ -103,13 +103,15 @@ suite('LocalPilot terminal integration', () => {
 });
 
 /** OpenAI-compatible mock: lists one model and answers any chat with a fixed string (streaming or not). */
-function mockOpenAI(reply: string): Promise<{ url: string; close(): void; requests: string[] }> {
+function mockOpenAI(reply: string): Promise<{ url: string; close(): void; requests: string[]; bodies: string[] }> {
   const requests: string[] = [];
+  const bodies: string[] = [];
   const srv = http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       requests.push(`${req.method} ${req.url}`);
+      bodies.push(body);
       res.setHeader('content-type', 'application/json');
       if (req.url === '/v1/models') {
         res.end(JSON.stringify({ data: [{ id: 'mock-coder', object: 'model' }] }));
@@ -131,15 +133,18 @@ function mockOpenAI(reply: string): Promise<{ url: string; close(): void; reques
       res.end();
     });
   });
-  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), requests })));
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), requests, bodies })));
 }
 
 /** OpenAI-compatible mock that streams one scripted turn per chat request: a tool call, or final text. */
-function mockScripted(turns: ({ tool: string; args: Record<string, unknown> } | { text: string })[]): Promise<{ url: string; close(): void; chats: number }> {
+function mockScripted(turns: ({ tool: string; args: Record<string, unknown> } | { text: string })[]): Promise<{ url: string; close(): void; chats: number; requests: string[] }> {
   const state = { chats: 0 };
+  const requests: string[] = [];
   const srv = http.createServer((req, res) => {
-    req.resume();
+    let body = '';
+    req.on('data', (d) => (body += d));
     req.on('end', () => {
+      requests.push(body);
       if (req.url === '/v1/models') {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ data: [{ id: 'mock-coder', object: 'model' }] }));
@@ -165,7 +170,7 @@ function mockScripted(turns: ({ tool: string; args: Record<string, unknown> } | 
   });
   return new Promise((resolve) =>
     srv.listen(0, '127.0.0.1', () =>
-      resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), get chats() { return state.chats; } })
+      resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close(), requests, get chats() { return state.chats; } })
     )
   );
 }
@@ -241,6 +246,10 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
       const piped = await run(['--ask', '--no-mcp'], { cwd: ws, input: 'again?' });
       assert.strictEqual(piped.code, 0, piped.err);
       assert.strictEqual(piped.out.trim(), 'The answer is **42**.');
+      // Piped stdin with a prompt argument goes along with the prompt.
+      const both = await run(['--ask', '--print', '--no-mcp', 'review this'], { cwd: ws, input: 'PIPED-MARKER-123' });
+      assert.strictEqual(both.code, 0, both.err);
+      assert.ok(srv.bodies.some((b) => b.includes('PIPED-MARKER-123')), 'piped stdin must reach the model alongside the prompt');
     } finally {
       srv.close();
     }
@@ -282,7 +291,7 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
     assert.strictEqual(missing.code, 2, missing.out + missing.err);
   });
 
-  test('get_diagnostics works in the CLI (no language servers) and does not crash the process', async function () {
+  test('get_diagnostics in the CLI (no language servers) tells the model to use real checks and does not crash the process', async function () {
     this.timeout(60_000);
     const srv = await mockScripted([{ tool: 'get_diagnostics', args: { path: 'a.js' } }, { text: 'No problems found.' }]);
     try {
@@ -296,6 +305,7 @@ suite('LocalPilot CLI (dist/cli.js)', () => {
       assert.doesNotMatch(r.err, /ReferenceError|is not a function/);
       assert.strictEqual(r.out.trim(), 'No problems found.');
       assert.ok(srv.chats >= 2, 'the tool result went back to the model');
+      assert.ok(srv.requests.some((b) => b.includes('Not available in the terminal')), 'the model is told diagnostics are unavailable');
     } finally {
       srv.close();
     }
@@ -324,6 +334,22 @@ suite('CLI shim', () => {
     assert.ok(alt.test('a/b/c.min.js'));
     assert.ok(globToRegExp('**/*.{ts,tsx}').test('a/b/c.tsx'));
   });
+
+  test('openTextDocument refreshes a clean cached document in place and textDocuments hides clean ones', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lp-shim-')));
+    try {
+      const file = path.join(dir, 'a.txt');
+      await fs.writeFile(file, 'v1');
+      const first = await shimWs.openTextDocument(ShimUri.file(file));
+      await fs.writeFile(file, 'v2');
+      assert.ok(!shimWs.textDocuments.some((d) => d.uri.fsPath === file && d.getText() === 'v1'));
+      const second = await shimWs.openTextDocument(ShimUri.file(file));
+      assert.strictEqual(second, first);
+      assert.strictEqual(second.getText(), 'v2');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 suite('Shell invocation', () => {
@@ -339,6 +365,26 @@ suite('Shell invocation', () => {
     assert.ok(inDir('C:\\wt', 'npm test', undefined, 'win32').startsWith('Set-Location'));
     assert.strictEqual(inDir('C:\\wt', 'npm test', 'cmd.exe', 'win32'), 'cd /d "C:\\wt" && npm test');
     assert.strictEqual(inDir("/tmp/it's", 'ls', '/bin/zsh', 'darwin'), "cd '/tmp/it'\\''s' && ls");
+  });
+
+  test('long command output keeps its first lines and the end, where failures are reported', () => {
+    const cap = new OutputCapture();
+    let i = 0;
+    for (let size = 0; size < 200_000; i++) {
+      const line = `line ${i} ${'x'.repeat(40)}\n`;
+      cap.push(line);
+      size += line.length;
+    }
+    cap.push('FINAL SUMMARY\n');
+    const text = cap.text();
+    assert.ok(text.startsWith(`line 0 ${'x'.repeat(40)}\n`));
+    assert.ok(text.includes('FINAL SUMMARY'));
+    assert.match(text, /…\[\d+ characters of output omitted\]…/);
+    assert.ok(text.length < 70_000);
+    const short = new OutputCapture();
+    short.push('a\n');
+    short.push('b\n');
+    assert.strictEqual(short.text(), 'a\nb\n');
   });
 
   test('child-process shells keep cmd.exe quotes intact and fall back to an existing POSIX shell', () => {

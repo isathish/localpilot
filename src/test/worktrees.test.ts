@@ -75,6 +75,17 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     assert.notStrictEqual(mgr.dirFor(repo), mgr.dirFor(repo + 'x'), 'different repos hash to different folders');
   });
 
+  test('the location setting expands ~, resolves relative paths under the home directory and is re-read on use', () => {
+    assert.ok(new WorktreeManager('~/lp-wt-test').dirFor('/x/repo').startsWith(path.join(os.homedir(), 'lp-wt-test') + path.sep));
+    assert.ok(new WorktreeManager('rel/wt').dirFor('/x/repo').startsWith(path.join(os.homedir(), 'rel', 'wt') + path.sep));
+    assert.ok(new WorktreeManager('  ').dirFor('/x/repo').startsWith(path.join(os.homedir(), '.localpilot', 'worktrees') + path.sep));
+    let loc = '~/a';
+    const live = new WorktreeManager(() => loc);
+    assert.ok(live.dirFor('/x/repo').startsWith(path.join(os.homedir(), 'a') + path.sep));
+    loc = '~/b';
+    assert.ok(live.dirFor('/x/repo').startsWith(path.join(os.homedir(), 'b') + path.sep));
+  });
+
   test('create seeds the worktree with committed + uncommitted + untracked state and records a base; changes() starts empty', async () => {
     const progress: string[] = [];
     const wt = await mgr.create(repo, 'session-1', { progress: (t) => progress.push(t) });
@@ -97,6 +108,19 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
       const again = await mgr.create(repo, 'session-1');
       assert.strictEqual(again.path, wt.path);
       await assert.rejects(fs.stat(path.join(again.path, 'junk.txt')), 'fresh copy');
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('create writes unsaved editor text (overlay) into the base, not as an agent change', async () => {
+    const wt = await mgr.create(repo, 'session-overlay', { overlay: { 'a.txt': 'unsaved', 'src/app.ts': 'export const a = 9;\n', '../escape.txt': 'no' } });
+    try {
+      assert.strictEqual(await fs.readFile(path.join(wt.path, 'a.txt'), 'utf8'), 'unsaved');
+      assert.strictEqual(await fs.readFile(path.join(wt.path, 'src', 'app.ts'), 'utf8'), 'export const a = 9;\n');
+      await assert.rejects(fs.stat(path.join(path.dirname(wt.path), 'escape.txt')), 'paths outside the repository are skipped');
+      assert.deepStrictEqual(await mgr.changes(wt), [], 'the overlay is part of the base');
+      assert.strictEqual(await mgr.baseContent(wt, 'a.txt'), 'unsaved');
     } finally {
       await mgr.remove(wt);
     }
@@ -218,6 +242,22 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     }
   });
 
+  test('create stops when aborted (before or during setup) and leaves no worktree behind', async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(mgr.create(repo, 'abort-early', { signal: aborted.signal }));
+    await assert.rejects(fs.stat(path.join(mgr.dirFor(repo), 'abort-early')));
+    await fs.mkdir(path.join(repo, '.localpilot'), { recursive: true });
+    const slow = process.platform === 'win32' ? 'ping -n 30 127.0.0.1 > NUL' : 'sleep 30';
+    await fs.writeFile(path.join(repo, '.localpilot', 'worktrees.json'), JSON.stringify({ setup: [slow, 'echo never > never.txt'] }));
+    const ctl = new AbortController();
+    const started = Date.now();
+    await assert.rejects(mgr.create(repo, 'abort-setup', { signal: ctl.signal, progress: (t) => /Setting up/.test(t) && setTimeout(() => ctl.abort(), 200) }));
+    assert.ok(Date.now() - started < 20_000, 'the running setup command was interrupted');
+    await assert.rejects(fs.stat(path.join(mgr.dirFor(repo), 'abort-setup')));
+    assert.doesNotMatch(git(['worktree', 'list'], repo), /abort-/);
+  });
+
   test('remove is idempotent and prune drops worktrees whose session is gone', async () => {
     const a = await mgr.create(repo, 'keep-me', { owner: 'w' });
     const b = await mgr.create(repo, 'gone', { owner: 'w' });
@@ -289,6 +329,20 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
       await mgr.rebase(wt);
       assert.deepStrictEqual(await mgr.changes(wt), []);
     } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('changes() still reports new files when the worktree index is locked', async () => {
+    const wt = await mgr.create(repo, 'locked');
+    const lock = path.join(path.resolve(wt.path, git(['rev-parse', '--git-dir'], wt.path).trim()), 'index.lock');
+    try {
+      await fs.writeFile(path.join(wt.path, 'fresh.txt'), 'one\ntwo\n');
+      await fs.writeFile(lock, '');
+      const changes = await mgr.changes(wt);
+      assert.deepStrictEqual(changes.find((c) => c.path === 'fresh.txt'), { path: 'fresh.txt', kind: 'create', added: 2, removed: 0 });
+    } finally {
+      await fs.rm(lock, { force: true });
       await mgr.remove(wt);
     }
   });

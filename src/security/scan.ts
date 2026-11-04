@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runCmd } from '../tools/git';
@@ -35,9 +36,18 @@ export interface Dependency {
   file: string;
 }
 
+/** PEP 503 normalised PyPI name: `Jupyter_Server` and `jupyter.server` are both `jupyter-server`. */
+const pep503 = (n: string) => n.toLowerCase().replace(/[-_.]+/g, '-');
+
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.venv', 'venv', '__pycache__', '.next', 'target', 'coverage', 'vendor', '.vscode-test']);
 
 // ------------------------------------------------------------------ lockfiles (pure)
+
+/** pip requirement files: `*requirements*.txt`, `constraints*.txt`, or any .txt in a `requirements/` folder. */
+function isRequirements(file: string): boolean {
+  file = file.replace(/\\/g, '/');
+  return /^(?:.*requirements.*|constraints.*)\.txt$/.test(path.posix.basename(file)) || /(?:^|\/)requirements\/[^/]+\.txt$/.test(file);
+}
 
 /** Exact versions from one lockfile; [] for files it does not understand. */
 export function parseLockfile(file: string, text: string): Dependency[] {
@@ -75,9 +85,9 @@ export function parseLockfile(file: string, text: string): Dependency[] {
       for (const m of text.matchAll(/^"?(@?[^@\s"]+)@[^\n]*:\n(?:[ \t]+.*\n)*?[ \t]+version:? "?([^"\s]+)"?/gm)) {
         add('npm', m[1], m[2]);
       }
-    } else if (/^requirements.*\.txt$/.test(base)) {
+    } else if (isRequirements(file)) {
       for (const m of text.matchAll(/^\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*==\s*([\w.+!-]+)/gm)) {
-        add('PyPI', m[1].toLowerCase(), m[2]);
+        add('PyPI', pep503(m[1]), m[2]);
       }
     } else if (base === 'poetry.lock' || base === 'uv.lock' || base === 'Cargo.lock') {
       for (const block of text.split(/^\[\[package\]\]/m).slice(1)) {
@@ -88,7 +98,7 @@ export function parseLockfile(file: string, text: string): Dependency[] {
           continue;
         }
         if (name && version) {
-          add(base === 'Cargo.lock' ? 'crates.io' : 'PyPI', base === 'Cargo.lock' ? name : name.toLowerCase(), version);
+          add(base === 'Cargo.lock' ? 'crates.io' : 'PyPI', base === 'Cargo.lock' ? name : pep503(name), version);
         }
       }
     } else if (base === 'Pipfile.lock') {
@@ -96,14 +106,58 @@ export function parseLockfile(file: string, text: string): Dependency[] {
       for (const sec of ['default', 'develop']) {
         for (const [name, d] of Object.entries(j[sec] ?? {})) {
           if (d.version?.startsWith('==')) {
-            add('PyPI', name.toLowerCase(), d.version.slice(2));
+            add('PyPI', pep503(name), d.version.slice(2));
           }
         }
       }
     } else if (base === 'go.mod') {
-      const body = text.replace(/\/\/.*$/gm, '');
-      for (const m of body.matchAll(/^\s*(?:require\s+)?([\w.-]+\.[\w.-]+\/[^\s]+)\s+(v[\w.+-]+)/gm)) {
-        add('Go', m[1], m[2].replace(/\+incompatible$/, ''));
+      // Directives one per line or in `( … )` blocks; only require counts, rewritten by replace (exclude, retract… ignored).
+      const required = new Map<string, string>();
+      const replaces: string[] = [];
+      let block = '';
+      for (const line of text.replace(/\/\/.*$/gm, '').replace(/"/g, '').split('\n').map((l) => l.trim())) {
+        let kind = block;
+        let rest = line;
+        if (block) {
+          if (line === ')') {
+            block = '';
+            continue;
+          }
+        } else {
+          const m = /^(\w+)\s*(\(?)\s*(.*)$/.exec(line);
+          if (!m) {
+            continue;
+          }
+          if (m[2]) {
+            block = m[3] === ')' ? '' : m[1];
+            continue;
+          }
+          [kind, rest] = [m[1], m[3]];
+        }
+        if (kind === 'require') {
+          const [p, v] = rest.split(/\s+/);
+          if (p && v) {
+            required.set(p, v);
+          }
+        } else if (kind === 'replace' && rest.includes('=>')) {
+          replaces.push(rest);
+        }
+      }
+      for (const r of replaces) {
+        const [[from, fromVer], [to, toVer]] = r.split('=>').map((x) => x.trim().split(/\s+/));
+        if (!required.has(from) || (fromVer && required.get(from) !== fromVer)) {
+          continue;
+        }
+        if (toVer) {
+          required.delete(from);
+          required.set(to, toVer);
+        } else if (/^(?:\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])/.test(to ?? '')) {
+          // A local directory: not a published module.
+          required.delete(from);
+        }
+      }
+      for (const [p, v] of required) {
+        add('Go', p, v.replace(/\+incompatible$/, ''));
       }
     } else if (base === 'Gemfile.lock') {
       // Every GEM section (Bundler writes one per gem source); GIT, PATH and PLUGIN SOURCE gems are not on RubyGems.
@@ -124,7 +178,9 @@ export function parseLockfile(file: string, text: string): Dependency[] {
   });
 }
 
-const LOCKFILES = /^(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|requirements.*\.txt|poetry\.lock|uv\.lock|Pipfile\.lock|go\.mod|Cargo\.lock|Gemfile\.lock)$/;
+const LOCKFILES = /^(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|go\.mod|Cargo\.lock|Gemfile\.lock)$/;
+const UNSUPPORTED = /^(pnpm-lock\.yaml|bun\.lockb?|composer\.lock|gradle\.lockfile|pom\.xml|build\.gradle(\.kts)?|packages\.lock\.json|Package\.resolved|pubspec\.lock|mix\.lock)$|\.csproj$/;
+const isLockfile = (file: string) => LOCKFILES.test(path.basename(file)) || isRequirements(file);
 
 // ------------------------------------------------------------------ OSV
 
@@ -135,7 +191,7 @@ interface OsvVuln {
   aliases?: string[];
   severity?: { type: string; score: string }[];
   database_specific?: { severity?: string; 'malicious-packages-origins'?: unknown };
-  affected?: { package?: { name?: string; ecosystem?: string }; ranges?: { events?: { introduced?: string; fixed?: string }[] }[]; database_specific?: { severity?: string; informational?: string }; ecosystem_specific?: { severity?: string } }[];
+  affected?: { package?: { name?: string; ecosystem?: string }; ranges?: { type?: string; events?: { introduced?: string; fixed?: string }[] }[]; database_specific?: { severity?: string; informational?: string }; ecosystem_specific?: { severity?: string } }[];
 }
 
 const CVSS3_WEIGHTS: Record<string, Record<string, number>> = {
@@ -209,11 +265,13 @@ export function osvSeverity(v: OsvVuln): Severity {
 /** Pure: versions that fix `v` for this package. */
 export function osvFixes(v: OsvVuln, dep: Pick<Dependency, 'name' | 'ecosystem'>): string[] {
   const fixes = new Set<string>();
+  const norm = (n: string) => (dep.ecosystem === 'PyPI' ? pep503(n) : n.toLowerCase());
   for (const a of v.affected ?? []) {
-    if (a.package?.name && a.package.name.toLowerCase() !== dep.name.toLowerCase()) {
+    if (a.package?.name && norm(a.package.name) !== norm(dep.name)) {
       continue;
     }
-    for (const r of a.ranges ?? []) {
+    // GIT ranges carry commit hashes, not versions anyone can upgrade to.
+    for (const r of (a.ranges ?? []).filter((x) => x.type !== 'GIT')) {
       for (const e of r.events ?? []) {
         if (e.fixed) {
           fixes.add(e.fixed);
@@ -224,14 +282,38 @@ export function osvFixes(v: OsvVuln, dep: Pick<Dependency, 'name' | 'ecosystem'>
   return [...fixes];
 }
 
-export async function checkDependencies(deps: Dependency[], opts: { fetchImpl?: typeof fetch; signal?: AbortSignal; progress?: (t: string) => void } = {}): Promise<Finding[]> {
+/** One retry, after a second, when OSV.dev is rate limiting, failing or unreachable. */
+async function osvFetch(f: typeof fetch, url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await f(url, init);
+      if (r.ok || attempt || (r.status !== 429 && r.status < 500)) {
+        return r;
+      }
+    } catch (e) {
+      if (attempt || init.signal?.aborted) {
+        throw e;
+      }
+    }
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+}
+
+/** `onSkip` hears about the part of the check that could not complete (advisories whose details could not be fetched). */
+export async function checkDependencies(deps: Dependency[], opts: { fetchImpl?: typeof fetch; signal?: AbortSignal; progress?: (t: string) => void; onSkip?: (t: string) => void } = {}): Promise<Finding[]> {
   const f = opts.fetchImpl ?? fetch;
-  const unique = [...new Map(deps.map((d) => [`${d.ecosystem}|${d.name}|${d.version}`, d])).values()];
+  // The same package and version in several lockfiles is queried once and reported against each of them.
+  const byKey = new Map<string, Dependency[]>();
+  for (const d of deps) {
+    const k = `${d.ecosystem}|${d.name}|${d.version}`;
+    byKey.set(k, [...(byKey.get(k) ?? []), d]);
+  }
+  const unique = [...byKey.values()].map((g) => g[0]);
   const hits: { dep: Dependency; ids: string[] }[] = [];
   for (let i = 0; i < unique.length; i += 500) {
     const chunk = unique.slice(i, i + 500);
     opts.progress?.(`Checking ${Math.min(i + 500, unique.length)} of ${unique.length} packages against OSV.dev…`);
-    const res = await f('https://api.osv.dev/v1/querybatch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ queries: chunk.map((d) => ({ package: { name: d.name, ecosystem: d.ecosystem }, version: d.version })) }), signal: opts.signal });
+    const res = await osvFetch(f, 'https://api.osv.dev/v1/querybatch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ queries: chunk.map((d) => ({ package: { name: d.name, ecosystem: d.ecosystem }, version: d.version })) }), signal: opts.signal });
     if (!res.ok) {
       throw new Error(`OSV.dev answered ${res.status} ${res.statusText}`);
     }
@@ -244,15 +326,23 @@ export async function checkDependencies(deps: Dependency[], opts: { fetchImpl?: 
   }
   const ids = [...new Set(hits.flatMap((h) => h.ids))];
   const details = new Map<string, OsvVuln>();
+  const unresolved = new Set<string>();
   for (let i = 0; i < ids.length; i += 8) {
-    await Promise.all(
-      ids.slice(i, i + 8).map(async (id) => {
-        const r = await f(`https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`, { signal: opts.signal });
-        if (r.ok) {
-          details.set(id, (await r.json()) as OsvVuln);
+    const batch = ids.slice(i, i + 8);
+    const settled = await Promise.allSettled(
+      batch.map(async (id) => {
+        const r = await osvFetch(f, `https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`, { signal: opts.signal });
+        if (!r.ok) {
+          throw new Error(`OSV.dev answered ${r.status}`);
         }
+        details.set(id, (await r.json()) as OsvVuln);
       })
     );
+    opts.signal?.throwIfAborted();
+    settled.forEach((s, k) => s.status === 'rejected' && unresolved.add(batch[k]));
+  }
+  if (unresolved.size) {
+    opts.onSkip?.(`dependencies: details for ${unresolved.size} advisor${unresolved.size === 1 ? 'y' : 'ies'} could not be fetched`);
   }
   const out: Finding[] = [];
   for (const { dep, ids: vids } of hits) {
@@ -266,7 +356,10 @@ export async function checkDependencies(deps: Dependency[], opts: { fetchImpl?: 
       }
       keys.forEach((k) => seen.add(k));
       const fixes = osvFixes(v, dep);
-      out.push({ kind: 'dependency', severity: osvSeverity(v), id: v.id, title: v.summary ?? v.details?.split('\n')[0]?.slice(0, 120) ?? v.id, file: dep.file, package: { ecosystem: dep.ecosystem, name: dep.name, version: dep.version }, fix: v.id.startsWith('MAL-') ? 'remove this package or pin a version not listed as malicious' : fixes.length ? `upgrade ${dep.name} to ${fixes.join(' or ')}` : 'no fixed version published yet', aliases: v.aliases?.filter((a) => a.startsWith('CVE-')) });
+      const title = unresolved.has(id) ? `${id} (details unavailable)` : v.summary ?? v.details?.split('\n')[0]?.slice(0, 120) ?? v.id;
+      for (const d of byKey.get(`${dep.ecosystem}|${dep.name}|${dep.version}`) ?? [dep]) {
+        out.push({ kind: 'dependency', severity: osvSeverity(v), id: v.id, title, file: d.file, package: { ecosystem: d.ecosystem, name: d.name, version: d.version }, fix: v.id.startsWith('MAL-') ? 'remove this package or pin a version not listed as malicious' : unresolved.has(id) ? `see https://osv.dev/vulnerability/${id}` : fixes.length ? `upgrade ${d.name} to ${fixes.join(' or ')}` : 'no fixed version published yet', aliases: v.aliases?.filter((a) => a.startsWith('CVE-')) });
+      }
     }
   }
   return out;
@@ -286,7 +379,7 @@ interface Rule {
 }
 
 const SECRET_RULES: Rule[] = [
-  { id: 'private-key', title: 'Private key', severity: 'critical', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----/, fix: 'remove it from the repository, rotate the key, load it from a file outside the repo or a secret store' },
+  { id: 'private-key', title: 'Private key', severity: 'critical', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/, fix: 'remove it from the repository, rotate the key, load it from a file outside the repo or a secret store' },
   { id: 'aws-access-key', title: 'AWS access key id', severity: 'critical', re: /\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/, value: 1, fix: 'deactivate the key in IAM and read credentials from the environment or a profile' },
   { id: 'github-token', title: 'GitHub token', severity: 'critical', re: /\b((?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}))\b/, value: 1, fix: 'revoke it on GitHub and read it from an environment variable' },
   { id: 'anthropic-key', title: 'Anthropic API key', severity: 'critical', re: /\b(sk-ant-[A-Za-z0-9_-]{30,})/, value: 1, fix: 'rotate it in the Anthropic console and read it from the environment' },
@@ -294,7 +387,9 @@ const SECRET_RULES: Rule[] = [
   { id: 'slack-token', title: 'Slack token', severity: 'high', re: /\b(xox[baprs]-[A-Za-z0-9-]{20,})\b/, value: 1, fix: 'revoke it in Slack and read it from the environment' },
   { id: 'google-api-key', title: 'Google API key', severity: 'high', re: /\b(AIza[0-9A-Za-z_-]{35})\b/, value: 1, fix: 'restrict or rotate it in Google Cloud and read it from the environment' },
   { id: 'stripe-key', title: 'Stripe live key', severity: 'critical', re: /\b((?:sk|rk)_live_[0-9A-Za-z]{24,})\b/, value: 1, fix: 'roll it in the Stripe dashboard and read it from the environment' },
-  { id: 'hardcoded-credential', title: 'Hard-coded password or token', severity: 'high', re: /\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)\b["']?\s*[:=]\s*["']([^"'\s]{12,})["']/i, value: 1, fix: 'read it from an environment variable or a secret store' },
+  { id: 'hardcoded-credential', title: 'Hard-coded password or token', severity: 'high', re: /(?<![A-Za-z0-9])[\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)[\w.-]*["']?\s*[:=]\s*["']([^"'\s]{12,})["']/i, value: 1, fix: 'read it from an environment variable or a secret store' },
+  // Config and .env files: unquoted values.
+  { id: 'hardcoded-credential', title: 'Hard-coded password or token', severity: 'high', re: /(?<![A-Za-z0-9])[\w.-]*?(?:password|passwd|secret|token|api[_-]?key)[\w.-]*\s*[:=]\s*([^\s"'#]{12,})/i, files: /(^|\/)\.env[^/]*$|\.(ya?ml|properties|ini|toml|cfg)$/, value: 1, fix: 'read it from an environment variable or a secret store' },
 ];
 
 const CODE_RULES: Rule[] = [
@@ -330,12 +425,12 @@ export function scanText(file: string, text: string, kinds: { secrets: boolean; 
     }
     if (kinds.secrets) {
       for (const r of SECRET_RULES) {
-        const m = r.re.exec(line);
+        const m = (!r.files || r.files.test(file)) && r.re.exec(line);
         if (!m) {
           continue;
         }
         const value = r.value ? m[r.value] : m[0];
-        if (r.id === 'hardcoded-credential' && (PLACEHOLDER.test(value) || entropy(value) < 3.3 || /process\.env|os\.environ|getenv|\$\{/.test(line))) {
+        if (r.id === 'hardcoded-credential' && (PLACEHOLDER.test(value) || entropy(value) < 3.3 || /\$\{|%\(|\{\{/.test(value) || /process\.env|os\.environ|getenv|\$\{/.test(line))) {
           continue;
         }
         out.push({ kind: 'secret', severity: isTest && r.severity === 'critical' ? 'high' : r.severity, id: r.id, title: `${r.title}${r.id === 'private-key' ? '' : `: ${mask(value)}`}`, file, line: i + 1, fix: r.fix });
@@ -395,6 +490,8 @@ export interface ScanResult {
   skipped: string[];
   /** The kinds that ran. */
   kinds?: { dependencies: boolean; secrets: boolean; code: boolean };
+  /** Where `root` sits in its git repository (`sub/dir`), so SARIF paths are repository-relative. */
+  prefix?: string;
 }
 
 export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promise<ScanResult> {
@@ -421,23 +518,30 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
   const skipped: string[] = [];
   let deps: Dependency[] = [];
   if (kinds.dependencies) {
-    for (const f of files.filter((x) => LOCKFILES.test(path.basename(x)))) {
+    for (const f of files.filter(isLockfile)) {
       deps.push(...parseLockfile(f, await fs.promises.readFile(path.join(root, f), 'utf8').catch(() => '')));
     }
     deps = deps.filter((d, i) => deps.findIndex((e) => e.ecosystem === d.ecosystem && e.name === d.name && e.version === d.version && e.file === d.file) === i);
+    const unsupported = files.filter((x) => UNSUPPORTED.test(path.basename(x)));
+    skipped.push(...unsupported.slice(0, 5).map((f) => `dependencies: ${f} is not supported, not checked`));
+    if (unsupported.length > 5) {
+      skipped.push(`dependencies: … and ${unsupported.length - 5} more unsupported files, not checked`);
+    }
     if (deps.length) {
       try {
-        findings.push(...(await checkDependencies(deps, opts)));
+        findings.push(...(await checkDependencies(deps, { ...opts, onSkip: (t) => skipped.push(t) })));
       } catch (e) {
         skipped.push(`dependencies: ${e instanceof Error ? e.message : String(e)}`);
       }
+    } else {
+      skipped.push('dependencies: no supported lockfile found');
     }
   }
   let read = 0;
   if (kinds.secrets || kinds.code) {
     opts.progress?.(`Reading ${files.length} files…`);
     for (const f of files) {
-      if (BINARY.test(f) || /\.min\.(js|css)$/.test(f) || LOCKFILES.test(path.basename(f))) {
+      if (BINARY.test(f) || /\.min\.(js|css)$/.test(f) || isLockfile(f)) {
         continue;
       }
       let text: string;
@@ -458,7 +562,9 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
     }
   }
   findings.sort((a, b) => SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity) || a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0));
-  return { root, findings, dependencies: deps.length, files: read, skipped, kinds };
+  const git = await runCmd('git', ['rev-parse', '--show-prefix'], root, undefined, 10_000).catch(() => undefined);
+  const prefix = git?.code === 0 ? git.out.trim().replace(/\/+$/, '') : '';
+  return { root, findings, dependencies: deps.length, files: read, skipped, kinds, prefix };
 }
 
 // ------------------------------------------------------------------ reports (pure)
@@ -479,13 +585,24 @@ export function formatFindings(r: ScanResult, max = 60): string {
 /** SARIF 2.1.0, the format GitHub code scanning (and most CI dashboards) read. */
 export function toSarif(r: ScanResult, version: string): object {
   const level = (s: Severity) => (s === 'critical' || s === 'high' ? 'error' : s === 'medium' ? 'warning' : 'note');
-  const rules = [...new Map(r.findings.map((f) => [f.id, { id: f.id, name: f.id, shortDescription: { text: f.kind === 'dependency' ? `${f.package!.name}: ${f.title}` : f.title.replace(/:.*$/, '') }, help: { text: f.fix ?? '' }, properties: { 'security-severity': ({ low: '3.0', medium: '5.5', high: '8.0', critical: '9.5' } as const)[f.severity], tags: ['security', f.kind] } }])).values()];
+  // One rule per id, rated by its most severe finding.
+  const top = new Map<string, Finding>();
+  for (const f of r.findings) {
+    const had = top.get(f.id);
+    if (!had || SEVERITY_ORDER.indexOf(f.severity) > SEVERITY_ORDER.indexOf(had.severity)) {
+      top.set(f.id, f);
+    }
+  }
+  const rules = [...top.values()].map((f) => ({ id: f.id, name: f.id, shortDescription: { text: f.kind === 'dependency' ? `${f.package!.name}: ${f.title}` : f.title.replace(/:.*$/, '') }, help: { text: f.fix ?? '' }, properties: { 'security-severity': ({ low: '3.0', medium: '5.5', high: '8.0', critical: '9.5' } as const)[f.severity], tags: ['security', f.kind] } }));
+  const uri = (file: string) => (r.prefix ? path.posix.join(r.prefix, file) : file);
+  const fingerprint = (f: Finding) => crypto.createHash('sha256').update([f.id, f.package!.ecosystem, f.package!.name, f.package!.version, f.file].join('|')).digest('hex');
   return {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
     version: '2.1.0',
     runs: [{
       tool: { driver: { name: 'LocalPilot security scan', version, informationUri: 'https://isathish.github.io/localpilot/', rules } },
-      results: r.findings.map((f) => ({ ruleId: f.id, level: level(f.severity), message: { text: f.kind === 'dependency' ? `${f.package!.name} ${f.package!.version}: ${f.title}. ${f.fix}` : `${f.title}. ${f.fix}` }, locations: [{ physicalLocation: { artifactLocation: { uri: f.file }, ...(f.line ? { region: { startLine: f.line } } : {}) } }] })),
+      ...(r.skipped.length ? { invocations: [{ executionSuccessful: false, toolExecutionNotifications: r.skipped.map((t) => ({ message: { text: t } })) }] } : {}),
+      results: r.findings.map((f) => ({ ruleId: f.id, level: level(f.severity), message: { text: f.kind === 'dependency' ? `${f.package!.name} ${f.package!.version}: ${f.title}. ${f.fix}` : `${f.title}. ${f.fix}` }, locations: [{ physicalLocation: { artifactLocation: { uri: uri(f.file) }, ...(f.line ? { region: { startLine: f.line } } : {}) } }], ...(f.kind === 'dependency' ? { partialFingerprints: { primaryLocationLineHash: fingerprint(f) } } : {}) })),
     }],
   };
 }

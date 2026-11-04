@@ -31,6 +31,7 @@ import { emptySettings, ProjectSettings } from './settings';
 import { runDigest, saveRunMemories } from './autoMemory';
 import { irrelevantTools } from './toolRelevance';
 import { listRepos } from './repos';
+import { markRepoGraphStale } from '../context/repoGraph';
 
 /** `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies. */
 export type ApprovalHandler = (title: string, detail: string, kind: NonNullable<Tool['approvalKind']>, opts?: { mandatory?: boolean }) => Promise<boolean>;
@@ -54,6 +55,8 @@ export interface AgentRunOptions {
   session: Session;
   /** The new user message to process (appended to the session). */
   userMessage: ChatMessage;
+  /** Called once the top-level run has appended its user message to the session. */
+  onUserMessage?: (m: ChatMessage) => void;
   modelRef?: string;
   /** Routing role for this run (subagents pass `fast` for read-only work). Defaults to agent / reasoning in Plan mode. */
   role?: ModelRole;
@@ -82,6 +85,8 @@ export interface AgentRunOptions {
   maxModelRetries?: number;
   /** First-token watchdog for this run (default 180 s, scaled by queue depth). Shorter for router-chosen subagent models, which have a fallback. */
   firstTokenTimeoutMs?: number;
+  /** When set, `maxModelRetries` and `firstTokenTimeoutMs` apply only if the routed model differs from this id (a side model). */
+  sideModelOf?: string;
   /**
    * The model was not the user's explicit choice (Auto, or inherited from a parent): when it is saturated the router
    * may run this on a comparable idle model instead so parallel work really runs in parallel. Default: Auto chats
@@ -203,19 +208,21 @@ export class AgentRunner {
   private async runTurn(o: AgentRunOptions, stats: RunStats): Promise<string> {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
-    const maxModelRetries = o.maxModelRetries ?? MAX_MODEL_RETRIES;
     const session = o.session;
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
 
+    // Captured before routing: the user may pick another model while the route is resolved, and that pick must stand.
+    const requested = o.modelRef ?? session.model;
+    const ownChoice = !!session.model && (!o.modelRef || o.modelRef === session.model);
     let route: Awaited<ReturnType<ProviderRegistry['route']>>;
     try {
       route = await this.providers.route({
         role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
-        modelRef: o.modelRef ?? session.model,
+        modelRef: requested,
         fresh: true,
         needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
-        spread: o.spreadModels ?? (depth > 0 || !(o.modelRef ?? session.model)),
+        spread: o.spreadModels ?? (depth > 0 || !requested),
         load: this.loadFor(session.id),
         signal: o.signal,
       });
@@ -234,6 +241,9 @@ export class AgentRunner {
       throw err;
     }
     const { provider } = route;
+    // The stricter limits are for a side model with a fallback; the parent's own model gets the normal patience.
+    const onSide = !o.sideModelOf || route.model.id !== o.sideModelOf;
+    const maxModelRetries = onSide ? o.maxModelRetries ?? MAX_MODEL_RETRIES : MAX_MODEL_RETRIES;
     // One number for the budget and for the request: the window the model is actually given (the setting, capped by
     // the model; 0 = the model's full native window). Budgeting against the native window while sending a smaller
     // num_ctx would let the server truncate silently before compaction ever triggered.
@@ -245,17 +255,17 @@ export class AgentRunner {
       status(route.reason);
     }
     // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
-    // unavailable model is replaced for good so the picker reflects what is actually answering. A model chosen only
+    // unavailable model is replaced for good so the picker reflects what is actually answering — unless only its
+    // server missed the last check, then the substitute answers this turn and the next one tries it again. A model chosen only
     // because the intended one was busy is not kept either: the next turn routes afresh. An Auto chat stays Auto:
     // every turn is routed again (to the default, a vision model for images, or an idle model when this one is busy),
     // and the UI shows what answered from the `model_request` event. A one-off model (a command's `model:`) does not
     // change the chat's model either.
     // Subagent sessions are ephemeral: record what actually answered so the parent can report or quarantine it.
-    const ownChoice = !!session.model && (!o.modelRef || o.modelRef === session.model);
     // A cloud model standing in for a local (or unknown) one is never written into the chat: the next turn tries the local one again.
     const wantedCfg = session.model ? cfg.providers.find((p) => session.model!.startsWith(`${p.id}/`)) : undefined;
     const cloudForLocal = route.fallback && !!model.remote && !(wantedCfg && isCloudProvider(wantedCfg));
-    if (depth > 0 || (ownChoice && (!route.reason || route.fallback) && !route.spread && !cloudForLocal)) {
+    if (depth > 0 || (session.model === requested && ownChoice && (!route.reason || (route.fallback && !route.unavailable)) && !route.spread && !cloudForLocal)) {
       session.model = model.id;
     }
 
@@ -272,7 +282,8 @@ export class AgentRunner {
     const offered = this.offeredTools.get(session.id) ?? new Set<string>();
     const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, [], getConfig().repos).length : 0);
     offered.forEach((n) => omit?.delete(n));
-    const toolList = this.selectTools(session.mode, o.toolFilter, omit);
+    // Unattended runs (eval) work in throwaway folders: this project's memory is neither shown nor written.
+    const toolList = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.unattended || !t.definition.name.startsWith('memory_'));
     if (!o.toolFilter && depth === 0) {
       toolList.forEach((t) => offered.add(t.definition.name));
       this.offeredTools.delete(session.id);
@@ -298,8 +309,12 @@ export class AgentRunner {
       roleOverride: o.roleOverride,
       clarify: cfg.clarify,
       canSaveMemory: toolDefs.some((t) => t.name === 'memory_save'),
+      canScreenshot: toolDefs.some((t) => t.name === 'browser_screenshot'),
+      canInspect: toolDefs.some((t) => t.name === 'browser_inspect'),
+      canOpenBrowser: toolDefs.some((t) => t.name === 'open_browser'),
       // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
-      memory: cfg.memoryEnabled && depth === 0 ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
+      unattended: o.unattended,
+      memory: cfg.memoryEnabled && depth === 0 && !o.unattended ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
     });
     const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = !!o.isolatedFrom;
@@ -314,6 +329,9 @@ export class AgentRunner {
       closeDanglingToolCalls(session.messages);
     }
     session.messages.push(turnMessage);
+    if (depth === 0) {
+      o.onUserMessage?.(turnMessage);
+    }
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
     const hookRoot = o.workspaceRoot ?? this.workspace.root;
@@ -674,6 +692,7 @@ export class AgentRunner {
       let text = '';
       let thinking = '';
       const calls: ToolCall[] = [];
+      let finish: string | undefined;
       // Transient failures (connection drops, 5xx, a stalled server, an empty completion) are retried a
       // couple of times before the user sees an error; a context-overflow reply compacts once and retries.
       let attempt = 0;
@@ -683,6 +702,7 @@ export class AgentRunner {
         text = '';
         thinking = '';
         calls.length = 0;
+        finish = undefined;
         if (o.signal.aborted) {
           aborted = true;
           break;
@@ -715,7 +735,7 @@ export class AgentRunner {
           // Ollama sends nothing while it buffers a tool call: a measured-slow model gets time for a max-length one.
           const measured = stats.genMs && stats.genTokens ? (cfg.maxOutputTokens / (stats.genTokens / (stats.genMs / 1000))) * 1.5 * 1000 : 0;
           const guarded = withWatchdog(stream, {
-            firstTokenMs: Math.min((o.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
+            firstTokenMs: Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first),
             idleMs: Math.max(IDLE_TIMEOUT_MS * patience.idle, measured),
             abort: () => ac.abort(),
             onWaiting: (s) => status(`${waitingFor} · ${s}s…`),
@@ -742,6 +762,9 @@ export class AgentRunner {
                 break;
               case 'tool_call':
                 calls.push(ev.call);
+                break;
+              case 'done':
+                finish = ev.finishReason;
                 break;
               case 'usage':
                 usage = ev;
@@ -898,6 +921,19 @@ export class AgentRunner {
       assistant.toolCalls = calls.length ? calls : undefined;
       session.messages.push(assistant);
       finalText = text;
+
+      if (finish === 'length') {
+        if (calls.length) {
+          // The arguments were cut off mid-call: running them would fail with a misleading error (or write half a file).
+          const note = `Your output reached the ${cfg.maxOutputTokens}-token output limit while writing this call, so nothing was executed. Write large files in parts (write_file a skeleton, then edit_file), or keep arguments shorter.`;
+          for (const c of calls) {
+            session.messages.push({ role: 'tool', content: nativeTools ? note : `<tool_result name="${c.name}">\n${note}\n</tool_result>`, toolCallId: c.id, toolName: c.name, meta: { timestamp: Date.now() } });
+          }
+          status('Output limit reached — asking for a shorter call…');
+          continue;
+        }
+        status('Reply truncated at the output limit');
+      }
 
       if (!calls.length) {
         // The model tried to call a tool but the call did not parse: hand the error back once so it can
@@ -1247,9 +1283,10 @@ export class AgentRunner {
       }
       if (tool && policy && !result) {
         // Organisation policy first (it cannot be overridden), then settings.json: deny → ask → allow, then the default mode.
-        const verdict = org.decision === 'ask' ? { decision: 'ask' as const, rule: undefined } : evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
+        const proj = evaluatePermission(policy.settings.permissions, call.name, args, { root: policy.root }, policy.extraAllow);
+        const verdict = proj.decision === 'deny' ? proj : org.decision === 'ask' ? { decision: 'ask' as const, rule: undefined } : proj;
         let decision: 'allow' | 'deny' | 'ask' | 'none' = verdict.decision;
-        let reason = org.decision === 'ask' ? org.reason! : verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
+        let reason = verdict !== proj ? org.reason! : verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
         if (decision === 'deny') {
           result = { content: `Blocked by ${reason} in settings.json. Do not retry this exact action; choose another approach or ask the user to change the rule.`, isError: true };
         } else if (policy.hooks?.has('PreToolUse')) {
@@ -1271,9 +1308,15 @@ export class AgentRunner {
           }
         }
         if (!result) {
-          if (decision === 'none' && !(managed.disableBypassPermissions && policy.settings.permissions.defaultMode && policy.settings.permissions.defaultMode !== 'default' && policy.settings.permissions.defaultMode !== 'plan')) {
-            decision = defaultModeDecision(policy.settings.permissions.defaultMode, call.name);
-            reason = decision === 'none' ? '' : `permissions.defaultMode = ${policy.settings.permissions.defaultMode}`;
+          const defaultMode = policy.settings.permissions.defaultMode;
+          if (decision === 'none' && !(managed.disableBypassPermissions && (defaultMode === 'bypassPermissions' || defaultMode === 'acceptEdits'))) {
+            const effective = tool.approvalKind ? flooredApproval(managed, tool.approvalKind, getConfig().approvals[tool.approvalKind]) : undefined;
+            decision = defaultModeDecision(defaultMode, call.name, tool.approvalKind, effective);
+            reason = decision === 'none' ? '' : `permissions.defaultMode = ${defaultMode}`;
+          } else if (decision === 'ask' && defaultMode === 'dontAsk') {
+            // dontAsk never prompts: an ask rule or hook ask becomes a refusal.
+            decision = 'deny';
+            reason = 'permissions.defaultMode = dontAsk';
           }
           if (decision === 'deny') {
             result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
@@ -1377,19 +1420,32 @@ export class AgentRunner {
         return p;
       }
       cache.clear();
-      return (await execute(call, tool, args).then(afterEdit)).msg;
+      try {
+        return (await execute(call, tool, args).then(afterEdit)).msg;
+      } finally {
+        markRepoGraphStale(ctx.workspaceRoot);
+      }
     };
 
-    // Parallel-safe tools run concurrently; mutating tools run sequentially in order, after reads.
-    const parallel = calls.filter((c) => byName.get(c.name)?.parallelSafe);
-    const serial = calls.filter((c) => !byName.get(c.name)?.parallelSafe);
+    // Consecutive parallel-safe tools run concurrently; a mutating tool runs alone, in the model's order.
     const results = new Map<string, ChatMessage>();
-    const settled = await pool.map(parallel, runOne);
-    settled.forEach((r, i) => {
-      const call = parallel[i];
-      results.set(call.id, r.status === 'fulfilled' ? r.value : { role: 'tool', content: `Tool failed: ${String(r.reason)}`, toolCallId: call.id, toolName: call.name });
-    });
-    for (const call of serial) {
+    let group: ToolCall[] = [];
+    const flush = async () => {
+      if (!group.length) {return;}
+      const batch = group;
+      group = [];
+      const settled = await pool.map(batch, runOne);
+      settled.forEach((r, i) => {
+        const call = batch[i];
+        results.set(call.id, r.status === 'fulfilled' ? r.value : { role: 'tool', content: `Tool failed: ${String(r.reason)}`, toolCallId: call.id, toolName: call.name });
+      });
+    };
+    for (const call of calls) {
+      if (byName.get(call.name)?.parallelSafe) {
+        group.push(call);
+        continue;
+      }
+      await flush();
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args: parseArgs(call.arguments) } });
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
@@ -1398,6 +1454,7 @@ export class AgentRunner {
       }
       results.set(call.id, await runOne(call));
     }
+    await flush();
     // Preserve the model's original call order in the transcript.
     const ordered = calls.map((c) => results.get(c.id)!);
     const imageMsg: ChatMessage | undefined = captured.length

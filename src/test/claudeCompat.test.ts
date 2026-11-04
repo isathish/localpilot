@@ -140,6 +140,21 @@ suite('Claude Code compatibility: permission rules', () => {
     } finally {
       forgetMcpToolOrigin('mcp_my_db_run_query');
     }
+    const allowed = (spec: string, tool: string) => evaluatePermission({ ...emptySettings().permissions, allow: [spec] }, tool, {}).decision;
+    registerMcpToolOrigin('mcp_github_enterprise_list_repos', 'github_enterprise', 'list_repos');
+    registerMcpToolOrigin('mcp_kit_db_query', 'kit:db', 'query');
+    try {
+      assert.strictEqual(allowed('mcp__github', 'mcp_github_enterprise_list_repos'), 'none', 'mcp__github does not cover github_enterprise');
+      assert.strictEqual(allowed('mcp__github_enterprise', 'mcp_github_enterprise_list_repos'), 'allow');
+      assert.strictEqual(deny('mcp__kit:db', 'mcp_kit_db_query'), 'deny');
+      assert.strictEqual(deny('mcp__plugin_kit_db__query', 'mcp_kit_db_query'), 'deny');
+      assert.strictEqual(deny('mcp__plugin_kit_db', 'mcp_kit_db_query'), 'deny');
+      assert.strictEqual(deny('mcp__kit', 'mcp_kit_db_query'), 'none');
+      assert.strictEqual(canonicalToolName('mcp_kit_db_query'), 'mcp__kit:db__query');
+    } finally {
+      forgetMcpToolOrigin('mcp_github_enterprise_list_repos');
+      forgetMcpToolOrigin('mcp_kit_db_query');
+    }
     assert.strictEqual(deny('Task(coder)', 'run_parallel_subagents', { tasks: [{ agent: 'explore' }, { agent: 'coder' }] }), 'deny');
     assert.strictEqual(deny('Task(coder)', 'run_parallel_subagents', { tasks: [{ agent: 'explore' }] }), 'none');
     const allow = evaluatePermission({ ...emptySettings().permissions, allow: ['Task(coder)'] }, 'run_parallel_subagents', { tasks: [{ agent: 'coder' }, { agent: 'explore' }] }).decision;
@@ -212,7 +227,9 @@ suite('Claude Code compatibility: permission rules', () => {
     assert.strictEqual(defaultModeDecision('bypassPermissions', 'run_command'), 'allow');
     assert.strictEqual(defaultModeDecision('acceptEdits', 'edit_file'), 'allow');
     assert.strictEqual(defaultModeDecision('acceptEdits', 'run_command'), 'none');
-    assert.strictEqual(defaultModeDecision('dontAsk', 'run_command'), 'deny');
+    assert.strictEqual(defaultModeDecision('dontAsk', 'run_command', 'terminal', 'ask'), 'deny');
+    assert.strictEqual(defaultModeDecision('dontAsk', 'read_file'), 'none');
+    assert.strictEqual(defaultModeDecision('dontAsk', 'write_file', 'write', 'always'), 'none');
     assert.strictEqual(defaultModeDecision(undefined, 'run_command'), 'none');
   });
 
@@ -473,6 +490,16 @@ suite('Claude Code compatibility: CLAUDE.md hierarchy and imports', () => {
       files.map((f) => `${f.label}:${f.note ?? 'full'}`),
       ['~/.claude/CLAUDE.md:truncated', 'AGENTS.md:full']
     );
+  });
+
+  (posix ? test : test.skip)('a symlinked rule file is included once', async () => {
+    const home = await tmp('linkhome');
+    const root = await tmp('linkroot');
+    await write(path.join(root, 'CLAUDE.md'), 'SHARED RULES');
+    await fs.symlink(path.join(root, 'CLAUDE.md'), path.join(root, 'AGENTS.md'));
+    const { text, files } = await buildInstructions([root], { home });
+    assert.deepStrictEqual(files.map((f) => f.label), ['AGENTS.md']);
+    assert.strictEqual(text.split('SHARED RULES').length, 2);
   });
 });
 

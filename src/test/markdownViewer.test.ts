@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { createShowMarkdownTool, MarkdownViewer } from '../ui/markdownViewer';
+import { ToolContext } from '../types';
 
 suite('LocalPilot Markdown reader', () => {
   suiteSetup(async function () {
@@ -35,5 +38,20 @@ suite('LocalPilot Markdown reader', () => {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     await vscode.commands.executeCommand('localpilot.openMarkdownViewer');
     await fs.rm(file, { force: true });
+  });
+
+  test('show_markdown resolves paths against the session worktree, not the main checkout', async () => {
+    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-md-wt-'));
+    try {
+      await fs.writeFile(path.join(wt, 'SPEC-WT.md'), '# Worktree spec\n');
+      let shown: vscode.Uri | undefined;
+      const viewer = { showFile: async (uri: vscode.Uri) => void (shown = uri) } as unknown as MarkdownViewer;
+      const ctx: ToolContext = { sessionId: 'test', workspaceRoot: wt, signal: new AbortController().signal, depth: 0, requestApproval: async () => true, progress: () => undefined, trackChange: async () => undefined };
+      const r = await createShowMarkdownTool(viewer).execute({ path: 'SPEC-WT.md' }, ctx);
+      assert.ok(!r.isError, r.content);
+      assert.strictEqual(shown?.fsPath, vscode.Uri.file(path.join(wt, 'SPEC-WT.md')).fsPath);
+    } finally {
+      await fs.rm(wt, { recursive: true, force: true });
+    }
   });
 });

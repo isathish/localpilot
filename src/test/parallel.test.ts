@@ -246,6 +246,40 @@ suite('Parallel execution: dependency waves, sharding and plan handoff', () => {
     assert.ok(none.isError && /Nothing to run/.test(none.content));
   });
 
+  test('run_todos_parallel runs only the selected items and never falls back to all pending items on a bad selector', async () => {
+    const starts: string[] = [];
+    const { tool } = fanOutTool(async (prompt) => {
+      starts.push(/checklist item (\S+) \(/.exec(prompt)![1]);
+      return 'ok';
+    });
+    let todos: TodoItem[] = [
+      { id: '1', title: 'First', status: 'pending', agent: 'coder', prompt: 'one' },
+      { id: '2', title: 'Second', status: 'pending', agent: 'coder', prompt: 'two' },
+    ];
+    const ctx = fakeCtx({ get: () => todos, set: (t) => (todos = t) });
+    const one = await tool.execute({ ids: '2' }, ctx);
+    assert.ok(!one.isError, one.content);
+    assert.deepStrictEqual(starts, ['2'], 'a scalar id runs only that item');
+    assert.strictEqual(todos.find((t) => t.id === '1')!.status, 'pending');
+    const bad = await tool.execute({ tasks: [{ title: 'x' }] }, ctx);
+    assert.ok(bad.isError && /nothing was run/.test(bad.content), bad.content);
+    assert.deepStrictEqual(starts, ['2'], 'malformed tasks run nothing');
+    assert.strictEqual(todos.find((t) => t.id === '1')!.status, 'pending');
+  });
+
+  test('run_parallel_subagents rejects a task without a prompt before running any child', async () => {
+    let runs = 0;
+    const { tool, events } = fanOutTool(async () => {
+      runs++;
+      return 'ok';
+    }, 'run_parallel_subagents');
+    const r = await tool.execute({ tasks: [{ agent: 'coder', prompt: 'do it' }, { agent: 'coder' }] }, fakeCtx(undefined));
+    assert.ok(r.isError, r.content);
+    assert.match(r.content, /task 2: needs "agent" and "prompt" strings/);
+    assert.strictEqual(runs, 0, 'no child runs');
+    assert.ok(!events.some((e) => e.type === 'subagent_start'));
+  });
+
   test('ParallelPool bounds concurrency and preserves order', async () => {
     const pool = new ParallelPool(2);
     let active = 0;
@@ -276,11 +310,11 @@ function fakeCtx(todos: ToolContext['todos']): ToolContext {
 }
 
 /** createAgentTools with a fake runner: `answer(prompt)` plays the subagent. */
-function fanOutTool(answer: (prompt: string) => Promise<string>): { tool: Tool; events: AgentEvent[] } {
+function fanOutTool(answer: (prompt: string) => Promise<string>, name = 'run_todos_parallel'): { tool: Tool; events: AgentEvent[] } {
   const events: AgentEvent[] = [];
   const agents = builtinAgents();
   const skills = { allAgents: agents, allSkills: [], enabledSkills: [], getAgent: (n: string) => agents.find((a) => a.name === n), getSkill: () => undefined, resolveSkill: () => undefined, similarSkillNames: () => [], loadSkillBody: async () => undefined } as unknown as Parameters<typeof createAgentTools>[1];
   const runner = { run: (o: { userMessage: { content: string } }) => answer(o.userMessage.content) } as unknown as Parameters<typeof createAgentTools>[0];
   const tools = createAgentTools(runner, skills, (e) => events.push(e), async () => true);
-  return { tool: tools.find((t) => t.definition.name === 'run_todos_parallel')!, events };
+  return { tool: tools.find((t) => t.definition.name === name)!, events };
 }

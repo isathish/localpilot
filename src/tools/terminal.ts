@@ -5,16 +5,22 @@ import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../config';
 import { shellInvocation } from '../terminal/shell';
+import { OutputCapture } from '../terminal/terminalManager';
 import { Tool } from '../types';
 import { displayPath, resolveWorkspacePath } from './fs';
 
 /** Runner that executes in a visible, branded VS Code terminal (set by the extension; absent in the CLI). */
 export interface IntegratedTerminalRunner {
   run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean): Promise<{ output: string; exitCode: number | undefined } | undefined>;
+  release?(sessionId: string): void;
 }
 let integrated: IntegratedTerminalRunner | undefined;
 export function setIntegratedTerminalRunner(r: IntegratedTerminalRunner | undefined): void {
   integrated = r;
+}
+/** Close the agent terminal a chat or subagent ran its commands in. */
+export function releaseIntegratedTerminal(sessionId: string): void {
+  integrated?.release?.(sessionId);
 }
 
 const DANGEROUS = /\b(rm\s+-rf\s+[\/~]|sudo\b|mkfs|dd\s+if=|:\(\)\s*\{|shutdown|reboot|git\s+push\s+--force|git\s+reset\s+--hard|chmod\s+-R\s+777)/i;
@@ -93,19 +99,19 @@ export const runCommandTool: Tool = {
         env: { ...process.env, CI: '1', GIT_PAGER: 'cat', PAGER: 'cat', FORCE_COLOR: '0', NO_COLOR: '1' },
         // Own process group so a timeout/stop can take down everything the command started, not just the shell.
         detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
       });
-      let out = '';
-      const cap = 200_000;
-      const push = (d: Buffer) => {
-        if (out.length < cap) {
-          out += d.toString();
-        }
-      };
+      const cap = new OutputCapture(50_000, 150_000);
+      let note = '';
+      const push = (d: string) => cap.push(d);
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
       child.stdout.on('data', push);
       child.stderr.on('data', push);
       const timer = setTimeout(() => {
         killTree(child);
-        out += `\n[timed out after ${timeoutMs / 1000}s]`;
+        note = `\n[timed out after ${timeoutMs / 1000}s]`;
       }, timeoutMs);
       const onAbort = () => killTree(child);
       ctx.signal.addEventListener('abort', onAbort, { once: true });
@@ -117,7 +123,7 @@ export const runCommandTool: Tool = {
       child.on('close', (code) => {
         clearTimeout(timer);
         ctx.signal.removeEventListener('abort', onAbort);
-        const cleaned = stripAnsi(out).trim();
+        const cleaned = stripAnsi(cap.text() + note).trim();
         resolve({
           content: `$ ${command}\n${cleaned || '(no output)'}\n[exit code ${code ?? 'null'}]`,
           isError: code !== 0,

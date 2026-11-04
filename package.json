@@ -1220,12 +1220,6 @@
         "command": "localpilot.captureScreenshot",
         "key": "ctrl+alt+shift+s",
         "mac": "cmd+alt+shift+s"
-      },
-      {
-        "command": "localpilot.explainSelection",
-        "key": "ctrl+shift+e",
-        "mac": "cmd+shift+e",
-        "when": "editorHasSelection"
       }
     ],
     "configuration": {
@@ -1432,6 +1426,7 @@
           "description": "Tool outputs longer than this are truncated (head + tail) before being sent to the model."
         },
         "localpilot.approvals.terminal": {
+          "scope": "application",
           "type": "string",
           "enum": [
             "always",
@@ -1442,6 +1437,7 @@
           "description": "Approval policy for running shell commands."
         },
         "localpilot.approvals.write": {
+          "scope": "application",
           "type": "string",
           "enum": [
             "always",
@@ -1452,6 +1448,7 @@
           "description": "Approval policy for creating/editing files."
         },
         "localpilot.approvals.delete": {
+          "scope": "application",
           "type": "string",
           "enum": [
             "always",
@@ -1461,6 +1458,7 @@
           "default": "ask"
         },
         "localpilot.approvals.network": {
+          "scope": "application",
           "type": "string",
           "enum": [
             "always",
@@ -1471,11 +1469,13 @@
           "description": "Approval policy for web search / fetch and MCP tools."
         },
         "localpilot.autoMode.enabled": {
+          "scope": "application",
           "type": "boolean",
           "default": false,
           "markdownDescription": "**Auto mode**: an action that would ask for approval (see `#localpilot.approvals.terminal#` and the other approval settings, or an `ask` permission rule) is first reviewed by a small local model. The reviewer approves actions that clearly serve your request and stay inside the project. Everything else still asks you. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking. Toggle with **LocalPilot: Toggle Auto Mode**."
         },
         "localpilot.autoMode.model": {
+          "scope": "application",
           "type": "string",
           "default": "",
           "markdownDescription": "Model that reviews actions in auto mode (`provider/model`). Empty = the fastest suitable installed model."
@@ -1709,6 +1709,7 @@
           "markdownDescription": "Plugin marketplaces to search and install from (**LocalPilot: Browse Plugins…**, `localpilot plugin search`): `owner/repo` on GitHub, any git URL, or a local folder — each with a `.claude-plugin/marketplace.json` in Claude Code's format. Marketplaces are fetched with `git`, so private repositories work with your git credentials."
         },
         "localpilot.hooks.enabled": {
+          "scope": "application",
           "type": "boolean",
           "default": true,
           "markdownDescription": "Run the hooks configured in `.localpilot/settings.json` / `.claude/settings.json` (and `~/.claude/settings.json`): shell commands on `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart`, `PreCompact` and `Notification`, with the Claude Code stdin/exit-code protocol (exit 2 blocks). Turn off to ignore hooks from a repository you do not trust."

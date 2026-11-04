@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { expandHome } from '../providers/colibriSetup';
 import { onAbort } from './resilience';
 
 /**
@@ -67,10 +68,19 @@ const noop: Logger = { info() {}, warn() {} };
 
 export class WorktreeManager {
   constructor(
-    /** Base directory for all worktrees; defaults to ~/.localpilot/worktrees. */
-    private readonly home = path.join(os.homedir(), '.localpilot', 'worktrees'),
+    /** Base directory for all worktrees (or a getter, re-read on each use); defaults to ~/.localpilot/worktrees. */
+    private readonly home: string | (() => string | undefined) | undefined = undefined,
     private readonly log: Logger = noop
   ) {}
+
+  /** The base directory with `~` expanded; relative paths resolve against the home directory. */
+  private get base(): string {
+    const raw = (typeof this.home === 'function' ? this.home() : this.home)?.trim();
+    if (!raw) {
+      return path.join(os.homedir(), '.localpilot', 'worktrees');
+    }
+    return path.resolve(os.homedir(), expandHome(raw));
+  }
 
   /** Repository root for `dir`, or undefined when it is not inside a git working tree. */
   async repoRoot(dir: string): Promise<string | undefined> {
@@ -95,14 +105,14 @@ export class WorktreeManager {
   /** Where worktrees of `repo` are kept. */
   dirFor(repo: string): string {
     const hash = crypto.createHash('sha1').update(repo).digest('hex').slice(0, 8);
-    return path.join(this.home, `${path.basename(repo).replace(/[^\w.-]+/g, '_')}-${hash}`);
+    return path.join(this.base, `${path.basename(repo).replace(/[^\w.-]+/g, '_')}-${hash}`);
   }
 
   /**
    * Create a worktree for `id` from the main checkout at `repo`, seeded with its uncommitted changes and untracked
-   * files, then run the repository's setup commands. `progress` receives human-readable status lines.
+   * files (and `overlay`, unsaved editor text keyed by repo-relative path), then run the repository's setup commands. `progress` receives human-readable status lines.
    */
-  async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number; subdir?: string; owner?: string } = {}): Promise<WorktreeInfo> {
+  async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number; subdir?: string; owner?: string; overlay?: Record<string, string> } = {}): Promise<WorktreeInfo> {
     const progress = opts.progress ?? (() => {});
     const dir = path.join(this.dirFor(repo), id.replace(/[^\w.-]+/g, '_'));
     await fs.promises.mkdir(path.dirname(dir), { recursive: true });
@@ -141,6 +151,7 @@ export class WorktreeManager {
       const untracked = (await git(['ls-files', '--others', '--exclude-standard', '-z'], repo)).split('\0').filter(Boolean);
       const notCopied: string[] = [];
       for (const rel of untracked) {
+        opts.signal?.throwIfAborted();
         const src = path.join(repo, rel);
         const dst = path.join(dir, rel);
         try {
@@ -168,12 +179,20 @@ export class WorktreeManager {
         progress(`Submodule ${sub} is not available in the isolated copy; edits there will not be applied`);
         this.log.warn(`worktree ${id}: submodule ${sub} is not available in the isolated copy`);
       }
+      // Unsaved editor buffers (repo-relative path -> text) win over what is on disk.
+      for (const [rel, text] of Object.entries(opts.overlay ?? {})) {
+        const norm = path.normalize(rel);
+        if (!norm || path.isAbsolute(norm) || norm.startsWith('..')) {continue;}
+        const dst = path.join(dir, norm);
+        await fs.promises.mkdir(path.dirname(dst), { recursive: true });
+        await fs.promises.writeFile(dst, text);
+      }
       opts.signal?.throwIfAborted();
       await this.runSetup(repo, dir, progress, opts.signal, opts.setupTimeoutMs ?? 10 * 60_000);
       opts.signal?.throwIfAborted();
       // Record the seeded + set-up state as the base commit so only the agent's own changes show up later.
       await git(['add', '-A'], dir);
-      await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: workspace snapshot (base)'], dir);
+      await git([...(await snapshotConfig()), 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: workspace snapshot (base)'], dir);
       const base = (await git(['rev-parse', 'HEAD'], dir)).trim();
       // Only a folder inside the repository is a subfolder of the copy.
       const subdir = opts.subdir && !path.isAbsolute(opts.subdir) && !opts.subdir.split(/[\\/]/).includes('..') ? path.normalize(opts.subdir) : undefined;
@@ -221,7 +240,7 @@ export class WorktreeManager {
       return [];
     }
     // Make untracked files part of the diff without staging their content.
-    await git(['add', '-A', '--intent-to-add'], wt.path).catch(() => undefined);
+    const intent = await git(['add', '-A', '--intent-to-add'], wt.path).then(() => true, () => false);
     const status = await git(['diff', '--name-status', '-M', '-z', wt.base], wt.path);
     const numstat = await git(['diff', '--numstat', '-M', wt.base], wt.path);
     const counts = new Map<string, { added: number; removed: number }>();
@@ -245,6 +264,15 @@ export class WorktreeManager {
         }
         const kind = code === 'A' ? 'create' : code === 'D' ? 'delete' : 'modify';
         out.push({ path: p, kind, ...(counts.get(p) ?? { added: 0, removed: 0 }) });
+      }
+    }
+    if (!intent) {
+      // The index could not be updated (e.g. locked): new files are missing from the diff, so list them directly.
+      const known = new Set(out.map((c) => c.path));
+      const untracked = (await git(['ls-files', '--others', '--exclude-standard', '-z'], wt.path).catch(() => '')).split('\0').filter((p) => p && !known.has(p));
+      for (const p of untracked) {
+        const text = await fs.promises.readFile(path.join(wt.path, p), 'utf8').catch(() => '');
+        out.push({ path: p, kind: 'create', added: text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0, removed: 0 });
       }
     }
     return out;
@@ -319,7 +347,7 @@ export class WorktreeManager {
   /** Make the worktree's current state its new base (after applying), so later diffs show only new work. */
   async rebase(wt: WorktreeInfo): Promise<void> {
     await git(['add', '-A'], wt.path);
-    await git(['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace'], wt.path);
+    await git([...(await snapshotConfig()), 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace'], wt.path);
     wt.base = (await git(['rev-parse', 'HEAD'], wt.path)).trim();
     const meta = `${wt.path}.json`;
     try {
@@ -383,6 +411,13 @@ export class WorktreeManager {
     }
     return n;
   }
+}
+
+/** `-c` options for LocalPilot's internal snapshot commits: a fixed identity, no signing and no user hooks. */
+async function snapshotConfig(): Promise<string[]> {
+  const noHooks = path.join(os.tmpdir(), 'localpilot-no-hooks');
+  await fs.promises.mkdir(noHooks, { recursive: true });
+  return ['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${noHooks}`];
 }
 
 function gitFull(args: string[], cwd: string, signal?: AbortSignal, timeoutMs = 120_000): Promise<{ code: number | null; out: Buffer; err: string }> {

@@ -146,7 +146,7 @@ The `LOCALPILOT_MANAGED_SETTINGS` environment variable points to another file, f
     "ask":  ["Bash(git push:*)"]                              // always asks, even if a project allows it
   },
   "approvals": { "terminal": "ask", "delete": "never" },     // floor: "ask" = never auto-approved, "never" = refused
-  "disableBypassPermissions": true,   // no bypassPermissions/acceptEdits/dontAsk default mode, no Auto mode
+  "disableBypassPermissions": true,   // no bypassPermissions/acceptEdits default mode, no Auto mode
   "allowCloudProviders": false,       // only providers on this machine or the private network load
   "allowedProviderHosts": ["localhost", "127.0.0.1", "*.corp.example"],
   "allowWebAccess": false,            // removes web_search, web_fetch and the browser tools

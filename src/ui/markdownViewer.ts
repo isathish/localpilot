@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveWorkspacePath } from '../tools/fs';
 import { Tool } from '../types';
 
 type Source = { kind: 'file'; uri: vscode.Uri } | { kind: 'text'; title: string; text: string };
@@ -55,6 +56,7 @@ export class MarkdownViewer implements vscode.Disposable {
   async showFile(uri: vscode.Uri, column: vscode.ViewColumn = vscode.ViewColumn.Beside): Promise<void> {
     this.source = { kind: 'file', uri };
     this.ensurePanel(path.basename(uri.fsPath), column);
+    this.allowResources(vscode.Uri.file(path.dirname(uri.fsPath)));
     this.watch(uri);
     await this.render();
   }
@@ -77,6 +79,20 @@ export class MarkdownViewer implements vscode.Disposable {
     });
     this.panel = panel;
     this._onDidChange.fire();
+  }
+
+  /** Lets relative images load for a file outside the workspace folders (e.g. an agent's worktree). */
+  private allowResources(dir: vscode.Uri): void {
+    const panel = this.panel;
+    const roots = panel?.webview.options.localResourceRoots ?? [];
+    const within = (r: vscode.Uri) => {
+      const rel = path.relative(r.fsPath, dir.fsPath);
+      return !rel.startsWith('..') && !path.isAbsolute(rel);
+    };
+    if (!panel || roots.some(within)) {
+      return;
+    }
+    panel.webview.options = { ...panel.webview.options, localResourceRoots: [...roots, dir] };
   }
 
   private post(m: ToViewer): void {
@@ -276,7 +292,7 @@ export class MarkdownViewer implements vscode.Disposable {
 }
 
 /** Lets the agent present a document (a spec, plan, report or any .md file) in the reader instead of a raw dump in chat. */
-export function createShowMarkdownTool(viewer: MarkdownViewer, resolve: (p: string) => vscode.Uri | undefined): Tool {
+export function createShowMarkdownTool(viewer: MarkdownViewer): Tool {
   return {
     parallelSafe: true,
     definition: {
@@ -291,12 +307,15 @@ export function createShowMarkdownTool(viewer: MarkdownViewer, resolve: (p: stri
         },
       },
     },
-    async execute(args) {
+    async execute(args, ctx) {
       const p = typeof args.path === 'string' ? args.path.trim() : '';
       if (p) {
-        const uri = resolve(p);
-        if (!uri) {
-          return { content: 'No workspace folder is open to resolve the path.', isError: true };
+        let uri: vscode.Uri;
+        try {
+          // The session's worktree when it runs isolated, else the workspace folder.
+          uri = resolveWorkspacePath(p, ctx);
+        } catch (e) {
+          return { content: e instanceof Error ? e.message : String(e), isError: true };
         }
         try {
           await vscode.workspace.fs.stat(uri);

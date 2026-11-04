@@ -103,6 +103,7 @@ export class SkillCatalog {
   private save(): Promise<void> {
     this.saving = this.saving.then(async () => {
       const tmp = `${this.opts.cacheFile}.${process.pid}.tmp`;
+      await this.mergeDisk();
       try {
         await fs.mkdir(path.dirname(this.opts.cacheFile), { recursive: true });
         await fs.writeFile(tmp, JSON.stringify(this.state, null, 2), 'utf8');
@@ -113,6 +114,34 @@ export class SkillCatalog {
       }
     });
     return this.saving;
+  }
+
+  /** Folds in what other processes (another window, the CLI) saved since this one loaded the file, so a save never
+   *  drops their dismissals or automatic installs. Repositories this process dropped stay dropped. */
+  private async mergeDisk(): Promise<void> {
+    let disk: Partial<CatalogState> | undefined;
+    try {
+      disk = JSON.parse(await fs.readFile(this.opts.cacheFile, 'utf8')) as Partial<CatalogState>;
+    } catch {
+      return;
+    }
+    if (disk?.version !== 1) {
+      return;
+    }
+    const st = this.state;
+    st.dismissed = [...new Set([...(disk.dismissed ?? []), ...st.dismissed])];
+    st.autoInstalled = { ...disk.autoInstalled, ...st.autoInstalled };
+    const dirs: Record<string, string[]> = { ...disk.autoDirs };
+    for (const [name, list] of Object.entries(st.autoDirs ?? {})) {
+      dirs[name] = [...new Set([...(dirs[name] ?? []), ...list])];
+    }
+    st.autoDirs = dirs;
+    for (const [repo, mine] of Object.entries(st.repos)) {
+      const theirs = disk.repos?.[repo];
+      if (theirs && theirs.fetched > mine.fetched) {
+        st.repos[repo] = theirs;
+      }
+    }
   }
 
   /** Repositories whose index is missing or older than the TTL. */
