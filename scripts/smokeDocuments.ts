@@ -3,7 +3,7 @@
  * run-smoke.js to out/pdf/extract-child.js, pdf.js from LOCALPILOT_PDFJS_DIR), page ranges and the attachment dispatch
  * for notebooks, Word documents and binaries.
  */
-import { extractPdfText, formatPdfText, parsePageRange } from '../src/pdf/extract';
+import { extractPdfText, formatPdfText, MIN_NODE, parsePageRange } from '../src/pdf/extract';
 import { attachmentKind, extractDocumentText, splitAttachmentRef } from '../src/context/extractors';
 import { makePdf } from '../src/test/fixtures/makePdf';
 import { makeDocx, makeZip } from '../src/test/fixtures/makeDocx';
@@ -13,6 +13,25 @@ type Check = (name: string, cond: boolean, detail?: unknown) => void;
 export async function documents(check: Check): Promise<void> {
   console.log('\n— documents —');
   check('parsePageRange: "3-7", "5-", "-2"', JSON.stringify([parsePageRange('3-7', 9), parsePageRange('5-', 9), parsePageRange('-2', 9)]) === JSON.stringify([{ from: 3, to: 7 }, { from: 5, to: 9 }, { from: 8, to: 9 }]));
+  const [maj, min] = process.versions.node.split('.').map(Number);
+  if (maj < MIN_NODE[0] || (maj === MIN_NODE[0] && min < MIN_NODE[1])) {
+    // pdf.js needs a newer Node than this one (VS Code itself always has it): the CLI must say so clearly.
+    const msg = await extractPdfText(makePdf(['x'])).then(() => '', (e: Error) => e.message);
+    check(`on Node ${process.versions.node}, reading a PDF fails with a clear version message (extraction checks need ${MIN_NODE.join('.')}+)`, /needs Node\.js 22\.13 or newer/.test(msg), msg);
+  } else {
+    await pdfChecks(check);
+  }
+  check('attachment kinds by extension', ['a.pdf', 'b.ipynb', 'c.docx', 'd.png', 'e.zip', 'f.ts'].map(attachmentKind).join() === 'pdf,ipynb,docx,image,binary,text');
+  check('#page= and #L ranges', splitAttachmentRef('a.pdf#page=2-3').start === 2 && splitAttachmentRef('a.pdf#page=2-3').end === 3 && splitAttachmentRef('a.ts#L4').start === 4);
+  const nb = await extractDocumentText('n.ipynb', Buffer.from(JSON.stringify({ cells: [{ cell_type: 'code', source: 'x = 1', outputs: [{ output_type: 'display_data', data: { 'image/png': '' } }] }] })));
+  check('notebooks as cells, images as [image output]', !!nb && nb.includes('x = 1') && nb.includes('[image output]'), nb);
+  const docx = await extractDocumentText('w.docx', makeDocx(['Smoke paragraph']));
+  check('docx text through mammoth', docx === 'Smoke paragraph', docx);
+  const zip = await extractDocumentText('a.zip', makeZip({ 'x': 'y' }));
+  check('binaries become a visible note', !!zip && zip.startsWith('(Binary or unsupported file: a.zip'), zip);
+}
+
+async function pdfChecks(check: Check): Promise<void> {
   try {
     const r = await extractPdfText(makePdf(['smoke text', 'page two']), { from: 1, to: 1 });
     const out = formatPdfText(r, 'smoke.pdf');
@@ -22,12 +41,4 @@ export async function documents(check: Check): Promise<void> {
   }
   const locked = await extractPdfText(makePdf(['x'], { password: 'pw' })).then(() => 'opened', (e: Error) => e.name);
   check('a password-protected PDF is reported as such', locked === 'PasswordException', locked);
-  check('attachment kinds by extension', ['a.pdf', 'b.ipynb', 'c.docx', 'd.png', 'e.zip', 'f.ts'].map(attachmentKind).join() === 'pdf,ipynb,docx,image,binary,text');
-  check('#page= and #L ranges', splitAttachmentRef('a.pdf#page=2-3').start === 2 && splitAttachmentRef('a.pdf#page=2-3').end === 3 && splitAttachmentRef('a.ts#L4').start === 4);
-  const nb = await extractDocumentText('n.ipynb', Buffer.from(JSON.stringify({ cells: [{ cell_type: 'code', source: 'x = 1', outputs: [{ output_type: 'display_data', data: { 'image/png': '' } }] }] })));
-  check('notebooks as cells, images as [image output]', !!nb && nb.includes('x = 1') && nb.includes('[image output]'), nb);
-  const docx = await extractDocumentText('w.docx', makeDocx(['Smoke paragraph']));
-  check('docx text through mammoth', docx === 'Smoke paragraph', docx);
-  const zip = await extractDocumentText('a.zip', makeZip({ 'x': 'y' }));
-  check('binaries become a visible note', !!zip && zip.startsWith('(Binary or unsupported file: a.zip'), zip);
 }
