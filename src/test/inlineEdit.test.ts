@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { extractCode } from '../ui/inlineEdit';
+import { extractCode, singleLine } from '../ui/inlineEdit';
 
 suite('Inline edit code extraction', () => {
   test('a TSDoc example with its own fence keeps the full body', () => {
@@ -22,5 +22,17 @@ suite('Inline edit code extraction', () => {
   });
   test('plain text without fences is returned trimmed', () => {
     assert.strictEqual(extractCode('\n  ls -la  \n'), 'ls -la');
+  });
+});
+
+suite('Terminal command joining', () => {
+  test('independent commands join into one line', () => {
+    assert.strictEqual(singleLine('npm ci\nnpm test', ' && '), 'npm ci && npm test');
+    assert.strictEqual(singleLine('npm ci\nnpm test', '; '), 'npm ci; npm test');
+  });
+  test('loops, continuations and heredocs are not joined', () => {
+    assert.strictEqual(singleLine('for f in *.ts; do\n  echo $f\ndone', ' && '), undefined);
+    assert.strictEqual(singleLine('docker run \\\n  -it ubuntu', ' && '), undefined);
+    assert.strictEqual(singleLine("cat > a.txt <<'EOF'\nhello\nEOF", ' && '), undefined);
   });
 });

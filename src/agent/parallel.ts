@@ -3,7 +3,12 @@ export class ParallelPool {
   private running = 0;
   private queue: (() => void)[] = [];
 
-  constructor(public readonly maxConcurrency: number) {}
+  readonly maxConcurrency: number;
+
+  constructor(maxConcurrency: number) {
+    // A limit below 1 (or not a number) would never start a task, so every batch would hang.
+    this.maxConcurrency = Math.max(1, Math.floor(Number(maxConcurrency)) || 1);
+  }
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.running >= this.maxConcurrency) {

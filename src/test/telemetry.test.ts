@@ -1,6 +1,10 @@
 import * as assert from 'assert';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
-import type { LogEntry, TelemetrySummary } from '../telemetry/telemetry';
+import { parseLogLine, Telemetry } from '../telemetry/telemetry';
+import type { LogEntry, TelemetryRemote, TelemetrySummary } from '../telemetry/telemetry';
 
 type Api = { telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: string; q?: string }): LogEntry[]; dir: string } };
 
@@ -40,5 +44,46 @@ suite('LocalPilot dashboard & telemetry', () => {
     assert.strictEqual(tabs.length, 1, 'one settings panel');
     assert.strictEqual(tabs[0].label, 'LocalPilot Settings');
     await vscode.window.tabGroups.close(tabs);
+  });
+
+  test('Delete all reports a Redis store that could not be cleared', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-telemetry-'));
+    const stub = (clear: () => Promise<void>): TelemetryRemote => ({
+      label: 'stub',
+      write: async () => undefined,
+      events: async () => undefined,
+      recentLogs: async () => [],
+      stats: async () => ({ events: 0, bytes: 0 }),
+      prune: async () => undefined,
+      clear,
+    });
+    try {
+      const down = new Telemetry({ dir, retentionDays: () => 0, remote: () => stub(() => Promise.reject(new Error('down'))) });
+      assert.strictEqual((await down.clear()).remoteError, 'down');
+      down.dispose();
+      const up = new Telemetry({ dir, retentionDays: () => 0, remote: () => stub(async () => undefined) });
+      assert.deepStrictEqual(await up.clear(), {});
+      up.dispose();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('log lines survive a reload byte for byte: backslashes, newlines, CR and U+2028', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-telemetry-'));
+    const msgs = ['Reading C:\\Users\\nina\\notes.txt', 'a\nb', 'progress 50%\r60%', 'x\u2028y'];
+    try {
+      const a = new Telemetry({ dir, retentionDays: () => 0 });
+      msgs.forEach((m) => a.log('info', m));
+      await a.flush();
+      a.dispose();
+      const b = new Telemetry({ dir, retentionDays: () => 0 });
+      await b.loadRecentLogs();
+      assert.deepStrictEqual(b.logs({ limit: 10 }).map((e) => e.msg), msgs);
+      assert.strictEqual(parseLogLine('2026-01-01T00:00:00.000Z [info] a\\nb')?.msg, 'a\nb');
+      b.dispose();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

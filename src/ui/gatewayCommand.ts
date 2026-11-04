@@ -1,8 +1,9 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { ProviderConfig } from '../types';
 import { editableProviders } from '../config';
-import { freePort, portInUse, which } from '../providers/colibriSetup';
-import { checkGatewayPrereqs, gatewayDashboard, gatewayEnv, GatewayId, gatewayModels, GatewayModels, GATEWAYS, installAndStartCommand, installCommand, needsProviders, nodeVersion, startCommand, terminalShell } from '../providers/gatewaySetup';
+import { expandHome, freePort, portInUse, which } from '../providers/colibriSetup';
+import { checkGatewayPrereqs, gatewayDashboard, gatewayEnv, GatewayId, gatewayModels, GatewayModels, gatewayNeedsKey, GATEWAYS, installAndStartCommand, installCommand, needsProviders, nodeVersion, startCommand, terminalShell } from '../providers/gatewaySetup';
 import { findPreset } from '../providers/presets';
 import { resolveApiKey } from '../providers/cloud';
 
@@ -93,6 +94,15 @@ export class GatewayLauncher implements vscode.Disposable {
       await this.host.onReady();
       return this.report(id, port, running, true);
     }
+    if (await gatewayNeedsKey(port, key)) {
+      const cfg = await this.ensureProvider(id, port);
+      const pick = await vscode.window.showWarningMessage(`${spec.label} is running on port ${port} but needs its master key.`, 'Set API key');
+      if (pick) {
+        await vscode.commands.executeCommand('localpilot.setProviderApiKey', cfg.id);
+      }
+      await this.host.onReady();
+      return;
+    }
     if (this.starting.has(id)) {
       this.terminals.get(id)?.show(true);
       void vscode.window.showInformationMessage(`${spec.label} is still starting in its terminal.`);
@@ -163,15 +173,23 @@ export class GatewayLauncher implements vscode.Disposable {
   private async litellmConfig(): Promise<string | undefined> {
     const current = this.settings.get<string>('gateways.litellmConfig', '');
     if (current) {
-      return current;
-    }
-    const pick = await vscode.window.showInformationMessage('LiteLLM serves the models listed in a config file (model_list).', { modal: true }, 'Choose config file…', 'How to write one');
-    if (pick === 'How to write one') {
-      void vscode.env.openExternal(vscode.Uri.parse('https://docs.litellm.ai/docs/proxy/configs'));
-      return undefined;
-    }
-    if (!pick) {
-      return undefined;
+      const file = expandHome(current);
+      if (fs.existsSync(file)) {
+        return file;
+      }
+      const choose = await vscode.window.showErrorMessage(`LiteLLM config file not found: ${file}`, { modal: true }, 'Choose config file…');
+      if (!choose) {
+        return undefined;
+      }
+    } else {
+      const pick = await vscode.window.showInformationMessage('LiteLLM serves the models listed in a config file (model_list).', { modal: true }, 'Choose config file…', 'How to write one');
+      if (pick === 'How to write one') {
+        void vscode.env.openExternal(vscode.Uri.parse('https://docs.litellm.ai/docs/proxy/configs'));
+        return undefined;
+      }
+      if (!pick) {
+        return undefined;
+      }
     }
     const uri = await vscode.window.showOpenDialog({ canSelectFiles: true, filters: { YAML: ['yaml', 'yml'] }, title: 'LiteLLM config file' });
     if (!uri?.[0]) {
@@ -194,7 +212,6 @@ export class GatewayLauncher implements vscode.Disposable {
     const term = this.terminal(id);
     term.sendText(command);
     this.host.log.info(`gateway: ${command}`);
-    const key = resolveApiKey(this.provider(id) ?? { apiKey: undefined });
     this.starting.add(id);
     let models: GatewayModels | undefined;
     try {
@@ -205,7 +222,7 @@ export class GatewayLauncher implements vscode.Disposable {
         const sub = vscode.window.onDidCloseTerminal((t) => t === term && (closed = true));
         try {
           while (!token.isCancellationRequested && !closed && Date.now() - started < limit) {
-            const m = await gatewayModels(port, key);
+            const m = await gatewayModels(port, resolveApiKey(this.provider(id) ?? { apiKey: undefined }));
             if (m) {
               return m;
             }

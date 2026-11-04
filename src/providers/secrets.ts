@@ -37,7 +37,7 @@ export class ProviderSecrets implements vscode.Disposable {
 
   /** Loads every key the configured providers reference (all settings scopes). */
   async load(): Promise<void> {
-    const names = [...new Set(configuredProviders().flatMap((p) => secretRefs(p.apiKey)))];
+    const names = [...new Set([...configuredProviders().flatMap((p) => secretRefs(p.apiKey)), ...webSearchRefs()])];
     if (!names.length) {
       return;
     }
@@ -89,7 +89,7 @@ export class ProviderSecrets implements vscode.Disposable {
    * (the references a settings write dropped) are candidates.
    */
   async prune(providers: ProviderConfig[] = configuredProviders(), only?: string[]): Promise<void> {
-    const used = new Set([...providers, ...configuredProviders()].flatMap((p) => secretRefs(p.apiKey)));
+    const used = new Set([...[...providers, ...configuredProviders()].flatMap((p) => secretRefs(p.apiKey)), ...webSearchRefs()]);
     const owners = this.state.get<Record<string, string>>(OWNERS_KEY, {});
     const here = this.workspaceOwner();
     const stale = [...new Set(only ?? Object.keys(owners))].filter((n) => n in owners && !used.has(n) && (owners[n] === 'user' || owners[n] === here));
@@ -129,4 +129,10 @@ export class ProviderSecrets implements vscode.Disposable {
 function configuredProviders(): ProviderConfig[] {
   const i = vscode.workspace.getConfiguration('localpilot').inspect<ProviderConfig[]>('providers');
   return [...(i?.globalValue ?? []), ...(i?.workspaceValue ?? []), ...(i?.workspaceFolderValue ?? [])].filter((p) => p && typeof p === 'object');
+}
+
+/** The web search API key's references in every settings scope; it shares the keychain with provider keys. */
+function webSearchRefs(): string[] {
+  const i = vscode.workspace.getConfiguration('localpilot').inspect<string>('webSearch.apiKey');
+  return [i?.globalValue, i?.workspaceValue, i?.workspaceFolderValue].flatMap((v) => (typeof v === 'string' ? secretRefs(v) : []));
 }

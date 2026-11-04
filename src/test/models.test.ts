@@ -17,6 +17,7 @@ import { classifyModelError } from '../agent/resilience';
 import { HttpError } from '../providers/http';
 import { pairToolCalls } from '../providers/toolPairing';
 import { endpointKey } from '../providers/discovery';
+import { isRemoteUrl } from '../providers/cloud';
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
 interface FakeModel {
@@ -185,6 +186,10 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     assert.strictEqual(tiny.completion, undefined);
     const minuscule = starterPlan(buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 2, ramGb: 2, vramGb: 0 }));
     assert.strictEqual(minuscule.agent.variant.ollama, 'smollm2:360m');
+    const twoGb = buildProfile({ platform: 'linux', arch: 'x64', cpuCores: 2, ramGb: 2, vramGb: 0 });
+    assert.ok(starterPlan(twoGb, 'docker').agent.variant.docker, 'Docker gets a starter model it can pull');
+    assert.ok(starterPlan(twoGb, 'lmstudio').agent.variant.lmstudio, 'LM Studio gets a starter model it can download');
+    assert.strictEqual(starterPlan(twoGb, 'ollama').agent.variant.ollama, 'smollm2:360m');
     for (const p of [small, mid, big, tiny, minuscule]) {
       assert.ok(!p.agent.variant.ollama?.startsWith('qwen'), `starter agent is never a Qwen model: ${p.agent.variant.ollama}`);
       assert.ok(p.agent.entry.supportsTools, 'starter agent must call tools');
@@ -351,6 +356,13 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const unloaded = pickAlternative(pool, coder, 'agent', busy, profile)!.modelId;
     const other = unloaded === 'gemma4:12b' ? 'ollama/qwen3:14b' : 'ollama/gemma4:12b';
     assert.strictEqual(pickAlternative(pool, coder, 'agent', busy, profile, false, undefined, new Set([other]))?.id, other, 'the resident one wins among idle comparable models');
+    // A big model loaded on a LAN Ollama takes none of this machine's memory: a local neighbour still fits.
+    const q8 = m('qwen3:8b', { sizeBytes: 5.2e9 });
+    const lan = { ...m('llama3.3:70b', { sizeBytes: 42e9 }), id: 'gpubox/llama3.3:70b', providerId: 'gpubox' };
+    const lanResident = new Set([lan.id]);
+    const lanGb = new Map([[lan.id, 45]]);
+    assert.strictEqual(pickAlternative([coder, q8, lan], coder, 'agent', busy, profile, false, undefined, lanResident, lanGb), undefined, 'counted locally it overflows the budget');
+    assert.strictEqual(pickAlternative([coder, q8, lan], coder, 'agent', busy, profile, false, undefined, lanResident, lanGb, (id) => !id.startsWith('gpubox/'))?.id, 'ollama/qwen3:8b');
   });
 
   test('a model already in memory wins ties for Auto, but never beats a clearly better one', () => {
@@ -461,6 +473,35 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('models.disabled', prev.disabled, vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
       await cfg.update('routing.vision', prev.vision, vscode.ConfigurationTarget.Global);
+      await cfg.update('inlineCompletion.model', prev.fim, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('a completion model nobody serves does not fall back to a cloud model', async function () {
+    this.timeout(30_000);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, fim: cfg.inspect('inlineCompletion.model')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    const cloud: ModelInfo = { id: 'cloud/big-coder', providerId: 'cloud', modelId: 'big-coder', name: 'big-coder', contextWindow: 128_000, maxOutputTokens: 8192, supportsTools: true, supportsVision: false, supportsFim: true, remote: true };
+    const stub = reg as unknown as { listModels: () => Promise<ModelInfo[]>; residentModels: () => Promise<ReadonlySet<string>> };
+    stub.listModels = async () => [cloud];
+    stub.residentModels = async () => new Set<string>();
+    try {
+      await cfg.update('providers', [{ id: 'cloud', type: 'openai', baseUrl: 'https://cloud.invalid/v1' }], vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
+      await cfg.update('inlineCompletion.model', 'tiny-fim:1b', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      await assert.rejects(reg.route({ role: 'completion' }), /not available locally/);
+      // Chosen explicitly, the cloud model is still used for completions.
+      await cfg.update('inlineCompletion.model', 'cloud/big-coder', vscode.ConfigurationTarget.Global);
+      await new Promise((r) => setTimeout(r, 100));
+      const pinned = await reg.route({ role: 'completion' });
+      assert.strictEqual(pinned.model.id, 'cloud/big-coder');
+      assert.ok(!pinned.fallback);
+    } finally {
+      reg.dispose();
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
       await cfg.update('inlineCompletion.model', prev.fim, vscode.ConfigurationTarget.Global);
     }
   });
@@ -802,6 +843,24 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     }
   });
 
+  test('auto-setup does not count cloud or gateway models as installed local models', async () => {
+    const reg = new ProviderRegistry(log);
+    const mm = new ModelManager(reg, log);
+    try {
+      (reg as unknown as { listModels: () => Promise<ModelInfo[]> }).listModels = async () => [m('gpt-x', { providerId: 'openai', id: 'openai/gpt-x', remote: true })];
+      (mm as unknown as { detectRuntimes: () => Promise<unknown[]> }).detectRuntimes = async () => [
+        { target: 'ollama', label: 'Ollama', installed: false, running: false },
+        { target: 'docker', label: 'Docker', installed: false, running: false },
+        { target: 'lmstudio', label: 'LM Studio', installed: false, running: false },
+      ];
+      const r = await mm.autoSetup();
+      assert.strictEqual(r.status, 'needs-runtime');
+    } finally {
+      mm.dispose();
+      reg.dispose();
+    }
+  });
+
   test('changing providers while a model listing is in flight lists the new providers, not the old ones', async function () {
     this.timeout(30_000);
     // An OpenAI-style server that answers /v1/models slowly, so the first listing is still running when the setting changes.
@@ -834,6 +893,48 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       newSrv.close();
       await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
     }
+  });
+
+  test('invalidate() during a model listing drops the in-flight round, so the next listing sees the server as it is now', async function () {
+    this.timeout(30_000);
+    let id = 'old-model';
+    const srv = http.createServer((req, res) => {
+      const listed = id; // what the server lists when the request arrives
+      setTimeout(() => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ data: req.url?.startsWith('/v1/models') ? [{ id: listed, object: 'model' }] : [] }));
+      }, 800);
+    });
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', () => resolve()));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`;
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect('providers')?.globalValue;
+    const reg = new ProviderRegistry(log);
+    try {
+      await cfg.update('providers', [{ id: 'srv', type: 'openai', baseUrl: url }], vscode.ConfigurationTarget.Global);
+      const inFlight = reg.listModels();
+      await new Promise((r) => setTimeout(r, 200));
+      id = 'new-model';
+      reg.invalidate();
+      const now = await reg.listModels();
+      assert.deepStrictEqual(now.map((m) => m.id), ['srv/new-model'], 'the listing after invalidate() asks the server again');
+      await inFlight;
+      assert.deepStrictEqual(reg.cachedModels().map((m) => m.id), ['srv/new-model'], 'the dropped round does not overwrite the cache');
+    } finally {
+      reg.dispose();
+      srv.close();
+      await cfg.update('providers', prev, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('isRemoteUrl: private and loopback IPv4/IPv6 hosts are local, public IPv6 literals are remote', () => {
+    assert.strictEqual(isRemoteUrl('http://0.0.0.0:11434'), false);
+    assert.strictEqual(isRemoteUrl('http://[::1]:1'), false);
+    assert.strictEqual(isRemoteUrl('http://[fd12::1]:1'), false);
+    assert.strictEqual(isRemoteUrl('http://[2606:4700:4700::1111]/'), true);
+    assert.strictEqual(isRemoteUrl('http://[::ffff:808:808]/'), true);
+    assert.strictEqual(isRemoteUrl('http://[::ffff:192.168.1.2]/'), false);
+    assert.strictEqual(isRemoteUrl('http://gpu-box:11434'), false);
   });
 
   test('a stopped local Ollama is started when a run needs it, once; a local model never silently becomes a cloud one', async function () {

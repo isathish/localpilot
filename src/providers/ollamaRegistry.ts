@@ -251,10 +251,24 @@ export class OllamaRegistry {
   private async cached<T>(key: string, load: () => Promise<T>): Promise<T> {
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < this.ttlMs) {
+      // Re-insert so the Map's insertion order doubles as LRU order.
+      this.cache.delete(key);
+      this.cache.set(key, hit);
       return hit.value as T;
     }
-    const value = await load();
-    this.cache.set(key, { at: Date.now(), value });
+    // A clone drops sliced-string references that would otherwise keep the whole fetched page alive.
+    const value = structuredClone(await load());
+    const now = Date.now();
+    for (const [k, e] of this.cache) {
+      if (now - e.at >= this.ttlMs) {
+        this.cache.delete(k);
+      }
+    }
+    this.cache.delete(key);
+    while (this.cache.size >= 50) {
+      this.cache.delete(this.cache.keys().next().value as string);
+    }
+    this.cache.set(key, { at: now, value });
     return value;
   }
 }

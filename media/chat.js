@@ -143,11 +143,13 @@
   const tok = (cls, text) => `<span class="tk-${cls}">${esc(text)}</span>`;
   // Streaming re-renders the whole answer up to 20×/s; finished code blocks are identical each time, so remember them.
   const hlCache = new Map();
-  function highlight(code, lang) {
+  function highlight(code, lang, store = true) {
     const key = `${lang}\u0000${code}`;
     const hit = hlCache.get(key);
     if (hit !== undefined) { return hit; }
     const out = highlightRaw(code, lang);
+    // A still-streaming block changes every tick; caching each partial copy would pile up megabytes.
+    if (!store || code.length > 60000) { return out; }
     if (hlCache.size > 300) { hlCache.delete(hlCache.keys().next().value); }
     hlCache.set(key, out);
     return out;
@@ -158,7 +160,7 @@
     if (lang === 'diff') { return code.split('\n').map((l) => (/^\+/.test(l) ? tok('add', l) : /^-/.test(l) ? tok('del', l) : /^@@/.test(l) ? tok('meta', l) : esc(l))).join('\n'); }
     if (lang === 'md') { return code.split('\n').map((l) => (/^#{1,6}\s/.test(l) ? tok('k', l) : /^\s*[-*+]\s|^\s*\d+\.\s/.test(l) ? esc(l).replace(/^(\s*(?:[-*+]|\d+\.))/, (m) => `<span class="tk-n">${m}</span>`) : esc(l).replace(/`[^`]+`/g, (m) => `<span class="tk-s">${m}</span>`).replace(/\*\*[^*]+\*\*/g, (m) => `<span class="tk-t">${m}</span>`))).join('\n'); }
     if (lang === 'html') { return esc(code).replace(/(&lt;!--[\s\S]*?--&gt;)|(&lt;\/?)([\w:-]+)([^&]*?)(\/?&gt;)/g, (m, c, open, name, attrs, close) => (c ? `<span class="tk-c">${c}</span>` : `<span class="tk-o">${open}</span><span class="tk-k">${name}</span>${attrs.replace(/([\w:-]+)(=)(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)?/g, (a, n, eq, v) => `<span class="tk-p">${n}</span>${eq}${v ? `<span class="tk-s">${v}</span>` : ''}`)}<span class="tk-o">${close}</span>`)); }
-    if (lang === 'css') { return esc(code).replace(/(\/\*[\s\S]*?\*\/)|([^{}\n;]+)(?=\s*\{)|([\w-]+)(\s*:\s*)([^;}\n]+)/g, (m, c, sel, prop, colon, val) => (c ? `<span class="tk-c">${c}</span>` : sel !== undefined ? `<span class="tk-t">${sel}</span>` : `<span class="tk-p">${prop}</span>${colon}<span class="tk-s">${val}</span>`)); }
+    if (lang === 'css') { return esc(code).replace(/(\/\*[\s\S]*?\*\/)|(?<=^|[{};\n]|\*\/)([^{}\n;]+)(?=\s*\{)|(?<![\w-])([\w-]+)(\s*:\s*)([^;}\n]+)/g, (m, c, sel, prop, colon, val) => (c ? `<span class="tk-c">${c}</span>` : sel !== undefined ? `<span class="tk-t">${sel}</span>` : `<span class="tk-p">${prop}</span>${colon}<span class="tk-s">${val}</span>`)); }
     if (lang === 'json') { return esc(code).replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)(\s*:)?|(-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b)|\b(true|false|null)\b/g, (m, str, colon, num, lit) => (str ? (colon ? `<span class="tk-p">${str}</span>${colon}` : `<span class="tk-s">${str}</span>`) : num ? `<span class="tk-n">${num}</span>` : `<span class="tk-k">${lit}</span>`)); }
     if (lang === 'yaml' || lang === 'toml') { return code.split('\n').map((l) => { const m = /^(\s*)(#.*)$/.exec(l); if (m) { return esc(m[1]) + tok('c', m[2]); } const kv = /^(\s*(?:- )?)([\w.-]+|"[^"]*"|\[[^\]]*\])(\s*[:=]\s*)(.*)$/.exec(l); if (kv) { const v = kv[4]; const val = /^(['"]).*\1$/.test(v) ? tok('s', v) : /^(true|false|null|~|yes|no|on|off)$/i.test(v) ? tok('k', v) : /^-?\d+(\.\d+)?$/.test(v) ? tok('n', v) : esc(v).replace(/(#.*)$/, (c) => `<span class="tk-c">${c}</span>`); return esc(kv[1]) + tok('p', kv[2]) + esc(kv[3]) + val; } return esc(l).replace(/^(\s*-\s)/, (d) => `<span class="tk-o">${d}</span>`); }).join('\n'); }
     const kws = kwSet(lang);
@@ -211,14 +213,14 @@
     return out.join('');
   }
   /** Fenced block with header actions. `info` is the fence info string: `ts`, `ts path/to/file.ts`, `json title="x"`. */
-  function codeBlock(code, info) {
+  function codeBlock(code, info, closed = true) {
     const parts = String(info || '').trim().split(/\s+/);
     const lang = parts[0] && !/[./]/.test(parts[0]) ? parts[0] : '';
     const titleM = /(?:title|file|path)=("?)([^"\s]+)\1/.exec(info || '');
     const file = titleM ? titleM[2] : parts.find((p) => /[\w-]+\.[a-z0-9]+$/i.test(p) && !p.includes('=')) || '';
     const lines = code.split('\n').length;
     const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${esc(file)}</span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
-    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file))}</code></pre></div>`;
+    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file), closed)}</code></pre></div>`;
   }
   /** `NNN | text` lines from read_file → numbered, highlighted listing. */
   function numberedListing(text, lang) {
@@ -297,8 +299,9 @@
       const fence = /^\s*(`{3,}|~{3,})\s*(.*)$/.exec(line);
       if (fence) {
         flush(); const info = fence[2] || ''; const buf = []; const close = new RegExp(`^\\s*\\${fence[1][0]}{${fence[1].length},}\\s*$`); i++;
-        while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; } i++;
-        out.push(codeBlock(buf.join('\n'), info));
+        while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; }
+        const closed = i < lines.length; i++;
+        out.push(codeBlock(buf.join('\n'), info, closed));
         continue;
       }
       const h = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -1004,7 +1007,7 @@
       if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const det = stepEl('ok', 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       if (m.role === 'user' && m.meta && m.meta.steer) {
         const prev = els.messages.lastElementChild;
-        const row = steerRow(m.content, m.images, m.meta.steerId, false);
+        const row = steerRow(m.content, m.images, m.meta.steerId, false, m.meta.corrections);
         if (prev && prev.classList.contains('assistant')) { prev.appendChild(row); } else { const t = el('div', 'turn assistant'); t.appendChild(row); els.messages.appendChild(t); }
         return;
       }
@@ -1105,7 +1108,7 @@
     }
     if (!state.models.length && !state.modelsLoading) {
       const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
-      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
+      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
     els.messages.appendChild(wrap);
@@ -2278,7 +2281,7 @@
   els.modelBtn.onclick = () => {
     // Nothing to pick from: offer the three ways to get a model instead of an empty list.
     if (!state.models.length) {
-      const look = () => { state.modelsRequested = true; state.modelsLoading = true; syncModel(); post({ type: 'refreshModels' }); };
+      const look = () => { state.modelsRequested = true; state.modelsLoading = true; syncModel(); post({ type: 'detectModels' }); };
       openMenu(els.modelBtn, [
         { label: 'Set up a local model', desc: 'Start or install Ollama and download a starter coder model sized for this machine', icon: I.download, onPick: () => { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } },
         { label: 'Look for model servers again', desc: 'Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner', icon: I.refresh, onPick: look },
@@ -2290,7 +2293,7 @@
     const autoName = modelName(autoModelId());
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
     for (const m of state.models) { items.push({ group: (state.providerNames && state.providerNames[m.providerId]) || m.providerId, label: m.name, desc: `${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.remote && m.supportsVision ? ' · vision' : ''}`, tag: m.remote ? 'cloud' : m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, onPick: () => chooseModel(m.id) }); }
-    items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, onPick: () => { state.modelsRequested = true; post({ type: 'refreshModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
+    items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, onPick: () => { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     openMenu(els.modelBtn, items, { search: 'Search models…' });
   };
   function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
@@ -2454,12 +2457,13 @@
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); els.input.focus();
   }
   /** A message typed while the agent was busy: a compact row inside the assistant's turn, "queued" until the loop takes it. */
-  function steerRow(content, images, id, queued) {
+  function steerRow(content, images, id, queued, fixes) {
     const d = el('div', `steer ${queued ? 'queued' : ''}`);
     if (id) { d.dataset.steerId = id; }
     d.innerHTML = `<span class="ico">${I.reply}</span><div class="txt"></div><span class="badge">${queued ? 'queued' : 'added'}</span>`;
     d.querySelector('.txt').textContent = String(content || '').replace(/\n\n\[\d+ images? attached\]$/, '');
     if (images && images.length) { const im = el('div', 'imgs', images.map((x) => `<img src="${x.startsWith('data:') ? x : `data:image/png;base64,${x}`}" alt="">`).join('')); d.appendChild(im); }
+    if (fixes && fixes.length) { d.appendChild(correctionNote(fixes)); }
     return d;
   }
   function sendCurrent(fromSuggestion) {
@@ -2550,7 +2554,7 @@
   document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); els.input.focus(); }
-    if (mod && e.key.toLowerCase() === 'i' && !e.defaultPrevented && e.target !== els.input) { e.preventDefault(); openContextMenu(); }
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i' && !e.defaultPrevented && e.target !== els.input) { e.preventDefault(); openContextMenu(); }
     if (e.target && e.target.classList && e.target.classList.contains('rename')) { return; }
     if (e.altKey && !mod && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); e.stopPropagation(); cycleTab(e.key === 'ArrowDown' ? 1 : -1); }
     if (e.altKey && !mod && /^Digit[1-9]$/.test(e.code)) { const { list } = tabList(); const t = list[Number(e.code.slice(5)) - 1]; if (t) { e.preventDefault(); e.stopPropagation(); selectTab(t.id); } }
@@ -2687,7 +2691,7 @@
         break;
       case 'steerQueued': {
         const live = ensureLive(m.sessionId);
-        live.root.appendChild(steerRow(m.content, m.images, m.id, true));
+        live.root.appendChild(steerRow(m.content, m.images, m.id, true, m.fixes));
         noteStatus(m.sessionId, state.paused.get(m.sessionId) && state.paused.get(m.sessionId).paused ? 'Paused · message waiting' : 'Message queued for the next step');
         if (state.session && state.session.id === m.sessionId) { setStatus(state.status.get(m.sessionId)); scrollToBottom(false); }
         break;
@@ -2718,7 +2722,7 @@
         u.appendChild(correctionNote(m.fixes || []));
         break;
       }
-      case 'draft': els.input.value = m.text || ''; autoGrow(); updateSendEnabled(); els.input.focus(); break;
+      case 'draft': els.input.value = m.text || ''; if (m.images && m.images.length) { state.images = m.images.map((data, i) => ({ name: `image-${i + 1}.png`, data: String(data).replace(/^data:[^,]*,/, ''), mime: 'image/png' })); renderChips(); } autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
       case 'openFiles': {

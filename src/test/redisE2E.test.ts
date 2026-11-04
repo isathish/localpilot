@@ -1,10 +1,12 @@
 import * as assert from 'assert';
 import * as fs from 'fs/promises';
+import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { LocalPilotApi } from '../extension';
-import { RedisClient } from '../storage/redis';
+import { parseRedisUrl, RedisClient } from '../storage/redis';
 import { dockerState, probeRedis } from '../storage/redisSetup';
+import { nextStreamId, RedisTelemetry, redisVersionSupported } from '../storage/redisTelemetry';
 
 /**
  * The optional Redis Stack store inside the real extension: settings switch telemetry over, events and log lines land in
@@ -61,7 +63,7 @@ suite('Redis Stack storage (real server, end to end)', function () {
     for (const k of ['localpilot.storage.redis.enabled', 'localpilot.storage.redis.url', 'localpilot.storage.sessionsInMemory']) {
       assert.ok(props[k], k);
     }
-    assert.ok(['running', 'stopped', 'missing'].includes(await dockerState()));
+    assert.ok(['running', 'denied', 'stopped', 'missing'].includes(await dockerState()));
     const probe = await probeRedis(URL);
     assert.ok(probe.ok && probe.version, 'probe reports the server version');
   });
@@ -170,6 +172,84 @@ suite('Redis Stack storage (real server, end to end)', function () {
       win.showQuickPick = original.pick;
       win.showInformationMessage = original.info;
       await cfg().update('storage.redis.enabled', false, vscode.ConfigurationTarget.Global);
+    }
+  });
+});
+
+suite('Redis client (in-process fake server)', () => {
+  test('a timed-out handshake does not poison the next connection', async () => {
+    const conns: net.Socket[] = [];
+    const server = net.createServer((sock) => {
+      sock.on('error', () => undefined);
+      if (conns.push(sock) === 1) {
+        return; // the first connection never answers
+      }
+      sock.on('data', (d: Buffer) => {
+        const text = d.toString('utf8');
+        // One reply per command: count the RESP array headers (`*N` at the start of a line).
+        for (const m of text.matchAll(/(?:^|\r\n)\*\d+\r\n\$\d+\r\n(\w+)/g)) {
+          sock.write(m[1].toUpperCase() === 'PING' ? '+PONG\r\n' : '+OK\r\n');
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    const client = new RedisClient(`redis://:secret@127.0.0.1:${port}/2`, { commandTimeoutMs: 300 });
+    try {
+      await assert.rejects(client.command('PING'));
+      assert.strictEqual(await client.command('PING'), 'PONG');
+    } finally {
+      client.close();
+      conns.forEach((s) => s.destroy());
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  test('servers older than Redis 6.2 are refused; XRANGE pages without exclusive ranges', () => {
+    assert.strictEqual(redisVersionSupported('6.0.16'), false);
+    assert.strictEqual(redisVersionSupported('6.2.0'), true);
+    assert.strictEqual(redisVersionSupported('7.4.1'), true);
+    assert.strictEqual(redisVersionSupported(undefined), true);
+    assert.strictEqual(nextStreamId('1700000000000-5'), '1700000000000-6');
+  });
+
+  test('IPv6 literals lose their brackets; an unparsable URL is a failed probe, not a throw', async () => {
+    assert.strictEqual(parseRedisUrl('redis://[::1]:6390').host, '::1');
+    assert.strictEqual(parseRedisUrl('redis://127.0.0.1').host, '127.0.0.1');
+    const p = await probeRedis('localhost:6379');
+    assert.strictEqual(p.ok, false);
+    assert.ok(p.error);
+  });
+
+  test('a failed time-series check is not cached: samples are written once Redis answers', async () => {
+    const free = net.createServer();
+    await new Promise<void>((resolve) => free.listen(0, '127.0.0.1', resolve));
+    const port = (free.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve) => free.close(() => resolve()));
+    const store = new RedisTelemetry(`redis://127.0.0.1:${port}`);
+    const line = () => JSON.stringify({ t: Date.now(), type: 'model', provider: 'p', model: 'm', outcome: 'ok', durationMs: 12 });
+    const seen: string[] = [];
+    const conns: net.Socket[] = [];
+    const server = net.createServer((sock) => {
+      conns.push(sock);
+      sock.on('error', () => undefined);
+      sock.on('data', (d: Buffer) => {
+        for (const m of d.toString('utf8').matchAll(/(?:^|\r\n)\*\d+\r\n\$\d+\r\n([\w.]+)/g)) {
+          const cmd = m[1].toUpperCase();
+          seen.push(cmd);
+          sock.write(cmd === 'TS.INFO' ? '-ERR key does not exist\r\n' : cmd === 'XADD' ? '$15\r\n1700000000000-0\r\n' : cmd === 'TS.ADD' ? ':1\r\n' : '+OK\r\n');
+        }
+      });
+    });
+    try {
+      await assert.rejects(store.write([line()], [], 0));
+      await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+      await store.write([line()], [], 0);
+      assert.ok(seen.includes('TS.ADD'), seen.join(','));
+    } finally {
+      store.dispose();
+      conns.forEach((s) => s.destroy());
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });

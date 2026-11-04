@@ -1,4 +1,6 @@
 import * as cp from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { McpServerConfig } from '../config';
 
 /**
@@ -109,9 +111,44 @@ async function readStream(body: ReadableStream<Uint8Array>, onEvent: (e: { event
   }
 }
 
-/** Quotes one token for a Windows command line: wrapped in double quotes when it has whitespace or `"`. */
-export function winQuote(token: string): string {
-  return /[\s"]/.test(token) ? `"${token.replace(/"/g, '\\"')}"` : token;
+/** One argument for `cmd /d /s /c "..."`: quoted the way the target parses it, then cmd metacharacters `^`-escaped. */
+function quoteForCmd(arg: string): string {
+  const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+  return quoted.replace(/([()%!^"<>&|])/g, '^$1');
+}
+
+/** PATH/PATHEXT lookup for a Windows command name (also used for a bare `npx`). */
+function winWhich(name: string): string | undefined {
+  if (/[\\/]/.test(name)) {
+    return fs.existsSync(name) ? name : undefined;
+  }
+  const exts = (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').map((e) => e.toLowerCase()).concat('');
+  for (const d of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    for (const e of exts) {
+      const f = path.join(d, name.toLowerCase().endsWith(e) ? name : name + e);
+      try {
+        if (fs.statSync(f).isFile()) {
+          return f;
+        }
+      } catch {
+        /* not here */
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * How to spawn a stdio server on Windows without `shell: true`: an .exe/.com runs directly (libuv quotes each
+ * argument); anything else (`npx` and other .cmd/.bat shims, or an unresolved name) goes through cmd with every
+ * argument quoted and its metacharacters escaped, so spaces, `&` or `%` in paths and arguments survive.
+ */
+export function winSpawn(command: string, args: string[], resolve: (c: string) => string | undefined = winWhich, comspec = process.env.ComSpec ?? 'cmd.exe'): { file: string; args: string[]; verbatim: boolean } {
+  const resolved = resolve(command);
+  if (resolved && /\.(exe|com)$/i.test(resolved)) {
+    return { file: resolved, args, verbatim: false };
+  }
+  return { file: comspec, args: ['/d', '/s', '/c', `"${[command, ...args].map(quoteForCmd).join(' ')}"`], verbatim: true };
 }
 
 export class StdioTransport implements Transport {
@@ -122,13 +159,15 @@ export class StdioTransport implements Transport {
   constructor(private readonly cfg: McpServerConfig, private readonly cwd: string | undefined, private readonly debug: (m: string) => void) {}
 
   async start(onMessage: (m: JsonRpcMessage) => void, onClose: (err: Error) => void): Promise<void> {
-    // `shell: true` on Windows so `npx` / `.cmd` launchers resolve the same way they do in a terminal.
     // Its own process group (POSIX), so stopping it reaches the real server and not only a launcher such as npx.
     const opts: cp.SpawnOptions = { cwd: this.cfg.cwd ?? this.cwd, env: { ...process.env, ...(this.cfg.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'] };
-    // With shell: true Node joins args with spaces unquoted, so build the quoted command line ourselves.
-    this.child = process.platform === 'win32'
-      ? cp.spawn([this.cfg.command!, ...(this.cfg.args ?? [])].map(winQuote).join(' '), [], { ...opts, shell: true })
-      : cp.spawn(this.cfg.command!, this.cfg.args ?? [], { ...opts, shell: false, detached: true });
+    // On Windows `npx` / `.cmd` launchers run through cmd with a quoted command line (see winSpawn).
+    if (process.platform === 'win32') {
+      const w = winSpawn(this.cfg.command!, this.cfg.args ?? []);
+      this.child = cp.spawn(w.file, w.args, { ...opts, shell: false, windowsVerbatimArguments: w.verbatim });
+    } else {
+      this.child = cp.spawn(this.cfg.command!, this.cfg.args ?? [], { ...opts, shell: false, detached: true });
+    }
     this.child.stdout!.setEncoding('utf8');
     this.child.stderr!.setEncoding('utf8');
     const spawned = new Promise<void>((resolve, reject) => {

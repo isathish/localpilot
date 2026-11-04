@@ -151,6 +151,7 @@ export class AnthropicProvider implements LLMProvider {
     const thinking = new Map<number, ThinkingBlock>();
     let finish: string | undefined;
     let promptTokens: number | undefined;
+    let cache: { cacheReadTokens?: number; cacheWriteTokens?: number } = {};
     let wroteText = false;
     for await (const ev of this.stream(body, messages, opts.signal)) {
       switch (ev.type) {
@@ -158,7 +159,9 @@ export class AnthropicProvider implements LLMProvider {
           throw new HttpError(STREAM_ERROR_STATUS[ev.error?.type ?? ''] ?? 500, JSON.stringify(ev.error ?? { message: 'provider error' }), `${this.baseUrl}/messages`);
         case 'message_start': {
           const u = ev.message?.usage;
+          // promptTokens stays the whole prompt (calibration, telemetry); the cached parts are reported beside it.
           promptTokens = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : undefined;
+          cache = { cacheReadTokens: u?.cache_read_input_tokens, cacheWriteTokens: u?.cache_creation_input_tokens };
           break;
         }
         case 'content_block_start': {
@@ -206,7 +209,7 @@ export class AnthropicProvider implements LLMProvider {
         case 'message_delta':
           finish = ev.delta?.stop_reason ?? finish;
           if (ev.usage) {
-            yield { type: 'usage', promptTokens, completionTokens: ev.usage.output_tokens };
+            yield { type: 'usage', promptTokens, completionTokens: ev.usage.output_tokens, ...cache };
           }
           break;
       }

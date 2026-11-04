@@ -115,10 +115,10 @@ export class WorktreeManager {
   async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number; subdir?: string; owner?: string; overlay?: Record<string, string> } = {}): Promise<WorktreeInfo> {
     const progress = opts.progress ?? (() => {});
     const dir = path.join(this.dirFor(repo), id.replace(/[^\w.-]+/g, '_'));
-    await fs.promises.mkdir(path.dirname(dir), { recursive: true });
     if (fs.existsSync(dir)) {
       await this.removePath(repo, dir);
     }
+    await fs.promises.mkdir(path.dirname(dir), { recursive: true });
     progress('Preparing an isolated copy of the repository…');
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD'], repo).catch(() => '')).trim();
     opts.signal?.throwIfAborted();
@@ -318,22 +318,30 @@ export class WorktreeManager {
         await git(['apply', '--whitespace=nowarn', file], wt.repo);
       } catch {
         // 3-way merges through the index, which must match the working tree: stage the affected files as they are
-        // now (the user's current content becomes "ours"), merge, then unstage again unless conflicts remain —
-        // a conflicted index lets VS Code offer its merge editor.
+        // now (the user's current content becomes "ours"), merge, then put the user's own index entries back —
+        // except for conflicted files: a conflicted index lets VS Code offer its merge editor.
         const touched = [...new Set(files.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])))];
         const existing = touched.filter((p) => fs.existsSync(path.join(wt.repo, p)));
-        if (existing.length) {
-          await git(['add', '--', ...existing], wt.repo).catch(() => undefined);
-        }
-        const res = await gitFull(['apply', '--3way', '--whitespace=nowarn', file], wt.repo);
-        for (const m of res.err.matchAll(/(?:Applied patch to '([^']+)' with conflicts|^U\s+(\S+))/gm)) {
-          conflicts.push(m[1] ?? m[2]);
-        }
-        if (res.code !== 0 && !conflicts.length) {
-          throw new Error(res.err.trim() || `git apply failed (${res.code})`);
-        }
-        if (!conflicts.length) {
-          await git(['reset', '-q', '--', ...touched], wt.repo).catch(() => undefined);
+        const saved = await indexEntries(wt.repo, touched);
+        try {
+          if (existing.length) {
+            await git(['add', '--', ...existing], wt.repo).catch(() => undefined);
+          }
+          const res = await gitFull(['apply', '--3way', '--whitespace=nowarn', file], wt.repo);
+          for (const m of res.err.matchAll(/(?:Applied patch to '([^']+)' with conflicts|^U\s+(\S+))/gm)) {
+            conflicts.push(m[1] ?? m[2]);
+          }
+          if (res.code !== 0 && !conflicts.length) {
+            if (!saved) {
+              // The user's index entries could not be read, so at least do not leave the files staged.
+              await git(['reset', '-q', '--', ...touched], wt.repo).catch(() => undefined);
+            }
+            throw new Error(res.err.trim() || `git apply failed (${res.code})`);
+          }
+        } finally {
+          if (saved) {
+            await restoreIndex(wt.repo, touched.filter((p) => !conflicts.includes(p)), saved).catch((e) => this.log.warn(`worktree apply: could not restore the index (${e instanceof Error ? e.message : String(e)})`));
+          }
         }
       }
     } finally {
@@ -367,6 +375,7 @@ export class WorktreeManager {
     await git(['worktree', 'remove', '--force', dir], repo).catch(() => undefined);
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     await fs.promises.rm(`${dir}.json`, { force: true }).catch(() => undefined);
+    await fs.promises.rmdir(path.dirname(dir)).catch(() => undefined); // drop the per-repo folder once it is empty
     await git(['worktree', 'prune'], repo).catch(() => undefined);
   }
 
@@ -398,12 +407,12 @@ export class WorktreeManager {
 
   /**
    * Remove worktrees of `owner` whose session is gone (not in `keep`); other windows' and the CLI's are left alone.
-   * Legacy worktrees without an owner go only once they are a week old. Returns how many were removed.
+   * Legacy worktrees without an owner go only once they are a week old; with no `owner` every unkept worktree goes. Returns how many were removed.
    */
-  async prune(repo: string, keep: Set<string>, owner: string): Promise<number> {
+  async prune(repo: string, keep: Set<string>, owner?: string): Promise<number> {
     let n = 0;
     for (const { id, info } of await this.list(repo)) {
-      const mine = info.owner ? info.owner === owner : Date.now() - (info.createdAt || 0) > 7 * 24 * 3600_000 && !id.startsWith('cli-');
+      const mine = owner === undefined || (info.owner ? info.owner === owner : Date.now() - (info.createdAt || 0) > 7 * 24 * 3600_000 && !id.startsWith('cli-'));
       if (mine && !keep.has(id)) {
         await this.remove(info);
         n++;
@@ -420,9 +429,13 @@ async function snapshotConfig(): Promise<string[]> {
   return ['-c', 'user.name=LocalPilot', '-c', 'user.email=localpilot@localhost', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${noHooks}`];
 }
 
-function gitFull(args: string[], cwd: string, signal?: AbortSignal, timeoutMs = 120_000): Promise<{ code: number | null; out: Buffer; err: string }> {
+function gitFull(args: string[], cwd: string, signal?: AbortSignal, timeoutMs = 120_000, input?: string): Promise<{ code: number | null; out: Buffer; err: string }> {
   return new Promise((resolve, reject) => {
     const child = cp.spawn('git', args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    if (input !== undefined) {
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(input);
+    }
     const out: Buffer[] = [];
     let err = '';
     const t = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
@@ -451,6 +464,41 @@ async function gitBuffer(args: string[], cwd: string): Promise<Buffer> {
 
 async function git(args: string[], cwd: string): Promise<string> {
   return (await gitBuffer(args, cwd)).toString('utf8');
+}
+
+/** The index entries (`git ls-files -s` records, by path) of `paths`; undefined when they cannot be read. */
+async function indexEntries(repo: string, paths: string[]): Promise<Map<string, string[]> | undefined> {
+  try {
+    const out = await git(['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...paths], repo);
+    const map = new Map<string, string[]>();
+    for (const rec of out.split('\0').filter(Boolean)) {
+      const p = rec.slice(rec.indexOf('\t') + 1);
+      map.set(p, [...(map.get(p) ?? []), rec]);
+    }
+    return map;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Put `paths` back to their `saved` index entries; paths that were not indexed leave the index again. */
+async function restoreIndex(repo: string, paths: string[], saved: Map<string, string[]>): Promise<void> {
+  const indexed = paths.filter((p) => saved.has(p));
+  const absent = paths.filter((p) => !saved.has(p));
+  if (indexed.length) {
+    // Drop whatever entries the merge left first (a mode-0 record), so earlier unmerged stages can come back too.
+    const records = indexed.flatMap((p) => {
+      const recs = saved.get(p)!;
+      return [`0 ${'0'.repeat(recs[0].split(' ')[1].length)}\t${p}`, ...recs];
+    });
+    const r = await gitFull(['update-index', '-z', '--index-info'], repo, undefined, undefined, records.map((l) => `${l}\0`).join(''));
+    if (r.code !== 0) {
+      throw new Error(r.err.trim() || `git update-index failed (${r.code})`);
+    }
+  }
+  if (absent.length) {
+    await git(['--literal-pathspecs', 'rm', '--cached', '-q', '--ignore-unmatch', '--', ...absent], repo);
+  }
 }
 
 function shell(command: string, cwd: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<void> {

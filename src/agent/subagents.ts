@@ -225,6 +225,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         workspaceRoot: ctx.workspaceRoot,
         isolatedFrom: ctx.isolatedFrom,
         depth: ctx.depth + 1,
+        // Every request the child (or its own children) makes is booked into the parent chat as subagent usage.
+        onUsage: (u, m, p) => ctx.recordUsage?.(u, m, p),
         signal: control.signal,
         control,
         requestApproval: (title, detail, kind, opts) => approval(ctx.sessionId, title, detail, kind, opts),
@@ -308,7 +310,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
                 title: { type: 'string', description: 'Short label shown in the checklist' },
                 agent: { type: 'string', description: 'Worker: coder, tester, docs, explore, reviewer, debugger, researcher…' },
                 prompt: { type: 'string', description: 'Complete self-contained brief: goal, exact files, constraints, how to verify, what to report' },
-                dependsOn: { type: 'array', items: { type: 'string' }, description: 'Titles or ids of tasks that must finish first' },
+                dependsOn: { type: 'array', items: { type: 'string' }, description: 'Tasks that must finish first: titles of tasks in this batch, their 1-based positions in this list, or ids of existing checklist items' },
                 skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this item must follow' },
               },
               required: ['agent', 'prompt'],
@@ -362,8 +364,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           const dup = existing.find((e) => e.status === 'pending' && !matched.has(e.id) && (norm(e.prompt) === norm(t.prompt) || (t.title && norm(e.title) === norm(t.title)) || norm(e.title) === norm(t.prompt).slice(0, 80)));
           if (dup) {
             matched.add(dup.id);
-            dup.agent = dup.agent || String(t.agent);
-            dup.prompt = dup.prompt || String(t.prompt);
+            dup.agent = String(t.agent) || dup.agent;
+            dup.prompt = String(t.prompt).trim() ? String(t.prompt) : dup.prompt;
             if (strList(t.skills)?.length) { dup.skills = strList(t.skills); }
             return dup.id;
           }
@@ -372,10 +374,18 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           return item.id;
         });
         const all = [...existing, ...created];
-        // dependsOn may name other inline tasks by title or by id; resolve titles to the ids just assigned.
+        // dependsOn names tasks in this batch (by title, prompt or 1-based position) before existing checklist items,
+        // so "2" means the second inline task even when an older item already has id 2.
+        const resolveDep = (d: string): string | undefined => {
+          const k = inline.findIndex((x) => !!norm(d) && (norm(x.title) === norm(d) || norm(x.prompt) === norm(d)));
+          if (k >= 0) { return resolvedIds[k]; }
+          const pos = /^\d+$/.test(d.trim()) ? Number(d.trim()) : 0;
+          if (pos >= 1 && pos <= inline.length) { return resolvedIds[pos - 1]; }
+          return all.find((c) => c.id === d || c.title === d.slice(0, 80))?.id;
+        };
         inline.forEach((t, i) => {
           const deps = Array.isArray(t.dependsOn) ? (t.dependsOn as unknown[]).map(String) : [];
-          const ids = deps.map((d) => all.find((c) => c.id === d || c.title === d.slice(0, 80))?.id ?? inline.findIndex((x) => norm(x.title) === norm(d) || norm(x.prompt) === norm(d))).map((x) => (typeof x === 'number' ? (x >= 0 ? resolvedIds[x] : undefined) : x)).filter((d): d is string => !!d && d !== resolvedIds[i]);
+          const ids = deps.map(resolveDep).filter((d): d is string => !!d && d !== resolvedIds[i]);
           const item = all.find((c) => c.id === resolvedIds[i]);
           if (item && ids.length) { item.dependsOn = [...new Set([...(item.dependsOn ?? []), ...ids])]; }
         });

@@ -7,12 +7,17 @@ const secretListeners = new Set<() => void>();
 
 /** Replaces the known secret values (`undefined` removes one) and tells providers to rebuild with them. */
 export function setSecretValues(values: Record<string, string | undefined>): void {
+  let changed = false;
   for (const [name, value] of Object.entries(values)) {
     if (value) {
+      changed = secretValues.get(name) !== value || changed;
       secretValues.set(name, value);
     } else {
-      secretValues.delete(name);
+      changed = secretValues.delete(name) || changed;
     }
+  }
+  if (!changed) {
+    return;
   }
   for (const l of secretListeners) {
     l();
@@ -110,20 +115,34 @@ export function isRemoteUrl(url: string): boolean {
   } catch {
     return false;
   }
-  return !(
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    host === '::1' ||
+  if (host.includes(':')) {
+    return !isPrivateIpv6(host);
+  }
+  return !(host === 'localhost' || host === '0.0.0.0' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || isPrivateIpv4(host) || !host.includes('.'));
+}
+
+function isPrivateIpv4(host: string): boolean {
+  return (
     /^127\./.test(host) ||
     /^10\./.test(host) ||
     /^192\.168\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-    /^f[cd][0-9a-f]{2}:/.test(host) ||
-    !host.includes('.')
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
   );
+}
+
+/** Loopback, unspecified, unique-local (fc00::/7), link-local (fe80::/10), or an IPv4-mapped private address. */
+function isPrivateIpv6(host: string): boolean {
+  if (host === '::1' || host === '::' || /^f[cd]/.test(host) || /^fe[89ab]/.test(host)) {
+    return true;
+  }
+  const mapped = /^::ffff:(.+)$/.exec(host)?.[1];
+  if (!mapped) {
+    return false;
+  }
+  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(mapped);
+  const v4 = hex ? [parseInt(hex[1], 16) >> 8, parseInt(hex[1], 16) & 255, parseInt(hex[2], 16) >> 8, parseInt(hex[2], 16) & 255].join('.') : mapped;
+  return /^\d+\.\d+\.\d+\.\d+$/.test(v4) && isPrivateIpv4(v4);
 }
 
 /** Azure OpenAI authenticates with an `api-key` header instead of a Bearer token. */

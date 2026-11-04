@@ -6,6 +6,7 @@ import { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { cliShim } from '../ui/cli';
 import { globToRegExp, RelativePattern as ShimRP, Uri as ShimUri, workspace as shimWs } from '../cli/vscodeShim';
 import { shellInvocation } from '../terminal/shell';
 import { inDir, OutputCapture, samePath, TerminalManager } from '../terminal/terminalManager';
@@ -57,6 +58,30 @@ suite('LocalPilot terminal integration', () => {
       assert.ok(String(opts.message).includes('LocalPilot'));
     } finally {
       term.dispose();
+    }
+  });
+
+  test('the localpilot shim passes the CLI exit code through', async function () {
+    this.timeout(30_000);
+    const shim = cliShim({ extensionUri: vscode.Uri.file(EXT_ROOT), globalStorageUri: vscode.Uri.file(os.tmpdir()) } as vscode.ExtensionContext);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-shim-'));
+    try {
+      const stub = path.join(dir, 'exit3.js');
+      await fs.writeFile(stub, 'process.exit(3)');
+      const env = { ...process.env, LOCALPILOT_CLI: stub };
+      let r: cp.SpawnSyncReturns<Buffer>;
+      if (process.platform === 'win32') {
+        const shimPath = path.join(dir, 'localpilot.cmd');
+        await fs.writeFile(shimPath, shim.windows);
+        r = cp.spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', shimPath], { env });
+      } else {
+        const shimPath = path.join(dir, 'localpilot');
+        await fs.writeFile(shimPath, shim.posix);
+        r = cp.spawnSync('bash', [shimPath, 'x'], { env });
+      }
+      assert.strictEqual(r.status, 3, String(r.stderr));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 

@@ -36,6 +36,8 @@ export class TerminalManager implements vscode.Disposable {
   private readonly records: TerminalExecutionRecord[] = [];
   private readonly byExecution = new Map<vscode.TerminalShellExecution, TerminalExecutionRecord>();
   private readonly agentTerminals = new Map<string, vscode.Terminal>();
+  /** Sessions whose agent terminal never got shell integration: run straight as a child process. */
+  private readonly noIntegration = new Set<string>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly _onDidRecord = new vscode.EventEmitter<TerminalExecutionRecord>();
   readonly onDidRecord = this._onDidRecord.event;
@@ -179,17 +181,29 @@ export class TerminalManager implements vscode.Disposable {
    * or `undefined` when shell integration is unavailable so the caller can fall back to a child process.
    */
   async run(sessionId: string, command: string, cwd: string, signal: AbortSignal, timeoutMs: number, reveal: boolean): Promise<IntegratedRunResult | undefined> {
+    if (this.noIntegration.has(sessionId)) {
+      return undefined;
+    }
     if (signal.aborted) {
       return { output: 'Not run: the user stopped the run.', exitCode: undefined };
     }
-    const term = this.agentTerminal(sessionId, cwd);
-    if (reveal) {
-      term.show(true);
+    if (vscode.workspace.getConfiguration('terminal.integrated').get('shellIntegration.enabled') === false) {
+      this.noIntegration.add(sessionId);
+      return undefined;
     }
+    const term = this.agentTerminal(sessionId, cwd);
     const si = await this.waitForShellIntegration(term, 4000);
     if (!si) {
       this.log.info('terminal: shell integration not available, falling back to child process');
+      this.noIntegration.add(sessionId);
+      if (this.agentTerminals.get(sessionId) === term) {
+        this.agentTerminals.delete(sessionId);
+      }
+      term.dispose();
       return undefined;
+    }
+    if (reveal) {
+      term.show(true);
     }
     if (signal.aborted) {
       return { output: 'Not run: the user stopped the run.', exitCode: undefined };

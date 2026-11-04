@@ -25,6 +25,8 @@ const cloud = (key: string, label: string, type: ProviderConfig['type'], baseUrl
   cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true },
 });
 
+const withModels = (p: ProviderPreset, models: string[]): ProviderPreset => ({ ...p, cfg: { ...p.cfg, models } });
+
 /**
  * Provider presets for the CLI (`localpilot providers add <key>`). The Settings page has the same list in
  * `media/settings.js` (PRESET_PROVIDERS); the smoke test keeps the two in sync.
@@ -60,7 +62,29 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   cloud('dashscope', 'Alibaba Qwen', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'),
   cloud('ollama-cloud', 'Ollama Cloud', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY', 'https://ollama.com/settings/keys'),
   cloud('azure', 'Azure OpenAI', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'),
+  // Bedrock's OpenAI-compatible endpoint takes a Bedrock API key as a Bearer token and has no /models, so its models are listed.
+  // IAM credentials, profiles and SigV4 go through a LiteLLM proxy instead.
+  withModels(
+    cloud('bedrock', 'Amazon Bedrock', 'openai', bedrockUrl('us-east-1'), 'AWS_BEARER_TOKEN_BEDROCK', 'https://console.aws.amazon.com/bedrock/home#/api-keys'),
+    ['openai.gpt-oss-120b-1:0', 'openai.gpt-oss-20b-1:0']
+  ),
 ];
+
+/** Bedrock's OpenAI-compatible endpoint in an AWS region. */
+export function bedrockUrl(region: string): string {
+  return `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`;
+}
+
+/** The AWS region of a Bedrock endpoint URL, if it is one. */
+export function bedrockRegion(baseUrl: string): string | undefined {
+  return /^https:\/\/bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com(\.cn)?\//i.exec(baseUrl)?.[1];
+}
+
+/** The same Bedrock endpoint in another region; other URLs are returned unchanged. */
+export function withRegion(baseUrl: string, region: string): string {
+  const r = region.trim().toLowerCase();
+  return bedrockRegion(baseUrl) && /^[a-z]{2}(-[a-z]+)+-\d+$/.test(r) ? baseUrl.replace(/^(https:\/\/bedrock-runtime\.)[a-z0-9-]+(\.amazonaws\.com)/i, `$1${r}$2`) : baseUrl;
+}
 
 export function findPreset(key: string): ProviderPreset | undefined {
   const k = key.trim().toLowerCase();

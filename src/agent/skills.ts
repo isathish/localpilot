@@ -38,7 +38,7 @@ export class SkillManager implements vscode.Disposable {
     /** Folder with the skills shipped inside the extension package. */
     private readonly builtinDir?: string
   ) {
-    for (const glob of ['**/.localpilot/{skills,agents}/**', '**/.claude/{skills,agents}/**', '**/.github/skills/**']) {
+    for (const glob of ['**/.localpilot/{skills,agents}/**', '**/.claude/{skills,agents}/**', '**/{.github,.cline,.clinerules,.agents}/skills/**']) {
       const w = vscode.workspace.createFileSystemWatcher(glob);
       const reload = () => void this.refresh();
       w.onDidChange(reload);
@@ -145,12 +145,16 @@ export class SkillManager implements vscode.Disposable {
       skillDirs.push({ dir: path.join(r, '.localpilot', 'skills'), source: 'workspace' });
       skillDirs.push({ dir: path.join(r, '.claude', 'skills'), source: 'workspace' });
       skillDirs.push({ dir: path.join(r, '.github', 'skills'), source: 'workspace' });
+      skillDirs.push({ dir: path.join(r, '.agents', 'skills'), source: 'workspace' });
+      skillDirs.push({ dir: path.join(r, '.cline', 'skills'), source: 'workspace' });
+      skillDirs.push({ dir: path.join(r, '.clinerules', 'skills'), source: 'workspace' });
       agentDirs.push({ dir: path.join(r, '.localpilot', 'agents'), source: 'workspace' });
       agentDirs.push({ dir: path.join(r, '.claude', 'agents'), source: 'workspace' });
     }
     skillDirs.push({ dir: path.join(home, '.localpilot', 'skills'), source: 'user' });
     skillDirs.push({ dir: path.join(home, '.claude', 'skills'), source: 'user' });
     skillDirs.push({ dir: path.join(home, '.agents', 'skills'), source: 'user' });
+    skillDirs.push({ dir: path.join(home, '.cline', 'skills'), source: 'user' });
     agentDirs.push({ dir: path.join(home, '.localpilot', 'agents'), source: 'user' });
     agentDirs.push({ dir: path.join(home, '.claude', 'agents'), source: 'user' });
     const cfg = getConfig();

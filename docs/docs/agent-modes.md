@@ -61,7 +61,9 @@ Paste an error or describe what goes wrong.
 
 ## Plan
 
-Plan mode investigates without editing, then shows a **Prepared plan** card:
+Plan mode investigates without editing, then shows a **Prepared plan** card. MCP tools run in Plan only when their server marks them read-only (`readOnlyHint`).
+
+The card has:
 
 - a title and one-line summary,
 - the plan saved as `.localpilot/plans/<name>.plan.md` (open or copy it),
@@ -72,7 +74,7 @@ Plan mode investigates without editing, then shows a **Prepared plan** card:
 
 ## Ask
 
-Ask is read-only. The model can read and search the workspace and use web search and fetch, but cannot edit, delete or run commands. Use it for explanations, architecture questions and code review.
+Ask is read-only. The model can read and search the workspace and use web search and fetch, but cannot edit, delete or run commands. MCP tools run in Ask only when their server marks them read-only (`readOnlyHint`). Use it for explanations, architecture questions and code review.
 
 ## Questions before it starts
 

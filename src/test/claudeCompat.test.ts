@@ -6,7 +6,7 @@ import { applyHookResult, execHook, hookMatches, HookOutcome, HookRunner } from 
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, expandAgentTools, fromClaudeToolInput, globToRegExp, matchCommandRule, matchPathRule, parseRule, registerMcpToolOrigin, forgetMcpToolOrigin, splitCommandChain } from '../agent/permissions';
 import { installPlugin, loadMarketplace, resolvePluginDir } from '../agent/pluginInstaller';
 import { emptySettings, loadProjectSettings, mergeSettings, normalizeSettings, parseJsonc } from '../agent/settings';
-import { discoverCommands, expandCommand, indexCommands, parseCommandFile, splitArgs, splitRules } from '../agent/commands';
+import { discoverCommands, expandCommand, indexCommands, parseCommandFile, parseTaskArgs, splitArgs, splitRules } from '../agent/commands';
 import { buildInstructions, collectInstructionFiles, resolveImports } from '../context/instructions';
 import { discoverPlugins, pluginSource } from '../agent/plugins';
 import { parseFrontMatter } from '../agent/frontMatter';
@@ -316,6 +316,13 @@ suite('Claude Code compatibility: hooks', () => {
     assert.ok(slow.timedOut);
   });
 
+  (posix ? test.skip : test)('on Windows a hook command keeps its double-quoted arguments', async function () {
+    this.timeout(10_000);
+    const r = await execHook({ type: 'command', command: 'node -e "console.log(process.argv[1])" "a b"' }, {}, { cwd: os.tmpdir() });
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.strictEqual(r.stdout.trim(), 'a b');
+  });
+
   (posix ? test : test.skip)('a timeout or abort kills the whole hook process tree promptly', async function () {
     this.timeout(10_000);
     let t = Date.now();
@@ -355,6 +362,11 @@ suite('Claude Code compatibility: hooks', () => {
 });
 
 suite('Claude Code compatibility: custom slash commands', () => {
+  test('/skill and /agent task arguments keep newlines and indentation', () => {
+    assert.deepStrictEqual(parseTaskArgs('pdf  line1\n  line2'), { name: 'pdf', task: 'line1\n  line2' });
+    assert.deepStrictEqual(parseTaskArgs('explore'), { name: 'explore', task: '' });
+  });
+
   test('front-matter: block lists, allowed-tools with parentheses, argument-hint, model', () => {
     const fm = parseFrontMatter('---\nname: x\nallowed-tools:\n  - Bash(git add:*)\n  - "Bash(git status:*)"\n---\nbody');
     assert.deepStrictEqual(fm.meta['allowed-tools'], ['Bash(git add:*)', 'Bash(git status:*)']);
@@ -394,6 +406,13 @@ suite('Claude Code compatibility: custom slash commands', () => {
     assert.strictEqual(notes.length, 1);
     assert.ok(prompt.includes('<file path="README.md">\n# Hello\n</file>'));
     assert.ok(prompt.includes('@missing.md'), 'unknown paths are left as typed');
+  });
+
+  test('expansion: $-patterns in the arguments are kept verbatim', async () => {
+    const arg = "awk '{print $2}' $$5 $' tail";
+    const c = parseCommandFile('/x/fix.md', 'Fix this: $ARGUMENTS', { source: 'project' });
+    const { prompt } = await expandCommand(c, arg, { root: await tmp('cmdargs') });
+    assert.strictEqual(prompt, `Fix this: ${arg}`);
   });
 
   test('discovery: project beats user, subfolders namespace, plugins are /plugin:name', async () => {
@@ -454,10 +473,16 @@ suite('Claude Code compatibility: CLAUDE.md hierarchy and imports', () => {
     await write(path.join(parent, 'outside.txt'), 'OUTSIDE SECRET');
     await write(path.join(home, '.ssh', 'id_rsa'), 'PRIVATE KEY');
     await write(path.join(home, '.claude', 'shared.md'), 'SHARED CLAUDE');
+    await write(path.join(home, '.claude', '.credentials.json'), 'OAUTH TOKEN');
+    await write(path.join(home, '.localpilot', 'keys.json'), 'PROVIDER KEY');
+    await write(path.join(home, '.localpilot', 'config.txt'), 'LOCALPILOT CONFIG');
     await write(path.join(root, 'docs', 'in.md'), 'INSIDE DOC');
     await write(path.join(root, '.env'), 'API_KEY=1');
-    await write(path.join(root, 'AGENTS.md'), `Read @docs/in.md and @../outside.txt and @~/.ssh/id_rsa and @${path.join(parent, 'outside.txt')} and @.env and @~/.claude/shared.md`);
+    await write(path.join(root, 'AGENTS.md'), `Read @docs/in.md and @../outside.txt and @~/.ssh/id_rsa and @${path.join(parent, 'outside.txt')} and @.env and @~/.claude/shared.md and @~/.localpilot/keys.json and @~/.claude/.credentials.json and @~/.localpilot/config.txt`);
     const { text } = await buildInstructions([root], { home });
+    assert.ok(!text.includes('PROVIDER KEY'), 'no import of ~/.localpilot/keys.json');
+    assert.ok(!text.includes('OAUTH TOKEN'), 'no import of ~/.claude/.credentials.json');
+    assert.ok(!text.includes('LOCALPILOT CONFIG'), 'only Markdown is imported from ~/.localpilot');
     assert.ok(text.includes('INSIDE DOC'), 'in-workspace import is inlined');
     assert.ok(text.includes('SHARED CLAUDE'), '~/.claude imports keep working');
     assert.ok(!text.includes('OUTSIDE SECRET'), 'no import from outside the workspace');

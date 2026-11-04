@@ -1491,7 +1491,8 @@
           "type": "number",
           "default": 2,
           "minimum": 1,
-          "maximum": 4
+          "maximum": 4,
+          "description": "Levels of subagents allowed. 1 = only the main agent may delegate (its subagents cannot start their own); 2 = subagents may delegate one level deeper; up to 4."
         },
         "localpilot.queue.concurrency": {
           "type": "number",
@@ -1628,7 +1629,7 @@
         "localpilot.mcpServers": {
           "type": "object",
           "default": {},
-          "markdownDescription": "MCP servers whose tools are exposed to the agent. A local server is started from a command: `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`. A remote server is reached at a URL over Streamable HTTP (or HTTP+SSE for a URL ending in `/sse` or `\"type\": \"sse\"`), with optional headers: `{ \"github\": { \"url\": \"https://api.githubcopilot.com/mcp/\", \"headers\": { \"Authorization\": \"Bearer ${env:GITHUB_TOKEN}\" } } }`. Header values accept `${env:NAME}` and `${secret:NAME}`.",
+          "markdownDescription": "MCP servers whose tools are exposed to the agent. A local server is started from a command: `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`. A remote server is reached at a URL over Streamable HTTP (or HTTP+SSE for a URL ending in `/sse` or `\"type\": \"sse\"`), with optional headers: `{ \"github\": { \"url\": \"https://api.githubcopilot.com/mcp/\", \"headers\": { \"Authorization\": \"Bearer ${env:GITHUB_TOKEN}\" } } }`. Header values accept `${env:NAME}`.",
           "additionalProperties": {
             "type": "object",
             "properties": {
@@ -1678,6 +1679,19 @@
                   "type": "string"
                 },
                 "markdownDescription": "Request headers for a remote server, e.g. `{ \"Authorization\": \"Bearer ${env:TOKEN}\" }`."
+              },
+              "timeout": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 3600,
+                "markdownDescription": "Seconds a tool call to this server may take before it fails."
+              },
+              "autoApprove": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "markdownDescription": "Tools of this server (as the server names them) that run without asking."
               }
             }
           }
@@ -1737,7 +1751,7 @@
             "obra/superpowers/skills",
             "github/awesome-copilot/skills"
           ],
-          "markdownDescription": "Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, github.com URLs) in the [Agent Skills](https://agentskills.io) format whose skills LocalPilot can install when a request matches one that is not installed yet. The first repository wins when several offer the same name. Browse them with **LocalPilot: Browse Skill Catalog…**. The index is cached in `~/.localpilot/skill-catalog.json` and refreshed daily; set `GITHUB_TOKEN` for private repositories or higher API limits."
+          "markdownDescription": "Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, github.com URLs) in the [Agent Skills](https://agentskills.io) format whose skills LocalPilot can install when a request matches one that is not installed yet. The first repository wins when several offer the same name. Browse them with **LocalPilot: Browse Skill Registry (Quick Pick)…**. The index is cached in `~/.localpilot/skill-catalog.json` and refreshed daily; set `GITHUB_TOKEN` for private repositories or higher API limits."
         },
         "localpilot.skills.autoInstall": {
           "type": "string",
@@ -1749,7 +1763,7 @@
           "enumDescriptions": [
             "Install the best-matching catalog skill as the request starts, then load it — no prompt.",
             "Show an \"Install …\" chip under the request; nothing is downloaded until you click it.",
-            "Never look up the catalog for a request (Browse Skill Catalog… still works)."
+            "Never look up the catalog for a request (Browse Skill Registry (Quick Pick)… still works)."
           ],
           "default": "auto",
           "markdownDescription": "When a request matches a skill from `#localpilot.skills.repositories#` better than any installed skill (planning, design docs, debugging, writing Markdown, PDFs, …), install it on the spot or offer it. A skill you removed after an automatic install, or declined, is not installed again."
@@ -2055,7 +2069,10 @@
     "@vscode/test-electron": "^3.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.5.0",
+    "katex": "0.19.1",
+    "mermaid": "12.3.0",
     "npm-run-all": "^4.1.5",
+    "pdfjs-dist": "6.5.438",
     "svg2ttf": "^6.1.0",
     "svgicons2svgfont": "^16.0.0",
     "ttf2woff": "^3.0.0",
@@ -2065,5 +2082,8 @@
   "overrides": {
     "diff": "^8.0.4",
     "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "mammoth": "1.13.0"
   }
 }

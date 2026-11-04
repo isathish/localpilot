@@ -48,7 +48,7 @@ To check that Ollama is reachable, run `curl http://localhost:11434/api/version`
 |---|---|
 | Tool calling | Native `/api/chat` tools for models that report tool support. Other models get a text-based tool protocol. |
 | Context size | Sends `num_ctx` with every request (`localpilot.contextWindow`, default `32768`), then prunes and compacts history as the chat grows. |
-| Thinking models | `localpilot.thinking` (default `off`) turns on Ollama's `think` option. The reasoning shows as a collapsed step. |
+| Thinking models | `localpilot.thinking` (default `auto`; also `off`, `on`, `low`, `medium`, `high`) sets Ollama's `think` option. `auto` picks the effort per task. The reasoning shows as a collapsed step. |
 | Images | Screenshots and pasted images go to a vision model such as `gemma4`, `qwen2.5vl` or `gemma3`. |
 | Inline completions | Off by default. Turn on `localpilot.inlineCompletion.enabled`. LocalPilot then uses Ollama's FIM `suffix` support with the smallest FIM-capable model that fits, unless you set `localpilot.inlineCompletion.model`. |
 | Model management | **Settings → Models** pulls and removes models with progress, marks each size *fits*, *tight* or *too big*, and lets you switch models on or off. |

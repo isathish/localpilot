@@ -293,7 +293,13 @@ const ghMissing = 'The GitHub CLI (gh) is not installed or not signed in. Instal
 async function gh(args: string[], ctx: ToolContext, input?: string): Promise<Run> {
   return runCmd('gh', args, rootOf(ctx), ctx.signal, 120_000, input);
 }
-const ghFailed = (r: Run, what: string) => (/command not found|not logged|auth login|authentication/i.test(r.err) ? { content: ghMissing, isError: true } : fail(r, what));
+const ghFailed = (r: Run, what: string) =>
+  // gh's "no known GitHub host" error also says `gh auth login`; it means a GitLab/Bitbucket remote or an unknown Enterprise host.
+  /known GitHub host/i.test(r.err)
+    ? { content: 'The git remote does not point to a GitHub host gh knows. pull_request and ci_status support GitHub only; for GitHub Enterprise run `gh auth login --hostname <host>`.', isError: true }
+    : /command not found|not logged|gh auth login\b|authentication required/i.test(r.err)
+      ? { content: ghMissing, isError: true }
+      : fail(r, what);
 
 export const pullRequestTool: Tool = {
   // No approvalKind: view/list stay available in Ask and Plan mode; create/comment ask explicitly and refuse there.

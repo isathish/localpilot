@@ -169,7 +169,7 @@ export async function expandCommand(cmd: CustomCommand, argText: string, opts: E
   const args = splitArgs(argText);
   let text = cmd.body;
   // 1. Arguments (also inside !`…` so `!`gh pr view $1`` works).
-  text = text.replace(/\$ARGUMENTS\b/g, argText.trim()).replace(/\$(\d)\b/g, (_, n: string) => args[Number(n) - 1] ?? '');
+  text = text.replace(/\$(ARGUMENTS\b|\d\b)/g, (_, k: string) => (k === 'ARGUMENTS' ? argText.trim() : args[Number(k) - 1] ?? ''));
   // 2. Shell preprocessing — only what the command's allowed-tools permit, like Claude Code.
   const perm = { ...emptySettings().permissions, allow: cmd.allowedTools };
   const matches = [...text.matchAll(/!`([^`\n]+)`/g)];
@@ -324,6 +324,12 @@ export function skillTaskPrompt(skill: string, task: string): string {
 /** `/agent <name> <task>`: the prompt that hands the task to that subagent. */
 export function agentTaskPrompt(agent: string, task: string): string {
   return `Delegate this to the "${agent}" subagent via run_subagent and relay its report: ${task.trim()}`;
+}
+
+/** `<name> <task>` after `/skill` or `/agent`: the task keeps its newlines and indentation. */
+export function parseTaskArgs(rest: string): { name: string; task: string } {
+  const m = /^(\S+)\s*([\s\S]*)$/.exec(rest.trim());
+  return { name: m?.[1] ?? '', task: (m?.[2] ?? '').trim() };
 }
 
 export function indexCommands(list: CustomCommand[]): Map<string, CustomCommand> {

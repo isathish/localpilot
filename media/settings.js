@@ -150,9 +150,11 @@
       ['dashscope', 'Alibaba Qwen', 'dashscope-intl.aliyuncs.com', 'openai', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
       ['ollama-cloud', 'Ollama Cloud', 'ollama.com', 'ollama', 'https://ollama.com', 'OLLAMA_API_KEY', 'https://ollama.com/settings/keys'],
       ['azure', 'Azure OpenAI', 'your-resource.openai.azure.com', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'],
-    ].map(([key, label, sub, type, baseUrl, env, keyUrl]) => ({ key, label, sub, group: 'cloud', keyUrl, cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true } })),
+      // Bedrock's OpenAI-compatible endpoint has no /models, so its models are listed. IAM / SigV4 auth goes through LiteLLM.
+      ['bedrock', 'Amazon Bedrock', 'bedrock-runtime · API key', 'openai', 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1', 'AWS_BEARER_TOKEN_BEDROCK', 'https://console.aws.amazon.com/bedrock/home#/api-keys', ['openai.gpt-oss-120b-1:0', 'openai.gpt-oss-20b-1:0']],
+    ].map(([key, label, sub, type, baseUrl, env, keyUrl, models]) => ({ key, label, sub, group: 'cloud', keyUrl, cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true, ...(models ? { models } : {}) } })),
   ];
-  const CUSTOM_PRESET = { key: 'custom', label: 'Custom endpoint', cfg: { id: 'custom', type: 'openai', baseUrl: 'http://', displayName: 'Custom' } };
+  const CUSTOM_PRESET = { key: 'custom', label: 'Custom endpoint', cfg: { id: 'custom', type: 'openai', baseUrl: '', displayName: 'Custom' } };
   const PRESET_GROUPS = [
     ['local', 'On this machine', 'Model servers on this computer or your network. Nothing leaves it.'],
     ['cloud', 'Cloud APIs', 'Hosted models. Needs an API key; prompts and code are sent to the provider.'],
@@ -209,6 +211,7 @@
     fireworks: { mark: LOGOS.fireworks, color: '#5019c5' }, cerebras: { mark: LOGOS.cerebras, color: '#f15a29' }, huggingface: { mark: LOGOS.huggingface, color: '#f59e0b' },
     nvidia: { mark: LOGOS.nvidia, color: '#76b900' }, moonshot: { mark: LOGOS.kimi, color: '#1783ff' }, dashscope: { mark: LOGOS.qwen, color: '#615ced' },
     'ollama-cloud': { mark: LOGOS.ollama, color: 'var(--fg)' }, azure: { mark: LOGOS.azure, color: '#0078d4' },
+    bedrock: { mark: 'BR', color: '#ff9900' },
   };
   /** Resolves a brand from a preset key or a provider config (id prefix such as "ollama-2", then baseUrl/type hints). */
   const brandOf = (keyOrCfg) => {
@@ -360,10 +363,12 @@
       t.onchange = () => set(key, t.value);
       ctl.appendChild(t);
     } else {
-      const i = el('input'); i.type = kind === 'number' ? 'number' : kind === 'password' ? 'password' : 'text'; i.value = v ?? ''; i.placeholder = opts.placeholder || ''; i.setAttribute('aria-label', label);
+      // A `secret` field holding a ${secret:…} reference stays empty; leaving it empty keeps the stored key.
+      const stored = opts.secret && isSecretRef(v);
+      const i = el('input'); i.type = kind === 'number' ? 'number' : kind === 'password' ? 'password' : 'text'; i.value = stored ? '' : v ?? ''; i.placeholder = stored ? '•••••••• saved in secret storage — type to replace' : opts.placeholder || ''; i.setAttribute('aria-label', label);
       if (kind === 'number') { if (opts.min !== undefined) { i.min = opts.min; } if (opts.max !== undefined) { i.max = opts.max; } if (opts.step) { i.step = opts.step; } }
       // `last` tracks what was sent so blur + the trailing debounce do not save the same value twice.
-      let last = v;
+      let last = stored ? '' : v;
       const commit = () => {
         if (kind === 'number') {
           const n = Number(i.value);
@@ -414,10 +419,22 @@
     // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt — unless
     // the user moved to another section, which must start at its top.
     const sameSection = state.page === 'settings' && renderedSection === `${state.page}/${state.section}`;
+    // An async state push must not rebuild the field being edited: wait until it loses focus (its own blur/change
+    // commit runs first). Search boxes re-render on purpose and restore their own focus.
+    const act = document.activeElement;
+    if (sameSection && act && /^(INPUT|TEXTAREA|SELECT)$/.test(act.tagName) && act.type !== 'search' && act.closest('main.content > .sec')) {
+      if (state.renderPendingOn !== act) {
+        state.renderPendingOn = act;
+        act.addEventListener('focusout', () => setTimeout(() => { if (state.renderPendingOn === act) { state.renderPendingOn = null; render(); } }), { once: true });
+      }
+      return;
+    }
+    state.renderPendingOn = null;
     const y = sameSection ? window.scrollY : 0;
     renderedSection = `${state.page}/${state.section}`;
     app.removeAttribute('aria-busy');
     if (state.page === 'setup') {
+      if (state.dash.timer) { stopDashboardTimer(); }
       app.innerHTML = ''; app.dataset.page = 'setup';
       renderSetup();
     } else {
@@ -591,7 +608,16 @@
 
   // ------------------------------------------------------------------ providers
   function providersList() { const v = ownValue('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }
-  function saveProviders(list) { set('providers', list); }
+  function saveProviders(list) {
+    set('providers', list);
+    // Optimistic: the next edit (or a render before the round-trip) starts from this list, not the last snapshot.
+    const s = state.data && state.data.settings.providers;
+    if (s) {
+      const copy = () => JSON.parse(JSON.stringify(list));
+      s[state.scope === 'workspace' ? 'workspaceValue' : 'userValue'] = copy();
+      if (state.scope === 'workspace' || s.workspaceValue === undefined) { s.value = copy(); }
+    }
+  }
   function secProviders(sec) {
     head(sec, 'Providers', 'Local servers keep your code on this machine; cloud providers receive what you send them. Automatic picks prefer local models.');
     sec.querySelector('h1').insertAdjacentHTML('beforeend', scopeBadge('providers'));
@@ -607,7 +633,7 @@
     bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     // Configured providers, local first: the split shows at a glance which models keep code on this machine.
-    const wrap = el('div', 'prov-list');
+    const wrap = el('div', 'prov-list'); wrap.dataset.deps = 'providers';
     if (!list.length) { wrap.appendChild(el('div', 'empty', 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
     const mixed = list.some(isCloud) && list.some((p) => !isCloud(p));
     for (const [cloud, label, hint] of [[false, 'Local', 'code stays on this machine'], [true, 'Cloud', 'prompts and code are sent to the provider']]) {
@@ -640,8 +666,11 @@
       if (list.some((p) => p.id === cfg.id)) { let n = 2; while (list.some((p) => p.id === `${cfg.id}-${n}`)) { n++; } cfg.id = `${cfg.id}-${n}`; }
       state.expanded = cfg.id;
       // A new cloud provider is useless without its key: open the card with the key field focused.
-      state.focusKey = pr.group === 'cloud' || pr.key === 'custom' ? cfg.id : null;
+      state.focusKey = pr.group === 'cloud' ? cfg.id : null;
+      // A custom endpoint needs its URL first.
+      state.focusUrl = pr.key === 'custom' ? cfg.id : null;
       saveProviders([...list, cfg]);
+      render();
     };
     const fill = () => {
       presets.innerHTML = '';
@@ -699,7 +728,7 @@
       post({ type: 'probe' });
     }
   }
-  const providerSig = (list) => list.map((p) => `${p.id}@${p.baseUrl}@${p.enabled === false ? 0 : 1}`).join('|');
+  const providerSig = (list) => list.map((p) => { const k = (state.data.keys || {})[p.id] || {}; return `${p.id}@${p.baseUrl}@${p.enabled === false ? 0 : 1}@${p.type}@${p.cloud ? 1 : 0}@${p.apiKey || ''}@${k.source || ''}${k.ok ? 1 : 0}`; }).join('|');
   /** Key state without the key: a warning badge for the header when it will not resolve, a note for the key row when it does. */
   function keyState(p) {
     const k = (state.data.keys || {})[p.id];
@@ -708,7 +737,7 @@
     return { warn: '', note: k.source === 'keychain' ? 'Saved in your OS keychain.' : k.source === 'env' ? `Read from <code>$${esc(k.env)}</code>.` : 'Stored in settings.json.' };
   }
   function providerCard(p, list) {
-    const probe = (state.probe || []).find((r) => r.id === p.id) || state.tests[p.id];
+    const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
     const open = state.expanded === p.id;
     const c = el('div', `prov ${p.enabled === false ? 'off' : ''}`);
     c.dataset.prov = p.id;
@@ -729,11 +758,11 @@
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
     const body = el('div', 'prov-body');
-    const upd = (patch) => { Object.assign(p, patch); saveProviders(list); };
+    const upd = (patch) => { Object.assign(p, patch); delete state.tests[p.id]; state.probedSig = ''; saveProviders(list); };
     const row = (label, desc, input) => { const f = el('div', 'field'); f.innerHTML = `<div><div class="lbl">${esc(label)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`; const ctl = el('div', 'ctl'); ctl.appendChild(input); f.appendChild(ctl); return f; };
     const text = (key, placeholder, type = 'text', validate) => {
       const i = el('input'); i.type = type; i.value = p[key] ?? ''; i.placeholder = placeholder;
-      const commit = () => { const v = i.value.trim(); if (validate && v && !validate(v)) { i.classList.add('invalid'); return; } i.classList.remove('invalid'); if ((p[key] ?? '') !== v) { upd({ [key]: v || undefined }); } };
+      const commit = () => { const v = i.value.trim(); if (validate && v && !validate(v)) { i.classList.add('invalid'); return; } i.classList.remove('invalid'); if ((p[key] ?? '') !== v) { if (key === 'id' && v && state.expanded === p.id) { state.expanded = v; } upd({ [key]: v || undefined }); } };
       i.onchange = commit; i.onblur = commit;
       return i;
     };
@@ -742,7 +771,8 @@
     body.appendChild(row('Display name', '', text('displayName', p.id)));
     body.appendChild(row('ID', 'Used in model ids as <code>id/model</code>. Lowercase letters, digits, - and _.', text('id', 'ollama', 'text', (v) => /^[a-z0-9_-]+$/.test(v) && !list.some((o) => o !== p && o.id === v))));
     body.appendChild(row('API type', '', typeSel));
-    body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v))));
+    const urlIn = text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v));
+    body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', urlIn));
     // A pasted key is moved to VS Code secret storage by the extension; the field then stays empty and says so.
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password';
     const stored = isSecretRef(p.apiKey);
@@ -757,7 +787,16 @@
     const keyRow = body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>\${env:NAME}</code> to read it from an environment variable.${getKey}`, keyCtl));
     // For a cloud API the key is the one field that matters: right under the name, before ID / API type / URL.
     if (isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
+    // Mirrors bedrockRegion / withRegion in src/providers/presets.ts: the region is part of a Bedrock endpoint URL.
+    const bedrock = /^(https:\/\/bedrock-runtime\.)([a-z0-9-]+)(\.amazonaws\.com)/i.exec(String(p.baseUrl || ''));
+    if (bedrock) {
+      const reg = el('input'); reg.type = 'text'; reg.value = bedrock[2]; reg.placeholder = 'us-east-1'; reg.setAttribute('aria-label', 'AWS region');
+      const commitRegion = () => { const v = reg.value.trim().toLowerCase(); if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(v)) { reg.classList.toggle('invalid', !!v); return; } reg.classList.remove('invalid'); if (v !== bedrock[2].toLowerCase()) { upd({ baseUrl: p.baseUrl.replace(bedrock[0], `${bedrock[1]}${v}${bedrock[3]}`) }); render(); } };
+      reg.onchange = commitRegion; reg.onblur = commitRegion;
+      body.insertBefore(row('AWS region', 'Where your Bedrock API key and model access live. The key is sent as a Bearer token; for IAM credentials or profiles, run a LiteLLM proxy instead.', reg), keyRow.nextSibling);
+    }
     if (state.focusKey === p.id) { state.focusKey = null; setTimeout(() => keyIn.focus(), 0); }
+    if (state.focusUrl === p.id) { state.focusUrl = null; setTimeout(() => urlIn.focus(), 0); }
     if (!isRemoteUrl(p.baseUrl)) {
       const cl = el('button', `toggle ${isCloud(p) ? 'on' : ''}`); cl.setAttribute('role', 'switch');
       cl.onclick = () => upd({ cloud: isCloud(p) ? undefined : true });
@@ -777,7 +816,7 @@
     const gw = pr && pr.group === 'gateway' ? pr.key : '';
     foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
     foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: p }); };
-    foot.querySelector('#rm').onclick = () => { saveProviders(list.filter((o) => o !== p)); state.expanded = null; };
+    foot.querySelector('#rm').onclick = () => { saveProviders(list.filter((o) => o !== p)); state.expanded = null; render(); };
     body.appendChild(foot);
     if (probe) {
       const r = el('div', `prov-result ${probe.ok ? 'ok' : 'err'}`);
@@ -854,7 +893,7 @@
     const auto = el('div', 'sys-foot');
     const starter = d.starter.agent ? `${d.starter.agent}${d.starter.completion ? ` + ${d.starter.completion} for completions` : ''}${d.starter.vision ? ` + ${d.starter.vision} for images` : ''}` : 'a coder model sized for this machine';
     auto.innerHTML = `<button class="btn ${anyModels ? '' : 'brand'}" id="auto" ${setupJob ? 'disabled' : ''}>${setupJob ? '<span class="spinner"></span>' : I.download}${anyModels ? 'Install starter set' : 'Set up automatically'}</button><span class="hint" ${setupJob ? `data-job-detail="${esc(setupJob.id)}"` : ''}>${esc(setupJob ? setupJob.detail : `Picks for this machine: ${starter}. Starts or installs Ollama when needed.`)}</span>`;
-    auto.querySelector('#auto').onclick = () => { const ol = d.runtimes.find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol && !ol.installed) }); };
+    auto.querySelector('#auto').onclick = () => post({ type: 'autoSetup', installRuntime: true });
     sys.appendChild(auto);
     sys.appendChild(field('models.autoSetup', 'Offer automatic setup', 'When LocalPilot starts and finds no local model, offer to install Ollama and a starter model.', 'toggle'));
     sec.appendChild(sys);
@@ -931,7 +970,7 @@
       row.appendChild(right);
       inst.appendChild(row);
     }
-    return component(inst, ['defaultModel', 'inlineCompletion.model', 'routing.vision', 'routing.reasoning'], installedCard);
+    return component(inst, ['defaultModel', 'inlineCompletion.model', 'routing.vision', 'routing.reasoning', 'models.disabled'], installedCard);
     };
     sec.appendChild(installedCard());
 
@@ -1382,9 +1421,9 @@
     sec.appendChild(el('h2', 'sub', 'Parallelism & context'));
     sec.appendChild(card(
       field('parallel.maxConcurrency', 'Max concurrent tools / subagents', 'Read-only tools and parallel subagents run concurrently up to this limit.', 'number', { min: 1, max: 16 }),
-      field('parallel.maxSubagentDepth', 'Max subagent depth', 'How deeply subagents may spawn further subagents.', 'number', { min: 0, max: 5 }),
+      field('parallel.maxSubagentDepth', 'Max subagent depth', 'Levels of subagents allowed. 1 = the agent may delegate but its subagents cannot start their own; 2 (default) = they can, one level deeper.', 'number', { min: 1, max: 4, step: 1 }),
       field('queue.concurrency', 'Queued tasks at once', 'Tasks from the task queue (Agents view → Queue, or <i>LocalPilot: Queue Agent Task…</i>). <code>1</code> runs them one after another; higher values run them side by side, each in its own worktree when <b>Where agents work</b> isolates them.', 'number', { min: 1, max: 8 }),
-      field('compactionThreshold', 'Compact context at', 'When the context reaches this share of the window, older messages are summarised automatically.', 'range', { min: 0.4, max: 0.95, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }),
+      field('compactionThreshold', 'Compact context at', 'When the context reaches this share of the window, older messages are summarised automatically.', 'range', { min: 0.3, max: 0.95, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }),
       field('maxToolOutputChars', 'Max tool output', 'Longer outputs are truncated (head + tail) before reaching the model.', 'number', { min: 2000, max: 200000, step: 1000 }),
       field('systemPromptAppend', 'Extra instructions', 'Appended to every system prompt — coding conventions, preferred libraries, language. Project rules in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code> and <code>.github/copilot-instructions.md</code> are loaded automatically.', 'textarea', { wide: true, placeholder: 'Always use TypeScript strict mode. Prefer small, pure functions. Reply in English.' })
     ));
@@ -1410,7 +1449,7 @@
     sec.appendChild(card(
       field('webSearch.provider', 'Search provider', '<b>DuckDuckGo</b> needs no key. <b>SearXNG</b> is self-hosted and fully private. <b>Brave</b> and <b>Tavily</b> need an API key.', 'select', { options: [['duckduckgo', 'DuckDuckGo'], ['searxng', 'SearXNG (self-hosted)'], ['brave', 'Brave Search'], ['tavily', 'Tavily']] }),
       prov === 'searxng' ? field('webSearch.searxngUrl', 'SearXNG URL', 'Your instance, e.g. <code>http://localhost:8888</code>.', 'text', { placeholder: 'http://localhost:8888', validate: (v) => /^https?:\/\/.+/.test(v) }) : null,
-      prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', '', 'password') : null,
+      prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', 'Kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>${env:NAME}</code> to read it from an environment variable.', 'password', { secret: true }) : null,
       field('webSearch.maxResults', 'Max results', '', 'number', { min: 1, max: 20 })
     ));
     sec.appendChild(el('h2', 'sub', 'Browser'));
@@ -1493,7 +1532,7 @@
     const skills = d.skills || [];
     const enabledCount = skills.filter((s) => !s.disabled).length;
     sec.appendChild(el('h2', 'sub', `Installed skills<span class="count">${enabledCount} enabled · ${skills.length} total</span>`));
-    const inst = el('div', 'card');
+    const inst = el('div', 'card'); inst.dataset.deps = 'skills.disabled';
     if (!skills.length) {
       inst.appendChild(el('div', 'empty', 'No skills installed. Search the registry below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.'));
     }
@@ -1565,21 +1604,26 @@
     renderSkillRegistry(results);
 
     // ---- repositories
-    const repos = Array.isArray(val('skills.repositories')) ? val('skills.repositories') : [];
     const rcard = el('div', 'card');
-    const rf = el('div', 'field wide');
-    rf.innerHTML = `<div><div class="lbl">Repositories${scopeBadge('skills.repositories')}${resetBtn('skills.repositories')}</div><div class="desc">GitHub repositories or folders in the <a href="https://agentskills.io">Agent Skills</a> format (<code>owner/repo/path[@ref]</code>). The registry above is their combined index, cached for a day; the first repository wins when several offer the same skill name. Set <code>GITHUB_TOKEN</code> for private repositories or higher rate limits.</div></div>`;
-    const rctl = el('div', 'ctl');
-    const rul = el('ul', 'list');
-    const status = new Map((reg.status || []).map((s) => [s.repo, s]));
-    repos.forEach((p, i) => {
-      const li = el('li', '', `<code>${esc(p)}</code><span class="muted small sk-st" data-repo="${esc(p)}"> · ${repoStatusText(status.get(p))}</span><span class="spacer"></span><button class="reset x" title="Remove">${I.x}</button>`);
-      li.querySelector('button').onclick = () => set('skills.repositories', repos.filter((_, j) => j !== i));
-      rul.appendChild(li);
-    });
-    const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills" aria-label="Skill repository to add (owner/repo/path)"><button class="btn sm">${I.plus}Add</button>`);
-    raddRow.querySelector('button').onclick = () => { const v = raddRow.querySelector('input').value.trim(); if (v) { set('skills.repositories', [...repos, v]); } };
-    rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl); rcard.appendChild(rf);
+    const cur = () => (Array.isArray(val('skills.repositories')) ? val('skills.repositories') : []);
+    const repoField = () => {
+      const rf = el('div', 'field wide');
+      rf.innerHTML = `<div><div class="lbl">Repositories${scopeBadge('skills.repositories')}${resetBtn('skills.repositories')}</div><div class="desc">GitHub repositories or folders in the <a href="https://agentskills.io">Agent Skills</a> format (<code>owner/repo/path[@ref]</code>). The registry above is their combined index, cached for a day; the first repository wins when several offer the same skill name. Set <code>GITHUB_TOKEN</code> for private repositories or higher rate limits.</div></div>`;
+      const rctl = el('div', 'ctl');
+      const rul = el('ul', 'list');
+      const status = new Map((reg.status || []).map((s) => [s.repo, s]));
+      cur().forEach((p) => {
+        const li = el('li', '', `<code>${esc(p)}</code><span class="muted small sk-st" data-repo="${esc(p)}"> · ${repoStatusText(status.get(p))}</span><span class="spacer"></span><button class="reset x" title="Remove">${I.x}</button>`);
+        li.querySelector('button').onclick = () => set('skills.repositories', cur().filter((x) => x !== p));
+        rul.appendChild(li);
+      });
+      const raddRow = el('div', 'row', `<input type="text" placeholder="owner/repo/skills" aria-label="Skill repository to add (owner/repo/path)"><button class="btn sm">${I.plus}Add</button>`);
+      const input = raddRow.querySelector('input');
+      raddRow.querySelector('button').onclick = () => { const v = input.value.trim(); if (v) { set('skills.repositories', [...cur().filter((x) => x !== v), v]); input.value = ''; } };
+      rctl.appendChild(rul); rctl.appendChild(raddRow); rf.appendChild(rctl);
+      return component(rf, ['skills.repositories'], repoField);
+    };
+    rcard.appendChild(repoField());
     const rbar = el('div', 'btnrow');
     rbar.innerHTML = `<span class="muted small">Index cached in <code>~/.localpilot/skill-catalog.json</code>.</span><span class="spacer"></span><button class="btn sm" id="sk-refresh" ${state.busy ? 'disabled' : ''}>${state.busy ? '<span class="spinner"></span>' : I.refresh}Re-index now</button><button class="btn sm" data-cmd="localpilot.installSkill" title="From a GitHub repository (owner/repo or a folder in it), a URL to a SKILL.md, or a local folder">${I.download}Install from URL or folder…</button>`;
     rbar.querySelector('#sk-refresh').onclick = () => { state.busy = true; render(); post({ type: 'refreshSkillRegistry' }); };
@@ -1589,14 +1633,15 @@
     // ---- skill and plugin folders
     sec.appendChild(el('h2', 'sub', 'Skill & plugin folders'));
     const pathList = (key, label, desc, placeholder) => {
-      const paths = Array.isArray(val(key)) ? val(key) : [];
-      const f = el('div', 'field wide');
+      const cur = () => (Array.isArray(val(key)) ? val(key) : []);
+      const paths = cur();
+      const f = el('div', 'field wide'); f.dataset.deps = key;
       f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">${desc}</div></div>`;
       const ctl = el('div', 'ctl');
       const ul = el('ul', 'list');
-      paths.forEach((p, i) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set(key, paths.filter((_, j) => j !== i)); ul.appendChild(li); });
+      paths.forEach((p) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set(key, cur().filter((x) => x !== p)); ul.appendChild(li); });
       const addRow = el('div', 'row', `<input type="text" placeholder="${esc(placeholder)}" aria-label="${esc(label)}: folder to add"><button class="btn sm">${I.plus}Add</button>`);
-      addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set(key, [...paths, v]); } };
+      addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set(key, [...cur(), v]); } };
       ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl);
       return f;
     };
@@ -1667,6 +1712,9 @@
     box.appendChild(list);
   }
   // ------------------------------------------------------------------ mcp
+  const splitArgs = (raw) => (raw.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map((a) => a.replace(/"/g, ''));
+  /** Inverse of splitArgs: an argument with whitespace is quoted so editing it round-trips. */
+  const joinArgs = (args) => args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '')}"` : a)).join(' ');
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the Network approval policy.');
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
@@ -1699,11 +1747,11 @@
     ctl.querySelector('#mcpAdd').onclick = () => {
       const name = ctl.querySelector('#mcpName').value.trim().replace(/[^\w.-]+/g, '-');
       const raw = ctl.querySelector('#mcpCmd').value.trim();
-      const parts = raw.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+      const parts = splitArgs(raw);
       if (!name || !parts.length) { toast('Name and a command or URL are required', 'error'); return; }
       if (servers[name]) { toast(`“${name}” already exists`, 'error'); return; }
       const next = own();
-      next[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0].replace(/"/g, ''), args: parts.slice(1).map((a) => a.replace(/"/g, '')) };
+      next[name] = /^https?:\/\//i.test(raw) ? { url: raw } : { command: parts[0], args: parts.slice(1) };
       state.expanded = `mcp:${name}`;
       set('mcpServers', next);
     };
@@ -1717,7 +1765,7 @@
     const upd = (patch) => { const next = own(); next[name] = { ...(next[name] || servers[name] || {}), ...patch }; for (const k of Object.keys(next[name])) { if (next[name][k] === undefined) { delete next[name][k]; } } set('mcpServers', next); };
     const row = (label, desc, input) => { const f = el('div', 'field'); f.innerHTML = `<div><div class="lbl">${esc(label)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`; const ctl = el('div', 'ctl'); ctl.appendChild(input); f.appendChild(ctl); return f; };
     const cmd = el('input'); cmd.type = 'text'; cmd.value = s.command || ''; cmd.onchange = () => upd({ command: cmd.value.trim() });
-    const args = el('input'); args.type = 'text'; args.value = (s.args || []).join(' '); args.placeholder = 'space-separated'; args.onchange = () => upd({ args: args.value.trim() ? args.value.trim().split(/\s+/) : undefined });
+    const args = el('input'); args.type = 'text'; args.value = joinArgs(s.args || []); args.placeholder = 'space-separated; quote an argument with spaces'; args.onchange = () => upd({ args: args.value.trim() ? splitArgs(args.value.trim()) : undefined });
     const cwd = el('input'); cwd.type = 'text'; cwd.value = s.cwd || ''; cwd.placeholder = 'workspace root'; cwd.onchange = () => upd({ cwd: cwd.value.trim() || undefined });
     const env = el('textarea'); env.value = s.env ? JSON.stringify(s.env, null, 2) : ''; env.placeholder = '{ "API_KEY": "…" }';
     env.onchange = () => { try { upd({ env: env.value.trim() ? JSON.parse(env.value) : undefined }); env.classList.remove('invalid'); } catch { env.classList.add('invalid'); toast('Environment must be valid JSON', 'error'); } };
@@ -1730,7 +1778,7 @@
       headers.onchange = () => { try { upd({ headers: headers.value.trim() ? JSON.parse(headers.value) : undefined }); headers.classList.remove('invalid'); } catch { headers.classList.add('invalid'); toast('Headers must be valid JSON', 'error'); } };
       body.appendChild(row('URL', '', url));
       body.appendChild(row('Transport', 'Automatic tries Streamable HTTP and falls back to SSE; a URL ending in <code>/sse</code> uses SSE.', type));
-      body.appendChild(row('Headers', 'JSON object sent with every request. Use <code>${env:NAME}</code> or <code>${secret:NAME}</code> so tokens stay out of settings.json.', headers));
+      body.appendChild(row('Headers', 'JSON object sent with every request. Use <code>${env:NAME}</code> so tokens stay out of settings.json.', headers));
     } else {
       body.appendChild(row('Command', '', cmd));
       body.appendChild(row('Arguments', '', args));
@@ -1849,7 +1897,7 @@
     head(sec, 'Dashboard', 'Usage recorded on this machine in <code>~/.localpilot/telemetry</code>; nothing is sent anywhere.');
     const bar = el('div', 'dash-bar');
     const seg = el('div', 'seg');
-    for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { requestDashboard(d); render(); }; seg.appendChild(b); }
+    for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { state.dash.days = d; render(); }; seg.appendChild(b); }
     bar.appendChild(seg);
     bar.appendChild(el('span', 'spacer'));
     const refresh = el('button', `btn sm${state.dash.manual ? ' busy' : ''}`, `${I.refresh}Refresh`); refresh.id = 'dash-refresh'; refresh.onclick = () => { state.dash.manual = true; refresh.classList.add('busy'); requestDashboard(); }; bar.appendChild(refresh);
@@ -1898,7 +1946,7 @@
     requestDashboard();
     requestLogs();
     if (state.dash.timer) { clearInterval(state.dash.timer); }
-    state.dash.timer = setInterval(() => { if (state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading) { requestDashboard(); } }, 15000);
+    state.dash.timer = setInterval(() => { if (state.page === 'settings' && state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading) { requestDashboard(); } }, 15000);
   }
   function renderStorage() {
     const n = document.getElementById('dashStorage'); const s = state.dash.summary;
@@ -2130,7 +2178,7 @@
         }
       }
       c.appendChild(det);
-      const found = (results || []).filter((r) => r.ok);
+      const found = (results || []).filter((r) => r.ok && r.enabled !== false);
       if (results && !found.length) {
         const help = el('div');
         help.style.marginTop = '14px';
@@ -2149,14 +2197,14 @@
       foot.querySelector('#again').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
       // The alternatives read as one sentence above the buttons, so the footer keeps to Check again · Skip · Continue.
       const alt = el('p', 'setup-alt muted small', 'No server running? <button class="inline-link" id="manual" title="Add any OpenAI-compatible server by URL">Add a custom endpoint</button> or <button class="inline-link" id="cloud" title="Settings → Providers → Cloud APIs">use a cloud API</button> (OpenAI, Claude, Gemini…).');
-      alt.querySelector('#manual').onclick = () => { state.page = 'settings'; state.section = 'providers'; render(); };
-      alt.querySelector('#cloud').onclick = () => { state.page = 'settings'; state.section = 'providers'; state.addTab = 'cloud'; render(); };
+      alt.querySelector('#manual').onclick = () => { post({ type: 'leaveSetup' }); state.page = 'settings'; state.section = 'providers'; render(); };
+      alt.querySelector('#cloud').onclick = () => { post({ type: 'leaveSetup' }); state.page = 'settings'; state.section = 'providers'; state.addTab = 'cloud'; render(); };
       c.appendChild(alt);
       foot.querySelector('#skip').onclick = () => post({ type: 'finishSetup' });
-      foot.querySelector('#next').onclick = () => { su.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); if (!su.model) { su.model = recommend(found); } su.step = 1; render(); };
+      foot.querySelector('#next').onclick = () => { su.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); if (!su.model || !found.some((r) => r.models.some((x) => x.id === su.model))) { su.model = recommend(found); } su.step = 1; render(); };
       c.appendChild(foot);
     } else if (su.step === 1) {
-      const found = (state.probe || []).filter((r) => r.ok);
+      const found = (state.probe || []).filter((r) => r.ok && r.enabled !== false);
       const all = found.flatMap((r) => r.models.map((m) => ({ ...m, provider: r.displayName })));
       c.innerHTML = `<h3>2 · Choose a default model</h3><p class="hint">For agent mode pick a tool-capable model (gemma4 e2b–12b, nemotron-3.5-bolt, devstral, gpt-oss). You can switch per chat at any time.</p>`;
       const list = el('div', 'mdl-list');
@@ -2201,7 +2249,7 @@
     const foot = el('p', 'muted small');
     foot.style.textAlign = 'center'; foot.style.marginTop = '18px';
     foot.innerHTML = `Local servers keep your code on your machine. <a data-url="https://isathish.github.io/localpilot/docs/getting-started/">Getting started guide</a> · <a id="toSettings">All settings</a>`;
-    foot.querySelector('#toSettings').onclick = () => { state.page = 'settings'; render(); };
+    foot.querySelector('#toSettings').onclick = () => { post({ type: 'leaveSetup' }); state.page = 'settings'; render(); };
     wrap.appendChild(foot);
     app.appendChild(wrap);
     wireGlobal(app);
@@ -2236,6 +2284,11 @@
         if (prev && state.pendingSave && Date.now() - state.pendingSave < 10_000) { state.pendingSave = 0; flashSaved(); }
         const nav = !prev || m.navigate !== false;
         const navChanged = nav && ((m.page && m.page !== state.page) || (m.section && m.section !== state.section));
+        // Entering the wizard starts from the current settings, so finishing it without changes keeps them.
+        if (nav && m.page === 'setup' && (!prev || state.page !== 'setup')) {
+          state.setup = { step: 0, model: val('defaultModel') || '', approvals: Object.keys(APPROVAL_PRESETS).find((k) => ['terminal', 'write', 'delete', 'network'].every((a) => APPROVAL_PRESETS[k].v[a] === val(`approvals.${a}`))) || '', inline: val('inlineCompletion.enabled') === true, providers: null };
+          state.probe = null;
+        }
         if (nav && m.page) { state.page = m.page; }
         if (nav && m.section) { state.section = m.section; }
         if (nav && m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
@@ -2243,7 +2296,7 @@
         // A settings round-trip: find what actually changed and refresh only those components.
         const keys = new Set([...Object.keys(prev.settings || {}), ...Object.keys(m.settings || {})]);
         const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
-        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], completions: ['models'], memory: ['memory'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
         const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
         if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
         if (changed.length) { refreshComponents(changed); }
@@ -2255,13 +2308,14 @@
         state.probe = results; state.busy = false; state.dmr = m.dockerModelRunner || null; state.runtimes = m.runtimes || state.runtimes; state.starter = m.starter || state.starter;
         for (const r of results) { state.tests[r.id] = r; }
         // After a one-click setup from the wizard, jump straight to the model step with the recommendation selected.
-        const found = results.filter((r) => r.ok && r.models.length);
+        const found = results.filter((r) => r.ok && r.enabled !== false && r.models.length);
         if (state.page === 'setup' && state.setup.pendingAuto && found.length) { state.setup.pendingAuto = false; state.setup.providers = results.filter((r) => r.ok || r.configured).map((r) => ({ id: r.id, type: r.type, baseUrl: r.baseUrl, displayName: r.displayName })); state.setup.model = recommend(found); state.setup.step = 1; }
         render();
         break;
       }
       case 'testResult': {
         state.tests[m.id] = m.result;
+        if (state.probe && m.result) { const i = state.probe.findIndex((r) => r.id === m.id); if (i >= 0) { state.probe[i] = m.result; } }
         if (state.page === 'setup') { render(); break; }
         // Only the tested provider's card changes.
         const list = providersList(); const p = list.find((x) => x.id === m.id); const old = app.querySelector(`.prov[data-prov="${CSS.escape(m.id)}"]`);
@@ -2319,18 +2373,19 @@
         if (!m.busy) { render(); }
         break;
       case 'dashboard':
+        // A slower reply for a range the user has since switched away from must not overwrite the selection.
+        if (typeof m.days === 'number' && m.days !== state.dash.days) { break; }
         state.dash.loading = false;
         if (state.dash.manual) { state.dash.manual = false; const rb = document.getElementById('dash-refresh'); if (rb) { rb.classList.remove('busy'); } }
         state.dash.summary = m.summary; state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
-        if (typeof m.days === 'number') { state.dash.days = m.days; }
-        if (state.section === 'dashboard') { renderDashboard(); }
+        if (state.page === 'settings' && state.section === 'dashboard') { renderDashboard(); }
         break;
       case 'logs':
         state.dash.logs = Array.isArray(m.entries) ? m.entries : [];
         if (state.section === 'dashboard') { renderLogs(); }
         break;
       case 'logLine':
-        if (state.section === 'dashboard' && m.entry) { appendLog(m.entry); }
+        if (state.page === 'settings' && state.section === 'dashboard' && m.entry) { appendLog(m.entry); }
         break;
       case 'toast':
         toast(m.text, m.level);

@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { ChangeTracker } from '../agent/changeTracker';
 import { getConfig } from '../config';
@@ -210,34 +211,58 @@ export async function terminalCommand(providers: ProviderRegistry, workspace: Wo
   if (!ask?.trim()) {
     return;
   }
-  const shell = process.env.SHELL ?? (process.platform === 'win32' ? 'powershell' : 'bash');
+  const active = vscode.window.activeTerminal;
+  const shellPath = (active?.creationOptions as vscode.TerminalOptions | undefined)?.shellPath;
+  const shell = path.basename(shellPath || vscode.env.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell' : 'bash'));
   const messages: ChatMessage[] = [
     { role: 'system', content: `You translate requests into a single ${shell} command for ${process.platform}. Working directory: ${workspace.root ?? '~'}. Respond with ONLY the command in a fenced code block. Prefer safe, non-destructive flags; never use sudo or rm -rf without being asked.` },
     { role: 'user', content: ask },
   ];
   const raw = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LocalPilot: generating command…' }, () => quickPrompt(providers, messages, { maxTokens: 300 }));
-  const command = (extractCode(raw) ?? '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).join(' && ').trim();
-  if (!command) {
+  // Multi-line scripts (loops, continuations, heredocs) stay as written; only blank and comment lines go.
+  const block = (extractCode(raw) ?? '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).join('\n').trim();
+  if (!block) {
     return;
   }
   const choice = await vscode.window.showQuickPick(
     [
-      { label: '$(play) Run in terminal', action: 'run', detail: command },
+      { label: '$(play) Run in terminal', action: 'run', detail: block },
       { label: '$(insert) Insert into terminal (don\'t run)', action: 'insert' },
       { label: '$(copy) Copy', action: 'copy' },
     ],
-    { title: command, placeHolder: 'Review the command before running' }
+    { title: block.split('\n').join(' ⏎ '), placeHolder: 'Review the command before running' }
   );
   if (!choice) {
     return;
   }
   if (choice.action === 'copy') {
-    await vscode.env.clipboard.writeText(command);
+    await vscode.env.clipboard.writeText(block);
     return;
   }
-  const term = vscode.window.activeTerminal ?? vscode.window.createTerminal('LocalPilot');
+  const term = active ?? vscode.window.createTerminal('LocalPilot');
   term.show();
-  term.sendText(command, choice.action === 'run');
+  if (choice.action === 'run') {
+    // Newlines go to the shell as Enter, so it handles continuations and loops itself.
+    term.sendText(block, true);
+    return;
+  }
+  const line = singleLine(block, /powershell|pwsh|cmd/i.test(shell) ? '; ' : ' && ');
+  if (line !== undefined) {
+    term.sendText(line, false);
+    return;
+  }
+  // Bracketed paste puts a multi-line script at the prompt without running any of it.
+  await vscode.env.clipboard.writeText(block);
+  await vscode.commands.executeCommand('workbench.action.terminal.paste');
+}
+
+/** Joins a block of independent commands into one line, or undefined when its lines depend on each other (loops, continuations, heredocs). */
+export function singleLine(block: string, sep: string): string | undefined {
+  const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.some((l) => /(\\|\||&&|\{|\bdo|\bthen)$/.test(l) || l.includes('<<'))) {
+    return undefined;
+  }
+  return lines.join(sep);
 }
 
 /** Quick-fix / refactor light-bulb actions. */

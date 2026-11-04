@@ -45,7 +45,7 @@ LocalPilot records the commands you run in any VS Code terminal that has shell i
 ### Install
 
 - **Inside VS Code.** Run *LocalPilot: Open LocalPilot Terminal*. It is also in the chat toolbar's ⋯ menu, and in the terminal **+** dropdown as the **LocalPilot** profile. The CLI is already on `PATH` in that terminal.
-- **In any shell.** Run *LocalPilot: Install 'localpilot' CLI in PATH*. It writes `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`). The script finds the newest installed LocalPilot after updates. It runs with `node`, or with VS Code's own runtime when Node is not installed. If `~/.local/bin` is not on your `PATH`, the notification tells you the line to add.
+- **In any shell.** Run *LocalPilot: Install 'localpilot' CLI in PATH*. It writes `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`). The script finds the newest installed LocalPilot after updates. It needs Node.js 18.17+ (20+ recommended); with an older or missing `node` the script uses VS Code's bundled runtime. If `~/.local/bin` is not on your `PATH`, the notification tells you the line to add.
 
 ### Examples
 
@@ -136,7 +136,7 @@ The report shows, per model, how many tasks passed, the average time, steps and 
 
 Add `localpilot-scan: ignore` (or `nosec`) on a line to skip it. The command exits with 1 when a finding reaches `--fail-on` (default `high`; `none` never fails). `--sarif file` writes SARIF 2.1.0 for GitHub code scanning, `--json file` the raw findings:
 
-In GitHub Actions the CLI runs straight from the release's VSIX (it is self-contained; only Node.js is needed):
+In GitHub Actions the CLI runs straight from the release's VSIX (it is self-contained; only Node.js 18.17+ is needed, 20+ recommended):
 
 ```yaml
 - name: LocalPilot security scan
@@ -201,7 +201,7 @@ The CLI uses the same skills as the extension: recommendations, the registry (`l
 
 Commands, file edits, deletes and network calls go through the same approval policies as the extension (`localpilot.approvals.*`) and the same `settings.json` permission rules.
 
-- When a policy says *ask*, the CLI shows the command or diff and prompts **[y]es · [n]o · [a]lways this session**.
+- When a policy says *ask*, the CLI shows the command or diff and prompts **[y]es · [n]o · [a]lways**. **[a]lways** approves only that kind of action (commands, file edits or network calls) until `/clear` or you exit. Deletes and destructive commands are not remembered and always ask again.
 - `--yes` approves everything.
 - Without a TTY (for example in CI), anything that needs approval is denied unless you pass `--yes`.
 
@@ -216,7 +216,7 @@ The CLI reads settings in this order, later sources winning:
 3. `~/.localpilot/config.json`
 4. command-line flags
 
-A model server configured in LocalPilot Settings is therefore already known to the CLI. API keys that Settings stored in VS Code's secret storage (`${secret:<id>}`) are out of the CLI's reach: set `LOCALPILOT_KEY_<ID>` instead, the provider id in upper case with other characters as `_` (for example `LOCALPILOT_KEY_OPENAI` or `LOCALPILOT_KEY_OLLAMA_CLOUD`). Keys written as `${env:NAME}` work in both. Changes made from the CLI (such as `/model`) are saved to `~/.localpilot/config.json`, never to VS Code's settings. Logs go to `~/.localpilot/cli.log`.
+A model server configured in LocalPilot Settings is therefore already known to the CLI. API keys that Settings stored in VS Code's secret storage (`${secret:<id>}`) are out of the CLI's reach: set `LOCALPILOT_KEY_<ID>` instead, the provider id in upper case with other characters as `_` (for example `LOCALPILOT_KEY_OPENAI` or `LOCALPILOT_KEY_OLLAMA_CLOUD`). Keys written as `${env:NAME}` work in both. Changes saved from the CLI (such as `localpilot providers add`) go to `~/.localpilot/config.json`, never to VS Code's settings. `/model` and `-m`/`--model` apply to the current run only; the lasting default is `defaultModel` in `~/.localpilot/config.json` or in VS Code's settings. Logs go to `~/.localpilot/cli.log`.
 
 `~/.localpilot/config.json` uses the same keys without the `localpilot.` prefix:
 
@@ -264,3 +264,5 @@ Cloud models are marked `cloud` in `localpilot models`. As in the editor, a run 
 | `vscode://localpilot.localpilot-agent/settings?section=providers` | Settings at a section |
 | `vscode://localpilot.localpilot-agent/setup` | The setup wizard |
 | `vscode://localpilot.localpilot-agent/terminal?run=localpilot%20--help` | The LocalPilot terminal, running a command |
+
+VS Code decodes the query once before LocalPilot splits it on `&`, so a plain value such as `prompt=…` must not contain `&`. To pass text with `&` or `=`, add `v=2` and percent-encode each value twice (`&` becomes `%2526`); this is what the CLI sends.

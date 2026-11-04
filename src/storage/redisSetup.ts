@@ -2,6 +2,7 @@
 // on `localpilot.storage.redis.enabled`. Everything it runs is shown in a terminal; nothing is installed silently.
 import * as cp from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
@@ -18,7 +19,12 @@ interface Logger {
 }
 
 export async function probeRedis(url: string): Promise<RedisProbe> {
-  const r = new RedisTelemetry(url);
+  let r: RedisTelemetry;
+  try {
+    r = new RedisTelemetry(url);
+  } catch (e) {
+    return { ok: false, timeseries: false, error: e instanceof Error ? e.message : String(e) };
+  }
   try {
     return await r.probe();
   } finally {
@@ -30,14 +36,24 @@ function docker(args: string[], timeout = 15_000): Promise<string> {
   return run('docker', args, timeout);
 }
 
-function run(cmd: string, args: string[], timeout = 15_000): Promise<string> {
+function run(cmd: string, args: string[], timeout = 15_000, cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    cp.execFile(cmd, args, { timeout, windowsHide: true }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve(String(stdout).trim())));
+    cp.execFile(cmd, args, { timeout, windowsHide: true, cwd }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve(String(stdout).trim())));
   });
 }
 
 /** True when `cmd` is on PATH and runs. */
 const has = (cmd: string, args = ['--version']): Promise<boolean> => run(cmd, args, 5000).then(() => true, () => false);
+
+/** True when an executable `bin` is on PATH, without running it (the redis-stack-server wrapper rejects `--version`). */
+async function onPath(bin: string): Promise<boolean> {
+  for (const p of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    if (await fs.promises.access(path.join(p, bin), fs.constants.X_OK).then(() => true, () => false)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Docker Desktop's app on this machine, when installed (its CLI may not be on PATH until it has run once). */
 function dockerDesktopApp(): string | undefined {
@@ -50,10 +66,18 @@ function dockerDesktopApp(): string | undefined {
   return candidates.find((p) => fs.existsSync(p));
 }
 
-/** `running`: daemon answers · `stopped`: Docker is installed but its engine is not up · `missing`: no Docker at all. */
-export async function dockerState(): Promise<'running' | 'stopped' | 'missing'> {
-  if (await docker(['version', '--format', '{{.Server.Version}}'], 5000).then(() => true, () => false)) {
+/** The daemon is up but this user may not talk to its socket (Linux, not in the docker group). */
+const DOCKER_GROUP_FIX = 'sudo usermod -aG docker $USER, then log out and back in (or restart VS Code)';
+const DOCKER_DENIED = /permission denied|docker\.sock|docker API/i;
+
+/** `running`: daemon answers · `denied`: daemon refuses this user · `stopped`: Docker is installed but its engine is not up · `missing`: no Docker at all. */
+export async function dockerState(): Promise<'running' | 'denied' | 'stopped' | 'missing'> {
+  const err = await docker(['version', '--format', '{{.Server.Version}}'], 5000).then(() => undefined, (e: Error) => e.message);
+  if (err === undefined) {
     return 'running';
+  }
+  if (DOCKER_DENIED.test(err)) {
+    return 'denied';
   }
   return (await has('docker')) || dockerDesktopApp() ? 'stopped' : 'missing';
 }
@@ -78,8 +102,12 @@ async function startDocker(): Promise<boolean> {
   return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Starting Docker…', cancellable: true }, async (_p, token) => {
     const started = Date.now();
     while (!token.isCancellationRequested && Date.now() - started < 3 * 60_000) {
-      if (await docker(['info', '--format', '{{.ServerVersion}}'], 5000).then(() => true, () => false)) {
+      const err = await docker(['info', '--format', '{{.ServerVersion}}'], 5000).then(() => undefined, (e: Error) => e.message);
+      if (err === undefined) {
         return true;
+      }
+      if (DOCKER_DENIED.test(err)) {
+        return false;
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
@@ -124,10 +152,6 @@ async function waitFor(url: string, title: string, timeoutMs: number): Promise<R
 export async function setupRedis(log: Logger): Promise<void> {
   const { url, enabled } = getConfig().storage.redis;
   const current = await probeRedis(url);
-  if (current.ok) {
-    await enable(url, current, log);
-    return;
-  }
   let port = 6379;
   let local = true;
   try {
@@ -137,7 +161,8 @@ export async function setupRedis(log: Logger): Promise<void> {
   } catch {
     local = false;
   }
-  const [dockerNow, brew, apt, dnf, wsl, winget] = local
+  // A server already answering takes the port, so the install options are pointless; the user only confirms it.
+  const [dockerNow, brew, apt, dnf, wsl, winget] = local && !current.ok
     ? await Promise.all([
         dockerState(),
         process.platform === 'darwin' ? has('brew') : false,
@@ -151,18 +176,22 @@ export async function setupRedis(log: Logger): Promise<void> {
   const sep = (label: string): Item => ({ id: '', label, kind: vscode.QuickPickItemKind.Separator });
   const native: Item[] = [
     ...(brew ? [{ id: 'brew', label: '$(package) Install Redis Stack with Homebrew', description: 'time series included', detail: 'brew tap redis-stack/redis-stack && brew install redis-stack-server' }] : []),
-    ...(apt && port === 6379 ? [{ id: 'apt', label: '$(package) Install Redis with apt', description: 'no time series', detail: 'sudo apt-get install -y redis-server — you type your password in the terminal' }] : []),
-    ...(!apt && dnf && port === 6379 ? [{ id: 'dnf', label: '$(package) Install Redis with dnf', description: 'no time series', detail: 'sudo dnf install -y redis — you type your password in the terminal' }] : []),
-    ...(wsl && port === 6379 ? [{ id: 'wsl', label: '$(terminal-linux) Install Redis in WSL (Ubuntu)', description: 'no time series', detail: 'Runs redis-server inside WSL; Windows reaches it on localhost' }] : []),
+    ...(apt && port === 6379 ? [{ id: 'apt', label: '$(package) Install Redis with apt', description: 'no time series · needs Redis 6.2+ (distro packages may be older)', detail: 'sudo apt-get install -y redis-server — you type your password in the terminal' }] : []),
+    ...(!apt && dnf && port === 6379 ? [{ id: 'dnf', label: '$(package) Install Redis with dnf', description: 'no time series · needs Redis 6.2+ (distro packages may be older)', detail: 'sudo dnf install -y redis — you type your password in the terminal' }] : []),
+    ...(wsl && port === 6379 ? [{ id: 'wsl', label: '$(terminal-linux) Install Redis in WSL (Ubuntu)', description: 'no time series · needs Redis 6.2+ (distro packages may be older)', detail: 'Runs redis-server inside WSL; Windows reaches it on localhost' }] : []),
     ...(winget && port === 6379 ? [{ id: 'memurai', label: '$(package) Install Memurai (Redis for Windows)', description: 'no time series', detail: 'winget install Memurai.MemuraiDeveloper — runs as a Windows service' }] : []),
   ];
   const getDocker: Item[] =
-    dockerNow === 'missing' && local
+    dockerNow === 'missing' && local && !current.ok
       ? [{ id: 'getDocker', label: '$(cloud-download) Install Docker Desktop first', detail: brew ? 'brew install --cask docker — then run this command again for Redis Stack' : winget ? 'winget install -e --id Docker.DockerDesktop — then run this command again for Redis Stack' : 'Opens the Docker download page — then run this command again for Redis Stack' }]
       : [];
   const items: Item[] = [
+    ...(current.ok
+      ? [{ id: 'use', label: `$(check) Use the Redis at ${redactRedisUrl(url)}`, description: `Redis ${current.version ?? '?'} · time series ${current.timeseries ? 'yes' : 'no'}`, detail: 'LocalPilot writes localpilot:* streams there — a dedicated db (redis://host:port/15) keeps them apart from app data' }]
+      : []),
     ...(dockerNow === 'running' ? [{ id: 'docker', label: '$(vm) Start Redis Stack in Docker', description: 'recommended', detail: `${IMAGE} on 127.0.0.1:${port} · capped at 256 MB · data kept in the "${CONTAINER}" volume` }] : []),
     ...(dockerNow === 'stopped' ? [{ id: 'startDocker', label: '$(debug-start) Start Docker, then Redis Stack', description: 'recommended', detail: 'Docker is installed but not running — LocalPilot starts it and waits for it' }] : []),
+    ...(dockerNow === 'denied' ? [{ id: 'dockerDenied', label: '$(warning) Docker is running but this user cannot reach it', detail: DOCKER_GROUP_FIX }] : []),
     ...(native.length ? [sep('Without Docker'), ...native] : []),
     ...getDocker,
     sep('Other'),
@@ -170,10 +199,12 @@ export async function setupRedis(log: Logger): Promise<void> {
     ...(enabled ? [{ id: 'off', label: '$(circle-slash) Turn Redis storage off', detail: 'Telemetry goes back to daily files in ~/.localpilot/telemetry' }] : [{ id: 'files', label: '$(check) Keep using local files', detail: 'Nothing to install. Chat memory is already capped without Redis (localpilot.storage.sessionsInMemory)' }]),
     { id: 'docs', label: '$(book) What does this do?', detail: 'Optional: moves telemetry history and logs out of VS Code\u2019s memory' },
   ];
-  const why = !local || dockerNow === 'running' ? '' : dockerNow === 'stopped' ? ' Docker is installed but not running.' : ' Docker is not installed.';
+  const why = !local || dockerNow === 'running' ? '' : dockerNow === 'stopped' ? ' Docker is installed but not running.' : dockerNow === 'denied' ? ' Docker is running but access is denied.' : ' Docker is not installed.';
   const pick = await vscode.window.showQuickPick(items, {
     title: 'LocalPilot: Redis storage (optional)',
-    placeHolder: `No Redis answering at ${redactRedisUrl(url)}.${why} How should LocalPilot get one?`,
+    placeHolder: current.ok
+      ? `A Redis is already answering at ${redactRedisUrl(url)}. Use it for LocalPilot telemetry?`
+      : `${current.error && /too old/i.test(current.error) ? current.error : `No Redis answering at ${redactRedisUrl(url)}.`}${why} How should LocalPilot get one?`,
     matchOnDetail: true,
   });
   if (!pick || !pick.id) {
@@ -195,10 +226,16 @@ export async function setupRedis(log: Logger): Promise<void> {
     }
   };
   switch (pick.id) {
+    case 'use':
+      await enable(url, current, log);
+      return;
     case 'docs':
       void vscode.env.openExternal(vscode.Uri.parse(DOCS));
       return;
     case 'files':
+      return;
+    case 'dockerDenied':
+      void vscode.window.showInformationMessage(`Docker is running, but this user cannot reach it. Run: ${DOCKER_GROUP_FIX}. Then run "LocalPilot: Set Up Redis Storage" again.`);
       return;
     case 'off':
       await cfg.update('storage.redis.enabled', false, vscode.ConfigurationTarget.Global);
@@ -293,9 +330,15 @@ export async function restartRedis(url: string, log: Logger): Promise<boolean> {
   if ((await dockerState()) === 'running' && (await docker(['ps', '-a', '--filter', `name=^/${CONTAINER}$`, '--format', '{{.State}}']).catch(() => ''))) {
     started = await docker(['start', CONTAINER]).then(() => true, (e) => (log.warn(`supervisor: docker start ${CONTAINER}: ${String(e)}`), false));
   }
-  for (const bin of started || process.platform === 'win32' ? [] : ['redis-stack-server', 'redis-server']) {
-    if (await has(bin)) {
-      started = await run(bin, ['--daemonize', 'yes', '--port', String(port)]).then(() => true, (e) => (log.warn(`supervisor: ${bin}: ${String(e)}`), false));
+  const native = started || process.platform === 'win32' ? [] : ['redis-stack-server', 'redis-server'];
+  const dir = path.join(os.homedir(), '.localpilot', 'redis');
+  if (native.length) {
+    await fs.promises.mkdir(dir, { recursive: true });
+  }
+  for (const bin of native) {
+    if (await onPath(bin)) {
+      // A data dir of its own: from cwd `/` BGSAVE fails and Redis then refuses writes (MISCONF).
+      started = await run(bin, ['--daemonize', 'yes', '--port', String(port), '--dir', dir, '--logfile', path.join(dir, 'redis.log')], 15_000, dir).then(() => true, (e) => (log.warn(`supervisor: ${bin}: ${String(e)}`), false));
       break;
     }
   }

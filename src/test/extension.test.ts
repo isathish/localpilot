@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { deepLinkParams } from '../ui/cli';
 
 suite('LocalPilot activation', () => {
   test('extension activates and registers its commands', async function () {
@@ -43,5 +44,20 @@ suite('LocalPilot activation', () => {
     this.timeout(15_000);
     // Should not throw even when no local server is reachable.
     await vscode.commands.executeCommand('localpilot.refreshModels');
+  });
+});
+
+suite('Deep links', () => {
+  test('a CLI (v=2) prompt keeps its "&", "|", "=", "%" and "+"', () => {
+    const prompt = 'fix login & add tests | b=1 %2 +x';
+    // VS Code hands the handler a query that is decoded once.
+    const query = decodeURIComponent(`mode=ask&prompt=${encodeURIComponent(encodeURIComponent(prompt))}&v=2`);
+    const params = deepLinkParams(query);
+    assert.strictEqual(params.get('prompt'), prompt);
+    assert.strictEqual(params.get('mode'), 'ask');
+  });
+
+  test('a plain prompt keeps "+" and "%"', () => {
+    assert.strictEqual(deepLinkParams('prompt=a+b%').get('prompt'), 'a+b%');
   });
 });

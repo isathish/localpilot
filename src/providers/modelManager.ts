@@ -78,7 +78,12 @@ async function downloadFile(url: string, dest: string, onProgress: (done: number
       cb(null, chunk);
     },
   });
-  await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), counter, createWriteStream(dest));
+  try {
+    await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), counter, createWriteStream(dest));
+  } catch (e) {
+    await fs.rm(dest, { force: true }).catch(() => undefined);
+    throw e;
+  }
 }
 
 function runProcess(cmd: string, args: string[], opts: { timeoutMs?: number; signal?: AbortSignal; cwd?: string } = {}): Promise<{ code: number | null; out: string }> {
@@ -583,6 +588,21 @@ export class ModelManager implements vscode.Disposable {
     for (let i = 0; i < 20 && (await up()); i++) {
       await sleep(500);
     }
+    if (process.platform === 'win32') {
+      // A surviving tray app respawns the server after ~1 s; wait that out before trusting the "down".
+      await sleep(1500);
+      for (let i = 0; i < 20 && (await up()); i++) {
+        await sleep(500);
+      }
+      if (await up()) {
+        const job = this.start('start', 'ollama', 'Ollama', 'Restarting Ollama…');
+        return this.finish(
+          job,
+          'error',
+          `Ollama restarted itself. Quit Ollama from the system tray, set the user environment variable OLLAMA_NUM_PARALLEL=${ModelManager.ollamaParallelSlots()}, then start Ollama again.`
+        );
+      }
+    }
     if (await up()) {
       const job = this.start('start', 'ollama', 'Ollama', 'Restarting Ollama…');
       return this.finish(job, 'error', `Ollama is still running (managed by Docker, a service or another app) — set OLLAMA_NUM_PARALLEL=${ModelManager.ollamaParallelSlots()} where it runs and restart it there.`);
@@ -606,16 +626,20 @@ export class ModelManager implements vscode.Disposable {
         this.update(job, { detail: 'Ollama is already installed — starting it…' });
       } else if (process.platform === 'darwin') {
         const zip = path.join(os.tmpdir(), `Ollama-darwin-${Date.now()}.zip`);
-        await downloadFile('https://ollama.com/download/Ollama-darwin.zip', zip, onProgress('Downloading Ollama for macOS'), signal);
-        this.update(job, { progress: -1, detail: 'Installing Ollama.app…' });
         let dest = '/Applications';
-        let r = await runProcess('ditto', ['-x', '-k', zip, dest], { signal });
-        if (r.code !== 0) {
-          dest = path.join(os.homedir(), 'Applications');
-          await fs.mkdir(dest, { recursive: true });
+        let r: { code: number | null; out: string };
+        try {
+          await downloadFile('https://ollama.com/download/Ollama-darwin.zip', zip, onProgress('Downloading Ollama for macOS'), signal);
+          this.update(job, { progress: -1, detail: 'Installing Ollama.app…' });
           r = await runProcess('ditto', ['-x', '-k', zip, dest], { signal });
+          if (r.code !== 0) {
+            dest = path.join(os.homedir(), 'Applications');
+            await fs.mkdir(dest, { recursive: true });
+            r = await runProcess('ditto', ['-x', '-k', zip, dest], { signal });
+          }
+        } finally {
+          await fs.rm(zip, { force: true }).catch(() => undefined);
         }
-        await fs.unlink(zip).catch(() => undefined);
         if (r.code !== 0) {
           throw new Error(`Could not unpack Ollama.app: ${r.out.trim().split('\n').pop() ?? ''}`);
         }
@@ -675,10 +699,14 @@ export class ModelManager implements vscode.Disposable {
       return;
     }
     const exe = path.join(os.tmpdir(), `OllamaSetup-${Date.now()}.exe`);
-    await downloadFile('https://ollama.com/download/OllamaSetup.exe', exe, onProgress('Downloading Ollama for Windows'), signal);
-    this.update(job, { progress: -1, detail: 'Running the installer silently (per-user, no admin rights needed)…' });
-    const r = await runProcess(exe, ['/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/NOCANCEL'], { signal, timeoutMs: 15 * 60_000 });
-    await fs.unlink(exe).catch(() => undefined);
+    let r: { code: number | null; out: string };
+    try {
+      await downloadFile('https://ollama.com/download/OllamaSetup.exe', exe, onProgress('Downloading Ollama for Windows'), signal);
+      this.update(job, { progress: -1, detail: 'Running the installer silently (per-user, no admin rights needed)…' });
+      r = await runProcess(exe, ['/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/NOCANCEL'], { signal, timeoutMs: 15 * 60_000 });
+    } finally {
+      await fs.rm(exe, { force: true }).catch(() => undefined);
+    }
     // Inno Setup can return before the files are visible to a second process; give the filesystem a moment.
     for (let i = 0; i < 20 && !(await installed()); i++) {
       await sleep(500);
@@ -703,29 +731,37 @@ export class ModelManager implements vscode.Disposable {
     await fs.mkdir(USER_OLLAMA_DIR, { recursive: true });
     let archive: string;
     let extract: string[];
-    if (zstAvailable && (nodeZstd || cliZstd)) {
-      archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tar.zst`);
-      await downloadFile(`${base}.tar.zst`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
-      if (nodeZstd) {
-        // Decompress in-process, then hand the plain tar to tar(1).
-        this.update(job, { progress: -1, detail: 'Decompressing…' });
-        const tar = archive.replace(/\.zst$/, '');
-        const { createReadStream } = await import('fs');
-        await pipeline(createReadStream(archive), (zlib as unknown as { createZstdDecompress(): Transform }).createZstdDecompress(), createWriteStream(tar));
-        await fs.unlink(archive).catch(() => undefined);
-        archive = tar;
-        extract = ['-xf', archive, '-C', USER_OLLAMA_DIR];
+    const temp: string[] = [];
+    let r: { code: number | null; out: string };
+    try {
+      if (zstAvailable && (nodeZstd || cliZstd)) {
+        archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tar.zst`);
+        temp.push(archive);
+        await downloadFile(`${base}.tar.zst`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
+        if (nodeZstd) {
+          // Decompress in-process, then hand the plain tar to tar(1).
+          this.update(job, { progress: -1, detail: 'Decompressing…' });
+          const tar = archive.replace(/\.zst$/, '');
+          temp.push(tar);
+          const { createReadStream } = await import('fs');
+          await pipeline(createReadStream(archive), (zlib as unknown as { createZstdDecompress(): Transform }).createZstdDecompress(), createWriteStream(tar));
+          await fs.unlink(archive).catch(() => undefined);
+          archive = tar;
+          extract = ['-xf', archive, '-C', USER_OLLAMA_DIR];
+        } else {
+          extract = ['--use-compress-program=unzstd', '-xf', archive, '-C', USER_OLLAMA_DIR];
+        }
       } else {
-        extract = ['--use-compress-program=unzstd', '-xf', archive, '-C', USER_OLLAMA_DIR];
+        archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tgz`);
+        temp.push(archive);
+        await downloadFile(`${base}.tgz`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
+        extract = ['-xzf', archive, '-C', USER_OLLAMA_DIR];
       }
-    } else {
-      archive = path.join(os.tmpdir(), `ollama-linux-${arch}-${Date.now()}.tgz`);
-      await downloadFile(`${base}.tgz`, archive, onProgress(`Downloading Ollama for Linux (${arch})`), signal);
-      extract = ['-xzf', archive, '-C', USER_OLLAMA_DIR];
+      this.update(job, { progress: -1, detail: `Unpacking into ${USER_OLLAMA_DIR}…` });
+      r = await runProcess('tar', extract, { signal });
+    } finally {
+      await Promise.all(temp.map((t) => fs.rm(t, { force: true }).catch(() => undefined)));
     }
-    this.update(job, { progress: -1, detail: `Unpacking into ${USER_OLLAMA_DIR}…` });
-    const r = await runProcess('tar', extract, { signal });
-    await fs.unlink(archive).catch(() => undefined);
     if (r.code !== 0) {
       throw new Error(`Could not unpack Ollama: ${r.out.trim().split('\n').pop() ?? ''}`);
     }
@@ -777,7 +813,7 @@ export class ModelManager implements vscode.Disposable {
   /** Starter picks for this machine, as runtime-specific ids. */
   async plan(target?: InstallTarget): Promise<{ profile: SystemProfile; target: InstallTarget; agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick }> {
     const profile = await getSystemProfile();
-    const p = starterPlan(profile);
+    const p = starterPlan(profile, target ?? 'ollama');
     return { profile, target: target ?? 'ollama', ...p };
   }
 
@@ -795,7 +831,7 @@ export class ModelManager implements vscode.Disposable {
     // Cancelling the setup also stops the start, install or download it is waiting on.
     const setupSignal = this.aborts.get(job.id)!.signal;
     try {
-      const existing = await this.registry.listModels(true);
+      const existing = (await this.registry.listModels(true)).filter((m) => !m.remote);
       if (existing.length && !opts.force) {
         this.finish(job, 'done');
         return { status: 'already', models: existing.length };
@@ -873,7 +909,12 @@ export class ModelManager implements vscode.Disposable {
           this.finish(job, 'cancelled');
           return { status: 'cancelled' };
         }
-        const ref = installId(step.pick, target) ?? installId(step.pick, 'ollama')!;
+        const ref = installId(step.pick, target);
+        if (!ref) {
+          const msg = 'This runtime has no starter model small enough for this machine — install Ollama';
+          this.finish(job, 'error', msg);
+          return { status: 'error', error: msg };
+        }
         const label = `${step.pick.entry.name} ${step.pick.variant.tag}`;
         if (!has(ref)) {
           this.update(job, { detail: `Downloading ${label} (${step.pick.variant.gb} GB) — ${i + 1}/${steps.length}`, progress: -1 });

@@ -271,7 +271,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (m.type === 'attachActive' || m.type === 'pickAttachment') {
         return void this.handleAttachment(m, sink);
       }
-      void this.controller.handle(m).catch((e) => sink.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) }));
+      void this.controller.handle(m, sink).catch((e) => sink.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) }));
     });
     host.onDidDispose(() => {
       disposed = true;

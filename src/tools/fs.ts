@@ -320,6 +320,15 @@ export const createDirTool: Tool = {
   },
 };
 
+/** Deletes to the trash, or permanently where the file system has none (Remote-SSH, WSL, containers); the CLI uses ~/.localpilot/trash. */
+export async function deleteUri(uri: vscode.Uri, recursive = false): Promise<void> {
+  try {
+    await vscode.workspace.fs.delete(uri, { recursive, useTrash: true });
+  } catch {
+    await vscode.workspace.fs.delete(uri, { recursive, useTrash: false });
+  }
+}
+
 export const deleteTool: Tool = {
   approvalKind: 'delete',
   definition: {
@@ -334,7 +343,11 @@ export const deleteTool: Tool = {
       () => undefined
     );
     const isDir = !!stat && (stat.type & vscode.FileType.Directory) !== 0;
-    const detail = isDir ? 'This moves the folder to the trash. Undo cannot bring a deleted folder back.' : 'This moves the path to the trash.';
+    const noTrash = !!vscode.env.remoteName;
+    const cli = vscode.env.appName === 'LocalPilot CLI';
+    const detail = noTrash
+      ? `This permanently deletes the path.${isDir ? ' Undo cannot bring a deleted folder back.' : ''}`
+      : `This moves the ${isDir ? 'folder' : 'path'} to the trash${cli ? ' (~/.localpilot/trash)' : ''}.${isDir ? ' Undo cannot bring a deleted folder back.' : ''}`;
     const ok = await ctx.requestApproval(`Delete ${displayPath(uri, ctx)}`, detail, 'delete');
     if (!ok) {
       return { content: 'User declined the deletion.', isError: true };
@@ -343,7 +356,7 @@ export const deleteTool: Tool = {
     if (!isDir) {
       await ctx.trackChange(uri.fsPath);
     }
-    await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
+    await deleteUri(uri, true);
     return { content: `Deleted ${displayPath(uri, ctx)}` };
   },
 };

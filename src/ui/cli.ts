@@ -24,24 +24,7 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
   ctx.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
-        // `uri.query` is already percent-decoded by VS Code; parse it ourselves so '+' and '%' in prompts survive.
-        // CLI links (v=2) encode values twice so a '&' or '=' inside a prompt survives that first decode.
-        const params = new Map<string, string>();
-        for (const part of uri.query.split('&')) {
-          const eq = part.indexOf('=');
-          if (eq > 0) {
-            params.set(part.slice(0, eq), part.slice(eq + 1));
-          }
-        }
-        if (params.get('v') === '2') {
-          for (const [k, v] of params) {
-            try {
-              params.set(k, decodeURIComponent(v));
-            } catch {
-              // keep the raw value
-            }
-          }
-        }
+        const params = deepLinkParams(uri.query);
         const handoff = uri.path === '/run' ? await readHandoff(params.get('id')) : undefined;
         const src = handoff ?? params;
         const prompt = (src.get('prompt') ?? '').trim();
@@ -82,6 +65,30 @@ export function registerUriHandler(ctx: vscode.ExtensionContext, controller: Cha
       },
     })
   );
+}
+
+/**
+ * Parameters of a deep link. `query` is already percent-decoded by VS Code; it is split here so '+' and '%' in prompts survive.
+ * Links with v=2 (the CLI's) encode values twice so a '&' or '=' inside a prompt survives that first decode.
+ */
+export function deepLinkParams(query: string): Map<string, string> {
+  const params = new Map<string, string>();
+  for (const part of query.split('&')) {
+    const eq = part.indexOf('=');
+    if (eq > 0) {
+      params.set(part.slice(0, eq), part.slice(eq + 1));
+    }
+  }
+  if (params.get('v') === '2') {
+    for (const [k, v] of params) {
+      try {
+        params.set(k, decodeURIComponent(v));
+      } catch {
+        // keep the raw value
+      }
+    }
+  }
+  return params;
 }
 
 /** Reads and deletes the one-time run request the CLI wrote; undefined when missing, malformed or stale. */
@@ -138,7 +145,8 @@ if [ -z "$CLI" ] || [ ! -f "$CLI" ]; then
 fi
 [ -f "$CLI" ] || { echo "localpilot: cannot find the LocalPilot extension (dist/cli.js). Reinstall from the VS Code Marketplace." >&2; exit 1; }
 ${codeBin ? `export LOCALPILOT_CODE_BIN="\${LOCALPILOT_CODE_BIN:-${codeBin}}"\n` : ''}export LOCALPILOT_VSCODE_SETTINGS="\${LOCALPILOT_VSCODE_SETTINGS:-${settingsJson}}"
-if command -v node >/dev/null 2>&1; then
+# Node older than 18.17 cannot run the CLI: fall back to VS Code's runtime.
+if command -v node >/dev/null 2>&1 && node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>18||(a===18&&b>=17)?0:1)' >/dev/null 2>&1; then
   exec node "$CLI" "$@"
 fi
 export ELECTRON_RUN_AS_NODE=1
@@ -149,10 +157,11 @@ rem LocalPilot CLI — the LocalPilot coding agent in your terminal. localpilot 
 setlocal\r
 set "CLI=%LOCALPILOT_CLI%"\r
 if not exist "%CLI%" set "CLI=${cliJs.replace(/\\/g, '\\\\')}"\r
-if not exist "%CLI%" for /f "delims=" %%D in ('dir /b /ad /o-n "%USERPROFILE%\\.vscode\\extensions\\${EXT_ID}-*" 2^>nul') do if not defined FOUND if exist "%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" ( set "CLI=%USERPROFILE%\\.vscode\\extensions\\%%D\\dist\\cli.js" & set FOUND=1 )\r
+if not exist "%CLI%" for %%E in (.vscode .vscode-insiders .cursor .vscode-oss .vscodium) do for /f "delims=" %%D in ('dir /b /ad /o-n "%USERPROFILE%\\%%E\\extensions\\${EXT_ID}-*" 2^>nul') do if not defined FOUND if exist "%USERPROFILE%\\%%E\\extensions\\%%D\\dist\\cli.js" ( set "CLI=%USERPROFILE%\\%%E\\extensions\\%%D\\dist\\cli.js" & set FOUND=1 )\r
 if not exist "%CLI%" ( echo localpilot: cannot find the LocalPilot extension ^(dist\\cli.js^). Reinstall from the VS Code Marketplace. 1>&2 & exit /b 1 )\r
 ${codeBin ? `if not defined LOCALPILOT_CODE_BIN set "LOCALPILOT_CODE_BIN=${codeBin.replace(/\\/g, '\\\\')}"\r\n` : ''}if not defined LOCALPILOT_VSCODE_SETTINGS set "LOCALPILOT_VSCODE_SETTINGS=${settingsJson.replace(/\\/g, '\\\\')}"\r
 where node >nul 2>nul || goto :electron\r
+node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit(a>18||(a===18&&b>=17)?0:1)" >nul 2>nul || goto :electron\r
 node "%CLI%" %*\r
 exit /b %ERRORLEVEL%\r
 :electron\r

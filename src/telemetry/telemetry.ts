@@ -124,7 +124,34 @@ export interface TelemetryOptions {
   remote?: () => TelemetryRemote | undefined;
   /** A remote write failed and the batch went to files instead. */
   onRemoteError?: (e: unknown) => void;
+  /** Extra destinations for every batch (exporters); the built-in store is always the first sink, named `store`. */
+  sinks?: { name: string; sink: TelemetrySink }[];
+  /** An extra sink failed to write, flush or shut down. The store and the other sinks are unaffected. */
+  onSinkError?: (name: string, e: unknown) => void;
 }
+
+/** One flush worth of recorded data, oldest first. */
+export interface TelemetryBatch {
+  events: TelemetryEvent[];
+  logs: LogEntry[];
+}
+
+export type MetricAttributes = Record<string, string | number | boolean>;
+
+/**
+ * A destination for telemetry. `write` receives every flushed batch; `flush` drains anything the sink buffers itself;
+ * `shutdown` flushes and releases it. Sinks that understand metrics also take `counter` and `histogram` samples.
+ */
+export interface TelemetrySink {
+  write(batch: TelemetryBatch): Promise<void>;
+  flush(): Promise<void>;
+  shutdown(): Promise<void>;
+  counter?(name: string, value: number, attributes?: MetricAttributes): void;
+  histogram?(name: string, value: number, attributes?: MetricAttributes): void;
+}
+
+/** Name of the built-in sink (files, or the external store with files as the fallback). It cannot be removed or replaced. */
+export const STORE_SINK = 'store';
 
 /** An external event/log store. Must throw from `write` when the batch was not stored, so it can go to files instead. */
 export interface TelemetryRemote {
@@ -149,7 +176,7 @@ const EVENT_PREFIX = 'events-';
 /** Lines queued for one file between flushes. Only reachable when the disk is stuck; then the oldest lines go rather than memory. */
 const MAX_PENDING_LINES = 20_000;
 
-const capPending = (lines: string[]): void => {
+const capPending = (lines: unknown[]): void => {
   if (lines.length > MAX_PENDING_LINES) {
     lines.splice(0, lines.length - MAX_PENDING_LINES);
   }
@@ -164,6 +191,11 @@ const startOfDay = (t: number): number => {
   d.setHours(0, 0, 0, 0);
   return d.getTime();
 };
+const daysBefore = (t: number, n: number): number => {
+  const d = new Date(startOfDay(t));
+  d.setDate(d.getDate() - n);
+  return d.getTime();
+};
 
 export function percentiles(values: number[] | Samples): Percentiles {
   const list = values instanceof Samples ? values.values : values;
@@ -176,10 +208,15 @@ export function percentiles(values: number[] | Samples): Percentiles {
   return { p50: at(0.5), p95: at(0.95), avg: Math.round(avg) };
 }
 
+/** A log entry as one stored line: `ISO [level] msg`, with backslashes, CR and LF escaped. */
+export function formatLogLine(e: LogEntry): string {
+  return `${new Date(e.t).toISOString()} [${e.level}] ${e.msg.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n')}`;
+}
+
 /** One stored log line (`ISO [level] msg`, newlines escaped) back into an entry. */
 export function parseLogLine(line: string): LogEntry | undefined {
-  const m = /^(\S+) \[(trace|debug|info|warn|error)\] (.*)$/.exec(line);
-  return m ? { t: Date.parse(m[1]) || Date.now(), level: m[2] as LogLevel, msg: m[3].replace(/\\n/g, '\n') } : undefined;
+  const m = /^(\S+) \[(trace|debug|info|warn|error)\] ([\s\S]*)$/.exec(line);
+  return m ? { t: Date.parse(m[1]) || Date.now(), level: m[2] as LogLevel, msg: m[3].replace(/\\([\\nr])/g, (_, c: string) => (c === 'n' ? '\n' : c === 'r' ? '\r' : '\\')) } : undefined;
 }
 
 /** Samples kept per percentile series; beyond this a uniform reservoir stands in for the full list. */
@@ -281,7 +318,8 @@ export class Telemetry {
       lines = [];
       this.pendingLogs.set(key, lines);
     }
-    lines.push(`${new Date(entry.t).toISOString()} [${level}] ${entry.msg.replace(/\r?\n/g, '\\n')}`);
+    const esc = entry.msg.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+    lines.push(`${new Date(entry.t).toISOString()} [${level}] ${esc}`);
     capPending(lines);
     this.schedule();
     this.notify(this.logListeners, entry);
@@ -329,7 +367,10 @@ export class Telemetry {
           return;
         }
       } catch (e) {
-        this.remoteFailed(e);
+        // A store swapped or disposed mid-call failed because of that, not because the new one is down.
+        if (this.opts.remote?.() === remote) {
+          this.remoteFailed(e);
+        }
       }
     }
     try {
@@ -368,7 +409,10 @@ export class Telemetry {
         await this.maybePrune();
         return;
       } catch (e) {
-        this.remoteFailed(e);
+        // A store swapped or disposed mid-call failed because of that, not because the new one is down.
+        if (this.opts.remote?.() === remote) {
+          this.remoteFailed(e);
+        }
       }
     }
     await fs.promises.mkdir(this.dir, { recursive: true });
@@ -426,7 +470,7 @@ export class Telemetry {
     if (!days || days <= 0) {
       return 0;
     }
-    const cutoff = dayKey(startOfDay(this.now) - (days - 1) * 86400_000);
+    const cutoff = dayKey(daysBefore(this.now, days - 1));
     let removed = 0;
     for (const f of await this.files()) {
       if (f.day < cutoff) {
@@ -434,18 +478,27 @@ export class Telemetry {
         removed++;
       }
     }
-    await this.opts.remote?.()?.prune(startOfDay(this.now) - (days - 1) * 86400_000).catch(() => undefined);
+    await this.opts.remote?.()?.prune(daysBefore(this.now, days - 1)).catch(() => undefined);
     return removed;
   }
 
-  /** Deletes all recorded events and logs. */
-  async clear(): Promise<void> {
+  /** Deletes all recorded events and logs. `remoteError` says the external store could not be cleared. */
+  async clear(): Promise<{ remoteError?: string }> {
     await this.flush();
     this.ring.length = 0;
     for (const f of await this.files()) {
       await fs.promises.rm(path.join(this.dir, f.name), { force: true });
     }
-    await this.opts.remote?.()?.clear().catch(() => undefined);
+    const remote = this.opts.remote?.();
+    if (remote) {
+      try {
+        await remote.clear();
+      } catch (e) {
+        this.remoteFailed(e);
+        return { remoteError: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return {};
   }
 
   private async files(): Promise<{ name: string; day: string; kind: 'events' | 'log'; size: number }[]> {
@@ -490,7 +543,7 @@ export class Telemetry {
   async eachEvent(days: number, onBatch: (events: TelemetryEvent[]) => void): Promise<void> {
     await this.flush();
     const span = days > 0 ? Math.min(days, MAX_SUMMARY_DAYS) : MAX_SUMMARY_DAYS;
-    const cutoff = days > 0 ? dayKey(startOfDay(this.now) - (span - 1) * 86400_000) : '';
+    const cutoff = days > 0 ? dayKey(daysBefore(this.now, span - 1)) : '';
     for (const f of await this.files()) {
       if (f.kind !== 'events' || f.day < cutoff) {
         continue;
@@ -519,7 +572,11 @@ export class Telemetry {
     }
     const remote = this.activeRemote();
     if (remote) {
-      await remote.events(days > 0 ? startOfDay(this.now) - (span - 1) * 86400_000 : 0, onBatch).catch((e) => this.remoteFailed(e));
+      await remote.events(days > 0 ? daysBefore(this.now, span - 1) : 0, onBatch).catch((e) => {
+        if (this.opts.remote?.() === remote) {
+          this.remoteFailed(e);
+        }
+      });
     }
   }
 
@@ -559,7 +616,7 @@ export class Telemetry {
     const files = await this.files();
     const now = this.now;
     let first: number | undefined;
-    const agg = aggregator({ days, from: days > 0 ? startOfDay(now) - (days - 1) * 86400_000 : now, to: now }, filter);
+    const agg = aggregator({ days, from: days > 0 ? daysBefore(now, days - 1) : now, to: now }, filter);
     await this.eachEvent(days, (batch) => {
       for (const e of batch) {
         first = first === undefined ? e.t : Math.min(first, e.t);
@@ -569,7 +626,7 @@ export class Telemetry {
     const s = agg.finish(days > 0 ? undefined : first ?? now);
     const configured = this.opts.remote?.();
     const remote = this.activeRemote();
-    const rs = remote ? await remote.stats().catch((e) => void this.remoteFailed(e)) : undefined;
+    const rs = remote ? await remote.stats().catch((e) => void (this.opts.remote?.() === remote && this.remoteFailed(e))) : undefined;
     const fileOldest = files.length ? Date.parse(`${files[0].day}T00:00:00`) || undefined : undefined;
     const backend = !configured ? 'files' : rs ? 'redis' : 'fallback';
     s.storage = {
@@ -614,8 +671,8 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
   };
   // Pre-create the days in range so sparklines have a point per day (and zero days show as zero).
   if (range.days > 0) {
-    for (let d = startOfDay(range.from); d <= range.to; d += 86400_000) {
-      dayOf(d);
+    for (const d = new Date(startOfDay(range.from)); d.getTime() <= range.to; d.setDate(d.getDate() + 1)) {
+      dayOf(d.getTime());
     }
   }
 

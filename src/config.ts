@@ -1,7 +1,10 @@
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { DEFAULT_SKILL_REPOSITORIES } from './agent/skillCatalog';
 import { ApprovalMode, ProviderConfig, ThinkingLevel } from './types';
 import { DEFAULT_PROVIDERS } from './providers/defaultProviders';
+import { expandHome } from './providers/colibriSetup';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -23,6 +26,10 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   cwd?: string;
   enabled?: boolean;
+  /** Seconds a tool call may take before it fails. */
+  timeout?: number;
+  /** Tool names (as the server names them) called without asking. */
+  autoApprove?: string[];
 }
 
 export interface RoutingConfig {
@@ -139,6 +146,7 @@ export function editableProviders(): { list: ProviderConfig[]; target: vscode.Co
 export function getConfig(): LocalPilotConfig {
   const c = vscode.workspace.getConfiguration(SECTION);
   const providers = c.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS).filter((p) => p.enabled !== false);
+  const maxConcurrency = Math.floor(Number(c.get<number>('parallel.maxConcurrency', 4)));
   return {
     providers,
     defaultModel: c.get<string>('defaultModel', ''),
@@ -156,7 +164,7 @@ export function getConfig(): LocalPilotConfig {
     },
     worktrees: {
       mode: (['always', 'parallel', 'off'] as const).find((m) => m === c.get<string>('worktrees.mode', 'always')) ?? 'always',
-      location: c.get<string>('worktrees.location', '') || undefined,
+      location: homePath(c.get<string>('worktrees.location', '')),
     },
     telemetry: {
       enabled: c.get<boolean>('telemetry.enabled', true),
@@ -170,8 +178,8 @@ export function getConfig(): LocalPilotConfig {
       },
     },
     parallel: {
-      maxConcurrency: c.get<number>('parallel.maxConcurrency', 4),
-      maxSubagentDepth: c.get<number>('parallel.maxSubagentDepth', 2),
+      maxConcurrency: Number.isFinite(maxConcurrency) ? Math.max(1, Math.min(16, maxConcurrency)) : 4,
+      maxSubagentDepth: Math.max(1, Math.min(4, Math.floor(c.get<number>('parallel.maxSubagentDepth', 2)) || 2)),
     },
     queue: { concurrency: Math.max(1, Math.min(8, Math.floor(c.get<number>('queue.concurrency', 1)))) },
     autoMode: { enabled: c.get<boolean>('autoMode.enabled', false), model: c.get<string>('autoMode.model', '') },
@@ -248,6 +256,12 @@ export function getConfig(): LocalPilotConfig {
   };
 }
 
+/** `~` expanded and relative paths resolved against the home directory; undefined when empty. */
+function homePath(raw: string | undefined): string | undefined {
+  const p = raw?.trim();
+  return p ? path.resolve(os.homedir(), expandHome(p)) : undefined;
+}
+
 function normalizeAutoInstall(v: unknown): LocalPilotConfig['skillAutoInstall'] {
   if (v === false || v === 'off' || v === 'never') {
     return 'off';
@@ -273,8 +287,14 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
   });
 }
 
+/** Security settings a repository must not change: `scope: application` in package.json, so only User settings accept them. */
+export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key.startsWith('approvals.') || key.startsWith('autoMode.');
+
 /** The most specific scope that sets `key`, so a write there actually takes effect (User when nothing overrides it). */
 export function configTarget(key: string): vscode.ConfigurationTarget {
+  if (isUserOnlySetting(key)) {
+    return vscode.ConfigurationTarget.Global;
+  }
   const i = vscode.workspace.getConfiguration(SECTION).inspect(key);
   if (i?.workspaceFolderValue !== undefined) {
     return vscode.ConfigurationTarget.WorkspaceFolder;

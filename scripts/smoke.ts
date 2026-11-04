@@ -203,9 +203,16 @@ async function mockOpenAI() {
     check('reassembles fragmented parallel tool calls', calls.length === 2 && calls[0].call.id === 'call_1' && JSON.parse(calls[0].call.arguments).query === 'TODO' && calls[1].call.name === 'list_dir', calls);
     check('/completions works', (await p.complete({ model: 'm', prompt: 'x' })) === 'console.log(x);');
     // Explicit model list fallback for servers with no /models
-    const p2 = new OpenAICompatProvider({ id: 'llamacpp', type: 'openai', baseUrl: 'http://127.0.0.1:1/v1', models: ['local-gguf'] });
+    const noList = await listen((_req, res) => {
+      res.statusCode = 404;
+      res.end('not found');
+    });
+    const p2 = new OpenAICompatProvider({ id: 'llamacpp', type: 'openai', baseUrl: `${noList.url}/v1`, models: ['local-gguf'] });
     const m2 = await p2.listModels().catch(() => []);
-    check('explicit models used when /models unreachable', m2.length === 1 && m2[0].id === 'llamacpp/local-gguf', m2);
+    check('explicit models used when the server has no /models endpoint', m2.length === 1 && m2[0].id === 'llamacpp/local-gguf', m2);
+    noList.close();
+    const down = new OpenAICompatProvider({ id: 'llamacpp', type: 'openai', baseUrl: 'http://127.0.0.1:1/v1', models: ['local-gguf'] });
+    check('a server that does not answer at all is reported down, not listed', (await down.listModels().then(() => 'listed', () => 'down')) === 'down');
   } finally {
     srv.close();
   }

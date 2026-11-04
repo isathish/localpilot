@@ -34,6 +34,10 @@ Auto-detection also probes a few other local ports and running Docker containers
 | Web search and web fetch tools | When the agent calls them | `localpilot.approvals.network` (`ask` to approve each, `never` to block) |
 | Model downloads | Only when you start one (setup, catalog, gallery) | Don't start one |
 | MCP servers | Only servers you configure | Remove them from `localpilot.mcpServers` |
+| Dependency checks against [OSV.dev](https://osv.dev): package names and versions from your lockfiles, no code | When the `security_scan` tool, `/scan` or `localpilot scan` checks dependencies | `localpilot.approvals.network` (`ask` or `never`) in the editor; `--offline` in the CLI |
+| Plugin marketplaces (fetched with `git`) | When you browse or install plugins | Remove them from `localpilot.plugins.marketplaces` |
+| Model gallery listings from ollama.com, hub.docker.com and huggingface.co | While the model gallery is open | Don't open the gallery |
+| Browser tools (open and read web pages) | When the agent calls them | `localpilot.approvals.network` (`ask` to approve each, `never` to block) |
 
 There is no account, no analytics SDK and no update check in the extension. Extension updates come from VS Code itself, the same as for any other extension.
 
@@ -46,7 +50,7 @@ There is no account, no analytics SDK and no update check in the extension. Exte
 
 1. Disconnect from the network. Chat, edits, tests and completions keep working against a local model.
 2. Open **Settings → Providers** and confirm every address is one you expect.
-3. Read the source on [GitHub]({{ site.repo }}). The network code is in `src/providers/`, `src/tools/web.ts`, `src/agent/skillCatalog.ts` and `src/mcp/`.
+3. Read the source on [GitHub]({{ site.repo }}). The network code is in `src/providers/`, `src/tools/web.ts`, `src/tools/browser.ts`, `src/security/`, `src/agent/skillCatalog.ts`, `src/agent/skillInstaller.ts`, `src/agent/pluginInstaller.ts` and `src/mcp/`.
 
 ## This website
 

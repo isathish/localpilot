@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { ContextManager, effectiveContextWindow, MIN_CONTEXT_WINDOW } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow, MIN_CONTEXT_WINDOW, TokenCalibration } from '../context/contextManager';
 import { estimateMessagesTokens, estimateMessageTokens, estimateTokens, estimateToolsTokens } from '../context/tokenizer';
 import { ChatMessage, LLMProvider, ModelInfo, StreamEvent } from '../types';
 
@@ -84,6 +84,16 @@ suite('effectiveContextWindow', () => {
     assert.strictEqual(effectiveContextWindow({ contextWindow: 8192 }, 1000), MIN_CONTEXT_WINDOW, 'never below the floor');
     assert.strictEqual(effectiveContextWindow({ contextWindow: 2048 }, 0), MIN_CONTEXT_WINDOW, 'a tiny native window is raised to the floor');
     assert.strictEqual(effectiveContextWindow({ contextWindow: 0 }, 0), 32768, 'unknown native window defaults to 32k');
+  });
+});
+
+suite('TokenCalibration', () => {
+  test('rejects a prompt count the server truncated to the window, accepts one under it', () => {
+    const cal = new TokenCalibration();
+    assert.strictEqual(cal.record('p/m', 50_000, 32_000, 32_768), false);
+    assert.strictEqual(cal.scale('p/m'), 1);
+    assert.strictEqual(cal.record('p/m', 10_000, 12_000, 32_768), true);
+    assert.ok(Math.abs(cal.scale('p/m') - 1.2) < 1e-9);
   });
 });
 

@@ -15,6 +15,16 @@ const YARN = '"@s/p@^1.0.0", "@s/p@^1.1":\n  version "1.2.0"\n  resolved "x"\n\n
 const GEMFILE = 'GEM\n  remote: https://rubygems.org/\n  specs:\n    rack (2.0.1)\n    nokogiri (1.10.0-x86_64-linux)\n      racc (~> 1.4)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rack\n';
 
 suite('LocalPilot security scan', () => {
+  test('workspace and local packages are not sent to OSV.dev', () => {
+    const npm = JSON.stringify({ lockfileVersion: 3, packages: { '': { name: 'root', version: '1.0.0' }, 'packages/core': { version: '2.0.0' }, 'node_modules/e': { version: '1.0.0' }, 'packages/core/node_modules/f': { version: '3.0.0' } } });
+    assert.strictEqual(names('package-lock.json', npm), 'e@1.0.0 f@3.0.0');
+    const npmWs = JSON.stringify({ lockfileVersion: 3, packages: { 'packages/e': { name: 'e', version: '2.0.0' } } });
+    assert.strictEqual(names('package-lock.json', npmWs), '');
+    assert.strictEqual(names('yarn.lock', '"my-app@workspace:.":\n  version: 0.0.0-use.local\n\n"lodash@npm:^4":\n  version: 4.17.21\n'), 'lodash@4.17.21');
+    assert.strictEqual(names('uv.lock', '[[package]]\nname = "app"\nversion = "0.1.0"\nsource = { editable = "." }\n\n[[package]]\nname = "rich"\nversion = "13.0.0"\nsource = { registry = "https://pypi.org/simple" }\n'), 'rich@13.0.0');
+    assert.strictEqual(names('poetry.lock', '[[package]]\nname = "lib"\nversion = "0.1.0"\n\n[package.source]\ntype = "directory"\nurl = "../lib"\n\n[[package]]\nname = "rich"\nversion = "13.0.0"\n'), 'rich@13.0.0');
+  });
+
   test('yarn.lock and Gemfile.lock parse the same with LF and CRLF line endings', () => {
     assert.strictEqual(names('yarn.lock', YARN), '@s/p@1.2.0 lodash@4.17.21');
     assert.strictEqual(names('yarn.lock', crlf(YARN)), '@s/p@1.2.0 lodash@4.17.21');
@@ -56,7 +66,9 @@ suite('LocalPilot security scan', () => {
       assert.strictEqual((await scanWorkspace(root, { kinds, path: root })).files, 2);
       assert.strictEqual((await scanWorkspace(root, { kinds, path: './src/' })).files, 1);
       assert.strictEqual((await scanWorkspace(root, { kinds: { dependencies: false, secrets: false, code: false } })).files, 0);
-      await assert.rejects(scanWorkspace(root, { kinds, path: 'nope' }), /No files under "nope"/);
+      await assert.rejects(scanWorkspace(root, { kinds, path: 'nope' }), /No such file or folder: nope/);
+      fs.mkdirSync(path.join(root, 'empty'));
+      await assert.rejects(scanWorkspace(root, { kinds, path: 'empty' }), /No files under "empty"/);
       await assert.rejects(scanWorkspace(root, { kinds, path: '../x' }), /outside the workspace/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -152,7 +164,7 @@ suite('LocalPilot security scan', () => {
     try {
       fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
       const r = await scanWorkspace(root, { kinds: { dependencies: true, secrets: false, code: false } });
-      assert.deepStrictEqual(r.skipped, ['dependencies: pnpm-lock.yaml is not supported, not checked', 'dependencies: no supported lockfile found']);
+      assert.deepStrictEqual(r.skipped.filter((t) => !t.startsWith('git ls-files failed')), ['dependencies: pnpm-lock.yaml is not supported, not checked', 'dependencies: no supported lockfile found']);
       assert.strictEqual(r.findings.length, 0);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

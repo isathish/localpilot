@@ -1,17 +1,19 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import { MemoryStore } from '../agent/memory';
 import { CatalogEntry, SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
 import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
-import { editableProviders, getConfig, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
+import { editableProviders, getConfig, isUserOnlySetting, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
 import { McpManager } from '../mcp/mcpManager';
 import { isRemoteUrl, keyStatus, KeyStatus, secretRefs } from '../providers/cloud';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { ProviderSecrets } from '../providers/secrets';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
-import { autoDetectProviders, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
+import { autoDetectProviders, endpointKey, KNOWN_ENDPOINTS, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
 import { createGalleryRegistries, GallerySource, isValidInstallRef } from '../providers/modelGallery';
 import { RegistryCapability, RegistryModel, RegistrySort, RegistryTag } from '../providers/ollamaRegistry';
@@ -21,6 +23,7 @@ import { SessionStore } from '../sessions/sessionStore';
 import { LogEntry, LogLevel, Telemetry, TelemetrySummary } from '../telemetry/telemetry';
 import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
+import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 
 export { probeProvider, recommendModel };
@@ -139,6 +142,7 @@ type FromSettings =
   | { type: 'command'; id: string; args?: unknown[] }
   | { type: 'deleteNote'; name: string; scope: 'project' | 'global' }
   | { type: 'openNote'; name: string; scope: 'project' | 'global' }
+  | { type: 'leaveSetup' }
   | { type: 'finishSetup'; model?: string; approvals?: 'safe' | 'balanced' | 'autonomous'; inlineCompletion?: boolean; providers?: ProviderConfig[] }
   | { type: 'openExternal'; url: string }
   | { type: 'dashboard'; days?: number }
@@ -201,6 +205,7 @@ export class SettingsPanel implements vscode.Disposable {
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
   private navigate = false;
+  private pushSeq = 0;
   private modelsLoaded = false;
   private modelsRefresh?: ReturnType<typeof setTimeout>;
   private jobsTimer?: ReturnType<typeof setTimeout>;
@@ -238,6 +243,12 @@ export class SettingsPanel implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('localpilot') && this.panel) {
           void this.pushState();
+        }
+        if (e.affectsConfiguration('localpilot.skills.repositories') && this.panel && this.catalog) {
+          void this.catalog
+            .refresh()
+            .then(() => this.pushSkillRegistry(this.skillQuery))
+            .catch((err) => this.log.warn(`skill registry: ${String(err)}`));
         }
       }),
       providers.onDidChange(() => this.panel && void this.pushState()),
@@ -287,8 +298,12 @@ export class SettingsPanel implements vscode.Disposable {
     this.panel = panel;
     panel.webview.onDidReceiveMessage((m: FromSettings) => void this.handle(m).catch((e) => this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) })));
     panel.onDidDispose(() => {
+      if (this.page === 'setup') {
+        void this.ctx.globalState.update(WELCOMED_KEY, true);
+      }
       this.panel = undefined;
       this.following = false;
+      Object.values(this.registries).forEach((r) => r.clearCache());
       this.modelsLoaded = false;
     });
   }
@@ -457,6 +472,13 @@ export class SettingsPanel implements vscode.Disposable {
       }
       case 'finishSetup':
         return this.finishSetup(m);
+      case 'leaveSetup':
+        await this.ctx.globalState.update(WELCOMED_KEY, true);
+        this.page = 'settings';
+        if (this.panel) {
+          this.panel.title = this.title();
+        }
+        return;
       case 'openExternal':
         if (/^https?:\/\//i.test(m.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(m.url));
@@ -504,8 +526,12 @@ export class SettingsPanel implements vscode.Disposable {
         if (pick !== 'Delete') {
           return;
         }
-        await this.telemetry.clear();
-        this.post({ type: 'toast', level: 'info', text: 'Telemetry cleared' });
+        const r = await this.telemetry.clear();
+        if (r.remoteError) {
+          this.post({ type: 'toast', level: 'error', text: `Local files deleted, but the Redis store could not be reached, so the data stored there was not deleted (${r.remoteError}). Run Delete again when Redis is up.` });
+        } else {
+          this.post({ type: 'toast', level: 'info', text: 'Telemetry cleared' });
+        }
         return this.pushDashboard();
       }
       case 'openLogFile': {
@@ -513,6 +539,18 @@ export class SettingsPanel implements vscode.Disposable {
           return;
         }
         await this.telemetry.flush();
+        // With Redis storage on, log lines go to Redis instead of the daily file.
+        const remote = this.telemetry.activeRemote();
+        if (remote) {
+          try {
+            const lines = await remote.recentLogs(2000);
+            const doc = await vscode.workspace.openTextDocument({ content: lines.join('\n') + '\n', language: 'log' });
+            await vscode.window.showTextDocument(doc, { preview: false });
+            return;
+          } catch {
+            // fall back to the file
+          }
+        }
         try {
           await vscode.window.showTextDocument(vscode.Uri.file(this.telemetry.logFile()), { preview: false });
         } catch {
@@ -530,20 +568,34 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   private lastDashboardDays = 7;
+  /** Enabled provider ids from the CLI config, so its model calls count on the dashboard too. */
+  private async cliProviderIds(): Promise<string[]> {
+    try {
+      const cfg = JSON.parse(await fs.readFile(path.join(os.homedir(), '.localpilot', 'config.json'), 'utf8')) as Record<string, unknown>;
+      const list = Array.isArray(cfg.providers) ? cfg.providers : Array.isArray(cfg['localpilot.providers']) ? cfg['localpilot.providers'] : [];
+      return (list as { id?: unknown; enabled?: unknown }[]).filter((p) => p && typeof p.id === 'string' && p.enabled !== false).map((p) => p.id as string);
+    } catch {
+      return [];
+    }
+  }
   private async pushDashboard(days = this.lastDashboardDays): Promise<void> {
     if (!this.telemetry) {
       return;
     }
     this.lastDashboardDays = days;
-    // Only providers that are configured and enabled right now: disabling one hides its history, and providers that
-    // tests or old configs made up never show.
-    const [summary, tuning] = await Promise.all([this.telemetry.summary(days, { providers: getConfig().providers.map((p) => p.id) }), this.tuner?.report().catch(() => undefined)]);
+    // Only providers that are configured and enabled right now, in VS Code or in the CLI's ~/.localpilot/config.json:
+    // disabling one hides its history, and providers that tests or old configs made up never show.
+    const providers = [...new Set([...getConfig().providers.map((p) => p.id), ...(await this.cliProviderIds())])];
+    const [summary, tuning] = await Promise.all([this.telemetry.summary(days, { providers }), this.tuner?.report().catch(() => undefined)]);
     this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile(), tuning });
   }
 
   private async update(key: string, value: unknown, scope: 'user' | 'workspace'): Promise<void> {
     if (!(SETTING_KEYS as readonly string[]).includes(key)) {
       throw new Error(`Unknown setting: ${key}`);
+    }
+    if (isUserOnlySetting(key)) {
+      scope = 'user';
     }
     if (scope === 'workspace' && !vscode.workspace.workspaceFolders?.length) {
       throw new Error('Open a folder to use workspace settings');
@@ -552,6 +604,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (key === 'providers' && Array.isArray(clean) && this.secrets) {
       // A pasted key goes to the OS keychain; settings.json keeps a `${secret:<id>}` reference.
       clean = await this.secrets.protect(clean as ProviderConfig[], scope);
+    }
+    if (key === 'webSearch.apiKey' && typeof clean === 'string' && clean.trim() && !clean.includes('${') && this.secrets) {
+      clean = await this.secrets.store('websearch', clean.trim(), scope);
     }
     const cfg = vscode.workspace.getConfiguration('localpilot');
     // Only keys this write stops referencing may be deleted, never ones another window's settings still use.
@@ -625,13 +680,13 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   private async installRegistrySkill(name: string, repo: string, scope?: 'user' | 'workspace'): Promise<void> {
-    if (!this.catalog) {
-      return;
-    }
-    const entries = await this.catalog.entries();
+    const entries = this.catalog ? await this.catalog.entries() : [];
     const entry = entries.find((e) => e.name === name && e.repo === repo) ?? entries.find((e) => e.name === name);
-    if (!entry) {
-      throw new Error(`"${name}" is no longer in the skill registry`);
+    if (!this.catalog || !entry) {
+      this.post({ type: 'skillJob', name, status: 'error', detail: 'no longer in the skill registry' });
+      this.post({ type: 'toast', level: 'error', text: `Could not install “${name}”: it is no longer in the skill registry` });
+      await this.pushSkillRegistry(this.skillQuery);
+      return;
     }
     const dest = skillsDestination(scope ?? getConfig().skillAutoInstallScope, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
     this.post({ type: 'skillJob', name: entry.name, status: 'running', detail: `Installing from ${entry.repo}…` });
@@ -677,25 +732,46 @@ export class SettingsPanel implements vscode.Disposable {
 
   private async finishSetup(m: Extract<FromSettings, { type: 'finishSetup' }>): Promise<void> {
     const cfg = vscode.workspace.getConfiguration('localpilot');
+    let model = m.model;
     if (m.providers?.length) {
-      // Merge: keep everything the user already configured, add newly detected servers.
+      // Merge: keep everything the user already configured, add newly detected servers (unique ids, known cloud flags).
       const { list, target } = editableProviders();
       const existing = list.map(sanitizeProvider);
-      const known = new Set(existing.map((p) => p.baseUrl.replace(/\/+$/, '')));
-      const added = m.providers.map(sanitizeProvider).filter((p) => !known.has(p.baseUrl));
+      const effective = cfg.get<ProviderConfig[]>('providers', DEFAULT_PROVIDERS);
+      const known = new Set([...existing, ...effective].map((p) => endpointKey(p.baseUrl)));
+      const taken = new Set([...existing, ...effective].map((p) => p.id));
+      const added: ProviderConfig[] = [];
+      for (const p of m.providers.map(sanitizeProvider)) {
+        if (known.has(endpointKey(p.baseUrl))) {
+          continue;
+        }
+        known.add(endpointKey(p.baseUrl));
+        let id = p.id;
+        for (let n = 2; taken.has(id); n++) {
+          id = `${p.id.replace(/-\d+$/, '')}-${n}`;
+        }
+        taken.add(id);
+        if (id !== p.id && model?.startsWith(`${p.id}/`)) {
+          model = `${id}/${model.slice(p.id.length + 1)}`;
+        }
+        const cloud = KNOWN_ENDPOINTS.find((k) => k.cloud && endpointKey(k.baseUrl) === endpointKey(p.baseUrl));
+        added.push({ ...p, id, ...(cloud ? { cloud: true } : {}) });
+      }
       if (added.length) {
         await cfg.update('providers', [...existing, ...added], target);
       }
     }
-    if (m.model) {
-      await cfg.update('defaultModel', m.model, vscode.ConfigurationTarget.Global);
+    if (model && model !== cfg.get<string>('defaultModel')) {
+      await cfg.update('defaultModel', model, vscode.ConfigurationTarget.Global);
     }
     if (m.approvals) {
       for (const [k, v] of Object.entries(PRESETS[m.approvals])) {
-        await cfg.update(`approvals.${k}`, v, vscode.ConfigurationTarget.Global);
+        if (cfg.get<string>(`approvals.${k}`) !== v) {
+          await cfg.update(`approvals.${k}`, v, vscode.ConfigurationTarget.Global);
+        }
       }
     }
-    if (typeof m.inlineCompletion === 'boolean') {
+    if (typeof m.inlineCompletion === 'boolean' && m.inlineCompletion !== cfg.get<boolean>('inlineCompletion.enabled')) {
       await cfg.update('inlineCompletion.enabled', m.inlineCompletion, vscode.ConfigurationTarget.Global);
     }
     await this.ctx.globalState.update(WELCOMED_KEY, true);
@@ -783,6 +859,15 @@ export class SettingsPanel implements vscode.Disposable {
     if (!this.panel) {
       return;
     }
+    const seq = ++this.pushSeq;
+    const models = await this.providers.listAllModels().catch(() => []);
+    const notes = await this.memory.list().catch(() => []);
+    const learning = await this.learner?.usage(this.skills.enabledSkills).catch(() => undefined);
+    const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
+    // A newer push started while this one awaited: only the newest snapshot may reach the webview.
+    if (seq !== this.pushSeq) {
+      return;
+    }
     const cfg = vscode.workspace.getConfiguration('localpilot');
     const settings: Record<string, SettingEntry> = {};
     for (const key of SETTING_KEYS) {
@@ -790,10 +875,6 @@ export class SettingsPanel implements vscode.Disposable {
       const scope = i?.workspaceValue !== undefined || i?.workspaceFolderValue !== undefined ? 'workspace' : i?.globalValue !== undefined ? 'user' : 'default';
       settings[key] = { value: cfg.get(key), default: i?.defaultValue, scope, userValue: i?.globalValue, workspaceValue: i?.workspaceValue ?? i?.workspaceFolderValue };
     }
-    const models = await this.providers.listAllModels().catch(() => []);
-    const notes = await this.memory.list().catch(() => []);
-    const learning = await this.learner?.usage(this.skills.enabledSkills).catch(() => undefined);
-    const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
     this.post({
       type: 'state',
       page: this.page,

@@ -15,10 +15,11 @@ import { ChangeTracker } from '../agent/changeTracker';
 const root = (): string => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
 /** Tool context that auto-approves (or declines) and records what it was asked. */
-function ctx(opts: { approve?: boolean; workspaceRoot?: string } = {}): ToolContext & { approvals: { title: string; kind: string }[]; tracked: string[] } {
+function ctx(opts: { approve?: boolean; workspaceRoot?: string; isolatedFrom?: string } = {}): ToolContext & { approvals: { title: string; kind: string }[]; tracked: string[] } {
   const c = {
     sessionId: 'test',
     workspaceRoot: opts.workspaceRoot,
+    isolatedFrom: opts.isolatedFrom,
     signal: new AbortController().signal,
     depth: 0,
     approvals: [] as { title: string; kind: string }[],
@@ -64,7 +65,9 @@ suite('Filesystem tools', () => {
     // Isolated: an absolute path into the real workspace is redirected into the worktree copy.
     const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-wt-'));
     try {
-      const iso = ctx({ workspaceRoot: wt });
+      const iso = ctx({ workspaceRoot: wt, isolatedFrom: root() });
+      // Not isolated (another workspace folder as root): absolute paths are left where they point.
+      assert.strictEqual(resolveWorkspacePath(path.join(root(), 'src', 'a.ts'), ctx({ workspaceRoot: wt })).fsPath, fsp(path.join(root(), 'src', 'a.ts')));
       assert.strictEqual(resolveWorkspacePath(path.join(root(), 'src', 'a.ts'), iso).fsPath, fsp(path.join(wt, 'src', 'a.ts')));
       assert.strictEqual(resolveWorkspacePath('src/a.ts', iso).fsPath, fsp(path.join(wt, 'src', 'a.ts')));
       assert.strictEqual(displayPath(vscode.Uri.file(path.join(wt, 'src', 'a.ts')), iso), path.join('src', 'a.ts'));
@@ -295,8 +298,8 @@ suite('Search tools', () => {
     const c = ctx();
     const r = await grepSearchTool.execute({ query: 'greetUser', include_pattern: `${base()}/**` }, c);
     const lines = r.content.split('\n');
-    assert.ok(lines.some((l) => /src\/alpha\.ts:1: .*function greetUser/.test(l)), r.content);
-    assert.ok(lines.some((l) => /notes\.md:2: /.test(l)), 'case-insensitive: GreetUser in notes.md');
+    assert.ok(lines.some((l) => /src\/alpha\.ts:1: ?.*function greetUser/.test(l)), r.content);
+    assert.ok(lines.some((l) => /notes\.md:2:/.test(l)), 'case-insensitive: GreetUser in notes.md');
     assert.ok(!lines.some((l) => /node_modules/.test(l)), 'node_modules excluded');
 
     const cs = await grepSearchTool.execute({ query: 'GreetUser', case_sensitive: true, include_pattern: `${base()}/**` }, c);
@@ -407,6 +410,8 @@ suite('Editor tools', () => {
       const warnings = await getDiagnosticsTool.execute({ path: path.basename(file), severity: 'warning' }, c);
       assert.match(warnings.content, /meh thing/);
       coll.clear();
+      // Let the clear's change event pass first: it would otherwise count as the file being checked.
+      await new Promise((r) => setTimeout(r, 600));
       const none = await getDiagnosticsTool.execute({ path: path.basename(file), severity: 'all' }, c);
       assert.match(none.content, /^No diagnostics were published for .*diag-\d+\.txt .*run_command/, 'an unchecked file is not reported as clean');
     } finally {

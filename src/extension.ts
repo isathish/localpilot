@@ -26,7 +26,7 @@ import { autoDetectProviders, recommendModel } from './providers/discovery';
 import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ollamaUp } from './providers/modelManager';
 import { ServiceSupervisor } from './providers/supervisor';
 import { ProviderRegistry } from './providers/registry';
-import { isCloudProvider, secretRefs } from './providers/cloud';
+import { isCloudProvider, resolveApiKey, secretEnvName, secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
 import { ColibriLauncher } from './ui/colibriCommand';
 import { GatewayLauncher } from './ui/gatewayCommand';
@@ -36,7 +36,7 @@ import { SessionStore } from './sessions/sessionStore';
 import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/browser';
 import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
-import { fsTools } from './tools/fs';
+import { deleteUri, fsTools } from './tools/fs';
 import { createAnalyzeWorkspaceTool } from './tools/workspace';
 import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
@@ -67,6 +67,8 @@ import { securityScanTool } from './tools/security';
 import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, searchPlugins, setPluginEnabled } from './agent/pluginInstaller';
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+let shutdown: (() => Promise<void>) | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
@@ -101,9 +103,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     // Straight to the channel: a mirrored log line about a failing write would only queue another write.
     onRemoteError: (e) => channel.warn(`Telemetry: ${redisTelemetry?.label ?? 'Redis'} unavailable, writing to files for a minute (${e instanceof Error ? e.message : String(e)})`),
   });
-  context.subscriptions.push(new vscode.Disposable(() => redisTelemetry?.dispose()));
+  shutdown = async () => {
+    await telemetry.flush();
+    redisTelemetry?.dispose();
+    redisTelemetry = undefined;
+  };
   const log = mirrorLog(channel, telemetry);
   context.subscriptions.push(telemetry);
+  context.subscriptions.push(new vscode.Disposable(() => redisTelemetry?.dispose()));
   context.subscriptions.push(
     onConfigChange(() => {
       if (syncRedis()) {
@@ -153,7 +160,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // The catalog index lives in ~/.localpilot so the CLI and the extension share one copy.
   const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
-  const worktrees = new WorktreeManager(() => getConfig().worktrees.location, log);
+  const worktrees = new WorktreeManager(() => process.env.LOCALPILOT_WORKTREES_DIR || getConfig().worktrees.location, log);
   const controller = new ChatController(store, runner, providers, skills, workspace, tracker, log, worktrees);
   // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
@@ -359,6 +366,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       if (e.affectsConfiguration('localpilot.skills.repositories')) {
         refresh('skill catalog', catalog.refresh());
       }
+      if (e.affectsConfiguration('localpilot.pluginPaths')) {
+        refresh('plugins', plugins.refresh());
+      }
     })
   );
 
@@ -530,7 +540,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       if (settingsPanel.isOpen) {
         return; // the user already opened Settings themselves — don't hijack the panel
       }
-      if (!models.length || !getConfig().defaultModel) {
+      if (!models.length) {
         settingsPanel.show('setup');
       } else {
         void context.globalState.update(WELCOMED_KEY, true);
@@ -863,7 +873,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
             void vscode.window.showWarningMessage('Apply failed — the other results were kept.');
             return;
           }
-          if (res.conflicts.length && (await vscode.window.showWarningMessage('Applied with conflicts. Discard the other results anyway?', { modal: true }, 'Discard')) !== 'Discard') {
+          if (res.conflicts.length && (await vscode.window.showWarningMessage(`Applied with conflicts in ${res.conflicts.length} file${res.conflicts.length === 1 ? '' : 's'}. Discard the other results anyway?`, { modal: true }, 'Discard')) !== 'Discard') {
             return;
           }
           for (const s of sessions) {
@@ -1129,6 +1139,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const slots = ModelManager.ollamaParallelSlots();
     const job = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Restarting Ollama with ${slots} parallel request slots…` }, () => modelManager.restartOllamaWithParallelSlots());
     if (job.status === 'done') {
+      runner.clearServedSerially();
       void vscode.window.showInformationMessage(`Ollama now serves up to ${slots} requests at once, so parallel subagents run concurrently. Lower localpilot.parallel.maxConcurrency if memory gets tight.`);
     } else if (job.status === 'error') {
       void vscode.window.showWarningMessage(job.error ?? 'Could not restart Ollama.', 'Open docs').then((p) => p && vscode.env.openExternal(vscode.Uri.parse('https://isathish.github.io/localpilot/docs/parallel-agents/#parallel-requests')));
@@ -1442,6 +1453,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const refreshBtn: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('refresh'), tooltip: 'Re-index the skill repositories' };
     const settingsBtn: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: 'Edit localpilot.skills.repositories' };
     qp.buttons = [refreshBtn, settingsBtn];
+    let hidden = false;
+    const picked = new Promise<Item[]>((resolve) => {
+      qp.onDidAccept(() => resolve([...qp.selectedItems]));
+      qp.onDidHide(() => {
+        hidden = true;
+        resolve([]);
+      });
+    });
     const render = async () => {
       const have = new Set(skills.allSkills.map((s) => s.name));
       const entries = await catalog.entries();
@@ -1459,14 +1478,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       }
       qp.items = items;
     };
-    qp.busy = true;
-    qp.show();
-    await render();
-    if (!(await catalog.ready())) {
-      await catalog.refresh();
-      await render();
-    }
-    qp.busy = false;
     qp.onDidTriggerButton(async (b) => {
       if (b === settingsBtn) {
         void vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.skills.repositories');
@@ -1474,15 +1485,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       }
       qp.busy = true;
       await catalog.refresh(true).catch((e) => log.warn(`skill catalog: ${String(e)}`));
+      if (!hidden) {
+        await render();
+        qp.busy = false;
+      }
+    });
+    let chosen: Item[];
+    try {
+      qp.busy = true;
+      qp.show();
       await render();
+      if (hidden) {
+        return undefined;
+      }
+      if (!(await catalog.ready())) {
+        if (hidden) {
+          return undefined;
+        }
+        await catalog.refresh();
+        if (hidden) {
+          return undefined;
+        }
+        await render();
+      }
       qp.busy = false;
-    });
-    const picked = await new Promise<Item[]>((resolve) => {
-      qp.onDidAccept(() => resolve([...qp.selectedItems]));
-      qp.onDidHide(() => resolve([]));
-    });
-    qp.dispose();
-    const entries = picked.flatMap((p) => (p.entry ? [p.entry] : []));
+      chosen = await picked;
+    } finally {
+      qp.dispose();
+    }
+    const entries = chosen.flatMap((p) => (p.entry ? [p.entry] : []));
     if (!entries.length) {
       return undefined;
     }
@@ -1524,6 +1555,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     return done;
   });
   cmd('localpilot.reloadSkills', async () => {
+    await plugins.refresh();
     await skills.refresh();
     await mcp.reload();
     vscode.window.showInformationMessage(`LocalPilot: ${skills.allSkills.length} skills, ${skills.allAgents.length} subagents, ${mcp.status.reduce((n, s) => n + s.tools, 0)} MCP tools`);
@@ -1596,7 +1628,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       if ((await vscode.window.showWarningMessage(`Remove ${pick.p.name}?`, { modal: true }, 'Remove')) !== 'Remove') {
         return;
       }
-      await vscode.workspace.fs.delete(vscode.Uri.file(pick.p.root), { recursive: true, useTrash: true });
+      await deleteUri(vscode.Uri.file(pick.p.root), true);
     } else if (action === 'Open folder') {
       await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(pick.p.root));
       return;
@@ -1625,19 +1657,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     const def = getConfig().defaultModel;
     const picked = await vscode.window.showQuickPick(
-      models.map((m) => ({ label: m.name, description: `${m.id}${m.remote ? ' · cloud' : ''}`, id: m.id, picked: m.id === def })),
+      models.map((m) => ({ label: m.name, description: `${m.id}${m.remote ? ' · cloud' : ''}`, id: m.id, providerId: m.providerId, picked: m.id === def })),
       { canPickMany: true, title: 'Benchmark models', placeHolder: 'Pick the models to compare on the built-in coding tasks (each task takes a minute or two per model)' }
     );
     if (!picked?.length) {
       return;
     }
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+    // The CLI has no secret storage: hand it the picked cloud models' keys as LOCALPILOT_KEY_<NAME>.
+    const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1' };
+    for (const p of picked) {
+      const cfg = getConfig().providers.find((c) => c.id === p.providerId);
+      for (const name of secretRefs(cfg?.apiKey)) {
+        const v = resolveApiKey({ apiKey: `\${secret:${name}}` });
+        if (v) {
+          env[secretEnvName(name)] = v;
+        }
+      }
+    }
     const term = vscode.window.createTerminal({
       name: 'LocalPilot Benchmark',
       cwd: root,
       shellPath: process.execPath,
-      shellArgs: [vscode.Uri.joinPath(context.extensionUri, 'dist', 'cli.js').fsPath, 'eval', '-C', root, '--models', picked.map((p) => p.id).join(',')],
-      env: { ELECTRON_RUN_AS_NODE: '1' },
+      shellArgs: [vscode.Uri.joinPath(context.extensionUri, 'dist', 'cli.js').fsPath, 'eval', '-C', root, '--suite', 'builtin', '--models', picked.map((p) => p.id).join(',')],
+      env,
     });
     term.show();
   });
@@ -1864,8 +1907,8 @@ export interface LocalPilotApi {
   readonly telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: LogLevel; q?: string; limit?: number }): LogEntry[]; readonly dir: string };
 }
 
-export function deactivate(): void {
-  /* disposables handle cleanup */
+export function deactivate(): Promise<void> | undefined {
+  return shutdown?.();
 }
 
 function timeAgo(ts: number): string {

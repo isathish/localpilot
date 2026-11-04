@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { McpClient, McpManager } from '../mcp/mcpManager';
-import { expandRefs, StdioTransport } from '../mcp/transports';
+import { expandRefs, StdioTransport, winSpawn } from '../mcp/transports';
 import { ToolRegistry } from '../tools/registry';
 
 /** A complete, tiny MCP server (stdio, JSON-RPC) exposing one `echo` tool — written to disk and run with node. */
@@ -165,5 +165,15 @@ suite('LocalPilot MCP client', () => {
     } finally {
       t.close();
     }
+  });
+
+  test('winSpawn quotes .cmd shims through cmd and runs .exe directly', () => {
+    const shim = winSpawn('npx', ['-y', 'C:\\Users\\Jane Doe\\srv.js', 'a=1&b=2'], () => 'C:\\nodejs\\npx.cmd', 'cmd.exe');
+    assert.strictEqual(shim.file, 'cmd.exe');
+    assert.strictEqual(shim.verbatim, true);
+    assert.deepStrictEqual(shim.args.slice(0, 3), ['/d', '/s', '/c']);
+    assert.ok(shim.args[3].includes('^"C:\\Users\\Jane Doe\\srv.js^"'), shim.args[3]);
+    assert.ok(shim.args[3].includes('a=1^&b=2'), shim.args[3]);
+    assert.deepStrictEqual(winSpawn('node', ['x y'], () => 'C:\\node.exe'), { file: 'C:\\node.exe', args: ['x y'], verbatim: false });
   });
 });

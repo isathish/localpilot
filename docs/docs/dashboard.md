@@ -63,9 +63,9 @@ To undo an automatic change, use **Undo** in the notification that announced it,
 
 ## Logs
 
-The **Logs** card mirrors the *LocalPilot* output channel. Filter by minimum level, search, and keep **Follow** on to stream new lines as they are written. **Open log file** opens today's file (`localpilot-YYYY-MM-DD.log`) in an editor. **Output channel** jumps to the VS Code panel.
+The **Logs** card mirrors the *LocalPilot* output channel. Filter by minimum level, search, and keep **Follow** on to stream new lines as they are written. **Open log file** opens today's file (`localpilot-YYYY-MM-DD.log`) in an editor. With Redis storage on, it shows the newest lines from Redis in an untitled editor instead. **Output channel** jumps to the VS Code panel.
 
-The CLI writes its own log (`localpilot --log-file`). Its runs still count in the metrics, because the extension and the CLI share the same telemetry folder.
+The CLI writes its own log to `~/.localpilot/cli.log` (add `-v` for debug lines). Its runs still count in the metrics, because the extension and the CLI share the same telemetry folder.
 
 ## Telemetry settings
 

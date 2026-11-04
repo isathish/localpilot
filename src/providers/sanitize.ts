@@ -4,7 +4,11 @@ import { ProviderConfig } from '../types';
 export function sanitizeProviderConfig(p: ProviderConfig): ProviderConfig {
   const id = String(p.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'provider';
   const type: ProviderConfig['type'] = p.type === 'ollama' || p.type === 'anthropic' ? p.type : 'openai';
-  let baseUrl = String(p.baseUrl || '').trim().replace(/\/+$/, '');
+  let baseUrl = String(p.baseUrl || '').trim();
+  if (/^https?:\/*$/i.test(baseUrl)) {
+    baseUrl = '';
+  }
+  baseUrl = baseUrl.replace(/\/+$/, '');
   if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
     baseUrl = `http://${baseUrl}`;
   }

@@ -311,11 +311,12 @@ export class SessionStore implements vscode.Disposable {
   }
 
   /** Delete every session except the given ids (running or pinned chats survive "Clear chat history"). */
-  async clearExcept(keep: Iterable<string>): Promise<number> {
-    const keepSet = new Set(keep);
+  async clearExcept(keep: Iterable<string> | ((id: string) => boolean)): Promise<number> {
+    const keeps = typeof keep === 'function' ? keep : ((set: Set<string>) => (id: string) => set.has(id))(new Set(keep));
     let n = 0;
     for (const id of [...this.index.keys()]) {
-      if (!keepSet.has(id)) {
+      // A predicate is asked just before each delete, so a chat that became busy meanwhile is spared.
+      if (this.index.has(id) && !keeps(id)) {
         await this.delete(id);
         n++;
       }
@@ -441,8 +442,20 @@ export class SessionStore implements vscode.Disposable {
     for (const m of s.messages) {
       if (m.role === 'tool') {
         lines.push(`<details><summary>Tool result: ${m.toolName}</summary>\n\n\`\`\`\n${m.content.slice(0, 4000)}\n\`\`\`\n</details>\n`);
+      } else if (m.role === 'user' && (m.meta?.hidden || m.meta?.toolImages || m.meta?.toolResults)) {
+        continue;
+      } else if (m.meta?.summary) {
+        lines.push('_Conversation compacted_\n');
+      } else if (m.role === 'user') {
+        const attached = [...m.content.matchAll(/<(attachment|directory|workspace_tree|problems|git|open_editors|terminal_output|selection)\b([^>]*)>[\s\S]*?<\/\1>/g)].map(
+          (b) => /\bpath="([^"]*)"/.exec(b[2])?.[1] ?? `@${b[1]}`
+        );
+        lines.push(`### You\n\n${m.meta?.display ?? userText(m.content)}\n`);
+        if (attached.length) {
+          lines.push(`Attached: ${[...new Set(attached)].join(', ')}\n`);
+        }
       } else {
-        lines.push(`### ${m.role === 'user' ? 'You' : 'LocalPilot'}\n\n${m.content}\n`);
+        lines.push(`### LocalPilot\n\n${m.content}\n`);
         for (const tc of m.toolCalls ?? []) {
           lines.push(`> **tool** \`${tc.name}(${tc.arguments.slice(0, 200)})\`\n`);
         }

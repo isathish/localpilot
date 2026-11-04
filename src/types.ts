@@ -123,11 +123,26 @@ export interface ChatRequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Token counts a provider reports for one request. `promptTokens` is the whole input, cached parts included (the
+ * real prompt size: context calibration and telemetry rely on it); the cache fields say how much of it was cached.
+ */
+export interface ProviderUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  /** Input tokens served from the provider's prompt cache. */
+  cacheReadTokens?: number;
+  /** Input tokens written to the prompt cache (Anthropic cache creation). */
+  cacheWriteTokens?: number;
+  /** Cost the provider reported for the request (OpenRouter `usage.cost`), in US dollars. */
+  costUsd?: number;
+}
+
 export type StreamEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'usage'; promptTokens?: number; completionTokens?: number }
+  | ({ type: 'usage' } & ProviderUsage)
   /** Liveness while a tool call's arguments stream (nothing to show yet). */
   | { type: 'progress' }
   | { type: 'done'; finishReason?: string };
@@ -237,6 +252,8 @@ export interface ToolContext {
   control?: import('./agent/runControl').RunControl;
   /** Skills in force for this run (preloaded, pinned or loaded with load_skill); subagents spawned from here inherit them. */
   skills?: string[];
+  /** Books a subagent's model request into this run's session (and on up to the top-level chat). */
+  recordUsage?(u: ProviderUsage | undefined, model?: string, provider?: string): void;
   /**
    * Shows questions in the chat and waits. Resolves the answers, `null` when the user skipped them, or `undefined`
    * when no chat surface can show them (the tool then falls back to native pickers). Absent for subagents.
@@ -328,6 +345,26 @@ export interface SessionSummary {
   group?: { id: string; kind: 'bestOf' | 'batch'; prompt: string; size: number };
   /** Per-chat skill behaviour overriding the global setting (see SessionSkills). */
   skills?: SessionSkills;
+  /** Tokens and cost of every model request made for this chat, its subagents' included. */
+  usage?: SessionUsage;
+  /** Size of the session file on disk (history list). */
+  bytes?: number;
+}
+
+/** Running totals for a chat. `promptTokens` is the uncached input only; cached input is counted in the cache fields. */
+export interface SessionUsage {
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Sum of provider-reported costs; absent when no request reported one. */
+  costUsd?: number;
+  requests: number;
+  /** The share of the totals spent by subagents. */
+  subagentTokens?: { promptTokens: number; completionTokens: number; requests: number };
+  /** Model and provider of the last request. */
+  model?: string;
+  provider?: string;
 }
 
 export interface Session extends SessionSummary {

@@ -46,12 +46,12 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
 | `args` | no | Arguments |
 | `url` | for a remote server | The server's endpoint (`https://…`) |
 | `type` | no | `stdio`, `http` (Streamable HTTP) or `sse` (HTTP+SSE). Inferred when omitted: a `command` is stdio, a `url` ending in `/sse` is SSE, any other `url` is Streamable HTTP |
-| `headers` | no | Remote servers: headers sent with every request, typically `Authorization`. Values accept `${env:NAME}` and `${secret:NAME}` |
+| `headers` | no | Remote servers: headers sent with every request, typically `Authorization`. Values accept `${env:NAME}` |
 | `env` | no | Extra environment variables, added to the environment VS Code was started with |
 | `cwd` | no | Working directory. Default: the first workspace folder |
 | `enabled` | no | Set `false` to keep the entry without starting the server |
 
-Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: use `${env:NAME}` or `${secret:NAME}` references, or put such servers in your user settings.
+Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: use `${env:NAME}` references, or put such servers in your user settings. A `${secret:NAME}` reference also resolves from a `LOCALPILOT_KEY_<NAME>` environment variable, and the CLI reads it from `~/.localpilot/keys.json`, but VS Code cannot store MCP header secrets in the keychain yet.
 
 ### Remote servers
 

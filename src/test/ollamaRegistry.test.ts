@@ -152,6 +152,22 @@ suite('LocalPilot Ollama library (model gallery)', () => {
     assert.strictEqual(calls.length, 4);
   });
 
+  test('registry cache is bounded and evicts the least recently used page first', async () => {
+    const calls: string[] = [];
+    const reg = new OllamaRegistry('https://example.test', 60_000, async (url) => {
+      calls.push(url);
+      return SEARCH_HTML;
+    });
+    for (let i = 0; i < 60; i++) {
+      await reg.search({ q: `q${i}` });
+    }
+    assert.strictEqual(calls.length, 60);
+    await reg.search({ q: 'q59' });
+    assert.strictEqual(calls.length, 60, 'a recent query is still served from cache');
+    await reg.search({ q: 'q0' });
+    assert.strictEqual(calls.length, 61, 'the oldest query was evicted and is fetched again');
+  });
+
   test('registry surfaces fetch failures instead of swallowing them', async () => {
     const reg = new OllamaRegistry('https://example.test', 1000, async () => {
       throw new Error('fetch failed');

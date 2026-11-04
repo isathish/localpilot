@@ -36,12 +36,12 @@ LocalPilot searches these folders in order. A skill found earlier overrides one 
 |---|---|
 | 1 | `<workspace>/.localpilot/skills/*` |
 | 2 | `<workspace>/.claude/skills/*` |
-| 3 | `<workspace>/.github/skills/*` |
-| 4 | `~/.localpilot/skills/*`, `~/.claude/skills/*`, `~/.agents/skills/*` |
+| 3 | `<workspace>/.github/skills/*`, `<workspace>/.agents/skills/*`, `<workspace>/.cline/skills/*`, `<workspace>/.clinerules/skills/*` |
+| 4 | `~/.localpilot/skills/*`, `~/.claude/skills/*`, `~/.agents/skills/*`, `~/.cline/skills/*` |
 | 5 | Folders listed in `localpilot.skillsPaths` |
 | 6 | Skills bundled with LocalPilot |
 
-[Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can also contribute skills.
+A skill folder may be a symbolic link to a folder elsewhere. [Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can also contribute skills.
 
 ### Built-in skills
 

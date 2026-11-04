@@ -152,5 +152,15 @@ export async function gatewayModels(port: number, key?: string, host = '127.0.0.
   }
 }
 
+/** True when something on the port answers `/v1/models` with 401/403: a gateway (LiteLLM with a master key) that needs its key. */
+export async function gatewayNeedsKey(port: number, key?: string, host = '127.0.0.1'): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${host}:${port}/v1/models`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(4000) });
+    return res.status === 401 || res.status === 403;
+  } catch {
+    return false;
+  }
+}
+
 /** The gateway's dashboard. */
 export const gatewayDashboard = (id: GatewayId, port: number) => `http://127.0.0.1:${port}${GATEWAYS[id].dashboardPath ?? '/'}`;

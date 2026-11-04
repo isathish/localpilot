@@ -90,6 +90,27 @@ suite('session store (chat history)', () => {
     }
   });
 
+  test('clearExcept with a predicate keeps the chats it returns true for and deletes the rest', async () => {
+    const { store, dir } = await freshStore();
+    try {
+      const a = store.create('m');
+      const b = store.create('m');
+      const c = store.create('m');
+      const asked: string[] = [];
+      const n = await store.clearExcept((id) => {
+        asked.push(id);
+        return id === b.id;
+      });
+      assert.strictEqual(n, 2);
+      assert.deepStrictEqual(store.list().map((x) => x.id), [b.id]);
+      assert.ok(!store.get(a.id) && !store.get(c.id));
+      assert.strictEqual(asked.length, 3, 'the predicate is asked once per chat');
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('search finds chats by what was said and returns the matching line, newest first', async () => {
     const { store, dir } = await freshStore();
     try {
@@ -164,6 +185,28 @@ suite('session store (chat history)', () => {
       } finally {
         again.dispose();
       }
+    } finally {
+      store.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('Markdown export shows only what the user typed, with attachments named rather than inlined', async () => {
+    const { store, dir } = await freshStore();
+    try {
+      const s = store.create('m');
+      s.messages.push(
+        { role: 'user', content: 'Earlier work summary', meta: { summary: true } },
+        { role: 'user', content: '<attachment path="src/a.ts">SECRET_BODY</attachment>\n<git>diff here</git>\nfix the bug' },
+        { role: 'assistant', content: 'done' },
+        { role: 'user', content: 'hidden steering nudge', meta: { hidden: true } }
+      );
+      const md = await store.exportMarkdown(s.id);
+      assert.strictEqual(md.match(/### You/g)?.length, 1, md);
+      assert.ok(md.includes('fix the bug'));
+      assert.ok(!md.includes('SECRET_BODY') && !md.includes('hidden steering'), md);
+      assert.ok(md.includes('Attached: src/a.ts, @git'), md);
+      assert.ok(md.includes('_Conversation compacted_'), md);
     } finally {
       store.dispose();
       await fs.rm(dir, { recursive: true, force: true });

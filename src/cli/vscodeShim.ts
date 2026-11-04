@@ -869,9 +869,23 @@ export const window = {
       sendText(text: string) {
         const cwd = typeof opts === 'object' && opts.cwd ? (typeof opts.cwd === 'string' ? opts.cwd : opts.cwd.fsPath) : workspaceRoot;
         const sh = shellInvocation(text, { login: true });
-        const child = cp.spawn(sh.file, sh.args, { cwd, detached: true, stdio: 'ignore', windowsVerbatimArguments: sh.windowsVerbatimArguments, windowsHide: true });
+        const dir = path.join(os.homedir(), '.localpilot', 'bg');
+        const log = path.join(dir, `${Date.now()}-${name.replace(/[^\w.-]+/g, '_').slice(0, 60)}.log`);
+        let fd: number | undefined;
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fd = fs.openSync(log, 'a');
+        } catch {
+          fd = undefined;
+        }
+        const out = fd ?? 'ignore';
+        const child = cp.spawn(sh.file, sh.args, { cwd, detached: true, stdio: ['ignore', out, out], windowsVerbatimArguments: sh.windowsVerbatimArguments, windowsHide: true });
+        if (fd !== undefined) {
+          fs.closeSync(fd);
+        }
+        child.on('error', (e) => process.stderr.write(`background command failed to start: ${e.message}\n`));
         child.unref();
-        promptOut.write(`\x1b[2m↗ started in background (pid ${child.pid}): ${text}\x1b[0m\n`);
+        promptOut.write(`\x1b[2m↗ started in background (pid ${child.pid}${fd !== undefined ? `, output → ${log}` : ''}): ${text}\x1b[0m\n`);
       },
       dispose() {},
     };

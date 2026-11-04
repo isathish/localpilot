@@ -99,6 +99,7 @@ export function fitNote(text: string, max: number): { text: string; dropped: num
  */
 export class MemoryStore {
   private cache = new Map<string, { text: string; mtime: number }>();
+  private locks = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly globalDir: vscode.Uri,
@@ -106,6 +107,19 @@ export class MemoryStore {
     /** Size caps applied on every write; absent = unlimited. */
     private readonly limits?: () => { maxNoteChars: number; maxNotes: number }
   ) {}
+
+  /** Runs `fn` after every earlier call with the same key has settled. */
+  private withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(key) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.catch(() => undefined);
+    this.locks.set(key, tail);
+    void tail.then(() => {
+      if (this.locks.get(key) === tail) {
+        this.locks.delete(key);
+      }
+    });
+    return run;
+  }
 
   private dir(scope: MemoryScope): vscode.Uri | undefined {
     if (scope === 'global') {
@@ -194,24 +208,31 @@ export class MemoryStore {
       throw new Error('No workspace folder open; use scope "global".');
     }
     await vscode.workspace.fs.createDirectory(dir);
-    let uri = vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
-    let text = content.trim() + '\n';
-    let duplicateLines = 0;
-    if (mode === 'append') {
-      uri = await this.resolve(dir, name);
-      const existing = (await this.read(name, scope)) ?? '';
-      const fresh = newLines(existing, content);
-      duplicateLines = fresh.duplicates;
-      if (existing.trim() && !fresh.text.trim()) {
-        return { path: uri.fsPath, unchanged: true, duplicateLines, droppedBlocks: 0, pruned: [] };
-      }
-      text = existing.trim() ? `${existing.trimEnd()}\n\n${fresh.text.trim()}\n` : text;
-    }
+    const uri = mode === 'append' ? await this.resolve(dir, name) : vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
     const lim = this.limits?.();
-    const fit = lim ? fitNote(text, lim.maxNoteChars) : { text, dropped: 0 };
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(fit.text, 'utf8'));
-    this.cache.delete(uri.toString());
-    this.log.info(`memory: wrote ${scope}/${this.safeName(name)} (${fit.text.length} chars${fit.dropped ? `, dropped ${fit.dropped} old paragraph(s)` : ''}${duplicateLines ? `, skipped ${duplicateLines} duplicate line(s)` : ''})`);
+    // Appends are read-modify-write: serialise writes to the same note so concurrent ones do not lose lines.
+    const r = await this.withLock(uri.toString(), async () => {
+      let text = content.trim() + '\n';
+      let duplicateLines = 0;
+      if (mode === 'append') {
+        const existing = (await this.read(name, scope)) ?? '';
+        const fresh = newLines(existing, content);
+        duplicateLines = fresh.duplicates;
+        if (existing.trim() && !fresh.text.trim()) {
+          return { duplicateLines };
+        }
+        text = existing.trim() ? `${existing.trimEnd()}\n\n${fresh.text.trim()}\n` : text;
+      }
+      const fit = lim ? fitNote(text, lim.maxNoteChars) : { text, dropped: 0 };
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(fit.text, 'utf8'));
+      this.cache.delete(uri.toString());
+      this.log.info(`memory: wrote ${scope}/${this.safeName(name)} (${fit.text.length} chars${fit.dropped ? `, dropped ${fit.dropped} old paragraph(s)` : ''}${duplicateLines ? `, skipped ${duplicateLines} duplicate line(s)` : ''})`);
+      return { duplicateLines, fit };
+    });
+    if (!r.fit) {
+      return { path: uri.fsPath, unchanged: true, duplicateLines: r.duplicateLines, droppedBlocks: 0, pruned: [] };
+    }
+    const { duplicateLines, fit } = r;
     const pruned = lim ? await this.prune(scope, lim.maxNotes, path.basename(uri.path)) : [];
     return { path: uri.fsPath, unchanged: false, duplicateLines, droppedBlocks: fit.dropped, pruned };
   }
@@ -350,11 +371,25 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
     definition: {
       name: 'memory_read',
       description: 'Read the full content of a memory note by name (see the Memory index in your instructions).',
-      parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' }, scope: { type: 'string', enum: ['project', 'global'], description: 'Default: both' } },
+        required: ['name'],
+      },
     },
     async execute(args) {
-      const body = await memory.read(String(args.name));
-      return body ? { content: body } : { content: `No memory named "${args.name}".`, isError: true };
+      const name = String(args.name);
+      if (args.scope === 'project' || args.scope === 'global') {
+        const one = await memory.read(name, args.scope);
+        return one ? { content: one } : { content: `No ${args.scope} memory named "${name}".`, isError: true };
+      }
+      const project = await memory.read(name, 'project');
+      const global = await memory.read(name, 'global');
+      if (project !== undefined && global !== undefined) {
+        return { content: `## project\n${project.trim()}\n\n## global\n${global.trim()}` };
+      }
+      const body = project ?? global;
+      return body ? { content: body } : { content: `No memory named "${name}".`, isError: true };
     },
   };
   const list: Tool = {

@@ -67,6 +67,15 @@ suite('Chat syntax highlighter', () => {
     }
   });
 
+  test('CSS with a long data URI highlights quickly and ordinary rules keep their tokens', () => {
+    const font = `@font-face { src: url(data:font/woff2;base64,${'QUJD'.repeat(12_500)}) }`;
+    assert.strictEqual(text(highlight(font, 'css')), font);
+    const out = highlight('/* c */\n.a, .b:hover { color: red; margin: 0 auto }\n@media (x) { div { top: 1px } }', 'css');
+    for (const t of ['<span class="tk-c">/* c */</span>', '<span class="tk-t">.a, .b:hover </span>', '<span class="tk-p">color</span>', '<span class="tk-s">red</span>', '<span class="tk-s">0 auto </span>', '<span class="tk-t">@media (x) </span>', '<span class="tk-t"> div </span>', '<span class="tk-p">top</span>']) {
+      assert.ok(out.includes(t), `${t} in ${out}`);
+    }
+  });
+
   test('a long block highlights in linear time (streaming re-renders it many times a second)', function () {
     this.timeout(15_000);
     const py = 'def f(x):\n    return x.y . z(1)\n"""doc"""\n# c\nclass Foo(Bar):\n    pass\n'.repeat(900); // ~59 KB, indented

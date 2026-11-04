@@ -4,7 +4,7 @@ import { runProcess } from '../tools/search';
 import { buildInstructions, InstructionFile } from './instructions';
 import { identifiersIn, NameVocabulary } from '../agent/promptCorrector';
 
-const TREE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/.next/**,**/target/**,**/coverage/**,**/.vscode-test/**}';
+export const TREE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/.next/**,**/target/**,**/coverage/**,**/.vscode-test/**}';
 
 /** Well-known files that reveal the stack / tooling, shown in the project map when present. */
 const STACK_MARKERS: [RegExp, string][] = [
@@ -90,7 +90,7 @@ export class WorkspaceContext implements vscode.Disposable {
     this.watcher.onDidCreate(invalidate);
     this.watcher.onDidDelete(invalidate);
     // Rules files are re-read only when one of them changes, not on every prompt build.
-    this.rulesWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot/rules.md,.localpilot/rules.local.md,.localpilot/rules/*,.localpilot/CLAUDE.md,AGENTS.md,CLAUDE.md,CLAUDE.local.md,.claude/CLAUDE.md,.claude/rules/*,.cursorrules,.cursor/rules/*,.github/copilot-instructions.md,.windsurfrules}');
+    this.rulesWatcher = vscode.workspace.createFileSystemWatcher('**/{.localpilot/rules.md,.localpilot/rules.local.md,.localpilot/rules/*,.localpilot/CLAUDE.md,AGENTS.md,CLAUDE.md,CLAUDE.local.md,.claude/CLAUDE.md,.claude/rules/*,.cursorrules,.cursor/rules/*,.github/copilot-instructions.md,.windsurfrules,.clinerules,.clinerules/*,.cline/rules/*}');
     const dropRules = () => (this.rulesCache = undefined);
     this.rulesWatcher.onDidChange(dropRules);
     this.rulesWatcher.onDidCreate(dropRules);

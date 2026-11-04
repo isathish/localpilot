@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { parseJsonc } from './settings';
 
@@ -21,9 +22,17 @@ export function collectRepos(
   exists: (p: string) => boolean = (p) => fs.existsSync(p)
 ): RepoInfo[] {
   const out: RepoInfo[] = [];
+  // A listed repo widens what the file tools reach: never the filesystem root, the home folder or a parent of the workspace.
+  const tooWide = (abs: string) =>
+    path.dirname(abs) === abs ||
+    abs === os.homedir() ||
+    sources.folders.some((f) => {
+      const rel = path.relative(abs, path.resolve(f));
+      return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+    });
   const add = (name: string, p: string, source: RepoInfo['source']) => {
     const abs = path.resolve(p);
-    if (!exists(abs) || out.some((r) => r.path === abs)) {
+    if (!exists(abs) || out.some((r) => r.path === abs) || (source !== 'workspace' && tooWide(abs))) {
       return;
     }
     let n = name.replace(/[^\w.-]+/g, '-') || nameOf(abs);
@@ -55,9 +64,14 @@ export function readReposFile(root: string): Record<string, string> {
   }
 }
 
+/**
+ * `primary` is the agent's root (possibly a worktree); `.localpilot/repos.json` is read and resolved against the main
+ * checkout (the first workspace folder), so relative entries point at the same repos from a worktree.
+ */
 export function listRepos(primary: string | undefined, folders: string[], setting: Record<string, string> = {}): RepoInfo[] {
   const all = [...new Set([...(primary ? [primary] : []), ...folders])];
-  return collectRepos({ folders: all, file: primary ? { base: primary, map: readReposFile(primary) } : undefined, setting });
+  const fileRoot = folders[0] ?? primary;
+  return collectRepos({ folders: all, file: fileRoot ? { base: fileRoot, map: readReposFile(fileRoot) } : undefined, setting });
 }
 
 /** A repo by name (case-insensitive) or by path. */

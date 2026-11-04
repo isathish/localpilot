@@ -13,6 +13,7 @@ import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownCont
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
 import { getJson, HttpError, newId, postJson, streamSse, withTimeout } from './http';
 import { imageMime } from './imageMime';
+import { fetchLmStudioContexts, isLmStudio } from './lmstudio';
 import { ThinkTagSplitter } from './thinkTags';
 import { pairToolCalls } from './toolPairing';
 
@@ -50,8 +51,19 @@ interface OpenAIChunk {
     };
     finish_reason?: string | null;
   }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    /** OpenRouter: what the request cost, in credits (US dollars). */
+    cost?: number;
+  } | null;
   error?: { message?: string; code?: string | number; type?: string; status?: number } | string;
+}
+
+/** Whether a `/v1/models` entry says how long its context is. */
+function hasContextField(m: OpenAIModel): boolean {
+  return [m.max_model_len, m.loaded_context_length, m.max_context_length, m.context_length, m.context_window, m.top_provider?.context_length].some((v) => typeof v === 'number' && v > 0);
 }
 
 /** An error sent inside the stream: an HttpError when it carries a status, so it is retried like the same error sent as a response. */
@@ -87,6 +99,10 @@ export class OpenAICompatProvider implements LLMProvider {
   /** Models whose server rejected a `suffix` on `/completions` (llama.cpp, vLLM): their FIM goes through chat. */
   private readonly noSuffix = new Set<string>();
   private readonly configuredName: string;
+  /** LM Studio by preset or port: context lengths come from its native `/api/v0/models`. */
+  private readonly lmStudio: boolean;
+  /** Set once the server turned out to have no LM Studio native API, so later listings skip the probe. */
+  private noNativeApi = false;
   /** Engine the server identified itself as on the last model listing. */
   engine?: 'colibri';
 
@@ -104,6 +120,7 @@ export class OpenAICompatProvider implements LLMProvider {
     this.explicitModels = cfg.models;
     this.configuredCtx = cfg.contextWindow;
     this.remote = isCloudProvider(cfg);
+    this.lmStudio = isLmStudio(cfg);
   }
 
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
@@ -139,6 +156,12 @@ export class OpenAICompatProvider implements LLMProvider {
     this.engine = colibri ? 'colibri' : undefined;
     // colibri decodes one request per KV slot; its /health says how many there are.
     const slots = colibri ? colibriSlots(await colibriHealth(this.baseUrl, this.headers, signal)) : undefined;
+    const native = !colibri && !this.remote && !this.noNativeApi && models.length && (this.lmStudio || !models.some(hasContextField))
+      ? await fetchLmStudioContexts(this.baseUrl, this.headers, signal)
+      : undefined;
+    if (native === null && !this.lmStudio) {
+      this.noNativeApi = true;
+    }
     return models
       .filter((m) => !/^(embeddings?|image|rerank|moderation|audio|transcribe|video)$/i.test(m.type ?? '') && !/embed/i.test(m.id))
       // Cloud listings mix in speech, image and moderation models; Mistral flags the ones that cannot chat.
@@ -147,7 +170,7 @@ export class OpenAICompatProvider implements LLMProvider {
       .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || !!capabilityList(m)?.includes('chat'))
       .map((m) => {
         const ctx =
-          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? this.configuredCtx ?? (this.remote ? knownContextWindow(m.id) : undefined) ?? 32768;
+          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? native?.get(m.id) ?? this.configuredCtx ?? (this.remote ? knownContextWindow(m.id) : undefined) ?? 32768;
         const caps = capabilityList(m);
         if (m.owned_by === COLIBRI_OWNER) {
           const spec = colibriSpec(m.id);
@@ -241,7 +264,7 @@ export class OpenAICompatProvider implements LLMProvider {
         throw streamError(chunk.error, `${this.baseUrl}/chat/completions`);
       }
       if (chunk.usage) {
-        yield { type: 'usage', promptTokens: chunk.usage.prompt_tokens, completionTokens: chunk.usage.completion_tokens };
+        yield { type: 'usage', ...usageOf(chunk.usage) };
       }
       for (const choice of chunk.choices ?? []) {
         const d = choice.delta;

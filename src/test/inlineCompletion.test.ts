@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { postProcess, suffixRange } from '../ui/inlineCompletion';
+import { getConfig } from '../config';
+import { InlineCompletionProvider, postProcess, suffixRange } from '../ui/inlineCompletion';
+import type { ProviderRegistry } from '../providers/registry';
 
 async function suffixAt(content: string, line: number, character: number): Promise<string> {
   const doc = await vscode.workspace.openTextDocument({ content, language: 'typescript' });
@@ -32,5 +34,31 @@ suite('Inline completion post-processing', () => {
     assert.strictEqual(postProcess('bar()', ');'), 'bar()');
     assert.strictEqual(postProcess('1, 2, [3]', '];'), '1, 2, [3]');
     assert.strictEqual(postProcess('"a"', '"'), '"a"');
+  });
+});
+
+suite('Inline completion debounce', () => {
+  test('a call superseded during the debounce settles instead of hanging', async function () {
+    this.timeout(10_000);
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = cfg.inspect('inlineCompletion.enabled')?.globalValue;
+    const registry = { route: async () => Promise.reject(new Error('no models')) } as unknown as ProviderRegistry;
+    const provider = new InlineCompletionProvider(registry, vscode.window.createOutputChannel('LocalPilot tests', { log: true }));
+    try {
+      await cfg.update('inlineCompletion.enabled', true, vscode.ConfigurationTarget.Global);
+      const doc = await vscode.workspace.openTextDocument({ content: 'const a = ', language: 'typescript' });
+      const pos = new vscode.Position(0, 10);
+      const ctx = { triggerKind: vscode.InlineCompletionTriggerKind.Invoke, selectedCompletionInfo: undefined };
+      const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) } as unknown as vscode.CancellationToken;
+      const first = provider.provideInlineCompletionItems(doc, pos, ctx, token);
+      const second = provider.provideInlineCompletionItems(doc, pos, ctx, token);
+      const late = Symbol('late');
+      const settled = await Promise.race([first, new Promise((r) => setTimeout(() => r(late), getConfig().inlineCompletion.debounceMs + 1000))]);
+      assert.strictEqual(settled, undefined);
+      assert.strictEqual(await second, undefined);
+    } finally {
+      provider.dispose();
+      await cfg.update('inlineCompletion.enabled', prev, vscode.ConfigurationTarget.Global);
+    }
   });
 });

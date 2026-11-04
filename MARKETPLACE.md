@@ -98,7 +98,7 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 
 ### 7 · Same agent in the terminal
 
-`localpilot "fix the failing tests"` from any shell, with `--plan`, `--ask` and `--parallel`.
+`localpilot "fix the failing tests"` from any shell, with `--plan` and `--ask`; `localpilot --parallel "a | b"` opens the tasks as parallel agents in VS Code.
 
 <p align="center"><img src="https://isathish.github.io/localpilot/assets/screenshots/terminal-cli.png" alt="The localpilot CLI in a terminal: it reads the code, edits test/cart.test.js, runs npm test (3 passing), prints a summary and lists the changed file" width="880"></p>
 

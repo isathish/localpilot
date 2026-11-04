@@ -19,6 +19,8 @@ const CACHE_MAX = 200;
 export class InlineCompletionProvider implements vscode.InlineCompletionItemProvider, vscode.Disposable {
   private generation = 0;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Settles the pending debounce early, so a superseded call returns instead of hanging. */
+  private wake?: () => void;
   private inflight: AbortController | undefined;
   private readonly cache = new Map<string, { text: string; at: number }>();
   /** Last seen length per document, to recognise deletions (backspace, cut) which should not trigger. */
@@ -38,6 +40,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
 
   dispose(): void {
     clearTimeout(this.debounceTimer);
+    this.wake?.();
     this.inflight?.abort();
     this.cache.clear();
     this.lastLength.clear();
@@ -68,10 +71,21 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     // Supersede whatever the previous keystroke started, then debounce.
     const gen = ++this.generation;
     clearTimeout(this.debounceTimer);
+    this.wake?.();
     this.inflight?.abort();
     this.inflight = undefined;
     await new Promise<void>((resolve) => {
-      this.debounceTimer = setTimeout(resolve, cfg.debounceMs);
+      const sub = token.onCancellationRequested(() => wake());
+      const wake = () => {
+        sub.dispose();
+        if (this.wake === wake) {
+          clearTimeout(this.debounceTimer);
+          this.wake = undefined;
+        }
+        resolve();
+      };
+      this.wake = wake;
+      this.debounceTimer = setTimeout(wake, cfg.debounceMs);
     });
     if (token.isCancellationRequested || gen !== this.generation) {
       return;
@@ -94,10 +108,10 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
       const sub = token.onCancellationRequested(() => abort.abort());
       try {
         // Routing picks the configured completion model, else the smallest FIM-capable model that fits this machine.
-        const { provider, model } = await this.providers.route({ role: 'completion' });
+        const { provider, model, fallback } = await this.providers.route({ role: 'completion' });
         modelId = model.id;
         // Ghost text asks on every pause in typing: it goes to a cloud model only when one is chosen for it explicitly.
-        if (abort.signal.aborted || gen !== this.generation || (model.remote && !getConfig().inlineCompletion.model)) {
+        if (abort.signal.aborted || gen !== this.generation || (model.remote && (fallback || !getConfig().inlineCompletion.model))) {
           return;
         }
         const header = `// File: ${vscode.workspace.asRelativePath(document.uri)} (${document.languageId})\n`;

@@ -2,7 +2,7 @@ import * as readline from 'readline';
 import * as vscode from 'vscode';
 import { isCloudProvider, isRemoteUrl, keyStatus, resolveApiKey, secretEnvName, setSecretValues } from '../providers/cloud';
 import { probeProvider, ProbeResult } from '../providers/discovery';
-import { findPreset, PROVIDER_PRESETS, PresetGroup, presetFor } from '../providers/presets';
+import { bedrockRegion, findPreset, PROVIDER_PRESETS, PresetGroup, presetFor, withRegion } from '../providers/presets';
 import { ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { sanitizeProviderConfig } from '../providers/sanitize';
@@ -27,6 +27,8 @@ export interface ProviderFlags {
   keyEnv?: string;
   cloud?: boolean;
   removeKey?: boolean;
+  /** AWS region for the Bedrock preset. */
+  region?: string;
 }
 
 const GROUP_LABEL: Record<PresetGroup, string> = { local: 'On this machine', gateway: 'Gateways (local, forward to cloud models)', cloud: 'Cloud APIs (your key)' };
@@ -162,7 +164,7 @@ async function storeKey(id: string, key: string): Promise<string> {
 /** `localpilot providers add <preset|url>` */
 export async function addProvider(target: string, flags: ProviderFlags, st: Style, out: (s: string) => void = console.log): Promise<number> {
   if (!target) {
-    out(`${st.red('✖')} Usage: localpilot providers add <preset|url> [--id <id>] [--key <key> | --key-env VAR] [--cloud]   (presets: localpilot providers presets)`);
+    out(`${st.red('✖')} Usage: localpilot providers add <preset|url> [--id <id>] [--key <key> | --key-env VAR] [--region <aws-region>] [--cloud]   (presets: localpilot providers presets)`);
     return 2;
   }
   const isUrl = /^https?:\/\//i.test(target) || /^[\w.-]+:\d+/.test(target);
@@ -190,6 +192,14 @@ export async function addProvider(target: string, flags: ProviderFlags, st: Styl
   const cfg: ProviderConfig = { ...base, id, ...(builtin && existing?.enabled === false ? { enabled: true } : {}) };
   if (flags.url) {
     cfg.baseUrl = flags.url;
+  }
+  if (flags.region) {
+    const url = withRegion(cfg.baseUrl, flags.region);
+    if (!bedrockRegion(cfg.baseUrl) || (url === cfg.baseUrl && bedrockRegion(url) !== flags.region.trim().toLowerCase())) {
+      out(`${st.red('✖')} --region applies to Amazon Bedrock endpoints and takes an AWS region such as us-west-2${bedrockRegion(cfg.baseUrl) ? ` (got "${flags.region}")` : ''}.`);
+      return 2;
+    }
+    cfg.baseUrl = url;
   }
   if (flags.type === 'ollama' || flags.type === 'openai' || flags.type === 'anthropic') {
     cfg.type = flags.type;

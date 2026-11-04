@@ -113,7 +113,7 @@ Open the LocalPilot icon in the Activity Bar (or <kbd>⌘⇧L</kbd>) and ask for
 | **Tools** | File ops, ripgrep search, symbols/references, shell, diagnostics, web search (DuckDuckGo / SearXNG / Brave / Tavily), web fetch, ask-user. |
 | **MCP** | Any stdio MCP server's tools are exposed to the agent automatically; status and errors in Settings. |
 | **Inline completions** | Ghost text from FIM models (qwen2.5-coder, codestral, starcoder2). |
-| **`localpilot` CLI & API** | `localpilot "fix the tests"` from any terminal (`--plan`, `--ask`, `--parallel`); other extensions can drive agents through the exported API. |
+| **`localpilot` CLI & API** | `localpilot "fix the tests"` from any terminal (`--plan`, `--ask`; `--parallel "a | b"` opens the tasks as parallel agents in VS Code); other extensions can drive agents through the exported API. |
 | **VS Code platform** | `@localpilot` chat participant, local models in Copilot's model picker (Language Model API), light-bulb fixes, context-menu actions, commit-message generator, status-bar model switcher, Settings panel and setup wizard. |
 | **Multi-session** | Persisted per workspace; fork, pin, rename, export to Markdown. |
 | **Dashboard, metrics & logs** | *LocalPilot: Open Dashboard*: tokens and tok/s per model, time to first token, tool usage and error rates, runs by mode, inline-completion acceptance, provider uptime and a searchable live log — all computed from local files in `~/.localpilot/telemetry`; nothing is ever sent anywhere. |

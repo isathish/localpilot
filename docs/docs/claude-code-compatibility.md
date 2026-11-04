@@ -10,11 +10,11 @@ LocalPilot reads the project configuration that Claude Code uses. A repository a
 
 | Claude Code file | LocalPilot equivalent | Used for |
 |---|---|---|
-| `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json` | `.localpilot/settings.json`, `.localpilot/settings.local.json`, `~/.localpilot/settings.json` | [Permission rules](#permission-rules), [hooks](#hooks), `env`, `enabledPlugins`, `model` |
+| `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json` | `.localpilot/settings.json`, `.localpilot/settings.local.json`, `~/.localpilot/settings.json` | [Permission rules](#permission-rules), [hooks](#hooks), `env` (passed to hooks only), `enabledPlugins`. `model` is parsed but not used |
 | `.claude/commands/*.md`, `~/.claude/commands` | `.localpilot/commands`, `~/.localpilot/commands` | [Custom slash commands](#custom-slash-commands) |
-| `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `~/.claude/CLAUDE.md`, `.claude/rules/*` | `.localpilot/rules.md`, `AGENTS.md`, `.cursorrules`, `.github/copilot-instructions.md` and others | [Project instructions](#claudemd-and-instruction-files), with `@imports` |
+| `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `~/.claude/CLAUDE.md`, `.claude/rules/*` | `.localpilot/rules.md`, `AGENTS.md`, `.cursorrules`, `.clinerules`, `.github/copilot-instructions.md` and others | [Project instructions](#claudemd-and-instruction-files), with `@imports` |
 | `.claude/agents/*.md`, `~/.claude/agents` | `.localpilot/agents`, `~/.localpilot/agents` | [Subagents]({{ '/docs/skills-and-agents/' | relative_url }}#subagents) |
-| `.claude/skills/*/SKILL.md`, `~/.claude/skills` | `.localpilot/skills`, `.github/skills`, `~/.localpilot/skills` | [Skills]({{ '/docs/skills-and-agents/' | relative_url }}) |
+| `.claude/skills/*/SKILL.md`, `~/.claude/skills` | `.localpilot/skills`, `.github/skills`, `.agents/skills`, `.cline/skills`, `~/.localpilot/skills`, `~/.cline/skills` | [Skills]({{ '/docs/skills-and-agents/' | relative_url }}) |
 | `.claude/plugins`, `~/.claude/plugins` | `.localpilot/plugins`, `~/.localpilot/plugins`, `localpilot.pluginPaths` | [Plugins](#plugins) |
 
 Useful chat commands:
@@ -110,7 +110,7 @@ Lists are concatenated, so a project can deny what a plugin or your user file al
 
 Hooks are shell commands that run on agent events. They can block a tool call, rewrite its input, add context for the model or keep the agent working.
 
-Hooks run arbitrary commands. Before you open a repository you do not trust, set `localpilot.hooks.enabled` to `false` (default `true`) to ignore all hooks. The switch is also in **Settings → Agent & approvals → Hooks**.
+Hooks run arbitrary commands. Before you open a repository you do not trust, set `localpilot.hooks.enabled` to `false` (default `true`) to ignore all hooks. It does not affect MCP servers from workspace plugins or settings. The switch is also in **Settings → Agent & approvals → Hooks**.
 
 ```jsonc
 {
@@ -238,9 +238,9 @@ Instruction files are joined into the system prompt in this order:
 
 | Order | Scope | Files |
 |---|---|---|
-| 1 | User (every project) | `~/.claude/CLAUDE.md`, `~/.localpilot/CLAUDE.md`, `~/.localpilot/rules.md` |
+| 1 | User (every project) | `~/.claude/CLAUDE.md`, `~/.localpilot/CLAUDE.md`, `~/.localpilot/rules.md`, `~/.agents/AGENTS.md`, then the rule files in `~/.localpilot/rules`, `~/.claude/rules`, `~/.cline/rules`, `~/Documents/Cline/Rules`, `~/Cline/Rules` |
 | 2 | Ancestors (monorepo roots), farthest first | `CLAUDE.md`, `.claude/CLAUDE.md`, `.localpilot/rules.md` in each folder above the workspace, stopping at your home folder |
-| 3 | Project | `.localpilot/rules.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`, then every `.md` / `.mdc` in `.cursor/rules`, `.localpilot/rules`, `.claude/rules` |
+| 3 | Project | `.localpilot/rules.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`, `.clinerules` (the single-file form), then the rule files in `.cursor/rules`, `.localpilot/rules`, `.claude/rules`, `.clinerules`, `.cline/rules` |
 | 4 | Local (personal; add to `.gitignore`) | `CLAUDE.local.md`, `.localpilot/rules.local.md` |
 
 **Imports.** `@path` imports another file into the one that mentions it: `@README`, `@docs/style.md`, `@~/.claude/my-instructions.md`.
@@ -253,6 +253,17 @@ Instruction files are joined into the system prompt in this order:
 **Size limit.** The combined instructions are cut at 12,000 characters, so keep the important rules near the top of the first files.
 
 Front matter in rule files (for example `.mdc`) is treated as metadata and removed. `/memory` lists the files currently in force.
+
+### Cline and Cursor compatibility
+
+Rules written for Cline and Cursor work without changes:
+
+- **Rule folders.** `.clinerules/`, `.cline/rules/` and `.cursor/rules/` in the workspace, and `~/.cline/rules/`, `~/Documents/Cline/Rules/` and `~/Cline/Rules/` for your own rules. A folder is read one level deep. Files ending in `.md`, `.mdc`, `.markdown` and `.txt` are rules.
+- **Single files.** The legacy `.clinerules` file and `.cursorrules` are read as project rules. `~/.agents/AGENTS.md` is read as a user rule.
+- **Order and labels.** Within a folder, rules are sorted by name and each one gets a `## <name>` heading in the prompt. The name is the front-matter `name`, or the file name without its extension. Rules with an empty body are skipped.
+- **Skills.** Skills in `.cline/skills/`, `.clinerules/skills/`, `.agents/skills/` and `~/.cline/skills/` are loaded like any other [skill]({{ '/docs/skills-and-agents/' | relative_url }}).
+
+Changes to rule and skill files in the workspace are picked up without a reload; changes to user-level rules are picked up within a minute.
 
 ## Plugins
 
@@ -280,7 +291,7 @@ Details:
 
 - The manifest may point `commands`, `agents`, `skills`, `hooks` and `mcpServers` at other paths, or inline the hooks and servers.
 - Plugin hooks rank below every settings file, so a project can override them.
-- Plugin MCP servers appear as `plugin:server`. Only stdio servers (with a `command`) are supported; servers with only a `url` are skipped.
+- Plugin MCP servers appear as `plugin:server`. They can be stdio servers (`command`) or remote servers (`url`, with `type` `http` or `sse` and optional `headers`).
 - To disable a plugin, add `"enabledPlugins": { "my-plugin": false }` (or `"my-plugin@marketplace": false`) to a `settings.json`.
 
 ### Finding and installing plugins
@@ -299,7 +310,6 @@ A plugin can come from a folder of the marketplace, from another repository, or 
 ## Differences from Claude Code
 
 - **No `SlashCommand` tool.** You run custom commands; the model cannot invoke them. `disable-model-invocation` is accepted and ignored.
-- **No remote MCP servers in plugins.** Only stdio servers are started.
 - **No `transcript_path`** in hook input.
 - **`SessionEnd` does not fire when the VS Code window closes.** It fires on clear, chat delete and CLI exit only.
 - **Modes still apply.** Permission rules decide the approval prompt, but Ask and Plan mode never edit files, whatever the rules say.

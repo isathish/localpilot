@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { deleteUri } from '../tools/fs';
 
 export interface TrackedChange {
   sessionId: string;
@@ -269,7 +270,7 @@ async function restoreFile(uri: vscode.Uri, content: string | undefined): Promis
   );
   if (content === undefined) {
     if (exists) {
-      await vscode.workspace.fs.delete(uri, { useTrash: true });
+      await deleteUri(uri);
     }
   } else if (!exists) {
     await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));

@@ -21,6 +21,8 @@ export interface EvalTask {
     files?: { path: string; pattern: string; absent?: boolean }[];
     /** The final answer must match (case-insensitive). */
     answer?: string;
+    /** The command's standard output must match (a regular expression, multiline). */
+    stdout?: string;
   };
   timeoutSec?: number;
 }
@@ -71,7 +73,7 @@ export const BUILTIN_SUITE: EvalSuite = {
         'main.py': 'from geo.calc import dist\nfrom geo.route import length\n\nprint(round(dist((0, 0), (3, 4)), 1), round(length([(0, 0), (3, 4), (3, 0)]), 1))\n',
       },
       prompt: 'Rename the function `dist` in geo/calc.py to `euclidean_distance` and update every place that uses it. `python3 main.py` must still print "5.0 9.0".',
-      verify: { command: ['{python}', 'main.py'], files: [{ path: 'geo/calc.py', pattern: 'def euclidean_distance\\(' }, { path: 'geo/route.py', pattern: '\\bdist\\(', absent: true }, { path: 'main.py', pattern: '\\bdist\\(', absent: true }] },
+      verify: { command: ['{python}', 'main.py'], stdout: '^5\\.0 9\\.0\\s*$', files: [{ path: 'geo/calc.py', pattern: 'def euclidean_distance\\(' }, { path: 'geo/route.py', pattern: '\\bdist\\(', absent: true }, { path: 'main.py', pattern: '\\bdist\\(', absent: true }] },
     },
     {
       id: 'js-signature-change',
@@ -136,8 +138,8 @@ export const BUILTIN_SUITE: EvalSuite = {
         'app/summary.ts': "import { tripKm } from '../lib/trip';\nexport const summary = (m: number[]) => `${tripKm(m)} km`;\n",
         'app/other.ts': 'export const hello = () => "hi";\n',
       },
-      prompt: 'If I change lib/units.ts, which other files could be affected? List them.',
-      verify: { answer: '(?=[\\s\\S]*lib/trip\\.ts)(?=[\\s\\S]*app/summary\\.ts)(?![\\s\\S]*app/other\\.ts)' },
+      prompt: 'If I change lib/units.ts, which other files could be affected? List only the affected file paths; do not mention files that are not affected.',
+      verify: { answer: '^(?![\\s\\S]*app/other\\.ts)(?=[\\s\\S]*lib/trip\\.ts)(?=[\\s\\S]*app/summary\\.ts)' },
     },
   ],
 };

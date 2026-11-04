@@ -75,7 +75,7 @@ The browser runs locally. No cloud browser service is used.
 
 ## Requirements
 
-To read images, the selected model must support vision (for example `gemma4`, `qwen2.5vl`, `llava`). LocalPilot checks the model's capabilities. If it cannot read images, the message is not sent and you are asked to pick a vision model.
+To read images, a model must support vision (for example `gemma4`, `qwen2.5vl`, `llava`). LocalPilot checks the model's capabilities. If the chat's model cannot read images and routing is on, that turn goes to a vision model instead: `localpilot.routing.vision`, or the best installed one. The message is refused only when no vision model can answer it (routing is off and the chat's model cannot see, or no vision model is installed). Your text and images then go back to the input box, so you can pick a vision model and send again.
 
 ## Screenshot tools by platform
 

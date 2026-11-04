@@ -87,10 +87,17 @@ export async function extractMemories(
 
 /** Runs the extraction and saves the notes; returns the names saved (empty when nothing was worth keeping). */
 export async function saveRunMemories(memory: MemoryStore, o: Parameters<typeof extractMemories>[0], digest: string): Promise<string[]> {
-  const index = await memory.promptSection(2000).catch(() => '');
+  const all = await memory.list().catch(() => []);
+  const project = all.filter((n) => n.scope === 'project');
+  const projectNames = new Set(project.map((n) => n.name.toLowerCase()));
+  const globalOnly = new Set(all.filter((n) => n.scope === 'global' && !projectNames.has(n.name.toLowerCase())).map((n) => n.name.toLowerCase()));
+  const index = project.map((n) => `- ${n.name}: ${n.summary}`).join('\n');
   const notes = await extractMemories(o, digest, index);
   const saved: string[] = [];
   for (const n of notes) {
+    if (globalOnly.has(n.name.toLowerCase())) {
+      continue;
+    }
     const r = await memory.write(n.name, n.content, 'project', 'append').catch(() => undefined);
     if (r && !r.unchanged) {
       saved.push(n.name);

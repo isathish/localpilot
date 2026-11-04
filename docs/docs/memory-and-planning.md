@@ -19,7 +19,7 @@ How it works:
 - Every system prompt includes an index of notes (name and first line), newest first, and the full text of notes of 1,200 characters or less, within about 5% of the context window (1,500 to 12,000 characters). Notes that do not fit are counted and stay reachable with `memory_list` and `memory_read`.
 - You can ask directly: *"remember that we deploy with `make release` and tests need `DATABASE_URL`"*.
 - **Saved automatically.** Small local models rarely save notes on their own. After a run with at least three tool calls in which the agent saved nothing, LocalPilot asks the same model, in the background once the answer is out, whether the run revealed durable facts: a build or test command that worked, a convention, a pitfall and its fix, a stated preference. It appends at most three short notes to project memory and shows **Saved to memory: …**; most runs save nothing. Anything that looks like a credential is dropped, and benchmark and other unattended runs never save. Set `localpilot.memory.autoSave` to `false` to turn this off.
-- `/memory` in the chat lists the saved notes along with the instruction files in force.
+- `/memory` in the chat lists the saved notes along with the instruction files in force: `CLAUDE.md`, `AGENTS.md`, and rules from `.localpilot/rules/`, `.claude/rules/`, `.cursor/rules/`, `.clinerules` and `.cline/rules/` (see [instruction files]({{ '/docs/claude-code-compatibility/' | relative_url }}#claudemd-and-instruction-files)).
 
 To manage notes, open **Settings → Memory & history**. It lists every note with scope, size and age, and lets you open or delete notes or clear a whole scope. *LocalPilot: Open Memory Notes* opens the folder. Set `localpilot.memory.enabled` to `false` to turn memory off.
 
@@ -52,7 +52,7 @@ A chat's title is your first message until you rename it. Empty chats you never 
 
 ## Thinking
 
-`localpilot.thinking` sets reasoning effort: `off` (default), `on`, `low`, `medium` or `high`. It maps to Ollama's `think` and to `reasoning_effort` on OpenAI-compatible servers. Only reasoning models use it.
+`localpilot.thinking` sets reasoning effort: `auto` (default), `off`, `on`, `low`, `medium` or `high`. `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. It maps to Ollama's `think` and to `reasoning_effort` on OpenAI-compatible servers. Only reasoning models use it.
 
 Reasoning streams into a collapsed **Thinking…** step with a timer. It becomes *Thought for Ns* when the answer starts.
 

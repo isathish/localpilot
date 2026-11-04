@@ -45,8 +45,12 @@ export class TokenCalibration {
   }
 
   /** Records one request; returns false when the sample was rejected as implausible. */
-  record(modelId: string, estimated: number, actual: number | undefined): boolean {
+  record(modelId: string, estimated: number, actual: number | undefined, window?: number): boolean {
     if (!actual || actual <= 0 || estimated < 256) {
+      return false;
+    }
+    // A count at (or a prompt beyond) the window was probably truncated by the server to num_ctx.
+    if (window && (actual >= 0.95 * window || estimated * this.scale(modelId) > window)) {
       return false;
     }
     const r = actual / estimated;

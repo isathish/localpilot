@@ -64,9 +64,12 @@ export function parseLockfile(file: string, text: string): Dependency[] {
       const j = JSON.parse(text) as { packages?: Record<string, { version?: string; name?: string; link?: boolean }>; dependencies?: Record<string, unknown> };
       if (j.packages) {
         for (const [k, v] of Object.entries(j.packages)) {
-          if (k && !v.link && v.version) {
-            add('npm', v.name ?? k.slice(k.lastIndexOf('node_modules/') + 'node_modules/'.length), v.version);
+          const i = k.lastIndexOf('node_modules/');
+          // Keys without node_modules/ are the root and workspace packages, not published ones.
+          if (i < 0 || v.link || !v.version) {
+            continue;
           }
+          add('npm', v.name ?? k.slice(i + 'node_modules/'.length), v.version);
         }
       } else {
         const walk = (deps: Record<string, unknown> | undefined) => {
@@ -82,8 +85,10 @@ export function parseLockfile(file: string, text: string): Dependency[] {
       }
     } else if (base === 'yarn.lock') {
       // Classic: `"name@^1", name@^1.2:\n  version "1.2.3"`; Berry: `"name@npm:^1":\n  version: 1.2.3`.
-      for (const m of text.matchAll(/^"?(@?[^@\s"]+)@[^\n]*:\n(?:[ \t]+.*\n)*?[ \t]+version:? "?([^"\s]+)"?/gm)) {
-        add('npm', m[1], m[2]);
+      for (const m of text.matchAll(/^"?(@?[^@\s"]+)@([^\n]*):\n(?:[ \t]+.*\n)*?[ \t]+version:? "?([^"\s]+)"?/gm)) {
+        if (!/@(workspace|link|portal|file|exec):/.test(`@${m[2]}`)) {
+          add('npm', m[1], m[3]);
+        }
       }
     } else if (isRequirements(file)) {
       for (const m of text.matchAll(/^\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*==\s*([\w.+!-]+)/gm)) {
@@ -95,6 +100,13 @@ export function parseLockfile(file: string, text: string): Dependency[] {
         const version = /^version\s*=\s*"([^"]+)"/m.exec(block)?.[1];
         // Cargo: workspace crates have no `source`; only published ones can have advisories.
         if (base === 'Cargo.lock' && !/^source\s*=/m.test(block)) {
+          continue;
+        }
+        // uv / Poetry: local, editable and virtual projects are not on PyPI.
+        if (base === 'uv.lock' && /^source\s*=\s*\{\s*(editable|virtual|path|directory)\s*=/m.test(block)) {
+          continue;
+        }
+        if (base === 'poetry.lock' && /^\[package\.source\][^[]*^type\s*=\s*"(directory|file)"/m.test(block)) {
           continue;
         }
         if (name && version) {
@@ -450,24 +462,37 @@ export function scanText(file: string, text: string, kinds: { secrets: boolean; 
 
 // ------------------------------------------------------------------ workspace
 
-async function trackedFiles(root: string): Promise<string[]> {
+const WALK_SKIP_DOT = new Set(['.git', '.cache', '.yarn', '.pnpm-store', '.gradle', '.terraform', '.tox', '.mypy_cache', '.pytest_cache', '.nuxt', '.svelte-kit', '.turbo', '.angular', '.idea', '.venv']);
+
+async function trackedFiles(root: string, prefix: string): Promise<{ files: string[]; note?: string }> {
   const g = await runCmd('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, undefined, 60_000);
   if (g.code === 0) {
-    return g.out.split('\0').filter(Boolean);
+    return { files: g.out.split('\0').filter(Boolean) };
   }
+  let note = `git ls-files failed (${(g.err || '').trim().split('\n')[0] || 'not a git repository'}); walked the folder instead, .gitignore not applied`;
   const out: string[] = [];
   const walk = async (rel: string) => {
     for (const e of await fs.promises.readdir(path.join(root, rel), { withFileTypes: true }).catch(() => [] as fs.Dirent[])) {
+      if (out.length >= 20_000) {
+        return;
+      }
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory() && !SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
+      if (e.isDirectory() && !SKIP_DIRS.has(e.name) && !WALK_SKIP_DOT.has(e.name)) {
         await walk(r);
-      } else if (e.isFile() && out.length < 20_000) {
+      } else if (e.isFile()) {
         out.push(r);
       }
     }
   };
-  await walk('');
-  return out;
+  if (prefix && (await fs.promises.stat(path.join(root, prefix)).catch(() => undefined))?.isFile()) {
+    out.push(prefix);
+  } else {
+    await walk(prefix);
+  }
+  if (out.length >= 20_000) {
+    note += '; stopped after 20,000 files';
+  }
+  return { files: out, note };
 }
 
 const BINARY = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tgz|jar|woff2?|ttf|eot|mp[34]|mov|wasm|so|dylib|dll|exe|bin|vsix|lock)$/i;
@@ -510,12 +535,13 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
   if (rel && !fs.existsSync(path.join(root, rel))) {
     throw new Error(`No such file or folder: ${rel}`);
   }
-  const files = (await trackedFiles(root)).filter((f) => (!rel || f === rel || f.startsWith(`${rel}/`)) && !f.split('/').some((s) => SKIP_DIRS.has(s)));
+  const tracked = await trackedFiles(root, rel);
+  const files = tracked.files.filter((f) => (!rel || f === rel || f.startsWith(`${rel}/`)) && !f.split('/').some((s) => SKIP_DIRS.has(s)));
   if (rel && !files.length) {
     throw new Error(`No files under "${rel}"`);
   }
   const findings: Finding[] = [];
-  const skipped: string[] = [];
+  const skipped: string[] = tracked.note ? [tracked.note] : [];
   let deps: Dependency[] = [];
   if (kinds.dependencies) {
     for (const f of files.filter(isLockfile)) {

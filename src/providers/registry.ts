@@ -215,6 +215,8 @@ export class ProviderRegistry implements vscode.Disposable {
   invalidate(): void {
     this.modelCache = [];
     this.lastRefresh = 0;
+    this.generation++;
+    this.discovery = undefined;
   }
 
   /** Enabled models from the last discovery without touching the network (empty before the first one). */
@@ -642,12 +644,18 @@ export class ProviderRegistry implements vscode.Disposable {
         `${wanted.startsWith(`${wantedCfg.id}/`) ? wanted.slice(wantedCfg.id.length + 1) : wanted} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
       );
     }
+    // Ghost text asks on every pause in typing: a completion model that is gone never quietly becomes a cloud one.
+    if (role === 'completion' && fallback && model.remote) {
+      throw new Error('The completion model is not available locally; LocalPilot does not send completions to a cloud model on its own.');
+    }
     // Parallel work: a saturated model makes every extra run queue behind the others, so Auto picks and workers
     // that only inherited a model move to a comparable idle one that fits in memory alongside (the user's
     // explicit choice for a chat is never second-guessed — callers pass `spread` only when it was not one).
     let spread = false;
     if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
-      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident, this.residentGb);
+      // Models on a LAN or remote server take none of this machine's memory.
+      const onThisMachine = (id: string) => !this.all.some((p) => id.startsWith(`${p.id}/`) && !isLoopbackUrl(p.baseUrl));
+      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident, this.residentGb, onThisMachine);
       if (alt) {
         const n = req.load.assigned.get(model.id) ?? 0;
         reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
@@ -835,7 +843,9 @@ export function pickAlternative(
   needsVision?: boolean,
   bonus?: UsageBonus,
   resident: ReadonlySet<string> = new Set(),
-  residentGb: ReadonlyMap<string, number> = new Map()
+  residentGb: ReadonlyMap<string, number> = new Map(),
+  /** Whether a model id runs on this machine; models elsewhere do not count against its memory budget. */
+  onThisMachine: (id: string) => boolean = () => true
 ): ModelInfo | undefined {
   if (!isSaturated(chosen, load)) {
     return undefined;
@@ -844,8 +854,8 @@ export function pickAlternative(
   const floor = scoreOf(chosen) - COMPARABLE_SCORE_GAP;
   const chosenB = paramsB(chosen);
   // Memory already committed: every model loaded right now (at the size its server reports, context cache included)
-  // and every model with a run on it, the chosen one included.
-  const sizeOf = (id: string) => residentGb.get(id) ?? modelFootprintGb(models.find((m) => m.id === id) ?? ({} as ModelInfo)) ?? 0;
+  // and every model with a run on it, the chosen one included (only those on this machine count).
+  const sizeOf = (id: string) => (onThisMachine(id) ? residentGb.get(id) ?? modelFootprintGb(models.find((m) => m.id === id) ?? ({} as ModelInfo)) ?? 0 : 0);
   const committed = new Set([chosen.id, ...resident, ...models.filter((m) => (load.assigned.get(m.id) ?? 0) > 0).map((m) => m.id)]);
   const committedGb = [...committed].reduce((sum, id) => sum + sizeOf(id), 0);
   const candidates = models
@@ -862,7 +872,7 @@ export function pickAlternative(
       }
       // A loaded model adds no weights, but it still has to fit: two big models answering at once on a machine that
       // is already over its budget is what runs it out of memory (Ollama dies mid-request). Then the run queues.
-      const extra = committed.has(m.id) ? 0 : residentGb.get(m.id) ?? modelFootprintGb(m);
+      const extra = committed.has(m.id) || !onThisMachine(m.id) ? 0 : residentGb.get(m.id) ?? modelFootprintGb(m);
       return extra === undefined || committedGb + extra <= profile.modelBudgetGb * 1.1;
     });
   // Fewest runs first; then a model already in memory (starts answering at once), then the better score.

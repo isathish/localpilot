@@ -295,7 +295,7 @@ export function installId(pick: CatalogPick, target: InstallTarget): string | un
  * tiny completion model when both fit at once. Machines too small for Gemma 4 e2b get a tiny tool-capable Llama.
  * Bigger models are an explicit upgrade from the catalog.
  */
-export function starterPlan(profile: SystemProfile): { agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick } {
+export function starterPlan(profile: SystemProfile, target: InstallTarget = 'ollama'): { agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick } {
   const gemma4 = MODEL_CATALOG.find((e) => e.key === 'gemma4')!;
   const llama = MODEL_CATALOG.find((e) => e.key === 'llama3.2')!;
   const smol = MODEL_CATALOG.find((e) => e.key === 'smollm2')!;
@@ -315,9 +315,16 @@ export function starterPlan(profile: SystemProfile): { agent: CatalogPick; compl
   } else {
     agent = pick(smol, '360m');
   }
+  // Docker and LM Studio have no ids for the tiniest picks; SmolLM2 1.7B is the smallest model they both ship.
+  if (!agent.variant[target]) {
+    const alt = pick(smol, '1.7b');
+    if (alt.variant.gb <= budget || budget < 2.5) {
+      agent = alt;
+    }
+  }
   const out: { agent: CatalogPick; completion?: CatalogPick; vision?: CatalogPick } = { agent };
   const small = pick(MODEL_CATALOG.find((e) => e.key === 'starcoder2')!, '3b');
-  if (agent.entry === gemma4 && agent.variant.gb + small.variant.gb <= budget) {
+  if (agent.entry === gemma4 && small.variant[target] && agent.variant.gb + small.variant.gb <= budget) {
     out.completion = small;
   }
   // Gemma 4 reads images itself; only the tiny fallbacks would need a separate vision model, and those machines

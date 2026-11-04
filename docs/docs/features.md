@@ -20,7 +20,8 @@ LocalPilot is a coding agent for VS Code. It reads your project, edits files, ru
 ![Settings → Providers: providers grouped under Local and Cloud, each card showing where it runs, its API and its status]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
 
 - **Local servers, detected automatically:**
-  - Ollama, LM Studio, llama.cpp, vLLM, SGLang, Docker Model Runner, Jan, LocalAI, KoboldCpp, GPT4All and text-generation-webui
+  - Ollama, LM Studio, llama.cpp, vLLM, SGLang, Docker Model Runner, Jan, LocalAI and KoboldCpp
+  - GPT4All and text-generation-webui as one-click presets in **Settings → Providers**
   - model servers running in Docker containers
 - **Cloud APIs with your own key:**
   - OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek and xAI

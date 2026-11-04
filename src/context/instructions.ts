@@ -1,15 +1,18 @@
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { parseFrontMatter } from '../agent/frontMatter';
 
 /**
  * Project instruction ("memory") files, resolved the way Claude Code does:
  *
- *   1. user     ~/.claude/CLAUDE.md, ~/.localpilot/CLAUDE.md, ~/.localpilot/rules.md
+ *   1. user     ~/.claude/CLAUDE.md, ~/.localpilot/CLAUDE.md, ~/.localpilot/rules.md, ~/.agents/AGENTS.md, then
+ *               USER_RULE_DIRS (~/.localpilot/rules/, ~/.claude/rules/, ~/.cline/rules/, ~/Documents/Cline/Rules/ …)
  *   2. ancestors  CLAUDE.md / .claude/CLAUDE.md / .localpilot/rules.md in each parent folder of the workspace
  *                 (monorepo roots), nearest last
  *   3. project  .localpilot/rules.md, AGENTS.md, CLAUDE.md, .claude/CLAUDE.md, .cursorrules,
- *               .github/copilot-instructions.md, .windsurfrules, then .cursor/rules/*, .localpilot/rules/*
+ *               .github/copilot-instructions.md, .windsurfrules, .clinerules (file), then RULE_DIRS
+ *               (.cursor/rules/, .localpilot/rules/, .claude/rules/, .clinerules/, .cline/rules/), each sorted by rule name
  *   4. local    CLAUDE.local.md (personal, git-ignored) — highest precedence, so it comes last
  *
  * `@path` on a line of its own or inside a sentence imports another file (relative to the importing file, `~/` for
@@ -17,9 +20,11 @@ import * as path from 'path';
  * must stay inside the workspace (or ~/.claude, ~/.localpilot); credential files are never imported.
  */
 
-export const PROJECT_RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules'];
+export const PROJECT_RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules', '.clinerules'];
 export const LOCAL_RULE_FILES = ['CLAUDE.local.md', '.localpilot/rules.local.md'];
-export const RULE_DIRS = ['.cursor/rules', '.localpilot/rules', '.claude/rules'];
+export const RULE_DIRS = ['.cursor/rules', '.localpilot/rules', '.claude/rules', '.clinerules', '.cline/rules'];
+export const USER_RULE_DIRS = ['.localpilot/rules', '.claude/rules', '.cline/rules', 'Documents/Cline/Rules', 'Cline/Rules'];
+const RULE_EXT = /\.(md|mdc|markdown|txt)$/i;
 const ANCESTOR_FILES = ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), path.join('.localpilot', 'rules.md')];
 const IMPORT_DEPTH = 5;
 const MAX_IMPORT_CHARS = 20_000;
@@ -29,6 +34,8 @@ export interface InstructionFile {
   /** Shown in the prompt as the section label, e.g. `CLAUDE.md`, `../CLAUDE.md`, `~/.claude/CLAUDE.md`. */
   label: string;
   scope: 'user' | 'ancestor' | 'project' | 'local';
+  /** For files from a rules folder: the front-matter `name` or the file's basename, used as the `## ` heading. */
+  name?: string;
   /** Set by buildInstructions when the size cap cut this file short or left it out. */
   note?: 'truncated' | 'omitted';
 }
@@ -45,30 +52,63 @@ async function readIfFile(file: string): Promise<string | undefined> {
   }
 }
 
+/** Path identity for dedupe and comparisons: case-insensitive on Windows. */
+const key = (p: string) => {
+  const r = path.resolve(p);
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+};
+
 const tilde = (p: string, home: string) => (p.startsWith(home) ? `~${p.slice(home.length).replace(/\\/g, '/')}` : p);
 
 /** Every instruction file that exists, in prompt order. */
 export async function collectInstructionFiles(roots: string[], home = os.homedir()): Promise<InstructionFile[]> {
   const out: InstructionFile[] = [];
   const seen = new Set<string>();
-  const push = async (file: string, label: string, scope: InstructionFile['scope']) => {
+  const push = async (file: string, label: string, scope: InstructionFile['scope'], name?: string) => {
     // By real path, so a symlinked AGENTS.md -> CLAUDE.md is included (and counted against the cap) once.
-    const key = await fs.realpath(file).catch(() => path.resolve(file));
-    if (seen.has(key)) {
+    const id = key(await fs.realpath(file).catch(() => file));
+    if (seen.has(id)) {
       return;
     }
     if ((await readIfFile(file)) !== undefined) {
-      seen.add(key);
-      out.push({ file, label, scope });
+      seen.add(id);
+      out.push(name ? { file, label, scope, name } : { file, label, scope });
     }
   };
-  for (const f of ['.claude/CLAUDE.md', '.localpilot/CLAUDE.md', '.localpilot/rules.md']) {
+  /** The rule files of one folder (not recursive), by rule name; files with an empty body are left out. */
+  const pushDir = async (dir: string, labelDir: string, scope: InstructionFile['scope']) => {
+    let entries: string[] = [];
+    try {
+      entries = (await fs.readdir(dir)).filter((n) => RULE_EXT.test(n));
+    } catch {
+      return; // not present, or a file (the legacy single-file .clinerules)
+    }
+    const rules: { n: string; name: string }[] = [];
+    for (const n of entries) {
+      const raw = await readIfFile(path.join(dir, n));
+      if (raw === undefined) {
+        continue;
+      }
+      const { meta, body } = parseFrontMatter(raw);
+      if (body.trim()) {
+        rules.push({ n, name: (typeof meta.name === 'string' && meta.name.trim()) || n.replace(RULE_EXT, '') });
+      }
+    }
+    rules.sort((a, b) => a.name.localeCompare(b.name) || a.n.localeCompare(b.n));
+    for (const r of rules) {
+      await push(path.join(dir, r.n), `${labelDir}/${r.n}`, scope, r.name);
+    }
+  };
+  for (const f of ['.claude/CLAUDE.md', '.localpilot/CLAUDE.md', '.localpilot/rules.md', '.agents/AGENTS.md']) {
     await push(path.join(home, f), `~/${f}`, 'user');
+  }
+  for (const d of USER_RULE_DIRS) {
+    await pushDir(path.join(home, d), `~/${d}`, 'user');
   }
   for (const root of roots) {
     // Ancestors, farthest first; the home folder and the filesystem root are not project folders.
     const ancestors: string[] = [];
-    for (let dir = path.dirname(root); dir !== path.dirname(dir) && path.resolve(dir) !== path.resolve(home); dir = path.dirname(dir)) {
+    for (let dir = path.dirname(root); dir !== path.dirname(dir) && key(dir) !== key(home); dir = path.dirname(dir)) {
       ancestors.unshift(dir);
     }
     for (const dir of ancestors) {
@@ -80,15 +120,7 @@ export async function collectInstructionFiles(roots: string[], home = os.homedir
       await push(path.join(root, rel), rel, 'project');
     }
     for (const dir of RULE_DIRS) {
-      let entries: string[] = [];
-      try {
-        entries = (await fs.readdir(path.join(root, dir))).filter((n) => /\.(md|mdc)$/.test(n)).sort();
-      } catch {
-        /* not present */
-      }
-      for (const n of entries) {
-        await push(path.join(root, dir, n), `${dir}/${n}`, 'project');
-      }
+      await pushDir(path.join(root, dir), dir, 'project');
     }
     for (const rel of LOCAL_RULE_FILES) {
       await push(path.join(root, rel), rel, 'local');
@@ -110,7 +142,7 @@ function maskCode(text: string): { masked: string; restore: (s: string) => strin
 const IMPORT_RE = /(^|[\s(])@((?:~\/|\.{1,2}\/|\/)?[\w.-][\w./-]*)/g;
 
 /** Credential locations are never imported, whoever asks. */
-const isSecret = (p: string) => /(^|[\\/])\.(ssh|aws|gnupg)([\\/]|$)|[\\/]\.config[\\/]gcloud([\\/]|$)/.test(p) || /^(\.env|id_(rsa|dsa|ecdsa|ed25519))|\.(pem|key)$/i.test(path.basename(p));
+const isSecret = (p: string) => /(^|[\\/])\.(ssh|aws|gnupg)([\\/]|$)|[\\/]\.config[\\/]gcloud([\\/]|$)/.test(p) || /^(\.env|id_(rsa|dsa|ecdsa|ed25519)|keys\.json$|\.credentials\.json$)|\.(pem|key)$/i.test(path.basename(p));
 const isInside = (p: string, dir: string) => {
   const rel = path.relative(dir, p);
   return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
@@ -120,7 +152,7 @@ const refusedImports = new Set<string>();
 
 /**
  * Resolves `@path` imports in an instruction file's text. Unless `scope` is `user`, targets must resolve inside one
- * of `roots` (default: the importing file's folder) or ~/.claude / ~/.localpilot; refused imports stay as plain text.
+ * of `roots` (default: the importing file's folder) or be Markdown under ~/.claude / ~/.localpilot; refused imports stay as plain text.
  */
 export async function resolveImports(text: string, file: string, opts: { home?: string; depth?: number; seen?: Set<string>; scope?: InstructionFile['scope']; roots?: string[] } = {}): Promise<string> {
   const depth = opts.depth ?? 0;
@@ -128,9 +160,11 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
     return text;
   }
   const home = opts.home ?? os.homedir();
-  const seen = opts.seen ?? new Set<string>([path.resolve(file)]);
+  const seen = opts.seen ?? new Set<string>([key(file)]);
   const roots = opts.roots ?? [path.dirname(file)];
-  const allowed = opts.scope === 'user' ? undefined : await Promise.all([...roots, path.join(home, '.claude'), path.join(home, '.localpilot')].map(realpath));
+  const allowed = opts.scope === 'user' ? undefined : await Promise.all(roots.map(realpath));
+  // Outside the workspace only Markdown under ~/.claude and ~/.localpilot: they also hold API keys and OAuth tokens.
+  const homeDocs = opts.scope === 'user' ? [] : await Promise.all([path.join(home, '.claude'), path.join(home, '.localpilot')].map(realpath));
   const { masked, restore } = maskCode(text);
   const refs = [...masked.matchAll(IMPORT_RE)];
   if (!refs.length) {
@@ -143,12 +177,12 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
       continue;
     }
     const abs = rel.startsWith('~/') ? path.join(home, rel.slice(2)) : path.isAbsolute(rel) ? rel : path.resolve(path.dirname(file), rel);
-    const key = path.resolve(abs);
-    if (seen.has(key)) {
+    const id = key(abs);
+    if (seen.has(id)) {
       continue;
     }
     const real = await realpath(abs);
-    if (isSecret(key) || isSecret(real) || (allowed && !allowed.some((dir) => isInside(real, dir)))) {
+    if (isSecret(path.resolve(abs)) || isSecret(real) || (allowed && !allowed.some((dir) => isInside(real, dir)) && !(/\.md$/i.test(real) && homeDocs.some((dir) => isInside(real, dir))))) {
       if (!refusedImports.has(`${file}|${real}`)) {
         refusedImports.add(`${file}|${real}`);
         console.warn(`LocalPilot: not importing ${rel} into ${file}: outside the workspace or a credential file`);
@@ -159,7 +193,7 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
     if (content === undefined) {
       continue; // not a file: leave the token (it may be a handle or an email)
     }
-    seen.add(key);
+    seen.add(id);
     const inner = await resolveImports(content.length > MAX_IMPORT_CHARS ? `${content.slice(0, MAX_IMPORT_CHARS)}\n…(import truncated)` : content, abs, { home, depth: depth + 1, seen, scope: opts.scope, roots });
     out = out.replace(m[0], () => `${m[1]}\n<!-- imported: ${rel} -->\n${inner.trim()}\n<!-- end import -->\n`);
   }
@@ -186,7 +220,7 @@ export async function buildInstructions(roots: string[], opts: { home?: string; 
     const own = f.scope === 'ancestor' ? path.dirname(f.file).replace(/[\\/]\.(claude|localpilot)$/, '') : undefined;
     const text = (await resolveImports(stripFrontMatter(raw), f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
     if (text) {
-      parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${text}` });
+      parts.push({ file: f, text: `<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${f.name ? `## ${f.name}\n` : ''}${text}` });
     }
   }
   const marker = '\n…(truncated)';

@@ -71,6 +71,13 @@ suite('LocalPilot repo graph', () => {
     assert.deepStrictEqual(p.optionalImports, ['x.y', 'x.z']);
   });
 
+  test('symbols: top-level CommonJS declarations, Kotlin enum class and C# record struct are indexed by name', () => {
+    const js = parseSource("'use strict';\nfunction connect() {}\nclass Pool {}\nexports.close = () => {};\nmodule.exports = { connect, Pool, open: () => 1 };\n", 'ts');
+    assert.deepStrictEqual(js.symbols.map((s) => `${s.kind} ${s.name}`), ['function connect', 'class Pool', 'export close', 'export open']);
+    assert.deepStrictEqual(parseSource('enum class Color { RED }\nannotation class Marker\n', 'java').symbols.map((s) => `${s.kind} ${s.name}`), ['enum Color', 'annotation Marker']);
+    assert.deepStrictEqual(parseSource('public record struct Point(int X, int Y);\npublic readonly record struct Size(int W);\n', 'cs').symbols.map((s) => `${s.kind} ${s.name}`), ['record Point', 'record Size']);
+  });
+
   test('fileKey: a path with a directory must match it; folders are reported, not resolved to a file', async () => {
     const g = await graphOf({ 'src/a.ts': "import { b } from './lib/b';\n", 'src/lib/b.ts': 'export const b = 1;\n' });
     assert.strictEqual(fileKey(g, 'wrong/dir/a.ts').key, undefined);

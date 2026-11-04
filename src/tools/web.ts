@@ -1,6 +1,7 @@
 import { getConfig } from '../config';
 import { Tool } from '../types';
 import { withTimeout } from '../providers/http';
+import { resolveApiKey } from '../providers/cloud';
 
 interface SearchHit {
   title: string;
@@ -39,10 +40,10 @@ export const webSearchTool: Tool = {
         hits = await searxng(query, cfg.searxngUrl ?? 'http://localhost:8888', max, ctx.signal);
         break;
       case 'brave':
-        hits = await brave(query, cfg.apiKey ?? '', max, ctx.signal);
+        hits = await brave(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
         break;
       case 'tavily':
-        hits = await tavily(query, cfg.apiKey ?? '', max, ctx.signal);
+        hits = await tavily(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
         break;
       default:
         hits = await duckduckgo(query, max, ctx.signal);
@@ -124,6 +125,9 @@ async function brave(q: string, key: string, max: number, signal: AbortSignal): 
     headers: { accept: 'application/json', 'x-subscription-token': key },
     signal: withTimeout(15_000, signal),
   });
+  if (!res.ok) {
+    throw new Error(res.status === 401 || res.status === 403 ? `Brave Search rejected the API key (HTTP ${res.status})` : `Brave Search failed: HTTP ${res.status}`);
+  }
   const json = (await res.json()) as { web?: { results?: { title: string; url: string; description?: string }[] } };
   return (json.web?.results ?? []).slice(0, max).map((r) => ({ title: r.title, url: r.url, snippet: r.description ?? '' }));
 }
@@ -138,6 +142,9 @@ async function tavily(q: string, key: string, max: number, signal: AbortSignal):
     body: JSON.stringify({ query: q, max_results: max }),
     signal: withTimeout(15_000, signal),
   });
+  if (!res.ok) {
+    throw new Error(res.status === 401 || res.status === 403 ? `Tavily rejected the API key (HTTP ${res.status})` : `Tavily search failed: HTTP ${res.status}`);
+  }
   const json = (await res.json()) as { results?: { title: string; url: string; content?: string }[] };
   return (json.results ?? []).slice(0, max).map((r) => ({ title: r.title, url: r.url, snippet: r.content ?? '' }));
 }

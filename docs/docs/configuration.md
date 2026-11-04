@@ -41,9 +41,11 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 | `localpilot.contextWindow` | `32768` | Requested context in tokens (Ollama `num_ctx`), capped by the model's maximum. `0` = the model's full native window, which needs enough RAM/VRAM. Compaction is budgeted against the same number |
 | `localpilot.maxOutputTokens` | `4096` | Maximum tokens per response |
 | `localpilot.temperature` | `-1` | Sampling temperature. `-1` uses each model's own setting (Gemma 4 and Qwen 3 ship 1.0 and repeat themselves at low temperatures); 0–2 forces one value for every model |
-| `localpilot.thinking` | `off` | Extended thinking for reasoning models: `off`, `on`, `low`, `medium` or `high`. Sent as Ollama `think` or OpenAI-compatible `reasoning_effort`. Reasoning shows as a collapsible step |
+| `localpilot.thinking` | `auto` | Extended thinking for reasoning models: `auto`, `off`, `on`, `low`, `medium` or `high`. `auto` picks per task: high for Plan and Debug, medium for Agent and Multitask, low for Ask and subagents, none for quick helpers. `off` explicitly tells thinking models not to reason. Sent as Ollama `think` or OpenAI-compatible `reasoning_effort`; Ollama models other than gpt-oss take only on or off, so `low` skips the reasoning and `medium` or `high` send `think: true`. Reasoning shows as a collapsible step |
 | `localpilot.keepAlive` | `30m` | How long Ollama keeps the model loaded after a request (for example `5m`, `30m`, or `-1` for forever). Avoids reload delays between turns |
 | `localpilot.prewarm` | `true` | Load the chat's model as soon as you focus the composer or switch models, so the first reply does not wait for a weight load. Ollama only; at most once every few minutes per model |
+| `localpilot.ollama.flashAttention` | `true` | Start Ollama with flash attention (`OLLAMA_FLASH_ATTENTION`): faster prompt processing and a smaller KV cache on supported models. Applies when LocalPilot starts or restarts Ollama |
+| `localpilot.ollama.kvCacheType` | `q8_0` | KV cache quantisation for Ollama (`OLLAMA_KV_CACHE_TYPE`): `f16`, `q8_0` (about half the memory of `f16`) or `q4_0` (about a quarter, small quality loss on long contexts). Needs flash attention; applies when LocalPilot starts or restarts Ollama |
 
 ## colibri
 
@@ -91,19 +93,21 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.compactionThreshold` | `0.75` | Fraction of the context window (0.3–0.95) at which pruning and summarising start |
 | `localpilot.maxToolOutputChars` | `24000` | Maximum characters per tool output; the head and tail are kept |
 | `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
+| `localpilot.prompts.autoCorrect` | `true` | Correct misspelled file names and code identifiers in your requests against the names in the workspace (`dicee.py` → `dice.py`) before the agent starts. Plain words are never changed; corrections are shown under your message |
 
 ## Skills, plugins & hooks
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.skillsPaths` | `[]` | Additional skill folders (each skill is a folder with a `SKILL.md`). `.localpilot/skills`, `.claude/skills`, `.github/skills` and `~/.agents/skills` are scanned automatically |
+| `localpilot.skillsPaths` | `[]` | Additional skill folders (each skill is a folder with a `SKILL.md`). `.localpilot/skills`, `.claude/skills`, `.github/skills`, `.agents/skills`, `.cline/skills`, `.clinerules/skills`, `~/.agents/skills` and `~/.cline/skills` are scanned automatically |
 | `localpilot.skills.builtin` | `true` | Load the 14 skills bundled with LocalPilot. A workspace or user skill with the same name overrides a bundled one |
 | `localpilot.skills.repositories` | `["anthropics/skills/skills", "obra/superpowers/skills", "github/awesome-copilot/skills"]` | Skill catalog: GitHub repositories or folders (`owner/repo[/path][@ref]`, or github.com URLs) whose skills can be installed when a request matches one. The first repository wins on duplicate names. The index is cached in `~/.localpilot/skill-catalog.json` for a day. `GITHUB_TOKEN` is used when set |
 | `localpilot.skills.autoInstall` | `auto` | What happens when a registry skill matches a request better than any installed one. `auto` installs and loads it as the request starts; `ask` shows an **Install "…"** chip; `off` never contacts the registry. Each chat can override this with its **Skills** button, where **Off** also silences suggestions for that chat |
 | `localpilot.skills.autoInstallScope` | `user` | Where automatically installed skills go: `user` (`~/.localpilot/skills`) or `workspace` (`.localpilot/skills`) |
 | `localpilot.skills.disabled` | `[]` | Skill names hidden from the agent (not in the prompt, not suggested, not loadable). They stay on disk. Toggle them in **Settings → Skills & subagents** |
 | `localpilot.pluginPaths` | `[]` | Extra folders with Claude Code-style plugins (a folder with `.claude-plugin/plugin.json` bundling `commands/`, `agents/`, `skills/`, `hooks/hooks.json` and `.mcp.json`). `.localpilot/plugins`, `.claude/plugins`, `~/.localpilot/plugins` and `~/.claude/plugins` are scanned automatically. Disable one with `enabledPlugins` in `settings.json` |
-| `localpilot.hooks.enabled` | `true` | Run hooks configured in `.localpilot/settings.json`, `.claude/settings.json` and `~/.claude/settings.json`. Hooks are shell commands on events such as `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop` and `SessionStart`, using the Claude Code stdin and exit-code protocol (exit 2 blocks). Turn this off for repositories you do not trust |
+| `localpilot.plugins.marketplaces` | `["anthropics/claude-plugins-official"]` | Plugin marketplaces to search and install from (**LocalPilot: Browse Plugins…**, `localpilot plugin search`): `owner/repo` on GitHub, any git URL or a local folder, each with a `.claude-plugin/marketplace.json` in Claude Code's format. Fetched with `git`, so private repositories work with your git credentials |
+| `localpilot.hooks.enabled` | `true` | Run hooks configured in `.localpilot/settings.json`, `.claude/settings.json` and `~/.claude/settings.json`. Hooks are shell commands on events such as `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop` and `SessionStart`, using the Claude Code stdin and exit-code protocol (exit 2 blocks). Turn this off for repositories you do not trust. It does not affect MCP servers from workspace plugins or settings |
 
 See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 
@@ -203,6 +207,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). The Chat view moves the same way as with drag-and-drop, so **Move View** and **Reset Location** in the view's context menu keep working. The Agents view and the activity bar icon stay in the Primary Side Bar. Also available as **LocalPilot: Move Chat To…** |
 | `localpilot.sessions.retention` | `50` | Maximum chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats do not count. `0` keeps everything |
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
+| `localpilot.memory.autoSave` | `true` | After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable project facts (build and test commands, conventions, pitfalls) and append at most three short notes to project memory. Runs after the answer; anything that looks like a credential is dropped. Needs `localpilot.memory.enabled` |
 | `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
 | `localpilot.memory.maxNotes` | `200` | Notes kept per scope; past it the least recently updated are removed (`README` is kept) |
 | `localpilot.showWelcomeOnStartup` | `true` | Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model |

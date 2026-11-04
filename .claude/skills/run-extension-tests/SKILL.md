@@ -32,7 +32,7 @@ export default {
   files: 'out/test/autonomy.test.js',            // or 'out/test/**/*.test.js'
   workspaceFolder: fs.mkdtempSync('$d/ws-'),
   launchArgs: ['--user-data-dir', '$d/ud'],
-  env: { LOCALPILOT_TELEMETRY_DIR: '$d/telemetry', LOCALPILOT_SKILL_CATALOG: '$d/cat.json' },
+  env: { LOCALPILOT_TELEMETRY_DIR: '$d/telemetry', LOCALPILOT_SKILL_CATALOG: '$d/cat.json', LOCALPILOT_WORKTREES_DIR: '$d/worktrees' },
   mocha: { timeout: 60000 },
 };
 EOF

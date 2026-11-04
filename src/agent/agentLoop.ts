@@ -9,7 +9,8 @@ import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
+import { AgentEvent, ApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, isWriteMode } from '../types';
+import { addUsage } from './usage';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
 import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
@@ -78,6 +79,8 @@ export interface AgentRunOptions {
   askUser?: ToolContext['askUser'];
   /** Nobody is watching this run (task queue): no question round before work starts. */
   unattended?: boolean;
+  /** A throwaway workspace unrelated to the user's project (benchmark): no project map, rules, memory or hooks. */
+  scratch?: boolean;
   maxIterations?: number;
   /** Pause/resume/steer handle. When given, `signal` should be `control.signal`. */
   control?: RunControl;
@@ -95,6 +98,8 @@ export interface AgentRunOptions {
   spreadModels?: boolean;
   /** Permission rules allowed for this run only (a custom slash command's `allowed-tools`). */
   permissionAllow?: string[];
+  /** Every model request of this run and of its subagents, for the parent to add to its own totals (subagents). */
+  onUsage?: (u: ProviderUsage | undefined, model: string, provider: string) => void;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -280,10 +285,10 @@ export class AgentRunner {
     // Once offered in a chat, a tool stays offered: tool definitions sit at the start of the prompt, and a list that
     // changes from turn to turn would make the server re-read the whole prompt (no prefix cache) on every change.
     const offered = this.offeredTools.get(session.id) ?? new Set<string>();
-    const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, [], getConfig().repos).length : 0);
+    const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath), getConfig().repos).length : 0);
     offered.forEach((n) => omit?.delete(n));
-    // Unattended runs (eval) work in throwaway folders: this project's memory is neither shown nor written.
-    const toolList = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.unattended || !t.definition.name.startsWith('memory_'));
+    // Scratch runs (benchmark) work in throwaway folders: this project's memory is neither shown nor written.
+    const toolList = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.scratch || !t.definition.name.startsWith('memory_'));
     if (!o.toolFilter && depth === 0) {
       toolList.forEach((t) => offered.add(t.definition.name));
       this.offeredTools.delete(session.id);
@@ -312,13 +317,13 @@ export class AgentRunner {
       canScreenshot: toolDefs.some((t) => t.name === 'browser_screenshot'),
       canInspect: toolDefs.some((t) => t.name === 'browser_inspect'),
       canOpenBrowser: toolDefs.some((t) => t.name === 'open_browser'),
+      project: !o.scratch,
       // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
-      unattended: o.unattended,
-      memory: cfg.memoryEnabled && depth === 0 && !o.unattended ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
+      memory: cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
     });
     const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = !!o.isolatedFrom;
-    const systemIsolated = isolated
+    const systemIsolated = isolated && !o.scratch
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
       : system;
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
@@ -335,10 +340,17 @@ export class AgentRunner {
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
     const hookRoot = o.workspaceRoot ?? this.workspace.root;
-    if (depth === 0 && this.hooks && (this.hooks.has('SessionStart') || this.hooks.has('UserPromptSubmit'))) {
+    if (depth === 0 && !o.scratch && this.hooks && (this.hooks.has('SessionStart') || this.hooks.has('UserPromptSubmit'))) {
       const hookContext: string[] = [];
       if (wasEmpty && this.hooks.has('SessionStart')) {
         const r = await this.hooks.run('SessionStart', { session_id: session.id, source: 'startup' }, { cwd: hookRoot, matchKey: 'startup', signal: o.signal });
+        if (r.stop) {
+          const note = `Stopped by a hook: ${r.stop}`;
+          session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
+          emit({ sessionId: session.id, type: 'assistant_delta', payload: note });
+          emit({ sessionId: session.id, type: 'turn_end', payload: { text: note, contextTokens: session.contextTokens, durationMs: Date.now() - stats.startedAt, steps: 0, toolCalls: 0 } });
+          return note;
+        }
         hookContext.push(...r.context);
       }
       if (this.hooks.has('UserPromptSubmit')) {
@@ -570,6 +582,11 @@ export class AgentRunner {
       },
       requestApproval: (title, detail, kind, opts) => this.gateApproval(kind, cfg.approvals[kind], (mandatory) => o.requestApproval(title, detail, kind, { mandatory }), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory }),
       askUser: depth === 0 ? o.askUser : undefined,
+      recordUsage: (u, m, p) => {
+        // The chat's own last model stays the one it answers with; the subagent's model only travels upwards.
+        session.usage = addUsage(session.usage, u, undefined, undefined, true);
+        o.onUsage?.(u, m ?? '', p ?? '');
+      },
     };
     const policy: ToolPolicy = {
       settings: this.projectSettings?.() ?? emptySettings(),
@@ -713,9 +730,13 @@ export class AgentRunner {
         let first = true;
         const requestedAt = Date.now();
         let firstAt: number | undefined;
-        let usage: { promptTokens?: number; completionTokens?: number } | undefined;
-        const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) =>
+        let usage: ProviderUsage | undefined;
+        // Called exactly once per request, so it is also where the request is booked into the session's usage.
+        const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) => {
           this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason });
+          session.usage = addUsage(session.usage, usage, model.modelId, model.providerId);
+          o.onUsage?.(usage, model.modelId, model.providerId);
+        };
         stats.steps++;
         try {
           const stream = provider.chat({
@@ -772,7 +793,7 @@ export class AgentRunner {
                   // The server's count is the real size of this prompt: show it, and let it correct the estimate for
                   // the next request. A count the calibration rejects (e.g. only the uncached part) keeps the estimate.
                   const scaleBefore = tokenCalibration.scale(model.id);
-                  if (tokenCalibration.record(model.id, budget.rawPromptTokens, ev.promptTokens)) {
+                  if (tokenCalibration.record(model.id, budget.rawPromptTokens, ev.promptTokens, model.contextWindow)) {
                     if (Math.abs(tokenCalibration.scale(model.id) / scaleBefore - 1) > 0.1) {
                       this.log.info(`context: ${model.id} prompt was ${ev.promptTokens.toLocaleString()} tokens (estimated ${budget.rawPromptTokens.toLocaleString()}); estimates for it are now scaled ×${tokenCalibration.scale(model.id).toFixed(2)}`);
                     }
@@ -990,7 +1011,7 @@ export class AgentRunner {
         }
         // Stop / SubagentStop hooks may judge the work unfinished and send the agent back (bounded).
         const stopEvent = depth === 0 ? 'Stop' : 'SubagentStop';
-        if (this.hooks?.has(stopEvent) && !o.signal.aborted) {
+        if (this.hooks?.has(stopEvent) && !o.scratch && !o.signal.aborted) {
           status('Running stop hooks…');
           const r = await this.hooks.run(stopEvent, { session_id: session.id, stop_hook_active: stopHookContinues > 0, last_assistant_message: text }, { cwd: hookRoot, signal: o.signal });
           if (r.block && stopHookContinues < MAX_STOP_HOOK_CONTINUES && !r.stop) {
@@ -1026,7 +1047,7 @@ export class AgentRunner {
       this.unassign(session.id);
       // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
       const coordinatorFirst = session.mode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
-      const { messages: results, perCall } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
+      const { messages: results, perCall, hookStop } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -1054,6 +1075,15 @@ export class AgentRunner {
       session.messages.push(...results);
       this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();
+      // A PreToolUse/PostToolUse hook answered `continue: false`: the run ends here.
+      if (hookStop) {
+        const note = `Stopped by a hook: ${hookStop}`;
+        session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
+        emit({ sessionId: session.id, type: 'assistant_delta', payload: note });
+        finalText = note;
+        completed = true;
+        break;
+      }
     }
 
     if (!completed && !o.signal.aborted) {
@@ -1077,8 +1107,8 @@ export class AgentRunner {
     const turnStart = session.messages.indexOf(turnMessage);
     const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
     const savedByModel = turnMsgs.some((m) => m.toolCalls?.some((c) => c.name === 'memory_save'));
-    // Not for unattended runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
-    if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.unattended && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(session.mode)) {
+    // Not for scratch runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
+    if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.scratch && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(session.mode)) {
       // At most 90 s, and cancelled by the next run: on a one-slot server it must never hold the model the user is waiting for.
       const memoryAbort = new AbortController();
       this.backgroundAborts.add(memoryAbort);
@@ -1114,6 +1144,10 @@ export class AgentRunner {
     }
     await Promise.race([Promise.allSettled([...this.background]), new Promise((r) => setTimeout(r, timeoutMs))]);
     return true;
+  }
+  /** Aborts background work (the memory save), e.g. when the user presses Ctrl+C while the CLI waits on it. */
+  cancelBackground(): void {
+    this.backgroundAborts.forEach((a) => a.abort());
   }
 
   private release(modelId: string, sessionId: string): void {
@@ -1181,6 +1215,17 @@ export class AgentRunner {
   /** Treat `modelId` as serving one request at a time: from now on a second simultaneous run on it is spread to a comparable idle model. */
   markServedSerially(modelId: string): void {
     this.serialWarned.add(modelId);
+  }
+
+  /** Forget the serial-server mark for `modelIds` (all models when omitted), e.g. after the server was restarted with parallel slots. */
+  clearServedSerially(modelIds?: Iterable<string>): void {
+    if (!modelIds) {
+      this.serialWarned.clear();
+      return;
+    }
+    for (const id of modelIds) {
+      this.serialWarned.delete(id);
+    }
   }
 
   /** Model ids currently known to serve one request at a time. */
@@ -1259,7 +1304,8 @@ export class AgentRunner {
     mode = 'agent',
     policy?: ToolPolicy,
     coordinatorFirst = false
-  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[] }> {
+  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[]; hookStop?: string }> {
+    let hookStop: string | undefined;
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
@@ -1304,6 +1350,7 @@ export class AgentRunner {
             }
             if (r.stop) {
               result = { content: `Stopped by a hook: ${r.stop}`, isError: true };
+              hookStop = r.stop;
             }
           }
         }
@@ -1366,6 +1413,9 @@ export class AgentRunner {
           { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), tool_response: { content, is_error: !!result.isError }, localpilot_tool_name: call.name },
           { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal }
         );
+        if (r.stop) {
+          hookStop = r.stop;
+        }
         const extra = [...(r.block ? r.reasons.map((x) => `[hook] ${x}`) : []), ...r.context];
         if (extra.length) {
           content = `${content}\n\n${extra.join('\n')}`;
@@ -1463,9 +1513,9 @@ export class AgentRunner {
     if (!nativeTools) {
       // Text protocol: tool results go back as a single user message (with any captured images attached to it).
       const carrier: ChatMessage = { role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages, toolResults: calls.map((c) => c.id) } };
-      return { messages: [carrier], perCall: ordered };
+      return { messages: [carrier], perCall: ordered, hookStop };
     }
-    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered };
+    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered, hookStop };
   }
 
   private async gateApproval(

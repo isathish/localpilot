@@ -23,7 +23,7 @@ export function parseRedisUrl(url: string): RedisTarget {
   }
   const db = Number(u.pathname.replace(/^\//, '') || 0);
   return {
-    host: u.hostname || '127.0.0.1',
+    host: u.hostname.replace(/^\[(.*)\]$/, '$1') || '127.0.0.1',
     port: Number(u.port) || 6379,
     tls: u.protocol === 'rediss:',
     username: u.username ? decodeURIComponent(u.username) : undefined,
@@ -120,6 +120,7 @@ export class RedisClient {
   private connecting?: Promise<net.Socket>;
   private pending: Pending[] = [];
   private buf: Buffer = Buffer.alloc(0);
+  private closed = false;
 
   constructor(
     url: string,
@@ -154,10 +155,15 @@ export class RedisClient {
   }
 
   close(): void {
+    // Terminal: a closed client never reconnects, so a disposed store cannot leak a fresh socket.
+    this.closed = true;
     this.fail(new Error('Redis connection closed'));
   }
 
   private connect(): Promise<net.Socket> {
+    if (this.closed) {
+      return Promise.reject(new Error('Redis connection closed'));
+    }
     if (this.sock && !this.sock.destroyed) {
       return Promise.resolve(this.sock);
     }
@@ -169,6 +175,10 @@ export class RedisClient {
     this.connecting = this.open()
       .then(async (sock) => {
         await this.hello(sock);
+        if (this.closed) {
+          sock.destroy();
+          throw new Error('Redis connection closed');
+        }
         this.sock = sock;
         return sock;
       })
@@ -181,7 +191,7 @@ export class RedisClient {
   private open(): Promise<net.Socket> {
     const t = this.target;
     return new Promise<net.Socket>((resolve, reject) => {
-      const sock = t.tls ? tls.connect({ host: t.host, port: t.port, servername: t.host }) : net.connect({ host: t.host, port: t.port });
+      const sock = t.tls ? tls.connect({ host: t.host, port: t.port, ...(net.isIP(t.host) ? {} : { servername: t.host }) }) : net.connect({ host: t.host, port: t.port });
       const timer = setTimeout(() => {
         sock.destroy();
         reject(new Error(`Cannot reach Redis at ${t.host}:${t.port} (timed out)`));
@@ -189,6 +199,11 @@ export class RedisClient {
       sock.setNoDelay(true);
       sock.once(t.tls ? 'secureConnect' : 'connect', () => {
         clearTimeout(timer);
+        if (this.closed) {
+          sock.destroy();
+          reject(new Error('Redis connection closed'));
+          return;
+        }
         this.buf = Buffer.alloc(0);
         resolve(sock);
       });
@@ -236,11 +251,14 @@ export class RedisClient {
       }
       sock.write(Buffer.concat(cmds.map(encode)));
     }).catch((e) => {
+      // The socket is not published yet, so the queue holds only this handshake's waiters: drop them with it.
+      this.fail(e);
       sock.destroy();
       throw e;
     });
     const bad = replies.find((r) => r instanceof RedisError);
     if (bad) {
+      this.fail(bad as RedisError);
       sock.destroy();
       throw bad;
     }

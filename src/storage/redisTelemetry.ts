@@ -18,6 +18,22 @@ export interface RedisProbe {
   error?: string;
 }
 
+/** Streams with MINID and exclusive ranges need Redis 6.2+; an unknown version is given the benefit of the doubt. */
+export function redisVersionSupported(v?: string): boolean {
+  const m = v ? /^(\d+)\.(\d+)/.exec(v) : null;
+  if (!m) {
+    return true;
+  }
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  return major > 6 || (major === 6 && minor >= 2);
+}
+
+/** The stream ID right after `id` (`ms-seq` → `ms-(seq+1)`), for paging XRANGE without 6.2's exclusive ranges. */
+export function nextStreamId(id: string): string {
+  const [ms, seq = '0'] = id.split('-');
+  return `${ms}-${BigInt(seq) + 1n}`;
+}
+
 type Sample = { key: string; value: number; labels: Record<string, string>; sum?: boolean };
 
 /** Numeric samples an event contributes to the time series. */
@@ -115,12 +131,16 @@ export class RedisTelemetry implements TelemetryRemote {
       if (pong instanceof RedisError) {
         return { ok: false, timeseries: false, error: pong.message };
       }
+      const version = typeof info === 'string' ? /redis_version:(\S+)/.exec(info)?.[1] : undefined;
+      if (!redisVersionSupported(version)) {
+        return { ok: false, timeseries: false, version, error: `Redis ${version} is too old: LocalPilot needs Redis 6.2+ (Redis Stack recommended)` };
+      }
       const mem = await this.client.command('INFO', 'memory').catch(() => '');
       this.timeseries = undefined;
       return {
         ok: true,
         timeseries: await this.hasTimeSeries(),
-        version: typeof info === 'string' ? /redis_version:(\S+)/.exec(info)?.[1] : undefined,
+        version,
         usedMemory: typeof mem === 'string' ? /used_memory_human:(\S+)/.exec(mem)?.[1] : undefined,
       };
     } catch (e) {
@@ -130,10 +150,19 @@ export class RedisTelemetry implements TelemetryRemote {
 
   private hasTimeSeries(): Promise<boolean> {
     // TS.INFO on a missing key answers "key does not exist" when the module is there, "unknown command" when not.
-    this.timeseries ??= this.client
-      .pipeline([['TS.INFO', `${TS_PREFIX}__probe__`]])
-      .then(([r]) => !(r instanceof RedisError && /unknown command/i.test(r.message)))
-      .catch(() => false);
+    // Only a definite answer is cached; a transport failure is asked again next time.
+    if (!this.timeseries) {
+      const p: Promise<boolean> = this.client
+        .pipeline([['TS.INFO', `${TS_PREFIX}__probe__`]])
+        .then(([r]) => !(r instanceof RedisError && /unknown command/i.test(r.message)))
+        .catch(() => {
+          if (this.timeseries === p) {
+            this.timeseries = undefined;
+          }
+          return false;
+        });
+      this.timeseries = p;
+    }
     return this.timeseries;
   }
 
@@ -181,7 +210,7 @@ export class RedisTelemetry implements TelemetryRemote {
       if (r.count < BATCH || !r.lastId) {
         return;
       }
-      start = `(${r.lastId}`;
+      start = nextStreamId(r.lastId);
     }
   }
 

@@ -10,6 +10,13 @@ import { formatAnalysis, summarizeManifest, summarizeWorkspace } from '../tools/
 import { AgentEvent, TodoItem, Tool, ToolContext } from '../types';
 
 suite('Parallel execution: dependency waves, sharding and plan handoff', () => {
+  test('ParallelPool treats a limit below 1 or not a number as 1 instead of never starting', async () => {
+    for (const limit of [0, -1, NaN]) {
+      const res = await new ParallelPool(limit).map([1, 2, 3], async (x) => x);
+      assert.deepStrictEqual(res.map((r) => r.status), ['fulfilled', 'fulfilled', 'fulfilled'], `limit ${limit}`);
+    }
+  });
+
   test('nextWave releases independent items first, dependents after, and blocks on failures', () => {
     const items = [
       { id: '1' },

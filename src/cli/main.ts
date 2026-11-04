@@ -26,7 +26,7 @@ import { createAgentTools } from '../agent/subagents';
 import { loadProjectSettings, ProjectSettings } from '../agent/settings';
 import { HookRunner } from '../agent/hooks';
 import { discoverPlugins, PluginInfo, pluginSource } from '../agent/plugins';
-import { agentTaskPrompt, CustomCommand, discoverCommands, expandCommand, indexCommands, skillTaskPrompt } from '../agent/commands';
+import { agentTaskPrompt, CustomCommand, discoverCommands, expandCommand, indexCommands, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
 import { describeSource, installSkills, parseSkillSource, skillsDestination } from '../agent/skillInstaller';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
@@ -100,7 +100,7 @@ ${bold('Usage')}
   localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
   localpilot providers                    local and cloud providers: reachability, models, key state
   localpilot providers presets            providers you can add (Ollama, LM Studio… OpenAI, Claude, Gemini, OpenRouter…)
-  localpilot providers add <preset|url>   add one [--id <id>] [--key <key> | --key-env VAR] [--url <url>] [--cloud]
+  localpilot providers add <preset|url>   add one [--id <id>] [--key <key> | --key-env VAR] [--url <url>] [--region <aws-region>] [--cloud]
   localpilot providers key <id> [key]     set its API key (prompted if omitted, or piped in) [--key-env VAR] [--remove-key]
   localpilot providers test [id]          check a provider and list its models
   localpilot providers remove <id>        remove a provider added here (disables a VS Code one for the CLI)
@@ -212,6 +212,7 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--key-env') {a.provider.keyEnv = next();}
     else if (x === '--remove-key') {a.provider.removeKey = true;}
     else if (x === '--url') {a.provider.url = next();}
+    else if (x === '--region') {a.provider.region = next();}
     else if (x === '--id') {a.provider.id = next();}
     else if (x === '--type') {a.provider.type = next();}
     else if (x === '--name') {a.provider.name = next();}
@@ -266,11 +267,13 @@ function openInVsCode(pathname: string, params: Record<string, string>, cwd: str
   // Values are encoded twice: VS Code decodes the query once before the handler splits it on '&'.
   const q = Object.entries({ ...params, ...extra }).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(encodeURIComponent(v))}`).join('&');
   const url = `vscode://localpilot.localpilot-agent/${pathname}${q ? `?${q}` : ''}`;
-  // On Windows the launcher is a .cmd that needs a shell; quoting keeps the '&' in the query from splitting the command.
+  // On Windows the launcher is a .cmd that needs cmd.exe; every argument is quoted so the '&' in the query does not split the command.
   const launch = (bin: string) => process.platform === 'win32'
-    ? cp.spawnSync(`"${bin}"`, ['--open-url', `"${url}"`, `"${cwd}"`], { stdio: 'inherit', shell: true })
+    ? cp.spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${[bin, '--open-url', url, cwd].map((a) => `"${a}"`).join(' ')}"`], { stdio: 'inherit', windowsVerbatimArguments: true })
     : cp.spawnSync(bin, ['--open-url', url, cwd], { stdio: 'inherit' });
-  let code = process.env.LOCALPILOT_CODE_BIN || 'code';
+  // A shim installed by an older version may point at a launcher that does not exist.
+  const configured = process.env.LOCALPILOT_CODE_BIN;
+  let code = configured && fs.existsSync(configured) ? configured : 'code';
   let r = launch(code);
   // cmd.exe reports a missing program as exit status 9009 instead of ENOENT.
   if (code !== 'code' && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' || (process.platform === 'win32' && r.status === 9009))) {
@@ -589,6 +592,28 @@ async function shutdown(core: Core): Promise<void> {
   core.telemetryRemote?.dispose();
 }
 
+/** Earlier CLI versions kept global notes one level too deep (`memory/memory`): move them up (best effort). */
+function migrateGlobalMemory(dir: string): void {
+  const old = path.join(dir, 'memory');
+  try {
+    if (!fs.statSync(old).isDirectory()) {
+      return;
+    }
+    for (const f of fs.readdirSync(old)) {
+      if (f.endsWith('.md') && !fs.existsSync(path.join(dir, f))) {
+        try {
+          fs.renameSync(path.join(old, f), path.join(dir, f));
+        } catch {
+          // leave it where it is
+        }
+      }
+    }
+    fs.rmdirSync(old); // only when it is empty now
+  } catch {
+    // nothing to migrate
+  }
+}
+
 async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }) => Promise<boolean>): Promise<Core> {
   const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
   const providers = new ProviderRegistry(log);
@@ -619,7 +644,8 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   const skills = new SkillManager(log, path.join(__dirname, '..', 'skills'));
   const workspace = new WorkspaceContext(log);
   const tracker = new ChangeTracker(log);
-  const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot', 'memory')), log, () => getConfig().memoryLimits);
+  migrateGlobalMemory(path.join(os.homedir(), '.localpilot', 'memory'));
+  const memory = new MemoryStore(vscode.Uri.file(path.join(os.homedir(), '.localpilot')), log, () => getConfig().memoryLimits);
   const learner = new SkillLearner(path.join(os.homedir(), '.localpilot', 'skill-learning.json'), log);
   const catalog = new SkillCatalog({ cacheFile: process.env.LOCALPILOT_SKILL_CATALOG || path.join(os.homedir(), '.localpilot', 'skill-catalog.json'), repositories: () => getConfig().skillRepositories, log });
   const runner = new AgentRunner(providers, tools, skills, workspace, log, tracker, memory, learner, catalog);
@@ -845,7 +871,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
 
 /** Create an isolated worktree for the CLI session (seeded with the checkout's uncommitted work) and route tools into it. */
 async function isolate(core: Core, session: Session, cwd: string, r: Renderer, signal?: AbortSignal): Promise<{ info: WorktreeInfo; mgr: WorktreeManager } | undefined> {
-  const mgr = new WorktreeManager(getConfig().worktrees.location, core.log);
+  const mgr = new WorktreeManager(() => getConfig().worktrees.location, core.log);
   const repo = await mgr.repoRoot(cwd);
   if (!repo) {
     return undefined;
@@ -940,19 +966,22 @@ function modelLine(m: ModelInfo, def: string): string {
 
 /** `/skill <name> <task>` or `/agent <name> <task>`: the prompt to run, or why it cannot run (same prompts as the chat). */
 function taskCommand(core: Core, kind: string, rest: string): { prompt: string } | { error: string } | undefined {
-  const [name, ...task] = rest.trim().split(/\s+/);
+  const { name, task } = parseTaskArgs(rest);
   if (!name) {
     return undefined;
   }
   if (kind === 'agent') {
-    return core.skills.getAgent(name) ? { prompt: agentTaskPrompt(name, task.join(' ')) } : { error: `Unknown subagent "${name}". Subagents: ${core.skills.allAgents.map((a) => a.name).join(', ')}` };
+    if (!core.skills.getAgent(name)) {
+      return { error: `Unknown subagent "${name}". Subagents: ${core.skills.allAgents.map((a) => a.name).join(', ')}` };
+    }
+    return task ? { prompt: agentTaskPrompt(name, task) } : { error: 'Usage: /agent <name> <task>' };
   }
   const skill = core.skills.resolveSkill(name)?.skill;
   if (!skill) {
     const similar = core.skills.similarSkillNames(name);
     return { error: `Unknown skill "${name}".${similar.length ? ` Did you mean ${similar.join(', ')}?` : ''} Install one with: localpilot skill install <owner/repo|url>` };
   }
-  return { prompt: skillTaskPrompt(skill.name, task.join(' ')) };
+  return { prompt: skillTaskPrompt(skill.name, task) };
 }
 
 async function cmdModels(core: Core): Promise<void> {
@@ -973,7 +1002,7 @@ async function cmdModels(core: Core): Promise<void> {
       console.log(modelLine(m, def));
     }
   }
-  console.log(dim(`\n${amber('●')} = default. Change with: localpilot --model <id> … or /model in a session${models.some((m) => m.remote) ? '. Cloud models answer only when chosen; automatic picks prefer local ones.' : ''}`));
+  console.log(dim(`\n${amber('●')} = default. Use another with: localpilot --model <id> …; /model switches the current session; set defaultModel to change the default${models.some((m) => m.remote) ? '. Cloud models answer only when chosen; automatic picks prefer local ones.' : ''}`));
 }
 
 /** `localpilot providers [list|presets|add|key|remove|test] …` */
@@ -1311,12 +1340,25 @@ async function cmdEval(core: Core, args: Args): Promise<number> {
   console.log(`${BRAND} benchmark ${bold(suite.name)}: ${tasks.length} task${tasks.length === 1 ? '' : 's'} × ${models.length} model${models.length === 1 ? '' : 's'}\n`);
   for (const model of models) {
     console.log(bold(model));
+    // A model the CLI cannot reach (a cloud key only in VS Code's secret storage) would be replaced by a fallback.
+    const route = await core.providers.route({ modelRef: model }).catch((e) => e as Error);
+    if (route instanceof Error || route.fallback || (route.model.id !== model && route.model.modelId !== model)) {
+      const why = `${model} is not available to the CLI — missing key? set LOCALPILOT_KEY_<ID> or run localpilot providers key <id>`;
+      run.results.push(...tasks.map((t) => ({ task: t.id, category: t.category, model, pass: false, skipped: why, durationMs: 0, steps: 0, toolCalls: 0, toolErrors: 0, promptTokens: 0, completionTokens: 0 })));
+      console.log(`  ${dim(`skipped: ${why}${route instanceof Error ? ` (${route.message})` : ''}`)}`);
+      continue;
+    }
     for (const task of tasks) {
       if (ctl.signal.aborted) {
         break;
       }
       process.stdout.write(`  ${task.id.padEnd(26)} `);
-      const r = await runTask(core.runner, task, model, { signal: ctl.signal, keep: o.keep });
+      let r: Awaited<ReturnType<typeof runTask>>;
+      try {
+        r = await runTask(core.runner, task, model, { signal: ctl.signal, keep: o.keep });
+      } catch (e) {
+        r = { task: task.id, category: task.category, model, pass: false, reason: e instanceof Error ? e.message : String(e), durationMs: 0, steps: 0, toolCalls: 0, toolErrors: 0, promptTokens: 0, completionTokens: 0 };
+      }
       run.results.push(r);
       console.log(r.skipped ? dim(`skipped (${r.skipped})`) : `${r.pass ? green('✔ pass') : red('✖ fail')}  ${dim(`${(r.durationMs / 1000).toFixed(0)} s · ${r.steps} steps · ${r.toolCalls} tools${r.workspace ? ` · ${r.workspace}` : ''}`)}${r.pass ? '' : `\n    ${dim(String(r.reason).slice(0, 240))}`}`);
     }
@@ -1328,11 +1370,20 @@ async function cmdEval(core: Core, args: Args): Promise<number> {
       prev.set(m, p);
     }
   }
-  const saved = await saveRun(run);
   const report = formatReport(run, prev);
-  console.log(`\n${md(report)}\n\n${dim(`Saved ${saved}`)}`);
+  console.log(`\n${md(report)}\n`);
   if (o.json) {
-    await import('fs').then((fs) => fs.promises.writeFile(o.json!, JSON.stringify({ ...run, summary: summarize(run.results) }, null, 2)));
+    await fs.promises.writeFile(o.json, JSON.stringify({ ...run, summary: summarize(run.results) }, null, 2));
+  }
+  // A partial run is no baseline for the next comparison.
+  if (ctl.signal.aborted) {
+    console.log(yellow('Interrupted — results not saved'));
+    return 130;
+  }
+  try {
+    console.log(dim(`Saved ${await saveRun(run)}`));
+  } catch (e) {
+    console.log(yellow(`! Could not save the run: ${e instanceof Error ? e.message : String(e)}`));
   }
   // Exit 1 when anything that ran failed, so CI can gate on a benchmark.
   return run.results.some((r) => !r.pass && !r.skipped) ? 1 : 0;
@@ -1571,7 +1622,13 @@ async function main(): Promise<void> {
       process.stdout.write(`${BRAND} ${dim(`${modelInfo.id} · ${args.mode} · ${cwdLabel}`)}\n\n`);
     }
     const ctl = new RunControl(session.id);
-    process.once('SIGINT', () => ctl.stop());
+    process.on('SIGINT', () => {
+      if (!ctl.signal.aborted) {
+        ctl.stop();
+      } else {
+        core.runner.cancelBackground();
+      }
+    });
     // Cooked terminal: Ctrl+Z arrives as SIGTSTP; hold the agent instead of suspending the process.
     // Children in our process group (hooks, git, rg) were stopped by the tty too; continue them right away.
     process.on('SIGTSTP', () => {
@@ -1609,6 +1666,7 @@ async function main(): Promise<void> {
     // The automatic memory save runs after the answer; give it a moment before the process ends.
     if (!ctl.signal.aborted) {
       renderer.status('Saving what this run learned to memory…');
+      process.once('SIGINT', () => core.runner.cancelBackground());
       await core.runner.idle(45_000);
       renderer.status('');
     }
@@ -1783,6 +1841,9 @@ async function main(): Promise<void> {
       }
       case 'hooks': {
         const entries = Object.entries(core.settings.hooks);
+        if (!getConfig().hooksEnabled) {
+          console.log(yellow('  Hooks are disabled (localpilot.hooks.enabled = false).'));
+        }
         console.log(entries.length ? entries.map(([ev, ms]) => `  ${bold(ev)}: ${ms.map((m) => `${m.matcher ? `${m.matcher} → ` : ''}${m.hooks.map((h) => h.command).join(', ')}`).join('; ')}`).join('\n') : dim('no hooks configured (settings.json → "hooks")'));
         return true;
       }

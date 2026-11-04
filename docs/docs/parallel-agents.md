@@ -127,7 +127,7 @@ A running agent has two buttons next to the composer:
 - Pausing a lane holds only that subagent.
 - Stopping a lane ends that subagent. The main agent continues and gets a *stopped by the user* report for that task, not a failure.
 
-The same controls are in the tab's right-click menu, the background strip, the **Agents** panel and the Command Palette: *LocalPilot: Pause Agent*, *Resume Agent*, *Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents*, *Stop Agent*, *Stop All Agents*.
+The same controls are in the tab's right-click menu, the background strip and the **Agents** panel. The Command Palette has *LocalPilot: Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents* and *Stop All Agents*.
 
 <p><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" alt="A paused agent: its subagent lanes (docs and tester working, two coders queued), a queued steering message, Paused · message waiting and the Resume button" width="420"></p>
 

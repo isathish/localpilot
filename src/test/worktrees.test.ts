@@ -84,6 +84,7 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     assert.ok(live.dirFor('/x/repo').startsWith(path.join(os.homedir(), 'a') + path.sep));
     loc = '~/b';
     assert.ok(live.dirFor('/x/repo').startsWith(path.join(os.homedir(), 'b') + path.sep));
+    assert.ok(new WorktreeManager(() => undefined).dirFor('/x/repo').startsWith(path.join(os.homedir(), '.localpilot', 'worktrees') + path.sep));
   });
 
   test('create seeds the worktree with committed + uncommitted + untracked state and records a base; changes() starts empty', async () => {
@@ -220,6 +221,24 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
       assert.deepStrictEqual(res.conflicts, []);
       assert.strictEqual(await fs.readFile(path.join(repo, 'src', 'app.ts'), 'utf8'), 'export const a = 10;\nexport const b = 2;\nexport const c = 30;\n');
       assert.doesNotMatch(git(['status', '--porcelain'], repo), /^M  /m, 'nothing left staged after a clean 3-way merge');
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('a 3-way apply keeps what the user had staged in the main checkout', async () => {
+    const wt = await mgr.create(repo, 'session-5b');
+    try {
+      await fs.writeFile(path.join(wt.path, 'src', 'app.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = 30;\n');
+      // The user stages an edit next to the agent's, so the plain apply no longer matches and the 3-way path runs.
+      await fs.writeFile(path.join(repo, 'src', 'app.ts'), 'export const a = 10;\nexport const b = 2;\nexport const c = 3;\n');
+      git(['add', 'src/app.ts'], repo);
+      const res = await mgr.apply(wt);
+      assert.deepStrictEqual(res.conflicts, []);
+      assert.strictEqual(await fs.readFile(path.join(repo, 'src', 'app.ts'), 'utf8'), 'export const a = 10;\nexport const b = 2;\nexport const c = 30;\n');
+      const staged = git(['diff', '--cached', '--', 'src/app.ts'], repo);
+      assert.match(staged, /^\+export const a = 10;$/m, 'the user\'s staged hunk is still staged');
+      assert.doesNotMatch(staged, /c = 30/, 'the merged agent edit is not staged');
     } finally {
       await mgr.remove(wt);
     }

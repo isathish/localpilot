@@ -23,7 +23,7 @@ import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { userText } from '../agent/clarify';
 import { findRipgrep, runProcess } from '../tools/search';
 import { releaseIntegratedTerminal } from '../tools/terminal';
-import { agentTaskPrompt, CommandManager, CustomCommand, expandCommand, skillTaskPrompt } from '../agent/commands';
+import { agentTaskPrompt, CommandManager, CustomCommand, expandCommand, parseTaskArgs, skillTaskPrompt } from '../agent/commands';
 import * as path from 'path';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { formatBoard, TeamBoard } from '../agent/teamBoard';
@@ -72,7 +72,7 @@ export type ToWebview =
   /** Pause state of a run or of one of its subagents (`childId`). `paused` = requested; `holding` = the loop has actually stopped at a step boundary. */
   | { type: 'paused'; sessionId: string; childId?: string; agent?: string; paused: boolean; holding: boolean }
   /** A message typed while the agent was busy was queued; the loop reports `steer` when it is injected. */
-  | { type: 'steerQueued'; sessionId: string; id: string; content: string; images?: string[] }
+  | { type: 'steerQueued'; sessionId: string; id: string; content: string; images?: string[]; fixes?: PromptFix[] }
   /** A message waits for a manual compaction to finish before it starts a run. */
   | { type: 'sendQueued'; sessionId: string }
   /** A message never started a run (no model could read its images, a custom command failed to expand): the chat drops its placeholder turn. */
@@ -87,7 +87,7 @@ export type ToWebview =
     }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'openFiles'; files: string[]; active?: string; selection?: boolean }
-  | { type: 'draft'; text: string }
+  | { type: 'draft'; text: string; images?: string[] }
   /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
   | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
   | { type: 'focusInput' }
@@ -144,6 +144,7 @@ export type FromWebview =
   | { type: 'setMode'; sessionId: string; mode: Session['mode'] }
   | { type: 'setSkills'; sessionId: string; mode?: string | null; pinned?: string[] }
   | { type: 'refreshModels' }
+  | { type: 'detectModels' }
   | { type: 'openFile'; path: string; line?: number; sessionId?: string }
   | { type: 'insertCode'; code: string }
   | { type: 'applyCodeToFile'; code: string; path?: string }
@@ -224,6 +225,8 @@ const REPLAY_BYTES_LIMIT = 6_000_000;
 export class ChatController implements vscode.Disposable {
   private sinks = new Set<Sink>();
   private runs = new Map<string, RunControl>();
+  /** Session id -> models uninstalled while that chat was running; its pin is reset to Auto when the run ends. */
+  private readonly removedWhileRunning = new Map<string, Set<string>>();
   /** Sessions whose current run was stopped by the user, so a queued task records `cancelled` rather than done/failed. */
   private readonly stoppedByUser = new Set<string>();
   private replays = new Map<string, RunReplay>();
@@ -378,6 +381,15 @@ export class ChatController implements vscode.Disposable {
   }
   private pendingDraft?: { text: string; at: number };
 
+  /** Answers the surface that asked (side bar or editor tab); without one (commands) every surface gets it. */
+  private replyTo(reply: Sink | undefined, m: ToWebview): void {
+    if (reply) {
+      reply.post(m);
+    } else {
+      this.broadcast(m);
+    }
+  }
+
   private broadcast(msg: ToWebview): void {
     this.record(msg);
     if (msg.type === 'event') {
@@ -479,13 +491,21 @@ export class ChatController implements vscode.Disposable {
         const trim = (c: unknown) => (typeof c === 'string' && c.length > REPLAY_RESULT_LIMIT ? `${c.slice(0, REPLAY_RESULT_LIMIT)}\n… (${(c.length - REPLAY_RESULT_LIMIT).toLocaleString()} more characters)` : c);
         const payload = p && typeof p === 'object' ? { ...p, content: trim(p.content), ...(p.data && typeof p.data === 'object' && 'content' in p.data ? { data: { ...p.data, content: trim(p.data.content) } } : {}) } : p;
         r.items.push({ type: 'event', event: { ...e, payload } });
-        r.bytes += typeof (payload as { content?: unknown } | undefined)?.content === 'string' ? ((payload as { content: string }).content.length) : 200;
+        const q = payload as { content?: unknown; data?: { content?: unknown; image?: { data?: unknown } } } | undefined;
+        const len = (c: unknown) => (typeof c === 'string' ? c.length : 0);
+        r.bytes += 200 + len(q?.content) + len(q?.data?.content) + len(q?.data?.image?.data);
       } else {
         if (e.type === 'steer') {
           this.forgetSteers(sid!, ((e.payload as { ids?: string[] } | undefined)?.ids) ?? []);
         }
         r.items.push(msg);
-        r.bytes += 200;
+        let size = 200;
+        try {
+          size += JSON.stringify(e.payload ?? '').length;
+        } catch {
+          /* circular or unserialisable: count the flat estimate */
+        }
+        r.bytes += size;
       }
     } else {
       if (msg.type === 'paused') {
@@ -994,7 +1014,7 @@ export class ChatController implements vscode.Disposable {
     await this.providers.warm(session.model, session.mode === 'plan' ? 'reasoning' : 'agent');
   }
 
-  async handle(msg: FromWebview): Promise<void> {
+  async handle(msg: FromWebview, reply?: Sink): Promise<void> {
     switch (msg.type) {
       case 'ready': {
         await this.sendInit();
@@ -1147,7 +1167,7 @@ export class ChatController implements vscode.Disposable {
           if (sid) {
             const s = this.store.peek(sid);
             const last = s?.messages.slice().reverse().find((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolImages && !m.meta?.toolResults);
-            const prompt = String(last?.meta?.display ?? last?.content ?? '').replace(/^\/skill \S+\s*/, '').trim();
+            const prompt = (last ? (last.meta?.display ?? userText(last.content)) : '').replace(/^\/skill \S+\s*/, '').trim();
             this.setOffers(sid, { ...this.offers.get(sid), available: undefined, ready: { name: one.name, prompt } });
           }
           void vscode.window.showInformationMessage(existing ? `"${one.name}" is ready to use.` : `Installed "${one.name}" into ${dest}.`);
@@ -1254,6 +1274,9 @@ export class ChatController implements vscode.Disposable {
       case 'refreshModels':
         await this.providers.listModels(true);
         return this.pushModels();
+      case 'detectModels':
+        await vscode.commands.executeCommand('localpilot.refreshModels');
+        return;
       case 'openFile': {
         const root = this.workspace.root;
         const absolute = msg.path.startsWith('/') || /^[a-z]:[\\/]/i.test(msg.path);
@@ -1322,7 +1345,7 @@ export class ChatController implements vscode.Disposable {
       }
       case 'attachRef':
         // Special context chip (e.g. @terminal) added from a command outside the webview.
-        this.broadcast({ type: 'toast', level: 'info', text: `attach:${msg.ref.replace(/^@/, '')}` });
+        this.replyTo(reply, { type: 'toast', level: 'info', text: `attach:${msg.ref.replace(/^@/, '')}` });
         return;
       case 'attachActive':
       case 'pickAttachment':
@@ -1411,9 +1434,9 @@ export class ChatController implements vscode.Disposable {
           if (uri.scheme === 'file') {
             const img = await readImage(uri.fsPath);
             if (img) {
-              this.broadcast({ type: 'image', image: img });
+              this.replyTo(reply, { type: 'image', image: img });
             } else {
-              this.broadcast({ type: 'toast', level: 'info', text: `attach:${vscode.workspace.asRelativePath(uri)}` });
+              this.replyTo(reply, { type: 'toast', level: 'info', text: `attach:${vscode.workspace.asRelativePath(uri)}` });
             }
           }
         } catch {
@@ -1423,14 +1446,14 @@ export class ChatController implements vscode.Disposable {
       }
       case 'pickImage':
         for (const img of await pickImages()) {
-          this.broadcast({ type: 'image', image: img });
+          this.replyTo(reply, { type: 'image', image: img });
         }
         return;
       case 'captureUrl':
-        await this.captureUrl(msg.url, { mobile: msg.mobile, fullPage: msg.fullPage });
+        await this.captureUrl(msg.url, { mobile: msg.mobile, fullPage: msg.fullPage }, reply);
         return;
       case 'inspectUrl':
-        await this.inspectUrl(msg.url, { mobile: msg.mobile });
+        await this.inspectUrl(msg.url, { mobile: msg.mobile }, reply);
         return;
       case 'openBrowser': {
         const url = msg.url || (await this.askUrl('Open in the VS Code browser view'));
@@ -1447,7 +1470,7 @@ export class ChatController implements vscode.Disposable {
         const mode = msg.mode ?? 'region';
         const img = await captureScreenshot(mode, { delayMs: msg.delayMs });
         if (img) {
-          this.broadcast({ type: 'image', image: img });
+          this.replyTo(reply, { type: 'image', image: img });
         } else {
           const hint = process.platform === 'linux' ? ' (install gnome-screenshot, spectacle, scrot or grim+slurp)' : '';
           this.broadcast({ type: 'toast', level: 'error', text: mode === 'region' || mode === 'window' ? `Screenshot cancelled${hint}` : `Screenshot failed${hint}` });
@@ -1517,10 +1540,10 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'restoreCheckpoint':
-        await this.rewindTo(msg.sessionId, msg.messageIndex, true);
+        await this.rewindTo(msg.sessionId, msg.messageIndex, true, reply);
         return;
       case 'editMessage':
-        await this.rewindTo(msg.sessionId, msg.messageIndex, false);
+        await this.rewindTo(msg.sessionId, msg.messageIndex, false, reply);
         return;
     }
   }
@@ -1530,7 +1553,7 @@ export class ChatController implements vscode.Disposable {
    * after it are removed and its text goes back into the composer. With `revertFiles` the files changed since that
    * turn are restored too ("Restore checkpoint"); without it the work on disk is kept ("Edit").
    */
-  private async rewindTo(sessionId: string, messageIndex: number, revertFiles: boolean): Promise<void> {
+  private async rewindTo(sessionId: string, messageIndex: number, revertFiles: boolean, reply?: Sink): Promise<void> {
     if (this.compacting.has(sessionId)) {
       this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
       return;
@@ -1558,7 +1581,7 @@ export class ChatController implements vscode.Disposable {
     if (revertFiles) {
       this.pushChanges(s.id);
     }
-    this.broadcast({ type: 'draft', text: prompt });
+    this.replyTo(reply, { type: 'draft', text: prompt });
     this.broadcast({
       type: 'toast',
       level: 'info',
@@ -1644,7 +1667,11 @@ export class ChatController implements vscode.Disposable {
   private dropRemovedModels(ids: string[]): void {
     const gone = new Set(ids);
     for (const summary of this.store.list()) {
-      if (!summary.model || !gone.has(summary.model) || this.runs.has(summary.id)) {
+      if (!summary.model || !gone.has(summary.model)) {
+        continue;
+      }
+      if (this.runs.has(summary.id)) {
+        this.removedWhileRunning.set(summary.id, new Set([...(this.removedWhileRunning.get(summary.id) ?? []), ...ids]));
         continue;
       }
       const s = this.store.get(summary.id);
@@ -1680,7 +1707,7 @@ export class ChatController implements vscode.Disposable {
   private lastUrl = '';
 
   /** Renders a URL headlessly and attaches the screenshot to the composer (also used by the command palette). */
-  async captureUrl(url?: string, opts: { mobile?: boolean; fullPage?: boolean } = {}): Promise<boolean> {
+  async captureUrl(url?: string, opts: { mobile?: boolean; fullPage?: boolean } = {}, reply?: Sink): Promise<boolean> {
     const target = url || (await this.askUrl('Screenshot a web page'));
     if (!target) {
       return false;
@@ -1688,7 +1715,7 @@ export class ChatController implements vscode.Disposable {
     this.broadcast({ type: 'toast', level: 'info', text: `Rendering ${target}…` });
     try {
       const shot = await captureUrl(target, { mobile: opts.mobile, fullPage: opts.fullPage });
-      this.broadcast({ type: 'image', image: { name: shot.name, data: shot.data, mime: shot.mime } });
+      this.replyTo(reply, { type: 'image', image: { name: shot.name, data: shot.data, mime: shot.mime } });
       return true;
     } catch (e) {
       this.broadcast({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
@@ -1697,7 +1724,7 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** DevTools-style inspection: attaches the screenshot and drafts a message carrying the console/network/perf report. */
-  async inspectUrl(url?: string, opts: { mobile?: boolean } = {}): Promise<boolean> {
+  async inspectUrl(url?: string, opts: { mobile?: boolean } = {}, reply?: Sink): Promise<boolean> {
     const target = url || (await this.askUrl('Inspect a web page (screenshot + console + network)'));
     if (!target) {
       return false;
@@ -1706,12 +1733,12 @@ export class ChatController implements vscode.Disposable {
     try {
       const r = await inspectUrl(target, { mobile: opts.mobile, includeText: false });
       if (r.screenshot) {
-        this.broadcast({ type: 'image', image: { name: `${new URL(r.finalUrl).hostname}-inspect.png`, data: r.screenshot, mime: 'image/png' } });
+        this.replyTo(reply, { type: 'image', image: { name: `${new URL(r.finalUrl).hostname}-inspect.png`, data: r.screenshot, mime: 'image/png' } });
       }
       const errors = r.console.filter((c) => c.level === 'error').length;
       const failed = r.network.filter((e) => e.error || (e.status ?? 0) >= 400).length;
       const summary = errors || failed || r.layout.length ? `${errors} console error${errors === 1 ? '' : 's'}, ${failed} failed request${failed === 1 ? '' : 's'}, ${r.layout.length} layout issue${r.layout.length === 1 ? '' : 's'}` : 'no errors detected';
-      this.broadcast({ type: 'draft', text: `I inspected ${r.finalUrl} (${summary}). Analyse the screenshot and this DevTools report, explain the root causes and fix them:\n\n\`\`\`\n${formatReport(r, { maxConsole: 15, maxNetwork: 10 })}\n\`\`\`` });
+      this.replyTo(reply, { type: 'draft', text: `I inspected ${r.finalUrl} (${summary}). Analyse the screenshot and this DevTools report, explain the root causes and fix them:\n\n\`\`\`\n${formatReport(r, { maxConsole: 15, maxNetwork: 10 })}\n\`\`\`` });
       return true;
     } catch (e) {
       this.broadcast({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
@@ -1774,7 +1801,7 @@ export class ChatController implements vscode.Disposable {
    * Fixes misspelled file names and identifiers in a request against the workspace (`localpilot.prompts.autoCorrect`)
    * and tells the chat, which already shows the message as typed, what was changed.
    */
-  private async correctNames(sessionId: string, text: string): Promise<{ text: string; fixes: PromptFix[] }> {
+  private async correctNames(sessionId: string, text: string, announce = true): Promise<{ text: string; fixes: PromptFix[] }> {
     if (!getConfig().autoCorrectPrompts || text.trimStart().startsWith('/')) {
       return { text, fixes: [] };
     }
@@ -1782,6 +1809,8 @@ export class ChatController implements vscode.Disposable {
       const result = correctPromptNames(text, await this.workspace.nameVocabulary());
       if (result.fixes.length) {
         this.log.info(`prompt: corrected ${result.fixes.map((f) => `${f.from} → ${f.to}`).join(', ')}`);
+      }
+      if (result.fixes.length && announce) {
         this.broadcast({ type: 'promptCorrected', sessionId, text: result.text, fixes: result.fixes });
       }
       return result;
@@ -1900,12 +1929,12 @@ export class ChatController implements vscode.Disposable {
       }
       if (blind || control.aborted) {
         if (blind && !control.aborted) {
-          this.broadcast({ type: 'toast', level: 'error', text: 'No installed model can read images — install a vision model (gemma4, qwen2.5vl, llava…)' });
+          this.broadcast({ type: 'toast', level: 'error', text: `${blind} cannot read images — pick a vision model, set localpilot.routing.vision (with routing on) or install one (gemma4, qwen2.5vl, llava…)` });
         }
         endEarly();
         this.broadcast({ type: 'sendRejected', sessionId });
         // The message never became part of the chat: give its text back and drop the bubble the view already shows.
-        this.broadcast({ type: 'draft', text: opts.display ?? text });
+        this.broadcast({ type: 'draft', text: opts.display ?? text, images });
         this.broadcast(this.sessionMsg(session));
         return '';
       }
@@ -2000,8 +2029,18 @@ export class ChatController implements vscode.Disposable {
         this.runStatus.delete(sessionId);
       }
       this.deliverLeftovers(sessionId, control);
+      const removed = this.runs.has(sessionId) ? undefined : this.removedWhileRunning.get(sessionId);
+      if (removed) {
+        this.removedWhileRunning.delete(sessionId);
+        if (removed.has(session.model)) {
+          session.model = '';
+        }
+      }
       this.store.save(session);
       this.broadcast({ type: 'running', sessionId, running: false });
+      if (removed && !session.model && sessionId === this.activeSessionId) {
+        this.broadcast(this.sessionMsg(session));
+      }
       this._onDidChangeRuns.fire();
       if (session.worktree) {
         this.pushChanges(sessionId);
@@ -2044,8 +2083,11 @@ export class ChatController implements vscode.Disposable {
     this.broadcast(this.sessionMsg(session));
     // Attachments are already inlined in the stored content, so send it verbatim with no new attachments; `display`
     // keeps the chat showing the original prompt and skips slash commands and name correction, which already ran.
+    // A /skill, /agent or custom-command turn is expanded again so it keeps the command's model and allowed tools.
     const content = last.content.replace(/\n\n\[\d+ images? attached\]$/, '');
-    const result = await this.send(sessionId, content, [], last.images, { display: last.meta?.display ?? userText(content) });
+    const result = last.meta?.display?.startsWith('/')
+      ? await this.send(sessionId, last.meta.display, [], last.images)
+      : await this.send(sessionId, content, [], last.images, { display: last.meta?.display ?? userText(content) });
     if (session.messages[idx]?.role !== 'user') {
       // The run never started (cancelled, refused): put the exchange back instead of losing it.
       session.messages.splice(idx, 0, ...removed);
@@ -2135,31 +2177,32 @@ export class ChatController implements vscode.Disposable {
    * agent — running chats are always kept — and leaves the user in a fresh chat. Returns the number removed.
    */
   async clearHistory(opts: { keepPinned?: boolean } = {}): Promise<number> {
-    const keep = new Set<string>(this.runs.keys());
-    if (opts.keepPinned !== false) {
-      for (const s of this.store.list()) {
-        if (s.pinned) {
-          keep.add(s.id);
-        }
+    const keepPinned = opts.keepPinned !== false;
+    // A chat whose run starts while the clear is in progress is spared: the busy check is made just before each delete.
+    const busy = (id: string) => this.runs.has(id) || this.starting.has(id) || this.compacting.has(id);
+    const all = this.store.list();
+    const pinned = new Set(keepPinned ? all.filter((s) => s.pinned).map((s) => s.id) : []);
+    const idle = all.filter((s) => !busy(s.id) && !pinned.has(s.id)).map((s) => ({ id: s.id, root: this.sessionRoot(s.id), hadMessages: !!s.messageCount }));
+    const n = await this.store.clearExcept((id) => busy(id) || pinned.has(id));
+    const remaining = new Set(this.store.list().map((s) => s.id));
+    for (const s of idle) {
+      if (remaining.has(s.id)) {
+        continue;
+      }
+      this.tracker.forget(s.id);
+      this.sessionApprovalMemory.delete(s.id);
+      if (s.hadMessages) {
+        await this.runner.hooks?.sessionEnd(s.id, 'other', s.root);
       }
     }
-    for (const s of this.store.list()) {
-      if (!keep.has(s.id)) {
-        this.tracker.forget(s.id);
-        this.sessionApprovalMemory.delete(s.id);
-        if (s.messageCount) {
-          await this.runner.hooks?.sessionEnd(s.id, 'other', this.sessionRoot(s.id));
-        }
-      }
-    }
-    const n = await this.store.clearExcept(keep);
+    const kept = remaining.size;
     const current = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
     if (!current) {
       const next = this.store.list()[0];
       this.setActive(next ? this.store.get(next.id)! : this.createSession('agent'));
     }
     this.broadcast({ type: 'historyCleared', removed: n });
-    this.broadcast({ type: 'toast', level: 'info', text: n ? `Cleared ${n} chat${n === 1 ? '' : 's'}${keep.size ? ` · kept ${keep.size} running/pinned` : ''}` : 'Nothing to clear' });
+    this.broadcast({ type: 'toast', level: 'info', text: n ? `Cleared ${n} chat${n === 1 ? '' : 's'}${kept ? ` · kept ${kept} running/pinned` : ''}` : 'Nothing to clear' });
     return n;
   }
 
@@ -2237,7 +2280,10 @@ export class ChatController implements vscode.Disposable {
     if (!c) {
       return fallback();
     }
-    text = (await this.correctNames(sessionId, text)).text;
+    // A steer is shown in its own row, so its corrections go there rather than onto the turn's request bubble.
+    const corrected = await this.correctNames(sessionId, text, false);
+    text = corrected.text;
+    const fixes = corrected.fixes;
     let content = text;
     const attachedBlocks = await this.readAttachments(attachments, this.store.get(sessionId));
     if (attachedBlocks.some(Boolean)) {
@@ -2247,10 +2293,10 @@ export class ChatController implements vscode.Disposable {
       return fallback();
     }
     const id = `steer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    if (!c.steer({ role: 'user', content, images, meta: { steerId: id } })) {
+    if (!c.steer({ role: 'user', content, images, meta: { steerId: id, ...(fixes.length ? { corrections: fixes } : {}) } })) {
       return fallback();
     }
-    this.broadcast({ type: 'steerQueued', sessionId, id, content: text, images });
+    this.broadcast({ type: 'steerQueued', sessionId, id, content: text, images, ...(fixes.length ? { fixes } : {}) });
     this.runStatus.set(sessionId, c.holding ? 'Paused · 1 message waiting' : 'Will take your message into account at the next step');
     this._onDidChangeRuns.fire();
     return true;
@@ -2434,7 +2480,7 @@ export class ChatController implements vscode.Disposable {
           [
             '**Slash commands**',
             '- `/model <provider/model>` — switch model for this session',
-            '- `/mode agent|ask|plan` — switch mode',
+            '- `/mode agent|multitask|debug|plan|ask` — switch mode',
             '- `/compact` — summarise older messages to free context',
             '- `/clear` — clear this session',
             '- `/skills` — list skills · `/agents` — list subagents · `/commands` — list custom commands',
@@ -2493,7 +2539,8 @@ export class ChatController implements vscode.Disposable {
       case 'hooks': {
         const p = this.runner.projectSettings?.();
         const entries = Object.entries(p?.hooks ?? {});
-        return say(entries.length ? `**Hooks**\n${entries.map(([ev, ms]) => `- **${ev}**: ${ms.map((mm) => `${mm.matcher ? `\`${mm.matcher}\` → ` : ''}${mm.hooks.map((h) => `\`${h.command.length > 60 ? `${h.command.slice(0, 60)}…` : h.command}\``).join(', ')}`).join('; ')}`).join('\n')}` : 'No hooks configured. Add to `.localpilot/settings.json` or `.claude/settings.json`: `{ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "./scripts/check.sh" }] }] } }`. Events: PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, SessionStart, PreCompact, Notification.');
+        const off = getConfig().hooksEnabled ? '' : 'Hooks are disabled (localpilot.hooks.enabled = false).\n\n';
+        return say(off + (entries.length ? `**Hooks**\n${entries.map(([ev, ms]) => `- **${ev}**: ${ms.map((mm) => `${mm.matcher ? `\`${mm.matcher}\` → ` : ''}${mm.hooks.map((h) => `\`${h.command.length > 60 ? `${h.command.slice(0, 60)}…` : h.command}\``).join(', ')}`).join('; ')}`).join('\n')}` : 'No hooks configured. Add to `.localpilot/settings.json` or `.claude/settings.json`: `{ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "./scripts/check.sh" }] }] } }`. Events: PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, SessionStart, PreCompact, Notification.'));
       }
       case 'skills': {
         const all = this.skills.allSkills;
@@ -2523,7 +2570,7 @@ export class ChatController implements vscode.Disposable {
           this.broadcast(this.sessionMsg(session));
           return '';
         }
-        return say('Usage: `/mode agent|ask|plan`');
+        return say('Usage: `/mode agent|multitask|debug|plan|ask`');
       case 'model':
         if (rest.trim()) {
           session.model = rest.trim();
@@ -2575,14 +2622,17 @@ export class ChatController implements vscode.Disposable {
           return say(`Unknown skill "${name}".${disabled}${similar.length ? ` Did you mean ${similar.map((s) => `\`${s}\``).join(', ')}?` : ''} Try /skills.${hint}`);
         }
         const skill = resolved.skill;
-        return { rewrite: skillTaskPrompt(skill.name, task.join(' ')) };
+        return { rewrite: skillTaskPrompt(skill.name, parseTaskArgs(rest).task) };
       }
       case 'agent': {
-        const [name, ...task] = rest.trim().split(/\s+/);
+        const { name, task } = parseTaskArgs(rest);
         if (!this.skills.getAgent(name)) {
           return say(`Unknown subagent "${name}". Try /agents.`);
         }
-        return { rewrite: agentTaskPrompt(name, task.join(' ')) };
+        if (!task) {
+          return say('Usage: `/agent <name> <task>`');
+        }
+        return { rewrite: agentTaskPrompt(name, task) };
       }
       default: {
         const custom = this._commands?.get(cmd);

@@ -62,7 +62,18 @@ export function parseSource(text: string, lang: Lang): ParsedFile {
       add(/(?:^|[\s;])(?:import|export)\s+(?:type\s+)?(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"\n]+)['"]/gm);
       add(/\brequire\(\s*['"]([^'"\n]+)['"]\s*\)/g);
       add(/\bimport\(\s*['"]([^'"\n]+)['"]\s*\)/g);
-      sym(/^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\*?|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)/, (m) => m[1].replace('*', ''));
+      // Top-level declarations, exported or not (CommonJS files export through module.exports).
+      sym(/^(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:(function)(?:\s*\*\s*|\s+)|(class|interface|type|enum|const|let|var)\s+)([A-Za-z_$][\w$]*)/, (m) => m[1] ?? m[2]);
+      sym(/^(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/, () => 'export');
+      for (const m of text.matchAll(/^module\.exports\s*=\s*\{([^}]*)\}/gm)) {
+        const line = text.slice(0, m.index).split('\n').length;
+        for (const k of m[1].split(',')) {
+          const name = /^\s*(?:async\s+)?([A-Za-z_$][\w$]*)/.exec(k)?.[1];
+          if (name && !symbols.some((x) => x.name === name)) {
+            symbols.push({ name, kind: 'export', line });
+          }
+        }
+      }
       break;
     case 'py': {
       const from = (mod: string, list: string) => {
@@ -108,12 +119,12 @@ export function parseSource(text: string, lang: Lang): ParsedFile {
     case 'java':
       add(/^\s*import\s+(?:static\s+)?([\w.]+?)(?:\.\*)?(?:\s+as\s+\w+)?\s*;?\s*$/gm);
       pkg = /^\s*package\s+([\w.]+)/m.exec(text)?.[1];
-      sym(/^\s*(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|final\s+|open\s+|data\s+|sealed\s+)*(class|interface|enum|object|record|fun)\s+([A-Za-z_]\w*)/, (m) => m[1]);
+      sym(/^\s*(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|final\s+|open\s+|data\s+|sealed\s+)*(enum\s+class|annotation\s+class|class|interface|enum|object|record|fun)\s+([A-Za-z_]\w*)/, (m) => m[1].split(/\s+/)[0]);
       break;
     case 'cs':
       add(/^\s*using\s+(?:static\s+)?([\w.]+)\s*;/gm);
       pkg = /^\s*namespace\s+([\w.]+)/m.exec(text)?.[1];
-      sym(/^\s*(?:public\s+|internal\s+|private\s+|protected\s+|static\s+|sealed\s+|abstract\s+|partial\s+)*(class|interface|struct|enum|record)\s+([A-Za-z_]\w*)/, (m) => m[1]);
+      sym(/^\s*(?:(?:public|internal|private|protected|static|sealed|abstract|partial|readonly|ref|unsafe|file|required)\s+)*(record\s+(?:struct|class)|class|interface|struct|enum|record)\s+([A-Za-z_]\w*)/, (m) => m[1].split(/\s+/)[0]);
       break;
   }
   return { imports: [...imports], symbols, ...(pkg ? { pkg } : {}), ...(optional.size ? { optionalImports: [...optional] } : {}) };

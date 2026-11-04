@@ -9,10 +9,12 @@ const workspaceFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot-test-w
 const telemetryDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot-test-home-')), 'telemetry');
 // Auto-install records ("installed then deleted → never again") must not leak into the real ~/.localpilot either.
 const skillCatalog = path.join(path.dirname(telemetryDir), 'skill-catalog.json');
+// Worktrees the agent tests create stay out of the real ~/.localpilot/worktrees.
+const worktreesDir = path.join(path.dirname(telemetryDir), 'worktrees');
 
 export default defineConfig({
 	files: 'out/test/**/*.test.js',
 	workspaceFolder,
-	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog },
+	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir },
 	mocha: { timeout: 20_000 },
 });

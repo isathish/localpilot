@@ -154,6 +154,19 @@ export interface LaunchResult {
   pid?: number;
 }
 
+/** The systemd unit file of a Linux service install of Ollama, if there is one. */
+export async function ollamaSystemdUnit(): Promise<string | undefined> {
+  for (const f of ['/etc/systemd/system/ollama.service', '/usr/lib/systemd/system/ollama.service', '/lib/systemd/system/ollama.service']) {
+    try {
+      await fs.access(f);
+      return f;
+    } catch {
+      // not here
+    }
+  }
+  return undefined;
+}
+
 /**
  * Starts Ollama the way each platform expects and waits until it answers: the menu-bar app on macOS (falling back to
  * `ollama serve` for a Homebrew/CLI-only install), the tray app on Windows, `ollama serve` elsewhere. A server that
@@ -163,6 +176,10 @@ export async function launchOllama(o: LaunchOptions): Promise<LaunchResult> {
   try {
     if (await o.up()) {
       return { ok: true };
+    }
+    // A stopped systemd service is a deliberate state: a per-user `ollama serve` would use another model store and block the unit.
+    if (process.platform === 'linux' && (await ollamaSystemdUnit())) {
+      return { ok: false, error: 'Ollama is installed as a systemd service that is stopped. Run: sudo systemctl start ollama' };
     }
     const extra = o.env ?? {};
     const env = { ...process.env, ...extra };

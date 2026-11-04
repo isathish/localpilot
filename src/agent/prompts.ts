@@ -32,8 +32,8 @@ export interface PromptOptions {
   workingSet?: string[];
   /** Current checklist, if any. */
   todos?: TodoItem[];
-  /** Unattended run in a throwaway folder (eval): the launching workspace's map and rules do not apply. */
-  unattended?: boolean;
+  /** false for a throwaway folder (benchmark): the launching workspace's map and rules do not apply. */
+  project?: boolean;
 }
 
 export async function buildSystemPrompt(o: PromptOptions): Promise<string> {
@@ -85,17 +85,17 @@ Answer the user's question directly. You may read files and search the workspace
   }
 
   parts.push(`# Environment
-- OS: ${process.platform} (${os.release()}), shell: ${process.env.SHELL ?? 'unknown'}
+- OS: ${process.platform} (${os.release()}), shell: ${process.platform === 'win32' ? 'cmd.exe or PowerShell (depends on the terminal) — avoid && and POSIX-only syntax; run separate commands in separate run_command calls' : process.env.SHELL ?? 'sh'}
 - Workspace root: ${root ?? '(no folder open)'}
 - Date: ${new Date().toISOString().slice(0, 10)}
 - Model context window: ~${o.model.contextWindow.toLocaleString()} tokens. Keep tool outputs focused (use line ranges, max_results) to conserve context.`);
 
-  const map = o.unattended ? undefined : await o.workspace.projectMap();
+  const map = o.project === false ? undefined : await o.workspace.projectMap();
   if (map) {
     parts.push(`# Project map\n${map}\nUse list_dir / read_file for details; the user can attach the full file list with @workspace.`);
   }
 
-  const rules = o.unattended ? undefined : await o.workspace.loadInstructions();
+  const rules = o.project === false ? undefined : await o.workspace.loadInstructions();
   if (rules) {
     parts.push(`# Project instructions\nThe repository provides these rules. Follow them; they override general defaults.\n${rules}`);
   }
