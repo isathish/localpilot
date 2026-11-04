@@ -57,6 +57,10 @@ export interface LocalPilotConfig {
   temperature?: number;
   compactionThreshold: number; // 0..1 fraction of context before compaction
   maxToolOutputChars: number;
+  /** Tool steps in a row that may all fail before the run stops and asks for guidance; 0 = no limit. */
+  maxConsecutiveMistakes: number;
+  /** Tools never offered to the model: our names, Claude Code / Cline names, or globs (`mcp_*`, `browser_*`). */
+  disabledTools: string[];
   approvals: { terminal: ApprovalMode; write: ApprovalMode; delete: ApprovalMode; network: ApprovalMode };
   parallel: { maxConcurrency: number; maxSubagentDepth: number };
   /** Task queue: how many queued tasks run at once (1 = one after another). */
@@ -82,6 +86,8 @@ export interface LocalPilotConfig {
   pluginMarketplaces: string[];
   /** Run the hooks configured in settings.json (PreToolUse, PostToolUse, Stop, …). */
   hooksEnabled: boolean;
+  /** Take a git checkpoint (private ref) before each user turn; file snapshots are kept either way. */
+  checkpointsEnabled: boolean;
   builtinSkills: boolean;
   /** Repositories (owner/repo[/path]) whose skills can be installed automatically when a request matches one. */
   skillRepositories: string[];
@@ -122,6 +128,10 @@ export interface LocalPilotConfig {
   /** colibri (experts streamed from disk): checkout folder, model and port for `LocalPilot: Start colibri`. */
   colibri: { path?: string; model?: string; port: number; kvSlots: number; modelsDir?: string; backend: 'auto' | 'cpu' | 'vulkan' | 'cuda' };
   routing: RoutingConfig;
+  /** Reading PDFs (read_pdf, read_file and attachments): the largest file in MB and the most characters per read. */
+  pdf: { maxReadSizeMB: number; maxChars: number };
+  /** Markdown reader: scroll sync with the source, outline depth (h2–h6), how front matter shows, Mermaid diagrams. */
+  markdownViewer: { scrollSync: boolean; outlineDepth: number; frontMatter: 'collapsed' | 'expanded' | 'hidden'; mermaid: boolean };
 }
 
 const SECTION = 'localpilot';
@@ -156,6 +166,8 @@ export function getConfig(): LocalPilotConfig {
     temperature: (() => { const t = c.get<number>('temperature', -1); return typeof t === 'number' && t >= 0 ? Math.min(2, t) : undefined; })(),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
+    maxConsecutiveMistakes: (() => { const n = Number(c.get<number>('maxConsecutiveMistakes', 6)); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6; })(),
+    disabledTools: (c.get<string[]>('disabledTools', []) ?? []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()),
     approvals: {
       terminal: c.get<ApprovalMode>('approvals.terminal', 'ask'),
       write: c.get<ApprovalMode>('approvals.write', 'always'),
@@ -206,6 +218,7 @@ export function getConfig(): LocalPilotConfig {
     pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     pluginMarketplaces: (c.get<string[]>('plugins.marketplaces', ['anthropics/claude-plugins-official']) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     hooksEnabled: c.get<boolean>('hooks.enabled', true),
+    checkpointsEnabled: c.get<boolean>('checkpoints.enabled', true),
     builtinSkills: c.get<boolean>('skills.builtin', true),
     skillRepositories: (c.get<string[]>('skills.repositories', DEFAULT_SKILL_REPOSITORIES) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
     skillAutoInstall: normalizeAutoInstall(c.get<unknown>('skills.autoInstall', 'auto')),
@@ -252,6 +265,16 @@ export function getConfig(): LocalPilotConfig {
       fast: c.get<string>('routing.fast', '') || undefined,
       coding: c.get<string>('routing.coding', '') || undefined,
       parallelModels: c.get<boolean>('routing.parallelModels', true),
+    },
+    pdf: {
+      maxReadSizeMB: Math.max(1, Number(c.get<number>('pdf.maxReadSizeMB', 100)) || 100),
+      maxChars: Math.max(1000, Math.floor(Number(c.get<number>('pdf.maxChars', 60000)) || 60000)),
+    },
+    markdownViewer: {
+      scrollSync: c.get<boolean>('markdownViewer.scrollSync', true),
+      outlineDepth: Math.max(2, Math.min(6, Math.floor(Number(c.get<number>('markdownViewer.outlineDepth', 3)) || 3))),
+      frontMatter: (['collapsed', 'expanded', 'hidden'] as const).find((m) => m === c.get<string>('markdownViewer.frontMatter', 'collapsed')) ?? 'collapsed',
+      mermaid: c.get<boolean>('markdownViewer.mermaid', true),
     },
   };
 }

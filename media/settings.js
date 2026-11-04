@@ -89,6 +89,7 @@
     ['agent', 'hooks.enabled', 'Run hooks'], ['agent', 'worktrees.mode', 'Where agents work'], ['agent', 'worktrees.location', 'Worktree folder'],
     ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compactionThreshold', 'Compact context at'],
     ['agent', 'maxToolOutputChars', 'Max tool output'], ['agent', 'systemPromptAppend', 'Extra instructions'],
+    ['agent', 'maxConsecutiveMistakes', 'Stop after errors in a row'], ['agent', 'disabledTools', 'Tools (switch tools off)'],
     ['completions', 'inlineCompletion.enabled', 'Enable inline completions'], ['completions', 'inlineCompletion.debounceMs', 'Debounce'], ['completions', 'inlineCompletion.maxTokens', 'Max tokens per suggestion'],
     ['web', 'webSearch.provider', 'Search provider'], ['web', 'webSearch.searxngUrl', 'SearXNG URL'], ['web', 'webSearch.apiKey', 'Web search API key'], ['web', 'webSearch.maxResults', 'Max results'],
     ['web', 'browser.chromePath', 'Browser for screenshots'],
@@ -1393,6 +1394,30 @@
       field('approvals.delete', 'Deleting files', '<code>delete_path</code> — moves to the OS trash when possible.', 'seg', { options: APPROVAL }),
       field('approvals.network', 'Network & MCP', '<code>web_search</code>, <code>web_fetch</code> and tools from MCP servers.', 'seg', { options: APPROVAL })
     ));
+    sec.appendChild(el('h2', 'sub', 'Tools'));
+    // Each switch edits localpilot.disabledTools by exact name; a tool switched off by a glob or alias stays locked here.
+    const toolsEl = () => {
+      const box = el('div', 'card tools-card');
+      const tools = (state.data && state.data.tools) || [];
+      const own = Array.isArray(ownValue('disabledTools')) ? ownValue('disabledTools') : [];
+      const merged = Array.isArray(val('disabledTools')) ? val('disabledTools') : [];
+      box.appendChild(el('div', 'desc', `Switched-off tools are never offered to the agent or its subagents. ${tools.filter((t) => t.off).length} of ${tools.length} off. MCP tools are managed per server on the MCP page; globs such as <code>mcp_*</code> or <code>browser_*</code> go in <code>localpilot.disabledTools</code>.`));
+      if (!tools.length) { box.appendChild(el('div', 'empty', 'No tools registered yet.')); }
+      for (const t of tools) {
+        const byName = merged.includes(t.name);
+        const locked = t.off && !byName;
+        const row = el('div', `mrow tool ${t.off ? 'off' : ''}`);
+        const tg = el('button', `toggle ${t.off ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.setAttribute('aria-checked', String(!t.off)); tg.setAttribute('aria-label', t.name);
+        tg.title = locked ? `Off by a pattern in localpilot.disabledTools (${merged.join(', ')})` : t.off ? 'Turn on: offer this tool to the agent' : 'Turn off: never offer this tool to the agent';
+        if (locked) { tg.disabled = true; }
+        tg.onclick = () => { tg.classList.toggle('on'); set('disabledTools', t.off ? own.filter((n) => n !== t.name) : [...own.filter((n) => n !== t.name), t.name]); };
+        row.appendChild(tg);
+        row.appendChild(el('div', 't', `<b>${esc(t.name)}</b><span>${esc(t.description || '')}</span>`));
+        box.appendChild(row);
+      }
+      return component(box, ['disabledTools'], toolsEl);
+    };
+    sec.appendChild(toolsEl());
     sec.appendChild(el('h2', 'sub', 'Auto mode'));
     sec.appendChild(card(
       field('autoMode.enabled', 'Review approvals with a local model', 'An action that would ask you first is reviewed by a small local model. It approves actions that clearly serve your request and stay inside the project; everything else still shows the approval card. <b>Block</b> rules are never overridden.', 'toggle'),
@@ -1425,6 +1450,7 @@
       field('queue.concurrency', 'Queued tasks at once', 'Tasks from the task queue (Agents view → Queue, or <i>LocalPilot: Queue Agent Task…</i>). <code>1</code> runs them one after another; higher values run them side by side, each in its own worktree when <b>Where agents work</b> isolates them.', 'number', { min: 1, max: 8 }),
       field('compactionThreshold', 'Compact context at', 'When the context reaches this share of the window, older messages are summarised automatically.', 'range', { min: 0.3, max: 0.95, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }),
       field('maxToolOutputChars', 'Max tool output', 'Longer outputs are truncated (head + tail) before reaching the model.', 'number', { min: 2000, max: 200000, step: 1000 }),
+      field('maxConsecutiveMistakes', 'Stop after errors in a row', 'A run stops and asks for guidance after this many steps in a row in which every tool call failed. Any successful tool call resets the count. <code>0</code> = no limit.', 'number', { min: 0, max: 50, step: 1 }),
       field('systemPromptAppend', 'Extra instructions', 'Appended to every system prompt — coding conventions, preferred libraries, language. Project rules in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code> and <code>.github/copilot-instructions.md</code> are loaded automatically.', 'textarea', { wide: true, placeholder: 'Always use TypeScript strict mode. Prefer small, pure functions. Reply in English.' })
     ));
   }
@@ -2007,6 +2033,11 @@
     const health = s.health;
     const up = health.filter((h) => h.up).length;
     const c = s.completions;
+    const ed = s.activity && s.activity.edits;
+    const keptLines = ed ? ed.acceptedAdded + ed.acceptedRemoved : 0;
+    const undoneLines = ed ? ed.rejectedAdded + ed.rejectedRemoved : 0;
+    const hk = s.activity && s.activity.hooks;
+    const hookFails = hk ? hk.failed + hk.timeout : 0;
     const kpis = el('div', 'kpis');
     kpis.innerHTML = [
       kpi('Agent runs', fmtN(t.runs), `${t.done} done · ${t.stopped} stopped · <span class="${t.failed ? 'err-text' : ''}">${t.failed} failed</span>${t.subagentRuns ? ` · ${t.subagentRuns} subagent` : ''}`, spark(s.series, (d) => d.runs), t.failed && okRate < 70 ? 'warn' : ''),
@@ -2018,6 +2049,8 @@
       kpi('Throughput', t.tokPerSec ? `${t.tokPerSec} <span class="kpi-u">tok/s</span>` : '—', t.tokPerSec ? `generation speed across all calls${topTps ? ` · fastest ${esc(topTps.model)}` : ''}` : 'no completed calls yet', spark(s.series, (d) => d.tokPerSec)),
       kpi('Turn time', t.runTime.p50 ? fmtMs(t.runTime.p50) : '—', t.runTime.p50 ? `median · p95 ${fmtMs(t.runTime.p95)} · ${t.steps.p50} step${t.steps.p50 === 1 ? '' : 's'} per turn` : 'no finished turns yet', ''),
       kpi('Cache hits', t.toolCalls ? pct((t.cachedTools / t.toolCalls) * 100) : '—', t.toolCalls ? `${fmtN(t.cachedTools)} read-only tool calls answered from the turn cache` : 'no tool calls yet', spark(s.series, (d) => d.cachedTools)),
+      kpi('Edits kept', keptLines + undoneLines ? pct((keptLines / (keptLines + undoneLines)) * 100) : '—', ed && ed.accepted + ed.rejected ? `+${fmtN(ed.acceptedAdded)} −${fmtN(ed.acceptedRemoved)} lines kept · <span class="${undoneLines ? 'err-text' : ''}">+${fmtN(ed.rejectedAdded)} −${fmtN(ed.rejectedRemoved)}</span> undone` : 'no agent edits kept or undone yet', spark(s.series, (d) => d.acceptedLines || 0)),
+      kpi('Hooks', hk && hk.runs ? fmtN(hk.runs) : '—', hk && hk.runs ? `<span class="${hookFails ? 'err-text' : ''}">${hookFails} failed</span>${hk.timeout ? ` (${hk.timeout} timed out)` : ''} · ${hk.blocked} blocked${hk.duration.p50 ? ` · ${fmtMs(hk.duration.p50)} median` : ''}` : 'no hooks ran', spark(s.series, (d) => d.hookFailures || 0), hookFails ? 'warn' : ''),
     ].join('');
     root.innerHTML = '';
     root.appendChild(kpis);

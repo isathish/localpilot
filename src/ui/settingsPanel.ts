@@ -25,6 +25,7 @@ import type { ModelTuner, TuneReport } from './modelAutoTune';
 import { ModelInfo, ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
+import { toolDisabled } from '../agent/toolAliases';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
@@ -100,7 +101,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: { name: string; tools: number; error?: string }[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] } }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -165,6 +166,7 @@ const SETTING_KEYS = [
   'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
   'memory.maxNoteChars', 'memory.maxNotes', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
+  'maxConsecutiveMistakes', 'disabledTools',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -229,7 +231,9 @@ export class SettingsPanel implements vscode.Disposable {
     /** Local metrics + log mirror behind the Dashboard page. */
     private readonly telemetry?: Telemetry,
     /** Moves API keys typed into a provider card into VS Code secret storage. */
-    private readonly secrets?: ProviderSecrets
+    private readonly secrets?: ProviderSecrets,
+    /** Registered built-in tools, for the Tools on/off list (MCP tools are managed per server). */
+    private readonly toolCatalog: () => { name: string; description: string }[] = () => []
   ) {
     if (telemetry) {
       const off = telemetry.onLog((entry) => {
@@ -890,6 +894,10 @@ export class SettingsPanel implements vscode.Disposable {
       skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, dir: s.dir, removable: s.source !== 'builtin' })),
       learning: { recurring: learning?.recurring ?? [] },
       agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
+      tools: (() => {
+        const off = getConfig().disabledTools;
+        return this.toolCatalog().filter((t) => !t.name.startsWith('mcp_')).sort((a, b) => a.name.localeCompare(b.name)).map((t) => ({ ...t, off: toolDisabled(t.name, off) }));
+      })(),
       mcp: this.mcp.status,
       managed: (() => { const p = getManagedPolicy(this.log); return p.source ? { source: p.source, message: p.message, lines: describePolicy(p) } : undefined; })(),
       memory: { project: notes.filter((n) => n.scope === 'project').length, global: notes.filter((n) => n.scope === 'global').length, notes: notes.slice(0, 200).map((n) => ({ name: n.name, scope: n.scope, summary: n.summary, updatedAt: n.updatedAt, chars: n.chars })) },

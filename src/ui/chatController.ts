@@ -9,6 +9,8 @@ import { SkillManager } from '../agent/skills';
 import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { currentEditor, EditorState, WorkspaceContext } from '../context/workspaceContext';
+import { FileIndex } from '../context/fileIndex';
+import { MentionHit } from '../context/mentionSearch';
 import { ProviderRegistry } from '../providers/registry';
 import { isEmptySession, SessionSearchHit, SessionStore } from '../sessions/sessionStore';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, UserAnswer, UserQuestion } from '../types';
@@ -87,6 +89,7 @@ export type ToWebview =
     }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'openFiles'; files: string[]; active?: string; selection?: boolean }
+  | { type: 'mentionResults'; query: string; items: MentionHit[] }
   | { type: 'draft'; text: string; images?: string[] }
   /** Names in the message just sent were corrected; the chat updates the bubble it already shows. */
   | { type: 'promptCorrected'; sessionId: string; text: string; fixes: PromptFix[] }
@@ -164,6 +167,8 @@ export type FromWebview =
   | { type: 'inspectUrl'; url?: string; mobile?: boolean }
   | { type: 'openBrowser'; url?: string }
   | { type: 'requestOpenFiles' }
+  | { type: 'mentionSearch'; query: string }
+  | { type: 'openMention'; ref: string }
   /** The webview's script hit an error (uncaught exception, rejected promise or a handler that threw): logged host-side so a dead UI is never silent. */
   | { type: 'clientError'; where: string; message: string; stack?: string }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
@@ -321,6 +326,11 @@ export class ChatController implements vscode.Disposable {
   }
   private lastSelection = false;
   private openFilesTimer: ReturnType<typeof setTimeout> | undefined;
+  private fileIndex?: FileIndex;
+  /** The workspace file index behind the `@` menu, built on the first search. */
+  private get mentionIndex(): FileIndex {
+    return (this.fileIndex ??= new FileIndex());
+  }
   private pushOpenFiles(): void {
     clearTimeout(this.openFilesTimer);
     this.openFilesTimer = setTimeout(() => this.broadcast(this.openFilesMsg()), 250);
@@ -1233,6 +1243,9 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'setModel': {
         const s = this.store.get(msg.sessionId);
+        if (s && (s.model !== msg.model || msg.makeDefault)) {
+          this.telemetry?.record({ type: 'model_selected', sid: s.id, model: msg.model, source: 'picker', makeDefault: msg.makeDefault || undefined });
+        }
         if (s) {
           s.model = msg.model;
           this.store.save(s);
@@ -1253,6 +1266,9 @@ export class ChatController implements vscode.Disposable {
       case 'setMode': {
         const s = this.store.get(msg.sessionId);
         if (s) {
+          if (s.mode !== msg.mode) {
+            this.telemetry?.record({ type: 'mode_switch', sid: s.id, from: s.mode, to: msg.mode, source: 'picker' });
+          }
           s.mode = msg.mode;
           this.store.save(s);
         }
@@ -1280,7 +1296,8 @@ export class ChatController implements vscode.Disposable {
       case 'openFile': {
         const root = this.workspace.root;
         const absolute = msg.path.startsWith('/') || /^[a-z]:[\\/]/i.test(msg.path);
-        let uri = absolute ? vscode.Uri.file(msg.path) : root ? vscode.Uri.joinPath(vscode.Uri.file(root), msg.path) : undefined;
+        // Relative refs may carry a multi-root `folder/` prefix or live in a folder other than the first.
+        let uri = absolute ? vscode.Uri.file(msg.path) : root ? await this.workspace.resolveRef(msg.path) : undefined;
         // A worktree chat's paths name files in its isolated copy, not the main checkout.
         const wt = msg.sessionId ? this.store.peek(msg.sessionId)?.worktree : undefined;
         if (wt) {
@@ -1295,6 +1312,11 @@ export class ChatController implements vscode.Disposable {
           }
         }
         if (!uri) {
+          return;
+        }
+        const stat = await vscode.workspace.fs.stat(uri).then((s) => s, () => undefined);
+        if (stat && stat.type & vscode.FileType.Directory) {
+          await vscode.commands.executeCommand('revealInExplorer', uri);
           return;
         }
         try {
@@ -1480,6 +1502,18 @@ export class ChatController implements vscode.Disposable {
       case 'requestOpenFiles':
         this.broadcast(this.openFilesMsg());
         return;
+      case 'mentionSearch': {
+        const items = await this.mentionIndex.search(msg.query, this.workspace.openEditors());
+        this.broadcast({ type: 'mentionResults', query: msg.query, items });
+        return;
+      }
+      case 'openMention': {
+        const command = ({ problems: 'workbench.actions.view.problems', terminal: 'workbench.action.terminal.focus', git: 'workbench.view.scm', workspace: 'workbench.view.explorer', editors: 'workbench.action.showAllEditors' } as Record<string, string>)[msg.ref.replace(/^@/, '')];
+        if (command) {
+          await vscode.commands.executeCommand(command);
+        }
+        return;
+      }
       case 'clientError':
         this.log.error(`chat webview (${msg.where}): ${msg.message}${msg.stack ? `\n${msg.stack}` : ''}`);
         return;
@@ -1533,6 +1567,9 @@ export class ChatController implements vscode.Disposable {
         if (!s || this.runs.has(s.id)) {
           return;
         }
+        if (s.mode !== 'agent') {
+          this.telemetry?.record({ type: 'mode_switch', sid: s.id, from: s.mode, to: 'agent', source: 'plan' });
+        }
         s.mode = 'agent';
         this.store.save(s);
         this.broadcast(this.sessionMsg(s));
@@ -1574,6 +1611,7 @@ export class ChatController implements vscode.Disposable {
     s.messages = s.messages.slice(0, messageIndex);
     s.contextTokens = 0;
     this.store.save(s);
+    this.telemetry?.record({ type: 'checkpoint', action: revertFiles ? 'restore' : 'rewind', outcome: revertFiles && (key === undefined || s.worktree) ? 'skipped' : 'ok', files: revertFiles ? reverted : undefined });
     if (!revertFiles && key !== undefined) {
       this.tracker.dropTurnsFrom(s.id, key); // the removed turns can no longer be restored
     }
@@ -1860,6 +1898,10 @@ export class ChatController implements vscode.Disposable {
 
   private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean }): Promise<string> {
     const slash = opts.display ? undefined : this.handleSlash(session, text);
+    if (slash !== undefined) {
+      const custom = typeof slash === 'object' && 'command' in slash;
+      this.telemetry?.record({ type: 'slash', command: custom ? slash.command.name : (/^\/([\w:-]+)/.exec(text.trim())?.[1] ?? '?'), custom: custom || undefined });
+    }
     if (typeof slash === 'object' && 'command' in slash) {
       // A custom command expands inside this run (which holds `starting`), so a message sent meanwhile is steering for it.
       const cmd = slash.command;
@@ -2251,9 +2293,17 @@ export class ChatController implements vscode.Disposable {
   private async readAttachments(attachments: string[], session?: Session): Promise<string[]> {
     const root = session?.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
     const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a, root)));
+    if (!root) {
+      this.mentionIndex.noteAttached(attachments);
+    }
     const failed = attachments.filter((_, i) => !blocks[i] || /^<attachment [^>]*error="not found"/.test(blocks[i]));
     if (failed.length) {
       this.broadcast({ type: 'toast', level: 'warn', text: `Could not attach ${failed.join(', ')}` });
+    }
+    // Binaries, unreadable documents and oversized PDFs are attached as a note; say so in the chat too.
+    const notes = blocks.map((b) => /^<attachment [^>]*(?:kind="(?:binary|image)"|error="(?!not found)[^"]*")[^>]*>\n([^\n]*)/.exec(b ?? '')?.[1]).filter((n): n is string => !!n);
+    if (notes.length) {
+      this.broadcast({ type: 'toast', level: 'info', text: notes.join(' ') });
     }
     return blocks;
   }
@@ -2565,6 +2615,9 @@ export class ChatController implements vscode.Disposable {
         return '';
       case 'mode':
         if ((ALL_MODES as readonly string[]).includes(rest.trim())) {
+          if (session.mode !== rest.trim()) {
+            this.telemetry?.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: rest.trim(), source: 'slash' });
+          }
           session.mode = rest.trim() as Session['mode'];
           this.store.save(session);
           this.broadcast(this.sessionMsg(session));
@@ -2573,6 +2626,7 @@ export class ChatController implements vscode.Disposable {
         return say('Usage: `/mode agent|multitask|debug|plan|ask`');
       case 'model':
         if (rest.trim()) {
+          this.telemetry?.record({ type: 'model_selected', sid: session.id, model: rest.trim(), source: 'slash' });
           session.model = rest.trim();
           this.store.save(session);
           this.broadcast(this.sessionMsg(session));
@@ -2650,6 +2704,7 @@ export class ChatController implements vscode.Disposable {
     }
     clearTimeout(this.deltaTimer);
     clearTimeout(this.openFilesTimer);
+    this.fileIndex?.dispose();
     this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
     this._onDidChangeRuns.dispose();

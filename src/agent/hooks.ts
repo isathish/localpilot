@@ -2,6 +2,8 @@ import * as cp from 'child_process';
 import { shellInvocation } from '../terminal/shell';
 import { killTree } from '../tools/terminal';
 import { HookCommand, HookEvent, HookMatcher, ProjectSettings } from './settings';
+import { recordTelemetry } from '../telemetry/catalog';
+import type { HookRunOutcome } from '../telemetry/telemetry';
 
 /**
  * Claude Code hooks: shell commands configured per event in settings.json. Each hook receives a JSON description of
@@ -190,6 +192,11 @@ export function execHook(hook: HookCommand, input: unknown, opts: { cwd?: string
   });
 }
 
+/** How one hook command ended, for telemetry: exit 2 blocks, any other non-zero exit is a failure. */
+export function hookRunOutcome(r: HookExecResult): HookRunOutcome {
+  return r.timedOut ? 'timeout' : r.code === 2 ? 'blocked' : r.code === 0 ? 'ok' : 'failed';
+}
+
 /** Folds one hook's result into the aggregate outcome. */
 export function applyHookResult(out: HookOutcome, event: HookEvent, r: HookExecResult, label: string, log?: { warn(m: string): void; debug(m: string): void }): void {
   out.ran++;
@@ -313,7 +320,14 @@ export class HookRunner {
     const env: Record<string, string> = { ...this.settings().env, ...(opts.env ?? {}), CLAUDE_PROJECT_DIR: cwd, LOCALPILOT_PROJECT_DIR: cwd };
     const payload = { hook_event_name: event, cwd, ...input };
     this.log.debug(`hooks: ${event} → ${hooks.length} hook(s)${keys.length ? ` for ${keys[0]}` : ''}`);
-    const results = await Promise.all(hooks.map((h) => execHook(h, payload, { cwd, env, signal: opts.signal })));
+    const results = await Promise.all(
+      hooks.map(async (h) => {
+        const started = Date.now();
+        const r = await execHook(h, payload, { cwd, env, signal: opts.signal });
+        recordTelemetry({ type: 'hook', event, durationMs: Date.now() - started, outcome: hookRunOutcome(r) });
+        return r;
+      })
+    );
     results.forEach((r, i) => applyHookResult(out, event, r, hooks[i].command.split(/\s+/).slice(0, 3).join(' '), this.log));
     for (const m of out.messages) {
       this.onMessage?.(m, event);

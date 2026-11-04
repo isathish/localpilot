@@ -135,4 +135,10 @@ LocalPilot parses these blocks and returns the results as a user message. This i
 
 ## Iteration limit and stopping
 
-A turn allows up to 40 model and tool round trips. Subagents get 25. Press **Stop** (<kbd>Esc</kbd> in the composer) at any time; tool calls in flight are cancelled. To hold an agent without cancelling it, use **Pause** (<kbd>⌥Esc</kbd>). See [Pause, steer and stop]({{ '/docs/parallel-agents/#pause-steer-and-stop' | relative_url }}).
+A turn allows up to 40 model and tool round trips. Subagents get 25.
+
+A run also stops when it keeps failing. After 6 steps in a row in which every tool call failed, or a tool call had to be sent back because it did not parse, the chat shows *LocalPilot ran into 6 errors in a row and stopped* with the latest error. Send a message to guide the agent and it continues normally. Any successful tool call resets the count. Change the limit with `localpilot.maxConsecutiveMistakes` (`0` = no limit).
+
+When a reply stops at the output limit (`localpilot.maxOutputTokens`), LocalPilot recovers on its own. A tool call cut off mid-arguments is not run: the model is asked to resend it more concisely, splitting a large `write_file` into several `edit_file` calls, up to 3 times in a row. A text answer that was cut off is continued once and joined into one message.
+
+Press **Stop** (<kbd>Esc</kbd> in the composer) at any time; tool calls in flight are cancelled. To hold an agent without cancelling it, use **Pause** (<kbd>⌥Esc</kbd>). See [Pause, steer and stop]({{ '/docs/parallel-agents/#pause-steer-and-stop' | relative_url }}).

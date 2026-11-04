@@ -38,7 +38,7 @@ const GIT_TIMEOUT_MS = 60_000;
 
 /** A ref-safe form of a session id (`s_…`, `cli-…` pass through unchanged). */
 export function refSafe(id: string): string {
-  return id.split('::')[0].replace(/[^A-Za-z0-9_-]/g, '_').replace(/^[-_]+(?=.)/, '') || 'session';
+  return id.split('::')[0].replace(/[^A-Za-z0-9_-]/g, '_') || 'session';
 }
 
 export function checkpointRef(sessionId: string, run: number): string {
@@ -72,7 +72,7 @@ export function recordCheckpoint(state: SessionCheckpoints, entry: CheckpointEnt
 
 /** Creation time encoded in a session id (`s_<base36 ms>…`, `cli-<base36 ms>`); undefined when it has none. */
 export function sessionCreatedAt(sessionId: string): number | undefined {
-  const m = /^(?:s_|cli-)([0-9a-z]{8,9})/.exec(sessionId);
+  const m = /^(?:s_|cli-)([0-9a-z]{8})/.exec(sessionId);
   const t = m ? parseInt(m[1], 36) : NaN;
   return Number.isFinite(t) && t > 1_500_000_000_000 && t < 4_000_000_000_000 ? t : undefined;
 }
@@ -90,7 +90,7 @@ function git(args: string[], cwd: string, opts: { env?: Record<string, string>; 
   return new Promise((resolve) => {
     let child: cp.ChildProcess;
     try {
-      child = cp.spawn('git', ['-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null', ...args], {
+      child = cp.spawn('git', ['-c', 'commit.gpgSign=false', ...args], {
         cwd,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...IDENTITY, ...opts.env },
         windowsHide: true,
@@ -314,24 +314,36 @@ export class CheckpointService {
     this.roots.delete(sid);
   }
 
-  /** Deletes checkpoint refs of chats that `orphan` says are gone; returns how many chats were cleaned up. */
-  async pruneRefs(cwd: string, orphan: (sessionId: string) => boolean): Promise<number> {
-    const r = await git(['for-each-ref', '--format=%(refname)', `${CHECKPOINT_REF_PREFIX}/`], cwd);
+  /**
+   * Deletes checkpoint refs of chats that `orphan` says are gone; returns how many chats were cleaned up.
+   * `orphan` gets the time of the chat's newest checkpoint here (see lastCheckpointAt).
+   */
+  async pruneRefs(cwd: string, orphan: (sessionId: string, lastUsedAt: number | undefined) => boolean): Promise<number> {
+    const r = await git(['for-each-ref', '--format=%(refname) %(committerdate:unix)', `${CHECKPOINT_REF_PREFIX}/`], cwd);
     if (r.code !== 0) {
       return 0;
     }
-    const doomed = new Map<string, string[]>();
-    for (const ref of r.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
-      const sid = ref.slice(CHECKPOINT_REF_PREFIX.length + 1).split('/')[0];
-      if (sid && orphan(sid)) {
-        doomed.set(sid, [...(doomed.get(sid) ?? []), ref]);
+    const bySession = new Map<string, { refs: string[]; last?: number }>();
+    for (const line of r.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
+      const [ref, date] = line.split(' ');
+      const [sid, run] = ref.slice(CHECKPOINT_REF_PREFIX.length + 1).split('/');
+      if (!sid) {
+        continue;
       }
+      const g = bySession.get(sid) ?? { refs: [] };
+      g.refs.push(ref);
+      const t = lastCheckpointAt(Number(run), Number(date));
+      if (t !== undefined && (g.last === undefined || t > g.last)) {
+        g.last = t;
+      }
+      bySession.set(sid, g);
     }
-    const refs = [...doomed.values()].flat();
+    const doomed = [...bySession].filter(([sid, g]) => orphan(sid, g.last));
+    const refs = doomed.flatMap(([, g]) => g.refs);
     if (refs.length) {
       await git(['update-ref', '--stdin'], cwd, { input: refs.map((x) => `delete ${x}\n`).join('') });
     }
-    return doomed.size;
+    return doomed.length;
   }
 
   /** Removes private index folders untouched for `maxAgeMs` (left by crashes or chats deleted elsewhere). */
@@ -358,11 +370,45 @@ export class CheckpointService {
   }
 }
 
-/** Chats whose refs should go: VS Code chats missing from the store, and CLI chats older than the scratch age. */
-export function isOrphanCheckpoint(sessionId: string, live: ReadonlySet<string> | undefined, now = Date.now()): boolean {
-  if (sessionId.startsWith('cli-')) {
-    const t = sessionCreatedAt(sessionId);
-    return t !== undefined && now - t > SCRATCH_MAX_AGE_MS;
+/**
+ * When a checkpoint ref was taken: the run when it is a `Date.now()` turn key (VS Code), else the commit date
+ * (a stash commit is made at snapshot time; a clean-tree checkpoint points at HEAD, so it can be older).
+ */
+export function lastCheckpointAt(run: number, committerDateSec: number): number | undefined {
+  const plausible = (t: number) => Number.isFinite(t) && t > 1_500_000_000_000 && t < 4_000_000_000_000;
+  const fromRun = plausible(run) ? run : undefined;
+  const fromDate = plausible(committerDateSec * 1000) ? committerDateSec * 1000 : undefined;
+  return fromRun === undefined ? fromDate : fromDate === undefined ? fromRun : Math.max(fromRun, fromDate);
+}
+
+/**
+ * Chats whose refs should go: CLI chats, and VS Code chats missing from `live`, once both their creation and their
+ * newest checkpoint (`lastUsedAt`, when known) are older than the scratch age. The age gate keeps a chat still
+ * in use in another window on the same repository (a different chat store) safe; chats deleted in this window lose
+ * their refs immediately through deleteSession.
+ */
+export function isOrphanCheckpoint(sessionId: string, live: ReadonlySet<string> | undefined, now = Date.now(), lastUsedAt?: number): boolean {
+  const t = sessionCreatedAt(sessionId);
+  if (t === undefined || now - Math.max(t, lastUsedAt ?? 0) <= SCRATCH_MAX_AGE_MS) {
+    return false;
   }
-  return !!live && sessionId.startsWith('s_') && !live.has(sessionId);
+  return sessionId.startsWith('cli-') || (!!live && sessionId.startsWith('s_') && !live.has(sessionId));
+}
+
+/** Removes the persisted file snapshots (`<dir>/<session>/`) of chats `orphan` says are gone; returns how many. */
+export function pruneSnapshotDirs(dir: string, orphan: (sessionId: string) => boolean): number {
+  let n = 0;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (orphan(name)) {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+      n++;
+    }
+  }
+  return n;
 }

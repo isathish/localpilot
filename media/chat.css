@@ -537,6 +537,14 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .chips { display: contents; }
 #input { width: 100%; resize: none; border: none; background: transparent; color: var(--input-fg); font: inherit; font-size: var(--fs); line-height: 1.5; padding: 8px 10px 4px; max-height: 240px; min-height: 36px; }
 #input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.inwrap { position: relative; min-width: 0; }
+.inwrap > #input { position: relative; z-index: 1; display: block; }
+.inwrap > .mirror { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; pointer-events: none; color: transparent; font: inherit; font-size: var(--fs); line-height: 1.5; padding: 8px 10px 4px; white-space: pre-wrap; overflow-wrap: break-word; }
+.mirror mark { color: transparent; background: color-mix(in srgb, var(--brand, var(--focus)) 24%, transparent); border-radius: 3px; }
+.popover .item b.hl { font-weight: 700; color: var(--brand-text, var(--accent)); }
+.popover .item.sel b.hl { color: inherit; text-decoration: underline; }
+.turn.user .att .chip.link { cursor: pointer; }
+.turn.user .att .chip.link:hover { background: var(--tint-2); color: var(--fg); }
 .row { display: flex; align-items: center; gap: 2px; padding: 2px 6px 6px; min-width: 0; flex-wrap: nowrap; }
 .ib { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--muted); flex: none; }
 .ib:hover { background: var(--tint); color: var(--fg); }

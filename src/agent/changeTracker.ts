@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import { deleteUri } from '../tools/fs';
+import { recordEditDecision } from '../telemetry/catalog';
 
 export interface TrackedChange {
   sessionId: string;
@@ -11,6 +14,8 @@ export interface TrackedChange {
 }
 
 const SCHEME = 'localpilot-original';
+/** Before-contents larger than this stay in memory only (same limit as untracked files in git checkpoints). */
+const MAX_PERSISTED_CHARS = 20 * 1024 * 1024;
 
 /**
  * Records the pre-edit snapshot of every file an agent touches so the user can review (diff),
@@ -21,6 +26,15 @@ export class ChangeTracker implements vscode.Disposable {
   /** Per-session, per-turn snapshots of files before the first edit in that turn (for "Restore checkpoint"). */
   private turns = new Map<string, Map<number, Map<string, string | undefined>>>();
   private currentTurn = new Map<string, number>();
+  /** Sessions whose persisted turn snapshots were read back from disk. */
+  private loadedTurns = new Set<string>();
+  /**
+   * Where turn snapshots are persisted (`<dir>/<session>/<turn>/<sha1 of path>.json`, one file per snapshot, written
+   * once), so Restore checkpoint survives a reload; unset = memory only.
+   */
+  persistDir?: string;
+  /** Pending snapshot writes and deletes per session, run in order. */
+  private io = new Map<string, Promise<void>>();
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
   private readonly addedDeco: vscode.TextEditorDecorationType;
@@ -61,6 +75,7 @@ export class ChangeTracker implements vscode.Disposable {
   /** Snapshot a file before the agent modifies it (no-op if already tracked for this session). */
   async beforeChange(fsPath: string, sessionId: string): Promise<void> {
     const sid = ChangeTracker.rootSession(sessionId);
+    this.loadPersisted(sid);
     const key = `${sid}|${fsPath}`;
     const turn = this.currentTurn.get(sid);
     const needTurnSnap = turn !== undefined && !this.turns.get(sid)?.get(turn)?.has(fsPath);
@@ -94,6 +109,7 @@ export class ChangeTracker implements vscode.Disposable {
       files.set(fsPath, current);
       byTurn.set(turn!, files);
       this.turns.set(sid, byTurn);
+      this.persistFile(sid, turn!, fsPath, current);
     }
     if (!this.changes.has(key)) {
       this.changes.set(key, { sessionId: sid, fsPath, original: current, changedAt: Date.now() });
@@ -117,16 +133,24 @@ export class ChangeTracker implements vscode.Disposable {
     }
     this.turns.delete(sid);
     this.currentTurn.delete(sid);
+    this.loadedTurns.delete(sid);
+    const dir = this.turnDir(sid);
+    if (dir) {
+      this.queue(sid, () => fs.promises.rm(dir, { recursive: true, force: true }));
+    }
     this._onDidChange.fire();
     this.decorateVisible();
   }
 
   /** Drop the checkpoint snapshots of `turn` and later (those messages were removed, so nothing can restore them). */
   dropTurnsFrom(sessionId: string, turn: number): void {
-    const byTurn = this.turns.get(ChangeTracker.rootSession(sessionId));
+    const sid = ChangeTracker.rootSession(sessionId);
+    this.loadPersisted(sid);
+    const byTurn = this.turns.get(sid);
     for (const t of [...(byTurn?.keys() ?? [])]) {
       if (t >= turn) {
         byTurn!.delete(t);
+        this.unpersist(sid, t);
       }
     }
     this._onDidChange.fire();
@@ -134,12 +158,143 @@ export class ChangeTracker implements vscode.Disposable {
 
   /** Which turns of a session have file snapshots (i.e. are restorable checkpoints). */
   checkpoints(sessionId: string): number[] {
-    return [...(this.turns.get(ChangeTracker.rootSession(sessionId))?.keys() ?? [])].sort((a, b) => a - b);
+    const sid = ChangeTracker.rootSession(sessionId);
+    this.loadPersisted(sid);
+    return [...(this.turns.get(sid)?.keys() ?? [])].sort((a, b) => a - b);
+  }
+
+  /** The turn key last passed to beginTurn for a session. */
+  currentTurnOf(sessionId: string): number | undefined {
+    return this.currentTurn.get(ChangeTracker.rootSession(sessionId));
+  }
+
+  private turnDir(sid: string): string | undefined {
+    return this.persistDir ? path.join(this.persistDir, sid.replace(/[^A-Za-z0-9_-]/g, '_')) : undefined;
+  }
+
+  /** Resolves once every pending snapshot write and delete has reached the disk. */
+  async flush(): Promise<void> {
+    await Promise.all([...this.io.values()]);
+  }
+
+  private queue(sid: string, op: () => Promise<unknown>): void {
+    const next = (this.io.get(sid) ?? Promise.resolve())
+      .then(op)
+      .then(
+        () => undefined,
+        (e) => this.log.warn(`checkpoint snapshot I/O for ${sid}: ${String(e)}`)
+      );
+    this.io.set(sid, next);
+    void next.then(() => {
+      if (this.io.get(sid) === next) {
+        this.io.delete(sid);
+      }
+    });
+  }
+
+  private static snapFile(fsPath: string): string {
+    return `${crypto.createHash('sha1').update(fsPath).digest('hex')}.json`;
+  }
+
+  /** Persists one file's before-content of a turn (written once, asynchronously). */
+  private persistFile(sid: string, turn: number, fsPath: string, content: string | undefined): void {
+    const dir = this.turnDir(sid);
+    if (!dir) {
+      return;
+    }
+    if (content !== undefined && content.length > MAX_PERSISTED_CHARS) {
+      this.log.warn(`checkpoint ${turn}: ${fsPath} is too large to persist; it can be restored only until the window reloads`);
+      return;
+    }
+    const tdir = path.join(dir, String(turn));
+    const body = JSON.stringify({ path: fsPath, content: content ?? null });
+    this.queue(sid, async () => {
+      await fs.promises.mkdir(tdir, { recursive: true });
+      await fs.promises.writeFile(path.join(tdir, ChangeTracker.snapFile(fsPath)), body);
+    });
+  }
+
+  /** Deletes the persisted snapshots of a turn: all of them, or only those of `paths`. */
+  private unpersist(sid: string, turn: number, paths?: string[]): void {
+    const dir = this.turnDir(sid);
+    if (!dir) {
+      return;
+    }
+    const tdir = path.join(dir, String(turn));
+    this.queue(sid, async () => {
+      await fs.promises.rm(path.join(dir, `${turn}.json`), { force: true });
+      if (!paths) {
+        await fs.promises.rm(tdir, { recursive: true, force: true });
+        return;
+      }
+      for (const p of paths) {
+        await fs.promises.rm(path.join(tdir, ChangeTracker.snapFile(p)), { force: true });
+      }
+      await fs.promises.rmdir(tdir).catch(() => undefined);
+    });
+  }
+
+  /** Reads a session's persisted turn snapshots once (after a reload); snapshots taken since win over the disk copy. */
+  private loadPersisted(sid: string): void {
+    const dir = this.turnDir(sid);
+    if (!dir || this.loadedTurns.has(sid)) {
+      return;
+    }
+    this.loadedTurns.add(sid);
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    const byTurn = this.turns.get(sid) ?? new Map<number, Map<string, string | undefined>>();
+    const add = (turn: number, p: unknown, c: unknown) => {
+      if (typeof p !== 'string') {
+        return;
+      }
+      const files = byTurn.get(turn) ?? new Map<string, string | undefined>();
+      if (!files.has(p)) {
+        files.set(p, typeof c === 'string' ? c : undefined);
+      }
+      byTurn.set(turn, files);
+    };
+    for (const name of names) {
+      const full = path.join(dir, name);
+      try {
+        if (/^\d+$/.test(name)) {
+          for (const f of fs.readdirSync(full).filter((n) => n.endsWith('.json'))) {
+            try {
+              const raw = JSON.parse(fs.readFileSync(path.join(full, f), 'utf8')) as { path?: unknown; content?: unknown };
+              add(Number(name), raw.path, raw.content);
+            } catch (e) {
+              this.log.warn(`unreadable checkpoint ${path.join(full, f)}: ${String(e)}`);
+            }
+          }
+        } else if (/^\d+\.json$/.test(name)) {
+          // Earlier layout (one JSON per turn): moved to one file per snapshot.
+          const turn = Number(name.slice(0, -5));
+          const raw = JSON.parse(fs.readFileSync(full, 'utf8')) as { files?: [string, string | null][] };
+          for (const [p, c] of raw.files ?? []) {
+            if (typeof p === 'string' && !byTurn.get(turn)?.has(p)) {
+              add(turn, p, c);
+              this.persistFile(sid, turn, p, typeof c === 'string' ? c : undefined);
+            }
+          }
+          this.queue(sid, () => fs.promises.rm(full, { force: true }));
+        }
+      } catch (e) {
+        this.log.warn(`unreadable checkpoint ${full}: ${String(e)}`);
+      }
+    }
+    if (byTurn.size) {
+      this.turns.set(sid, byTurn);
+    }
   }
 
   /** Revert every file touched in `turn` or later to its content at the start of the earliest such turn. */
   async restoreToTurn(sessionId: string, turn: number): Promise<number> {
     const sid = ChangeTracker.rootSession(sessionId);
+    this.loadPersisted(sid);
     const byTurn = this.turns.get(sid);
     if (!byTurn) {
       return 0;
@@ -171,13 +326,13 @@ export class ChangeTracker implements vscode.Disposable {
     // Snapshots of files that could not be restored stay, so the checkpoint can be retried.
     for (const t of turns) {
       const files = byTurn.get(t)!;
-      for (const fsPath of [...files.keys()]) {
-        if (!failed.has(fsPath)) {
-          files.delete(fsPath);
-        }
-      }
+      const restored = [...files.keys()].filter((p) => !failed.has(p));
+      restored.forEach((p) => files.delete(p));
       if (!files.size) {
         byTurn.delete(t);
+        this.unpersist(sid, t);
+      } else {
+        this.unpersist(sid, t, restored);
       }
     }
     this._onDidChange.fire();
@@ -198,11 +353,16 @@ export class ChangeTracker implements vscode.Disposable {
   }
 
   /** Accept the change: forget the snapshot. */
-  keep(sessionId: string, fsPath?: string): void {
+  keep(sessionId: string, fsPath?: string, record = true): void {
+    const kept: TrackedChange[] = [];
     for (const [k, c] of this.changes) {
       if (c.sessionId === ChangeTracker.rootSession(sessionId) && (!fsPath || c.fsPath === fsPath)) {
         this.changes.delete(k);
+        kept.push(c);
       }
+    }
+    if (record) {
+      void recordEditDecision('accepted', kept);
     }
     this._onDidChange.fire();
     this.decorateVisible();
@@ -211,10 +371,10 @@ export class ChangeTracker implements vscode.Disposable {
   /** Revert the file(s) to the snapshot taken before the agent touched them. */
   async undo(sessionId: string, fsPath?: string): Promise<number> {
     let n = 0;
-    for (const c of this.forSession(sessionId)) {
-      if (fsPath && c.fsPath !== fsPath) {
-        continue;
-      }
+    const undone = this.forSession(sessionId).filter((c) => !fsPath || c.fsPath === fsPath);
+    // Measured before the files are rewritten.
+    await recordEditDecision('rejected', undone);
+    for (const c of undone) {
       try {
         await restoreFile(vscode.Uri.file(c.fsPath), c.original);
         n++;

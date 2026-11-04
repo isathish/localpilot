@@ -42,6 +42,8 @@ Open the history with **All chats** in the tab bar (or **+N** when there are mor
 - Each row has pin, rename, delete (with confirmation) and **more…** (open, fork, export as Markdown, clear messages).
 - Keys: <kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>F2</kbd> and <kbd>Delete</kbd> act on the selected row.
 
+Each chat also records its token usage: uncached input, output, prompt-cache reads and writes, the number of model requests, and the cost when the provider reports one (OpenRouter). Subagent requests count towards the chat that started them and are also kept as a separate breakdown. The totals are saved in the chat's session file. Anthropic and OpenAI-compatible servers report cache tokens. Ollama does not.
+
 A chat's title is your first message until you rename it. Empty chats you never used do not appear in the history, and **New chat** on an empty chat reuses it.
 
 **Settings → Memory & history** shows how many chats exist and how much disk they use. You can:

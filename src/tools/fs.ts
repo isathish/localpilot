@@ -3,6 +3,7 @@ import * as path from 'path';
 import { Tool, ToolContext } from '../types';
 import { listRepos } from '../agent/repos';
 import { getConfig } from '../config';
+import { readPdf } from './pdf';
 
 // Windows paths are case-insensitive and VS Code lowercases drive letters (`c:\`) while models and users write `C:\`.
 const foldCase = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
@@ -88,6 +89,13 @@ export const readFileTool: Tool = {
   },
   async execute(args, ctx) {
     const uri = resolveWorkspacePath(str(args.path, 'path'), ctx);
+    if (/\.pdf$/i.test(uri.fsPath)) {
+      const s = args.start_line !== undefined ? Math.max(1, Math.floor(Number(args.start_line)) || 1) : undefined;
+      const e = args.end_line !== undefined ? Math.max(1, Math.floor(Number(args.end_line)) || 1) : undefined;
+      const pages = s !== undefined || e !== undefined ? `${s ?? 1}-${e ?? ''}` : undefined;
+      const r = await readPdf({ path: uri.fsPath, pages }, ctx);
+      return { ...r, content: `(read_file on a PDF: start_line/end_line are page numbers; prefer read_pdf)\n${r.content}` };
+    }
     const doc = await vscode.workspace.openTextDocument(uri);
     const start = Math.max(1, Number(args.start_line ?? 1));
     // At most 2,000 lines per read and 2,000 characters per line (minified code): a whole large file in one result

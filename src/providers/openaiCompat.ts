@@ -6,6 +6,7 @@ import {
   LLMProvider,
   ModelInfo,
   ProviderConfig,
+  ProviderUsage,
   StreamEvent,
 } from '../types';
 import { lookupCatalog } from './catalog';
@@ -64,6 +65,18 @@ interface OpenAIChunk {
 /** Whether a `/v1/models` entry says how long its context is. */
 function hasContextField(m: OpenAIModel): boolean {
   return [m.max_model_len, m.loaded_context_length, m.max_context_length, m.context_length, m.context_window, m.top_provider?.context_length].some((v) => typeof v === 'number' && v > 0);
+}
+
+/** A chunk's usage block: `prompt_tokens` already includes the cached part, which is reported beside it. */
+export function usageOf(u: NonNullable<OpenAIChunk['usage']>): ProviderUsage {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+  return {
+    promptTokens: num(u.prompt_tokens),
+    completionTokens: num(u.completion_tokens),
+    cacheReadTokens: num(u.prompt_tokens_details?.cached_tokens) || undefined,
+    cacheWriteTokens: num(u.prompt_tokens_details?.cache_write_tokens) || undefined,
+    costUsd: num(u.cost),
+  };
 }
 
 /** An error sent inside the stream: an HttpError when it carries a status, so it is retried like the same error sent as a response. */

@@ -7,6 +7,7 @@ import { SkillManager } from './skills';
 import { newId } from '../providers/http';
 import { classifyModelError } from './resilience';
 import { resolveAgentName, routeSubagent } from './builtinAgents';
+import { mapToolNames } from './toolAliases';
 import { findRepo } from './repos';
 import { reposFor } from '../tools/repos';
 import { releaseIntegratedTerminal } from '../tools/terminal';
@@ -218,7 +219,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         modelRef: child.model || undefined,
         role,
         spreadModels: spreadable && !fellBack,
-        toolFilter: def.tools,
+        // Agents registered from other sources may still name Claude Code or Cline tools.
+        toolFilter: def.tools && mapToolNames(def.tools),
         roleOverride: `${def.systemPrompt}\n\n${SUBAGENT_CONTRACT}`,
         // The parent's active skills, the agent file's `skills:` and anything the task named: the swarm follows one playbook.
         skills: [...new Set([...(ctx.skills ?? []), ...(def.skills ?? []), ...(extraSkills ?? [])])],

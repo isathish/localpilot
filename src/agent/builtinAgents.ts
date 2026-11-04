@@ -1,7 +1,7 @@
 import type { RoutingConfig } from '../config';
 import type { ModelRole } from '../providers/catalog';
 import { SubagentDefinition } from '../types';
-import { expandAgentTools } from './permissions';
+import { mapToolNames } from './toolAliases';
 
 /**
  * Subagents shipped with LocalPilot. A workspace or user agent file with the same name replaces the built-in one.
@@ -10,7 +10,7 @@ import { expandAgentTools } from './permissions';
  */
 
 // `load_skill` is read-only: every subagent may pull in a playbook that applies to its brief.
-const READ_ONLY = ['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill', 'repo_graph'];
+const READ_ONLY = ['read_file', 'read_pdf', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'gather_context', 'analyze_workspace', 'load_skill', 'repo_graph'];
 const READ_AND_RUN = [...READ_ONLY, 'run_command'];
 
 const REPORT_RULES = `# Report
@@ -128,7 +128,7 @@ Structure: What was documented (files/sections) → Anything in the code that se
       name: 'researcher',
       source: 'builtin',
       description: 'Researches a topic, library or error message on the web and summarises findings with sources.',
-      tools: ['web_search', 'web_fetch', 'read_file', 'gather_context', 'load_skill'],
+      tools: ['web_search', 'web_fetch', 'read_file', 'read_pdf', 'gather_context', 'load_skill'],
       systemPrompt: `You are a research agent. Use web_search, then web_fetch the most relevant results (official docs and primary sources first). Cross-check at least two sources before stating something as fact and prefer information matching the project's versions (check package manifests with read_file when relevant).
 
 ${REPORT_RULES}
@@ -199,10 +199,11 @@ export function resolveAgentName(requested: string, known: Iterable<string>): st
 
 /**
  * A Claude Code agent's `tools:` list in LocalPilot tool names (`Read` → read_file, list_dir, … plus the read-only
- * context tools; `Bash` → run_command; `Edit` / `Write` → edit_file, write_file, …). Our own names pass through.
+ * context tools; `Bash` → run_command; `Edit` / `Write` → edit_file, write_file, …). Cline names (`read_files`,
+ * `execute_command`…) are mapped too; our own names pass through.
  */
 export function localToolNames(names: string[]): string[] {
-  const out = new Set(expandAgentTools(names));
+  const out = new Set(mapToolNames(names, true));
   if (names.some((n) => n.trim().replace(/\(.*\)$/s, '').trim() === 'Read')) {
     ['gather_context', 'get_editor_state', 'analyze_workspace'].forEach((t) => out.add(t));
   }

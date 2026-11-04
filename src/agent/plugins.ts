@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { McpServerConfig } from '../config';
+import { normalizeMcpServers } from '../mcp/config';
 import { emptySettings, normalizeSettings, parseJsonc, ProjectSettings } from './settings';
 
 /**
@@ -94,49 +95,9 @@ async function listMarkdown(dir: string, depth = 2): Promise<string[]> {
 // The path that follows the variable is normalised with it so `${CLAUDE_PLUGIN_ROOT}/x` yields native separators on Windows.
 const substitute = (v: string, root: string) => v.replace(/(?:\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT)((?:[\\/][^\s"']*)?)/g, (_m, rest: string) => path.normalize(root + rest));
 
+/** A plugin's `.mcp.json`: the shared normaliser, with `${CLAUDE_PLUGIN_ROOT}` substituted and the plugin folder as default cwd. */
 function normalizeMcp(raw: unknown, root: string): Record<string, McpServerConfig> {
-  const out: Record<string, McpServerConfig> = {};
-  if (!raw || typeof raw !== 'object') {
-    return out;
-  }
-  const map = ((raw as { mcpServers?: unknown }).mcpServers ?? raw) as Record<string, unknown>;
-  for (const [name, cfg] of Object.entries(map)) {
-    if (!cfg || typeof cfg !== 'object') {
-      continue;
-    }
-    const c = cfg as { command?: unknown; args?: unknown; env?: unknown; cwd?: unknown; type?: unknown; url?: unknown; headers?: unknown };
-    // Remote server (`{ "type": "http" | "sse", "url", "headers" }`, as in Claude Code's .mcp.json).
-    if (typeof c.url === 'string' && c.url.trim()) {
-      const headers: Record<string, string> = {};
-      if (c.headers && typeof c.headers === 'object') {
-        for (const [k, v] of Object.entries(c.headers as Record<string, unknown>)) {
-          if (typeof v === 'string') {
-            headers[k] = substitute(v, root);
-          }
-        }
-      }
-      out[name] = { url: substitute(c.url.trim(), root), type: c.type === 'sse' || c.type === 'http' ? c.type : undefined, headers: Object.keys(headers).length ? headers : undefined };
-      continue;
-    }
-    if (typeof c.command !== 'string' || !c.command.trim()) {
-      continue;
-    }
-    const env: Record<string, string> = {};
-    if (c.env && typeof c.env === 'object') {
-      for (const [k, v] of Object.entries(c.env as Record<string, unknown>)) {
-        if (typeof v === 'string') {
-          env[k] = substitute(v, root);
-        }
-      }
-    }
-    out[name] = {
-      command: substitute(c.command, root),
-      args: Array.isArray(c.args) ? c.args.filter((a): a is string => typeof a === 'string').map((a) => substitute(a, root)) : undefined,
-      env: Object.keys(env).length ? env : undefined,
-      cwd: typeof c.cwd === 'string' ? substitute(c.cwd, root) : root,
-    };
-  }
-  return out;
+  return normalizeMcpServers(raw, { root, defaultCwd: root, map: (v) => substitute(v, root) }).servers;
 }
 
 /** Reads one plugin folder; undefined when it has no manifest. */

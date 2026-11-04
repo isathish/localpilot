@@ -13,7 +13,7 @@ LocalPilot talks to model servers that run on your machine or your network, and 
 | `type` | Protocol | Use for |
 |---|---|---|
 | `ollama` | Ollama native API (`/api/chat`, `/api/generate`, `/api/tags`, `/api/show`) | Ollama, local or [Ollama Cloud](https://ollama.com) (`https://ollama.com`). Full support for tools, thinking, FIM `suffix`, vision and `num_ctx`. |
-| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, colibri. Gateways to cloud models: OmniRoute, LiteLLM. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI… |
+| `openai` | OpenAI-compatible (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) | Local: LM Studio, llama.cpp, vLLM, SGLang, LocalAI, Jan, KoboldCpp, GPT4All, text-generation-webui, colibri. Gateways to cloud models: OmniRoute, LiteLLM. Cloud: OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Moonshot, Alibaba Qwen, Azure OpenAI, Amazon Bedrock… |
 | `anthropic` | Anthropic Messages API (`/v1/messages`, `/v1/models`) | Claude models: tools, images, streaming, thinking and prompt caching. |
 
 You refer to a model as **`<providerId>/<modelId>`**, for example `ollama/qwen2.5-coder:14b` or `lmstudio/qwen2.5-coder-14b-instruct`.
@@ -337,6 +337,8 @@ Ways to give a key:
 
 Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`.
 
+Amazon Bedrock uses its OpenAI-compatible endpoint, `https://bedrock-runtime.<region>.amazonaws.com/openai/v1`, with a [Bedrock API key](https://console.aws.amazon.com/bedrock/home#/api-keys) sent as a Bearer token (read from `AWS_BEARER_TOKEN_BEDROCK` until you paste one). Pick the region in the provider card's **AWS region** field, or with `localpilot providers add bedrock --region eu-central-1`. The endpoint has no model listing, so the preset lists the models it serves (`openai.gpt-oss-120b-1:0`, `openai.gpt-oss-20b-1:0`); add others under **Models**. IAM credentials, AWS profiles and SigV4 signing are not supported directly: run a [LiteLLM proxy](https://docs.litellm.ai/docs/providers/bedrock) and add it as a gateway.
+
 ### Claude
 
 The `anthropic` type talks to the Messages API directly:
@@ -374,7 +376,7 @@ The model then appears under the matching provider.
 - **Tool calling:** read from Ollama's `/api/show` capabilities or the server's model metadata. Models without native tools fall back to a prompt-based protocol.
 - **Vision:** enables image attachments.
 - **FIM:** used for inline completions (`insert` capability, or coder-model name heuristics).
-- **Context window:** read from model metadata and capped by `localpilot.contextWindow`.
+- **Context window:** read from model metadata and capped by `localpilot.contextWindow`. LM Studio's `/v1/models` has no context lengths, so for LM Studio (and any local server whose listing has none) LocalPilot asks its native `/api/v0/models`: the length a model is loaded with, else the most it supports. The provider's `contextWindow` is the fallback after that.
 
 ## Recommended models
 

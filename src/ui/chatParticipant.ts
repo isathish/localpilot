@@ -104,7 +104,8 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
             break;
           }
           case 'error': {
-            const md = new vscode.MarkdownString(`\n\n> $(warning) ${String(e.payload)}`);
+            const p = e.payload as { message?: string } | string;
+            const md = new vscode.MarkdownString(`\n\n> $(warning) ${typeof p === 'object' && p ? String(p.message ?? '') : String(p)}`);
             md.supportThemeIcons = true;
             stream.markdown(md);
             break;

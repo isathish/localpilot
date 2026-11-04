@@ -3,6 +3,22 @@ import * as path from 'path';
 import { runProcess } from '../tools/search';
 import { buildInstructions, InstructionFile } from './instructions';
 import { identifiersIn, NameVocabulary } from '../agent/promptCorrector';
+import { mentionKind, recordTelemetry } from '../telemetry/catalog';
+import * as nodeFs from 'fs';
+import { getConfig } from '../config';
+import { AttachmentKind, attachmentKind, binaryNote, extractDocumentText, formatSize, looksBinary, splitAttachmentRef } from './extractors';
+import { describePdfError, extractPdfText, formatPdfText } from '../pdf/extract';
+
+async function readHead(fsPath: string, n = 8192): Promise<Uint8Array> {
+  const fh = await nodeFs.promises.open(fsPath, 'r');
+  try {
+    const buf = Buffer.alloc(n);
+    const { bytesRead } = await fh.read(buf, 0, n, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
 
 export const TREE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.venv/**,**/__pycache__/**,**/.next/**,**/target/**,**/coverage/**,**/.vscode-test/**}';
 
@@ -338,7 +354,7 @@ export class WorkspaceContext implements vscode.Disposable {
    * Maps an attachment path to a file: absolute paths as-is; in multi-root workspaces `asRelativePath` prefixes the
    * folder name, so a leading segment naming a folder picks that folder; otherwise the first folder that has the file.
    */
-  private async resolveRef(p: string): Promise<vscode.Uri> {
+  async resolveRef(p: string): Promise<vscode.Uri> {
     if (path.isAbsolute(p)) {
       return vscode.Uri.file(p);
     }
@@ -372,6 +388,24 @@ export class WorkspaceContext implements vscode.Disposable {
     return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? path.join(root, rel) : rel === '' ? root : p;
   }
 
+  /** A PDF as attached context: its text from `from` to `to` (pages), up to `localpilot.pdf.maxChars`. */
+  private async pdfAttachment(uri: vscode.Uri, rel: string, from?: number, to?: number): Promise<string> {
+    const tag = (attrs: string, body: string) => `<attachment path="${rel}" kind="pdf"${attrs}>\n${body}\n</attachment>`;
+    const { maxReadSizeMB, maxChars } = getConfig().pdf;
+    const size = (await nodeFs.promises.stat(uri.fsPath)).size;
+    if (size > maxReadSizeMB * 1024 * 1024) {
+      return tag(' error="too large"', `(PDF ${path.basename(uri.fsPath)} is ${formatSize(size)}, over the ${maxReadSizeMB} MB limit of localpilot.pdf.maxReadSizeMB)`);
+    }
+    try {
+      const r = await extractPdfText(uri.fsPath, { from, to: to ?? from, maxChars });
+      const pages = r.pages.length ? `${r.from === r.to ? r.from : `${r.from}-${r.to}`} of ${r.numPages}` : `0 of ${r.numPages}`;
+      return tag(` pages="${pages}"`, formatPdfText(r, rel));
+    } catch (e) {
+      this.log.warn(`PDF attachment failed: ${rel}: ${String(e)}`);
+      return tag(' error="unreadable"', `(${describePdfError(e, false)})`);
+    }
+  }
+
   /** Supplies the last terminal command + output for `@terminal` (set by the extension; absent in the CLI). */
   terminalContext?: () => string;
 
@@ -380,6 +414,7 @@ export class WorkspaceContext implements vscode.Disposable {
    * isolated chat's worktree folder) replaces the main checkout for relative paths, @git and @workspace.
    */
   async readAttachment(ref: string, root?: string): Promise<string> {
+    recordTelemetry({ type: 'mention', kind: mentionKind(ref) });
     const special = ref.replace(/^@/, '');
     switch (special) {
       case 'terminal':
@@ -407,11 +442,10 @@ export class WorkspaceContext implements vscode.Disposable {
         return `<open_editors>\n${open.join('\n') || '(none)'}\n</open_editors>`;
       }
     }
-    const m = /^(.*?)(?:#L(\d+)(?:-L?(\d+))?)?$/.exec(ref);
-    if (!m) {
-      return '';
-    }
-    const [, p, start, end] = m;
+    const parts = splitAttachmentRef(ref);
+    const p = parts.path;
+    const start = parts.start !== undefined ? String(parts.start) : undefined;
+    const end = parts.end !== undefined ? String(parts.end) : undefined;
     if (!root && !vscode.workspace.workspaceFolders?.length && !path.isAbsolute(p)) {
       return '';
     }
@@ -427,20 +461,48 @@ export class WorkspaceContext implements vscode.Disposable {
         const entries = await vscode.workspace.fs.readDirectory(uri);
         return `<directory path="${label(uri)}">\n${entries.map(([n, t]) => (t === vscode.FileType.Directory ? `${n}/` : n)).join('\n')}\n</directory>`;
       }
-      const doc = await vscode.workspace.openTextDocument(uri);
-      let text = doc.getText();
-      if (start) {
-        const s = Math.max(0, Number(start) - 1);
-        const e = end ? Number(end) : s + 1;
-        text = doc.getText(new vscode.Range(s, 0, e, 0));
+      // Documents and binaries by extension, before the editor gets a chance to refuse them (or open them as garbage).
+      const kind = attachmentKind(uri.fsPath);
+      if (kind === 'pdf') {
+        return await this.pdfAttachment(uri, label(uri), parts.start, parts.end);
+      }
+      const name = path.basename(uri.fsPath);
+      const binary = (k: AttachmentKind = 'binary') => `<attachment path="${label(uri)}" kind="${k}">\n${binaryNote(name, stat.size, k)}\n</attachment>`;
+      if (kind === 'image' || kind === 'binary') {
+        return binary(kind);
+      }
+      if (kind === 'text' && uri.scheme === 'file' && looksBinary(await readHead(uri.fsPath))) {
+        return binary();
+      }
+      let text: string;
+      if (kind === 'ipynb' || kind === 'docx') {
+        try {
+          text = (await extractDocumentText(name, await vscode.workspace.fs.readFile(uri), kind)) ?? '';
+        } catch (e) {
+          this.log.warn(`attachment read failed: ${ref}: ${String(e)}`);
+          return `<attachment path="${label(uri)}" kind="${kind}" error="unreadable">\n(Could not read ${name}: ${e instanceof Error ? e.message : String(e)})\n</attachment>`;
+        }
+        if (start) {
+          text = text.split('\n').slice(Math.max(0, Number(start) - 1), end ? Number(end) : Number(start)).join('\n');
+        }
+      } else {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        text = doc.getText();
+        if (start) {
+          const s = Math.max(0, Number(start) - 1);
+          const e = end ? Number(end) : s + 1;
+          text = doc.getText(new vscode.Range(s, 0, e, 0));
+        }
       }
       // A whole large file would crowd out everything else in the prompt; the agent reads the rest with read_file.
       const MAX = 60_000;
       if (text.length > MAX) {
         const shownLines = text.slice(0, MAX).split('\n').length;
-        text = `${text.slice(0, MAX)}\n… [attachment cut at ${MAX.toLocaleString()} of ${text.length.toLocaleString()} characters; read the rest with read_file from line ${(start ? Number(start) : 1) + shownLines - 1}]`;
+        const from = (start ? Number(start) : 1) + shownLines - 1;
+        const rest = kind === 'docx' ? `attach ${label(uri)}#L${from} for the rest` : `read the rest with read_file from line ${from}`;
+        text = `${text.slice(0, MAX)}\n… [attachment cut at ${MAX.toLocaleString()} of ${text.length.toLocaleString()} characters; ${rest}]`;
       }
-      return `<attachment path="${label(uri)}"${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
+      return `<attachment path="${label(uri)}"${kind !== 'text' ? ` kind="${kind}"` : ''}${start ? ` lines="${start}-${end ?? start}"` : ''}>\n${text}\n</attachment>`;
     } catch (e) {
       this.log.warn(`attachment read failed: ${ref}: ${String(e)}`);
       // Say so instead of dropping it: the model and the chat both see which attachment was missing.

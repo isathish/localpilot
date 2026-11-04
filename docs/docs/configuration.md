@@ -92,6 +92,8 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 |---|---|---|
 | `localpilot.compactionThreshold` | `0.75` | Fraction of the context window (0.3–0.95) at which pruning and summarising start |
 | `localpilot.maxToolOutputChars` | `24000` | Maximum characters per tool output; the head and tail are kept |
+| `localpilot.maxConsecutiveMistakes` | `6` | Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired) and ask for guidance. Any successful tool call resets the count; `0` = no limit |
+| `localpilot.disabledTools` | `[]` | Tools never offered to the model: LocalPilot names (`web_fetch`), Claude Code or Cline names (`Bash`, `execute_command`) or globs (`mcp_*`, `browser_*`). Also under **Settings → Agent & approvals → Tools** |
 | `localpilot.systemPromptAppend` | `""` | Extra instructions appended to every system prompt |
 | `localpilot.prompts.autoCorrect` | `true` | Correct misspelled file names and code identifiers in your requests against the names in the workspace (`dicee.py` → `dice.py`) before the agent starts. Plain words are never changed; corrections are shown under your message |
 
@@ -107,6 +109,7 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.skills.disabled` | `[]` | Skill names hidden from the agent (not in the prompt, not suggested, not loadable). They stay on disk. Toggle them in **Settings → Skills & subagents** |
 | `localpilot.pluginPaths` | `[]` | Extra folders with Claude Code-style plugins (a folder with `.claude-plugin/plugin.json` bundling `commands/`, `agents/`, `skills/`, `hooks/hooks.json` and `.mcp.json`). `.localpilot/plugins`, `.claude/plugins`, `~/.localpilot/plugins` and `~/.claude/plugins` are scanned automatically. Disable one with `enabledPlugins` in `settings.json` |
 | `localpilot.plugins.marketplaces` | `["anthropics/claude-plugins-official"]` | Plugin marketplaces to search and install from (**LocalPilot: Browse Plugins…**, `localpilot plugin search`): `owner/repo` on GitHub, any git URL or a local folder, each with a `.claude-plugin/marketplace.json` in Claude Code's format. Fetched with `git`, so private repositories work with your git credentials |
+| `localpilot.checkpoints.enabled` | `true` | Take a checkpoint before each message you send. In a git repository it is a private ref (`refs/localpilot/checkpoints/<chat>/<turn>`) that records the working tree, including untracked files and changes made by shell commands. Your index, branches and `git stash list` are not touched. Outside git, or with this off, only the files the agent edits are snapshotted. Checkpoints are deleted with the chat. See [Checkpoints]({{ '/docs/features/' | relative_url }}#checkpoints) |
 | `localpilot.hooks.enabled` | `true` | Run hooks configured in `.localpilot/settings.json`, `.claude/settings.json` and `~/.claude/settings.json`. Hooks are shell commands on events such as `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop` and `SessionStart`, using the Claude Code stdin and exit-code protocol (exit 2 blocks). Turn this off for repositories you do not trust. It does not affect MCP servers from workspace plugins or settings |
 
 See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).

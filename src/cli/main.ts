@@ -16,6 +16,7 @@ import { AgentRunner } from '../agent/agentLoop';
 import { RunControl } from '../agent/runControl';
 import { WorktreeInfo, WorktreeManager } from '../agent/worktrees';
 import { ChangeTracker } from '../agent/changeTracker';
+import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs } from '../agent/checkpoints';
 import { createGatherContextTool } from '../agent/clarify';
 import { SkillLearner } from '../agent/skillRecommender';
 import { createMemoryTools, manageTodosTool, MemoryStore } from '../agent/memory';
@@ -32,18 +33,22 @@ import { SkillCatalog } from '../agent/skillCatalog';
 import { getConfig } from '../config';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { McpManager } from '../mcp/mcpManager';
+import { loadMcpFiles } from '../mcp/config';
+import { cliMcpTrust } from '../mcp/trust';
 import { createProvider, ProviderRegistry } from '../providers/registry';
 import { findOllamaBinary, launchOllama, ollamaServerEnv } from '../providers/ollamaLauncher';
 import { isLoopbackUrl } from '../providers/cloud';
 import { browserInspectTool, browserScreenshotTool } from '../tools/browser';
 import { editorTools } from '../tools/editor';
 import { fsTools } from '../tools/fs';
+import { pdfTools } from '../tools/pdf';
 import { createAnalyzeWorkspaceTool } from '../tools/workspace';
 import { ToolRegistry } from '../tools/registry';
 import { runProcess, searchTools } from '../tools/search';
 import { terminalTools } from '../tools/terminal';
 import { webTools } from '../tools/web';
 import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
+import { setTelemetryRecorder } from '../telemetry/catalog';
 import { RedisTelemetry } from '../storage/redisTelemetry';
 import { AgentEvent, ALL_MODES, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
@@ -529,6 +534,7 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
   };
   switch (name) {
     case 'read_file': return `Read ${s(a.path)}${a.start_line ? ` (lines ${a.start_line}–${a.end_line ?? ''})` : ''}`;
+    case 'read_pdf': return `Read PDF ${s(a.path)}${a.pages ? ` (pages ${s(a.pages)})` : ''}`;
     case 'edit_file': return `Edit ${s(a.path)}`;
     case 'write_file': return `Write ${s(a.path)}`;
     case 'list_dir': return `List ${s(a.path || '.')}`;
@@ -659,8 +665,19 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     log.warn(`telemetry: invalid localpilot.storage.redis.url (${e instanceof Error ? e.message : String(e)}); writing to files`);
   }
   const telemetry = new Telemetry({ dir: defaultTelemetryDir(), retentionDays: () => getConfig().telemetry.retentionDays, enabled: () => getConfig().telemetry.enabled, remote: () => redis });
+  setTelemetryRecorder(telemetry);
   runner.telemetry = telemetry;
   providers.telemetry = telemetry;
+  // Same checkpoints as in VS Code: a git ref before each turn, file snapshots under ~/.localpilot/checkpoints.
+  const lpHome = path.join(os.homedir(), '.localpilot');
+  tracker.persistDir = path.join(lpHome, 'checkpoints');
+  const checkpoints = new CheckpointService({ globalStorageDir: lpHome, enabled: () => getConfig().checkpointsEnabled, log, defaultRoot: () => args.cwd });
+  runner.checkpoints = checkpoints;
+  void (async () => {
+    checkpoints.pruneScratch();
+    pruneSnapshotDirs(tracker.persistDir!, (sid) => isOrphanCheckpoint(sid, undefined));
+    await checkpoints.pruneRefs(args.cwd, (sid, last) => isOrphanCheckpoint(sid, undefined, Date.now(), last));
+  })().catch((e) => log.warn(`checkpoint prune: ${String(e)}`));
   // Claude Code-compatible project configuration: settings.json, plugins, custom commands (both .claude and .localpilot).
   const roots = [args.cwd];
   let settings = await loadProjectSettings(roots, { log });
@@ -678,14 +695,17 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
   // No language server in the terminal: these would silently report nothing, so point the model at real checks instead.
   const noLsp = new Set(['get_diagnostics', 'find_symbol', 'find_references']);
   const termOnly = (list: typeof editorTools) => list.map((t) => (noLsp.has(t.definition.name) ? { ...t, execute: async () => ({ content: "Not available in the terminal (no language server). Run the project's type checker, linter or tests with run_command (e.g. npx tsc --noEmit, eslint, pytest); use grep_search or repo_graph for definitions and references.", isError: true }) } : t));
-  tools.registerAll([...fsTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
+  tools.registerAll([...fsTools, ...pdfTools, ...termOnly(searchTools), ...terminalTools, ...termOnly(editorTools), ...webTools, browserScreenshotTool, browserInspectTool, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, sessions), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, emit, approve));
   await skills.refresh();
   let mcp: McpManager | undefined;
   const pluginMcp = pluginParts.mcpServers();
-  if (args.mcp && (Object.keys(getConfig().mcpServers).length || Object.keys(pluginMcp).length)) {
+  if (args.mcp && (Object.keys(getConfig().mcpServers).length || Object.keys(pluginMcp).length || (await loadMcpFiles(roots)).some((l) => Object.keys(l.servers).length || l.problems.length))) {
     mcp = new McpManager(tools, log, VERSION);
     mcp.extraServers = () => pluginMcp;
+    mcp.projectFolders = () => roots;
+    mcp.trust = cliMcpTrust(args.cwd, () => !!args.trustWorkspace);
+    mcp.onFileProblems = (file, problems) => process.stderr.write(`${yellow('!')} invalid MCP configuration in ${file}:\n${problems.map((p) => `  ${p}`).join('\n')}\n`);
     await mcp.reload();
   }
   return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, telemetryRemote: redis, settings, plugins, commands };
@@ -847,10 +867,10 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           }
           case 'clarify': r.note(`Request looks ambiguous (${((p.reasons as string[]) ?? []).join('; ')}) — interpreting it from editor, errors and git context`); break;
           case 'subagent_start': r.note(`↳ subagent ${p.agent}: ${String(p.label || p.prompt).slice(0, 80)}`); break;
-          case 'nudge': r.note(`↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
+          case 'nudge': r.note(p.reason === 'length' ? `↺ the reply was cut off at the output limit — ${p.continued ? 'asking the model to continue' : 'asking for a shorter call'}` : `↺ ${p.reason === 'malformed' ? 'the tool call did not parse' : p.reason === 'shown' ? 'the tool call was written as text, not made' : p.reason === 'stale' ? 'the workers already finished; asking for their results' : 'the reply claimed an action no tool performed'} — asking the model to act`); break;
           case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
           case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
-          case 'error': r.error(String(e.payload)); break;
+          case 'error': r.error(e.payload && typeof e.payload === 'object' ? String(p.message ?? p.latest ?? 'error') : String(e.payload)); break;
           case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; break;
         }
       },
@@ -1657,7 +1677,7 @@ async function main(): Promise<void> {
     } else {
       changesSummary(core, session);
       if (core.tracker.forSession(session.id).length) {
-        core.tracker.keep(session.id); // one-shot runs keep their edits; the summary above tells the user what changed
+        core.tracker.keep(session.id, undefined, false); // one-shot runs keep their edits; the summary above tells the user what changed
       }
     }
     if (wt) {
@@ -1770,13 +1790,14 @@ async function main(): Promise<void> {
       case 'help': console.log(HELP); return true;
       case 'exit': case 'quit': case 'q': rl!.close(); return true;
       case 'mode':
-        if ((ALL_MODES as readonly string[]).includes(arg)) { session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|multitask|debug|plan|ask`)); }
+        if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|multitask|debug|plan|ask`)); }
         return true;
       case 'model': {
         if (!arg) { console.log(dim(`model is ${session.model}`)); return true; }
         const models = await core.providers.listModels();
         const m = models.find((x) => x.id === arg || x.modelId === arg || x.name === arg) ?? models.find((x) => x.id.includes(arg));
         if (!m) { console.log(red(`no model matches "${arg}" — /models lists them`)); return true; }
+        core.telemetry.record({ type: 'model_selected', sid: session.id, model: m.id, source: 'cli' });
         session.model = m.id; cliOverrides.defaultModel = m.id; setWorkspaceRoot(args.cwd);
         console.log(dim(`model → ${m.id}`)); return true;
       }
@@ -1872,7 +1893,7 @@ async function main(): Promise<void> {
           return true;
         }
         console.log(dim(`unknown command /${cmd} — /help`));
-        return true;
+        return false;
       }
     }
   };
@@ -1928,7 +1949,9 @@ async function main(): Promise<void> {
     if (line.startsWith('/')) {
       busy = true;
       try {
-        await slash(line);
+        if (await slash(line)) {
+          core.telemetry.record({ type: 'slash', command: line.slice(1).split(/\s+/)[0] });
+        }
       } catch (e) {
         renderer.error(e instanceof Error ? e.message : String(e));
       } finally {

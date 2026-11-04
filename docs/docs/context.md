@@ -12,7 +12,8 @@ permalink: /docs/context/
 |---|---|
 | Paper-clip button | The active file, or only the selection as `file#L10-L20` |
 | Folder button, drag and drop, or the Explorer context menu | Any files. Images become image attachments |
-| `@path/to/file` or `@path/to/file#L10-L40` | A file or line range. Autocomplete offers open editors |
+| `@path/to/file` or `@path/to/file#L10-L40` | A file or line range. Autocomplete searches the whole workspace |
+| `@"docs/my file.md"` | A path with spaces, in quotes |
 | `@folder/` | A directory listing |
 | `@workspace` | The project file tree, cut at 400 entries |
 | `@selection` | The current selection, or the whole active file if nothing is selected |
@@ -21,7 +22,11 @@ permalink: /docs/context/
 | `@editors` | The list of open editors |
 | `@terminal` | The last command and output of the active terminal (VS Code only, not the CLI) |
 
-Type `@` to open the mention picker. Use <kbd>↑</kbd> / <kbd>↓</kbd> to move and <kbd>Tab</kbd> to pick. <kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd> opens the **Add context** menu when focus is elsewhere in the chat; in the input it runs **Improve prompt**.
+Type `@` to open the mention picker. Use <kbd>↑</kbd> / <kbd>↓</kbd> to move and <kbd>Tab</kbd> to pick.
+
+The picker fuzzy-matches what you type after `@` against every file and folder in the workspace (`node_modules`, `.git`, build output and similar folders are skipped), so `@chatctl` finds `src/ui/chatController.ts`. Open editors are listed first and files you attached recently next; the matched letters are highlighted. In a multi-root workspace each result shows its folder as `name:/path`.
+
+Mentions in the input are highlighted. <kbd>Backspace</kbd> right after a mention removes the whole mention. In a sent message, click a context chip to open it: a file opens in the editor, `@problems` opens the Problems panel, `@terminal` the terminal and `@git` Source Control. While an input method editor (Japanese, Chinese, Korean) is composing, <kbd>Enter</kbd> confirms the text and never sends the message. <kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd> opens the **Add context** menu when focus is elsewhere in the chat; in the input it runs **Improve prompt**.
 
 ## The context meter
 

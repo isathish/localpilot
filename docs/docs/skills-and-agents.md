@@ -225,11 +225,13 @@ You convert JS to idiomatic TS. Preserve behaviour, add precise types, run tsc a
 
 | Field | Meaning |
 |---|---|
-| `tools` | Restricts the tool set. Omit it to allow all tools |
+| `tools` | Restricts the tool set. Omit it to allow all tools. LocalPilot names, Claude Code names (`Read`, `Grep`, `Glob`, `Edit`, `MultiEdit`, `Write`, `Bash`, `LS`, `WebFetch`, `WebSearch`, `NotebookRead`, `Task`) and Cline names (`read_files`, `editor`, `run_commands`, `search_codebase`, `execute_command`…) all work: `tools: Read, Grep` gives `read_file` and `grep_search` plus the other read-only tools those names cover |
 | `model` | Overrides the session model. Use a bigger model for hard sub-tasks, a smaller one for exploration |
 | `skills` | Installed skills whose instructions are preloaded into every run of this subagent |
 
 Subagent files are read from `.localpilot/agents`, `.claude/agents`, `~/.localpilot/agents` and `~/.claude/agents`, and from plugins.
+
+To keep a tool away from the agent and every subagent, switch it off under **Settings → Agent & approvals → Tools**, or list it in `localpilot.disabledTools`. The list takes the same names as `tools:` and also globs such as `mcp_*` or `browser_*`. A disabled tool is never sent to the model.
 
 ### Built-in subagents
 

@@ -32,7 +32,27 @@ export type TelemetryEvent =
   /** Inline completion lifecycle. */
   | (Base & { type: 'completion'; action: CompletionAction; model?: string; language?: string; durationMs?: number })
   /** Provider reachability check. */
-  | (Base & { type: 'health'; provider: string; ok: boolean; durationMs: number; models?: number; error?: string });
+  | (Base & { type: 'health'; provider: string; ok: boolean; durationMs: number; models?: number; error?: string })
+  /** A chat task's lifecycle: its first request, and how each top-level turn ended. */
+  | (Base & { type: 'task'; sid: string; action: TaskAction; mode: string })
+  | (Base & { type: 'mode_switch'; sid?: string; from: string; to: string; source: ChoiceSource })
+  /** A slash command that was handled (the name only, never its arguments). */
+  | (Base & { type: 'slash'; command: string; custom?: boolean })
+  /** Context attached with an @ mention or the attach button (the kind only, never the path). */
+  | (Base & { type: 'mention'; kind: MentionKind })
+  | (Base & { type: 'mcp_call'; server: string; tool: string; durationMs: number; ok: boolean })
+  /** `restore` reverts files and the conversation; `rewind` only the conversation (Edit message). */
+  | (Base & { type: 'checkpoint'; action: 'create' | 'restore' | 'rewind'; outcome: 'ok' | 'failed' | 'skipped'; files?: number })
+  /** One hook command: the event it ran for and how it ended. */
+  | (Base & { type: 'hook'; event: string; durationMs: number; outcome: HookRunOutcome })
+  /** The user kept or undid agent edits. Lines are counted against the pre-edit snapshot. */
+  | (Base & { type: 'edit_decision'; decision: 'accepted' | 'rejected'; added: number; removed: number; files: number })
+  | (Base & { type: 'model_selected'; sid?: string; model: string; source: ChoiceSource; makeDefault?: boolean });
+
+export type TaskAction = 'created' | 'completed' | 'aborted' | 'failed' | 'mistake_limit';
+export type ChoiceSource = 'picker' | 'slash' | 'plan' | 'cli';
+export type MentionKind = 'file' | 'range' | 'folder' | 'url' | 'terminal' | 'workspace' | 'problems' | 'git' | 'selection' | 'editors' | 'other';
+export type HookRunOutcome = 'ok' | 'blocked' | 'failed' | 'timeout';
 
 /** An event as callers record it: the timestamp is optional (defaults to now). Distributes over the union. */
 export type TelemetryInput = TelemetryEvent extends infer E ? (E extends Base ? Omit<E, 't'> & { t?: number } : never) : never;
@@ -67,6 +87,22 @@ export interface DayPoint {
   completionsShown: number;
   completionsAccepted: number;
   errors: number;
+  /** Lines (added + removed) in agent edits the user kept / undid. */
+  acceptedLines: number;
+  rejectedLines: number;
+  hookFailures: number;
+}
+
+export interface ActivitySummary {
+  tasks: { created: number; completed: number; aborted: number; failed: number; mistakeLimit: number };
+  edits: { accepted: number; rejected: number; acceptedAdded: number; acceptedRemoved: number; rejectedAdded: number; rejectedRemoved: number; acceptedFiles: number; rejectedFiles: number };
+  hooks: { runs: number; ok: number; blocked: number; failed: number; timeout: number; duration: Percentiles; byEvent: { event: string; runs: number; failures: number }[] };
+  mcp: { calls: number; errors: number; servers: { server: string; calls: number; errors: number; duration: Percentiles }[] };
+  checkpoints: { created: number; restores: number; rewinds: number; failed: number; files: number };
+  modeSwitches: { to: string; count: number }[];
+  modelSelections: { model: string; count: number }[];
+  slash: { command: string; count: number }[];
+  mentions: { kind: string; count: number }[];
 }
 export interface TelemetrySummary {
   days: number;
@@ -107,7 +143,9 @@ export interface TelemetrySummary {
   completions: { requested: number; shown: number; accepted: number; cached: number; empty: number; error: number; acceptanceRate: number; latency: Percentiles; byLanguage: { language: string; shown: number; accepted: number }[] };
   health: { provider: string; checks: number; ok: number; uptime: number; up: boolean; lastAt: number; latency: Percentiles; lastError?: string; models?: number }[];
   worktrees: { created: number; applied: number; discarded: number; conflicts: number; files: number };
-  errors: { t: number; kind: 'model' | 'tool' | 'run' | 'health'; what: string; detail: string }[];
+  /** Tasks, edit decisions, hooks, MCP calls, checkpoints and choices the user made. */
+  activity: ActivitySummary;
+  errors: { t: number; kind: 'model' | 'tool' | 'run' | 'health' | 'hook' | 'mcp'; what: string; detail: string }[];
   storage: { events: number; bytes: number; files: number; oldest?: number; dir: string; /** Where new data goes right now. */ backend?: 'files' | 'redis' | 'fallback'; remoteError?: string };
 }
 
@@ -251,14 +289,80 @@ export class Samples {
   }
 }
 
+function linesByDay<T extends { t: number }>(items: T[], line: (x: T) => string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const x of items) {
+    const key = dayKey(x.t);
+    let lines = out.get(key);
+    if (!lines) {
+      lines = [];
+      out.set(key, lines);
+    }
+    lines.push(line(x));
+  }
+  return out;
+}
+
+/** The local store: events to `events-YYYY-MM-DD.jsonl`, log lines to `localpilot-YYYY-MM-DD.log`, appended per day. */
+export class FileTelemetrySink implements TelemetrySink {
+  constructor(readonly dir: string) {}
+
+  async write(batch: TelemetryBatch): Promise<void> {
+    if (!batch.events.length && !batch.logs.length) {
+      return;
+    }
+    await fs.promises.mkdir(this.dir, { recursive: true });
+    for (const [day, lines] of linesByDay(batch.events, (e) => JSON.stringify(e))) {
+      await fs.promises.appendFile(path.join(this.dir, `${EVENT_PREFIX}${day}.jsonl`), `${lines.join('\n')}\n`, 'utf8');
+    }
+    for (const [day, lines] of linesByDay(batch.logs, formatLogLine)) {
+      await fs.promises.appendFile(path.join(this.dir, `${LOG_PREFIX}${day}.log`), `${lines.join('\n')}\n`, 'utf8');
+    }
+  }
+
+  async flush(): Promise<void> {
+    /* appends are written straight away */
+  }
+
+  async shutdown(): Promise<void> {
+    /* nothing held open */
+  }
+}
+
+/** An external store (Redis) as a sink. Throws from `write` when the batch was not stored. */
+export class RemoteTelemetrySink implements TelemetrySink {
+  constructor(
+    readonly remote: TelemetryRemote,
+    private readonly retentionDays: () => number
+  ) {}
+
+  write(batch: TelemetryBatch): Promise<void> {
+    return this.remote.write(
+      batch.events.map((e) => JSON.stringify(e)),
+      batch.logs.map(formatLogLine),
+      this.retentionDays()
+    );
+  }
+
+  async flush(): Promise<void> {
+    /* the remote write is complete when `write` resolves */
+  }
+
+  async shutdown(): Promise<void> {
+    /* the owner of the connection disposes it */
+  }
+}
+
 /**
  * Append-only store of local telemetry events and log lines. Events go to `events-YYYY-MM-DD.jsonl`, log lines to
  * `localpilot-YYYY-MM-DD.log`; both are pruned by the retention setting. Writes are batched and never awaited by
  * callers; `flush()` waits for them (dispose, tests).
  */
 export class Telemetry {
-  private pendingEvents = new Map<string, string[]>();
-  private pendingLogs = new Map<string, string[]>();
+  private pendingEvents: TelemetryEvent[] = [];
+  private pendingLogs: LogEntry[] = [];
+  private readonly sinks = new Map<string, TelemetrySink>();
+  private readonly files_: FileTelemetrySink;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private writing: Promise<void> = Promise.resolve();
   private readonly ring: LogEntry[] = [];
@@ -271,6 +375,11 @@ export class Telemetry {
 
   constructor(private readonly opts: TelemetryOptions) {
     this.dir = opts.dir;
+    this.files_ = new FileTelemetrySink(opts.dir);
+    this.sinks.set(STORE_SINK, { write: (b) => this.writeStore(b), flush: async () => undefined, shutdown: async () => undefined });
+    for (const { name, sink } of opts.sinks ?? []) {
+      this.add(name, sink);
+    }
   }
 
   private get now(): number {
@@ -286,14 +395,8 @@ export class Telemetry {
       return;
     }
     const ev = { ...e, t: e.t ?? this.now } as TelemetryEvent;
-    const key = dayKey(ev.t);
-    let lines = this.pendingEvents.get(key);
-    if (!lines) {
-      lines = [];
-      this.pendingEvents.set(key, lines);
-    }
-    lines.push(JSON.stringify(ev));
-    capPending(lines);
+    this.pendingEvents.push(ev);
+    capPending(this.pendingEvents);
     this.schedule();
     this.notify(this.eventListeners, ev);
   }
@@ -312,15 +415,8 @@ export class Telemetry {
     if (this.ring.length > max) {
       this.ring.splice(0, this.ring.length - max);
     }
-    const key = dayKey(entry.t);
-    let lines = this.pendingLogs.get(key);
-    if (!lines) {
-      lines = [];
-      this.pendingLogs.set(key, lines);
-    }
-    const esc = entry.msg.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-    lines.push(`${new Date(entry.t).toISOString()} [${level}] ${esc}`);
-    capPending(lines);
+    this.pendingLogs.push(entry);
+    capPending(this.pendingLogs);
     this.schedule();
     this.notify(this.logListeners, entry);
   }
@@ -395,17 +491,27 @@ export class Telemetry {
   }
 
   private async write(): Promise<void> {
-    const events = this.pendingEvents;
-    const logs = this.pendingLogs;
-    this.pendingEvents = new Map();
-    this.pendingLogs = new Map();
-    if (!events.size && !logs.size) {
+    const batch: TelemetryBatch = { events: this.pendingEvents, logs: this.pendingLogs };
+    this.pendingEvents = [];
+    this.pendingLogs = [];
+    if (!batch.events.length && !batch.logs.length) {
       return;
     }
+    // The store's own failures propagate as before; an exporter that fails only reports it.
+    const extra = [...this.sinks].filter(([name]) => name !== STORE_SINK).map(([name, sink]) => this.guard(name, () => sink.write(batch)));
+    try {
+      await this.sinks.get(STORE_SINK)!.write(batch);
+    } finally {
+      await Promise.all(extra);
+    }
+  }
+
+  /** The built-in sink: the external store when it is set and up, files otherwise (and when it fails mid-write). */
+  private async writeStore(batch: TelemetryBatch): Promise<void> {
     const remote = this.activeRemote();
     if (remote) {
       try {
-        await remote.write([...events.values()].flat(), [...logs.values()].flat(), this.opts.retentionDays());
+        await new RemoteTelemetrySink(remote, this.opts.retentionDays).write(batch);
         await this.maybePrune();
         return;
       } catch (e) {
@@ -415,14 +521,71 @@ export class Telemetry {
         }
       }
     }
-    await fs.promises.mkdir(this.dir, { recursive: true });
-    for (const [day, lines] of events) {
-      await fs.promises.appendFile(path.join(this.dir, `${EVENT_PREFIX}${day}.jsonl`), `${lines.join('\n')}\n`, 'utf8');
-    }
-    for (const [day, lines] of logs) {
-      await fs.promises.appendFile(path.join(this.dir, `${LOG_PREFIX}${day}.log`), `${lines.join('\n')}\n`, 'utf8');
-    }
+    await this.files_.write(batch);
     await this.maybePrune();
+  }
+
+  private async guard(name: string, op: () => Promise<void>): Promise<void> {
+    try {
+      await op();
+    } catch (e) {
+      this.opts.onSinkError?.(name, e);
+    }
+  }
+
+  // ------------------------------------------------------------------ sinks
+  /** Adds (or replaces) a sink; it receives every batch flushed from now on. The `store` sink cannot be replaced. */
+  add(name: string, sink: TelemetrySink): void {
+    if (name === STORE_SINK) {
+      throw new Error(`the "${STORE_SINK}" telemetry sink is built in`);
+    }
+    const old = this.sinks.get(name);
+    this.sinks.set(name, sink);
+    if (old && old !== sink) {
+      void this.guard(name, () => old.shutdown());
+    }
+  }
+
+  /** Flushes what is queued to the sink, then detaches and shuts it down. False when no such sink (or the built-in store). */
+  async remove(name: string): Promise<boolean> {
+    const sink = this.sinks.get(name);
+    if (!sink || name === STORE_SINK) {
+      return false;
+    }
+    await this.flush();
+    if (this.sinks.get(name) === sink) {
+      this.sinks.delete(name);
+    }
+    await this.guard(name, () => sink.shutdown());
+    return true;
+  }
+
+  /** Names of the attached sinks, the store first. */
+  sinkNames(): string[] {
+    return [...this.sinks.keys()];
+  }
+
+  /** Adds to a monotonic counter in every sink that keeps metrics. Nothing is recorded while telemetry is off. */
+  counter(name: string, value = 1, attributes?: MetricAttributes): void {
+    this.metric((s) => s.counter?.(name, value, attributes));
+  }
+
+  /** Records one sample of a distribution (durations, sizes) in every sink that keeps metrics. */
+  histogram(name: string, value: number, attributes?: MetricAttributes): void {
+    this.metric((s) => s.histogram?.(name, value, attributes));
+  }
+
+  private metric(fn: (s: TelemetrySink) => void): void {
+    if (!this.enabled) {
+      return;
+    }
+    for (const [name, sink] of this.sinks) {
+      try {
+        fn(sink);
+      } catch (e) {
+        this.opts.onSinkError?.(name, e);
+      }
+    }
   }
 
   /** The external store, unless none is configured or it failed within the last minute. */
@@ -458,10 +621,17 @@ export class Telemetry {
     }
     this.writing = this.writing.then(() => this.write()).catch(() => undefined);
     await this.writing;
+    await Promise.all([...this.sinks].map(([name, sink]) => this.guard(name, () => sink.flush())));
+  }
+
+  /** Writes everything queued, then shuts every sink down. */
+  async shutdown(): Promise<void> {
+    await this.flush();
+    await Promise.all([...this.sinks].map(([name, sink]) => this.guard(name, () => sink.shutdown())));
   }
 
   dispose(): void {
-    void this.flush();
+    void this.shutdown();
   }
 
   /** Removes event and log files older than the retention window. Returns the number of files removed. */
@@ -664,7 +834,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
     const k = dayKey(t);
     let p = byDay.get(k);
     if (!p) {
-      p = { day: k, runs: 0, failedRuns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, modelCalls: 0, modelErrors: 0, tokPerSec: 0, completionsShown: 0, completionsAccepted: 0, errors: 0 };
+      p = { day: k, runs: 0, failedRuns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, modelCalls: 0, modelErrors: 0, tokPerSec: 0, completionsShown: 0, completionsAccepted: 0, errors: 0, acceptedLines: 0, rejectedLines: 0, hookFailures: 0 };
       byDay.set(k, p);
     }
     return p;
@@ -703,6 +873,19 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
   let genMsTotal = 0;
   type AgentAgg = { agent: string; runs: number; done: number; stopped: number; failed: number; dur: Samples; toolCalls: number };
   const agents = new Map<string, AgentAgg>();
+  const tasks = { created: 0, completed: 0, aborted: 0, failed: 0, mistakeLimit: 0 };
+  const edits = { accepted: 0, rejected: 0, acceptedAdded: 0, acceptedRemoved: 0, rejectedAdded: 0, rejectedRemoved: 0, acceptedFiles: 0, rejectedFiles: 0 };
+  const hooks = { runs: 0, ok: 0, blocked: 0, failed: 0, timeout: 0, dur: new Samples() };
+  const hookEvents = new Map<string, { event: string; runs: number; failures: number }>();
+  const mcpServers = new Map<string, { server: string; calls: number; errors: number; dur: Samples }>();
+  const checkpoints = { created: 0, restores: 0, rewinds: 0, failed: 0, files: 0 };
+  const modeSwitches = new Map<string, number>();
+  const modelSelections = new Map<string, number>();
+  const slash = new Map<string, number>();
+  const mentions = new Map<string, number>();
+  const bump = (m: Map<string, number>, k: string): void => void m.set(k, (m.get(k) ?? 0) + 1);
+  const ranked = <K extends string>(m: Map<string, number>, key: K, limit = 10): ({ count: number } & Record<K, string>)[] =>
+    [...m].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([k, count]) => ({ [key]: k, count }) as { count: number } & Record<K, string>);
   let count = 0;
 
   const add = (e: TelemetryEvent): void => {
@@ -882,6 +1065,81 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
           worktrees.discarded++;
         }
         break;
+      case 'task':
+        tasks[e.action === 'mistake_limit' ? 'mistakeLimit' : e.action]++;
+        break;
+      case 'edit_decision': {
+        const lines = e.added + e.removed;
+        if (e.decision === 'accepted') {
+          edits.accepted++;
+          edits.acceptedAdded += e.added;
+          edits.acceptedRemoved += e.removed;
+          edits.acceptedFiles += e.files;
+          day.acceptedLines += lines;
+        } else {
+          edits.rejected++;
+          edits.rejectedAdded += e.added;
+          edits.rejectedRemoved += e.removed;
+          edits.rejectedFiles += e.files;
+          day.rejectedLines += lines;
+        }
+        break;
+      }
+      case 'hook': {
+        hooks.runs++;
+        hooks[e.outcome]++;
+        hooks.dur.add(e.durationMs);
+        let h = hookEvents.get(e.event);
+        if (!h) {
+          h = { event: e.event, runs: 0, failures: 0 };
+          hookEvents.set(e.event, h);
+        }
+        h.runs++;
+        if (e.outcome === 'failed' || e.outcome === 'timeout') {
+          h.failures++;
+          day.hookFailures++;
+          day.errors++;
+          noteError({ t: e.t, kind: 'hook', what: e.event, detail: e.outcome === 'timeout' ? 'timed out' : 'exited with an error' });
+        }
+        break;
+      }
+      case 'mcp_call': {
+        let m = mcpServers.get(e.server);
+        if (!m) {
+          m = { server: e.server, calls: 0, errors: 0, dur: new Samples() };
+          mcpServers.set(e.server, m);
+        }
+        m.calls++;
+        m.dur.add(e.durationMs);
+        if (!e.ok) {
+          m.errors++;
+          day.errors++;
+          noteError({ t: e.t, kind: 'mcp', what: `${e.server}/${e.tool}`, detail: 'call failed' });
+        }
+        break;
+      }
+      case 'checkpoint':
+        if (e.action === 'create') {
+          checkpoints.created++;
+        } else if (e.outcome === 'failed') {
+          checkpoints.failed++;
+        } else {
+          checkpoints[e.action === 'restore' ? 'restores' : 'rewinds']++;
+          checkpoints.files += e.files ?? 0;
+        }
+        break;
+      case 'mode_switch':
+        bump(modeSwitches, e.to);
+        break;
+      case 'model_selected':
+        bump(modelSelections, e.model);
+        break;
+      case 'slash':
+        bump(slash, e.command);
+        break;
+      case 'mention':
+        bump(mentions, e.kind);
+        break;
     }
   };
 
@@ -920,6 +1178,21 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
       },
       health: [...health.values()].map((h) => ({ provider: h.provider, checks: h.checks, ok: h.ok, uptime: h.checks ? Math.round((h.ok / h.checks) * 1000) / 10 : 0, up: h.up, lastAt: h.lastAt, latency: percentiles(h.dur), lastError: h.lastError, models: h.models })).sort((a, b) => a.provider.localeCompare(b.provider)),
       worktrees,
+      activity: {
+        tasks: { ...tasks },
+        edits: { ...edits },
+        hooks: { runs: hooks.runs, ok: hooks.ok, blocked: hooks.blocked, failed: hooks.failed, timeout: hooks.timeout, duration: percentiles(hooks.dur), byEvent: [...hookEvents.values()].sort((a, b) => b.runs - a.runs) },
+        mcp: {
+          calls: [...mcpServers.values()].reduce((a, m) => a + m.calls, 0),
+          errors: [...mcpServers.values()].reduce((a, m) => a + m.errors, 0),
+          servers: [...mcpServers.values()].map((m) => ({ server: m.server, calls: m.calls, errors: m.errors, duration: percentiles(m.dur) })).sort((a, b) => b.calls - a.calls),
+        },
+        checkpoints: { ...checkpoints },
+        modeSwitches: ranked(modeSwitches, 'to'),
+        modelSelections: ranked(modelSelections, 'model'),
+        slash: ranked(slash, 'command', 15),
+        mentions: ranked(mentions, 'kind'),
+      },
       errors: errors.slice(0, 25),
       storage: { events: count, bytes: 0, files: 0, dir: '' },
     };

@@ -379,6 +379,8 @@ export interface Session extends SessionSummary {
   todos?: TodoItem[];
   /** Files read or modified in this session (workspace-relative), most recent last. */
   workingSet?: string[];
+  /** Checkpoints taken before each user turn (git refs, or file snapshots outside git). */
+  checkpoints?: import('./agent/checkpoints').SessionCheckpoints;
 }
 
 export interface TodoItem {

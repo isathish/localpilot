@@ -1,6 +1,14 @@
 import * as vscode from 'vscode';
 import { ChatController, FromWebview, ToWebview } from './chatController';
 import { currentEditor } from '../context/workspaceContext';
+import { attachmentKind } from '../context/extractors';
+
+/** File picker filters for chat attachments: every file type, plus shortcuts to documents and images. */
+export const ATTACH_FILTERS: Record<string, string[]> = {
+  'All files': ['*'],
+  Documents: ['pdf', 'docx', 'ipynb', 'md', 'markdown', 'txt', 'csv', 'json', 'yaml', 'yml', 'html', 'xml'],
+  Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
+};
 
 /** Where the chat lives; mirrors the `localpilot.chat.location` setting. */
 export type ChatLocation = 'sidebar' | 'secondarySidebar' | 'panel' | 'editor';
@@ -292,9 +300,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return void sink.post({ type: 'toast', level: 'info', text: `attach:${ref}` });
     }
     if (m.type === 'pickAttachment') {
-      const picked = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach', defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri });
+      const picked = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach', defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri, filters: ATTACH_FILTERS });
       for (const uri of picked ?? []) {
-        sink.post({ type: 'toast', level: 'info', text: `attach:${vscode.workspace.asRelativePath(uri)}` });
+        // Images go to the vision attachment row; everything else (code, PDF, DOCX, notebooks, …) becomes a file chip.
+        if (attachmentKind(uri.fsPath) === 'image') {
+          await this.controller.handle({ type: 'attachUri', uri: uri.toString() }, sink);
+        } else {
+          sink.post({ type: 'toast', level: 'info', text: `attach:${vscode.workspace.asRelativePath(uri)}` });
+        }
       }
     }
   }

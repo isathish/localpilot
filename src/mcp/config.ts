@@ -149,7 +149,7 @@ export function normalizeMcpServers(raw: unknown, opts: { root?: string; default
       problems.push(...own.map((p) => `"${name}": ${p}`));
       continue;
     }
-    const remote = type ? type !== 'stdio' : !command;
+    const remote = type ? type !== 'stdio' : !!url;
     const cfg: McpServerConfig = remote ? { url, type, headers } : { command, args, env, cwd: cwd ?? opts.defaultCwd, type };
     if (enabled === false) {
       cfg.enabled = false;

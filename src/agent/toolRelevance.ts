@@ -11,8 +11,40 @@ const TOPICS: { tools: string[]; words: RegExp; workspace?: (root: string, repos
   { tools: ['git_commit', 'git_push', 'pull_request', 'ci_status'], words: /\b(commit\w*|push\w*|merg\w*|git|ship|publish\w*|upload\w*|pull[ -]?requests?|PRs?|branch\w*|ci|workflows?|actions|checks?|pipelines?|builds? (?:failed|failing|broke|is red)|github|gitlab|git_commit|git_push|pull_request|ci_status|release\w*)\b/i },
   { tools: ['team_board'], words: /\b(board|team_board|backlog|hand ?off|handoff|claim|split (it|this|the work)|for others|teammates?|workers?)\b/i, workspace: (root) => !!root && fs.existsSync(path.join(root, '.localpilot', 'board')) },
   { tools: ['repos'], words: /\b(repos|repositories|repository|multi[- ]?repo|monorepo|across (the )?projects)\b/i, workspace: (_root, repos) => repos > 1 },
+  { tools: ['read_pdf'], words: /\.pdf\b|\bpdfs?\b|read_pdf/i, workspace: (root) => !!root && hasPdf(root) },
   { tools: ['security_scan'], words: /\b(security|secure|vulnerab\w*|cves?|ghsa|advisor(y|ies)|secrets?|leak\w*|credentials?|audit|scan|sast|owasp|injection|dependenc(y|ies) (check|update|upgrade))\b/i },
 ];
+
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'out', 'build', 'target', 'vendor', '__pycache__']);
+let pdfCache: { root: string; at: number; found: boolean } | undefined;
+
+/** True when a PDF sits in the top levels of the workspace (bounded walk, cached for a minute). */
+export function hasPdf(root: string): boolean {
+  if (pdfCache?.root === root && Date.now() - pdfCache.at < 60_000) {
+    return pdfCache.found;
+  }
+  let budget = 3000;
+  const walk = (dir: string, depth: number): boolean => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (--budget < 0) {
+        return false;
+      }
+      if (e.isFile() && /\.pdf$/i.test(e.name)) {
+        return true;
+      }
+    }
+    return depth > 0 && entries.some((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name) && walk(path.join(dir, e.name), depth - 1));
+  };
+  const found = walk(root, 3);
+  pdfCache = { root, at: Date.now(), found };
+  return found;
+}
 
 /** Names of situational tools to leave out of this run. */
 export function irrelevantTools(recentText: string, root: string | undefined, repoCount: number): Set<string> {

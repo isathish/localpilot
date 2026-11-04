@@ -21,6 +21,7 @@ import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
 import { SkillManager } from './skills';
 import { ChangeTracker } from './changeTracker';
+import { CheckpointService } from './checkpoints';
 import { MemoryStore } from './memory';
 import { RunStats, Telemetry } from '../telemetry/telemetry';
 import { HookRunner } from './hooks';
@@ -31,6 +32,9 @@ import { audit, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed } 
 import { emptySettings, ProjectSettings } from './settings';
 import { runDigest, saveRunMemories } from './autoMemory';
 import { irrelevantTools } from './toolRelevance';
+import { MistakeCounter, mistakeLimitMessage } from './mistakes';
+import { CONTINUE_NUDGE, joinContinuation, LENGTH_NUDGE, lengthAction, lengthGiveUpMessage } from './outputLimit';
+import { toolDisabled } from './toolAliases';
 import { listRepos } from './repos';
 import { markRepoGraphStale } from '../context/repoGraph';
 
@@ -174,6 +178,8 @@ export class AgentRunner {
   hooks?: HookRunner;
   /** Reviews prompts when `localpilot.autoMode.enabled` is on; absent = always ask. */
   autoReviewer?: AutoReviewer;
+  /** Git checkpoints before each user turn (`localpilot.checkpoints.enabled`); absent = file snapshots only. */
+  checkpoints?: CheckpointService;
 
   async run(o: AgentRunOptions): Promise<string> {
     // The user is waiting on this run: background model work from earlier runs gives way.
@@ -182,6 +188,10 @@ export class AgentRunner {
     }
     const stats = new RunStats();
     let outcome: 'done' | 'stopped' | 'failed' = 'done';
+    const topLevel = (o.depth ?? 0) === 0;
+    if (topLevel && !o.session.messages.some((m) => m.role === 'user')) {
+      this.telemetry?.record({ type: 'task', sid: o.session.id, action: 'created', mode: o.session.mode });
+    }
     try {
       const text = await this.runTurn(o, stats);
       outcome = o.signal.aborted ? 'stopped' : 'done';
@@ -207,6 +217,9 @@ export class AgentRunner {
         completionTokens: stats.completionTokens,
         isolated: !!o.isolatedFrom,
       });
+      if (topLevel) {
+        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? 'completed' : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.session.mode });
+      }
     }
   }
 
@@ -336,6 +349,11 @@ export class AgentRunner {
     session.messages.push(turnMessage);
     if (depth === 0) {
       o.onUserMessage?.(turnMessage);
+    }
+    if (depth === 0 && !o.scratch && this.checkpoints) {
+      // Before hooks and the first model call, so everything this turn changes (shell commands included) can be rolled back.
+      const run = o.userMessage.meta?.checkpoint ?? this.tracker?.currentTurnOf(session.id) ?? session.messages.length - 1;
+      await this.checkpoints.snapshot(session, run, o.workspaceRoot ?? this.workspace.root);
     }
 
     // Hooks: SessionStart (first turn of a chat) and UserPromptSubmit may add context or block the prompt.
@@ -620,6 +638,21 @@ export class AgentRunner {
     const MAX_NUDGES = 2;
     let malformedNudged = false;
     let toolCallRepairs = 0;
+    /** Steps in a row whose tool calls all failed (or had to be repaired); the run stops at localpilot.maxConsecutiveMistakes. */
+    const mistakes = new MistakeCounter(cfg.maxConsecutiveMistakes);
+    /** Set when the run gives up (mistake limit, repeated output cut-offs): shown as an error and kept in the transcript. */
+    let stopError: { payload: string | Record<string, unknown>; note: string } | undefined;
+    const stopForMistakes = () => {
+      const note = mistakeLimitMessage(mistakes.count, mistakes.latest);
+      stopError = { payload: { kind: 'mistake_limit', count: mistakes.count, latest: mistakes.latest, message: note }, note };
+      if (depth === 0) {
+        this.telemetry?.record({ type: 'task', sid: session.id, action: 'mistake_limit', mode: session.mode });
+      }
+    };
+    /** Cut-off tool calls retried in a row; reset by any reply that ends normally. */
+    let lengthRetries = 0;
+    /** The prose reply cut off at the output limit that the next reply continues (the two are joined). */
+    let continuing: { message: ChatMessage; nudge: ChatMessage } | undefined;
     /** (tool, args) → how often it was requested this turn; repeats beyond MAX_IDENTICAL_CALLS are refused; reset after a successful edit. */
     const callCounts = new Map<string, number>();
     let completed = false;
@@ -819,6 +852,11 @@ export class AgentRunner {
             toolCallRepairs++;
             modelEvent('retry', kind);
             this.log.warn(`model sent a tool call the server could not parse; asking it to resend (${toolCallRepairs}/${MAX_TOOLCALL_REPAIRS}): ${msg}`);
+            if (mistakes.recordRepair(msg.replace(/^HTTP \d+ from \S+:\s*/, '').slice(0, 120))) {
+              stopForMistakes();
+              aborted = true;
+              break;
+            }
             status('Fixing tool call…');
             emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'malformed' } });
             session.messages.push({
@@ -937,22 +975,53 @@ export class AgentRunner {
         }
       }
 
+      // The reply continues one that stopped at the output limit: keep a single message, without the hidden request.
+      const joined = !!continuing;
+      if (continuing) {
+        const { message: before, nudge } = continuing;
+        continuing = undefined;
+        session.messages = session.messages.filter((m) => m !== before && m !== nudge);
+        text = joinContinuation(before.content, text);
+        thinking = [before.thinking, thinking].filter(Boolean).join('\n');
+        assistant.meta = before.meta ?? assistant.meta;
+      }
       assistant.content = text;
       assistant.thinking = thinking || undefined;
       assistant.toolCalls = calls.length ? calls : undefined;
       session.messages.push(assistant);
       finalText = text;
 
-      if (finish === 'length') {
-        if (calls.length) {
-          // The arguments were cut off mid-call: running them would fail with a misleading error (or write half a file).
-          const note = `Your output reached the ${cfg.maxOutputTokens}-token output limit while writing this call, so nothing was executed. Write large files in parts (write_file a skeleton, then edit_file), or keep arguments shorter.`;
-          for (const c of calls) {
-            session.messages.push({ role: 'tool', content: nativeTools ? note : `<tool_result name="${c.name}">\n${note}\n</tool_result>`, toolCallId: c.id, toolName: c.name, meta: { timestamp: Date.now() } });
-          }
-          status('Output limit reached — asking for a shorter call…');
-          continue;
+      const cutOff = lengthAction({ finish, truncatedCall: calls.length > 0 || malformedCalls.length > 0, text, retries: lengthRetries, continuing: joined });
+      if (finish !== 'length') {
+        lengthRetries = 0;
+      }
+      if (cutOff === 'retry' || cutOff === 'give_up') {
+        // The arguments were cut off mid-call: running them would fail with a misleading error (or write half a file).
+        const note = `Your output reached the ${cfg.maxOutputTokens}-token output limit while writing this call, so nothing was executed.`;
+        for (const c of calls) {
+          session.messages.push({ role: 'tool', content: nativeTools ? note : `<tool_result name="${c.name}">\n${note}\n</tool_result>`, toolCallId: c.id, toolName: c.name, meta: { timestamp: Date.now() } });
         }
+        lengthRetries++;
+        if (cutOff === 'give_up') {
+          const msg = lengthGiveUpMessage(cfg.maxOutputTokens, lengthRetries);
+          stopError = { payload: msg, note: msg };
+          break;
+        }
+        this.log.warn(`reply cut off at the output limit inside a tool call; asking for a shorter one (${lengthRetries})`);
+        status('Output limit reached — asking for a shorter call…');
+        emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'length' } });
+        session.messages.push({ role: 'user', content: LENGTH_NUDGE, meta: { timestamp: Date.now(), hidden: true, nudge: 'length' } });
+        continue;
+      }
+      if (cutOff === 'continue' && !o.signal.aborted) {
+        status('Output limit reached — asking the model to continue…');
+        emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'length', continued: true } });
+        const nudge: ChatMessage = { role: 'user', content: CONTINUE_NUDGE, meta: { timestamp: Date.now(), hidden: true, nudge: 'length' } };
+        session.messages.push(nudge);
+        continuing = { message: assistant, nudge };
+        continue;
+      }
+      if (finish === 'length') {
         status('Reply truncated at the output limit');
       }
 
@@ -961,6 +1030,10 @@ export class AgentRunner {
         // resend a corrected call instead of the turn ending as if the action had happened.
         if (malformedCalls.length && !malformedNudged && !o.signal.aborted) {
           malformedNudged = true;
+          if (mistakes.recordRepair(malformedCalls[0].slice(0, 120))) {
+            stopForMistakes();
+            break;
+          }
           status('Fixing tool call…');
           const names = toolDefs.map((t) => t.name).join(', ');
           emit({ sessionId: session.id, type: 'nudge', payload: { reason: 'malformed' } });
@@ -1047,7 +1120,7 @@ export class AgentRunner {
       this.unassign(session.id);
       // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
       const coordinatorFirst = session.mode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
-      const { messages: results, perCall, hookStop } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
+      const { messages: results, perCall, hookStop, failed } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -1084,9 +1157,19 @@ export class AgentRunner {
         completed = true;
         break;
       }
+      if (!o.signal.aborted && !control.aborted && mistakes.recordStep(perCall.map((m) => ({ isError: failed.has(m.toolCallId ?? ''), content: m.content })))) {
+        stopForMistakes();
+        break;
+      }
     }
 
-    if (!completed && !o.signal.aborted) {
+    if (stopError && !o.signal.aborted) {
+      // The run gave up: an error row now, and the reason kept in the transcript (meta.error) for the next turn and replays.
+      this.log.warn(`session ${session.id}: ${stopError.note}`);
+      emit({ sessionId: session.id, type: 'error', payload: stopError.payload });
+      session.messages.push({ role: 'assistant', content: stopError.note, meta: { timestamp: Date.now(), error: stopError.note } });
+      finalText = stopError.note;
+    } else if (!completed && !o.signal.aborted) {
       // Ran out of steps with tool results pending: say so instead of ending on a dangling tool call.
       const note = `Stopped after ${maxIter} model steps in one turn without reaching a final answer. Reply "continue" to carry on from here, or narrow the task.`;
       this.log.warn(`session ${session.id}: ${note}`);
@@ -1255,6 +1338,11 @@ export class AgentRunner {
     // Organisation policy: web access and other tool families it switched off are not offered at all.
     const managed = getManagedPolicy(this.log);
     list = list.filter((t) => toolAllowed(managed, t.definition.name));
+    // Tools the user switched off (localpilot.disabledTools) are never sent to the model.
+    const disabled = getConfig().disabledTools;
+    if (disabled.length) {
+      list = list.filter((t) => !toolDisabled(t.definition.name, disabled));
+    }
     // Memory off: no notes are loaded into the prompt, so none should be written or looked up either.
     if (!getConfig().memoryEnabled) {
       list = list.filter((t) => !t.definition.name.startsWith('memory_'));
@@ -1304,8 +1392,10 @@ export class AgentRunner {
     mode = 'agent',
     policy?: ToolPolicy,
     coordinatorFirst = false
-  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[]; hookStop?: string }> {
+  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[]; hookStop?: string; failed: Set<string> }> {
     let hookStop: string | undefined;
+    /** Ids of the calls whose result is an error (for the consecutive-mistake limit). */
+    const failed = new Set<string>();
     const byName = new Map(available.map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
@@ -1314,6 +1404,7 @@ export class AgentRunner {
     const execute = async (call: ToolCall, tool: Tool | undefined, args: Record<string, unknown>): Promise<{ msg: ChatMessage; isError: boolean }> => {
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
+        failed.add(call.id);
         return { msg: toolMsg(call, notRun), isError: true };
       }
       const started = Date.now();
@@ -1424,6 +1515,9 @@ export class AgentRunner {
       this.telemetry?.record({ type: 'tool', sid: sessionId, name: call.name, mode, durationMs: Date.now() - started, error: !!result.isError });
       audit(managed, { event: 'tool', session: sessionId, tool: call.name, args: JSON.stringify(args).slice(0, 2000), outcome: result.isError ? 'error' : 'ok', blocked: /^Blocked by /.test(result.content ?? '') || undefined, durationMs: Date.now() - started }, policy?.root ?? ctx.workspaceRoot, this.log);
       emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: result.isError, durationMs: Date.now() - started, content, data: result.data } });
+      if (result.isError) {
+        failed.add(call.id);
+      }
       return { msg: toolMsg(call, content), isError: !!result.isError };
     };
     const runOne = async (call: ToolCall): Promise<ChatMessage> => {
@@ -1437,6 +1531,7 @@ export class AgentRunner {
         if (n > MAX_IDENTICAL_CALLS) {
           const content = `Refused: this exact call (${call.name} with the same arguments) has already been made ${n - 1} times since the last change and would return the same result. Use the earlier result, change the arguments, or take a different approach — if you are finished, answer the user.`;
           emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content } });
+          failed.add(call.id);
           return { role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now() } };
         }
       }
@@ -1487,6 +1582,9 @@ export class AgentRunner {
       const settled = await pool.map(batch, runOne);
       settled.forEach((r, i) => {
         const call = batch[i];
+        if (r.status !== 'fulfilled') {
+          failed.add(call.id);
+        }
         results.set(call.id, r.status === 'fulfilled' ? r.value : { role: 'tool', content: `Tool failed: ${String(r.reason)}`, toolCallId: call.id, toolName: call.name });
       });
     };
@@ -1513,9 +1611,9 @@ export class AgentRunner {
     if (!nativeTools) {
       // Text protocol: tool results go back as a single user message (with any captured images attached to it).
       const carrier: ChatMessage = { role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages, toolResults: calls.map((c) => c.id) } };
-      return { messages: [carrier], perCall: ordered, hookStop };
+      return { messages: [carrier], perCall: ordered, hookStop, failed };
     }
-    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered, hookStop };
+    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered, hookStop, failed };
   }
 
   private async gateApproval(

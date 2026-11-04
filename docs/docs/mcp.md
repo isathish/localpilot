@@ -45,13 +45,32 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
 | `command` | for a local server | Program to launch |
 | `args` | no | Arguments |
 | `url` | for a remote server | The server's endpoint (`https://…`) |
-| `type` | no | `stdio`, `http` (Streamable HTTP) or `sse` (HTTP+SSE). Inferred when omitted: a `command` is stdio, a `url` ending in `/sse` is SSE, any other `url` is Streamable HTTP |
-| `headers` | no | Remote servers: headers sent with every request, typically `Authorization`. Values accept `${env:NAME}` |
+| `type` | no | `stdio`, `http` (Streamable HTTP, also written `streamableHttp`) or `sse` (HTTP+SSE). Inferred when omitted: a `command` is stdio, a `url` ending in `/sse` is SSE, any other `url` is Streamable HTTP |
+| `headers` | no | Remote servers: headers sent with every request, typically `Authorization` |
 | `env` | no | Extra environment variables, added to the environment VS Code was started with |
 | `cwd` | no | Working directory. Default: the first workspace folder |
-| `enabled` | no | Set `false` to keep the entry without starting the server |
+| `enabled` | no | Set `false` to keep the entry without starting the server (`"disabled": true` also works) |
+| `timeout` | no | Seconds a tool call may take before it fails |
+| `autoApprove` | no | Tool names (as the server names them) that run without asking, unless `localpilot.approvals.network` is `never` or your organization's policy sets a network approval |
+
+`command`, `args`, `env` values, `cwd`, `url` and `headers` accept `${env:NAME}`, `${secret:NAME}` and Claude-style `${NAME}` or `${NAME:-default}`. A reference that resolves to nothing is left as written, and the log gets one warning for that server. Settings always show the references, never the values.
 
 Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: use `${env:NAME}` references, or put such servers in your user settings. A `${secret:NAME}` reference also resolves from a `LOCALPILOT_KEY_<NAME>` environment variable, and the CLI reads it from `~/.localpilot/keys.json`, but VS Code cannot store MCP header secrets in the keychain yet.
+
+### Server files (`.mcp.json`)
+
+LocalPilot also reads servers from files in the `{ "mcpServers": { "name": { … } } }` format that Claude Code and Cline use. When the same name appears in several places, the first one in this list wins:
+
+1. the `localpilot.mcpServers` setting;
+2. `<workspace>/.mcp.json`;
+3. `~/.localpilot/mcp.json`, or the file named by `LOCALPILOT_MCP_SETTINGS_PATH`;
+4. plugin `.mcp.json` files.
+
+Besides the fields above, these files accept Cline's and Claude Code's spellings: `transportType` or a nested `transport: { "type": … }` instead of `type`, `disabled`, and `alwaysAllow` for `autoApprove`. A relative `cwd` is resolved against the file's folder.
+
+A workspace's `.mcp.json` runs commands from the repository, so LocalPilot asks once before starting its servers ("This workspace defines MCP servers … Start them?"). The answer is remembered for that workspace. If a server's command, arguments, environment, URL or headers change, you are asked again for that server. If you choose **Not now**, the servers stay stopped until you reload the window. The CLI asks in the terminal and remembers the answer in `~/.localpilot/mcp-trust.json`. With `--trust-workspace` it starts them without asking, and with no terminal to ask in it leaves them stopped.
+
+A file with errors shows a notification that lists the problem in each server, with an **Open file** button. The servers that are valid still start.
 
 ### Remote servers
 
@@ -61,7 +80,7 @@ For a remote server without an explicit `type`, LocalPilot first speaks Streamab
 
 ## Starting and reloading
 
-- Servers start when the extension activates, and restart when `localpilot.mcpServers` changes.
+- Servers start when the extension activates. When `localpilot.mcpServers` or an `mcp.json` file changes, only the servers whose connection settings changed are stopped, started or restarted. A new `timeout` or `autoApprove` applies without a restart.
 - To restart them yourself, run **LocalPilot: Reload Skills, Subagents & MCP Servers**. The notification shows how many MCP tools were registered.
 - The [CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) starts the same servers. Pass `--no-mcp` to skip them.
 

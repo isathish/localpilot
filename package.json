@@ -75,6 +75,21 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "localpilot.markdownEditor",
+        "displayName": "LocalPilot Markdown Reader",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -616,6 +631,12 @@
         "title": "Attach Image to Chat…",
         "category": "LocalPilot",
         "icon": "$(file-media)"
+      },
+      {
+        "command": "localpilot.attachFile",
+        "title": "Add File to Chat",
+        "category": "LocalPilot",
+        "icon": "$(attach)"
       },
       {
         "command": "localpilot.fixDiagnosticAt",
@@ -1177,6 +1198,10 @@
       ],
       "explorer/context": [
         {
+          "command": "localpilot.attachFile",
+          "group": "localpilot@0"
+        },
+        {
           "command": "localpilot.attachImage",
           "when": "resourceExtname =~ /\\.(png|jpe?g|gif|webp)$/",
           "group": "localpilot"
@@ -1425,6 +1450,64 @@
           "default": 24000,
           "description": "Tool outputs longer than this are truncated (head + tail) before being sent to the model."
         },
+        "localpilot.maxConsecutiveMistakes": {
+          "type": "integer",
+          "default": 6,
+          "minimum": 0,
+          "markdownDescription": "Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired), and ask you for guidance. Any successful tool call resets the count; your next message continues normally. `0` = no limit."
+        },
+        "localpilot.disabledTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Tools never offered to the model. Use LocalPilot names (`web_fetch`), Claude Code or Cline names (`Bash`, `WebSearch`, `execute_command`) or globs (`mcp_*`, `browser_*`). Also editable under **Settings → Agent & approvals → Tools**."
+        },
+        "localpilot.pdf.maxReadSizeMB": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "markdownDescription": "Largest PDF the agent may read with `read_pdf`, `read_file` or as an attachment."
+        },
+        "localpilot.pdf.maxChars": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 1000,
+          "markdownDescription": "Most characters of PDF text returned per read (the tool output is still subject to `#localpilot.maxToolOutputChars#`)."
+        },
+        "localpilot.markdownViewer.scrollSync": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep the Markdown reader and the source editor scrolled to the same place. Double-click a block in the reader to jump to its line in the source."
+        },
+        "localpilot.markdownViewer.outlineDepth": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 2,
+          "maximum": 6,
+          "markdownDescription": "Deepest heading level shown in the Markdown reader's outline and in an inline `[[toc]]`."
+        },
+        "localpilot.markdownViewer.frontMatter": {
+          "type": "string",
+          "enum": [
+            "collapsed",
+            "expanded",
+            "hidden"
+          ],
+          "enumDescriptions": [
+            "A collapsed Properties table above the document",
+            "The Properties table, open",
+            "Do not show front matter"
+          ],
+          "default": "collapsed",
+          "markdownDescription": "How YAML front matter is shown above a document in the Markdown reader."
+        },
+        "localpilot.markdownViewer.mermaid": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Render ```` ```mermaid ```` code blocks as diagrams in the Markdown reader. Mermaid is bundled and works offline."
+        },
         "localpilot.approvals.terminal": {
           "scope": "application",
           "type": "string",
@@ -1629,7 +1712,7 @@
         "localpilot.mcpServers": {
           "type": "object",
           "default": {},
-          "markdownDescription": "MCP servers whose tools are exposed to the agent. A local server is started from a command: `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`. A remote server is reached at a URL over Streamable HTTP (or HTTP+SSE for a URL ending in `/sse` or `\"type\": \"sse\"`), with optional headers: `{ \"github\": { \"url\": \"https://api.githubcopilot.com/mcp/\", \"headers\": { \"Authorization\": \"Bearer ${env:GITHUB_TOKEN}\" } } }`. Header values accept `${env:NAME}`.",
+          "markdownDescription": "MCP servers whose tools are exposed to the agent. A local server is started from a command: `{ \"filesystem\": { \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"] } }`. A remote server is reached at a URL over Streamable HTTP (or HTTP+SSE for a URL ending in `/sse` or `\"type\": \"sse\"`), with optional headers: `{ \"github\": { \"url\": \"https://api.githubcopilot.com/mcp/\", \"headers\": { \"Authorization\": \"Bearer ${env:GITHUB_TOKEN}\" } } }`. Every field accepts `${env:NAME}` and `${secret:NAME}`. Servers are also read from `<workspace>/.mcp.json` (started once you trust them) and `~/.localpilot/mcp.json`; this setting wins on a name clash.",
           "additionalProperties": {
             "type": "object",
             "properties": {
@@ -1721,6 +1804,11 @@
             "anthropics/claude-plugins-official"
           ],
           "markdownDescription": "Plugin marketplaces to search and install from (**LocalPilot: Browse Plugins…**, `localpilot plugin search`): `owner/repo` on GitHub, any git URL, or a local folder — each with a `.claude-plugin/marketplace.json` in Claude Code's format. Marketplaces are fetched with `git`, so private repositories work with your git credentials."
+        },
+        "localpilot.checkpoints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Take a checkpoint before each message you send: in a git repository a private ref (`refs/localpilot/checkpoints/<chat>/<turn>`) records the working tree, including untracked files and changes made by shell commands, without touching your index, branches or `git stash list`. Outside git (or with this off) only the files the agent edits are snapshotted. Checkpoints are deleted with the chat."
         },
         "localpilot.hooks.enabled": {
           "scope": "application",
@@ -2044,7 +2132,7 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production && node scripts/check-assets.js",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",

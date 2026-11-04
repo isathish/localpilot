@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentRunner } from './agent/agentLoop';
 import { ChangeTracker } from './agent/changeTracker';
+import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs } from './agent/checkpoints';
 import { createGatherContextTool } from './agent/clarify';
 import { createSkillPrompt, SkillLearner } from './agent/skillRecommender';
 import { describeSource, discoverSkills, installSkills, parseSkillSource, skillsDestination } from './agent/skillInstaller';
@@ -21,6 +22,7 @@ import { CommandManager } from './agent/commands';
 import { configTarget, editableProviders, getConfig, onConfigChange, setDefaultModel, setModelEnabled } from './config';
 import { WorkspaceContext } from './context/workspaceContext';
 import { McpManager } from './mcp/mcpManager';
+import { showMcpFileProblems, workspaceMcpTrust } from './mcp/trust';
 import { catalogForSystem, installId, InstallTarget, MODEL_CATALOG } from './providers/catalog';
 import { autoDetectProviders, recommendModel } from './providers/discovery';
 import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ollamaUp } from './providers/modelManager';
@@ -37,6 +39,7 @@ import { browserTools, captureUrl, inspectUrl, openInBrowser } from './tools/bro
 import { InspectReport } from './tools/cdp';
 import { editorTools } from './tools/editor';
 import { deleteUri, fsTools } from './tools/fs';
+import { pdfTools } from './tools/pdf';
 import { createAnalyzeWorkspaceTool } from './tools/workspace';
 import { ToolRegistry } from './tools/registry';
 import { searchTools } from './tools/search';
@@ -46,7 +49,7 @@ import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController } from './ui/chatController';
 import { registerChatParticipant } from './ui/chatParticipant';
-import { AGENTS_VIEW_ID, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
+import { AGENTS_VIEW_ID, ATTACH_FILTERS, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { WorktreeManager } from './agent/worktrees';
 import { cliShim, installCli, registerUriHandler } from './ui/cli';
 import { TerminalManager } from './terminal/terminalManager';
@@ -55,10 +58,12 @@ import { InlineCompletionProvider } from './ui/inlineCompletion';
 import { inlineEdit, LocalPilotCodeActions, terminalCommand } from './ui/inlineEdit';
 import { LocalModelChatProvider } from './ui/lmProvider';
 import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
+import { MarkdownCustomEditor } from './ui/markdown/customEditor';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 import { RedisTelemetry } from './storage/redisTelemetry';
+import { setTelemetryRecorder } from './telemetry/catalog';
 import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
 import { TaskQueue } from './agent/taskQueue';
 import { AutoReviewer } from './agent/autoReviewer';
@@ -110,6 +115,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   };
   const log = mirrorLog(channel, telemetry);
   context.subscriptions.push(telemetry);
+  setTelemetryRecorder(telemetry);
   context.subscriptions.push(new vscode.Disposable(() => redisTelemetry?.dispose()));
   context.subscriptions.push(
     onConfigChange(() => {
@@ -166,6 +172,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
   runner.telemetry = telemetry;
   runner.autoReviewer = new AutoReviewer(providers, log);
+  tracker.persistDir = path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'checkpoints');
+  const checkpoints = new CheckpointService({
+    globalStorageDir: context.globalStorageUri.fsPath,
+    enabled: () => getConfig().checkpointsEnabled,
+    log,
+    defaultRoot: () => workspace.root,
+    multiRoot: () => (vscode.workspace.workspaceFolders?.length ?? 0) > 1,
+    warn: (m) => void vscode.window.showWarningMessage(m),
+  });
+  runner.checkpoints = checkpoints;
+  context.subscriptions.push(store.onDidDelete((id) => void checkpoints.deleteSession(id).catch((e) => log.warn(`checkpoint cleanup: ${String(e)}`))));
   controller.telemetry = telemetry;
   // Claude Code-compatible project configuration: settings.json (permission rules, hooks), plugins and custom
   // slash commands from both `.claude/` and `.localpilot/`.
@@ -209,6 +226,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const extensionVersion = String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0');
   const mcp = new McpManager(tools, log, extensionVersion);
   mcp.extraServers = () => plugins.mcpServers();
+  mcp.trust = workspaceMcpTrust(context.workspaceState);
+  mcp.onFileProblems = showMcpFileProblems;
   const modelManager = new ModelManager(providers, log);
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
 
@@ -326,16 +345,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
 
 
-  tools.registerAll([...fsTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
+  tools.registerAll([...fsTools, ...pdfTools, ...searchTools, ...terminalTools, ...editorTools, ...webTools, ...browserTools, ...createMemoryTools(memory), manageTodosTool, createGatherContextTool(workspace, store), createAnalyzeWorkspaceTool(() => getConfig().parallel.maxConcurrency), repoGraphTool, ...gitTools, teamBoardTool, reposTool, securityScanTool]);
   tools.registerAll(createAgentTools(runner, skills, (e) => controller.emitEvent(e), (sid, title, detail, kind) => controller.requestApproval(sid, title, detail, kind)));
   const markdownViewer = new MarkdownViewer(context, log);
   controller.markdownViewer = markdownViewer;
-  context.subscriptions.push(markdownViewer);
+  // Before any awaited work, so readers restored with the window resolve.
+  context.subscriptions.push(markdownViewer, MarkdownViewer.registerSerializer(context), MarkdownCustomEditor.register(context, log));
   tools.register(createShowMarkdownTool(markdownViewer));
 
   await controller.loaded;
   // Worktrees of sessions that no longer exist (crash, manual deletion of the chat store) are removed on start —
   // only once the sessions are loaded, so a live chat's worktree is never mistaken for an orphan.
+  // Checkpoint refs of chats deleted while LocalPilot was not running, and stale private indexes.
+  void controller.loaded
+    .then(async () => {
+      checkpoints.pruneScratch();
+      const root = workspace.root;
+      if (store.loadedOk) {
+        const live = new Set(store.list().map((s) => s.id));
+        pruneSnapshotDirs(tracker.persistDir!, (sid) => isOrphanCheckpoint(sid, live));
+        const n = root ? await checkpoints.pruneRefs(root, (sid, last) => isOrphanCheckpoint(sid, live, Date.now(), last)) : 0;
+        if (n) {
+          log.info(`removed the checkpoints of ${n} deleted chat(s)`);
+        }
+      }
+    })
+    .catch((e) => log.warn(`checkpoint prune: ${e instanceof Error ? e.message : String(e)}`));
   void controller.loaded
     .then(() => new Promise((r) => setTimeout(r, 5000)))
     .then(() => controller.pruneWorktrees())
@@ -393,7 +428,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry, providerSecrets);
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry, providerSecrets, () => tools.list().map((t) => ({ name: t.definition.name, description: t.definition.description.split(/(?<=\.)\s/)[0].slice(0, 160) })));
   settingsPanel.learner = learner;
   // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
   const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
@@ -1786,6 +1821,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return controller.handle({ type: 'attachUri', uri: uri.toString() });
     }
     return controller.handle({ type: 'pickImage' });
+  });
+  // Any file or folder from the Explorer (several when multi-selected); images join the vision row, the rest become chips.
+  cmd('localpilot.attachFile', async (uri?: unknown, uris?: unknown) => {
+    const list = Array.isArray(uris) && uris.every((u) => u instanceof vscode.Uri) && uris.length ? (uris as vscode.Uri[]) : uri instanceof vscode.Uri ? [uri] : await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach', defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri, filters: ATTACH_FILTERS });
+    if (!list?.length) {
+      return;
+    }
+    view.reveal();
+    for (const u of list) {
+      await controller.handle({ type: 'attachUri', uri: u.toString() });
+    }
   });
   const diagnosticAction = (prefix: string, mode: 'agent' | 'ask') => async (uri: unknown, diags: unknown) => {
     if (!(uri instanceof vscode.Uri) || !Array.isArray(diags)) {

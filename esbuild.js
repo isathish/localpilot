@@ -1,4 +1,6 @@
 const esbuild = require("esbuild");
+const fs = require('fs');
+const { copyAssets } = require('./scripts/assets');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -23,6 +25,17 @@ const esbuildProblemMatcherPlugin = {
 	},
 };
 
+/**
+ * Copies pdf.js, the KaTeX CSS and fonts and the licence notices into dist/ after every build, watch rebuilds included.
+ * @type {import('esbuild').Plugin}
+ */
+const assetsPlugin = {
+	name: 'localpilot-assets',
+	setup(build) {
+		build.onEnd(() => copyAssets(__dirname));
+	},
+};
+
 const version = require('./package.json').version;
 
 const common = {
@@ -40,7 +53,7 @@ const common = {
 
 async function main() {
 	// 1. The extension: `vscode` is provided by the host.
-	const ext = await esbuild.context({ ...common, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js', external: ['vscode'] });
+	const ext = await esbuild.context({ ...common, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js', external: ['vscode'], plugins: [...common.plugins, assetsPlugin] });
 	// 2. The `localpilot` CLI: same agent core, `vscode` resolved to the Node shim, runnable with plain node.
 	const cli = await esbuild.context({
 		...common,
@@ -49,11 +62,30 @@ async function main() {
 		alias: { vscode: './src/cli/vscodeShim.ts' },
 		banner: { js: '#!/usr/bin/env node' },
 	});
+	// 3. Mermaid for the Markdown reader and the chat: one browser IIFE, loaded by the webviews only when a diagram is shown.
+	const mermaid = await esbuild.context({
+		entryPoints: ['media/vendor-src/mermaid-entry.js'],
+		outfile: 'dist/webview/mermaid.js',
+		bundle: true,
+		format: 'iife',
+		platform: 'browser',
+		minify: true,
+		legalComments: 'external',
+		logLevel: 'silent',
+		plugins: [esbuildProblemMatcherPlugin],
+	});
+	// 4. The PDF text extractor, forked as a plain Node child (pdf.js needs Node >= 22.13, unlike the CLI bundle).
+	const children = fs.existsSync('src/pdf/extractChild.ts')
+		? [await esbuild.context({ ...common, entryPoints: ['src/pdf/extractChild.ts'], outfile: 'dist/pdf/extract-child.js', target: 'node22' })]
+		: [];
+	const contexts = [ext, cli, ...children];
+	await mermaid.rebuild();
+	await mermaid.dispose();
 	if (watch) {
-		await Promise.all([ext.watch(), cli.watch()]);
+		await Promise.all(contexts.map((c) => c.watch()));
 	} else {
-		await Promise.all([ext.rebuild(), cli.rebuild()]);
-		await Promise.all([ext.dispose(), cli.dispose()]);
+		await Promise.all(contexts.map((c) => c.rebuild()));
+		await Promise.all(contexts.map((c) => c.dispose()));
 	}
 }
 

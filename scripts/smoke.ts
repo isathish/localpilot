@@ -12,7 +12,8 @@ import { retryAfter } from '../src/providers/http';
 import { retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
 import { buildProfile } from '../src/providers/system';
-import { PROVIDER_PRESETS } from '../src/providers/presets';
+import { bedrockRegion, bedrockUrl, PROVIDER_PRESETS, withRegion } from '../src/providers/presets';
+import { lmStudioContexts, lmStudioRoot } from '../src/providers/lmstudio';
 import { checkGatewayPrereqs, classifyGatewayModels, gatewayEnv, gatewayModels, installCommand as gatewayInstall, needsProviders, nodeVersionOk, startCommand as gatewayStart } from '../src/providers/gatewaySetup';
 import { checkPrereqs, coliCommand, findColibri, freePort, installCommand, launcherIn, modelChoices, probePort, setupArgs, statusProgress } from '../src/providers/colibriSetup';
 import * as nodeFs from 'fs';
@@ -32,10 +33,13 @@ import { builtinCommands } from '../src/agent/commands';
 import { BUILTIN_SUITE } from '../src/eval/suite';
 import { parseMemoryNotes, runDigest } from '../src/agent/autoMemory';
 import { irrelevantTools } from '../src/agent/toolRelevance';
+import { checkpointRef, isOrphanCheckpoint, pickOutcome, recordCheckpoint, SessionCheckpoints } from '../src/agent/checkpoints';
+import { foldersOf, fuzzyMatch, MentionEntry, rankMentions } from '../src/context/mentionSearch';
 import { getEventListeners } from 'events';
 import { onAbort, sleep as rsleep } from '../src/agent/resilience';
 import { withTimeout } from '../src/providers/http';
 import { McpManager } from '../src/mcp/mcpManager';
+import { expandMcpServer, mcpFingerprint, mergeMcpLayers, normalizeMcpServers } from '../src/mcp/config';
 import { claimable, formatBoard, parseTask, serializeTask, TeamBoard } from '../src/agent/teamBoard';
 import { teamBoardTool } from '../src/tools/teamBoard';
 import { collectRepos, findRepo } from '../src/agent/repos';
@@ -435,6 +439,8 @@ async function cloudAgentE2E() {
   const webview = nodeFs.readFileSync('media/settings.js', 'utf8');
   const drift = PROVIDER_PRESETS.filter((p) => !webview.includes(`'${p.key}'`) || !webview.includes(`'${p.cfg.baseUrl}'`) || (p.env && !webview.includes(`'${p.env}'`)));
   const webKeys = [...webview.matchAll(/\[\s*'([a-z0-9-]+)',\s*'[^']+',\s*'[^']*',\s*'(?:ollama|openai|anthropic)'/g)].map((m) => m[1]);
+  check('Bedrock preset: region rewrites only Bedrock endpoints', withRegion(bedrockUrl('us-east-1'), 'eu-west-1') === bedrockUrl('eu-west-1') && bedrockRegion(withRegion(bedrockUrl('us-east-1'), 'bogus')) === 'us-east-1' && withRegion('https://api.openai.com/v1', 'eu-west-1') === 'https://api.openai.com/v1' && !!PROVIDER_PRESETS.find((p) => p.key === 'bedrock')?.cfg.models?.length);
+  check('LM Studio native context: loaded length, else the maximum', lmStudioContexts([{ id: 'a', loaded_context_length: 8192, max_context_length: 32768 }, { id: 'b', max_context_length: 4096 }]).get('a') === 8192 && lmStudioContexts([{ id: 'b', max_context_length: 4096 }]).get('b') === 4096 && lmStudioRoot('http://localhost:1234/v1') === 'http://localhost:1234');
   check('CLI and Settings provider presets are the same list', !drift.length && webKeys.every((k) => PROVIDER_PRESETS.some((p) => p.key === k)), { drift: drift.map((p) => p.key), extra: webKeys.filter((k) => !PROVIDER_PRESETS.some((p) => p.key === k)) });
   check('thinking style per Claude model', thinkingStyle('claude-opus-5-5') === 'always' && thinkingStyle('claude-fable-5-1') === 'always' && thinkingStyle('claude-sonnet-4-6') === 'adaptive' && thinkingStyle('claude-haiku-5-5') === 'adaptive' && thinkingStyle('claude-sonnet-4-5') === 'budget' && thinkingStyle('claude-3-7-sonnet-latest') === 'budget' && thinkingStyle('claude-3-5-haiku-latest') === 'none');
   check('local gateways marked cloud count as cloud; URLs decide otherwise', isCloudProvider({ baseUrl: 'http://localhost:20128/v1', cloud: true }) && !isCloudProvider({ baseUrl: 'http://localhost:1234/v1' }) && isCloudProvider({ baseUrl: 'https://api.openai.com/v1' }));
@@ -712,6 +718,42 @@ async function gatewayChecks() {
 }
 
 async function pureLogic() {
+  console.log('\n[checkpoints]');
+  {
+    check('checkpoint ref is per session and run', checkpointRef('s_ab::w1', 42) === 'refs/localpilot/checkpoints/s_ab/42');
+    check('clean tree records HEAD', pickOutcome({ head: 'h' }).outcome === 'head_clean');
+    check('dirty tree records the stash', pickOutcome({ head: 'h', stash: 's' }).sha === 's');
+    check('failed stash falls back to HEAD', pickOutcome({ head: 'h', stashFailed: true }).outcome === 'head_fallback');
+    check('no HEAD skips to file snapshots', pickOutcome({}).kind === 'files');
+    const st: SessionCheckpoints = { history: [] };
+    [1, 2, 3].forEach((run) => recordCheckpoint(st, { run, createdAt: run, kind: 'commit', outcome: 'head_clean' }, 2));
+    check('checkpoint history is capped, newest kept', st.history.map((e) => e.run).join() === '2,3' && st.latest === 3);
+    const old = (Date.now() - 30 * 86_400_000).toString(36);
+    check('old CLI checkpoints are orphans, live chats are not', isOrphanCheckpoint(`cli-${old}`, undefined) && !isOrphanCheckpoint(`s_${old}zz11`, new Set([`s_${old}zz11`])));
+  }
+  console.log('\n[@ mention search]');
+  {
+    const files: MentionEntry[] = ['src/ui/chatController.ts', 'src/ui/chatViewProvider.ts', 'src/context/contextManager.ts', 'docs/my file.md'].map((p) => ({ ref: p, display: p, kind: 'file' }));
+    for (let i = 0; i < 3000; i++) {
+      files.push({ ref: `pkg${i % 40}/mod${i}/c${i}hat_t${i}ools.ts`, display: `pkg${i % 40}/mod${i}/c${i}hat_t${i}ools.ts`, kind: 'file' });
+    }
+    const all = [...files, ...foldersOf(files)];
+    const t0 = Date.now();
+    const hits = rankMentions('chatctl', all);
+    const ms = Date.now() - t0;
+    check('@chatctl ranks src/ui/chatController.ts first among 3,000 files', hits[0]?.ref === 'src/ui/chatController.ts', hits.slice(0, 3));
+    check('@ search over 3,000 files takes under 100 ms', ms < 100, ms);
+    check('fuzzy match is a case-insensitive subsequence', !!fuzzyMatch('CCT', 'chatController.ts') && !fuzzyMatch('xyz', 'chatController.ts'));
+    check('fuzzy match prefers word starts', fuzzyMatch('cc', 'chatController.ts')!.positions.join() === '0,4', fuzzyMatch('cc', 'chatController.ts'));
+    check('folders are derived from file paths', foldersOf(files).some((f) => f.ref === 'src/ui' && f.display === 'src/ui/' && f.kind === 'folder'));
+    const open = rankMentions('', all, { open: ['src/context/contextManager.ts'], recent: ['docs/my file.md'] });
+    check('open editors first, recently attached next', open[0]?.ref === 'src/context/contextManager.ts' && open[0].open === true && open[1]?.ref === 'docs/my file.md' && open[1].recent === true, open.slice(0, 2));
+    check('results are capped at 20', rankMentions('t', all).length === 20);
+    const multi = foldersOf([{ ref: 'api/src/a.ts', display: 'api:/src/a.ts', kind: 'file' }]);
+    check('multi-root folders keep the name:/path form', multi.length === 1 && multi[0].ref === 'api/src' && multi[0].display === 'api:/src/', multi);
+    const hit = rankMentions('ctl', all)[0];
+    check('highlight offsets point at matched characters', !!hit && hit.hl.map((i) => hit.desc[i]).join('').toLowerCase() === 'ctl' && hit.labelHl.map((i) => hit.label[i]).join('').toLowerCase() === 'ctl', hit);
+  }
   console.log('\n[Text tool-call protocol]');
   const a = extractTextToolCalls('Let me look.\n```tool_call\n{"name":"read_file","arguments":{"path":"x.ts"}}\n```\n<tool_call>{"name":"list_dir","arguments":{"path":"."}}</tool_call>');
   check('parses fenced + tagged tool calls', a.calls.length === 2 && a.calls[0].name === 'read_file' && a.remainder === 'Let me look.', a);
@@ -1335,6 +1377,30 @@ rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdou
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 
+  console.log('\n[MCP server files: .mcp.json normalizer, merge, expansion]');
+  {
+    const table: [string, unknown, unknown][] = [
+      ['Claude stdio', { type: 'stdio', command: 'npx', args: ['-y', 'srv'] }, { type: 'stdio', command: 'npx', args: ['-y', 'srv'] }],
+      ['Cline disabled + timeout + autoApprove', { command: 'node', disabled: true, timeout: 30, autoApprove: ['a'] }, { command: 'node', enabled: false, timeout: 30, autoApprove: ['a'] }],
+      ['transportType alias', { url: 'https://h/mcp', transportType: 'streamableHttp' }, { url: 'https://h/mcp', type: 'streamableHttp' }],
+      ['nested transport', { transport: { type: 'sse', url: 'https://h/sse' } }, { url: 'https://h/sse', type: 'sse' }],
+      ['url without type', { url: 'https://h/mcp' }, { url: 'https://h/mcp' }],
+      ['invalid type', { type: 'ws', url: 'https://h' }, undefined],
+      ['nothing to start', { args: ['x'] }, undefined],
+    ];
+    const canon = (o: unknown) => (o && typeof o === 'object' ? JSON.stringify(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))) : String(o));
+    const bad = table.filter(([, input, want]) => {
+      const r = normalizeMcpServers({ mcpServers: { s: input } });
+      return canon(r.servers.s) !== canon(want) ||(want === undefined) !== (r.problems.length > 0);
+    });
+    check('normalizer table: Claude, Cline and nested-transport fields; invalid entries become field errors', bad.length === 0, bad.map(([n]) => n));
+    const merged = mergeMcpLayers([{ source: 'settings', servers: { a: { command: 's' } }, problems: [] }, { source: 'project', file: '/w/.mcp.json', servers: { a: { command: 'p' }, b: { command: 'p' } }, problems: [] }, { source: 'user', servers: { b: { command: 'u' }, c: { command: 'u' } }, problems: [] }]);
+    check('settings beat the project file, which beats the user file', merged.a.command === 's' && merged.b.source === 'project' && merged.c.command === 'u');
+    const ex = expandMcpServer({ command: '${env:LP_SMOKE_BIN}', args: ['${LP_SMOKE_GONE}'], cwd: '${env:LP_SMOKE_BIN}', headers: { A: 'Bearer ${secret:k}' } }, (kind, n) => (kind === 'secret' ? (n === 'k' ? 'sk' : undefined) : n === 'LP_SMOKE_BIN' ? '/bin' : undefined));
+    check('expansion covers command, args, cwd and headers; a missing variable stays as written', ex.cfg.command === '/bin' && ex.cfg.cwd === '/bin' && ex.cfg.args?.[0] === '${LP_SMOKE_GONE}' && ex.cfg.headers?.A === 'Bearer sk' && ex.missing.join() === 'LP_SMOKE_GONE', ex);
+    check('timeout and autoApprove do not count as a configuration change', mcpFingerprint({ command: 'x' }) === mcpFingerprint({ command: 'x', timeout: 9, autoApprove: ['t'] }) && mcpFingerprint({ command: 'x' }) !== mcpFingerprint({ command: 'y' }));
+  }
+
   console.log('\n[Situational tools: offered only when relevant]');
   {
     const plain = irrelevantTools('fix the off-by-one in pager.py', undefined, 1);
@@ -1466,6 +1532,7 @@ async function agentLoopE2E() {
       if (body.model === 'flaky') {
         send({ choices: [{ delta: { content: 'Recovered after a retry.' } }] });
         send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+        send({ choices: [], usage: { prompt_tokens: 3000, completion_tokens: 6, prompt_tokens_details: { cached_tokens: 2048 }, cost: 0.0015 } });
       } else if (body.model === 'overthinker') {
         // Asked to reason, it reasons until the output limit and never answers; asked not to, it answers at once.
         overthinkerEfforts.push(body.reasoning_effort);
@@ -1572,6 +1639,8 @@ async function agentLoopE2E() {
     const outFlaky = await runner.run({ session: sFlaky, userMessage: { role: 'user', content: 'go' }, emit: (e) => evFlaky.push(e), signal: new AbortController().signal, requestApproval: async () => true });
     check('resilience: HTTP 503 before first token is retried and recovers', outFlaky === 'Recovered after a retry.' && flakyHits === 2, { outFlaky, flakyHits });
     check('resilience: retry is announced with reason=server', evFlaky.some((e) => e.type === 'retry' && (e.payload as { reason: string }).reason === 'server') && !evFlaky.some((e) => e.type === 'error'));
+    const fu = sFlaky.usage;
+    check('usage: both requests booked, cached input and cost kept apart', fu?.requests === 2 && fu.promptTokens === 952 && fu.cacheReadTokens === 2048 && fu.completionTokens === 6 && fu.costUsd === 0.0015 && fu.model === 'flaky' && fu.provider === 'mock', fu);
     // An empty completion is asked again instead of being accepted as the answer.
     const sEmpty = mkSession('mock/empty');
     const evEmpty: AgentEvent[] = [];
@@ -1938,6 +2007,13 @@ async function telemetry() {
     now += DAY;
     const empty = summarize([] as TelemetryEvent[], { days: 1, from: now, to: now });
     check('summarize([]) yields zeros and one series point', empty.totals.runs === 0 && empty.series.length === 1 && empty.completions.acceptanceRate === 0);
+    const acts = summarize([{ t: now, type: 'edit_decision', decision: 'accepted', added: 5, removed: 1, files: 1 }, { t: now, type: 'edit_decision', decision: 'rejected', added: 2, removed: 0, files: 1 }, { t: now, type: 'hook', event: 'Stop', durationMs: 9, outcome: 'failed' }] as TelemetryEvent[], { days: 1, from: now, to: now });
+    check('summary: kept and undone edit lines and hook failures for the dashboard tiles', acts.activity.edits.acceptedAdded === 5 && acts.series[0].acceptedLines === 6 && acts.series[0].rejectedLines === 2 && acts.activity.hooks.failed === 1 && acts.errors[0]?.kind === 'hook', acts.activity);
+    const sunk: TelemetryEvent[] = [];
+    const sinkT = new Telemetry({ dir: tmp, retentionDays: () => 0, now: () => now, sinks: [{ name: 'mem', sink: { write: async (b) => void sunk.push(...b.events), flush: async () => undefined, shutdown: async () => undefined } }] });
+    sinkT.record({ type: 'slash', command: 'help' });
+    await sinkT.shutdown();
+    check('telemetry sinks: an extra sink gets every flushed event, next to the file store', sunk.length === 1 && sunk[0].type === 'slash' && sinkT.sinkNames().join(',') === 'store,mem');
     // The dashboard passes the enabled provider ids: a disabled or made-up provider disappears along with its calls.
     const mixed: TelemetryEvent[] = [
       { t: now, type: 'health', provider: 'ollama', ok: true, durationMs: 5, models: 2 },

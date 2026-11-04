@@ -77,7 +77,7 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot doctor` | Checks providers (reachability and key state), settings and tools |
 | `localpilot providers` | Lists providers under **Local** and **Cloud** with reachability, model count and where each key comes from. Never prints a key |
 | `localpilot providers presets` | Lists what `providers add` accepts: local servers, cloud APIs and gateways |
-| `localpilot providers add <preset\|url>` | Adds a provider: a preset (`openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `omniroute`…) or any OpenAI-compatible URL. Options: `--key <key>`, `--key-env VAR`, `--url <url>`, `--id <id>`, `--name <name>`, `--type ollama\|openai\|anthropic`, `--cloud` / `--no-cloud`. Checks the connection and lists the models |
+| `localpilot providers add <preset\|url>` | Adds a provider: a preset (`openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `omniroute`…) or any OpenAI-compatible URL. Options: `--key <key>`, `--key-env VAR`, `--url <url>`, `--region <aws-region>` (Amazon Bedrock), `--id <id>`, `--name <name>`, `--type ollama\|openai\|anthropic`, `--cloud` / `--no-cloud`. Checks the connection and lists the models |
 | `localpilot providers key <id> [key]` | Sets a provider's API key: as an argument, typed at a hidden prompt, or piped in (`pass openai \| localpilot providers key openai`). `--key-env VAR` reads it from a variable instead; `--remove-key` deletes it |
 | `localpilot providers test [id]` | Checks one provider, or all, and lists their models |
 | `localpilot providers remove <id>` | Removes a provider added from the CLI, with its stored key. A provider from VS Code settings is disabled for the CLI only |

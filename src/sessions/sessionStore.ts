@@ -10,9 +10,10 @@ export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>)
 }
 
 /** The list row of a session: everything but the transcript and other per-turn state. */
-function summaryOf(s: Session): SessionSummary {
+function summaryOf(s: Session, bytes?: number): SessionSummary {
   const { id, title, createdAt, updatedAt, model, mode, plan, pinned, worktree, isolated, group, skills } = s;
-  return { id, title, createdAt, updatedAt, model, mode, plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills };
+  const usage = s.usage ? { ...s.usage, subagentTokens: s.usage.subagentTokens && { ...s.usage.subagentTokens } } : undefined;
+  return { id, title, createdAt, updatedAt, model, mode, plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes };
 }
 
 export interface SessionSearchHit {
@@ -84,7 +85,7 @@ export class SessionStore implements vscode.Disposable {
             empty.push(s.id);
             continue;
           }
-          this.index.set(s.id, summaryOf(s));
+          this.index.set(s.id, summaryOf(s, raw.byteLength));
           keep.push(s);
           if (keep.length > cap) {
             keep.sort((a, b) => b.updatedAt - a.updatedAt).length = cap;
@@ -376,7 +377,7 @@ export class SessionStore implements vscode.Disposable {
     // The caller's object is the live one: make sure it is the one the store hands out (and lists) from now on.
     this.sessions.delete(s.id);
     this.sessions.set(s.id, s);
-    this.index.set(s.id, summaryOf(s));
+    this.index.set(s.id, summaryOf(s, this.index.get(s.id)?.bytes));
     this.saveTimers.set(
       s.id,
       setTimeout(() => {
@@ -417,8 +418,13 @@ export class SessionStore implements vscode.Disposable {
       const tmp = vscode.Uri.joinPath(this.dir, `${s.id}.json.tmp`);
       try {
         await vscode.workspace.fs.createDirectory(this.dir);
-        await vscode.workspace.fs.writeFile(tmp, Buffer.from(JSON.stringify(s), 'utf8'));
+        const data = Buffer.from(JSON.stringify(s), 'utf8');
+        await vscode.workspace.fs.writeFile(tmp, data);
         await vscode.workspace.fs.rename(tmp, target, { overwrite: true });
+        const row = this.index.get(s.id);
+        if (row) {
+          row.bytes = data.byteLength;
+        }
       } catch (e) {
         this.log.error(`Failed to save session ${s.id}: ${String(e)}`);
       }

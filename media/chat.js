@@ -880,7 +880,7 @@
     d.dataset.index = index;
     const atts = [];
     const text = (m.meta && m.meta.display ? m.meta.display : m.content)
-      .replace(/<attachment[^>]*path="([^"]+)"[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p) => { atts.push(p); return ''; })
+      .replace(/<attachment[^>]*path="([^"]+)"(?:\s+lines="(\d+)[^"]*")?[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p, ln) => { atts.push(ln ? `${p}#L${ln}` : p); return ''; })
       .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
     const act = el('div', 'actions', `<button data-act="copy" title="Copy">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit and resend: remove this message and later turns (files are kept), put the text back in the composer">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: revert files changed since this message and edit it">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
@@ -893,7 +893,7 @@
     };
     d.appendChild(act);
     syncRestoreButton(d, state.session && state.session.id);
-    if (atts.length) { d.appendChild(el('div', 'att', atts.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join(''))); }
+    if (atts.length) { d.appendChild(el('div', 'att', atts.map(attChip).join(''))); }
     if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" title="Click to enlarge">`).join(''))); }
     d.appendChild(el('div', 'utext', inline(text)));
     if (m.meta && m.meta.corrections && m.meta.corrections.length) { d.appendChild(correctionNote(m.meta.corrections)); }
@@ -1250,6 +1250,15 @@
     live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
     live.thinkingEl = null;
   }
+  /** An `error` event's text: a plain string, or `{ kind, message }` (the consecutive-mistake limit). */
+  function errorText(p) { return p && typeof p === 'object' ? String(p.message || p.latest || 'Error') : String(p); }
+  /** Error row for an `error` event; the mistake limit names the latest failure and how to carry on. */
+  function errorBox(p) {
+    if (p && typeof p === 'object' && p.kind === 'mistake_limit') {
+      return el('div', 'error-box mistake-limit', `<span class="msg">LocalPilot ran into ${esc(p.count)} errors in a row and stopped.<br>Latest: <code>${esc(p.latest || 'unknown error')}</code><br>Send a message to guide it and continue.</span>`);
+    }
+    return el('div', 'error-box', `<span class="msg">${esc(errorText(p))}</span>`);
+  }
   /** Inline note under a retracted reply: why the model is being asked to act instead of the turn ending. */
   function nudgeNote(reason) {
     const why = {
@@ -1258,6 +1267,7 @@
       shown: 'The tool call was written as text instead of being made — asking the model to call it.',
       stale: 'The workers already finished — asking the model to report their results instead of re-announcing the hand-off.',
       malformed: 'The tool call could not be parsed — asking the model to resend it.',
+      length: 'The reply was cut off at the output limit — asking the model for a shorter call.',
     }[reason] || 'Nothing was executed — asking the model to act or explain.';
     return el('div', 'note nudge', `${I.warn}<span>${esc(why)}</span>`);
   }
@@ -1353,7 +1363,7 @@
     if (!state.running.has(sid) && !state.pendingSend.has(sid) && !state.live.has(sid)) {
       if (e.type === 'memory') { if (visible && e.payload && e.payload.saved && e.payload.saved.length) { toast(`Saved to memory: ${e.payload.saved.join(', ')}`, 'info'); } }
       else if (e.type === 'context') { if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } }
-      else if (e.type === 'error' && visible) { toast(String(e.payload), 'error'); }
+      else if (e.type === 'error' && visible) { toast(errorText(e.payload), 'error'); }
       return;
     }
     const live = ensureLive(sid);
@@ -1361,7 +1371,7 @@
     const child = e.payload && typeof e.payload === 'object' && e.payload.childId && e.type !== 'subagent_start' && e.type !== 'subagent_end';
     if (child && !['status', 'tool_start', 'tool_end', 'model_request'].includes(e.type)) {
       const d = e.payload.data;
-      if (e.type === 'error') { childStatus(live, sid, e.payload.childId, e.payload.agent, String(d), visible); }
+      if (e.type === 'error') { childStatus(live, sid, e.payload.childId, e.payload.agent, errorText(d), visible); }
       else if (e.type === 'retry' && d) { childStatus(live, sid, e.payload.childId, e.payload.agent, `retrying ${d.attempt}/${d.max}`, visible); }
       return;
     }
@@ -1460,6 +1470,12 @@
       }
       case 'todos': if (state.session && state.session.id === sid) { state.session.todos = Array.isArray(e.payload) ? e.payload : []; renderTasks(); } break;
       case 'nudge': {
+        // A text reply cut off at the output limit is being continued: the rest streams on into the same body.
+        if (e.payload && e.payload.reason === 'length' && e.payload.continued) {
+          const st = 'Reply cut off at the output limit — continuing…'; noteStatus(sid, st); if (visible) { setStatus(st); }
+          showTyping(live); followLive(live);
+          break;
+        }
         // The reply so far claimed or announced an action that never happened. It stays, dimmed and labelled, and whatever
         // the model streams next starts in a fresh body — never glued onto the retracted sentence.
         const prev = live.text.trim() ? live.body : null;
@@ -1478,7 +1494,7 @@
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
-      case 'error': { rotateBody(live); live.failed = true; setPhase(live, 'Failed'); const box = el('div', 'error-box', `<span class="msg">${esc(String(e.payload))}</span>`); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
+      case 'error': { rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
       case 'turn_end': noteStatus(sid, 'Finishing…'); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
   }
@@ -2244,7 +2260,7 @@
         if (it.hr) { if (!ql) { list.appendChild(el('hr')); } continue; }
         if (ql && !(`${it.label} ${it.desc || ''} ${it.group || ''}`.toLowerCase().includes(ql))) { continue; }
         if (it.group && it.group !== lastGroup && !ql) { list.appendChild(el('div', 'grp', esc(it.group))); lastGroup = it.group; }
-        const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${esc(it.label)}</span>${it.desc ? `<span class="desc">${esc(it.desc)}</span>` : ''}</span>${it.tag ? `<span class="tag">${esc(it.tag)}</span>` : ''}<span class="check">${it.selected ? I.check : ''}</span>`);
+        const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${it.labelHtml || esc(it.label)}</span>${it.desc ? `<span class="desc">${it.descHtml || esc(it.desc)}</span>` : ''}</span>${it.tag ? `<span class="tag">${esc(it.tag)}</span>` : ''}<span class="check">${it.selected ? I.check : ''}</span>`);
         row.onmousedown = (e) => { e.preventDefault(); pick(it); };
         menuState.items.push({ it, row }); list.appendChild(row);
       }
@@ -2257,7 +2273,7 @@
     render('');
     placePopover(anchor);
     const key = (e) => {
-      if (!menuState) { return; }
+      if (!menuState || e.isComposing || e.keyCode === 229) { return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); menuState.sel = (menuState.sel + 1) % menuState.items.length; highlight(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); menuState.sel = (menuState.sel - 1 + menuState.items.length) % menuState.items.length; highlight(); }
       else if (e.key === 'Enter') { e.preventDefault(); const x = menuState.items[menuState.sel]; if (x) { pick(x.it); } }
@@ -2409,7 +2425,7 @@
   els.ctx.onclick = () => state.session && post({ type: 'compactNow', sessionId: state.session.id });
 
   // inline '/' and '@' autocomplete reuse the popover
-  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@([\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1] }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
+  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
   function showInlineMenu(t) {
     if (t.kind === '/') {
       const items = SLASH.filter(([c]) => c.startsWith(t.tok) || (c.endsWith(' ') && t.tok.startsWith(c.trim() + ' '))).map(([c, d]) => ({ label: c.trim(), desc: d, icon: I.sparkle, onPick: () => { els.input.value = c; els.input.focus(); updateSendEnabled(); } }))
@@ -2422,21 +2438,71 @@
     } else {
       if (!state.openFiles.length) { post({ type: 'requestOpenFiles' }); }
       const q = t.tok.toLowerCase();
-      const items = MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))
-        .concat(state.openFiles.filter((f) => f.toLowerCase().includes(q)).slice(0, 8).map((f) => ({ label: f.split('/').pop(), desc: f, icon: I.file, onPick: () => applyMention(f) })));
+      if (mentionHits.asked !== t.tok) { mentionHits.asked = t.tok; post({ type: 'mentionSearch', query: t.tok }); }
+      // Until the host answers this query, the previous answer narrowed by the new text stands in.
+      const hits = mentionHits.query === t.tok ? mentionHits.items : mentionHits.items.filter((h) => subseq(q, h.desc));
+      const files = hits.length ? hits.map((h) => ({ label: h.label, labelHtml: hlHtml(h.label, h.labelHl), desc: h.desc, descHtml: hlHtml(h.desc, h.hl), icon: h.kind === 'folder' ? I.folder : I.file, tag: h.open ? 'open' : h.recent ? 'recent' : '', onPick: () => applyMention(h.ref) }))
+        : state.openFiles.filter((f) => f.toLowerCase().includes(q)).slice(0, 8).map((f) => ({ label: f.split('/').pop(), desc: f, icon: I.file, onPick: () => applyMention(f) }));
+      const items = (t.quoted ? [] : MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))).concat(files);
       if (!items.length) { return closeMenu(); }
       openMenu(els.box, items); els.input.focus();
     }
   }
-  function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@[\w./-]*$/, ''); els.input.value = `${before}@${name} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + name.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
+  // Workspace-wide @ search: the host ranks its file index (open editors, then recent attachments, then fuzzy score).
+  const mentionHits = { asked: null, query: null, items: [] };
+  function subseq(q, s) { let i = 0; const l = s.toLowerCase(); for (let k = 0; k < l.length && i < q.length; k++) { if (l[k] === q[i]) { i++; } } return i === q.length; }
+  function hlHtml(s, pos) { const on = new Set(pos || []); return s.split('').map((c, i) => (on.has(i) ? `<b class="hl">${esc(c)}</b>` : esc(c))).join(''); }
+  function mentionResults(m) {
+    if (m.query !== mentionHits.asked) { return; }
+    mentionHits.query = m.query; mentionHits.items = m.items || [];
+    const t = tokenAt();
+    if (t && t.kind === '@' && t.tok === m.query && document.activeElement === els.input) { showInlineMenu(t); }
+  }
+  /** Paths outside the plain `@path` alphabet (spaces, brackets …) are quoted: `@"docs/my file.md"`. */
+  function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); const token = /^[\w./-]+$/.test(name) ? name : `"${name}"`; els.input.value = `${before}@${token} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + token.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
+  /** `@path`, `@path#L3-L9` and `@"path with spaces"` in a draft; also what the composer highlights. */
+  const MENTION_RE = /(^|\s)(@(?:"([^"\n]+)"|([\w./-]+(?:#L\d+(?:-L?\d+)?)?)))/g;
+  function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]); }
+  /** Opens what a sent message's context chip names: a file, the Problems panel, the terminal, a URL. */
+  function openMentionRef(ref, line) {
+    if (/^https?:\/\//i.test(ref)) { post({ type: 'openExternal', url: ref }); return; }
+    if (ref.startsWith('@')) { post({ type: 'openMention', ref }); return; }
+    post({ type: 'openFile', path: ref, line: line ? Number(line) : undefined, sessionId: state.session ? state.session.id : undefined });
+  }
+  /** A sent message's context chip; `a` is a path (`file#L3-L9`), a special mention (`problems`, `@git`) or a URL. */
+  function attChip(a) {
+    const n = String(a).replace(/^@/, '');
+    const special = MENTIONS.some(([k]) => k === n) || n === 'directory';
+    const m = /^(.*?)(?:#L(\d+)(?:-L?\d+)?)?$/.exec(a);
+    const ref = special ? `@${n}` : /^https?:\/\//i.test(a) ? a : m[1];
+    const open = ref !== '@directory';
+    return `<span class="chip${open ? ' link' : ''}"${open ? ` data-ref="${esc(ref)}"${!special && m[2] ? ` data-line="${m[2]}"` : ''} title="Open ${esc(n)}"` : ''}>${special ? I.list : I.file}<span>${esc(special ? ref : a)}</span></span>`;
+  }
+  els.messages.addEventListener('click', (e) => { const c = e.target.closest && e.target.closest('.turn.user .att .chip[data-ref]'); if (c) { openMentionRef(c.dataset.ref, c.dataset.line); } });
 
   // ------------------------------------------------------------------ input handling
   function autoGrow() { els.input.style.height = 'auto'; els.input.style.height = Math.min(240, els.input.scrollHeight) + 'px'; }
+  // Mentions in the draft are highlighted by a mirror of the text drawn behind the transparent textarea. Programmatic
+  // `value` writes (drafts, history, improve prompt …) fire no input event, so the setter is wrapped as well.
+  const mirror = el('div', 'mirror'); mirror.setAttribute('aria-hidden', 'true');
+  const inwrap = el('div', 'inwrap'); els.input.parentNode.insertBefore(inwrap, els.input); inwrap.append(mirror, els.input);
+  function syncMirror() {
+    const v = els.input.value; let html = ''; let at = 0;
+    for (const m of v.matchAll(MENTION_RE)) { const s = m.index + m[1].length; html += `${esc(v.slice(at, s))}<mark>${esc(m[2])}</mark>`; at = s + m[2].length; }
+    mirror.innerHTML = `${html}${esc(v.slice(at))}\n`;
+    mirror.style.right = `${els.input.offsetWidth - els.input.clientWidth}px`;
+    mirror.scrollTop = els.input.scrollTop;
+  }
+  const valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+  Object.defineProperty(els.input, 'value', { configurable: true, get() { return valueProp.get.call(this); }, set(v) { valueProp.set.call(this, v); syncMirror(); } });
+  syncMirror();
+  els.input.addEventListener('input', syncMirror);
+  els.input.addEventListener('scroll', () => { mirror.scrollTop = els.input.scrollTop; });
   /** ⌘/Ctrl+Shift+Enter: start the draft as a new agent in its own tab, leaving the current chat (even a running one) untouched. */
   function sendInNewTab() {
     const text = els.input.value.trim();
     if (!text) { return; }
-    const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
+    const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
     post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', text, attachments, images: images.length ? images : undefined });
@@ -2448,7 +2514,7 @@
   function steerCurrent() {
     const text = els.input.value.trim();
     if ((!text && !state.images.length) || !state.session) { return; }
-    const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
+    const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
     post({ type: 'steer', sessionId: state.session.id, text: text || 'Consider the attached image(s).', attachments, images: images.length ? images : undefined });
@@ -2476,7 +2542,7 @@
       if (p && p.paused) { steerCurrent(); return; }
       openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); return;
     }
-    const atRefs = [...text.matchAll(/(?:^|\s)@([\w./-]+(?:#L\d+(?:-L?\d+)?)?)/g)].map((m) => m[1]);
+    const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     const images = state.images.map((i) => i.data);
     const finalText = text || 'Describe what you see in the attached image(s).';
@@ -2486,7 +2552,7 @@
     if (!finalText.startsWith('/')) {
       const u = userTurn({ content: finalText, images }, undefined);
       u.classList.add('fresh');
-      if (attachments.length) { u.insertBefore(el('div', 'att', attachments.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join('')), u.firstChild.nextSibling); }
+      if (attachments.length) { u.insertBefore(el('div', 'att', attachments.map(attChip).join('')), u.firstChild.nextSibling); }
       els.messages.appendChild(u); ensureLive(state.session.id); setStatus('Sending…');
       // React before the host acknowledges: Stop and the progress bar appear now; a watchdog undoes it if nothing comes back.
       const sid = state.session.id;
@@ -2508,10 +2574,18 @@
   }
   els.input.addEventListener('focus', warmModel);
   els.input.addEventListener('keydown', (e) => {
+    // An IME (Japanese, Chinese, Korean …) uses Enter and the arrows to confirm or pick a candidate: not ours.
+    if (e.isComposing || e.keyCode === 229) { return; }
     if (menuState && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key) && !els.popover.querySelector('.search')) {
       if (e.key === 'Tab') { e.preventDefault(); const x = menuState.items[menuState.sel]; if (x) { closeMenu(); x.it.onPick && x.it.onPick(); } return; }
       if (e.key === 'Enter') { const x = menuState.items[menuState.sel]; if (x && x.it.label !== els.input.value.trim()) { e.preventDefault(); closeMenu(); x.it.onPick && x.it.onPick(); return; } closeMenu(); }
       else { els.popover.onkeydown(e); return; }
+    }
+    // Backspace right after "@mention " removes the whole mention: select it and let the native delete keep undo working.
+    if (e.key === 'Backspace' && !e.altKey && !e.metaKey && !e.ctrlKey && els.input.selectionStart === els.input.selectionEnd) {
+      const before = els.input.value.slice(0, els.input.selectionStart);
+      const mm = /(?:^|\s)(@(?:"[^"\n]+"|[\w./-]+(?:#L\d+(?:-L?\d+)?)?)) $/.exec(before);
+      if (mm) { els.input.selectionStart = before.length - mm[1].length - 1; }
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); improvePrompt(); return; }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && improveUndo && els.input.value === improveUndo.improved) { e.preventDefault(); els.input.value = improveUndo.original; improveUndo = null; autoGrow(); updateSendEnabled(); return; }
@@ -2725,6 +2799,7 @@
       case 'draft': els.input.value = m.text || ''; if (m.images && m.images.length) { state.images = m.images.map((data, i) => ({ name: `image-${i + 1}.png`, data: String(data).replace(/^data:[^,]*,/, ''), mime: 'image/png' })); renderChips(); } autoGrow(); updateSendEnabled(); els.input.focus(); break;
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
+      case 'mentionResults': mentionResults(m); break;
       case 'openFiles': {
         const was = `${state.activeFile}|${state.hasSelection}`;
         state.openFiles = m.files || []; state.activeFile = m.active || ''; state.hasSelection = !!m.selection;
