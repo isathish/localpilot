@@ -137,10 +137,10 @@ suite('checkpoints (git)', function () {
     await svc.snapshot(s, 1, repo);
     await svc.snapshot(s, 2, repo);
     assert.strictEqual((await svc.refs(s.id, repo)).length, 2);
-    assert.ok(fs.existsSync(path.join(tmp, 'global', 'checkpoint-scratch', scratchKey(git(repo, 'rev-parse', '--show-toplevel'), s.id))));
+    assert.ok(fs.existsSync(path.join(tmp, 'global', 'checkpoint-scratch', scratchKey(path.resolve(git(repo, 'rev-parse', '--show-toplevel')), s.id))));
     await svc.deleteSession(s.id);
     assert.strictEqual((await svc.refs(s.id, repo)).length, 0);
-    assert.ok(!fs.existsSync(path.join(tmp, 'global', 'checkpoint-scratch', scratchKey(git(repo, 'rev-parse', '--show-toplevel'), s.id))));
+    assert.ok(!fs.existsSync(path.join(tmp, 'global', 'checkpoint-scratch', scratchKey(path.resolve(git(repo, 'rev-parse', '--show-toplevel')), s.id))));
   });
 
   test('non-git folder falls back to file snapshots; disabled records nothing', async () => {

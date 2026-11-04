@@ -49,7 +49,7 @@ jobs:
       previous_tag: ${{ steps.decide.outputs.previous_tag }}
       bump: ${{ steps.decide.outputs.bump }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
@@ -101,11 +101,11 @@ jobs:
     if: needs.prepare.outputs.release != 'true' && needs.prepare.outputs.bump != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -145,10 +145,10 @@ jobs:
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -188,7 +188,7 @@ jobs:
             echo "Or **Extensions → ··· → Install from VSIX…** in VS Code. Documentation: https://isathish.github.io/localpilot/"
             if [ -n "$PREV" ]; then echo ""; echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/$PREV...$TAG"; fi
           } >> RELEASE_NOTES.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-${{ needs.prepare.outputs.version }}
           path: |
@@ -209,10 +209,10 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -236,14 +236,14 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: release-${{ needs.prepare.outputs.version }}
       - name: Verify checksums
@@ -258,7 +258,7 @@ jobs:
           git push origin "$TAG"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: LocalPilot ${{ env.TAG }}
