@@ -862,6 +862,13 @@
   }
 
   // ------------------------------------------------------------------ transcript rendering
+  /** "Restore checkpoint" only where it would revert something: not in worktree chats, and only if this turn or a later one has file snapshots. */
+  function syncRestoreButton(turn, sid) {
+    const b = turn.querySelector('[data-act="restore"]'); if (!b) { return; }
+    const key = Number(turn.dataset.checkpoint);
+    const ok = !!sid && !state.worktree.has(sid) && turn.dataset.checkpoint !== undefined && (state.checkpoints.get(sid) || []).some((t) => t >= key);
+    b.classList.toggle('hidden', !ok);
+  }
   function userTurn(m, index) {
     const d = el('div', 'turn user');
     d.dataset.index = index;
@@ -871,6 +878,7 @@
       .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
     const act = el('div', 'actions', `<button data-act="copy" title="Copy">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit and resend: remove this message and later turns (files are kept), put the text back in the composer">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: revert files changed since this message and edit it">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
+    if (m.meta && m.meta.checkpoint !== undefined) { d.dataset.checkpoint = m.meta.checkpoint; }
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
       if (b.dataset.act === 'copy') { copyTo(b, text); }
@@ -878,6 +886,7 @@
       if (b.dataset.act === 'restore' && state.session) { post({ type: 'restoreCheckpoint', sessionId: state.session.id, messageIndex: index }); }
     };
     d.appendChild(act);
+    syncRestoreButton(d, state.session && state.session.id);
     if (atts.length) { d.appendChild(el('div', 'att', atts.map((a) => `<span class="chip">${I.file}<span>${esc(a)}</span></span>`).join(''))); }
     if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" title="Click to enlarge">`).join(''))); }
     d.appendChild(el('div', 'utext', inline(text)));
@@ -2591,7 +2600,7 @@
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
         break;
       }
-      case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); } break;
+      case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;

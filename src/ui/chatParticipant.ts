@@ -38,6 +38,8 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
     }
 
     const sink = {
+      // Approvals and ask_user cannot be shown in the VS Code chat stream; they use native dialogs instead.
+      canPrompt: false,
       post: (m: import('./chatController').ToWebview) => {
         if (m.type !== 'event' || m.event.sessionId !== sessionId) {
           return;
@@ -48,14 +50,19 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
             stream.markdown(String(e.payload));
             break;
           case 'tool_start': {
-            const p = e.payload as { name: string; args: Record<string, unknown> };
-            stream.progress(`${p.name} ${summarise(p.args)}`);
+            // Worker events arrive wrapped as { childId, agent, inner, data }.
+            const p = e.payload as { childId?: string; agent?: string; data?: unknown } | undefined;
+            const inner = (p?.childId ? p.data : p) as { name?: string; args?: Record<string, unknown> } | undefined;
+            if (inner?.name) {
+              stream.progress(`${p?.childId ? `${p.agent}: ` : ''}${inner.name} ${summarise(inner.args)}`);
+            }
             break;
           }
           case 'tool_end': {
-            const p = e.payload as { name: string; isError?: boolean; data?: { path?: string } };
-            if (p.data?.path) {
-              stream.reference(vscode.Uri.file(p.data.path));
+            const p = e.payload as { childId?: string; data?: unknown } | undefined;
+            const inner = (p?.childId ? p.data : p) as { name?: string; isError?: boolean; data?: { path?: string } } | undefined;
+            if (inner?.data?.path) {
+              stream.reference(vscode.Uri.file(inner.data.path));
             }
             break;
           }
@@ -123,7 +130,8 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
   ctx.subscriptions.push(participant);
 }
 
-function summarise(args: Record<string, unknown>): string {
-  const v = args.path ?? args.query ?? args.command ?? args.pattern ?? args.url ?? '';
+function summarise(args: Record<string, unknown> | undefined): string {
+  const a = args ?? {};
+  const v = a.path ?? a.query ?? a.command ?? a.pattern ?? a.url ?? '';
   return typeof v === 'string' ? v.slice(0, 60) : '';
 }

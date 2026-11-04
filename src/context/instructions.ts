@@ -13,7 +13,8 @@ import * as path from 'path';
  *   4. local    CLAUDE.local.md (personal, git-ignored) — highest precedence, so it comes last
  *
  * `@path` on a line of its own or inside a sentence imports another file (relative to the importing file, `~/` for
- * home), recursively up to IMPORT_DEPTH levels; code blocks and spans are left alone.
+ * home), recursively up to IMPORT_DEPTH levels; code blocks and spans are left alone. Imports from repository files
+ * must stay inside the workspace (or ~/.claude, ~/.localpilot); credential files are never imported.
  */
 
 export const PROJECT_RULE_FILES = ['.localpilot/rules.md', 'AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md', '.windsurfrules'];
@@ -105,14 +106,28 @@ function maskCode(text: string): { masked: string; restore: (s: string) => strin
 
 const IMPORT_RE = /(^|[\s(])@((?:~\/|\.{1,2}\/|\/)?[\w.-][\w./-]*)/g;
 
-/** Resolves `@path` imports in an instruction file's text. */
-export async function resolveImports(text: string, file: string, opts: { home?: string; depth?: number; seen?: Set<string> } = {}): Promise<string> {
+/** Credential locations are never imported, whoever asks. */
+const isSecret = (p: string) => /(^|[\\/])\.(ssh|aws|gnupg)([\\/]|$)|[\\/]\.config[\\/]gcloud([\\/]|$)/.test(p) || /^(\.env|id_(rsa|dsa|ecdsa|ed25519))|\.(pem|key)$/i.test(path.basename(p));
+const isInside = (p: string, dir: string) => {
+  const rel = path.relative(dir, p);
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+};
+const realpath = (p: string) => fs.realpath(p).catch(() => path.resolve(p));
+const refusedImports = new Set<string>();
+
+/**
+ * Resolves `@path` imports in an instruction file's text. Unless `scope` is `user`, targets must resolve inside one
+ * of `roots` (default: the importing file's folder) or ~/.claude / ~/.localpilot; refused imports stay as plain text.
+ */
+export async function resolveImports(text: string, file: string, opts: { home?: string; depth?: number; seen?: Set<string>; scope?: InstructionFile['scope']; roots?: string[] } = {}): Promise<string> {
   const depth = opts.depth ?? 0;
   if (depth >= IMPORT_DEPTH) {
     return text;
   }
   const home = opts.home ?? os.homedir();
   const seen = opts.seen ?? new Set<string>([path.resolve(file)]);
+  const roots = opts.roots ?? [path.dirname(file)];
+  const allowed = opts.scope === 'user' ? undefined : await Promise.all([...roots, path.join(home, '.claude'), path.join(home, '.localpilot')].map(realpath));
   const { masked, restore } = maskCode(text);
   const refs = [...masked.matchAll(IMPORT_RE)];
   if (!refs.length) {
@@ -129,12 +144,20 @@ export async function resolveImports(text: string, file: string, opts: { home?: 
     if (seen.has(key)) {
       continue;
     }
+    const real = await realpath(abs);
+    if (isSecret(key) || isSecret(real) || (allowed && !allowed.some((dir) => isInside(real, dir)))) {
+      if (!refusedImports.has(`${file}|${real}`)) {
+        refusedImports.add(`${file}|${real}`);
+        console.warn(`LocalPilot: not importing ${rel} into ${file}: outside the workspace or a credential file`);
+      }
+      continue;
+    }
     const content = await readIfFile(abs);
     if (content === undefined) {
       continue; // not a file: leave the token (it may be a handle or an email)
     }
     seen.add(key);
-    const inner = await resolveImports(content.length > MAX_IMPORT_CHARS ? `${content.slice(0, MAX_IMPORT_CHARS)}\n…(import truncated)` : content, abs, { home, depth: depth + 1, seen });
+    const inner = await resolveImports(content.length > MAX_IMPORT_CHARS ? `${content.slice(0, MAX_IMPORT_CHARS)}\n…(import truncated)` : content, abs, { home, depth: depth + 1, seen, scope: opts.scope, roots });
     out = out.replace(m[0], () => `${m[1]}\n<!-- imported: ${rel} -->\n${inner.trim()}\n<!-- end import -->\n`);
   }
   return restore(out);
@@ -153,7 +176,9 @@ export async function buildInstructions(roots: string[], opts: { home?: string; 
     if (raw === undefined) {
       continue;
     }
-    const text = (await resolveImports(stripFrontMatter(raw), f.file, { home })).trim();
+    // An ancestor (e.g. the monorepo root above an opened package) may also import from its own folder tree.
+    const own = f.scope === 'ancestor' ? path.dirname(f.file).replace(/[\\/]\.(claude|localpilot)$/, '') : undefined;
+    const text = (await resolveImports(stripFrontMatter(raw), f.file, { home, scope: f.scope, roots: own ? [...roots, own] : roots })).trim();
     if (text) {
       parts.push(`<!-- ${f.label}${f.scope === 'user' ? ' (user)' : f.scope === 'local' ? ' (local)' : ''} -->\n${text}`);
     }

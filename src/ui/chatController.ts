@@ -177,6 +177,8 @@ export interface Sink {
   post(msg: ToWebview): void;
   /** Whether the user can currently see this surface; approvals raised while nothing is visible also get a notification. */
   visible?: () => boolean;
+  /** False when this surface cannot show approval or question cards (the @localpilot participant). */
+  canPrompt?: boolean;
 }
 
 /** An approval the agent is waiting on; kept so a re-created webview can show the prompt again and a hidden one can mirror it as a notification. */
@@ -335,7 +337,11 @@ export class ChatController implements vscode.Disposable {
   }
 
   private anySurfaceVisible(): boolean {
-    return [...this.sinks].some((s) => !s.visible || s.visible());
+    return this.promptSurfaces().some((s) => !s.visible || s.visible());
+  }
+
+  private promptSurfaces(): Sink[] {
+    return [...this.sinks].filter((s) => s.canPrompt !== false);
   }
 
   /** Prefills the composer (used by Settings → "Create skill" and other entry points). */
@@ -368,7 +374,11 @@ export class ChatController implements vscode.Disposable {
     }
     this.flushDeltas();
     for (const s of this.sinks) {
-      s.post(msg);
+      try {
+        s.post(msg);
+      } catch (e) {
+        this.log.warn(`chat surface failed to handle ${msg.type}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   }
 
@@ -391,7 +401,11 @@ export class ChatController implements vscode.Disposable {
     this.pendingDeltas.clear();
     for (const event of events) {
       for (const s of this.sinks) {
-        s.post({ type: 'event', event });
+        try {
+          s.post({ type: 'event', event });
+        } catch (e) {
+          this.log.warn(`chat surface failed to handle ${event.type}: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
     }
   }
@@ -1109,7 +1123,18 @@ export class ChatController implements vscode.Disposable {
       case 'approval': {
         const pending = this.approvals.get(msg.id);
         if (pending) {
+          if (msg.approved && msg.remember) {
+            this.rememberApproval(pending.sessionId, pending.kind);
+          }
           this.settleApproval(msg.id, msg.approved);
+          if (msg.approved && msg.remember) {
+            // Parallel workers may already be waiting on the same kind of action.
+            for (const [id, other] of [...this.approvals]) {
+              if (other.sessionId === pending.sessionId && other.kind === pending.kind) {
+                this.settleApproval(id, true);
+              }
+            }
+          }
         }
         return;
       }
@@ -1218,8 +1243,17 @@ export class ChatController implements vscode.Disposable {
           if (s.messages.length > 6) {
             this.broadcast({ type: 'toast', level: 'info', text: `Compacting with ${model.name}…` });
           }
+          const snapshot = s.messages;
+          const len = snapshot.length;
           // A server that stalls must not leave the chat stuck in "compacting": give up after 3 minutes, history unchanged.
           const res = await cm.compact(s.messages, provider, model, AbortSignal.timeout(180_000), 4, false);
+          if (!this.store.get(s.id)) {
+            return; // the chat was deleted meanwhile
+          }
+          if (s.messages !== snapshot || s.messages.length !== len) {
+            this.broadcast({ type: 'toast', level: 'info', text: 'The chat changed while compacting — left as it was' });
+            return;
+          }
           if (res.removed > 0) {
             s.messages = res.messages;
             s.compactions++;
@@ -1239,6 +1273,10 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'clearSession': {
+        if (this.compacting.has(msg.sessionId)) {
+          this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
+          return;
+        }
         const s = this.store.get(msg.sessionId);
         if (s && !this.isRunning(s.id)) {
           await this.runner.hooks?.sessionEnd(s.id, 'clear', this.sessionRoot(s.id));
@@ -1392,6 +1430,10 @@ export class ChatController implements vscode.Disposable {
    * turn are restored too ("Restore checkpoint"); without it the work on disk is kept ("Edit").
    */
   private async rewindTo(sessionId: string, messageIndex: number, revertFiles: boolean): Promise<void> {
+    if (this.compacting.has(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
+      return;
+    }
     const s = this.store.get(sessionId);
     if (!s || this.isRunning(s.id)) {
       this.broadcast({ type: 'toast', level: 'error', text: `Stop the running agent before ${revertFiles ? 'restoring a checkpoint' : 'editing a message'}` });
@@ -1646,9 +1688,18 @@ export class ChatController implements vscode.Disposable {
   }
 
   async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean } = {}): Promise<string> {
+    if (!this.store.get(sessionId)) {
+      throw new Error('Session not found');
+    }
+    // A manual compaction rewrites the history when it finishes; a turn started meanwhile would be dropped by it.
+    while (this.compacting.has(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Compacting this chat — your message is sent when it finishes' });
+      this.broadcast({ type: 'sendQueued', sessionId });
+      await this.compacting.get(sessionId);
+    }
     const session = this.store.get(sessionId);
     if (!session) {
-      throw new Error('Session not found');
+      return ''; // deleted while it was compacting
     }
     if (this.runs.has(sessionId) || this.starting.has(sessionId)) {
       // A run that is still being set up registers within moments; wait for it so the message is not dropped.
@@ -1662,12 +1713,9 @@ export class ChatController implements vscode.Disposable {
       }
       // The other send ended without starting a run (a slash command answered locally, a start that was cancelled):
       // steering would drop this message, so it starts a run of its own.
-    }
-    // A manual compaction rewrites the history when it finishes; a turn started meanwhile would be dropped by it.
-    const compaction = this.compacting.get(sessionId);
-    if (compaction) {
-      this.broadcast({ type: 'toast', level: 'info', text: 'Compacting this chat — your message is sent when it finishes' });
-      await compaction;
+      if (this.compacting.has(sessionId)) {
+        return this.send(sessionId, text, attachments, images, opts);
+      }
     }
     this.starting.add(sessionId);
     try {
@@ -1786,9 +1834,11 @@ export class ChatController implements vscode.Disposable {
       }
       return '';
     } finally {
-      this.runs.delete(sessionId);
-      this.replays.delete(sessionId);
-      this.runStatus.delete(sessionId);
+      if (this.runs.get(sessionId) === control) {
+        this.runs.delete(sessionId);
+        this.replays.delete(sessionId);
+        this.runStatus.delete(sessionId);
+      }
       this.store.save(session);
       this.broadcast({ type: 'running', sessionId, running: false });
       this._onDidChangeRuns.fire();
@@ -1813,6 +1863,10 @@ export class ChatController implements vscode.Disposable {
   async retry(sessionId: string): Promise<string> {
     const session = this.store.get(sessionId);
     if (!session || this.runs.has(sessionId)) {
+      return '';
+    }
+    if (this.compacting.has(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
       return '';
     }
     let idx = session.messages.length - 1;
@@ -1985,14 +2039,26 @@ export class ChatController implements vscode.Disposable {
   /** Queue a user message for a running (or paused) agent; it is appended at the next step boundary. */
   async steer(sessionId: string, text: string, attachments: string[] = [], images?: string[]): Promise<boolean> {
     const c = this.runs.get(sessionId);
-    if (!c || !text.trim()) {
+    if (!text.trim()) {
       return false;
+    }
+    const original = text;
+    // The run ended (or never started) before the message could be queued: send it as a new turn instead of dropping it.
+    const fallback = async () => {
+      await this.send(sessionId, original, attachments, images);
+      return true;
+    };
+    if (!c) {
+      return fallback();
     }
     text = (await this.correctNames(sessionId, text)).text;
     let content = text;
     const attachedBlocks = await this.readAttachments(attachments);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
+    }
+    if (this.runs.get(sessionId) !== c || c.aborted) {
+      return fallback();
     }
     const id = `steer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     c.steer({ role: 'user', content, images, meta: { steerId: id } });
@@ -2030,8 +2096,8 @@ export class ChatController implements vscode.Disposable {
     const id = `${sessionId}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     return new Promise<boolean>((resolve) => {
       this.approvals.set(id, { sessionId, title, detail, kind, resolve, mirrored: false });
-      if (this.sinks.size === 0) {
-        // No UI attached (e.g. chat participant path) — fall back to a native dialog.
+      if (this.promptSurfaces().length === 0) {
+        // No surface that can show the card (none attached, or only the @localpilot participant) — fall back to a native dialog.
         void vscode.window.showWarningMessage(`${title}\n${detail}`.slice(0, 1000), { modal: true }, 'Allow', 'Allow for session').then((choice) => {
           if (!this.approvals.has(id)) {
             return; // the run was stopped meanwhile
@@ -2066,7 +2132,7 @@ export class ChatController implements vscode.Disposable {
    * undefined at once when no chat surface is attached, so ask_user falls back to native pickers.
    */
   requestQuestions(sessionId: string, questions: UserQuestion[]): Promise<UserAnswer[] | null | undefined> {
-    if (this.sinks.size === 0) {
+    if (this.promptSurfaces().length === 0) {
       return Promise.resolve(undefined);
     }
     const id = `${sessionId}:q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

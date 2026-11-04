@@ -360,6 +360,25 @@ suite('Claude Code compatibility: CLAUDE.md hierarchy and imports', () => {
     assert.strictEqual(text.split('PROJECT RULES').length, 2);
   });
 
+  test('imports from repository files stay inside the workspace and never read credentials', async () => {
+    const home = await tmp('memhome');
+    const parent = await tmp('memoutside');
+    const root = path.join(parent, 'repo');
+    await write(path.join(parent, 'outside.txt'), 'OUTSIDE SECRET');
+    await write(path.join(home, '.ssh', 'id_rsa'), 'PRIVATE KEY');
+    await write(path.join(home, '.claude', 'shared.md'), 'SHARED CLAUDE');
+    await write(path.join(root, 'docs', 'in.md'), 'INSIDE DOC');
+    await write(path.join(root, '.env'), 'API_KEY=1');
+    await write(path.join(root, 'AGENTS.md'), `Read @docs/in.md and @../outside.txt and @~/.ssh/id_rsa and @${path.join(parent, 'outside.txt')} and @.env and @~/.claude/shared.md`);
+    const { text } = await buildInstructions([root], { home });
+    assert.ok(text.includes('INSIDE DOC'), 'in-workspace import is inlined');
+    assert.ok(text.includes('SHARED CLAUDE'), '~/.claude imports keep working');
+    assert.ok(!text.includes('OUTSIDE SECRET'), 'no import from outside the workspace');
+    assert.ok(!text.includes('PRIVATE KEY'), 'no import from ~/.ssh');
+    assert.ok(!text.includes('API_KEY'), 'no import of .env');
+    assert.ok(text.includes('@../outside.txt') && text.includes('@~/.ssh/id_rsa'), 'refused imports stay as plain text');
+  });
+
   test('import depth is bounded', async () => {
     const dir = await tmp('deep');
     for (let i = 0; i < 8; i++) {
