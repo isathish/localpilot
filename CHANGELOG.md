@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.3 — 2026-11-04
+
 ### Added
 - **A built-in Markdown Reader.** Open any `.md` file in its own LocalPilot Markdown Reader tab with Open With… or **LocalPilot: Open Markdown Reader to the Side**, read two documents side by side, and get your reader tabs back after a window reload. The 'Aa' reading-settings popover (key `a`) sets column width, font, line height and text size, and your choice applies at once to every open reader.
 - **Diagrams, math and more in the Markdown Reader.** Mermaid diagrams are drawn offline (with Copy source, Copy SVG and Save SVG), and math, GitHub alerts, footnotes, a front-matter Properties table, sticky table headers and an inline `[[toc]]` are rendered. You can filter the outline and set its depth.
@@ -122,7 +124,11 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Tool calls are handled correctly.** JSON in an answer is no longer run as a tool call unless it names a real tool, tool results no longer appear as your messages or get resent by Retry, and tool steps show their output. The agent may now re-run the same test or diagnostics command after editing a file, and chats saved while a tool was running continue with that call marked interrupted.
 - **Inline completions fixed.** The text after the cursor is now sent correctly (last line, files without a final newline), closing brackets or quotes that belong to a suggestion are kept, servers without fill-in-the-middle support fall back to a chat request, and requests replaced by newer keystrokes end right away.
 - **Inline edit is safer.** It no longer includes the line after a full-line selection, overwrites code that moved while the model worked, or applies a reply that was cut off or contains its own code fences. Undo works in untitled files.
-- **Retry and Edit resend what you typed.** `/skill`, `/agent` and custom-command turns now run the command again with its model and allowed tools, multi-line tasks keep their line breaks, arguments with `$` pass through unchanged, and `/agent` with no task shows usage help.
+- **Retry and Edit resend what you typed.** `/skill`, `/agent` and custom-command turns now run the command again with its model and allowed tools, multi-line tasks keep their line breaks, arguments with `# Changelog
+
+All notable changes to LocalPilot are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [Semantic Versioning](https://semver.org/).
+
+ pass through unchanged, and `/agent` with no task shows usage help.
 - **Chat panel fixes.** Esc on an approval card no longer also stops the agent, ⌘I only improves the prompt, and the ⌥1-9, ⌘⌥T and ⌘⌥W tab shortcuts work on macOS. More than 12 pinned tabs no longer freeze the view, menus no longer close when the chat auto-scrolls, a background chat no longer replaces the one you are viewing, and lists render correctly.
 - **The chat in an editor tab knows your file.** Editor context, `@selection`, attach active file, Insert and Apply now use the last file you were working in instead of failing with "no active editor"; attachments, images and drafts go only to the chat you used.
 - **Context is not silently dropped.** In multi-root workspaces attached files are found in the right folder and paths to other folders open the right file; unreadable attachments show as missing. `@terminal` from a command includes the terminal output and `@problems` lists warnings too. Over the 12,000-character instruction limit the user-level file is now cut first instead of project files, `/memory` shows what was cut, and a rule file symlinked to CLAUDE.md is included once.

@@ -2,7 +2,7 @@
   "name": "localpilot-agent",
   "displayName": "LocalPilot Agent",
   "description": "The AI coding agent that runs on your machine. Copilot-style agent mode with Ollama, LM Studio, llama.cpp or vLLM — private, offline, free.",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -1534,13 +1534,29 @@
                 "additionalProperties": {
                   "type": "object",
                   "properties": {
-                    "contextWindow": { "type": "number" },
-                    "maxOutput": { "type": "number" },
-                    "vision": { "type": "boolean" },
-                    "reasoning": { "type": "boolean" },
-                    "inputPrice": { "type": "number" },
-                    "outputPrice": { "type": "number" },
-                    "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+                    "contextWindow": {
+                      "type": "number"
+                    },
+                    "maxOutput": {
+                      "type": "number"
+                    },
+                    "vision": {
+                      "type": "boolean"
+                    },
+                    "reasoning": {
+                      "type": "boolean"
+                    },
+                    "inputPrice": {
+                      "type": "number"
+                    },
+                    "outputPrice": {
+                      "type": "number"
+                    },
+                    "temperature": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 2
+                    }
                   }
                 }
               }
