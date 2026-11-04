@@ -20,7 +20,8 @@ async function run(req: ExtractRequest): Promise<ExtractReply> {
   const url = pathToFileURL(path.join(req.lib, 'pdf.mjs')).href;
   const pdfjs = (await import(url)) as { getDocument(o: object): { promise: Promise<PdfjsDoc>; destroy(): Promise<void> } };
   const data = req.data ? new Uint8Array(req.data) : new Uint8Array(fs.readFileSync(req.file!));
-  const dir = (d: string) => path.join(req.assets, d) + path.sep;
+  // pdf.js insists on a trailing '/' (a Windows `\` is rejected); forward slashes work for Node's fs everywhere.
+  const dir = (d: string) => `${path.join(req.assets, d).replace(/\\/g, '/')}/`;
   const task = pdfjs.getDocument({
     data,
     password: req.password,

@@ -138,7 +138,7 @@ export async function automation(check: Check): Promise<void> {
   // ---- schedules, runs, reports
   const s = makeSchedule({ name: 'nightly', cron: '0 3 * * *', prompt: 'run the tests', cwd: '/repo', mode: 'plan', model: 'ollama/qwen', timeout: '20m' });
   check('makeSchedule: timeout in seconds', s.timeoutSec === 1200 && s.mode === 'plan');
-  check('runArgs: one-shot yolo json run with timeout, folder, mode, model', runArgs(s).join(' ') === '--yolo --json --timeout 1200s -C /repo --plan -m ollama/qwen -- run the tests', runArgs(s).join(' '));
+  check('runArgs: one-shot yolo json run with timeout, folder, mode, model', runArgs(s).join(' ') === `--yolo --json --timeout 1200s -C ${s.cwd} --plan -m ollama/qwen -- run the tests` && path.resolve(s.cwd) === path.resolve('/repo'), runArgs(s).join(' '));
   let badName = false;
   try {
     makeSchedule({ name: 'no spaces', cron: '0 3 * * *', prompt: 'x', cwd: '/' });
@@ -235,7 +235,7 @@ export async function automation(check: Check): Promise<void> {
   check('claude import: title, cwd, merged assistant message, tool result, no meta/sidechain', cs.title === 'Fix add in math.ts' && cs.cwd === '/repo' && cs.messages.map((m) => m.role).join() === 'user,assistant,tool,assistant' && cs.messages[1].thinking === 'Look at the test first.' && cs.messages[1].toolCalls?.[0].name === 'Read' && cs.messages[2].toolName === 'Read' && !JSON.stringify(cs.messages).includes('subagent chatter'), cs.messages);
   const cx = parseCodexSession(codexRollout('/repo'));
   check('codex import: environment skipped, reasoning, call and output', cx.cwd === '/repo' && cx.model === 'gpt-test' && cx.messages.map((m) => m.role).join() === 'user,assistant,tool,assistant' && cx.messages[1].thinking === 'Search with rg.' && cx.messages[1].toolCalls?.[0].id === 'call_1' && cx.title === 'List the TODOs in this repo', cx.messages);
-  check('claude slug', claudeProjectSlug('/Users/me/Work/My.App') === '-Users-me-Work-My-App');
+  check('claude slug', process.platform === 'win32' ? claudeProjectSlug('C:\\Users\\me\\Work\\My.App') === 'C--Users-me-Work-My-App' : claudeProjectSlug('/Users/me/Work/My.App') === '-Users-me-Work-My-App');
   const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-import-'));
   try {
     const ws = path.join(fake, 'repo');
