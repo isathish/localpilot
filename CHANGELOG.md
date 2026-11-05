@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.4 — 2026-11-05
+
 ### Fixed
 - **Agents started together each get their own isolated copy.** In a parallel batch or Best of N, two agents creating their git worktree at the same moment could collide on git's locks; the one that lost silently edited the workspace directly instead of working isolated. Worktrees are now created one after another per repository (setup still runs in parallel), with retries when another git process holds a lock.
 - **Saving `.mcp.json` no longer restarts its MCP servers.** When the file was read while being saved (empty for a moment) or with a syntax error, its servers were treated as removed and stopped, then started again once the save finished. A file that cannot be read keeps the servers it had until it reads cleanly again; the syntax error is still reported.
