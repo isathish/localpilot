@@ -12,6 +12,20 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
+/**
+ * Removes a temp folder. On Windows a process that just exited (the cmd.exe/npm wrappers of a killed check, an
+ * antivirus scan) can hold it for a moment (EBUSY/EPERM): retried, then only warned about, since a leftover temp
+ * folder is not a test failure.
+ */
+function removeTemp(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  } catch (e) {
+    console.warn(`  (could not remove ${dir}: ${e.code ?? e.message})`);
+  }
+}
+
+
 const CLI = path.resolve('dist/cli.js');
 if (!fs.existsSync(CLI)) {
   console.error('dist/cli.js missing — run `node esbuild.js` first');
@@ -289,7 +303,7 @@ try {
   } else {
     console.log('  - git not available; skipped');
   }
-  fs.rmSync(repo, { recursive: true, force: true });
+  removeTemp(repo);
 
   console.log('[headless runs]');
   const local = ['--no-mcp', '-m', 'local/qwen2.5-coder-7b'];
@@ -320,7 +334,7 @@ try {
     const parsed = errLines.map((l) => { try { return JSON.parse(l); } catch { return undefined; } });
     jsonErrs.push({ args: args.join(' '), code: d.code, ok: d.code === 2 && errLines.length > 0 && parsed.every((x) => x && typeof x.type === 'string') && parsed.some((x) => x.type === 'error' && typeof x.message === 'string' && x.kind), stderr: d.stderr.slice(0, 300) });
   }
-  fs.rmSync(deadHome, { recursive: true, force: true });
+  removeTemp(deadHome);
   check('--json: failures before the run (unreachable provider, -k without -P, unknown -P) are JSON error lines on stderr, exit 2', jsonErrs.every((x) => x.ok), jsonErrs);
   r = await cli(['-y', '--no-mcp', '-P', 'local', '-k', 'sk-run-only', '-p', 'Say hi']);
   check('-P/-k: the key is used for this run and not saved', r.code === 0 && seen.localAuth.at(-1) === 'Bearer sk-run-only' && !fs.readFileSync(cfgFile, 'utf8').includes('sk-run-only') && !(fs.existsSync(keysFile) && fs.readFileSync(keysFile, 'utf8').includes('sk-run-only')), r.out);
@@ -498,10 +512,10 @@ try {
   srv.close();
   healSrv.close();
   for (const dir of [healHome, ...healWorkspaces]) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(ws, { recursive: true, force: true });
+  removeTemp(home);
+  removeTemp(ws);
 }
 console.log(failures ? `\n${failures} CLI check(s) FAILED` : '\nAll CLI end-to-end checks passed');
 process.exit(failures ? 1 : 0);
