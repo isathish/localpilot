@@ -5,12 +5,12 @@
 <p align="center"><strong>The AI coding agent that runs on your machine.</strong><br>
 An agent that reads your project, edits files, runs commands and tests, and shows you every diff — inside VS Code, powered by models you serve with <b>Ollama</b>, <b>LM Studio</b>, <b>llama.cpp</b>, <b>vLLM</b> or <b>Docker Model Runner</b>, or by the cloud model you choose with your own key: <b>OpenAI</b>, <b>Claude</b>, <b>Gemini</b>, <b>OpenRouter</b>, <b>Groq</b>, <b>Mistral</b>, <b>DeepSeek</b> and more. No accounts, no telemetry sent anywhere, and your code never leaves your machine unless you add a cloud provider.</p>
 <p align="center">
-  <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://github.com/isathish/localpilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/v/localpilot.localpilot-agent?label=marketplace&color=0078d4" alt="VS Code Marketplace"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/visual-studio-marketplace/i/localpilot.localpilot-agent?color=4cc38a" alt="Installs"></a>
-  <a href="https://github.com/isathish/localpilot/releases/latest"><img src="https://img.shields.io/github/v/release/isathish/localpilot?label=release&color=f2a33a" alt="Latest release"></a>
-  <a href="https://isathish.github.io/localpilot/"><img src="https://img.shields.io/badge/docs-website-111827" alt="Documentation"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+  <a href="https://github.com/isathish/localpilot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/isathish/localpilot/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white&style=flat-square&labelColor=1f2937" alt="CI status"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><img src="https://img.shields.io/badge/VS%20Code-Install-0078d4?logo=visualstudiocode&logoColor=white&style=flat-square&labelColor=1f2937" alt="Install from the VS Code Marketplace"></a>
+  <a href="https://github.com/isathish/localpilot/releases/latest"><img src="https://img.shields.io/github/v/release/isathish/localpilot?label=release&logo=github&logoColor=white&color=f2a33a&style=flat-square&labelColor=1f2937" alt="Latest release"></a>
+  <a href="https://github.com/isathish/localpilot/releases"><img src="https://img.shields.io/github/downloads/isathish/localpilot/total?label=downloads&logo=github&logoColor=white&color=4cc38a&style=flat-square&labelColor=1f2937" alt="VSIX downloads"></a>
+  <a href="https://isathish.github.io/localpilot/"><img src="https://img.shields.io/badge/docs-website-8b5cf6?logo=readthedocs&logoColor=white&style=flat-square&labelColor=1f2937" alt="Documentation"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/isathish/localpilot?color=22c55e&style=flat-square&labelColor=1f2937" alt="MIT license"></a>
 </p>
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent"><b>Install from Marketplace</b></a> ·
