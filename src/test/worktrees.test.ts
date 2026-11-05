@@ -87,6 +87,22 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     assert.ok(new WorktreeManager(() => undefined).dirFor('/x/repo').startsWith(path.join(os.homedir(), '.localpilot', 'worktrees') + path.sep));
   });
 
+  test('several agents started together each get their own worktree (no lock collisions)', async function () {
+    this.timeout(60_000);
+    const ids = ['par-1', 'par-2', 'par-3', 'par-4'];
+    const made = await Promise.all(ids.map((id) => mgr.create(repo, id)));
+    try {
+      assert.strictEqual(new Set(made.map((w) => w.path)).size, ids.length, 'one worktree each');
+      for (const w of made) {
+        assert.ok(await fs.stat(path.join(w.path, '.git')).then(() => true, () => false), `${w.path} is a git worktree`);
+      }
+    } finally {
+      for (const w of made) {
+        await mgr.remove(w);
+      }
+    }
+  });
+
   test('create seeds the worktree with committed + uncommitted + untracked state and records a base; changes() starts empty', async () => {
     const progress: string[] = [];
     const wt = await mgr.create(repo, 'session-1', { progress: (t) => progress.push(t) });

@@ -112,6 +112,38 @@ export class WorktreeManager {
    * Create a worktree for `id` from the main checkout at `repo`, seeded with its uncommitted changes and untracked
    * files (and `overlay`, unsaved editor text keyed by repo-relative path), then run the repository's setup commands. `progress` receives human-readable status lines.
    */
+  /** `git worktree add` calls queued per repository: they write the repository's shared worktree list and config. */
+  private readonly adding = new Map<string, Promise<unknown>>();
+
+  /**
+   * Adds a worktree after any other add in the same repository has finished, and retries when git finds a lock held
+   * by another git process (VS Code's own git integration, the user's terminal). Agents started together (a parallel
+   * batch, Best of N) otherwise collide on those locks, and the loser silently edits the workspace instead.
+   */
+  private addWorktree(repo: string, args: string[]): Promise<string> {
+    const run = (this.adding.get(repo) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await git(args, repo);
+          } catch (e) {
+            if (attempt >= 5 || !/\.lock\b|could not lock|unable to create .*lock|another git process/i.test(String(e))) {
+              throw e;
+            }
+            await new Promise((r) => setTimeout(r, 250 * attempt));
+          }
+        }
+      });
+    this.adding.set(repo, run);
+    void run.finally(() => {
+      if (this.adding.get(repo) === run) {
+        this.adding.delete(repo);
+      }
+    }).catch(() => undefined);
+    return run;
+  }
+
   async create(repo: string, id: string, opts: { progress?: (text: string) => void; signal?: AbortSignal; setupTimeoutMs?: number; subdir?: string; owner?: string; overlay?: Record<string, string> } = {}): Promise<WorktreeInfo> {
     const progress = opts.progress ?? (() => {});
     const dir = path.join(this.dirFor(repo), id.replace(/[^\w.-]+/g, '_'));
@@ -123,11 +155,11 @@ export class WorktreeManager {
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD'], repo).catch(() => '')).trim();
     opts.signal?.throwIfAborted();
     if (head) {
-      await git(['worktree', 'add', '--detach', dir, head], repo);
+      await this.addWorktree(repo, ['worktree', 'add', '--detach', dir, head]);
     } else {
       // Empty repository (no commits yet): an orphan worktree with nothing in it.
-      await git(['worktree', 'add', '--detach', dir], repo).catch(async () => {
-        await git(['worktree', 'add', '--orphan', '-b', `localpilot-${id}`, dir], repo);
+      await this.addWorktree(repo, ['worktree', 'add', '--detach', dir]).catch(async () => {
+        await this.addWorktree(repo, ['worktree', 'add', '--orphan', '-b', `localpilot-${id}`, dir]);
       });
     }
     try {

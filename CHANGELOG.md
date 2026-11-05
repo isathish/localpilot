@@ -5,6 +5,7 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 ## Unreleased
 
 ### Fixed
+- **Agents started together each get their own isolated copy.** In a parallel batch or Best of N, two agents creating their git worktree at the same moment could collide on git's locks; the one that lost silently edited the workspace directly instead of working isolated. Worktrees are now created one after another per repository (setup still runs in parallel), with retries when another git process holds a lock.
 - **Saving `.mcp.json` no longer restarts its MCP servers.** When the file was read while being saved (empty for a moment) or with a syntax error, its servers were treated as removed and stopped, then started again once the save finished. A file that cannot be read keeps the servers it had until it reads cleanly again; the syntax error is still reported.
 - **MCP servers are not restarted when their script is only read (Windows).** With `localpilot.mcp.watchServerFiles`, Windows reports a file being read as a change, so starting one server could restart every other server that uses the same script, and a server could keep restarting itself. A restart now needs the script's size or modification time to change.
 - **Reading PDFs works on Windows.** `read_pdf`, PDF attachments and password-protected PDFs failed on Windows because the pdf.js data folders were passed with backslashes, which pdf.js rejects.
