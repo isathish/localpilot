@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.5 — 2026-11-05
+
 ### Added
 - **A Telemetry page in Settings.** Settings now has controls for 35 settings that could only be changed in `settings.json` before, starting with a new Telemetry page. Settings → Telemetry turns recording on or off and sets how many days to keep data. It also covers Redis storage, deleting recorded data and OpenTelemetry export: endpoint with Test connection, exporters, trace sampling, prompt content on spans, metric interval and headers. Fields set by `OTEL_*` environment variables are marked as overridden, and OTLP settings are always saved to User settings. The Redis URL shows whether Redis is connected (and whether Redis Stack time series are on) or unreachable, and has a Test connection button. The Dashboard, Telemetry and About pages say where usage data is sent, if anywhere, naming only the host of the Redis server or OTLP collector you configured.
 - **An Edits & checkpoints card.** Settings → Agent & approvals → Edits & checkpoints sets the diff preview (`localpilot.diffPreview`), the file-editing tool (`localpilot.editTool`), whether new errors are reported to the agent (`localpilot.edit.reportNewErrors`) and checkpoints before each message (`localpilot.checkpoints.enabled`). The chat's 'Checkpoints are off' link opens this card.
@@ -40,7 +42,6 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ### Fixed
 - **Workers that claim work they did not do are flagged.** Small local models sometimes report "I created the file" without having written anything. When a worker's report claims a change but it made no edit, write or command, the coordinating agent now sees a note saying so, and checks instead of moving on.
-
 
 ## 1.5.4 — 2026-11-05
 
