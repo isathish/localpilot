@@ -1,0 +1,10 @@
+npm error code ERESOLVE
+npm error ERESOLVE unable to resolve dependency tree
+npm error
+npm error While resolving: web@1.0.0
+npm error Found: react@18.2.0
+npm error node_modules/react
+npm error   react@"^18.2.0" from the root project
+npm error
+npm error Could not resolve dependency:
+npm error peer react@"^17.0.0" from old-widget@2.0.0

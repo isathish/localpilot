@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "python -m app.main", "root": "/work/proj",
+  "expected": [
+    { "category": "runtime", "code": "ZeroDivisionError", "file": "app/calc.py", "line": 7 }
+  ] }

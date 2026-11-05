@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "rust", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": null, "file": "src/lib.rs", "line": 10, "test": "tests::adds" }
+  ] }

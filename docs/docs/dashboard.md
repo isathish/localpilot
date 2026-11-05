@@ -54,7 +54,7 @@ Besides model calls, tool calls, runs, completions and provider checks, LocalPil
 
 | Event | Fields |
 |-------|--------|
-| `task` | Chat task created, then one outcome per turn: completed, aborted (stopped), failed, or stopped at the mistake limit. |
+| `task` | Chat task created, then one outcome per turn: completed, completed but not verified, incomplete, blocked, aborted (stopped), failed, or stopped at the mistake limit. |
 | `mode_switch` / `model_selected` | The new mode or model, and whether you used the picker, a slash command, the CLI or **Build plan**. |
 | `slash` | The command name only, never its arguments. |
 | `mention` | The kind of context attached (file, line range, folder, URL, `@git`, `@problems`…), never the path. |
@@ -62,8 +62,34 @@ Besides model calls, tool calls, runs, completions and provider checks, LocalPil
 | `checkpoint` | A git checkpoint taken before a turn, a restore (files and conversation) or a rewind (conversation only), the outcome (`failed` when some files could not be restored) and the number of files reverted. |
 | `hook` | The hook event, duration and outcome (ok, blocked, failed, timed out). The command line is not recorded. |
 | `edit_decision` | Kept or undone, lines added and removed, and the number of files. |
+| `recovery` | A self-healing step (`detected`, `retry`, `fix_attempt`, `validated`, `rolled_back`, `recovered`, `duplicate`, `escalated`, `blocked`, `exhausted`, `resumed`, `memory_hit`, `accept_risk`), the failure category and severity, attempt N of M, duration, outcome and a 16-character signature hash. Never code, error messages, file paths or the readable signature. |
 
 Paths, command lines and branch names are never recorded. **Export…** shows exactly what is stored.
+
+## Self-healing & recovery
+
+The **Self-healing & recovery** section shows what the [self-healing engine]({{ '/docs/self-healing/' | relative_url }}) did in the selected range.
+
+- **Tiles:** engine on or off, failures detected, recovered, pending intervention, recovery rate and mean time to recover.
+- **Configuration:** automatic detection, automatic retry, automatic code fixes, regression testing required, max repair attempts, and *Security bypass: disabled*, which cannot be switched on.
+- **Current recovery:** for each running chat, its phase, attempt N/M and the kind of failure.
+
+**Recovery rate** = recovered ÷ (recovered + escalated + exhausted + blocked), over the recovery episodes in the range; 0 when there were none. This is the same definition in the telemetry, the Dashboard and the docs. Preexisting failures (already there before the task) and foreign ones (in files another running task changed) never open an episode, and a task that ends *Not verified* never counts as recovered.
+
+Below them, eight views:
+
+| View | What it shows |
+|------|---------------|
+| **Failure History** | Time, chat, category, severity, signature and outcome, filterable by category. Pick an entry from failure memory and choose **Don't suggest again** to stop it being offered as a fix suggestion |
+| **Root Cause Analysis** | Per attempt: the failure, the root cause (the model's `Root cause:` line or LocalPilot's own hypothesis), the strategy, the result and any memory suggestion used |
+| **Recovery Attempts** | A timeline per task: attempts with durations, retries and backoff waits, resource adjustments (thinking off, smaller context, another model) |
+| **Applied Patches** | File, lines added and removed, attempt, kept or rolled back, a preview and **Open diff** |
+| **Retry Configuration** | The effective policy per category (defaults plus your `localpilot.healing.policies`), with a link to edit it |
+| **Regression Reports** | Per validation: failures before and after, fixed, introduced and preexisting |
+| **Human Intervention Queue** | Open items waiting for you, with **Open chat**, **Resume**, **Approve install**, **Rollback fixes** and **Dismiss** |
+| **Recovery Performance Analytics** | Recovery rate by category, attempts per recovery, time to recover (median and 90th percentile), the most frequent signatures and how often a memory suggestion led to a fix |
+
+Readable signatures such as `TS2345@src/api/user.ts` come from the local recovery store on this machine. Telemetry itself only has a 16-character hash of the signature.
 
 ## Model tuning
 
@@ -103,7 +129,7 @@ With Redis on, the data goes to the server you configured rather than staying in
 In **Settings → Telemetry → Export to your OpenTelemetry collector**, switch on *Send telemetry to an OTLP collector* (`localpilot.telemetry.otlp.enabled`) to also send telemetry to your own collector (otel-collector, Grafana Alloy, or a self-hosted Langfuse or Phoenix through their OTLP endpoints). It is plain OTLP/HTTP with JSON bodies, works in VS Code and the CLI, and carries the resource attributes `service.name=localpilot` and `service.version`. Export needs `localpilot.telemetry.enabled`: while local recording is off nothing is exported, not even log lines, and a warning in the log says so.
 
 - **Logs** (`/v1/logs`): every event above as a record named `localpilot.<type>` with its fields as attributes, plus the LocalPilot log lines.
-- **Metrics** (`/v1/metrics`, every `metricsInterval` seconds, cumulative): `localpilot.events`, `localpilot.model.requests`, `localpilot.model.duration`, `localpilot.model.ttft`, `localpilot.tokens`, `localpilot.tool.calls`, `localpilot.tool.duration`, `localpilot.runs`, `localpilot.run.duration`, and counters for completions, tasks, hooks, MCP calls and accepted/rejected edit lines.
+- **Metrics** (`/v1/metrics`, every `metricsInterval` seconds, cumulative): `localpilot.events`, `localpilot.model.requests`, `localpilot.model.duration`, `localpilot.model.ttft`, `localpilot.tokens`, `localpilot.tool.calls`, `localpilot.tool.duration`, `localpilot.runs`, `localpilot.run.duration`, and counters for completions, tasks, hooks, MCP calls and accepted/rejected edit lines. Self-healing adds `localpilot.recovery.events` (by action and category), `localpilot.recovery.outcomes` (by outcome) and the histogram `localpilot.recovery.duration_ms` (by category), with no signature attribute.
 - **Traces** (`/v1/traces`, add `traces` to `localpilot.telemetry.otlp.exporters`): an `invoke_agent` span per run (subagents nest under the tool call that started them), a `chat <model>` span per model request and an `execute_tool <name>` span per tool call, with `gen_ai.*` attributes (model, provider, token usage, finish reason, tool name and call id). `traceSamplePercent` keeps that share of runs. Prompts, replies, tool input/output and error text are added only with `recordContent: true`; without it a failed span's status message is just `tool error` or the run outcome. Events recorded during a span get its `traceId` and `spanId`, so logs and traces link up.
 
 Exports are batched (up to 512 items, at least every 5 seconds); at most 2048 wait while the collector is unreachable, and the oldest are dropped first. The standard variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL` (only `http/json`; other values log a warning) and `OTEL_METRIC_EXPORT_INTERVAL` override the settings. Set `LOCALPILOT_OTEL_DEBUG=1` to log the resolved configuration and the result of every export. **Test connection** next to the endpoint in Settings (or **LocalPilot: Test OTLP Connection**) sends one `localpilot.test.connection` record and shows the collector's HTTP status or the error under the field. A field that an environment variable overrides is marked *Overridden by OTEL_…* and cannot be edited there. The OTLP settings are User settings only; a workspace cannot redirect your telemetry.

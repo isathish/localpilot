@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "maven", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": "AssertionFailedError", "file": null, "line": null, "test": "com.example.SumTest.adds" },
+    { "category": "dependency", "code": "unresolved_dependency", "file": null, "line": null, "symbol": "com.acme:widgets:jar:2.1" }
+  ] }

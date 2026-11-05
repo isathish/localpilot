@@ -2,7 +2,9 @@
 // End-to-end test of the `localpilot` CLI with local and cloud providers: runs the bundled dist/cli.js the way a user
 // does, in a throwaway HOME, against mock servers for Anthropic (Claude), an OmniRoute-style gateway and a local
 // OpenAI-compatible server. Covers `providers presets|add|key|test|remove`, `models`, `doctor`, a full agent run on
-// Claude (tool call → result → answer) and Auto routing staying local.
+// Claude (tool call → result → answer) and Auto routing staying local. Self-healing: outcome exit codes (0/1/4/5), the
+// NDJSON outcome and contract, recovery events, checks.json trust, `recovery list|show|resume|clear`, `-c` on an interrupted
+// recovery and model retries, against a scripted model that edits files in throwaway workspaces with real `npm test` checks.
 // Run: npm run e2e:cli   (builds first)
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -88,6 +90,52 @@ const srv = http.createServer(async (req, res) => {
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 
+// Self-healing: a scripted model in its own home. Each request's mode comes from the newest user message with a
+// HEAL_MODE=<mode> / HEAL_TALK marker: after a user turn (or a hidden fix prompt) it writes a file, after a tool result it
+// answers with a root cause. `down` answers the next agent requests with 503s, `alwaysDown` every request.
+const heal = { chats: 0, writes: 0, writeTimes: [], down: 0, alwaysDown: false };
+const healSrv = http.createServer(async (req, res) => {
+  const url = req.url ?? '';
+  if (url.endsWith('/v1/models')) {
+    return res.end(JSON.stringify({ data: [{ id: 'coder', capabilities: ['tool_use'] }] }));
+  }
+  if (!url.endsWith('/v1/chat/completions')) {
+    res.statusCode = 404;
+    return res.end();
+  }
+  const b = JSON.parse(await body(req));
+  heal.chats++;
+  const agentCall = Array.isArray(b.tools) && b.tools.length > 0;
+  if (heal.alwaysDown || (agentCall && heal.down > 0)) {
+    heal.down = Math.max(0, heal.down - 1);
+    res.statusCode = 503;
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ error: { message: 'service unavailable' } }));
+  }
+  res.setHeader('content-type', 'text/event-stream');
+  const say = (text) => {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\n`);
+    res.end('data: [DONE]\n\n');
+  };
+  const marked = b.messages.filter((m) => m.role === 'user' && /HEAL_MODE=\w+|HEAL_TALK/.test(JSON.stringify(m.content))).at(-1);
+  const mode = /HEAL_MODE=(\w+)/.exec(JSON.stringify(marked?.content ?? ''))?.[1];
+  if (!agentCall || !mode) {
+    return say('Hi from the healing model.');
+  }
+  if (b.messages.at(-1)?.role === 'tool') {
+    return say('Root cause: add() multiplied its arguments instead of adding them\nFiles changed: math.js\nDone: yes');
+  }
+  const n = ++heal.writes;
+  heal.writeTimes.push(Date.now());
+  const file = mode === 'app' ? 'app.js' : 'math.js';
+  const content = mode === 'bad' ? `module.exports.add = (a, b) => a * b + ${n}; // attempt ${n}\n` : mode === 'app' ? `console.log('revision ${n}');\n` : `module.exports.add = (a, b) => a + b; // revision ${n}\n`;
+  res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_heal_${n}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: file, content }) } }] }, finish_reason: 'tool_calls' }] })}\n\n`);
+  res.end('data: [DONE]\n\n');
+});
+await new Promise((r) => healSrv.listen(0, '127.0.0.1', r));
+const healHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-heal-'));
+const healWorkspaces = [];
+
 // A provider defined in VS Code's settings, whose key VS Code keeps in the keychain (`${secret:vsc}`).
 const vsSettings = process.platform === 'darwin'
   ? path.join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json')
@@ -95,8 +143,32 @@ const vsSettings = process.platform === 'darwin'
 fs.mkdirSync(path.dirname(vsSettings), { recursive: true });
 fs.writeFileSync(vsSettings, JSON.stringify({ 'localpilot.providers': [{ id: 'vsc', type: 'openai', baseUrl: `${base}/local/v1`, displayName: 'From VS Code' }, { id: 'vslm', type: 'vscode-lm', baseUrl: 'vscode://lm' }], 'localpilot.telemetry.enabled': false, 'localpilot.skills.autoInstall': 'off', 'localpilot.autoClarify': false }, null, 2));
 
+// The healing home's only provider is the scripted model. npm never reaches a registry from these runs.
+const healSettings = vsSettings.replace(home, healHome);
+fs.mkdirSync(path.dirname(healSettings), { recursive: true });
+fs.writeFileSync(healSettings, JSON.stringify({ 'localpilot.providers': [{ id: 'heal', type: 'openai', baseUrl: `http://127.0.0.1:${healSrv.address().port}/v1` }], 'localpilot.telemetry.enabled': false, 'localpilot.skills.autoInstall': 'off', 'localpilot.autoClarify': false }, null, 2));
+const healEnv = { HOME: healHome, USERPROFILE: healHome, APPDATA: path.join(healHome, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(healHome, '.config'), npm_config_registry: 'http://127.0.0.1:9/', npm_config_offline: 'true', npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false' };
+/** A throwaway workspace with these files (removed at the end). */
+function healWorkspace(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-healws-'));
+  healWorkspaces.push(dir);
+  for (const [name, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.writeFileSync(path.join(dir, name), text);
+  }
+  return dir;
+}
+/** The CLI in the healing home, in `cwd`. */
+const healCli = (args, cwd, { env = {}, onSpawn } = {}) => cli(['--no-mcp', '-m', 'heal/coder', ...args], { cwd, env: { ...healEnv, ...env }, onSpawn });
+const healCmd = (args, cwd, env = {}) => cli(args, { cwd, env: { ...healEnv, ...env } });
+const ndjsonOf = (text) => text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return undefined; } }).filter(Boolean);
+const runResult = (r) => ndjsonOf(r.stdout).find((x) => x.type === 'run_result');
+const healingCommands = (records) => records.filter((x) => x.type === 'tool_start' && x.origin === 'healing').map((x) => String(x.args?.command ?? ''));
+const nodePackage = (test) => JSON.stringify({ name: 'e2e-heal', version: '1.0.0', private: true, scripts: { test } }, null, 2);
+const ADD_TEST = "const { add } = require('./math');\nif (add(2, 2) !== 4) {\n  console.error('test failed: add(2, 2) should be 4');\n  process.exit(1);\n}\nconsole.log('1 passing');\n";
+
 /** Runs the CLI with a fresh environment (no real keys leak in) and returns its exit code and output. */
-function cli(args, { input, env = {}, cwd = ws } = {}) {
+function cli(args, { input, env = {}, cwd = ws, onSpawn } = {}) {
   return new Promise((resolve) => {
     const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/API_KEY|_TOKEN$|^LOCALPILOT_KEY_/.test(k)));
     const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...clean, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -106,6 +178,7 @@ function cli(args, { input, env = {}, cwd = ws } = {}) {
     child.stdout.on('data', (d) => ((out += d), (stdout += d)));
     child.stderr.on('data', (d) => ((out += d), (stderr += d)));
     child.stdin.end(input ?? '');
+    onSpawn?.(child);
     const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
     child.on('exit', (code) => {
       clearTimeout(timer);
@@ -263,6 +336,148 @@ try {
   check('doctor --json: providers with key state, never the key', r.code === 0 && Array.isArray(doc.providers) && doc.providers.some((p) => p.id === 'local' && p.reachable) && !r.stdout.includes('sk-e2e-claude') && typeof doc.log === 'string', r.out.slice(0, 600));
   check('doctor --json: the VS Code-only vscode-lm provider is hidden', !doc.providers.some((p) => p.type === 'vscode-lm'), doc.providers);
 
+  console.log('[self-healing]');
+  {
+    // A test that never passes: the fix attempts run out, the run is incomplete (exit 4) with its contract.
+    const wsNever = healWorkspace({ 'package.json': nodePackage('node test.js'), 'test.js': ADD_TEST });
+    r = await healCli(['-y', '-p', '--json', 'Implement add in math.js HEAL_MODE=bad'], wsNever);
+    let records = ndjsonOf(r.stdout);
+    let result = runResult(r);
+    const neverSid = result?.sessionId;
+    check('-p, test never passes: exit 4, NDJSON finishReason incomplete with outcome and contract', r.code === 4 && result?.finishReason === 'incomplete' && result.outcome === 'incomplete' && result.contract?.testsPassed === 'failed' && Array.isArray(result.contract.unresolved), { code: r.code, result, stderr: r.stderr.slice(0, 600) });
+    const cards = records.filter((x) => x.type === 'recovery');
+    check('recovery events stream as NDJSON: fix attempts and the failing check', cards.some((x) => x.phase === 'fixing' && x.attempt >= 1) && cards.some((x) => (x.checks ?? []).some((c) => c.id === 'npm:test' && c.status === 'failed')) && healingCommands(records).includes('npm test'), cards.map((x) => `${x.phase} ${x.attempt ?? ''} ${x.decision ?? ''}`));
+    check('the model was asked to fix it more than once (distinct patches)', heal.writes >= 3 && /attempt [2-9]/.test(fs.readFileSync(path.join(wsNever, 'math.js'), 'utf8')), heal.writes);
+
+    r = await healCmd(['recovery', 'list'], wsNever);
+    check('recovery list: the incomplete task of this folder', r.code === 0 && !!neverSid && r.out.includes(neverSid) && /incomplete/.test(r.out), r.out);
+    r = await healCmd(['recovery', 'show', String(neverSid)], wsNever);
+    check('recovery show <sid>: root cause and next actions', r.code === 0 && /Root cause:.*add\(\) multiplied/.test(r.out) && /Next:/.test(r.out) && /\/recovery resume|localpilot recovery resume/.test(r.out) && r.out.includes(`localpilot recovery clear ${neverSid}`), r.out);
+    r = await healCmd(['recovery', 'show', 'cli-nosuchsession'], wsNever);
+    check('recovery show with an unknown id: exit 2', r.code === 2, r.out);
+
+    // The same project with a correct implementation: verified, exit 0.
+    const wsClean = healWorkspace({ 'package.json': nodePackage('node test.js'), 'test.js': ADD_TEST });
+    r = await healCli(['-y', '-p', '--json', 'Implement add in math.js HEAL_MODE=good'], wsClean);
+    result = runResult(r);
+    check('clean run: the test passes, exit 0, outcome completed', r.code === 0 && result?.finishReason === 'completed' && result.outcome === 'completed' && result.contract?.testsPassed === 'passed', { code: r.code, result, stderr: r.stderr.slice(0, 600) });
+
+    // A missing package: installing needs a mandatory prompt nobody can answer (no TTY, --yes does not cover it).
+    const wsDep = healWorkspace({ 'package.json': nodePackage('node test.js'), 'test.js': "require('left-pad-e2e-missing');\nconsole.log('1 passing');\n" });
+    r = await healCli(['-y', '--json', 'Implement add in math.js HEAL_MODE=good'], wsDep);
+    result = runResult(r);
+    const depSid = result?.sessionId;
+    const depShow = await healCmd(['recovery', 'show', String(depSid), '--json'], wsDep);
+    let state;
+    try { state = JSON.parse(depShow.stdout.slice(depShow.stdout.indexOf('{'))); } catch { state = undefined; }
+    check('missing dependency with --yes and no TTY: exit 5, blocked', r.code === 5 && result?.finishReason === 'blocked' && result.outcome === 'blocked', { code: r.code, result, stderr: r.stderr.slice(0, 600) });
+    check('blocked: approval needed recorded, no install attempted', state?.phase === 'blocked' && state.intervention?.reason === 'approval_needed' && state.pendingAction?.status !== 'done' && !fs.existsSync(path.join(wsDep, 'node_modules')) && !fs.existsSync(path.join(wsDep, 'package-lock.json')), { phase: state?.phase, intervention: state?.intervention?.reason, pending: state?.pendingAction });
+
+    // No checks for the changed file: done but unverified, which --require-verified turns into exit 4.
+    const wsNone = healWorkspace({ 'README.md': '# scratch\n' });
+    r = await healCli(['-y', '-p', '--require-verified', 'Write app.js HEAL_MODE=app'], wsNone);
+    check('--require-verified with no discovered checks: exit 4, "Not verified" shown', r.code === 4 && /Not verified/i.test(r.stderr), r.out);
+    r = await healCli(['-y', '-p', '--json', 'Write app.js HEAL_MODE=app'], wsNone);
+    result = runResult(r);
+    check('no discovered checks without --require-verified: exit 0, completed_unverified', r.code === 0 && result?.outcome === 'completed_unverified' && result.finishReason === 'completed', { code: r.code, result });
+
+    // .localpilot/checks.json is workspace-controlled: ignored unless the workspace is trusted.
+    const verify = "require('fs').writeFileSync(require('path').join(__dirname, 'verified.txt'), String(Date.now()));\nconsole.log('verified');\n";
+    const wsChecks = healWorkspace({ '.localpilot/checks.json': JSON.stringify({ checks: [{ id: 'custom:verify', kind: 'test', command: 'node verify.js' }] }), 'verify.js': verify });
+    r = await healCli(['-y', '-p', '--json', 'Write app.js HEAL_MODE=app'], wsChecks);
+    result = runResult(r);
+    check('checks.json ignored without LOCALPILOT_TRUST_WORKSPACE=1', r.code === 0 && result?.outcome === 'completed_unverified' && !healingCommands(ndjsonOf(r.stdout)).includes('node verify.js') && !fs.existsSync(path.join(wsChecks, 'verified.txt')), { code: r.code, result, cmds: healingCommands(ndjsonOf(r.stdout)) });
+    r = await healCli(['-y', '-p', '--json', 'Write app.js again HEAL_MODE=app'], wsChecks, { env: { LOCALPILOT_TRUST_WORKSPACE: '1' } });
+    result = runResult(r);
+    check('checks.json used with LOCALPILOT_TRUST_WORKSPACE=1', r.code === 0 && result?.outcome === 'completed' && healingCommands(ndjsonOf(r.stdout)).includes('node verify.js') && fs.existsSync(path.join(wsChecks, 'verified.txt')), { code: r.code, result, cmds: healingCommands(ndjsonOf(r.stdout)) });
+
+    // A run stopped (SIGTERM) while its checks run: the recovery is kept as interrupted, the check process is killed,
+    // and `-c`, `recovery list|resume|clear` reach it. Two such runs: a `-c` with a prompt starts a new task.
+    const slow = "require('fs').writeFileSync(require('path').join(__dirname, 'started.flag'), String(process.pid));\nsetTimeout(() => process.exit(1), 20000);\n";
+    const gone = async (pid) => {
+      for (let i = 0; i < 30; i++) {
+        try { process.kill(pid, 0); } catch { return true; }
+        await new Promise((res) => setTimeout(res, 100));
+      }
+      return false;
+    };
+    const interrupted = async (label) => {
+      const dir = healWorkspace({ 'package.json': nodePackage('node slow-test.js'), 'slow-test.js': slow });
+      const flag = path.join(dir, 'started.flag');
+      let signalled = false;
+      const run = await healCli(['-y', '-p', 'Implement add in math.js HEAL_MODE=good'], dir, {
+        onSpawn: (child) => {
+          const poll = setInterval(() => {
+            if (fs.existsSync(flag)) {
+              clearInterval(poll);
+              signalled = true;
+              child.kill('SIGTERM');
+            }
+          }, 100);
+          child.on('exit', () => clearInterval(poll));
+        },
+      });
+      const hist = await healCmd(['history', '--json'], dir);
+      let sid;
+      try { sid = JSON.parse(hist.out.slice(hist.out.indexOf('[')))[0]?.id; } catch { sid = undefined; }
+      check(`SIGTERM during the checks (${label}): exit 143, the session is saved`, signalled && run.code === 143 && !!sid, { signalled, code: run.code, out: run.out.slice(0, 600), hist: hist.out.slice(0, 300) });
+      const show = await healCmd(['recovery', 'show', String(sid), '--json'], dir);
+      let st;
+      try { st = JSON.parse(show.stdout.slice(show.stdout.indexOf('{'))); } catch { st = undefined; }
+      const lock = path.join(healHome, '.localpilot', 'recovery', `${encodeURIComponent(String(sid))}.lock`);
+      check(`SIGTERM (${label}): phase interrupted persisted, owner lock released`, show.code === 0 && st?.phase === 'interrupted' && !fs.existsSync(lock), { code: show.code, phase: st?.phase, lock: fs.existsSync(lock) });
+      const pid = Number(fs.existsSync(flag) ? fs.readFileSync(flag, 'utf8') : NaN);
+      check(`SIGTERM (${label}): the running check process was killed, not left running`, Number.isInteger(pid) && pid > 0 && (await gone(pid)), pid);
+      return { dir, sid };
+    };
+
+    const intA = await interrupted('-c');
+    r = await healCmd(['recovery', 'list'], intA.dir);
+    check('recovery list: the interrupted recovery', r.code === 0 && !!intA.sid && r.out.includes(intA.sid) && /interrupted/.test(r.out), r.out);
+    r = await healCli(['-c', '-p', 'HEAL_TALK are you there?'], intA.dir);
+    check('localpilot -c on an interrupted session prints the recovery state', r.code === 0 && /Recovery interrupted/.test(r.out) && !!intA.sid && r.out.includes(`localpilot recovery resume ${intA.sid}`) && /Hi from the healing model/.test(r.stdout), r.out);
+
+    // `recovery resume`: the checks re-run before the model is asked again, no edit is replayed, and it completes.
+    const intB = await interrupted('resume');
+    fs.writeFileSync(path.join(intB.dir, 'slow-test.js'), "console.log('1 passing');\n");
+    const writesBefore = heal.writes;
+    const resumeStarted = Date.now();
+    r = await healCli(['recovery', 'resume', String(intB.sid), '-y', '-p', '--json'], intB.dir);
+    records = ndjsonOf(r.stdout);
+    result = runResult(r);
+    const checkStart = records.find((x) => x.type === 'tool_start' && x.origin === 'healing' && /npm test/.test(String(x.args?.command ?? '')));
+    const newWrites = heal.writeTimes.slice(writesBefore).filter((t) => t >= resumeStarted);
+    check('recovery resume: the checks re-run before any model edit', r.code === 0 && !!checkStart && newWrites.every((t) => t >= checkStart.ts) && records.filter((x) => x.type === 'tool_start' && x.name === 'write_file' && x.origin !== 'healing').every((x) => x.ts >= checkStart.ts), { code: r.code, checkStart: checkStart?.ts, newWrites, stderr: r.stderr.slice(0, 600) });
+    check('recovery resume: outcome completed', result?.outcome === 'completed' && result.finishReason === 'completed', { code: r.code, result });
+    r = await healCmd(['recovery', 'clear', String(intB.sid)], intB.dir);
+    const listed = await healCmd(['recovery', 'list'], intB.dir);
+    check('recovery clear <sid>: gone from recovery list', r.code === 0 && listed.code === 0 && !listed.out.includes(String(intB.sid)), { clear: r.out, list: listed.out });
+
+    // The model server fails the first requests, then answers: retried, and the run completes.
+    const wsRetry = healWorkspace({ 'README.md': '# retry\n' });
+    const before = heal.chats;
+    heal.down = 2;
+    r = await healCli(['-y', '--json', 'HEAL_TALK say hi'], wsRetry);
+    result = runResult(r);
+    records = ndjsonOf(r.stdout);
+    check('server down for the first requests, then up: retried, exit 0', r.code === 0 && result?.finishReason === 'completed' && heal.down === 0 && heal.chats - before >= 3 && /Hi from the healing model/.test(result.text ?? ''), { code: r.code, result, stderr: r.stderr.slice(0, 600) });
+    check('the retries stream as recovery events (model_unavailable)', records.some((x) => x.type === 'recovery' && x.phase === 'retrying' && x.category === 'model_unavailable'), records.filter((x) => x.type === 'recovery'));
+
+    // The model server keeps failing: exit 1 and the outcome `failed` is persisted.
+    const wsDown = healWorkspace({ 'README.md': '# down\n' });
+    heal.alwaysDown = true;
+    try {
+      r = await healCli(['-y', '--json', 'HEAL_TALK say hi'], wsDown);
+    } finally {
+      heal.alwaysDown = false;
+    }
+    result = runResult(r);
+    const downShow = await healCmd(['recovery', 'show', String(result?.sessionId), '--json'], wsDown);
+    try { state = JSON.parse(downShow.stdout.slice(downShow.stdout.indexOf('{'))); } catch { state = undefined; }
+    check('server down permanently: exit 1, outcome failed', r.code === 1 && result?.outcome === 'failed' && result.finishReason === 'error', { code: r.code, result, stderr: r.stderr.slice(0, 600) });
+    check('server down permanently: outcome failed persisted with the model_unavailable intervention', state?.outcome === 'failed' && state.intervention?.reason === 'model_unavailable', { outcome: state?.outcome, phase: state?.phase, intervention: state?.intervention });
+  }
+
   console.log('[keys]');
   r = await cli(['providers', 'key', 'anthropic', '--remove-key']);
   const after = await cli(['providers']);
@@ -281,6 +496,10 @@ try {
   check('unknown preset: clear error, exit code 2', r.code === 2 && /Unknown provider/.test(r.out), r.out);
 } finally {
   srv.close();
+  healSrv.close();
+  for (const dir of [healHome, ...healWorkspaces]) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(ws, { recursive: true, force: true });
 }

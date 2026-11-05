@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "node", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": "assertion", "file": "test/sum.test.js", "line": 4, "test": "adds" }
+  ] }

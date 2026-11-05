@@ -1,0 +1,10 @@
+> calc@1.0.0 typecheck
+> tsc --noEmit -p .
+
+src/api/user.ts(42,17): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+src/api/user.ts(57,3): error TS2322: Type 'undefined' is not assignable to type 'User'.
+  Type 'undefined' is not assignable to type '{ id: number; name: string; }'.
+/work/proj/src/util/format.ts(8,1): error TS1128: Declaration or statement expected.
+src/server.ts(3,22): error TS2307: Cannot find module 'express' or its corresponding type declarations.
+src/server.ts(4,22): error TS2307: Cannot find module './routes' or its corresponding type declarations.
+src/api/user.ts(42,17): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.

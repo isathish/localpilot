@@ -1,9 +1,10 @@
 import { AgentEvent, SessionUsage } from '../types';
+import { CompletionContract } from '../agent/healing/types';
 
 /** Agent events written by `--json` one-shot runs; the rest (approval plumbing, UI refreshes) stay internal. */
-export const NDJSON_EVENTS = new Set(['assistant_delta', 'thinking_delta', 'tool_start', 'tool_end', 'tool_progress', 'status', 'compaction', 'subagent_start', 'subagent_end', 'hook', 'nudge', 'error']);
+export const NDJSON_EVENTS = new Set(['assistant_delta', 'thinking_delta', 'tool_start', 'tool_end', 'tool_progress', 'status', 'compaction', 'subagent_start', 'subagent_end', 'hook', 'nudge', 'recovery', 'error']);
 
-export type FinishReason = 'completed' | 'max_steps' | 'mistake_limit' | 'error' | 'aborted' | 'timeout';
+export type FinishReason = 'completed' | 'max_steps' | 'mistake_limit' | 'error' | 'aborted' | 'timeout' | 'incomplete' | 'blocked';
 
 export interface RunResult {
   finishReason: FinishReason;
@@ -13,6 +14,10 @@ export interface RunResult {
   durationMs: number;
   model: string;
   sessionId: string;
+  /** The quality gate's verdict, when self-healing ran. */
+  outcome?: string;
+  /** The completion contract behind `outcome`. */
+  contract?: CompletionContract;
 }
 
 /** One agent event as an NDJSON record: `{type, ts, …}`; undefined for events the stream does not carry. */
@@ -69,7 +74,8 @@ export class NdjsonWriter {
   }
 
   result(r: RunResult): void {
-    this.write(this.out, { type: 'run_result', ts: this.now(), ...r });
+    const { outcome, contract, ...rest } = r;
+    this.write(this.out, { type: 'run_result', ts: this.now(), ...rest, ...(outcome ? { outcome } : {}), ...(contract ? { contract } : {}) });
   }
 
   private write(stream: NodeJS.WritableStream, record: Record<string, unknown>): void {

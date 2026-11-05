@@ -43,6 +43,8 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
       stream.progress('Images are not passed through @localpilot yet; attach them in the LocalPilot chat');
     }
 
+    /** Answer text streamed so far (to tell whether the self-healing footer still has to be shown). */
+    let streamed = '';
     const sink = {
       // Approvals and ask_user cannot be shown in the VS Code chat stream; they use native dialogs instead.
       handlesPrompts: (sid: string) => sid === sessionId,
@@ -61,8 +63,17 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
         }
         switch (e.type) {
           case 'assistant_delta':
+            streamed += String(e.payload);
             stream.markdown(String(e.payload));
             break;
+          case 'turn_end': {
+            // The self-healing footer (Verified / Not verified / Incomplete) is appended to the answer, not streamed.
+            const report = (e.payload as { recovery?: { report?: string } } | undefined)?.recovery?.report;
+            if (report && !streamed.includes(report)) {
+              stream.markdown(`\n\n${report}`);
+            }
+            break;
+          }
           case 'tool_start': {
             const p = e.payload as { name?: string; args?: unknown } | undefined;
             if (p?.name) {
@@ -93,6 +104,13 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
           case 'nudge': {
             const p = e.payload as { reason?: string };
             stream.progress(p.reason === 'stale' ? 'The workers already finished — asking the model for their results…' : p.reason === 'malformed' ? 'The tool call did not parse — asking the model to resend it…' : 'The reply claimed an action no tool performed — asking the model to act…');
+            break;
+          }
+          case 'recovery': {
+            const p = e.payload as { phase?: string; title?: string; attempt?: number; max?: number; decision?: string } | undefined;
+            if (p?.phase) {
+              stream.progress(`Self-healing: ${p.phase.replace(/_/g, ' ')}${p.attempt && p.max ? ` · attempt ${p.attempt}/${p.max}` : ''}${p.title ? ` · ${p.title}` : ''}${p.decision ? ` · ${p.decision}` : ''}`);
+            }
             break;
           }
           case 'clarify': {

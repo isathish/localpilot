@@ -1,0 +1,10 @@
+panic: assignment to entry in nil map
+
+goroutine 1 [running]:
+runtime.mapassign_faststr(...)
+	/usr/local/go/src/runtime/map_faststr.go:205 +0x3c
+main.register(...)
+	/work/proj/cmd/server/main.go:17 +0x45
+main.main()
+	/work/proj/cmd/server/main.go:9 +0x1d
+exit status 2

@@ -1,0 +1,12 @@
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+  Failed Calc.Tests.SumTests.Adds [3 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 3
+Actual:   4
+  Stack Trace:
+     at Calc.Tests.SumTests.Adds() in /work/proj/tests/Calc.Tests/SumTests.cs:line 12
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+
+Failed!  - Failed:     1, Passed:     4, Skipped:     0, Total:     5, Duration: 21 ms - Calc.Tests.dll (net8.0)

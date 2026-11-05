@@ -1,0 +1,5 @@
+{ "input": "run_command", "command": "npx eslint -f unix .", "root": "/work/proj",
+  "expected": [
+    { "category": "lint", "code": "no-unused-vars", "file": "src/a.js", "line": 3 },
+    { "category": "lint", "code": "semi", "file": "lib/b.js", "line": 14 }
+  ] }

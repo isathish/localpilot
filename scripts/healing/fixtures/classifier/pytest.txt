@@ -1,0 +1,40 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.1, pytest-8.0.0, pluggy-1.4.0
+rootdir: /work/proj
+collected 5 items / 1 error
+
+tests/test_calc.py .F.                                                   [ 60%]
+tests/api/test_users_api.py F                                            [ 80%]
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_config.py _____________________
+ImportError while importing test module '/work/proj/tests/test_config.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+tests/test_config.py:1: in <module>
+    import yaml
+E   ModuleNotFoundError: No module named 'yaml'
+=================================== FAILURES ===================================
+__________________________________ test_add ___________________________________
+
+    def test_add():
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+E        +  where 4 = add(1, 2)
+
+tests/test_calc.py:8: AssertionError
+______________________________ test_list_users _______________________________
+
+client = <FlaskClient <Flask 'app'>>
+
+    def test_list_users(client):
+        resp = client.get("/users")
+>       assert resp.status_code == 200
+E       assert 404 == 200
+
+tests/api/test_users_api.py:12: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_calc.py::test_add - assert 4 == 3
+FAILED tests/api/test_users_api.py::test_list_users - assert 404 == 200
+ERROR tests/test_config.py - ModuleNotFoundError: No module named 'yaml'
+==================== 2 failed, 2 passed, 1 error in 0.12s =====================

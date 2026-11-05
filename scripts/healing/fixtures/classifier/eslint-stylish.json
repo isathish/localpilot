@@ -1,0 +1,6 @@
+{ "input": "check", "ecosystem": "node", "kind": "lint", "root": "/work/proj",
+  "expected": [
+    { "category": "lint", "code": "@typescript-eslint/no-unused-vars", "file": "src/api/user.ts", "line": 12 },
+    { "category": "lint", "code": "eqeqeq", "file": "src/api/user.ts", "line": 31 },
+    { "category": "lint", "code": null, "file": "src/index.ts", "line": 1 }
+  ] }

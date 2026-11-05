@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/work/proj/app/store.py", line 40, in load
+    rows = conn.execute("SELECT * FROM items").fetchall()
+sqlite3.DatabaseError: database disk image is malformed

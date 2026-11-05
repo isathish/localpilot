@@ -113,6 +113,8 @@
     paused: new Map(),
     /** sid → { path, applied, conflicts } when the session's changes live in an isolated worktree. */
     worktree: new Map(),
+    /** sid → self-healing cards of the current/last turn and its outcome; sid → interrupted recovery state. */
+    recovery: new Map(), interrupted: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -1110,12 +1112,16 @@
       d.appendChild(errorBox(err));
       return d;
     }
-    if (m.content && m.content.trim()) {
-      const body = el('div', 'body', renderMarkdown(m.content)); d.appendChild(body);
+    // Self-healing's footer ("Verified: …", "Incomplete: …") is drawn as its card, not repeated at the end of the answer.
+    const report = m.meta && m.meta.healing && typeof m.meta.healing.report === 'string' && m.meta.healing.report.trim();
+    const content = report && m.content && m.content.trimEnd().endsWith(report) ? m.content.trimEnd().slice(0, -report.length).trimEnd() : m.content;
+    if (content && content.trim()) {
+      const body = el('div', 'body', renderMarkdown(content)); d.appendChild(body);
       // Long or structured answers read better in the dedicated Markdown reader.
-      const long = m.content.length > 600 || /^#{1,3}\s/m.test(m.content) || /^\|.*\|$/m.test(m.content);
+      const long = content.length > 600 || /^#{1,3}\s/m.test(content) || /^\|.*\|$/m.test(content);
+      if (report) { d.appendChild(recSettled(state.session ? state.session.id : '', null, report)); }
       d.appendChild(answerFoot(m, long));
-    }
+    } else if (report) { d.appendChild(recSettled(state.session ? state.session.id : '', null, report)); }
     return d.children.length ? d : null;
   }
   /** Under every answer: which model replied and how fast (from the turn's meta), then Copy / Regenerate / Open as
@@ -1124,6 +1130,7 @@
     const mt = m.meta || {};
     const info = [];
     if (mt.model) { info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}">${esc(modelName(mt.model))}</span>`); }
+    const out = mt.healing && reportOutcome(mt.healing.report); if (BADGE[out]) { info.unshift(outcomeBadge(out, mt.healing.report)); }
     if (mt.outputTokens && mt.genMs > 250) { info.push(`<span title="${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
     const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}</span>`);
     f.onclick = (e) => {
@@ -1213,7 +1220,7 @@
     s.messages.forEach((m, i) => {
       if (i >= cutoff) { return; }
       const ts = (m.meta && m.meta.timestamp) || 0;
-      if (m.role === 'user' && m.meta && m.meta.hidden && m.meta.nudge) {
+      if (m.role === 'user' && m.meta && m.meta.hidden && m.meta.nudge && !m.meta.healing) {
         // Replay of a nudge: the previous reply is kept but marked as retracted, exactly as it looked live.
         const prev = els.messages.lastElementChild;
         if (prev && prev.classList.contains('assistant')) { const bodies = prev.querySelectorAll(':scope > .body'); const last = bodies[bodies.length - 1]; if (last) { last.classList.add('retracted'); } prev.appendChild(nudgeNote(m.meta.nudge)); }
@@ -1257,7 +1264,9 @@
     // Install / Create / Use offers from the last request outlive its live turn.
     if (s.offers && !inFlight) { const n = skillSuggestionNote(s.offers); if (n) { n.classList.add('offer'); els.messages.appendChild(n); } }
     const live = state.live.get(s.id);
+    if (!inFlight) { recReplay(s.id); }
     if (live) { els.messages.appendChild(live.root); if (live.dirty) { scheduleRender(live); } }
+    renderInterrupted();
     setRunning(state.running.has(s.id) || state.pendingSend.has(s.id));
     if (state.running.has(s.id)) { setStatus(state.status.get(s.id) || 'Working…'); } else if (state.pendingSend.has(s.id)) { setStatus('Sending…'); }
     if (open.length) { const all = m.querySelectorAll('details'); for (const i of open) { if (all[i]) { all[i].open = true; } } }
@@ -1423,8 +1432,8 @@
       const body = el('div', 'body', '<span class="typing"><i></i><i></i><i></i></span>');
       root.appendChild(work); root.appendChild(steps); root.appendChild(body);
       live = { sid: sessionId, root, work, steps, body, text: '', thinking: '', thinkingEl: null, thinkStart: 0, tools: new Map(), subs: new Map(), subTools: new Map(), timer: 0, startedAt: Date.now(), phase: '', durationMs: 0, failed: false };
-      state.live.set(sessionId, live);
-      if (state.session && state.session.id === sessionId) { for (const e of els.messages.querySelectorAll(':scope > .empty')) { e.remove(); } els.messages.appendChild(root); }
+      state.live.set(sessionId, live); state.recovery.delete(sessionId);
+      if (state.session && state.session.id === sessionId) { for (const e of els.messages.querySelectorAll(':scope > .empty, :scope > .rec-int')) { e.remove(); } els.messages.appendChild(root); }
       if (!workTicker) { workTicker = setInterval(tickWork, 1000); }
     }
     return live;
@@ -1507,6 +1516,261 @@
       length: 'The reply was cut off at the output limit — asking the model for a shorter call.',
     }[reason] || 'Nothing was executed — asking the model to act or explain.';
     return el('div', 'note nudge', `${I.warn}<span>${esc(why)}</span>`);
+  }
+  // ------------------------------------------------------------------ self-healing (recovery card, outcome badge)
+  const REC_STEPS = [['Detect', ['detecting', 'classifying', 'retrying']], ['Diagnose', ['diagnosing', 'resolving', 'escalating']], ['Fix', ['fixing', 'rolling_back']], ['Validate', ['verifying', 'validating']], ['Regression', ['regression', 'completing']]];
+  const REC_CAT = { model_timeout: 'Model timeout', model_unavailable: 'Model unavailable', model_overload: 'Model overloaded', model_output: 'Model output', compile: 'Compile', typescript: 'TypeScript', lint: 'Lint', build: 'Build', dependency: 'Dependency', unit_test: 'Unit test', integration_test: 'Integration test', runtime: 'Runtime', database: 'Database', data_corruption: 'Data corruption', mcp: 'MCP', git_conflict: 'Git conflict', security: 'Security', tool: 'Tool', permission: 'Permission', check_timeout: 'Check timeout', loop: 'Agent loop', unknown: 'Unknown' };
+  const REC_REASON = { exhausted: 'fix attempts used up', duplicate: 'the same error keeps coming back', deadline: 'recovery time limit reached', loop: 'the agent kept repeating itself', mistake_limit: 'too many errors in a row', approval_needed: 'an approval is needed', credentials: 'credentials are missing or rejected', git_conflict: 'a git conflict needs your review', security: 'a security finding needs your decision', data_corruption: 'possible data corruption, nothing was written', model_blocked: 'the model reported it is blocked', user_edit_conflict: 'you changed the same files', model_unavailable: 'the model server is unavailable' };
+  const REC_PHASE = { detecting: 'detecting', classifying: 'classifying', retrying: 'retrying', diagnosing: 'diagnosing', resolving: 'resolving', fixing: 'fixing', validating: 'validating', verifying: 'verifying', rolling_back: 'rolling back', regression: 'regression check', escalating: 'escalating', completing: 'completing', interrupted: 'interrupted', executing: 'executing', idle: 'idle' };
+  const BADGE = { completed: ['ok', 'Completed ✓ verified'], completed_unverified: ['warn', 'Not verified'], incomplete: ['bad', 'Incomplete'], blocked: ['bad', 'Blocked'] };
+  const recStep = (phase) => REC_STEPS.findIndex((s) => s[1].includes(phase));
+  const recTerminal = (o) => ['completed', 'completed_unverified', 'incomplete', 'blocked', 'failed', 'cancelled'].includes(o);
+  /** The code in "TypeScript TS2345 in src/a.ts:4" (TS2345, E0308, CS1002, F401, GHSA-…, ModuleNotFoundError, MCP:-32602). */
+  const recCode = (p) => p.code || ((/\b(TS\d{3,5}|E\d{4}|CS\d{4}|NU\d{4}|[A-Z]\d{3,4}|GHSA-[\w-]+|MCP:-?\d+|[A-Z]\w*Error)\b/.exec(p.title || '') || [])[1]) || '';
+  /** "Verified: …" / "Not verified: …" / "Incomplete: …" / "Blocked: …": the outcome a stored footer reports. */
+  const reportOutcome = (r) => { const t = String(r || '').trim(); return /^verified\b/i.test(t) ? 'completed' : /^(not verified|unverified)\b/i.test(t) ? 'completed_unverified' : /^incomplete\b/i.test(t) ? 'incomplete' : /^blocked\b/i.test(t) ? 'blocked' : ''; };
+  /** Per chat: the cards of the current/last turn by recovery id (payloads merged) and the turn's outcome. */
+  function recCache(sid) { let c = state.recovery.get(sid); if (!c) { c = { cards: new Map(), outcome: null }; state.recovery.set(sid, c); } return c; }
+  function recMerge(prev, p) {
+    const m = Object.assign({}, prev || {});
+    for (const [k, v] of Object.entries(p || {})) { if (v !== undefined && v !== null) { m[k] = v; } }
+    const i = recStep(m.phase); m.reached = Math.max(prev && typeof prev.reached === 'number' ? prev.reached : -1, i);
+    if (recTerminal(m.phase) && !m.outcome) { m.outcome = m.phase; }
+    // An answered card asks again when the engine escalates anew (a new intervention) or goes back to work.
+    const iv = p && p.intervention;
+    if ((iv && iv.id !== (prev && prev.intervention && prev.intervention.id)) || (p && p.phase && !recTerminal(p.phase))) { delete m.done; }
+    return m;
+  }
+  /** Counts the user's visible turns in `msgs[0, end)`: the position of the answer that follows the last one. */
+  function userTurns(msgs, end) {
+    return (msgs || []).slice(0, end).filter((m) => m.role === 'user' && !(m.meta && (m.meta.hidden || m.meta.steer || m.meta.summary || m.meta.toolResults || m.meta.toolImages))).length;
+  }
+  function outcomeBadge(outcome, title) {
+    const b = BADGE[outcome]; if (!b) { return ''; }
+    return `<span class="outcome ${b[0]}"${title ? ` title="${esc(title)}"` : ''}>${esc(b[1])}</span>`;
+  }
+  function recHeader(p) {
+    const parts = ['Self-healing'];
+    if (p.attempt) { parts.push(`attempt ${p.attempt}${p.max ? `/${p.max}` : ''}`); }
+    if (p.category) { const code = recCode(p); parts.push(`${REC_CAT[p.category] || p.category}${code ? ` (${code})` : ''}`); }
+    else if (!p.id) { parts.push('verifying changes'); }
+    return parts.join(' · ');
+  }
+  function recBody(p) {
+    const out = p.outcome && recTerminal(p.outcome) ? p.outcome : '';
+    const steps = REC_STEPS.map((s, i) => {
+      // Finished well: every step done. Stopped: the furthest step reached is where it failed. Running: the current one.
+      const ok = out === 'completed' || out === 'completed_unverified'; const r = Math.max(0, p.reached); const now = recStep(p.phase); const cur = !out && now === i;
+      const cls = ok ? 'done' : out ? (i < r ? 'done' : i === r && out !== 'cancelled' ? 'bad' : '') : cur ? 'cur' : i <= Math.max(p.reached, now) ? 'done' : '';
+      return `<li class="${cls}"${cur ? ' aria-current="step"' : ''}>${esc(s[0])}</li>`;
+    }).join('');
+    const chip = (c) => {
+      const st = String(c.status || ''); const sym = st === 'passed' ? '✓' : st === 'failed' ? '✗' : st === 'timeout' ? '⏱' : st === 'skipped' ? '' : '…';
+      const ms = typeof c.ms === 'number' && st !== 'skipped' ? (c.ms >= 1000 ? `${(c.ms / 1000).toFixed(1)}s` : `${Math.round(c.ms)}ms`) : '';
+      const tip = st === 'skipped' ? `Skipped${c.skipReason ? `: ${c.skipReason}` : ''}` : `${c.id}: ${st}${ms ? ` in ${ms}` : ''}`;
+      return `<span class="rchip ${esc(st)}" title="${esc(tip)}">${sym ? `<b>${sym}</b>` : ''}<span class="n">${esc(c.id)}</span>${st === 'skipped' ? '<i>skipped</i>' : ms ? `<i>${esc(ms)}</i>` : ''}</span>`;
+    };
+    const patch = (x) => `<li class="${x.result === 'rolled_back' ? 'rb' : ''}" title="${esc(x.file)}${x.result ? ` (${esc(String(x.result).replace(/_/g, ' '))})` : ''}"><span class="f">${esc(x.file)}</span><span class="a">+${esc(x.added || 0)}</span><span class="r">−${esc(x.removed || 0)}</span></li>`;
+    const checks = Array.isArray(p.checks) ? p.checks : []; const patches = Array.isArray(p.patches) ? p.patches : [];
+    // Once the card stopped, each attempt's patches that are still applied can be rolled back (all of them when the
+    // payload does not say which attempt wrote a patch).
+    const groups = new Map(); for (const x of patches) { const k = typeof x.attempt === 'number' ? String(x.attempt) : ''; if (!groups.has(k)) { groups.set(k, []); } groups.get(k).push(x); }
+    const sent = Array.isArray(p.rbSent) ? p.rbSent : [];
+    const rb = (k, xs) => {
+      if (!out || !xs.some((x) => x.result !== 'rolled_back')) { return ''; }
+      const asked = sent.includes(k); const label = k ? `Rollback attempt ${k}` : 'Rollback fixes';
+      return `<li class="rec-rb"><button class="btn sm" type="button" data-rb="${esc(k)}"${asked ? ' disabled' : ''} title="${esc(k ? `Undo the files attempt ${k} changed` : 'Undo the files the fix attempts changed')}">${I.undo}<span>${asked ? 'Rollback requested' : esc(label)}</span></button></li>`;
+    };
+    const plist = [...groups].map(([k, xs]) => `<ul class="rec-patches">${groups.size > 1 && k ? `<li class="rec-att">Attempt ${esc(k)}</li>` : ''}${xs.map(patch).join('')}${rb(k, xs)}</ul>`).join('');
+    return `<ol class="rec-stepper">${steps}</ol>${p.title ? `<div class="rec-title">${esc(p.title)}</div>` : ''}${p.rootCause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(p.rootCause)}</div>` : ''}${checks.length ? `<div class="rec-checks">${checks.map(chip).join('')}</div>` : ''}${plist}${p.decision && !out ? `<div class="rec-decision">${I.spin}<span>${esc(p.decision)}</span></div>` : ''}`;
+  }
+  /** Final state line + intervention actions; rebuilt only when they change so an open guidance box survives updates. */
+  function recFinal(card, p) {
+    const out = p.outcome && recTerminal(p.outcome) ? p.outcome : '';
+    const sig = JSON.stringify([out, p.attempt, p.intervention, p.contract && p.contract.checksModified, p.done]);
+    const fin = card.querySelector(':scope > .rec-final');
+    if (fin.dataset.sig === sig) { return; }
+    fin.dataset.sig = sig; fin.innerHTML = '';
+    card.classList.remove('ok', 'warn', 'bad', 'off');
+    if (!out) { return; }
+    if (out === 'completed') { card.classList.add('ok'); fin.innerHTML = `${I.check}<span>${p.attempt ? `Recovered after ${p.attempt} attempt${p.attempt === 1 ? '' : 's'}` : 'Verified'}</span>`; return; }
+    if (out === 'completed_unverified') {
+      card.classList.add('warn');
+      const mod = (p.contract && p.contract.checksModified) || [];
+      fin.innerHTML = `${I.warn}<span>Not verified${mod.length ? ': the fix changed files that define the checks' : ''}</span>${mod.length ? `<ul class="rec-mod">${mod.map((x) => `<li><code>${esc(x.file)}</code>${x.attempt ? ` <i>attempt ${esc(x.attempt)}</i>` : ''}</li>`).join('')}</ul>` : ''}`;
+      return;
+    }
+    if (out === 'cancelled') { card.classList.add('off'); fin.innerHTML = '<span>Cancelled</span>'; return; }
+    card.classList.add('bad');
+    const iv = p.intervention;
+    const reason = iv ? REC_REASON[iv.reason] || String(iv.reason || '').replace(/_/g, ' ') : out === 'failed' ? 'recovery failed' : 'the task is not finished';
+    fin.innerHTML = `${I.warn}<span>Needs you: ${esc(reason)}</span>`;
+    // Accepting a risk is only ever offered for a security finding.
+    const sec = p.category === 'security' || (iv && iv.reason === 'security');
+    const acts = (iv && Array.isArray(iv.nextActions) ? iv.nextActions : []).filter((a) => a && a.action && (a.action !== 'acceptRisk' || sec));
+    if (acts.length && !p.done) { fin.appendChild(recActions(card, p, acts)); }
+  }
+  /**
+   * Webview -> host `{ type: 'recoveryAction', sessionId, recoveryId, action, text?, attempt? }`: `text` is the guidance of
+   * `retryWithGuidance`, `attempt` the attempt a `rollback` undoes (absent: every fix attempt). For `acceptRisk` the host
+   * must confirm with a modal (`showWarningMessage(…, { modal: true })`) and `audit()` the decision before it acts: the
+   * click in the card is a request, not that confirmation.
+   */
+  function recPost(sid, recoveryId, action, extra) { post(Object.assign({ type: 'recoveryAction', sessionId: sid, recoveryId, action }, extra || {})); }
+  function recActions(card, p, acts) {
+    const box = el('div', 'rec-acts');
+    acts.forEach((a, i) => { const b = el('button', `btn sm${a.action === 'acceptRisk' ? ' danger' : i === 0 ? ' primary' : a.action === 'dismiss' ? ' ghost' : ''}`, esc(a.label || a.action)); b.dataset.ra = a.action; b.title = a.action === 'acceptRisk' ? 'Keep the finding in the code; LocalPilot asks you to confirm and records the decision in the audit log' : a.command ? `${a.label || a.action} (${a.command})` : a.label || a.action; box.appendChild(b); });
+    const send = (action, text) => {
+      recPost(card.dataset.sid, card.dataset.rid || p.id, action, text ? { text } : null);
+      box.querySelectorAll('button, input').forEach((x) => { x.disabled = true; });
+      const c = recCache(card.dataset.sid).cards.get(card.dataset.rid); if (c) { c.done = true; }
+      if (action === 'dismiss') { box.remove(); }
+    };
+    box.onclick = (e) => {
+      const b = e.target.closest('button[data-ra]'); if (!b || b.disabled) { return; }
+      const a = b.dataset.ra;
+      if (a === 'retryWithGuidance') {
+        let form = box.querySelector('.rec-guide');
+        if (!form) {
+          form = el('form', 'rec-guide', '<input type="text" placeholder="What should LocalPilot do differently?" aria-label="Guidance for the next attempt"><button class="btn sm primary" type="submit">Send</button><button class="btn sm ghost" type="button" data-x="1">Cancel</button>');
+          form.onsubmit = (ev) => { ev.preventDefault(); const t = form.querySelector('input').value.trim(); if (t) { send('retryWithGuidance', t); } };
+          form.querySelector('[data-x]').onclick = () => form.remove();
+          box.appendChild(form);
+        }
+        form.querySelector('input').focus(); return;
+      }
+      send(a);
+    };
+    return box;
+  }
+  /** Draws / updates a recovery card element from its merged payload. */
+  function recPaint(card, p) {
+    card.querySelector(':scope > .rec-head .t').textContent = recHeader(p);
+    card.__p = p;
+    const sig = JSON.stringify([p.phase, p.reached, p.title, p.rootCause, p.checks, p.patches, p.decision, p.outcome, p.rbSent]);
+    const body = card.querySelector(':scope > .rec-body');
+    if (body.dataset.sig !== sig) { body.dataset.sig = sig; body.innerHTML = recBody(p); }
+    card.classList.toggle('running', !(p.outcome && recTerminal(p.outcome)));
+    recFinal(card, p);
+  }
+  function recCardEl(sid, p) {
+    const card = el('div', 'rec running', `<div class="rec-head"><span class="ico">${I.refresh}</span><span class="t"></span></div><div class="rec-body"></div><div class="rec-verify"><div class="rec-vh">Verification</div><div class="rec-rows"></div></div><div class="rec-final"></div>`);
+    card.dataset.sid = sid; card.dataset.rid = p.id || '';
+    card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Self-healing');
+    card.querySelector(':scope > .rec-body').onclick = (e) => {
+      const b = e.target.closest('button[data-rb]'); const cur = card.__p; if (!b || b.disabled || !cur) { return; }
+      const k = b.dataset.rb;
+      recPost(card.dataset.sid, card.dataset.rid || cur.id, 'rollback', k ? { attempt: Number(k) } : null);
+      cur.rbSent = [...(Array.isArray(cur.rbSent) ? cur.rbSent : []), k];
+      recPaint(card, cur);
+    };
+    recPaint(card, p);
+    return card;
+  }
+  /** The live card for a payload: by id, else the id-less verification card adopted, else a new one above the stream. */
+  function recLiveCard(live, sid, id) {
+    let card = id ? live.root.querySelector(`:scope > .rec[data-rid="${CSS.escape(id)}"]`) : null;
+    if (!card) { card = live.root.querySelector(':scope > .rec[data-rid=""]'); if (card && id) { card.dataset.rid = id; } }
+    // Steps that come after the card (a fixer worker, the next edits) start a new block below it, in order.
+    if (!card) { rotateBody(live); card = recCardEl(sid, { id: id || '', phase: 'verifying', reached: -1 }); live.root.insertBefore(card, live.body); if (live.steps.children.length) { live.steps = el('div', 'steps'); live.root.insertBefore(live.steps, live.body); } else { live.root.insertBefore(live.steps, live.body); } }
+    return card;
+  }
+  function onRecovery(live, sid, p, visible) {
+    if (!p || typeof p !== 'object') { return; }
+    const cache = recCache(sid);
+    const m = recMerge(cache.cards.get(p.id) || cache.cards.get(''), p); cache.cards.delete(''); cache.cards.set(p.id, m);
+    recPaint(recLiveCard(live, sid, p.id), m);
+    if (!recTerminal(m.outcome)) { const t = `Self-healing: ${REC_PHASE[m.phase] || m.phase}${m.decision ? ` · ${m.decision}` : ''}`; noteStatus(sid, t); if (visible) { setStatus(t); } setPhase(live, 'Self-healing'); }
+    followLive(live);
+  }
+  /** `turn_end` with the engine's verdict: settles a card still open and labels the answer footer once the transcript reloads. */
+  function recTurnEnd(live, sid, pl, visible) {
+    if (!pl || !pl.outcome) { return; }
+    const c = recCache(sid); const rid = pl.recovery && pl.recovery.id; c.outcome = { outcome: pl.outcome, contract: pl.contract, id: rid, report: pl.recovery && pl.recovery.report };
+    const key = rid && c.cards.has(rid) ? rid : [...c.cards.keys()].pop();
+    if (key !== undefined && !recTerminal(c.cards.get(key).outcome)) { onRecovery(live, sid, { id: key, phase: pl.outcome, outcome: pl.outcome, contract: pl.contract, attempt: pl.recovery && pl.recovery.attempts || undefined }, visible); }
+  }
+  /** A worker's event forwarded under this chat's id (`{ childId, agent, inner, data }`)? A root recovery payload may
+   *  name the worker it delegated to in its own `childId`; only wrapped events carry `data`. */
+  function wrappedChild(e) {
+    return !!(e.payload && typeof e.payload === 'object' && e.payload.childId && e.type !== 'subagent_start' && e.type !== 'subagent_end' && !(e.type === 'recovery' && !('data' in e.payload)));
+  }
+  function onChildRecovery(live, sid, pl, visible) {
+    const d = pl.data; if (!d || typeof d !== 'object') { return; }
+    recChild(live.subs.get(pl.childId), d, false);
+    if (!recTerminal(d.outcome || d.phase)) { childStatus(live, sid, pl.childId, pl.agent, `self-healing: ${REC_PHASE[d.phase] || d.phase}`, visible); }
+    followLive(live);
+  }
+  /** A verification tool row (origin healing) goes under the card, not in the turn's steps. */
+  function recToolRows(live, sid) {
+    const c = recCache(sid); if (!c.cards.size) { c.cards.set('', { id: '', phase: 'verifying', reached: 3 }); }
+    const last = [...live.root.querySelectorAll(':scope > .rec')].pop();
+    return (last && last.classList.contains('running') ? last : recLiveCard(live, sid, '')).querySelector(':scope > .rec-verify > .rec-rows');
+  }
+  /** A worker's recovery: one compact line (and its verification rows) inside the subagent row. */
+  function recChild(sub, d, toolRow) {
+    const rows = sub && (sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows')); if (!rows) { return null; }
+    let mini = rows.querySelector(':scope > .rec-mini');
+    if (!mini) { mini = el('div', 'rec-mini running', '<div class="rm-line"><span class="ico"></span><span class="t">Self-healing</span><span class="chips"></span></div><div class="rec-rows"></div>'); mini.querySelector('.ico').innerHTML = I.refresh; rows.appendChild(mini); }
+    if (toolRow) { return mini.querySelector('.rec-rows'); }
+    const p = recMerge(mini.__p, d); mini.__p = p;
+    const out = p.outcome && recTerminal(p.outcome) ? p.outcome : '';
+    mini.className = `rec-mini ${out ? (out === 'completed' ? 'ok' : out === 'completed_unverified' ? 'warn' : out === 'cancelled' ? 'off' : 'bad') : 'running'}`;
+    const head = recHeader(p).replace(/^Self-healing/, out === 'completed' ? 'Recovered' : out === 'completed_unverified' ? 'Not verified' : out && out !== 'cancelled' ? 'Needs attention' : 'Self-healing');
+    mini.querySelector('.t').textContent = `${head}${!out && p.phase ? ` · ${REC_PHASE[p.phase] || p.phase}` : ''}`;
+    mini.querySelector('.t').title = [p.title, p.rootCause && `Root cause: ${p.rootCause}`, p.decision].filter(Boolean).join('\n');
+    mini.querySelector('.chips').innerHTML = (Array.isArray(p.checks) ? p.checks : []).map((c) => `<b class="${esc(c.status)}" title="${esc(`${c.id}: ${c.status}${c.skipReason ? ` (${c.skipReason})` : ''}`)}">${c.status === 'passed' ? '✓' : c.status === 'failed' ? '✗' : c.status === 'timeout' ? '⏱' : '–'}</b>`).join('');
+    return mini;
+  }
+  /** Replay: the card of a finished turn. The full payload when this webview saw the turn, else the stored footer. */
+  function recSettled(sid, p, report) {
+    if (p) { const card = recCardEl(sid, p); if (!card.querySelector('.rec-rows').children.length) { card.querySelector('.rec-verify').remove(); } return card; }
+    const out = reportOutcome(report);
+    const n = el('div', `rec settled ${out === 'completed' ? 'ok' : out === 'completed_unverified' ? 'warn' : out ? 'bad' : ''}`, `<div class="rec-head"><span class="ico">${out === 'completed' ? I.check : out ? I.warn : I.refresh}</span><span class="t">Self-healing</span></div><div class="rec-report"></div>`);
+    n.querySelector('.rec-report').textContent = report;
+    return n;
+  }
+  /** The turn this webview watched finish: its full cards replace the stored footer card, and its outcome labels the footer. */
+  function recReplay(sid) {
+    const rc = state.recovery.get(sid); if (!rc) { return; }
+    // The cards belong to the answer at the position the turn ended at; a transcript cut back (checkpoint restore, undo) drops them.
+    const s = state.session; const at = s && s.id === sid ? userTurns(s.messages, s.messages.length) : undefined;
+    if (rc.at === undefined) { rc.at = at; } else if (at !== rc.at) { state.recovery.delete(sid); return; }
+    const turn = [...els.messages.querySelectorAll(':scope > .turn.assistant:not(.plancard)')].pop(); if (!turn) { return; }
+    if (rc.cards.size) {
+      const stored = [...turn.querySelectorAll(':scope > .rec.settled')].pop();
+      const ref = stored || [...turn.querySelectorAll(':scope > .body')].pop() || turn.querySelector(':scope > .afoot');
+      const cards = rc.els && rc.els.length ? rc.els : [...rc.cards.values()].map((p) => recSettled(sid, p));
+      for (const card of cards) { card.classList.remove('running'); if (ref) { turn.insertBefore(card, ref); } else { turn.appendChild(card); } }
+      if (stored) { stored.remove(); }
+    }
+    const o = rc.outcome; const info = turn.querySelector(':scope > .afoot .info');
+    // Without a contract the engine was off: 'completed' then only means "ended with an answer", not verified.
+    if (o && info && !info.querySelector('.outcome') && BADGE[o.outcome] && (o.contract || o.outcome !== 'completed')) { info.insertAdjacentHTML('afterbegin', outcomeBadge(o.outcome, o.report) + (info.children.length ? '<i>·</i>' : '')); }
+  }
+  /** The id an interrupted card's actions name: the store's key for it (`recoveryId` if the host sent one, else the session). */
+  const recInterruptedId = (sid, st) => String(st.recoveryId || st.sessionId || st.sid || sid);
+  /** "Recovery interrupted" (a reload or exit stopped it mid-way): Resume, Rollback fixes or Dismiss. */
+  function renderInterrupted() {
+    for (const n of els.messages.querySelectorAll(':scope > .rec-int')) { n.remove(); }
+    const s = state.session; const st = s && state.interrupted.get(s.id);
+    if (!st || state.running.has(s.id) || state.live.has(s.id)) { return; }
+    const n = typeof st.attempt === 'number' ? st.attempt : Array.isArray(st.attempts) ? st.attempts.length : 0;
+    const last = Array.isArray(st.attempts) && st.attempts.length ? st.attempts[st.attempts.length - 1] : null;
+    const cat = st.category || (last && last.category);
+    // The store overwrites `phase` with 'interrupted'; only a phase from before that says where it stopped.
+    const ph = [st.lastPhase, st.phase].find((x) => typeof x === 'string' && x && x !== 'interrupted');
+    const facts = [ph ? `Stopped while ${REC_PHASE[ph] || ph}` : 'Stopped before it finished', n && `attempt ${n}${st.max ? `/${st.max}` : ''}`, cat && (REC_CAT[cat] || cat)].filter(Boolean).join(' · ');
+    const fails = (Array.isArray(st.active) ? st.active : []).slice(0, 3).map((f) => `<li>${f.code ? `<code>${esc(f.code)}</code> ` : ''}${short(String(f.message || ''), 120)}${f.file ? ` <span class="at">${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</span>` : ''}</li>`).join('');
+    const cause = (st.intervention && st.intervention.rootCause) || (last && last.rootCause) || st.rootCause;
+    const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button><button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">Dismiss</button></div></div>`);
+    card.querySelector('.rec-acts').onclick = (e) => {
+      const b = e.target.closest('button[data-ra]'); if (!b) { return; }
+      recPost(s.id, recInterruptedId(s.id, st), b.dataset.ra);
+      if (b.dataset.ra === 'resume') { card.querySelectorAll('button').forEach((x) => { x.disabled = true; }); b.classList.add('busy'); }
+      else { state.interrupted.delete(s.id); card.remove(); }
+    };
+    els.messages.appendChild(card);
   }
   // Scrolls only when the event belongs to the transcript on screen — background agents must not move it.
   // Coalesced to one layout read per frame: a worker batch can emit hundreds of events in a burst, and a forced
@@ -1622,6 +1886,10 @@
     // Hook rows still running are left as they are: their result arrives after the turn (handleEvent's outside-a-run branch).
     finishThinking(live);
     if (live.work) { settleWork(live.root, live.work, turnStats(live.root), live.durationMs || Date.now() - live.startedAt, live.failed); live.work = null; }
+    // The recovery cards (with their verification rows and any open guidance box) outlive the live turn: the reloaded transcript reuses them.
+    const rc = state.recovery.get(sessionId); if (rc) { rc.els = [...live.root.querySelectorAll(':scope > .rec')]; for (const c of rc.els) { if (c.classList.contains('running')) { c.classList.remove('running'); c.querySelector(':scope > .rec-body .rec-decision')?.remove(); } } }
+    // Where the turn sits in the transcript (its user message is before `liveFrom`): replay only puts the cards back there.
+    const s = state.session; if (rc && s && s.id === sessionId && typeof s.liveFrom === 'number') { rc.at = userTurns(s.messages, s.liveFrom); }
     state.live.delete(sessionId);
   }
   function renderHookRow(row, h) {
@@ -1642,11 +1910,12 @@
     }
     const live = ensureLive(sid);
     // A worker's events forwarded under this chat's id; only the kinds drawn on its lane are handled below.
-    const child = e.payload && typeof e.payload === 'object' && e.payload.childId && e.type !== 'subagent_start' && e.type !== 'subagent_end';
+    const child = wrappedChild(e);
     if (child && !['status', 'tool_start', 'tool_end', 'tool_progress', 'model_request'].includes(e.type)) {
       const d = e.payload.data;
       if (e.type === 'error') { childStatus(live, sid, e.payload.childId, e.payload.agent, errorText(d), visible); }
       else if (e.type === 'retry' && d) { childStatus(live, sid, e.payload.childId, e.payload.agent, `retrying ${d.attempt}/${d.max}`, visible); }
+      else if (e.type === 'recovery') { onChildRecovery(live, sid, e.payload, visible); }
       return;
     }
     switch (e.type) {
@@ -1680,17 +1949,18 @@
           // A subagent's tool call: render it as a nested row under that agent's pill.
           const d = e.payload.data || {}; const sub = live.subs.get(e.payload.childId);
           if (sub && d.name !== 'manage_todos') {
-            const rows = sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
+            const rows = d.origin === 'healing' ? recChild(sub, d, true) : sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
             if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); }
           }
           childStatus(live, sid, e.payload.childId, e.payload.agent, plainLabel(toolLabel(d.name, d.args || {}, true)), visible);
           followLive(live);
           break;
         }
-        rotateBody(live);
-        const node = placeTool(live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
+        const heal = e.payload.origin === 'healing';
+        if (!heal) { rotateBody(live); }
+        const node = placeTool(heal ? recToolRows(live, sid) : live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
         if (node) { live.tools.set(e.payload.id, node); }
-        setPhase(live, PHASES[e.payload.name] || 'Working'); updateWork(live);
+        setPhase(live, heal ? 'Verifying' : PHASES[e.payload.name] || 'Working'); updateWork(live);
         noteStatus(sid, toolLabel(e.payload.name, e.payload.args || {}, true).replace(/<[^>]+>/g, ''));
         followLive(live);
         break;
@@ -1750,6 +2020,8 @@
       }
       case 'todos': if (state.session && state.session.id === sid) { state.session.todos = Array.isArray(e.payload) ? e.payload : []; renderTasks(); } break;
       case 'nudge': {
+        // Self-healing's hidden fix prompts are not nudges: nothing was retracted.
+        if (e.payload && e.payload.healing) { break; }
         // A text reply cut off at the output limit is being continued: the rest streams on into the same body.
         if (e.payload && e.payload.reason === 'length' && e.payload.continued) {
           const st = 'Reply cut off at the output limit — continuing…'; noteStatus(sid, st); if (visible) { setStatus(st); }
@@ -1784,7 +2056,8 @@
       case 'rules_applied': { const files = (e.payload && e.payload.files) || []; if (files.length) { rotateBody(live); live.root.insertBefore(el('div', 'note rules', `Conditional rules applied: ${files.map((f) => `<code>${esc(f)}</code>`).join(', ')}`), live.body); } break; }
       case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
       case 'error': { rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
-      case 'turn_end': noteStatus(sid, 'Finishing…'); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
+      case 'recovery': onRecovery(live, sid, e.payload, visible); break;
+      case 'turn_end': noteStatus(sid, 'Finishing…'); recTurnEnd(live, sid, e.payload, visible); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
   }
 
@@ -3661,7 +3934,7 @@
         if (!m.running) { state.paused.delete(m.sessionId); }
         clearTimeout(state.pendingSend.get(m.sessionId)); state.pendingSend.delete(m.sessionId);
         state.scroll.delete(m.sessionId);
-        if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
+        if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); state.interrupted.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
         else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
         if (isActive) { setRunning(m.running); renderTasks(); renderChanges(); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
@@ -3705,6 +3978,10 @@
       case 'insertMention': insertMention(m.ref); break;
       case 'image': if (attachCount() >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} images and files per message`, 'error'); break; } addImageUrl(m.image.name, `data:${m.image.mime};base64,${m.image.data}`); break;
       case 'replay': applyReplay(m); break;
+      // Host -> webview `{ type: 'recoveryInterrupted', sessionId, state }`: `state` is the session's RecoveryState or
+      // UnfinishedSummary (phase already 'interrupted'; `lastPhase` and `recoveryId` optional), null to clear the card.
+      // The card's actions post `recoveryAction` with `recoveryId` = state.recoveryId || state.sessionId || state.sid || sessionId.
+      case 'recoveryInterrupted': if (typeof m.sessionId === 'string') { if (m.state && typeof m.state === 'object') { state.interrupted.set(m.sessionId, m.state); } else { state.interrupted.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderInterrupted(); } } break;
     }
   }
 

@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "node src/server.js", "root": "/work/proj",
+  "expected": [
+    { "category": "runtime", "code": "TypeError", "file": "src/server.js", "line": 12 }
+  ] }

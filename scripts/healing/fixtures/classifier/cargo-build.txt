@@ -1,0 +1,18 @@
+   Compiling calc v0.1.0 (/work/proj)
+error[E0308]: mismatched types
+ --> src/main.rs:3:18
+  |
+3 |     let x: i32 = "a";
+  |            ---   ^^^ expected `i32`, found `&str`
+  |            |
+  |            expected due to this
+
+error[E0432]: unresolved import `serde`
+ --> src/lib.rs:1:5
+  |
+1 | use serde::Serialize;
+  |     ^^^^^ use of undeclared crate or module `serde`
+
+Some errors have detailed explanations: E0308, E0432.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `calc` (bin "calc") due to 2 previous errors

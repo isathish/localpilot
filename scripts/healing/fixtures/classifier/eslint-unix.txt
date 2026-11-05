@@ -1,0 +1,5 @@
+/work/proj/src/a.js:3:7: 'x' is defined but never used. [Error/no-unused-vars]
+/work/proj/src/a.js:9:1: Unexpected console statement. [Warning/no-console]
+/work/proj/lib/b.js:14:22: Missing semicolon. [Error/semi]
+
+3 problems

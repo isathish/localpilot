@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "python", "kind": "typecheck", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": "assignment", "file": "app/models.py", "line": 14 },
+    { "category": "compile", "code": "arg-type", "file": "app/views.py", "line": 30 }
+  ] }

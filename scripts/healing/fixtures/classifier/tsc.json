@@ -1,0 +1,8 @@
+{ "input": "check", "ecosystem": "node", "kind": "typecheck", "root": "/work/proj",
+  "expected": [
+    { "category": "typescript", "code": "TS2345", "file": "src/api/user.ts", "line": 42 },
+    { "category": "typescript", "code": "TS2322", "file": "src/api/user.ts", "line": 57 },
+    { "category": "compile", "code": "TS1128", "file": "src/util/format.ts", "line": 8 },
+    { "category": "dependency", "code": "TS2307", "file": "src/server.ts", "line": 3, "symbol": "express" },
+    { "category": "typescript", "code": "TS2307", "file": "src/server.ts", "line": 4 }
+  ] }

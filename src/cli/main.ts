@@ -67,7 +67,7 @@ import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider,
 import { cmdMcp, parseMcpArgs } from './mcpCmd';
 import { setSecretValues } from '../providers/cloud';
 import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
-import { describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
+import { audit as auditPolicy, describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard, canFinish } from '../agent/teamBoard';
 import { boardOwner, teamBoardTool } from '../tools/teamBoard';
@@ -90,7 +90,12 @@ import { exitSummary, gitState, nextMode, statusLineText } from './statusLine';
 import { contextPercent } from '../agent/reports';
 import { effectiveContextWindow } from '../context/contextManager';
 import { NdjsonWriter, runUsage } from './ndjson';
-import { atRefs, exitCodeFor, parseDuration, readSystemArg, RunOutcome, runProviderList, withStdin, YOLO_TOOLS, finishReasonFor } from './headless';
+import { atRefs, EXIT_CODES_HELP, exitCodeFor, parseDuration, readSystemArg, REQUIRE_VERIFIED_HELP, RunOutcome, runProviderList, withStdin, YOLO_TOOLS, finishReasonFor } from './headless';
+import { CliHealing, attemptBudget, createCliHealing } from './healing';
+import { RecoveryNotes, RESUME_PROMPT, outcomeBlock, stateDetail } from './recoveryRender';
+import { recoverySlash, RECOVERY_USAGE } from './slash/recovery';
+import { cmdRecovery, resumableRecovery } from './recoveryCmd';
+import { escalationReport, isTerminalPhase, type CompletionContract, type NextAction, type RecoveryEventPayload, type RecoverySummary } from '../agent/healing';
 import { cmdConfig, ConfigSources, doctorReport } from './configCmd';
 import { newestInstalledExtension, versionNotice } from './versionCheck';
 import { readImage } from '../ui/images';
@@ -155,6 +160,8 @@ ${bold('Usage')}
   localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
   localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
   localpilot -c | -r [id]                continue the last session / pick one to resume (with a task: run it there)
+  localpilot recovery list|show <id>|resume <id>|clear [id]   self-healing state of this folder's sessions: interrupted,
+                                          incomplete and blocked tasks; resume one (checks re-run first) or forget finished ones
   localpilot history                      saved sessions in this folder [--json] [--limit 50]; history delete <id>;
                                           history export <id> [-o file.md|file.html]; history import [claude|codex] [N|all]
   localpilot schedule create <name> --cron "0 3 * * *" --prompt "…"   scheduled unattended runs via cron/launchd/Task
@@ -182,6 +189,7 @@ ${bold('Options')}
   --json                       one-shot runs: one JSON event per line on stdout, then a run_result line
   --timeout <s>                stop the run after this long (90, 90s, 5m) and exit with code 124
   --retries <n>                stop after n failed steps in a row (localpilot.maxConsecutiveMistakes); exit code 3
+${REQUIRE_VERIFIED_HELP}
   --yolo                       for CI: --yes, only the core file and command tools, --retries 3, no MCP unless --mcp
   -s, --system <text|@file>    add to the system prompt; --system-replace uses it instead of LocalPilot's persona
   -P, --provider <id>          use this provider (configured, or a preset such as openai) for this run
@@ -192,12 +200,14 @@ ${bold('Options')}
   -v, --verbose                show tool arguments and debug logs
   --settings | --setup         open LocalPilot Settings / the setup wizard in VS Code
   -h, --help · --version
+  ${EXIT_CODES_HELP}
 
 ${bold('In a session')}
   /team <task>   split the task for background workers and the shared board (multitask mode)
   /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
   /thinking auto|off|low|medium|high|max   how hard the model thinks in this session (remembered)
   /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
+  ${RECOVERY_USAGE}   self-healing state of this session: re-run the checks and continue, undo fix attempts, past attempts
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /undo [N [f|c|b]]   go back to an earlier turn: restore its files, the chat or both (Esc Esc at an empty prompt)   /undo all   revert every pending change
   /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins) and MCP prompts   /permissions   /hooks   settings.json rules
@@ -231,7 +241,7 @@ interface Args {
   /** Apply security-sensitive settings from the workspace's .vscode/settings.json. */
   trustWorkspace?: boolean;
   verbose: boolean;
-  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history' | 'config' | 'mcp' | 'acp';
+  cmd?: 'models' | 'doctor' | 'ide' | 'settings' | 'setup' | 'help' | 'version' | 'skill-install' | 'skill-search' | 'providers' | 'eval' | 'work' | 'scan' | 'plugin' | 'history' | 'config' | 'mcp' | 'acp' | 'recovery';
   /** `mcp …`: the words after `mcp` (it parses its own flags). */
   mcpArgv?: string[];
   /** `--json` without a file: NDJSON events for one-shot runs, JSON output for `config` and `doctor`. */
@@ -277,6 +287,10 @@ interface Args {
   apply: boolean;
   /** `--thinking [level]`: this session's thinking level (a bare flag = medium). */
   thinking?: ThinkChoice;
+  /** `--require-verified`: a done-but-unverified run exits 4 (incomplete). */
+  requireVerified?: boolean;
+  /** `recovery resume <id>`: this run is the resume turn of an interrupted / unfinished recovery. */
+  recoveryResume?: boolean;
   /** A usage error found while parsing (unknown option, bad value): main prints it and exits 2. */
   error?: string;
 }
@@ -369,6 +383,8 @@ function parseArgs(argv: string[]): Args {
     else if (x === '--hooks-dir') {(a.hooksDirs ??= []).push(path.resolve(next()));}
     else if (x === '--compaction') {const v = next(); if (/^(agentic|basic|off)$/.test(v)) {cliOverrides['compaction.strategy'] = v;} else {a.error = `--compaction takes agentic, basic or off (got "${v}")`;}}
     else if (x === 'history' && !words.length && !a.cmd) {a.cmd = 'history';}
+    else if (x === 'recovery' && !words.length && !a.cmd) {a.cmd = 'recovery';}
+    else if (x === '--require-verified') {a.requireVerified = true;}
     // `eval`/`scan --json out.json` write a report file; anywhere else `--json` is a flag (NDJSON for runs, JSON output).
     else if (x === '--json' && (a.cmd === 'eval' || a.cmd === 'scan') && /\.json$|[/\\]/i.test(argv[i + 1] ?? '')) {a.evalOpts.json = next(); a.scanOpts.json = a.evalOpts.json;}
     else if (x === '--json') {a.json = true;}
@@ -514,9 +530,11 @@ class StreamFilter {
 class Renderer {
   private filter = new StreamFilter();
   private line = '';
-  private running = new Map<string, { label: string; start: number; tail?: string }>();
+  private running = new Map<string, { label: string; start: number; tail?: string; healing?: boolean }>();
+  /** The last rows printed were self-healing verification commands (grouped under one `verification` heading). */
+  private verifying = false;
   thinking = 0;
-  constructor(private readonly verbose: boolean, private readonly quiet: boolean) {}
+  constructor(private readonly verbose: boolean, readonly quiet: boolean) {}
 
   private breakLine(): void {
     if (this.line && !this.line.endsWith('\n')) {
@@ -531,6 +549,7 @@ class Renderer {
       return; // quiet (--print / piped) mode prints the final answer once at the end
     }
     this.clearStatus();
+    this.verifying = false;
     // Render markdown per complete line so inline markup split across stream deltas still formats.
     this.pending += delta;
     const nl = this.pending.lastIndexOf('\n');
@@ -589,7 +608,8 @@ class Renderer {
       this.statusShown = false;
     }
   }
-  toolStart(id: string, name: string, args: Record<string, unknown>): void {
+  /** `healing`: a self-healing check the engine ran (not the model): dimmed, indented under a `verification` heading. */
+  toolStart(id: string, name: string, args: Record<string, unknown>, healing = false): void {
     if (this.quiet) {
       return;
     }
@@ -597,8 +617,12 @@ class Renderer {
     this.flushPending();
     this.breakLine();
     const label = toolLabel(name, args);
-    this.running.set(id, { label, start: Date.now() });
-    process.stdout.write(`  ${dim('⟳')} ${dim(label)}${this.verbose ? ` ${dim(JSON.stringify(args).slice(0, 200))}` : ''}\n`);
+    this.running.set(id, { label, start: Date.now(), healing });
+    if (healing && !this.verifying) {
+      process.stdout.write(`  ${dim('verification')}\n`);
+    }
+    this.verifying = healing;
+    process.stdout.write(`${healing ? '    ' : '  '}${dim('⟳')} ${dim(label)}${this.verbose ? ` ${dim(JSON.stringify(args).slice(0, 200))}` : ''}\n`);
   }
   /** Live run_command output: its latest line on the status line, with the detach hint. */
   toolOutput(id: string, chunk: string): void {
@@ -610,7 +634,7 @@ class Renderer {
     const last = r.tail.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? '';
     this.status(`${last || 'running…'}${tty ? '  (Ctrl+B: proceed while it runs)' : ''}`);
   }
-  toolEnd(id: string, name: string, isError: boolean, content: string, data: unknown, cached?: boolean): void {
+  toolEnd(id: string, name: string, isError: boolean, content: string, data: unknown, cached?: boolean, healing = false): void {
     if (this.quiet) {
       return;
     }
@@ -618,6 +642,19 @@ class Renderer {
     this.running.delete(id);
     const dur = r ? Date.now() - r.start : 0;
     const meta = cached ? dim(' cached') : dur > 800 ? dim(` ${(dur / 1000).toFixed(1)}s`) : '';
+    if (healing || r?.healing) {
+      // Only the verdict and, for a failure, the tail of the output: the engine extracts the evidence for the model.
+      if (tty && r && this.verifying) {
+        process.stdout.write('\x1b[1A\x1b[2K');
+      }
+      process.stdout.write(`    ${isError ? red('✗') : dim('✓')} ${dim(r?.label ?? name)}${meta}\n`);
+      if (isError && content) {
+        const lines = content.replace(/^\$ .*\n/, '').replace(/\n\[exit code [^\]]*\]$/, '').split('\n').filter((l) => l.trim());
+        process.stdout.write(lines.slice(-8).map((l) => `      ${dim('│')} ${dim(l)}`).join('\n') + (lines.length ? '\n' : ''));
+      }
+      this.verifying = true;
+      return;
+    }
     if (tty && r) {
       process.stdout.write('\x1b[1A\x1b[2K'); // rewrite the ⟳ line in place
     }
@@ -642,6 +679,7 @@ class Renderer {
     this.clearStatus();
     this.flushPending();
     this.breakLine();
+    this.verifying = false;
     const done = items.filter((t) => t.status === 'done').length;
     process.stdout.write(`  ${amber('☰')} ${bold(`Plan ${done}/${items.length}`)}\n${items.map((t) => `    ${t.status === 'done' ? green('✓') : t.status === 'in_progress' ? amber('▸') : t.status === 'skipped' ? dim('–') : dim('○')} ${t.status === 'done' ? dim(t.title) : t.title}`).join('\n')}\n`);
   }
@@ -656,7 +694,23 @@ class Renderer {
     this.clearStatus();
     this.flushPending();
     this.breakLine();
+    this.verifying = false;
     process.stdout.write(`  ${dim(s)}\n`);
+  }
+  /** Pre-styled lines (the self-healing outcome block): stdout, or stderr in --print / piped runs (nothing with --json). */
+  block(lines: string[]): void {
+    if (!lines.length || ndjson) {
+      return;
+    }
+    if (this.quiet) {
+      process.stderr.write(`${lines.map((l) => `  ${l}`).join('\n')}\n`);
+      return;
+    }
+    this.clearStatus();
+    this.flushPending();
+    this.breakLine();
+    this.verifying = false;
+    process.stdout.write(`\n${lines.map((l) => `  ${l}`).join('\n')}\n`);
   }
   error(s: string): void {
     if (ndjson) {
@@ -746,6 +800,8 @@ interface Core {
   plugins: PluginInfo[];
   /** Custom slash commands (.claude/commands, .localpilot/commands, plugins), by `/name`. */
   commands: CustomCommand[];
+  /** Self-healing: the service the runner uses and its recovery store (`~/.localpilot/recovery`). */
+  healing: CliHealing;
 }
 
 /** Stop what keeps the process alive (MCP servers, Redis telemetry) after a subcommand or one-shot run. */
@@ -873,7 +929,53 @@ async function boot(args: Args, emit: (e: AgentEvent) => void, approve: (sid: st
     mcp.onFileProblems = (file, problems) => (ndjson ? ndjson.error(`invalid MCP configuration in ${file}: ${problems.join('; ')}`, { kind: 'mcp_config', file, problems }) : process.stderr.write(`${yellow('!')} invalid MCP configuration in ${file}:\n${problems.map((p) => `  ${p}`).join('\n')}\n`));
     await mcp.reload();
   }
-  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, telemetryRemote: redis, settings, plugins, commands };
+  const healing = cliHealing(args, { log, telemetry, tracker, providers, mcp: () => mcp, approve: (title, detail, kind) => approve('', title, detail, kind).then((d) => toDecision(d).ok) });
+  runner.healing = healing.service;
+  return { providers, tools, skills, workspace, tracker, memory, runner, catalog, mcp, log, sessions, telemetry, telemetryRemote: redis, settings, plugins, commands, healing };
+}
+
+/** Workspace trust as the settings shim sees it: `--trust-workspace` or LOCALPILOT_TRUST_WORKSPACE=1 (untrusted by default). */
+function workspaceTrusted(args: Pick<Args, 'trustWorkspace'>): boolean {
+  return !!args.trustWorkspace || process.env.LOCALPILOT_TRUST_WORKSPACE === '1';
+}
+
+/** The self-healing service over the CLI's providers, MCP servers and change tracker (recovery state in ~/.localpilot/recovery). */
+function cliHealing(args: Args, d: { log: vscode.LogOutputChannel; telemetry?: Telemetry; tracker?: ChangeTracker; providers?: ProviderRegistry; mcp?: () => McpManager | undefined; approve?: (title: string, detail: string, kind: string) => Promise<boolean> }): CliHealing {
+  return createCliHealing({
+    cwd: args.cwd,
+    config: () => getConfig().healing,
+    log: d.log,
+    telemetry: d.telemetry,
+    isTrusted: () => workspaceTrusted(args),
+    approve: d.approve ?? (async () => false),
+    mcpRestart: async (server) => {
+      const m = d.mcp?.();
+      return m ? m.restart(server) : false;
+    },
+    provider: d.providers && ((id) => d.providers!.get(id)),
+    settle: d.tracker && ((sid) => d.tracker!.settle(sid)),
+    writers: d.tracker && (() => d.tracker!.all()),
+    audit: (event) => auditPolicy(getManagedPolicy(), event, args.cwd, d.log),
+  });
+}
+
+/** Stops the run in progress with the `shutdown` reason, waits (bounded) for it to persist its state, then exits. */
+async function stopForShutdown(core: Core, code: number): Promise<never> {
+  shutdownCode = code;
+  const run = liveRun;
+  if (run) {
+    run.control.stop('shutdown');
+    await Promise.race([run.done.catch(() => undefined), new Promise((r) => setTimeout(r, 5000))]);
+    // The run's own save comes after its hooks settle, which can outlast the wait above: save the chat here too, so a
+    // closed terminal or a cancelled CI job never loses it (`localpilot -c` and `recovery resume` need it).
+    if (core.store?.has(run.session.id)) {
+      core.store.save(run.session);
+      await core.store.flush(run.session).catch(() => undefined);
+    }
+  }
+  await core.healing.store.flush().catch(() => undefined);
+  core.mcp?.dispose();
+  process.exit(code);
 }
 
 function newSession(mode: Session['mode'], model: string): Session {
@@ -891,6 +993,12 @@ let lastTurnAnswered = false;
 let lastTurnError: { message: string; kind?: string } | undefined;
 /** `--json` one-shot runs: every event also goes out as NDJSON. */
 let ndjson: NdjsonWriter | undefined;
+/** The self-healing verdict of the last runTurn (turn_end `outcome` / `contract`); `ended` is false when it threw before turn_end. */
+let lastTurnHealing: { ended: boolean; outcome?: string; contract?: CompletionContract } = { ended: false };
+/** The run in progress, so a hangup / SIGTERM can stop it as a shutdown (its recovery stays resumable) and wait for it. */
+let liveRun: { control: RunControl; done: Promise<unknown>; session: Session } | undefined;
+/** Set when SIGHUP / SIGTERM is shutting the CLI down: the run's normal ending must not exit with its own code first. */
+let shutdownCode: number | undefined;
 
 /** A failure outside the run: an `{type:'error', kind}` record with --json, else `✖ message` (and a hint) on stderr. */
 function reportError(message: string, kind: string, hint?: string): void {
@@ -996,7 +1104,7 @@ async function askQuestionsNow(questions: UserQuestion[], rl: readline.Interface
   return answers;
 }
 
-async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; images?: string[]; toolFilter?: string[]; roleOverride?: string } = {}): Promise<string> {
+async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; images?: string[]; toolFilter?: string[]; roleOverride?: string; resume?: boolean } = {}): Promise<string> {
   let content = text;
   const root = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
   const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f, root)));
@@ -1013,6 +1121,11 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   lastTurnCompleted = true;
   lastTurnAnswered = false;
   lastTurnError = undefined;
+  lastTurnHealing = { ended: false };
+  /** The newest `recovery` card of the main run, and the turn_end recovery summary, for the outcome block. */
+  let recovery: RecoveryEventPayload | undefined;
+  let summary: RecoverySummary | undefined;
+  const notes = new RecoveryNotes(STYLE);
   // Pause / resume feedback, for the main run and for subagents the user paused or stopped individually.
   const offControl = control.onDidChange((c) => {
     const who = c === control ? '' : `${c.label ?? 'subagent'}: `;
@@ -1028,10 +1141,15 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   });
   let result: string;
   const turnStarted = Date.now();
+  const rootSid = ChangeTracker.rootSession(session.id);
+  core.healing.live.add(rootSid);
   try {
-    result = await core.runner.run({
+    const run = core.runner.run({
       session,
       userMessage,
+      resume: opts.resume,
+      // Nobody can answer a prompt (piped or -p without --yes): installs are not attempted and the task is reported blocked.
+      unattended: (!process.stdin.isTTY || printMode) && !yesMode,
       modelRef: opts.modelRef,
       permissionAllow: opts.permissionAllow,
       toolFilter: opts.toolFilter,
@@ -1051,9 +1169,10 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           case 'assistant_delta': r.text(String(e.payload)); break;
           case 'thinking_delta': r.status(`Thinking… ${dim(String(e.payload).replace(/\s+/g, ' ').slice(-60))}`); break;
           case 'status': if (typeof e.payload === 'string') {r.status(e.payload);} break;
-          case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {});} break;
+          case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {}, p.origin === 'healing');} break;
           case 'tool_progress': if (!p.childId) {r.toolOutput(String(p.id), String(p.chunk ?? ''));} break;
-          case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached);} break;
+          case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached, p.origin === 'healing');} break;
+          case 'recovery': if (!p.childId) {recovery = p as unknown as RecoveryEventPayload; notes.lines(recovery).forEach((l) => r.note(l));} break;
           case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
           case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
           case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;
@@ -1076,14 +1195,24 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           case 'steer': r.note(`↩ your message${Number(p.count) === 1 ? ' was' : 's were'} added to the conversation`); break;
           case 'subagent_end': r.note(`↲ subagent ${p.agent} ${p.error ? red('failed') : 'done'}`); break;
           case 'error': r.error(e.payload && typeof e.payload === 'object' ? String(p.message ?? p.latest ?? 'error') : String(e.payload)); break;
-          case 'turn_end': final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; lastTurnAnswered = p.completed === true; break;
+          case 'turn_end':
+            final = String(p.text ?? ''); lastTurnCompleted = p.completed !== false; lastTurnAnswered = p.completed === true;
+            lastTurnHealing = { ended: true, ...(typeof p.outcome === 'string' ? { outcome: p.outcome } : {}), ...(p.contract ? { contract: p.contract as CompletionContract } : {}) };
+            summary = p.recovery as RecoverySummary | undefined;
+            break;
         }
       },
       requestApproval: (title, detail, kind, opts) => approvalDecision(title, detail, kind, rl, control.signal, opts),
       // Questions need someone at the terminal; scripted runs (no TTY, --yes) go with the agent's recommendations.
       askUser: process.stdin.isTTY && !yesMode && !printMode ? (questions) => askQuestions(questions, rl, control.signal) : undefined,
     });
+    liveRun = { control, done: run, session };
+    result = await run;
   } finally {
+    if (liveRun?.control === control) {
+      liveRun = undefined;
+    }
+    core.healing.live.delete(rootSid);
     offControl();
     if (activeSignal === control.signal) {
       activeSignal = undefined;
@@ -1097,6 +1226,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
       core.store.save(session);
       await core.store.flush(session);
     }
+    await recoveryOutcome(core, session.id, r, turnStarted, recovery, summary).catch((e) => core.log.warn(`recovery outcome: ${String(e)}`));
   }
   const spent = turnUsageLabel(usageDelta(usageBefore, session.usage));
   if (spent) {
@@ -1107,6 +1237,30 @@ async function runTurn(core: Core, session: Session, text: string, files: string
     process.stdout.write('\x07');
   }
   return final || result;
+}
+
+/**
+ * The end-of-turn self-healing block (design §9.5): `Incomplete:` / `Blocked:` with the root cause and next commands,
+ * `Not verified`, or the verified footer. On the throw path (no turn_end) the escalation persisted before the throw is shown.
+ */
+async function recoveryOutcome(core: Core, sid: string, r: Renderer, since: number, card: RecoveryEventPayload | undefined, summary: RecoverySummary | undefined): Promise<void> {
+  if (ndjson || !getConfig().healing.enabled) {
+    return; // NDJSON carries the recovery events and the run_result outcome
+  }
+  let outcome = lastTurnHealing.ended ? lastTurnHealing.outcome : undefined;
+  let report = summary?.report;
+  let next: readonly NextAction[] | undefined = card?.intervention?.nextActions;
+  if (!lastTurnHealing.ended || outcome === 'incomplete' || outcome === 'blocked') {
+    const state = await core.healing.store.load(sid).catch(() => undefined);
+    const open = state?.intervention && !state.intervention.resolvedAt && state.updatedAt >= since ? state.intervention : undefined;
+    if (state && open && isTerminalPhase(state.phase)) {
+      outcome = outcome ?? state.phase;
+      report = report ?? escalationReport(state, open);
+      next = next?.length ? next : open.nextActions;
+    }
+  }
+  const lines = outcomeBlock({ outcome, report: r.quiet ? report?.split('\n')[0] : report, nextActions: next }, STYLE);
+  r.block(lines);
 }
 
 /** Create an isolated worktree for the CLI session (seeded with the checkout's uncommitted work) and route tools into it. */
@@ -1940,6 +2094,29 @@ async function main(): Promise<void> {
     reportError(args.error, 'usage', 'See: localpilot --help');
     process.exit(2);
   }
+  // `recovery list|show|clear` only read the stores; `recovery resume <id>` becomes a one-shot resume turn in that session.
+  if (args.cmd === 'recovery') {
+    setWorkspaceRoot(args.cwd);
+    const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
+    const sessions = await openCliStore(args.cwd, args.dataDir, log);
+    const { store } = cliHealing(args, { log });
+    const r = await cmdRecovery(args.prompt.split(/\s+/).filter(Boolean), { store, sessions: sessions.list(), budget: (st) => attemptBudget(getConfig().healing, st), style: STYLE, json: !!args.json }).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return { code: 1 } as Awaited<ReturnType<typeof cmdRecovery>>;
+    });
+    sessions.dispose();
+    await store.flush();
+    if (!r.resume) {
+      process.exit(r.code);
+    }
+    args.cmd = undefined;
+    args.resume = r.resume;
+    args.recoveryResume = true;
+    args.prompt = r.guidance ? `${RESUME_PROMPT}\n\n${r.guidance}` : RESUME_PROMPT;
+    if (args.json) {
+      ndjson = new NdjsonWriter();
+    }
+  }
   if (!args.cmd && !args.prompt && process.stdin.isTTY && (args.yolo || args.systemReplace || args.timeoutMs)) {
     const oneShot = [args.yolo && '--yolo', args.systemReplace && '--system-replace', args.timeoutMs && '--timeout'].filter(Boolean);
     reportError(`${oneShot.join(', ')} ${oneShot.length > 1 ? 'are' : 'is'} for one-shot runs: localpilot <flags> "task" (or pipe the task in)`, 'usage');
@@ -2165,6 +2342,10 @@ async function main(): Promise<void> {
       out.write(dim('No saved session in this folder yet — starting a new one.\n'));
     }
   }
+  if (args.recoveryResume && !resumed) {
+    reportError(`session ${String(args.resume)} could not be read`, 'usage', 'See: localpilot recovery list');
+    process.exit(2);
+  }
   if (resumed) {
     // -m and a mode flag apply to the resumed chat; otherwise it keeps its own model (when it is still reachable).
     if (args.model) {
@@ -2188,6 +2369,41 @@ async function main(): Promise<void> {
     void store.prune(getConfig().sessionRetention, [session.id]).catch((e) => core.log.warn(`session prune: ${String(e)}`));
   } else if (!quiet) {
     out.write(`${resumeBanner(session, STYLE)}\n\n`);
+  }
+  // Self-healing: states whose process died are marked interrupted; the resumed chat's is shown in detail (and a
+  // `recovery resume` runs the resume turn), other interrupted ones in this folder get a one-line notice.
+  const healingNote = (lines: string[]): void => {
+    if (!lines.length) {
+      return;
+    }
+    if (ndjson) {
+      ndjson.event({ type: 'status', sessionId: session.id, payload: lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '') });
+    } else {
+      out.write(`${lines.join('\n')}\n\n`);
+    }
+  };
+  const unfinished = await core.healing.service.scanUnfinished().catch((e) => {
+    core.log.warn(`recovery scan: ${String(e)}`);
+    return [];
+  });
+  void core.healing.store.prune(30).catch((e) => core.log.warn(`recovery prune: ${String(e)}`));
+  const resumeTurn = !!args.recoveryResume;
+  if (resumed) {
+    const state = await core.healing.store.load(session.id).catch(() => undefined);
+    if (state && (resumableRecovery(state) || args.recoveryResume)) {
+      const lines = stateDetail(state, attemptBudget(getConfig().healing, state), STYLE, { inRepl: !args.prompt });
+      const hint = `localpilot recovery resume ${session.id}`;
+      healingNote(args.prompt && !args.recoveryResume ? [...lines, dim(`  Your prompt runs as a new task${lines.some((l) => l.includes(hint)) ? '' : `; to continue the recovery: ${hint}`}`)] : lines);
+    }
+  }
+  const folderIds = new Set(store.list().map((x) => x.id));
+  const elsewhere = unfinished.filter((u) => u.sid !== session.id && folderIds.has(u.sid));
+  if (elsewhere.length) {
+    healingNote([dim(`⟲ ${elsewhere.length} interrupted self-healing recover${elsewhere.length === 1 ? 'y' : 'ies'} in this folder (${elsewhere.map((u) => u.sid).slice(0, 3).join(', ')}${elsewhere.length > 3 ? ', …' : ''}) — localpilot recovery list`)]);
+  }
+  // A closed terminal or SIGTERM is a shutdown, not a user stop: the run's recovery is saved as interrupted (resumable).
+  for (const [sig, code] of [['SIGHUP', 129], ['SIGTERM', 143]] as const) {
+    process.once(sig, () => void stopForShutdown(core, code));
   }
   /** Where the agent works: the isolated copy of the start folder, or the start folder itself. */
   const runRoot = (): string => (session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : args.cwd);
@@ -2273,7 +2489,7 @@ async function main(): Promise<void> {
     let answer = '';
     let thrown: string | undefined;
     try {
-      answer = await runTurn(core, session, prepared.text, [...args.files, ...refs.files], renderer, undefined, ctl, { ...prepared.opts, images, toolFilter: args.yolo ? YOLO_TOOLS : undefined, roleOverride: systemReplace });
+      answer = await runTurn(core, session, prepared.text, [...args.files, ...refs.files], renderer, undefined, ctl, { ...prepared.opts, ...(args.recoveryResume ? { display: `localpilot recovery resume ${session.id}` } : {}), images, toolFilter: args.yolo ? YOLO_TOOLS : undefined, roleOverride: systemReplace, resume: resumeTurn });
     } catch (e) {
       if (!ctl.signal.aborted) {
         thrown = e instanceof Error ? e.message : String(e);
@@ -2287,8 +2503,10 @@ async function main(): Promise<void> {
         }
       }
     }
-    const outcome: RunOutcome = { aborted: ctl.signal.aborted, timedOut: timedOut(), error: lastTurnError?.message ?? thrown, errorKind: lastTurnError?.kind, completed: lastTurnCompleted };
-    ndjson?.result({ finishReason: finishReasonFor(outcome), text: answer, ...runUsage(before, session.usage), durationMs: Date.now() - started, model: session.model || modelInfo.id, sessionId: session.id });
+    // The quality gate's verdict from turn_end; the final model failure throws without one, which is `failed`.
+    const healed = lastTurnHealing.ended ? lastTurnHealing.outcome : thrown && getConfig().healing.enabled ? 'failed' : undefined;
+    const outcome: RunOutcome = { aborted: ctl.signal.aborted, timedOut: timedOut(), error: lastTurnError?.message ?? thrown, errorKind: lastTurnError?.kind, completed: lastTurnCompleted, outcome: healed, requireVerified: args.requireVerified };
+    ndjson?.result({ finishReason: finishReasonFor(outcome), text: answer, ...runUsage(before, session.usage), durationMs: Date.now() - started, model: session.model || modelInfo.id, sessionId: session.id, ...(healed ? { outcome: healed } : {}), ...(lastTurnHealing.contract ? { contract: lastTurnHealing.contract } : {}) });
     return { answer, code: exitCodeFor(outcome) };
   };
 
@@ -2316,7 +2534,7 @@ async function main(): Promise<void> {
     const limit = deadline(ctl);
     const wt = args.isolate ? await isolate(core, session, args.cwd, renderer, ctl.signal).catch((e) => fatal(core, e)) : undefined;
     if (ctl.signal.aborted) {
-      process.exit(limit.fired() ? 124 : 130);
+      process.exit(shutdownCode ?? (limit.fired() ? 124 : 130));
     }
     if (args.isolate && !wt) {
       reportError(notGit, 'isolate');
@@ -2353,7 +2571,7 @@ async function main(): Promise<void> {
     await core.runner.hooks?.sessionEnd(session.id, 'other', args.cwd, { signal: ctl.signal });
     await core.telemetry.flush();
     core.telemetryRemote?.dispose();
-    process.exit(code);
+    process.exit(shutdownCode ?? code);
   }
 
   // Interactive REPL --------------------------------------------------------
@@ -2388,7 +2606,7 @@ async function main(): Promise<void> {
     } finally {
       await shutdown(core);
     }
-    process.exit(ctl.signal.aborted && !code ? 130 : code);
+    process.exit(shutdownCode ?? (ctl.signal.aborted && !code ? 130 : code));
   }
 
   process.stdout.write(`${BRAND} ${dim(`v${VERSION}`)}  ${dim('·')}  ${cyan(modelInfo.id)}  ${dim('·')}  ${amber(args.mode)}  ${dim('·')}  ${dim(cwdLabel)}\n${dim('Type a task, /help for commands, Tab to complete, Shift+Tab for the next mode, Ctrl+C to stop a run, Ctrl+Z to pause it, /exit to quit.')}\n\n`);
@@ -2400,7 +2618,7 @@ async function main(): Promise<void> {
   const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
   /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
   let shiftTab = false;
-  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/recovery', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
   const completer = createCompleter({
     commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
     root: () => runRoot(),
@@ -2507,10 +2725,11 @@ async function main(): Promise<void> {
     rl!.prompt(true);
   });
   rl.on('close', async () => {
-    // Ctrl+D mid-run: stop the agent (and its run_command process groups) before exiting.
+    // Ctrl+D mid-run: stop the agent (and its run_command process groups) before exiting. Leaving the CLI is a
+    // shutdown, so an active recovery is kept as interrupted and `localpilot -c` can resume it.
     const wasRunning = !!current;
     if (current) {
-      current.stop();
+      current.stop('shutdown');
       await Promise.race([currentRun?.catch(() => undefined), new Promise((r) => setTimeout(r, 5000))]);
     }
     core.mcp?.dispose();
@@ -2527,6 +2746,26 @@ async function main(): Promise<void> {
         process.exit(wasRunning ? 130 : 0);
       });
   });
+
+  /** `/recovery resume [guidance]`: a resume turn — the checks re-run before the model is asked; edits are never replayed. */
+  const resumeRecovery = async (guidance?: string): Promise<void> => {
+    rl!.setPrompt('');
+    current = new RunControl(session.id);
+    try {
+      currentRun = runTurn(core, session, guidance ? `${RESUME_PROMPT}\n\n${guidance}` : RESUME_PROMPT, pendingFiles, renderer, rl, current, { display: `/recovery resume${guidance ? ` ${guidance}` : ''}`, resume: true });
+      await currentRun;
+      pendingFiles = [];
+      changesSummary(core, session);
+    } catch (e) {
+      renderer.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      leftovers(current);
+      current = undefined;
+      currentRun = undefined;
+      process.stdout.write('\n');
+      rl!.setPrompt(promptText());
+    }
+  };
 
   const slash = async (line: string): Promise<boolean> => {
     const [cmd, ...rest] = line.slice(1).split(/\s+/);
@@ -2621,6 +2860,8 @@ async function main(): Promise<void> {
       case 'doctor': await cmdDoctor(core); return true;
       case 'history': case 'resume': case 'fork':
         return sessionSlash(cmd, arg, { store, current: () => session, switchTo, ask: (q) => ask(q), style: STYLE });
+      case 'recovery':
+        return recoverySlash(cmd, arg, { service: core.healing.service, store: core.healing.store, sessionId: () => session.id, root: runRoot, budget: (st) => attemptBudget(getConfig().healing, st), resume: resumeRecovery, style: STYLE });
       case 'compact': case 'smol': case 'skills': case 'agents': case 'mcp': case 'memory': case 'context': case 'yes': case 'auto': case 'settings': case 'plugins':
         return infoSlash(cmd, arg, { session: () => session, store, providers: core.providers, skills: core.skills, memory: core.memory, workspace: core.workspace, plugins: core.plugins, mcp: core.mcp, style: STYLE, md, status: (t) => (t ? renderer.status(t) : renderer.clearStatus()), onAutoApprove: () => rl!.setPrompt(promptText()) });
       case 'skill': case 'agent': {

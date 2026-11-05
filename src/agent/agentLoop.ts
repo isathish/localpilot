@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
-import { ContextManager, effectiveContextWindow, FitResult, tokenCalibration } from '../context/contextManager';
+import { ContextManager, effectiveContextWindow, FitResult, MIN_CONTEXT_WINDOW, tokenCalibration } from '../context/contextManager';
 import { toolResultCache } from '../context/toolResultCache';
 import { WorkspaceContext } from '../context/workspaceContext';
 import { ProviderRegistry, ModelLoad } from '../providers/registry';
@@ -12,7 +12,7 @@ import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
 import { deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
 import { isReadOnlyOrSafe } from './commandGuard';
-import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
+import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, HealingRawOutcome, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolCallDecision, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
 import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
@@ -45,6 +45,14 @@ import { toolDisabled, toolInFilter } from './toolAliases';
 import { listRepos } from './repos';
 import { markRepoGraphStale } from '../context/repoGraph';
 import { archiveCompaction, TranscriptArchive } from '../sessions/transcriptArchive';
+import type { HealingDelegate, HealingEngine, HealingExec, HealingService, ModelFailureResult } from './healing/engine';
+import { effectivePolicies } from './healing/policy';
+import { repairToolCallText } from './healing/jsonRepair';
+import { diff as treeDiff, snapshot as treeSnapshot } from './healing/treeSnapshot';
+import type { RerouteRequirement } from './healing/retryController';
+import type { FixPromptMessage } from './healing/rca';
+import type { ApprovalRecord, CompletionContract, EscalationReason, ObserveResult, TaskOutcome } from './healing/types';
+import { ChildWrites, type HealingSyntheticContext } from './childEvents';
 
 /**
  * `mandatory`: the organization's policy requires this prompt; no auto-approval, session memory or "always" answer applies.
@@ -68,6 +76,38 @@ interface ToolPolicy {
   askMandatory: DecisionHandler;
   signal: AbortSignal;
 }
+
+/** Options of one `executeToolCalls` step; the self-healing engine's synthetic calls run with `origin: 'healing'`. */
+interface ExecOptions {
+  /** Tags the step's tool_start/tool_end payloads (the chat groups them under the recovery card). */
+  origin?: 'healing';
+  /** Identical-call counts for this step; synthetic calls bring their own so the turn's limit never refuses a check. */
+  callCounts?: Map<string, number>;
+  /** The step does not count towards the consecutive-mistake limit (synthetic calls, re-executed MCP calls). */
+  skipMistakes?: boolean;
+  /** Tools to resolve the calls against instead of the turn's filtered list. */
+  tools?: Tool[];
+  /** Wraps a model-originated run_command that is about to execute (tree snapshot before/after). */
+  aroundCommand?: () => Promise<() => Promise<void>>;
+}
+
+/** What gateApproval needs from the turn's healing engine. */
+type ApprovalRecorder = Pick<HealingEngine, 'inRecovery' | 'recordApproval'>;
+
+/** Who settled an approval (`decided`'s `by`), keyed by the returned decision, for the step's structured decisions. */
+const DECIDED_BY = new WeakMap<ApprovalDecision, string>();
+
+/** Maps an approval refusal onto the structured decision of the call it blocked. */
+function refusalOf(d: ApprovalDecision): ToolCallDecision {
+  if (d.byUser) {
+    return { deniedByUser: true };
+  }
+  const by = DECIDED_BY.get(d);
+  return { blockedBy: by === 'stopped' || by === 'policy' || by === 'setting' ? by : 'unattended' };
+}
+
+/** The run's stats plus the self-healing outcome of its turn. */
+type HealedStats = RunStats & { outcome?: TaskOutcome };
 
 export interface AgentRunOptions {
   session: Session;
@@ -121,6 +161,12 @@ export interface AgentRunOptions {
   permissionAllow?: string[];
   /** Every model request of this run and of its subagents, for the parent to add to its own totals (subagents). */
   onUsage?: (u: ProviderUsage | undefined, model: string, provider: string) => void;
+  /** A fixer worker the self-healing engine started: the child runs its own engine in worker mode (scoped checks, one attempt). */
+  healingRole?: 'fixer';
+  /** Resume an interrupted recovery: rerun the checks before the first model call instead of redoing the task's edits. */
+  resume?: boolean;
+  /** The task-queue entry this run executes: kept in the recovery state, so interventions find their queue task. */
+  taskId?: string;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -133,7 +179,7 @@ const MAX_TOOLCALL_REPAIRS = 2;
 export type TurnErrorKind = 'connection' | 'auth' | 'ratelimit' | 'stall' | 'context' | 'server' | 'other';
 
 export function errorKind(k: ModelFailure): TurnErrorKind {
-  return k === 'network' || k === 'unroutable' ? 'connection' : k === 'auth' || k === 'quota' ? 'auth' : k === 'overflow' ? 'context' : k === 'ratelimit' || k === 'stall' || k === 'server' ? k : 'other';
+  return k === 'network' || k === 'unroutable' ? 'connection' : k === 'auth' || k === 'quota' ? 'auth' : k === 'overflow' ? 'context' : k === 'ratelimit' || k === 'stall' || k === 'server' ? k : k === 'overload' ? 'server' : 'other';
 }
 
 /** Local models may need to load weights and prefill a long prompt before the first token. */
@@ -206,6 +252,8 @@ export class AgentRunner {
   checkpoints?: CheckpointService;
   /** Keeps what compaction replaces (`<id>.archive.jsonl`); absent = compacted messages are gone. */
   archive?: TranscriptArchive;
+  /** Self-healing engine service (detect, retry, fix, verify); absent = the loop behaves exactly as without it. */
+  healing?: HealingService;
 
   async run(o: AgentRunOptions): Promise<string> {
     // The user is waiting on this run: background model work from earlier runs gives way.
@@ -221,9 +269,11 @@ export class AgentRunner {
     let error: string | undefined;
     let reply: string | undefined;
     const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.mode ?? o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
+    /** The turn's healing engine, disposed when the run ends (stop reason `shutdown` -> interrupted, a user stop -> cancelled). */
+    const life: { heal?: HealingEngine } = {};
     try {
       const tracing = this.telemetry?.tracing;
-      const text = await (tracing ? tracing.with(span, () => this.runTurn(o, stats)) : this.runTurn(o, stats));
+      const text = await (tracing ? tracing.with(span, () => this.runTurn(o, stats, life)) : this.runTurn(o, stats, life));
       outcome = o.signal.aborted ? 'stopped' : 'done';
       const last = o.session.messages[o.session.messages.length - 1];
       error = last?.role === 'assistant' ? last.meta?.error : undefined;
@@ -234,6 +284,10 @@ export class AgentRunner {
       error = e instanceof Error ? e.message : String(e);
       throw e;
     } finally {
+      if (life.heal) {
+        const reason: unknown = o.signal.aborted ? o.signal.reason : undefined;
+        await life.heal.dispose(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : o.signal.aborted ? 'cancelled' : undefined).catch((e) => this.log.warn(`Self-healing: could not close the recovery state: ${e instanceof Error ? e.message : String(e)}`));
+      }
       this.unassign(o.session.id);
       if (topLevel && !o.scratch && (outcome === 'stopped' || error)) {
         this.endHook(o, outcome === 'stopped' ? 'TaskCancel' : 'TaskError', error);
@@ -257,7 +311,9 @@ export class AgentRunner {
       });
       endRunSpan(span, { model: stats.model || o.session.model, outcome, error, steps: stats.steps, toolCalls: stats.toolCalls, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens, output: reply });
       if (topLevel) {
-        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? (stats.mistakeLimited ? 'mistake_limit' : 'completed') : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.mode ?? o.session.mode });
+        const healed = (stats as HealedStats).outcome;
+        const done = stats.mistakeLimited ? 'mistake_limit' : healed === 'incomplete' || healed === 'blocked' || healed === 'completed_unverified' ? healed : healed === 'cancelled' ? 'aborted' : healed === 'failed' ? 'failed' : 'completed';
+        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? done : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.mode ?? o.session.mode });
       }
     }
   }
@@ -292,7 +348,7 @@ export class AgentRunner {
     return true;
   }
 
-  private async runTurn(o: AgentRunOptions, stats: RunStats): Promise<string> {
+  private async runTurn(o: AgentRunOptions, stats: HealedStats, life: { heal?: HealingEngine } = {}): Promise<string> {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
     const session = o.session;
@@ -305,8 +361,8 @@ export class AgentRunner {
     const requested = o.modelRef ?? session.model;
     const ownChoice = !!session.model && (!o.modelRef || o.modelRef === session.model);
     let route: Awaited<ReturnType<ProviderRegistry['route']>>;
-    try {
-      route = await this.providers.route({
+    const routeOnce = () =>
+      this.providers.route({
         role: o.role ?? (turnMode === 'plan' ? 'reasoning' : 'agent'),
         modelRef: requested,
         fresh: true,
@@ -315,9 +371,19 @@ export class AgentRunner {
         load: this.loadFor(session.id),
         signal: o.signal,
       });
+    // Self-healing: "no server reachable" is retried with backoff and a health probe before the turn gives up.
+    const healRouting = this.healing && !o.scratch && cfg.healing.enabled && (depth === 0 || o.healingRole === 'fixer') ? this.healing : undefined;
+    try {
+      route = healRouting
+        ? await healRouting.routeRetry(effectivePolicies(cfg.healing).model_unavailable, routeOnce, requested ?? cfg.providers.find((p) => p.enabled !== false)?.id, o.signal, session.id)
+        : await routeOnce();
     } catch (e) {
       if (o.signal.aborted) {
         throw e;
+      }
+      if (healRouting && depth === 0) {
+        const failure = classifyModelError(e);
+        await healRouting.escalateRun(session.id, failure === 'auth' || failure === 'quota' ? 'credentials' : 'model_unavailable', e).catch((x) => this.log.warn(`Self-healing: could not record the routing failure: ${String(x)}`));
       }
       // No model to answer (server down, model missing): keep the prompt and the error in the chat so Retry has something to resend.
       const friendly = e instanceof Error ? e.message : String(e);
@@ -333,14 +399,15 @@ export class AgentRunner {
       (err as Error & { reported?: boolean }).reported = true;
       throw err;
     }
-    const { provider } = route;
+    // Reassigned only by a self-healing reroute after an overload (same tool protocol, capabilities and locality).
+    let { provider } = route;
     // The stricter limits are for a side model with a fallback; the parent's own model gets the normal patience.
     const onSide = !o.sideModelOf || route.model.id !== o.sideModelOf;
     const maxModelRetries = onSide ? o.maxModelRetries ?? MAX_MODEL_RETRIES : MAX_MODEL_RETRIES;
     // One number for the budget and for the request: the window the model is actually given (the setting, capped by
     // the model; 0 = the model's full native window). Budgeting against the native window while sending a smaller
     // num_ctx would let the server truncate silently before compaction ever triggered.
-    const model: ModelInfo = { ...route.model, contextWindow: effectiveContextWindow(route.model, cfg.contextWindow) };
+    let model: ModelInfo = { ...route.model, contextWindow: effectiveContextWindow(route.model, cfg.contextWindow) };
     stats.model = model.id;
     this.assign(model.id, session.id);
     const profile = model.runtime ? await getSystemProfile().catch(() => undefined) : undefined;
@@ -363,7 +430,7 @@ export class AgentRunner {
     }
 
     const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined, scale: () => tokenCalibration.scale(model.id), sessionId: session.id, strategy: cfg.compactionStrategy });
-    const pool = new ParallelPool(cfg.parallel.maxConcurrency);
+    let pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
     const toolsEnabled = turnMode !== 'ask' || true; // ask mode still gets read-only tools
     // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
@@ -678,6 +745,19 @@ export class AgentRunner {
       const ask = () => o.requestApproval(title, detail, kind, { mandatory });
       return o.willPrompt?.(kind, mandatory) === false ? ask() : withEditPreview(opts?.preview, ask);
     };
+    /** The turn's self-healing engine (created below, once the tool context exists); undefined = healing is off for this run. */
+    let heal: HealingEngine | undefined;
+    // Children without their own engine route their writes to the root session's engine (its patch scopes and fingerprints).
+    const writeHeal = (): HealingEngine | undefined => heal ?? (depth > 0 ? this.healing?.forRoot(ChangeTracker.rootSession(session.id)) : undefined);
+    const rootHeal = (): HealingEngine | undefined => (depth > 0 ? this.healing?.forRoot(ChangeTracker.rootSession(session.id)) : undefined);
+    // Subagents and fixer workers of a root recovery write the fixes: their dangerous commands always ask too, and
+    // their approvals land in the root's audit trail when they have no engine of their own.
+    const approvalHeal: ApprovalRecorder | undefined = this.healing
+      ? {
+          inRecovery: () => !!heal?.inRecovery() || !!rootHeal()?.inRecovery(),
+          recordApproval: (r) => (heal ?? rootHeal())?.recordApproval(r),
+        }
+      : undefined;
     const toolCtx: ToolContext = {
       sessionId: session.id,
       skills: [...activeSkills],
@@ -693,7 +773,11 @@ export class AgentRunner {
       progress: (t) => status(t),
       // Edits inside an isolated worktree need no undo snapshots: discarding the worktree is the undo, and the
       // tracker stays about files in the real workspace (those applied from the worktree).
-      trackChange: (fsPath) => (isolated ? Promise.resolve() : (this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve())),
+      trackChange: (fsPath) => {
+        const track = () => (isolated ? Promise.resolve() : (this.tracker?.beforeChange(fsPath, session.id) ?? Promise.resolve()));
+        const h = writeHeal();
+        return h ? h.beforeWrite(fsPath, heal ? undefined : session.id).catch((e) => this.log.warn(`Self-healing: could not snapshot ${fsPath}: ${String(e)}`)).then(track) : track();
+      },
       todos: {
         get: () => session.todos ?? [],
         set: (items) => {
@@ -702,7 +786,7 @@ export class AgentRunner {
         },
       },
       // The approval setting is read at each request, so a change in the composer's auto-approve bar applies mid-run.
-      approve: (title, detail, kind, opts) => this.gateApproval(kind, getConfig().approvals[kind], (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { ...opts, title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal }),
+      approve: (title, detail, kind, opts) => this.gateApproval(kind, getConfig().approvals[kind], (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { ...opts, title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, heal: approvalHeal }),
       requestApproval: async (title, detail, kind, opts) => (await toolCtx.approve!(title, detail, kind, opts)).ok,
       askUser: depth === 0 ? o.askUser : undefined,
       recordUsage: (u, m, p) => {
@@ -711,22 +795,119 @@ export class AgentRunner {
         o.onUsage?.(u, m ?? '', p ?? '');
       },
     };
-    const policy: ToolPolicy = {
+    const makePolicy = (origin?: 'healing', signal: AbortSignal = o.signal): ToolPolicy => ({
       settings: this.projectSettings?.() ?? emptySettings(),
       extraAllow: o.permissionAllow ?? [],
       hooks: this.hooks,
       root: hookRoot,
       sessionId: session.id,
       // An `ask` rule still goes through auto mode's reviewer; only an explicit `deny` skips the model.
-      ask: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: opts?.mandatory, dangerous: opts?.dangerous, confirm: opts?.confirm }),
-      askMandatory: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal: o.signal, mandatory: true }),
-      signal: o.signal,
+      ask: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal, mandatory: opts?.mandatory, dangerous: opts?.dangerous, confirm: opts?.confirm, heal: approvalHeal, ...(origin ? { origin, unattended: o.unattended } : {}) }),
+      askMandatory: (title, detail, kind, opts) => this.gateApproval(kind, 'ask', (mandatory) => prompt(title, detail, kind, mandatory, opts), emit, session.id, { title, detail, root: hookRoot, request: userText(o.userMessage.content), signal, mandatory: true, heal: approvalHeal, ...(origin ? { origin, unattended: o.unattended } : {}) }),
+      signal,
+    });
+    const policy = makePolicy();
+
+    // --- Self-healing (design §2.5, §5.3, §10) ----------------------------------------------
+    /**
+     * A check or resolver command of the engine: a synthetic run_command through managed policy, permission rules,
+     * hooks, the approval gate and the audit log, isolated from the model's turn (own identical-call counts, no
+     * mistake counting, no step counters, nothing appended to the transcript). The raw outcome, not the clamped tool
+     * text, goes back to the classifier.
+     */
+    const runSyntheticCommand: HealingExec = async (spec, signal, flags) => {
+      // From the full registry: an agent whose tool filter omits run_command is still verified.
+      const tool = this.tools.get('run_command');
+      if (!tool) {
+        return { exitCode: null, output: 'Tool "run_command" is not available.' };
+      }
+      const args = { command: spec.command, ...(spec.cwd ? { cwd: spec.cwd } : {}), timeout_seconds: flags.timeoutSeconds, ...(flags.requiresApproval ? { requires_approval: true } : {}) };
+      const call: ToolCall = { id: `heal_${newId()}`, name: 'run_command', arguments: JSON.stringify(args) };
+      const got: { raw?: HealingRawOutcome } = {};
+      const healingAllowance = flags.kind === 'check' ? flags.allowance : undefined;
+      const approve: NonNullable<ToolContext['approve']> = (title, detail, kind, opts) =>
+        this.gateApproval(kind, getConfig().approvals[kind], (mandatory) => prompt(healingAllowance ? 'Run verification checks (LocalPilot self-healing)' : title, detail, kind, mandatory, opts), emit, session.id, {
+          ...opts, ...(healingAllowance ? { healingAllowance } : {}), title, detail, root: hookRoot, request: userText(o.userMessage.content), signal, heal: approvalHeal, origin: 'healing', unattended: o.unattended,
+        });
+      const ctx: ToolContext = {
+        ...toolCtx,
+        signal,
+        approve,
+        requestApproval: async (title, detail, kind, opts) => (await approve(title, detail, kind, opts)).ok,
+        healingExec: {
+          origin: 'healing',
+          noAutoDetach: true,
+          timeoutSeconds: flags.timeoutSeconds,
+          checkSpecMatch: flags.checkSpecMatch,
+          rawOutcome: (r) => {
+            got.raw = r;
+          },
+        },
+      };
+      const step = await this.executeToolCalls([call], [tool], ctx, pool, ctxMgr, emit, session.id, nativeTools, new Map(), false, undefined, turnMode, makePolicy('healing', signal), false, { origin: 'healing', callCounts: new Map(), skipMistakes: true, tools: [tool] });
+      const text = step.perCall[0]?.content ?? '';
+      const skipped = step.decisions.get(call.id);
+      if (skipped) {
+        return { exitCode: null, output: text, skipped };
+      }
+      const r = got.raw;
+      if (!r) {
+        return { exitCode: null, output: text };
+      }
+      return { exitCode: r.exitCode ?? null, output: r.failed ? `${r.failed}\n${r.output}` : r.output, ...(r.timedOut ? { timedOut: true } : {}), ...(r.detached ? { detached: true } : {}) };
     };
+    /** Hidden fix prompt of an inline attempt: `meta.healing` only, never `meta.nudge` (the chat would retract the reply). */
+    const injectHidden = (msg: FixPromptMessage) => {
+      session.messages.push({ role: 'user', content: msg.content, meta: { timestamp: Date.now(), hidden: true, healing: { ...msg.meta.healing } } });
+    };
+    /** Delegated fix: a synthetic run_parallel_subagents call (fixer workers), kept in the transcript so it stays well-formed. */
+    const runSyntheticDelegation: HealingDelegate = async (tasks, signal) => {
+      const tool = this.tools.get('run_parallel_subagents');
+      if (!tool) {
+        return { ok: false, content: 'Tool "run_parallel_subagents" is not available.' };
+      }
+      const items = tasks.map((t) => ({ agent: t.agent, prompt: t.prompt, origin: t.origin }));
+      const call: ToolCall = { id: newId(), name: 'run_parallel_subagents', arguments: JSON.stringify({ tasks: items }) };
+      // Text-protocol models read calls from the reply text, so the synthetic call is written there too.
+      const asText = nativeTools ? '' : `\`\`\`tool_call\n${JSON.stringify({ name: call.name, arguments: { tasks: items } })}\n\`\`\``;
+      session.messages.push({ role: 'assistant', content: asText, toolCalls: [call], meta: { timestamp: Date.now(), synthetic: 'healing' } });
+      let writtenFiles: string[] = [];
+      const capture = (e: AgentEvent) => {
+        const p = e.payload as { id?: string; data?: { writtenFiles?: unknown } } | undefined;
+        if (e.type === 'tool_end' && p?.id === call.id && Array.isArray(p.data?.writtenFiles)) {
+          writtenFiles = p.data.writtenFiles.filter((f): f is string => typeof f === 'string');
+        }
+        emit(e);
+      };
+      const ctx: HealingSyntheticContext = { ...toolCtx, signal, healingSynthetic: true };
+      const step = await this.executeToolCalls([call], [tool], ctx, pool, ctxMgr, capture, session.id, nativeTools, new Map(), model.supportsVision, undefined, turnMode, makePolicy('healing', signal), false, { origin: 'healing', callCounts: new Map(), skipMistakes: true, tools: [tool] });
+      session.messages.push(...step.messages);
+      return { ok: !step.failed.has(call.id) && !step.decisions.has(call.id), content: step.perCall[0]?.content ?? '', writtenFiles };
+    };
+    try {
+      heal = this.healing?.begin({
+        session, depth, mode: turnMode, role: o.healingRole, root: toolCtx.workspaceRoot, signal: o.signal, control, emit, unattended: o.unattended,
+        exec: runSyntheticCommand, injectHidden, delegate: runSyntheticDelegation, contextWindow: model.contextWindow, resume: o.resume, scratch: o.scratch, taskId: o.taskId,
+        turnKey: o.userMessage.meta?.checkpoint ?? this.tracker?.currentTurnOf(session.id) ?? Math.max(0, session.messages.indexOf(turnMessage)),
+        maxConcurrency: cfg.parallel.maxConcurrency, mainRoot: o.isolatedFrom,
+      });
+    } catch (e) {
+      this.log.warn(`Self-healing: could not start for this run: ${e instanceof Error ? e.message : String(e)}`);
+      heal = undefined;
+    }
+    life.heal = heal;
+    /** Outcome of the turn as the engine settled it (gate, escalation); undefined without healing. */
+    let outcome: TaskOutcome | undefined;
+    let contract: CompletionContract | undefined;
+    /** The engine ended the turn (policy stop, deadline, resume verdict): its report is the final message. */
+    let healStop: string | undefined;
     /** Times a Stop / SubagentStop hook sent the agent back to work this turn. */
     let stopHookContinues = 0;
 
     let finalText = '';
     const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
+    /** maxIterations plus the recovery steps the engine granted (at most `healing.extraSteps` in total). */
+    let iterLimit = maxIter;
     // Read-only tool results are memoised for the turn (including in-flight calls, so identical
     // parallel requests run once); any mutating tool clears the cache.
     const toolCache = new Map<string, Promise<{ msg: ChatMessage; isError: boolean }>>();
@@ -742,14 +923,16 @@ export class AgentRunner {
     let nudges = 0;
     const MAX_NUDGES = 2;
     let malformedNudged = false;
+    /** Malformed-call nudges so far (the self-healing model_output policy bounds them). */
+    let malformedRepairs = 0;
     let toolCallRepairs = 0;
     /** Steps in a row whose tool calls all failed (or had to be repaired); the run stops at localpilot.maxConsecutiveMistakes. */
     const mistakes = new MistakeCounter(cfg.maxConsecutiveMistakes);
     /** Set when the run gives up (mistake limit, repeated output cut-offs): shown as an error and kept in the transcript. */
-    let stopError: { payload: string | Record<string, unknown>; note: string } | undefined;
+    let stopError: { payload: string | Record<string, unknown>; note: string; reason?: EscalationReason } | undefined;
     const stopForMistakes = () => {
       const note = mistakeLimitMessage(mistakes.count, mistakes.latest);
-      stopError = { payload: { kind: 'mistake_limit', count: mistakes.count, latest: mistakes.latest, message: note }, note };
+      stopError = { payload: { kind: 'mistake_limit', count: mistakes.count, latest: mistakes.latest, message: note }, note, reason: 'mistake_limit' };
       stats.mistakeLimited = true;
     };
     /** Cut-off tool calls retried in a row; reset by any reply that ends normally. */
@@ -787,10 +970,76 @@ export class AgentRunner {
       return true;
     };
 
-    for (let iter = 0; iter < maxIter; iter++) {
+    /** Attempts of a self-healing retry policy (the `retry` note's "n/max"). */
+    const healMax = (f: ModelFailureResult['failure']): number => effectivePolicies(cfg.healing)[f?.category ?? 'model_unavailable'].attempts;
+    /** Model failures go to the engine unless this run must fail fast (a side model with a fallback, `maxModelRetries: 0`). */
+    const healModel = (): HealingEngine | undefined => (maxModelRetries > 0 ? heal : undefined);
+    /** The window may shrink after an overload, but never below what the system prompt, tool schemas and a reply need. */
+    const contextFloor = (b: { systemTokens: number; toolsTokens: number }) => Math.max(MIN_CONTEXT_WINDOW, b.systemTokens + b.toolsTokens + cfg.maxOutputTokens + 1024);
+    const rerouteNeeds = (): RerouteRequirement => ({
+      protocol: nativeTools ? 'native' : 'text',
+      vision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && !m.meta?.toolImages),
+      locality: model.remote ? 'remote' : 'local',
+    });
+    /** Applies the engine's resource adjustment before a model retry (§4.2 overload row). */
+    const applyAdjustment = async (adjust: NonNullable<ModelFailureResult['adjust']>, floor: number): Promise<string | undefined> => {
+      switch (adjust.kind) {
+        case 'thinking_off':
+          think = think === undefined ? undefined : false;
+          return 'thinking off';
+        case 'halve_context': {
+          const win = Math.max(floor, Math.min(model.contextWindow, adjust.contextWindow));
+          if (win >= model.contextWindow) {
+            return undefined;
+          }
+          model = { ...model, contextWindow: win };
+          return `context ${win.toLocaleString()} tokens`;
+        }
+        case 'serial':
+          pool = new ParallelPool(1);
+          this.markServedSerially(model.id);
+          return 'one request at a time';
+        case 'reroute': {
+          const next = await this.rerouteTarget(model, adjust.require, !!cloudForLocal);
+          if (!next) {
+            return undefined;
+          }
+          // The run's model bookkeeping moves with it: the old model's slot is freed, the new one is held.
+          this.release(model.id, session.id);
+          provider = next.provider;
+          model = { ...next.model, contextWindow: effectiveContextWindow(next.model, cfg.contextWindow) };
+          stats.model = model.id;
+          this.assign(model.id, session.id);
+          const busyNext = this.inflight.get(model.id) ?? new Set<string>();
+          busyNext.add(session.id);
+          this.inflight.set(model.id, busyNext);
+          return `rerouted to ${model.name}`;
+        }
+      }
+    };
+
+    // Resume of an interrupted recovery: rerun the checks before the model is asked anything (no edits are replayed).
+    if (heal && o.resume && !o.signal.aborted) {
+      const r = await heal.resumeEntry({ todos: session.todos, request: userText(o.userMessage.content) });
+      if (r.action === 'continue') {
+        iterLimit = Math.min(iterLimit + r.grantSteps, maxIter + cfg.healing.extraSteps);
+      } else if (r.action === 'complete') {
+        outcome = r.outcome;
+        contract = r.contract;
+        healStop = r.report ?? (r.outcome === 'completed' ? 'Verified: nothing left to fix.' : `Recovery ended: ${r.outcome.replace(/_/g, ' ')}.`);
+        completed = true;
+      }
+    }
+
+    for (let iter = 0; iter < iterLimit && healStop === undefined; iter++) {
       toolResultCache.tick(session.id);
       await hold();
       if (o.signal.aborted || control.aborted) {
+        break;
+      }
+      // The recovery deadline counts only while a recovery attempt is active (no recovery, no deadline).
+      if (heal?.deadlineHit()) {
+        healStop = await heal.escalate('deadline');
         break;
       }
       injectSteering();
@@ -873,11 +1122,11 @@ export class AgentRunner {
         let firstAt: number | undefined;
         let usage: ProviderUsage | undefined;
         // Called exactly once per request, so it is also where the request is booked into the session's usage.
-        const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string) => {
+        const modelEvent = (outcome: 'ok' | 'error' | 'retry' | 'aborted', reason?: string, endedAt = Date.now()) => {
           // Priced from the bundled model facts unless the provider reported a cost; subagents pass theirs upwards.
           const priced = withCost(usage, model);
           const traced = recordModelSpan(this.telemetry?.tracing, { sid: session.id, model: model.modelId, provider: model.providerId, startMs: requestedAt, outcome, reason, finishReason: finish, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, maxTokens: cfg.maxOutputTokens, temperature: cfg.temperature, input: () => session.messages, output: calls.length ? `${text}\n${calls.map((c) => `[tool call] ${c.name} ${c.arguments}`).join('\n')}` : text });
-          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: turnMode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, cacheReadTokens: usage?.cacheReadTokens, cacheWriteTokens: usage?.cacheWriteTokens, costUsd: priced?.costUsd, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason, ...traced });
+          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: turnMode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, cacheReadTokens: usage?.cacheReadTokens, cacheWriteTokens: usage?.cacheWriteTokens, costUsd: priced?.costUsd, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: endedAt - requestedAt, outcome, reason, ...traced });
           session.usage = addUsage(session.usage, priced, model.modelId, model.providerId);
           o.onUsage?.(priced, model.modelId, model.providerId);
         };
@@ -963,10 +1212,18 @@ export class AgentRunner {
           }
           const kind = classifyModelError(e);
           const msg = e instanceof Error ? e.message : String(e);
-          if (kind === 'toolcall' && toolCallRepairs < MAX_TOOLCALL_REPAIRS) {
+          const failedAt = Date.now();
+          /** The engine's verdict on this failure (healing on); it already waited its backoff when it says retry. */
+          let healed: ModelFailureResult | undefined;
+          // A tool call the server could not parse: repaired by resending, MAX_TOOLCALL_REPAIRS or the model_output policy.
+          if (kind === 'toolcall' && heal) {
+            healed = await heal.onModelFailure(kind, e, toolCallRepairs + 1, { streamed: false, modelName: model.name, target: model.id });
+          }
+          const repairMax = healed ? healMax(healed.failure) : MAX_TOOLCALL_REPAIRS;
+          if (kind === 'toolcall' && (healed ? healed.decision.action === 'fix' || healed.decision.action === 'retry' : toolCallRepairs < MAX_TOOLCALL_REPAIRS)) {
             toolCallRepairs++;
-            modelEvent('retry', kind);
-            this.log.warn(`model sent a tool call the server could not parse; asking it to resend (${toolCallRepairs}/${MAX_TOOLCALL_REPAIRS}): ${msg}`);
+            modelEvent('retry', kind, failedAt);
+            this.log.warn(`model sent a tool call the server could not parse; asking it to resend (${toolCallRepairs}/${repairMax}): ${msg}`);
             if (mistakes.recordRepair(msg.replace(/^HTTP \d+ from \S+:\s*/, '').slice(0, 120))) {
               stopForMistakes();
               aborted = true;
@@ -982,8 +1239,16 @@ export class AgentRunner {
             continue;
           }
           // Only thinking streamed before a stall (no answer text, no tool call): nothing was produced that a retry could duplicate.
-          const retryable = isTransient(kind) && (first || (kind === 'stall' && !text && !calls.length)) && attempt < maxModelRetries;
-          modelEvent(retryable ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind);
+          const replayable = first || (kind === 'stall' && !text && !calls.length);
+          const healer = healModel();
+          if (healer && !healed && !(kind === 'overflow' && !compactedForOverflow)) {
+            healed = await healer.onModelFailure(kind, e, attempt + 1, {
+              streamed: !replayable, modelName: model.name, target: model.id, thinking: think !== undefined && think !== false, contextWindow: model.contextWindow,
+              contextFloor: contextFloor(budget), serial: this.serialWarned.has(model.id), reroute: rerouteNeeds(),
+            });
+          }
+          const retryable = healed && healer ? healed.decision.action === 'retry' && replayable : isTransient(kind) && replayable && attempt < maxModelRetries;
+          modelEvent(retryable ? 'retry' : kind === 'overflow' && !compactedForOverflow ? 'retry' : 'error', kind, failedAt);
           if (kind === 'overflow' && !compactedForOverflow) {
             // The server knows better than our estimate: shrink the history and send again.
             compactedForOverflow = true;
@@ -1017,6 +1282,21 @@ export class AgentRunner {
             emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
             continue;
           }
+          if (retryable && healed) {
+            attempt++;
+            thinking = '';
+            first = true;
+            if (o.signal.aborted) {
+              aborted = true;
+              break;
+            }
+            const max = healMax(healed.failure);
+            const adjusted = healed.adjust ? await applyAdjustment(healed.adjust, contextFloor(budget)) : undefined;
+            this.log.warn(`model call failed (${kind}), self-healing retry ${attempt}/${max}${adjusted ? ` (${adjusted})` : ''}: ${msg}`);
+            status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? 'The server is rate limiting' : kind === 'overload' ? 'The model ran out of memory' : 'Connection to the model failed'} — retrying (${attempt}/${max})${adjusted ? ` with ${adjusted}` : ''}…`);
+            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max, reason: kind, message: msg, ...(adjusted ? { adjust: adjusted } : {}) } });
+            continue;
+          }
           if (retryable) {
             attempt++;
             // A model that went silent inside a tool call after thinking samples afresh; its partial reasoning goes.
@@ -1039,13 +1319,31 @@ export class AgentRunner {
           emit({ sessionId: session.id, type: 'error', payload: { message: friendly, kind: errorKind(kind), provider: provider.type } });
           // meta.error lets the transcript show the failure as an error box (with Retry) after the live turn is gone.
           session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
+          // No turn_end follows: the outcome (failed / blocked) and the intervention are persisted before the throw.
+          await heal?.escalate(kind === 'auth' || kind === 'quota' ? 'credentials' : 'model_unavailable', { detail: friendly }).catch((x) => this.log.warn(`Self-healing: could not record the model failure: ${String(x)}`));
           const err = e instanceof Error ? e : new Error(msg);
           (err as Error & { reported?: boolean }).reported = true;
           throw err;
         }
         o.signal.removeEventListener('abort', onAbort);
         // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
-        if (!text.trim() && !calls.length && attempt < maxModelRetries && !o.signal.aborted) {
+        const emptyHealer = !text.trim() && !calls.length && !o.signal.aborted ? healModel() : undefined;
+        const emptyVerdict = emptyHealer ? await emptyHealer.onModelFailure('empty', new Error('empty completion'), attempt + 1, { streamed: false, modelName: model.name, target: model.id }) : undefined;
+        if (emptyVerdict && (emptyVerdict.decision.action === 'retry' || emptyVerdict.decision.action === 'fix') && !o.signal.aborted) {
+          // Self-healing: the model_output policy bounds the re-asks; it has no backoff (nothing failed on the server).
+          const overthought = !!thinking.trim() && think !== false && think !== undefined;
+          if (overthought) {
+            think = false;
+          }
+          modelEvent('retry', overthought ? 'overthought' : 'empty');
+          attempt++;
+          const max = healMax(emptyVerdict.failure);
+          this.log.warn(`${overthought ? 'reasoning-only' : 'empty'} completion from ${model.id}; self-healing retry ${attempt}/${max}${overthought ? ' without thinking' : ''}`);
+          status(overthought ? `The model used its whole reply for thinking — asking again without thinking (${attempt}/${max})…` : `The model returned nothing — asking again (${attempt}/${max})…`);
+          emit({ sessionId: session.id, type: 'retry', payload: { attempt, max, reason: 'empty', message: 'empty completion' } });
+          continue;
+        }
+        if (!emptyHealer && !text.trim() && !calls.length && attempt < maxModelRetries && !o.signal.aborted) {
           // Only reasoning came back: the model thought until the output limit. The same request would do the same,
           // so ask again without thinking — and keep it off for the rest of this turn.
           const overthought = !!thinking.trim() && think !== false && think !== undefined;
@@ -1104,6 +1402,27 @@ export class AgentRunner {
           malformedCalls = parsed.malformed;
         }
       }
+      // Self-healing: a call written as broken JSON is repaired deterministically before the model is asked to resend
+      // it. Never for a cut-off reply, a truncated mutating call, or arguments missing a required parameter (§5.6).
+      if (heal && toolDefs.length && !calls.length && (malformedCalls.length || /\{\s*["'“]?name["'”]?\s*:/.test(text))) {
+        const repaired = repairToolCallText(text, {
+          knownToolNames: new Set(toolDefs.map((t) => t.name)),
+          finish,
+          requiredParams: (name) => schemaOf(toolDefs, name).required ?? [],
+          paramTypes: (name) => Object.fromEntries(Object.entries(schemaOf(toolDefs, name).properties ?? {}).filter(([, v]) => typeof v?.type === 'string').map(([k, v]) => [k, String(v?.type)])),
+          isReadOnly: (name) => {
+            const t = this.tools.get(name);
+            return !!t && (!!t.readOnly || !t.approvalKind);
+          },
+        });
+        const parsed = repaired ? extractTextToolCalls(repaired.text, new Set(toolDefs.map((t) => t.name)), toolDefs) : undefined;
+        if (repaired && parsed?.calls.length) {
+          this.log.info(`self-healing: repaired a ${repaired.name} call written as invalid JSON (${repaired.fixes.join(', ') || 'normalised'})`);
+          calls.push(...parsed.calls);
+          text = parsed.remainder;
+          malformedCalls = [];
+        }
+      }
 
       assistant.content = text;
       assistant.thinking = thinking || undefined;
@@ -1125,7 +1444,7 @@ export class AgentRunner {
         lengthRetries++;
         if (cutOff === 'give_up') {
           const msg = lengthGiveUpMessage(cfg.maxOutputTokens, lengthRetries);
-          stopError = { payload: msg, note: msg };
+          stopError = { payload: msg, note: msg, reason: 'exhausted' };
           break;
         }
         this.log.warn(`reply cut off at the output limit inside a tool call; asking for a shorter one (${lengthRetries})`);
@@ -1149,8 +1468,18 @@ export class AgentRunner {
       if (!calls.length) {
         // The model tried to call a tool but the call did not parse: hand the error back once so it can
         // resend a corrected call instead of the turn ending as if the action had happened.
-        if (malformedCalls.length && !malformedNudged && !o.signal.aborted) {
+        // Self-healing: the model_output policy bounds the repair nudges (instead of once per run); exhausted -> escalated.
+        let malformedVerdict: ModelFailureResult | undefined;
+        if (heal && malformedCalls.length && !o.signal.aborted) {
+          malformedVerdict = await heal.onModelFailure('malformed', new Error(malformedCalls[0]), malformedRepairs + 1, { streamed: false, modelName: model.name, target: model.id });
+          if (malformedVerdict.decision.action === 'escalate') {
+            healStop = await heal.escalate('exhausted', { detail: `the model kept sending tool calls that could not be parsed (${malformedCalls[0].slice(0, 120)})` });
+            break;
+          }
+        }
+        if (malformedCalls.length && (malformedVerdict ? malformedVerdict.decision.action === 'fix' || malformedVerdict.decision.action === 'retry' : !malformedNudged) && !o.signal.aborted) {
           malformedNudged = true;
+          malformedRepairs++;
           if (mistakes.recordRepair(malformedCalls[0].slice(0, 120))) {
             stopForMistakes();
             break;
@@ -1221,6 +1550,21 @@ export class AgentRunner {
         if (!o.signal.aborted && !control.aborted && injectSteering()) {
           continue;
         }
+        // Self-healing completion gate: checks run only when files actually changed; a failure becomes a fix step
+        // (the engine injects the prompt and grants recovery steps) or ends the task with its outcome and contract.
+        if (heal && !o.signal.aborted && !control.aborted) {
+          const gate = await heal.beforeComplete({ todos: session.todos, finalText: text, request: userText(o.userMessage.content) });
+          if (gate.action === 'continue') {
+            iterLimit = Math.min(iterLimit + gate.grantSteps, maxIter + cfg.healing.extraSteps);
+            status('Self-healing: fixing what the checks found…');
+            continue;
+          }
+          outcome = gate.outcome;
+          contract = gate.contract;
+          if (gate.report) {
+            finalText = this.appendReport(session, assistant, gate.report);
+          }
+        }
         completed = true;
         break;
       }
@@ -1241,7 +1585,46 @@ export class AgentRunner {
       this.unassign(session.id);
       // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
       const coordinatorFirst = turnMode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
-      const { messages: results, perCall, hookStop, failed } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, turnMode, policy, coordinatorFirst);
+      // Self-healing: the preexisting-failure baseline runs once, before the first step that changes files or delegates
+      // (a shell command that is not read-only may write files too: codegen, `sed -i`, `echo > file`).
+      if (heal && calls.some((c) => DELEGATION_TOOLS.has(c.name) || ['write', 'delete'].includes(toolList.find((t) => t.definition.name === c.name)?.approvalKind ?? '') || (c.name === 'run_command' && !isReadOnlyOrSafe(String(parseArgs(c.arguments).command ?? '')).ok))) {
+        await heal.ensureBaseline();
+      }
+      // Files written this step (own edits, and what delegated workers report) for the engine's patch tracking.
+      const stepHeal = writeHeal();
+      const writes = stepHeal ? new ChildWrites(toolCtx.workspaceRoot) : undefined;
+      const healOpts: ExecOptions = heal ? { aroundCommand: () => this.commandSnapshot(heal!) } : {};
+      const stepEmit = writes
+        ? (e: AgentEvent) => {
+            writes.note(e);
+            emit(e);
+          }
+        : emit;
+      const step = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, stepEmit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, turnMode, policy, coordinatorFirst, healOpts);
+      let { messages: results, perCall } = step;
+      const { hookStop, failed } = step;
+      if (stepHeal && writes?.list().length) {
+        await stepHeal.afterWrite(writes.list(), heal ? undefined : session.id).catch((e) => this.log.warn(`Self-healing: could not record written files: ${String(e)}`));
+      }
+      let observed: ObserveResult = {};
+      if (heal) {
+        observed = await heal.observe(calls, perCall, failed, step.decisions);
+        // MCP calls proven not to have executed (server not connected) run again, through the same approvals.
+        if (observed.retryCalls?.length && !o.signal.aborted) {
+          const again = await this.executeToolCalls(observed.retryCalls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, new Map(), turnMode, policy, false, { skipMistakes: true });
+          const redone = new Map(again.perCall.map((m) => [m.toolCallId, m]));
+          for (const c of observed.retryCalls) {
+            failed.delete(c.id);
+            if (again.failed.has(c.id)) {
+              failed.add(c.id);
+            }
+          }
+          perCall = perCall.map((m) => redone.get(m.toolCallId) ?? m);
+          results = nativeTools
+            ? results.map((m) => (m.role === 'tool' && redone.has(m.toolCallId) ? redone.get(m.toolCallId)! : m))
+            : results.map((m, i) => (i === 0 ? { ...m, content: perCall.map((x) => x.content).join('\n\n') } : m));
+        }
+      }
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -1267,6 +1650,9 @@ export class AgentRunner {
         }
       }
       session.messages.push(...results);
+      if (observed.inject) {
+        session.messages.push({ role: 'user', content: observed.inject, meta: { timestamp: Date.now(), hidden: true, healing: {} } });
+      }
       this.trackWorkingSet(session, calls);
       session.updatedAt = Date.now();
       // A PreToolUse/PostToolUse hook answered `continue: false`: the run ends here.
@@ -1278,23 +1664,48 @@ export class AgentRunner {
         completed = true;
         break;
       }
+      // Data corruption or a git conflict: the engine escalated; nothing more is written this turn.
+      if (observed.stop) {
+        healStop = observed.stop.message;
+        break;
+      }
       if (!o.signal.aborted && !control.aborted && mistakes.recordStep(perCall.map((m) => ({ isError: failed.has(m.toolCallId ?? ''), content: m.content })))) {
         stopForMistakes();
         break;
       }
     }
 
-    if (stopError && !o.signal.aborted) {
+    /** The engine's report for a run that gave up (mistake limit, step limit, output cut-offs); payload kinds stay as they are. */
+    const escalated = async (reason: EscalationReason, detail: string): Promise<string | undefined> => {
+      if (!heal) {
+        return undefined;
+      }
+      try {
+        return await heal.escalate(reason, { detail });
+      } catch (e) {
+        this.log.warn(`Self-healing: escalation failed: ${e instanceof Error ? e.message : String(e)}`);
+        return undefined;
+      }
+    };
+    if (healStop !== undefined && !o.signal.aborted) {
+      // The engine ended the turn (data corruption, git conflict, deadline, exhausted repairs, a resume verdict): its report is the answer.
+      session.messages.push({ role: 'assistant', content: healStop, meta: { timestamp: Date.now(), healing: { report: healStop } } });
+      emit({ sessionId: session.id, type: 'assistant_delta', payload: healStop });
+      finalText = healStop;
+    } else if (stopError && !o.signal.aborted) {
       // The run gave up: an error row now, and the reason kept in the transcript (meta.error) for the next turn and replays.
       this.log.warn(`session ${session.id}: ${stopError.note}`);
+      const report = stopError.reason ? await escalated(stopError.reason, stopError.note) : undefined;
       emit({ sessionId: session.id, type: 'error', payload: stopError.payload });
-      session.messages.push({ role: 'assistant', content: `(error: ${stopError.note})`, meta: { timestamp: Date.now(), error: stopError.note } });
+      session.messages.push({ role: 'assistant', content: `(error: ${stopError.note})`, meta: { timestamp: Date.now(), error: stopError.note, ...(report ? { healing: { report } } : {}) } });
       finalText = stopError.note;
     } else if (!completed && !o.signal.aborted) {
       // Ran out of steps with tool results pending: say so instead of ending on a dangling tool call.
-      const note = `Stopped after ${maxIter} model steps in one turn without reaching a final answer. Reply "continue" to carry on from here, or narrow the task.`;
+      const granted = iterLimit - maxIter;
+      const note = `Stopped after ${maxIter} model steps${granted > 0 ? ` + ${granted} recovery steps` : ''} in one turn without reaching a final answer. Reply "continue" to carry on from here, or narrow the task.`;
       this.log.warn(`session ${session.id}: ${note}`);
-      session.messages.push({ role: 'assistant', content: note, meta: { timestamp: Date.now() } });
+      const report = await escalated('loop', note);
+      session.messages.push({ role: 'assistant', content: report ? `${note}\n\n${report}` : note, meta: { timestamp: Date.now(), ...(report ? { healing: { report } } : {}) } });
       emit({ sessionId: session.id, type: 'assistant_delta', payload: note });
       finalText = finalText || note;
     }
@@ -1306,7 +1717,20 @@ export class AgentRunner {
       // Which model answered and how fast, for the footer under the answer (kept with the transcript, never sent).
       last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
-    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, completed, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens } });
+    // Self-healing: the turn's outcome (completed, completed_unverified, incomplete, blocked, cancelled), its contract and recovery summary.
+    let healed: Record<string, unknown> | undefined;
+    if (heal) {
+      const settled = heal.result();
+      outcome = outcome ?? settled?.outcome ?? (o.signal.aborted || control.aborted ? 'cancelled' : completed ? 'completed' : 'incomplete');
+      contract = contract ?? settled?.contract;
+      stats.outcome = outcome;
+      const recovery = heal.summary();
+      if (recovery) {
+        session.recovery = recovery;
+      }
+      healed = { outcome, ...(contract ? { contract } : {}), ...(recovery ? { recovery } : {}) };
+    }
+    emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, completed, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens, ...healed } });
     // Keep what a substantial run taught about the project, after the answer is out (never delays the reply).
     const turnStart = session.messages.indexOf(turnMessage);
     const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
@@ -1355,6 +1779,55 @@ export class AgentRunner {
   /** Aborts background work (the memory save), e.g. when the user presses Ctrl+C while the CLI waits on it. */
   cancelBackground(): void {
     this.backgroundAborts.forEach((a) => a.abort());
+  }
+
+  /** Adds the self-healing footer to the turn's answer (`meta.healing.report`); a message of its own when the engine wrote after it. */
+  private appendReport(session: Session, answer: ChatMessage, report: string): string {
+    const withReport = answer.content.trim() ? `${answer.content.trimEnd()}\n\n${report}` : report;
+    if (session.messages[session.messages.length - 1] === answer) {
+      answer.content = withReport;
+      answer.meta = { ...answer.meta, healing: { ...answer.meta?.healing, report } };
+    } else {
+      session.messages.push({ role: 'assistant', content: report, meta: { timestamp: Date.now(), healing: { report } } });
+    }
+    return withReport;
+  }
+
+  /** Tree snapshot around a model-originated run_command: what it changed (sed -i, codegen, lockfiles) counts as changed files (§2.4). */
+  private async commandSnapshot(heal: HealingEngine): Promise<() => Promise<void>> {
+    const before = await treeSnapshot(heal.root);
+    return async () => {
+      try {
+        const files = treeDiff(before, await treeSnapshot(heal.root));
+        if (files.length) {
+          await heal.noteCommandChanges(files);
+        }
+      } catch (e) {
+        this.log.warn(`Self-healing: could not record the command's changes: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+  }
+
+  /**
+   * A smaller model to reroute an overloaded run to: the same tool protocol (the turn's tool definitions are fixed),
+   * vision when the turn has images, and the same locality (local never becomes cloud unless the route already allowed it).
+   */
+  private async rerouteTarget(current: ModelInfo, need: RerouteRequirement, cloudAllowed: boolean): Promise<Awaited<ReturnType<ProviderRegistry['resolve']>> | undefined> {
+    const models = await this.providers.listModels().catch(() => [] as ModelInfo[]);
+    const size = (m: ModelInfo) => m.sizeBytes ?? Number.POSITIVE_INFINITY;
+    const fits = models
+      .filter((m) => m.id !== current.id && !m.disabled && m.supportsTools === (need.protocol === 'native') && (!need.vision || m.supportsVision))
+      .filter((m) => (need.locality === 'remote' ? !!m.remote : !m.remote || cloudAllowed))
+      .filter((m) => current.sizeBytes === undefined || size(m) < current.sizeBytes)
+      .sort((a, b) => (current.sizeBytes === undefined ? size(a) - size(b) : size(b) - size(a)));
+    for (const m of fits) {
+      try {
+        return await this.providers.resolve(m.id);
+      } catch {
+        // gone since the listing: try the next one
+      }
+    }
+    return undefined;
   }
 
   private release(modelId: string, sessionId: string): void {
@@ -1519,12 +1992,22 @@ export class AgentRunner {
     callCounts?: Map<string, number>,
     mode = 'agent',
     policy?: ToolPolicy,
-    coordinatorFirst = false
-  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[]; hookStop?: string; failed: Set<string> }> {
+    coordinatorFirst = false,
+    opts: ExecOptions = {}
+  ): Promise<{ messages: ChatMessage[]; perCall: ChatMessage[]; hookStop?: string; failed: Set<string>; decisions: Map<string, ToolCallDecision> }> {
     let hookStop: string | undefined;
     /** Ids of the calls whose result is an error (for the consecutive-mistake limit). */
     const failed = new Set<string>();
-    const byName = new Map(available.map((t) => [t.definition.name, t]));
+    /** Why a call did not run (denied, blocked by policy / a rule / a hook / a setting, unattended, stopped); the text stays as it was. */
+    const decisions = new Map<string, ToolCallDecision>();
+    const origin = opts.origin;
+    if (origin) {
+      // Synthetic self-healing calls: tool rows carry their origin so the chat groups them under the recovery card.
+      const base = emit;
+      emit = (e) => base(e.type === 'tool_start' || e.type === 'tool_end' ? { ...e, payload: { ...(e.payload as object), origin } } : e);
+    }
+    callCounts = opts.callCounts ?? callCounts;
+    const byName = new Map((opts.tools ?? available).map((t) => [t.definition.name, t]));
     // Images produced by tools (browser_screenshot) ride along in a user message, which every provider accepts.
     const captured: { callId: string; caption: string; data: string }[] = [];
     const toolMsg = (call: ToolCall, content: string, isError = false): ChatMessage => ({ role: 'tool', content: nativeTools ? content : `<tool_result name="${call.name}">\n${content}\n</tool_result>`, toolCallId: call.id, toolName: call.name, meta: { timestamp: Date.now(), ...(isError ? { failed: true } : {}) } });
@@ -1534,6 +2017,7 @@ export class AgentRunner {
       if (ctx.signal.aborted) {
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
         failed.add(call.id);
+        decisions.set(call.id, { blockedBy: 'stopped' });
         return { msg: toolMsg(call, notRun, true), isError: true };
       }
       const started = Date.now();
@@ -1548,6 +2032,7 @@ export class AgentRunner {
       const org = tool && !result ? policyVerdict(managed, call.name, args, policy?.root ?? ctx.workspaceRoot) : { decision: 'none' as const };
       if (org.decision === 'deny') {
         result = { content: `Blocked by ${org.reason}. Nothing was done; do not retry this action — choose another approach or tell the user it is not permitted here.`, isError: true };
+        decisions.set(call.id, { blockedBy: 'policy' });
       }
       if (tool && policy && !result) {
         // Organisation policy first (it cannot be overridden), then settings.json: deny → ask → allow, then the default mode.
@@ -1557,10 +2042,12 @@ export class AgentRunner {
         let reason = verdict !== proj ? org.reason! : verdict.rule ? `permission rule \`${verdict.rule}\`` : '';
         if (decision === 'deny') {
           result = { content: `Blocked by ${reason} in settings.json. Do not retry this exact action; choose another approach or ask the user to change the rule.`, isError: true };
+          decisions.set(call.id, { blockedBy: 'rule' });
         } else if (policy.hooks?.has('PreToolUse')) {
           const r = await policy.hooks.run('PreToolUse', { session_id: policy.sessionId, tool_name: canonicalToolName(call.name), tool_input: claudeToolInput(call.name, args), localpilot_tool_name: call.name }, { cwd: policy.root, matchKeys: toolNames(call.name), signal: policy.signal, onRun: hookRow });
           if (r.block || r.permission === 'deny') {
             result = { content: `Blocked by a PreToolUse hook: ${r.reasons.join('\n') || 'no reason given'}. Nothing was done.`, isError: true };
+            decisions.set(call.id, { blockedBy: 'hook' });
           } else {
             if (r.updatedInput) {
               args = fromClaudeToolInput(call.name, r.updatedInput, args);
@@ -1573,6 +2060,7 @@ export class AgentRunner {
             if (r.stop) {
               result = { content: `Stopped by a hook: ${r.stop}`, isError: true };
               hookStop = r.stop;
+              decisions.set(call.id, { blockedBy: 'hook' });
             }
           }
         }
@@ -1592,6 +2080,7 @@ export class AgentRunner {
           }
           if (decision === 'deny') {
             result = { content: `Blocked by ${reason}. Nothing was done.`, isError: true };
+            decisions.set(call.id, { blockedBy: 'setting' });
           } else if (decision === 'allow' && !(tool.approvalKind && managed.approvals[tool.approvalKind])) {
             // A project allow skips the prompt, unless the organisation set an approval floor for this kind of action.
             callCtx = { ...callCtx, requestApproval: async () => !ctx.signal.aborted, approve: async () => ({ ok: !ctx.signal.aborted }) };
@@ -1610,6 +2099,9 @@ export class AgentRunner {
               } else if (!d.ok) {
                 result = { content: `${call.name} was not approved (${reason}). Nothing was done.`, isError: true };
               }
+              if (!d.ok) {
+                decisions.set(call.id, ctx.signal.aborted ? { blockedBy: 'stopped' } : refusalOf(d));
+              }
             }
           }
         }
@@ -1617,24 +2109,42 @@ export class AgentRunner {
           this.log.info(`tool ${call.name} blocked: ${result.content.split('\n')[0]}`);
         }
       }
+      /** The tool's own approval was refused (the call did not run). */
+      let refused: ToolCallDecision | undefined;
       if (!result) {
         const approve = callCtx.approve;
         if (approve && tool) {
           // Tools see a yes/no answer; a denial's reason goes to the model in place of the tool's fixed refusal text.
           callCtx = {
             ...callCtx,
-            requestApproval: async (t, d, k, opts) => {
-              const v = await approve(t, d, k, opts);
+            requestApproval: async (t, d, k, o) => {
+              const v = await approve(t, d, k, o);
               if (!v.ok && v.byUser) {
                 denial = v.feedback ?? denial ?? '';
+              }
+              if (!v.ok) {
+                refused = ctx.signal.aborted ? { blockedBy: 'stopped' } : refusalOf(v);
               }
               return v.ok;
             },
           };
         }
-        result = tool
-          ? await this.tools.execute(call.name, args, callCtx)
-          : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+        // A model-originated command is bracketed by tree snapshots (self-healing), so its file changes are known.
+        const settle = tool && opts.aroundCommand && !origin && call.name === 'run_command' ? await opts.aroundCommand().catch(() => undefined) : undefined;
+        const run = async (): Promise<ToolResult> =>
+          tool ? this.tools.execute(call.name, args, callCtx) : { content: `Tool "${call.name}" is not available in this mode. Available: ${[...byName.keys()].join(', ')}`, isError: true };
+        if (settle) {
+          try {
+            result = await run();
+          } finally {
+            await settle();
+          }
+        } else {
+          result = await run();
+        }
+      }
+      if (refused && result.isError) {
+        decisions.set(call.id, refused);
       }
       if (denial !== undefined && result.isError) {
         result = { ...result, content: deniedResultText(result.content, denial) };
@@ -1767,6 +2277,7 @@ export class AgentRunner {
         emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args: parseArgs(call.arguments) } });
         emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content: notRun } });
         results.set(call.id, toolMsg(call, notRun, true));
+        decisions.set(call.id, { blockedBy: 'stopped' });
         continue;
       }
       results.set(call.id, await runOne(call));
@@ -1780,9 +2291,9 @@ export class AgentRunner {
     if (!nativeTools) {
       // Text protocol: tool results go back as a single user message (with any captured images attached to it).
       const carrier: ChatMessage = { role: 'user', content: ordered.map((m) => m.content).join('\n\n'), images: imageMsg?.images, meta: { timestamp: Date.now(), toolImages: imageMsg?.meta?.toolImages, toolResults: calls.map((c) => c.id) } };
-      return { messages: [carrier], perCall: ordered, hookStop, failed };
+      return { messages: [carrier], perCall: ordered, hookStop, failed, decisions };
     }
-    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered, hookStop, failed };
+    return { messages: imageMsg ? [...ordered, imageMsg] : ordered, perCall: ordered, hookStop, failed, decisions };
   }
 
   private async gateApproval(
@@ -1791,11 +2302,13 @@ export class AgentRunner {
     ask: (mandatory: boolean) => Promise<boolean | ApprovalDecision>,
     emit: (e: AgentEvent) => void,
     sessionId: string,
-    info?: ApprovalOptions & { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal }
+    info?: ApprovalOptions & { title: string; detail: string; root?: string; request?: string; signal?: AbortSignal; heal?: ApprovalRecorder; origin?: 'healing'; unattended?: boolean }
   ): Promise<ApprovalDecision> {
     const managed = getManagedPolicy(this.log);
+    const heal = info?.heal;
     // `safe` resolves per command; a destructive command or the model's requires_approval makes this one prompt mandatory.
-    const level = effectiveApproval(mode, info, getConfig().dangerousAlwaysAsk);
+    // While a self-healing recovery is active a destructive command always asks, whatever dangerousAlwaysAsk says.
+    const level = effectiveApproval(mode, info, getConfig().dangerousAlwaysAsk || (!!info?.dangerous && !!heal?.inRecovery()));
     const strict = !!info?.mandatory || level.mustAsk;
     const base = flooredApproval(managed, kind, level.mode);
     const floored = autoApprovedMode(managed, kind, strict && base === 'always' ? 'ask' : base, { autoApprove: info?.autoApprove, mandatory: strict });
@@ -1803,8 +2316,19 @@ export class AgentRunner {
     const decided = (ok: boolean | ApprovalDecision, by: string): ApprovalDecision => {
       const d = toDecision(ok);
       const byUser = by === 'user' && ok !== false;
-      audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: d.ok, by: by === 'user' && !byUser ? 'non-interactive' : by }, info?.root, this.log);
-      return byUser ? { ...d, byUser } : d;
+      const who = by === 'user' && !byUser ? 'non-interactive' : by;
+      audit(managed, { event: 'approval', session: sessionId, kind, title: info?.title, approved: d.ok, by: who }, info?.root, this.log);
+      const out = byUser ? { ...d, byUser } : d;
+      DECIDED_BY.set(out, who);
+      // Every decision of the turn goes into the recovery state (audit() is a no-op without an org audit log).
+      if (heal) {
+        const record: ApprovalRecord = {
+          at: Date.now(), kind, command: /^\$ (.+)$/m.exec(info?.detail ?? '')?.[1] ?? info?.title, decision: !d.ok ? 'denied' : byUser ? 'approved' : 'auto', mandatory,
+          ...(d.ok ? {} : { blockedBy: byUser ? 'user' : who }), ...(info?.origin ? { origin: info.origin } : {}),
+        };
+        heal.recordApproval(record);
+      }
+      return out;
     };
     // A stopped run (or a single stopped subagent lane) must not approve anything or hang on a prompt nobody will answer now.
     const sig = info?.signal;
@@ -1820,6 +2344,12 @@ export class AgentRunner {
       }
       return decided(false, managed.approvals[kind] === 'never' ? 'policy' : 'setting');
     }
+    // Self-healing checks: one "yes" covers this turn's check commands while their definitions are unchanged. Never
+    // for a mandatory, destructive or confirm-required prompt, nor when the organization set the terminal approval.
+    const allowance = kind === 'terminal' && !mandatory && !strict && !info?.dangerous && !info?.confirm && !managed.approvals.terminal ? info?.healingAllowance : undefined;
+    if (allowance?.granted) {
+      return decided(true, 'allowance');
+    }
     const auto = getConfig().autoMode;
     if (auto.enabled && info && this.autoReviewer && !managed.disableBypassPermissions && !mandatory) {
       emit({ sessionId, type: 'status', payload: `Auto mode: reviewing "${info.title.slice(0, 60)}"…` });
@@ -1832,6 +2362,10 @@ export class AgentRunner {
         return decided(true, 'auto-mode');
       }
       emit({ sessionId, type: 'status', payload: `Auto mode needs you: ${v.reason || info.title.slice(0, 60)}` });
+    }
+    // Nobody is watching a queued run: an engine command that needs a prompt is skipped, not left waiting.
+    if (info?.origin === 'healing' && info.unattended) {
+      return decided(false, 'unattended');
     }
     emit({ sessionId, type: 'approval_request', payload: { kind } });
     if (info && this.hooks?.has('Notification')) {
@@ -1846,8 +2380,18 @@ export class AgentRunner {
       const off = onAbort(sig, () => r(false));
       void asked.finally(off).catch(() => undefined);
     });
-    return decided(await Promise.race([asked, stopped]), sig?.aborted ? 'stopped' : 'user');
+    const answer = decided(await Promise.race([asked, stopped]), sig?.aborted ? 'stopped' : 'user');
+    if (allowance && answer.ok && answer.byUser) {
+      allowance.grant();
+    }
+    return answer;
   }
+}
+
+/** The JSON-schema `properties` / `required` of a tool definition (empty when it has none). */
+function schemaOf(defs: readonly ToolDefinition[], name: string): { properties?: Record<string, { type?: unknown } | undefined>; required?: string[] } {
+  const params = defs.find((d) => d.name === name)?.parameters as { properties?: Record<string, { type?: unknown } | undefined>; required?: unknown } | undefined;
+  return { properties: params?.properties, required: Array.isArray(params?.required) ? params.required.filter((r): r is string => typeof r === 'string') : undefined };
 }
 
 /** True when the user is asking to execute the plan/checklist that is already in the session. */

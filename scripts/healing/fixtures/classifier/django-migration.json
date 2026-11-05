@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "python manage.py migrate", "root": "/work/proj",
+  "expected": [
+    { "category": "database", "code": "InconsistentMigrationHistory", "file": "manage.py", "line": 22 }
+  ] }

@@ -1312,3 +1312,87 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .toast { border-colo
 .confirm-row .msg { flex: 1 1 160px; min-width: 0; }
 .confirm-row .acts { display: inline-flex; gap: 6px; margin-left: auto; }
 .confirm-row .btn.danger { border-color: color-mix(in srgb, var(--error) 50%, var(--border-soft)); } .confirm-row .btn.danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
+
+/* Self-healing: one card per recovery (stepper, checks, patches, final state), the outcome badge, worker lines. */
+.rec { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); border: 1px solid var(--border-soft); border-left: 2px solid var(--brand); border-radius: var(--radius-sm); background: var(--tint); min-width: 0; }
+.rec.ok { border-left-color: var(--ok); } .rec.warn { border-left-color: var(--warn); } .rec.bad { border-left-color: var(--error); } .rec.off { border-left-color: var(--border); }
+.rec-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
+.rec-head .ico { display: inline-grid; place-items: center; flex: none; color: var(--brand-text); }
+.rec-head svg { width: 13px; height: 13px; }
+.rec.running .rec-head .ico svg { animation: spin 1.6s linear infinite; }
+.rec.ok .rec-head .ico { color: var(--ok-text); } .rec.warn .rec-head .ico { color: var(--warn-text); } .rec.bad .rec-head .ico { color: var(--error-text); } .rec.off .rec-head .ico { color: var(--muted); }
+.rec-head .t { min-width: 0; overflow-wrap: anywhere; }
+.rec-body > * + *, .rec-body { margin-top: 6px; }
+.rec-body:empty { display: none; }
+.rec-stepper { display: flex; flex-wrap: wrap; gap: 2px 0; margin: 6px 0 0; padding: 0; list-style: none; font-size: var(--fs-xs); color: var(--muted); }
+.rec-stepper li { display: inline-flex; align-items: center; white-space: nowrap; }
+.rec-stepper li + li::before { content: '→'; margin: 0 5px; opacity: .6; color: var(--muted); }
+.rec-stepper li.done { color: var(--fg); }
+.rec-stepper li.cur { color: var(--brand-text); font-weight: 600; }
+.rec-stepper li.bad { color: var(--error-text); font-weight: 600; }
+.rec-title { color: var(--fg); overflow-wrap: anywhere; }
+.rec-cause { color: var(--fg); overflow-wrap: anywhere; } .rec-cause > span { color: var(--muted); }
+.rec-checks { display: flex; flex-wrap: wrap; gap: 4px; }
+.rchip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 7px; border: 1px solid var(--border-soft); border-radius: 10px; font-size: var(--fs-xs); line-height: 18px; color: var(--fg); }
+.rchip .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rchip i { font-style: normal; color: var(--muted); }
+.rchip.passed b { color: var(--ok-text); } .rchip.failed b { color: var(--error-text); } .rchip.timeout b { color: var(--warn-text); }
+.rchip.failed { border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+.rchip.skipped { color: var(--muted); border-style: dashed; }
+.rec-patches { margin: 0; padding: 0; list-style: none; font-family: var(--mono); font-size: var(--fs-xs); }
+.rec-patches li { display: flex; gap: 6px; min-width: 0; }
+.rec-patches .f { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-patches .a { color: var(--ok-text); flex: none; } .rec-patches .r { color: var(--error-text); flex: none; }
+.rec-patches li.rb { color: var(--muted); } .rec-patches li.rb .f { text-decoration: line-through; } .rec-patches li.rb :is(.a, .r) { color: var(--muted); }
+.rec-patches + .rec-patches { margin-top: 4px; }
+.rec-patches li.rec-att { color: var(--muted); font-family: var(--vscode-font-family); }
+.rec-patches li.rec-rb { margin-top: 3px; font-family: var(--vscode-font-family); }
+.rec-rb .btn { height: 22px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rec-rb .btn svg { width: 12px; height: 12px; flex: none; }
+.rec-rb .btn:disabled { opacity: .5; cursor: default; }
+.rec-decision { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-xs); }
+.rec-decision svg { width: 11px; height: 11px; flex: none; animation: spin 1.2s linear infinite; }
+.rec-verify { margin-top: 6px; padding-top: 4px; border-top: 1px solid var(--border-soft); }
+.rec-verify:not(:has(.rec-rows > *)) { display: none; }
+.rec-vh { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 2px; }
+.rec-rows { display: flex; flex-direction: column; min-width: 0; }
+.rec-final:empty { display: none; }
+.rec-final { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 8px; font-weight: 600; }
+.rec-final > svg { width: 13px; height: 13px; flex: none; }
+.rec.ok .rec-final { color: var(--ok-text); } .rec.warn .rec-final { color: var(--warn-text); } .rec.bad .rec-final { color: var(--error-text); } .rec.off .rec-final { color: var(--muted); font-weight: 400; }
+.rec-final > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.rec-mod { flex-basis: 100%; margin: 2px 0 0; padding-left: 18px; font-weight: 400; color: var(--fg); font-size: var(--fs-xs); }
+.rec-mod i { font-style: normal; color: var(--muted); }
+.rec-acts { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; margin-top: 2px; font-weight: 400; color: var(--fg); }
+.rec-acts .btn { height: 24px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rec-acts .btn svg { width: 12px; height: 12px; }
+.rec-acts .btn:disabled { opacity: .5; cursor: default; }
+.rec-acts .btn.busy svg { animation: spin 1.2s linear infinite; }
+.rec-acts .btn.danger { border-color: color-mix(in srgb, var(--error) 55%, var(--border-soft)); color: var(--error-text); background: color-mix(in srgb, var(--error) 8%, transparent); }
+.rec-guide { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+.rec-guide input { flex: 1 1 160px; min-width: 0; height: 24px; padding: 0 8px; font: inherit; font-size: var(--fs-sm); color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--border-2); border-radius: var(--radius-sm); }
+.rec-guide input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
+.rec-report { margin-top: 4px; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rec-fails { margin: 0; padding-left: 18px; font-size: var(--fs-xs); } .rec-fails code { font-size: inherit; } .rec-fails .at { color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
+.rec-int { margin: 8px 0; }
+/* A worker's recovery: one muted line inside its lane. */
+.rec-mini { margin: 2px 0; font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.rec-mini .rm-line { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 8px; }
+.rec-mini .ico { display: inline-grid; place-items: center; flex: none; color: var(--brand-text); }
+.rec-mini .ico svg { width: 11px; height: 11px; }
+.rec-mini.running .ico svg { animation: spin 1.6s linear infinite; }
+.rec-mini.ok .ico { color: var(--ok-text); } .rec-mini.warn .ico, .rec-mini.warn .t { color: var(--warn-text); } .rec-mini.bad .ico, .rec-mini.bad .t { color: var(--error-text); }
+.rec-mini .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-mini .chips { display: inline-flex; gap: 3px; flex: none; margin-left: auto; }
+.rec-mini .chips b { font-weight: 600; } .rec-mini .chips .passed { color: var(--ok-text); } .rec-mini .chips .failed { color: var(--error-text); } .rec-mini .chips .timeout { color: var(--warn-text); }
+.rec-mini .rec-rows { margin-left: 16px; }
+/* Outcome badge at the start of the answer footer. */
+.afoot .info .outcome { flex: none; padding: 0 6px; border-radius: 9px; line-height: 16px; border: 1px solid currentColor; overflow: visible; }
+.afoot .outcome.ok { color: var(--ok-text); } .afoot .outcome.warn { color: var(--warn-text); } .afoot .outcome.bad { color: var(--error-text); }
+@container messages (max-width: 360px) {
+  .rec { padding: 6px 8px; }
+  .rec-stepper li + li::before { margin: 0 3px; }
+  .rec-acts .btn { flex: 1 1 auto; }
+  .rec-rb .btn { flex: 1 1 auto; }
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-color: var(--vscode-contrastBorder, var(--border)); border-right-color: var(--vscode-contrastBorder, var(--border)); border-bottom-color: var(--vscode-contrastBorder, var(--border)); }

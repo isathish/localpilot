@@ -349,13 +349,42 @@ function assertWritable(file: string): void {
   }
 }
 
+/** Defaults the CLI applies when no settings file sets a key and the caller passes none (package.json's defaults in VS Code). */
+export const SETTING_DEFAULTS: Readonly<Record<string, unknown>> = {
+  'healing.enabled': true,
+  'healing.autoDetect': true,
+  'healing.autoRetry': true,
+  'healing.autoFix': true,
+  'healing.regressionRequired': true,
+  'healing.maxRepairAttempts': 3,
+  'healing.maxTotalAttempts': 8,
+  'healing.extraSteps': 16,
+  'healing.taskDeadlineMinutes': 60,
+  'healing.checkTiming': 'onComplete',
+  'healing.scopeTests': true,
+  'healing.checkTimeoutSeconds': 300,
+  'healing.checkTimeBudgetSeconds': 900,
+  'healing.baseline': 'fast',
+  'healing.checks': [],
+  'healing.policies': {},
+  'healing.dependencyInstall': 'ask',
+  'healing.gitConflicts': 'escalate',
+  'healing.securityCheck': 'changed',
+  'healing.delegateFixes': true,
+  'healing.memory': 'workspace',
+};
+const settingDefault = (key: string): unknown => {
+  const v = SETTING_DEFAULTS[key];
+  return v && typeof v === 'object' ? structuredClone(v) : v;
+};
+
 /** Flattened `localpilot.*` settings. Precedence: VS Code user settings < workspace .vscode/settings.json < ~/.localpilot/config.json < CLI flags. */
 const settings: Record<string, unknown> = {};
 export const cliOverrides: Record<string, unknown> = {};
 function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, prefix = ''): void {
   for (const [k, v] of Object.entries(obj)) {
     const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos', 'headers'].includes(key.split('.').pop()!)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos', 'headers', 'policies'].includes(key.split('.').pop()!)) {
       flatten(v as Record<string, unknown>, into, key);
     } else {
       into[key] = v;
@@ -364,7 +393,7 @@ function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, pr
 }
 
 /** Settings a cloned repo's .vscode/settings.json must not set unless the workspace is trusted (they choose endpoints, commands and approvals). */
-const SENSITIVE_WORKSPACE_KEYS = ['providers', 'defaultModel', 'routing.', 'mcpServers', 'approvals.', 'autoMode.', 'hooks.', 'pluginPaths', 'skillsPaths', 'skills.repositories', 'webSearch.', 'storage.redis.', 'terminal.', 'inlineCompletion.model'];
+const SENSITIVE_WORKSPACE_KEYS = ['providers', 'defaultModel', 'routing.', 'mcpServers', 'approvals.', 'autoMode.', 'hooks.', 'pluginPaths', 'skillsPaths', 'skills.repositories', 'webSearch.', 'storage.redis.', 'terminal.', 'inlineCompletion.model', 'healing.enabled', 'healing.checks', 'healing.securityCheck'];
 let trustWorkspace = process.env.LOCALPILOT_TRUST_WORKSPACE === '1';
 export function setTrustWorkspace(v: boolean): void {
   trustWorkspace = v;
@@ -376,7 +405,7 @@ const isSensitive = (key: string) => SENSITIVE_WORKSPACE_KEYS.some((p) => {
   return key === base || key.startsWith(`${base}.`);
 });
 /** Read only from user settings or ~/.localpilot/config.json, never from a workspace, trusted or not (`scope: application` in VS Code). */
-const isUserOnly = (key: string) => key === 'hooks.enabled' || key === 'approvals' || key.startsWith('approvals.') || key === 'autoMode' || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
+const isUserOnly = (key: string) => key === 'hooks.enabled' || key === 'healing.dependencyInstall' || key === 'healing.securityCheck' || key === 'approvals' || key.startsWith('approvals.') || key === 'autoMode' || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
 
 export function loadSettings(workspaceRoot?: string): void {
   for (const k of Object.keys(settings)) {
@@ -630,14 +659,14 @@ export const workspace = {
     return {
       get<T>(key: string, def?: T): T {
         const v = settings[prefix + key];
-        return (v === undefined ? def : v) as T;
+        return (v !== undefined ? v : def !== undefined ? def : settingDefault(prefix + key)) as T;
       },
       inspect<T>(key: string) {
         // Only what is saved in ~/.localpilot/config.json counts as the user's value; -m and VS Code's settings are not ours to clear.
         const saved: Record<string, unknown> = {};
         flatten(readJsonc(CLI_SETTINGS_PATH), saved);
         const v = (saved[prefix + key] ?? saved[`localpilot.${prefix}${key}`]) as T | undefined;
-        return { key, globalValue: v, defaultValue: undefined as T | undefined, workspaceValue: undefined as T | undefined, workspaceFolderValue: undefined as T | undefined };
+        return { key, globalValue: v, defaultValue: settingDefault(prefix + key) as T | undefined, workspaceValue: undefined as T | undefined, workspaceFolderValue: undefined as T | undefined };
       },
       async update(key: string, value: unknown): Promise<void> {
         // CLI-side changes (e.g. default model) go to ~/.localpilot/config.json; VS Code's settings.json is never written.

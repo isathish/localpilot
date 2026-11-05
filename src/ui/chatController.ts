@@ -55,6 +55,8 @@ import { affectsUiPrefs, checkPathsExist, PathsExistMsg, uiPrefsMsg, UiPrefsMsg 
 import type { WhatsNew } from './whatsNew';
 import { toDecision } from '../agent/approvalLevel';
 import type { ApprovalDecision } from '../types';
+import type { AttemptRecord, HealingService, RecoveryState, ResumeInfo, TaskOutcome } from '../agent/healing';
+import { forgetRecovery, phaseBeforeInterrupt, recoveryStateOf } from './healingAccess';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -156,7 +158,27 @@ export type ToWebview =
   /** `action`: a button on the toast that posts `msg` back (e.g. Undo after Reject). */
   | { type: 'toast'; level: 'info' | 'warn' | 'error'; text: string; action?: { label: string; msg: FromWebview } }
   /** "Improve prompt" progress: the rewritten draft streams in (`delta`), then `done` or `error`. */
-  | { type: 'improvedPrompt'; sessionId: string; delta?: string; done?: boolean; text?: string; error?: string };
+  | { type: 'improvedPrompt'; sessionId: string; delta?: string; done?: boolean; text?: string; error?: string }
+  /** The chat's self-healing was interrupted (window closed mid-recovery): the Recovery interrupted card; `state: null` removes it. */
+  | { type: 'recoveryInterrupted'; sessionId: string; state: InterruptedState | null };
+
+/**
+ * What the Recovery interrupted card shows: the service's synchronous resume index entry, then (posted again once
+ * the persisted state is read) the active failures, the attempts, the intervention and the phase it stopped in.
+ */
+export type InterruptedState = ResumeInfo & {
+  sessionId: string;
+  recoveryId: string;
+  lastPhase?: string;
+  active?: RecoveryState['active'];
+  attempts?: Pick<AttemptRecord, 'n' | 'category' | 'rootCause' | 'result'>[];
+  intervention?: RecoveryState['intervention'];
+};
+
+export type RecoveryAction = 'resume' | 'retryWithGuidance' | 'approveInstall' | 'rollback' | 'openMergeEditor' | 'acceptRisk' | 'dismiss';
+
+/** The hidden steer turn that continues an interrupted recovery; the engine reruns the checks before the model is called. */
+export const RESUME_PROMPT = 'Continue the interrupted task. LocalPilot will first re-run the checks.';
 
 export type FromWebview =
   | { type: 'ready' }
@@ -275,7 +297,12 @@ export type FromWebview =
   | { type: 'pathsExist'; seq: number; paths: string[]; sessionId?: string }
   | { type: 'dismissWhatsNew' }
   | { type: 'openChangelog' }
-  | { type: 'copyText'; text: string };
+  | { type: 'copyText'; text: string }
+  /**
+   * A button on a recovery card. `text`: the guidance of `retryWithGuidance`; `attempt`: the attempt a `rollback` undoes
+   * (absent: every fix attempt); `file`: the conflicted file of `openMergeEditor`.
+   */
+  | { type: 'recoveryAction'; sessionId: string; recoveryId?: string; action: RecoveryAction; text?: string; attempt?: number; file?: string };
 
 export interface Sink {
   post(msg: ToWebview): void;
@@ -318,6 +345,18 @@ interface RunReplay {
 const REPLAY_RESULT_LIMIT = 16_000;
 /** Beyond this the buffer restarts from the messages persisted so far (only the tail of a very long run is replayed). */
 const REPLAY_BYTES_LIMIT = 6_000_000;
+
+/** How a message is sent. `resume`: the hidden steer turn that continues an interrupted recovery (AgentRunOptions.resume). */
+interface SendOptions {
+  modelRef?: string;
+  permissionAllow?: string[];
+  display?: string;
+  unattended?: boolean;
+  mode?: Session['mode'];
+  resume?: boolean;
+  /** The queue task this run executes (recorded in its recovery state). */
+  taskId?: string;
+}
 
 /** Shared brain behind the sidebar view, editor panels and the @localpilot chat participant. */
 export class ChatController implements vscode.Disposable {
@@ -373,6 +412,12 @@ export class ChatController implements vscode.Disposable {
   telemetry?: Pick<Telemetry, 'record'>;
   /** Marks this window's worktrees (`vscode:<store hash>`, set by the extension host) so only it prunes them. */
   worktreeOwner = 'vscode';
+  /** The self-healing engine's service (set by the extension host): recovery card actions and the interrupted-state index. */
+  healing?: HealingService;
+  /** Set once the window is closing: runs are stopped with reason `shutdown`, so their recovery state stays resumable. */
+  private shuttingDown = false;
+  /** Self-healing outcome of each chat's last top-level turn that reported one. */
+  private readonly outcomes = new Map<string, { outcome: TaskOutcome; interventionId?: string; report?: string }>();
   private _commands?: CommandManager;
   private commandsSub?: vscode.Disposable;
   private _mcp?: McpManager;
@@ -424,7 +469,13 @@ export class ChatController implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((e) => affectsUiPrefs(e) && this.broadcast(uiPrefsMsg(this.whatsNew?.pending))),
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       // Retention pruning and history clearing drop chats in the store: release their snapshots too.
-      store.onDidDelete((id) => tracker.forget(id)),
+      store.onDidDelete((id) => {
+        tracker.forget(id);
+        this.outcomes.delete(id);
+        if (this.healing) {
+          forgetRecovery(this.healing, id).catch((e) => this.log.warn(`Self-healing: could not forget the recovery state of ${id}: ${e instanceof Error ? e.message : String(e)}`));
+        }
+      }),
       providers.onDidChange(() => void this.pushModels()),
       providers.onDidRemoveModels((ids) => this.dropRemovedModels(ids)),
       // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
@@ -664,6 +715,12 @@ export class ChatController implements vscode.Disposable {
         const q = payload as { content?: unknown; data?: { content?: unknown; image?: { data?: unknown } } } | undefined;
         const len = (c: unknown) => (typeof c === 'string' ? c.length : 0);
         r.bytes += 200 + len(q?.content) + len(q?.data?.content) + len(q?.data?.image?.data);
+      } else if (e.type === 'recovery' && recoveryKey(e)) {
+        // The card is updated in place by id: only its latest state needs replaying.
+        const key = recoveryKey(e);
+        r.items = r.items.filter((m) => !(m.type === 'event' && m.event.type === 'recovery' && recoveryKey(m.event) === key));
+        r.items.push(msg);
+        r.bytes += 1000;
       } else {
         if (e.type === 'steer') {
           this.forgetSteers(sid!, ((e.payload as { ids?: string[] } | undefined)?.ids) ?? []);
@@ -806,6 +863,7 @@ export class ChatController implements vscode.Disposable {
     this.activeSessionId = s.id;
     this.broadcast(this.sessionMsg(s));
     this.pushChanges(s.id);
+    this.postInterrupted(s.id);
     this._onDidChangeActive.fire(s);
     // A prompt of the chat the user just left is now out of sight.
     this.mirrorPendingApprovals();
@@ -1549,6 +1607,8 @@ export class ChatController implements vscode.Disposable {
       }
       case 'stop':
         return this.stop(msg.sessionId);
+      case 'recoveryAction':
+        return this.recoveryAction(msg);
       case 'detachCommand':
         detachCommand(msg.id);
         return;
@@ -2325,6 +2385,7 @@ export class ChatController implements vscode.Disposable {
     if (s) {
       post(this.sessionMsg(s));
       this.pushChanges(s.id);
+      this.postInterrupted(s.id, post);
       this._onDidChangeActive.fire(s);
     }
     if (this.pendingDraft && Date.now() - this.pendingDraft.at < 15_000) {
@@ -2513,7 +2574,7 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean; mode?: Session['mode'] } = {}): Promise<string> {
+  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: SendOptions = {}): Promise<string> {
     if (!this.store.get(sessionId)) {
       throw new Error('Session not found');
     }
@@ -2533,6 +2594,9 @@ export class ChatController implements vscode.Disposable {
         await new Promise((r) => setTimeout(r, 100));
       }
       if (this.runs.has(sessionId) || this.starting.has(sessionId)) {
+        if (opts.resume) {
+          return ''; // a resume turn is never a visible steer: the chat is already continuing
+        }
         // Busy: the message becomes a steering instruction for the running agent instead of being refused.
         await this.steer(sessionId, text, attachments, images);
         return '';
@@ -2552,8 +2616,9 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean; mode?: Session['mode'] }): Promise<string> {
-    const mcpSlash = opts.display ? undefined : parseMcpSlash(text);
+  private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: SendOptions): Promise<string> {
+    // A resume turn is LocalPilot's own hidden steer, never a slash command or a prompt to correct.
+    const mcpSlash = opts.display || opts.resume ? undefined : parseMcpSlash(text);
     let mcpPromptImages = 0;
     if (mcpSlash) {
       // `/mcp:<server>:<prompt> args…`: the prompt's messages become this turn; the chat shows what was typed.
@@ -2577,7 +2642,7 @@ export class ChatController implements vscode.Disposable {
         return '';
       }
     }
-    const slash = opts.display ? undefined : this.handleSlash(session, text) ?? this.inlineCommand(text);
+    const slash = opts.display || opts.resume ? undefined : this.handleSlash(session, text) ?? this.inlineCommand(text);
     if (slash !== undefined) {
       const custom = typeof slash === 'object' && 'command' in slash;
       this.telemetry?.record({ type: 'slash', command: custom ? slash.command.name : (/^\/([\w.:@-]+)/.exec(text.trim())?.[1] ?? '?'), custom: custom || undefined });
@@ -2677,7 +2742,7 @@ export class ChatController implements vscode.Disposable {
       return endEarly();
     }
 
-    const corrected = opts.display ? { text, fixes: [] } : await this.correctNames(sessionId, text);
+    const corrected = opts.display || opts.resume ? { text, fixes: [] } : await this.correctNames(sessionId, text);
     text = corrected.text;
     let content = text;
     const attachedBlocks = await this.readAttachments(attachments, session);
@@ -2687,7 +2752,7 @@ export class ChatController implements vscode.Disposable {
     if (images?.length) {
       content = `${content}\n\n[${images.length} image${images.length === 1 ? '' : 's'} attached]`;
     }
-    const meta: ChatMessage['meta'] = { checkpoint, ...(opts.display ? { display: opts.display } : {}), ...(mcpPromptImages ? { mcpPromptImages } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
+    const meta: ChatMessage['meta'] = { checkpoint, ...(opts.resume ? { hidden: true } : {}), ...(opts.display ? { display: opts.display } : {}), ...(mcpPromptImages ? { mcpPromptImages } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
     const userMessage: ChatMessage = { role: 'user', content, images, meta };
     // `/deep-planning`: this turn runs in Plan mode, then the chat returns to the mode it was in.
     const modeBefore = planTurn && session.mode !== 'plan' ? session.mode : undefined;
@@ -2700,6 +2765,10 @@ export class ChatController implements vscode.Disposable {
 
     // A fatal error of this run (not a subagent's): `/deep-planning` then keeps any existing plan file as it is.
     let turnErrored = false;
+    this.outcomes.delete(sessionId);
+    if (opts.resume) {
+      this.broadcast({ type: 'recoveryInterrupted', sessionId, state: null });
+    }
     try {
       const result = await this.runner.run({
         session,
@@ -2752,6 +2821,12 @@ export class ChatController implements vscode.Disposable {
           if (e.type === 'error' && !(e.payload as { childId?: string } | undefined)?.childId) {
             turnErrored = true;
           }
+          if (e.type === 'turn_end' && !(e.payload as { childId?: string } | undefined)?.childId) {
+            const p = e.payload as { outcome?: TaskOutcome; interventionId?: string; recovery?: { interventionId?: string; report?: string } } | undefined;
+            if (p?.outcome) {
+              this.outcomes.set(sessionId, { outcome: p.outcome, interventionId: p.interventionId ?? p.recovery?.interventionId, report: p.recovery?.report });
+            }
+          }
           if (e.type === 'turn_end' && planTurn && !(e.payload as { childId?: string } | undefined)?.childId) {
             const p = e.payload as { text?: string; completed?: boolean };
             void this.writeImplementationPlan(sessionId, { text: String(p?.text ?? ''), completed: p?.completed, errored: turnErrored, aborted: control.aborted });
@@ -2762,6 +2837,8 @@ export class ChatController implements vscode.Disposable {
         // Unattended runs (task queue) have nobody to answer: ask_user falls back to the agent's recommendations.
         askUser: opts.unattended ? async () => null : (questions) => this.requestQuestions(sessionId, questions),
         unattended: opts.unattended,
+        resume: opts.resume || undefined,
+        taskId: opts.taskId,
       });
       return result;
     } catch (e) {
@@ -2806,7 +2883,9 @@ export class ChatController implements vscode.Disposable {
       }
       // A run the user stopped needs no notice; group runs get the review offer above instead.
       const silent = control.aborted || (!!session.group && session.group.size > 1);
-      this.notifier.finished(sessionId, session.title, silent, turnErrored ? 'error' : 'ok', this.tracker.forSession(sessionId).length);
+      const healed = this.outcomes.get(sessionId);
+      const attention = healed?.outcome === 'incomplete' || healed?.outcome === 'blocked';
+      this.notifier.finished(sessionId, session.title, silent, turnErrored ? 'error' : attention ? 'attention' : 'ok', this.tracker.forSession(sessionId).length, attention ? healed?.report : undefined);
     }
   }
 
@@ -2883,31 +2962,284 @@ export class ChatController implements vscode.Disposable {
   /**
    * Runs one task-queue entry as its own chat and resolves when the agent finishes. `isolated` puts it in a
    * worktree (under `worktrees.mode: parallel`) so tasks running side by side do not edit the same checkout.
+   * A task requeued with `resume` continues in its own chat with the resume turn when that chat still exists.
    */
-  async runQueuedTask(task: { prompt: string; mode: Session['mode']; model?: string }, started: (sessionId: string) => void, isolated: boolean): Promise<{ ok: boolean; error?: string; cancelled?: boolean }> {
-    const s = this.createSession(task.mode);
-    s.title = task.prompt.slice(0, 60);
-    s.isolated = isolated;
-    if (task.model) {
-      s.model = task.model;
+  async runQueuedTask(
+    task: { id?: string; prompt: string; mode: Session['mode']; model?: string; sessionId?: string; resume?: boolean },
+    started: (sessionId: string) => void,
+    isolated: boolean
+  ): Promise<{ ok: boolean; error?: string; cancelled?: boolean; outcome?: TaskOutcome; interventionId?: string; shutdown?: boolean }> {
+    const existing = task.resume && task.sessionId ? this.store.get(task.sessionId) : undefined;
+    let s: Session;
+    if (existing) {
+      s = existing;
+    } else {
+      s = this.createSession(task.mode);
+      s.title = task.prompt.slice(0, 60);
+      s.isolated = isolated;
+      if (task.model) {
+        s.model = task.model;
+      }
+      this.store.save(s);
     }
-    this.store.save(s);
     started(s.id);
     let error: string | undefined;
+    let ended = false;
+    let answer = '';
     const off = this.onAgentEvent((e) => {
-      if (e.sessionId !== s.id || e.type !== 'error' || (e.payload && typeof e.payload === 'object' && 'childId' in e.payload)) {
+      if (e.sessionId !== s.id || (e.payload && typeof e.payload === 'object' && 'childId' in e.payload)) {
         return;
       }
-      error = (e.payload && typeof e.payload === 'object' ? String((e.payload as { message?: string }).message ?? '') : String(e.payload ?? '')).slice(0, 300);
+      if (e.type === 'turn_end') {
+        ended = true;
+        answer = String((e.payload as { text?: unknown } | undefined)?.text ?? '');
+      } else if (e.type === 'error') {
+        error = (e.payload && typeof e.payload === 'object' ? String((e.payload as { message?: string }).message ?? '') : String(e.payload ?? '')).slice(0, 300);
+      }
     });
     try {
-      const text = await this.send(s.id, task.prompt, [], undefined, { modelRef: task.model, unattended: true });
-      if (this.stoppedByUser.delete(s.id)) {
-        return { ok: false, cancelled: true, error: 'Stopped by the user.' };
+      // Already running (the user clicked Resume as the queue requeued it): follow that run instead of steering into it.
+      const text = existing && this.busy(s.id)
+        ? (await this.settled(s.id), answer)
+        : existing
+        ? await this.send(s.id, RESUME_PROMPT, [], undefined, { modelRef: task.model, unattended: true, resume: true, taskId: task.id })
+        : await this.send(s.id, task.prompt, [], undefined, { modelRef: task.model, unattended: true, taskId: task.id });
+      if (this.shuttingDown) {
+        return { ok: false, shutdown: true };
       }
-      return text.trim() && !error ? { ok: true } : { ok: false, error: error ?? 'The agent stopped without an answer.' };
+      if (this.stoppedByUser.delete(s.id)) {
+        return { ok: false, cancelled: true, outcome: 'cancelled', error: 'Stopped by the user.' };
+      }
+      const reported = this.outcomes.get(s.id);
+      // No outcome on the turn_end: self-healing is off (the old "has an answer and no error" rule) or the final model
+      // failure threw before any turn_end was emitted (failed).
+      const outcome: TaskOutcome = reported?.outcome ?? (ended && text.trim() && !error ? 'completed' : 'failed');
+      const ok = outcome === 'completed' || outcome === 'completed_unverified';
+      return {
+        ok,
+        outcome,
+        interventionId: reported?.interventionId,
+        error: ok ? undefined : error ?? reported?.report?.slice(0, 300) ?? 'The agent stopped without an answer.',
+      };
     } finally {
       off.dispose();
+    }
+  }
+
+  private busy(sessionId: string): boolean {
+    return this.runs.has(sessionId) || this.starting.has(sessionId);
+  }
+
+  /** Resolves once the chat has no run in flight (`starting` ends without an event, so it is also polled). */
+  private settled(sessionId: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const check = () => {
+        if (!this.busy(sessionId)) {
+          sub.dispose();
+          clearInterval(timer);
+          resolve();
+        }
+      };
+      const sub = this.onDidChangeRuns(check);
+      const timer = setInterval(check, 250);
+      check();
+    });
+  }
+
+  /** Self-healing outcome of the chat's last turn (undefined when it reported none). */
+  lastOutcome(sessionId: string): TaskOutcome | undefined {
+    return this.outcomes.get(sessionId)?.outcome ?? this.store.peek(sessionId)?.recovery?.outcome;
+  }
+
+  /** Continues an interrupted recovery: the hidden steer turn, run with `resume` so the engine reruns the checks first. */
+  async resumeRecovery(sessionId: string): Promise<string> {
+    if (!this.store.get(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'warn', text: 'This chat no longer exists — its recovery cannot be resumed' });
+      return '';
+    }
+    if (this.busy(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'This chat is still running — stop it before resuming the recovery' });
+      return '';
+    }
+    return this.send(sessionId, RESUME_PROMPT, [], undefined, { resume: true });
+  }
+
+  /**
+   * Posts the Recovery interrupted card for the chat on screen again. The extension host calls it once
+   * `healing.scanUnfinished()` has resolved: the restored chat's webview is usually ready before the index is filled.
+   */
+  refreshInterrupted(): void {
+    if (this.activeSessionId) {
+      this.postInterrupted(this.activeSessionId);
+    }
+  }
+
+  /** The interrupted index entry of an idle chat (undefined while it runs or when it has none). */
+  private interruptedInfo(sessionId: string): ResumeInfo | undefined {
+    if (!this.healing || this.busy(sessionId)) {
+      return undefined;
+    }
+    try {
+      const info = this.healing.resumeInfo(sessionId);
+      return info?.phase === 'interrupted' ? info : undefined;
+    } catch (e) {
+      this.log.warn(`Self-healing: could not read the recovery state of ${sessionId}: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Shows the Recovery interrupted card for a chat whose recovery was cut off by a closed window (idle chats only):
+   * the index entry right away, then the persisted failures, attempts and root cause once they are read.
+   */
+  private postInterrupted(sessionId: string, post: (m: ToWebview) => void = (m) => this.broadcast(m)): void {
+    const info = this.interruptedInfo(sessionId);
+    const healing = this.healing;
+    if (!info || !healing) {
+      return;
+    }
+    post({ type: 'recoveryInterrupted', sessionId, state: { ...info, sessionId, recoveryId: sessionId } });
+    void (async () => {
+      let state: RecoveryState | undefined;
+      try {
+        state = await recoveryStateOf(healing, sessionId);
+      } catch (e) {
+        this.log.warn(`Self-healing: could not load the recovery state of ${sessionId}: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      // Resumed, dismissed or rolled back meanwhile: the card is gone and stays gone.
+      const now = this.interruptedInfo(sessionId);
+      if (!state || !now) {
+        return;
+      }
+      const lastPhase = phaseBeforeInterrupt(state);
+      post({
+        type: 'recoveryInterrupted',
+        sessionId,
+        state: {
+          ...now,
+          sessionId,
+          recoveryId: sessionId,
+          ...(lastPhase ? { lastPhase } : {}),
+          active: state.active,
+          attempts: state.attempts.map((a) => ({ n: a.n, category: a.category, ...(a.rootCause ? { rootCause: a.rootCause } : {}), ...(a.result ? { result: a.result } : {}) })),
+          ...(state.intervention ? { intervention: state.intervention } : {}),
+        },
+      });
+    })();
+  }
+
+  /** A button on a recovery card (live or interrupted). */
+  private async recoveryAction(msg: Extract<FromWebview, { type: 'recoveryAction' }>): Promise<void> {
+    const sid = msg.sessionId;
+    const healing = this.healing;
+    const fail = (what: string, e: unknown) => {
+      const text = `${what}: ${e instanceof Error ? e.message : String(e)}`;
+      this.log.warn(`Self-healing: ${text}`);
+      this.broadcast({ type: 'toast', level: 'error', text });
+    };
+    switch (msg.action) {
+      case 'resume':
+      case 'approveInstall':
+        // An install is approved through the normal (mandatory) approval prompt the resumed engine raises again.
+        await this.resumeRecovery(sid);
+        return;
+      case 'retryWithGuidance': {
+        const text = msg.text?.trim();
+        if (text) {
+          await this.send(sid, text);
+        }
+        return;
+      }
+      case 'openMergeEditor':
+        return this.openMergeEditor(sid, msg.file ?? msg.text);
+      default:
+        break;
+    }
+    if (!healing) {
+      this.broadcast({ type: 'toast', level: 'warn', text: 'Self-healing is not available in this window' });
+      return;
+    }
+    // Restoring files or closing the recovery under a live engine would pull the ground from under its fix or validation.
+    if ((msg.action === 'rollback' || msg.action === 'dismiss') && this.busy(sid)) {
+      this.broadcast({ type: 'toast', level: 'info', text: `This chat is still running — stop it before ${msg.action === 'rollback' ? 'rolling back' : 'dismissing the recovery'}` });
+      return;
+    }
+    switch (msg.action) {
+      case 'rollback': {
+        this.runStatus.set(sid, 'Rolling back fixes…');
+        this.broadcast({ type: 'event', event: { sessionId: sid, type: 'status', payload: 'Rolling back fixes…' } });
+        try {
+          const r = await healing.rollback(sid, msg.attempt, this.sessionRoot(sid));
+          const skipped = r.skipped.length ? ` · kept ${r.skipped.length} (${[...new Set(r.skipped.map((x) => x.reason.replace(/_/g, ' ')))].join(', ')})` : '';
+          this.broadcast({ type: 'toast', level: r.skipped.length ? 'warn' : 'info', text: r.restored.length || r.skipped.length ? `Rolled back ${r.restored.length} file${r.restored.length === 1 ? '' : 's'}${skipped}` : 'No fix attempts to roll back' });
+          this.broadcast({ type: 'recoveryInterrupted', sessionId: sid, state: null });
+        } catch (e) {
+          fail('Rollback failed', e);
+        } finally {
+          if (!this.runs.has(sid)) {
+            this.runStatus.delete(sid);
+          }
+          this._onDidChangeRuns.fire();
+          this.pushChanges(sid);
+        }
+        return;
+      }
+      case 'acceptRisk': {
+        const pick = await vscode.window.showWarningMessage(
+          'Accept the security risk and keep the finding in the code?',
+          { modal: true, detail: 'LocalPilot stops treating this security finding as a failure for this task. The decision is recorded in the recovery state and the audit log.' },
+          'Accept risk'
+        );
+        if (pick !== 'Accept risk') {
+          return;
+        }
+        try {
+          const risk = await healing.acceptRisk(sid, 'user');
+          this.broadcast({ type: 'toast', level: risk ? 'info' : 'warn', text: risk ? `Accepted the risk of ${risk.signatures.length} security finding${risk.signatures.length === 1 ? '' : 's'}` : 'No open security finding to accept' });
+        } catch (e) {
+          fail('Could not record the accepted risk', e);
+        }
+        return;
+      }
+      case 'dismiss':
+        try {
+          await healing.dismiss(sid);
+        } catch (e) {
+          fail('Could not dismiss the recovery', e);
+        }
+        this.broadcast({ type: 'recoveryInterrupted', sessionId: sid, state: null });
+        return;
+      default:
+        this.log.warn(`Self-healing: unknown recovery action ${String((msg as { action?: unknown }).action)}`);
+    }
+  }
+
+  /** Opens a conflicted file in VS Code's merge editor, or as a plain editor when the git extension cannot. */
+  private async openMergeEditor(sessionId: string, file: string | undefined): Promise<void> {
+    const root = this.sessionRoot(sessionId);
+    let rel = file?.trim();
+    if (!rel && root) {
+      try {
+        rel = (await runProcess('git', ['diff', '--name-only', '--diff-filter=U'], root, undefined, 10_000)).split(/\r?\n/).find(Boolean);
+      } catch {
+        /* not a git checkout: nothing to open */
+      }
+    }
+    if (!rel) {
+      this.broadcast({ type: 'toast', level: 'warn', text: 'No conflicted file to open' });
+      return;
+    }
+    const uri = vscode.Uri.file(path.isAbsolute(rel) || !root ? rel : path.join(root, rel));
+    try {
+      await vscode.commands.executeCommand('git.openMergeEditor', uri);
+    } catch (e) {
+      this.log.debug(`merge editor unavailable (${e instanceof Error ? e.message : String(e)}); opening ${uri.fsPath}`);
+      try {
+        await vscode.window.showTextDocument(uri, { preview: false });
+      } catch (e2) {
+        this.broadcast({ type: 'toast', level: 'error', text: `Could not open ${rel}: ${e2 instanceof Error ? e2.message : String(e2)}` });
+      }
     }
   }
 
@@ -3582,8 +3914,10 @@ export class ChatController implements vscode.Disposable {
   }
 
   dispose(): void {
+    // Not a user Stop: the engines persist `interrupted` (resumable on the next start) instead of `cancelled`.
+    this.shuttingDown = true;
     for (const [, c] of this.runs) {
-      c.stop();
+      c.stop('shutdown');
     }
     clearTimeout(this.deltaTimer);
     clearTimeout(this.openFilesTimer);
@@ -3610,6 +3944,16 @@ Rules:
 
 /** The model's rewrite without the wrappers small models add anyway ("Rewritten request:", quotes, a code fence). */
 /** What the user typed for a stored prompt: the command line they entered, or the content without the context blocks the UI prepended. */
+/** Identity of a recovery card: its id, prefixed by the subagent for a child's card (wrapped under `payload.data`). */
+function recoveryKey(e: AgentEvent): string | undefined {
+  const p = e.payload as { id?: unknown; childId?: unknown; data?: { id?: unknown } } | undefined;
+  if (!p || typeof p !== 'object') {
+    return undefined;
+  }
+  const id = typeof p.childId === 'string' ? p.data?.id : p.id;
+  return typeof id === 'string' ? `${typeof p.childId === 'string' ? p.childId : ''}:${id}` : undefined;
+}
+
 /** Checkpoint key of a chat's latest user message. */
 function lastTurnKey(s: Session): number | undefined {
   for (let i = s.messages.length - 1; i >= 0; i--) {

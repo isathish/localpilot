@@ -81,7 +81,11 @@ import { setTelemetryRecorder } from './telemetry/catalog';
 import { attachOtlp } from './telemetry/otlpSetup';
 import { resolveOtlpConfig } from './telemetry/otlp';
 import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
-import { TaskQueue } from './agent/taskQueue';
+import { TaskQueue, type QueueTaskStatus } from './agent/taskQueue';
+import type { InterventionRecord, RecoveryState, RollbackResult, TaskOutcome } from './agent/healing';
+import { createHealingHost, ensureChecksFile, registerRecoverySnapshots } from './healingHost';
+import { healingView } from './ui/healingChecksView';
+import { RecoveryCommands, queueTaskFor } from './ui/recoveryCommands';
 import { AutoReviewer } from './agent/autoReviewer';
 import { reposTool } from './tools/repos';
 import { securityScanTool } from './tools/security';
@@ -272,7 +276,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(mcpOAuth);
   controller.mcp = mcp;
   const modelManager = new ModelManager(providers, log);
+  // Self-healing: one service per window; the agent loop runs its engine, the chat shows its cards and actions.
+  const healing = createHealingHost({
+    storageDir: (context.storageUri ?? context.globalStorageUri).fsPath,
+    log,
+    telemetry,
+    providers,
+    tracker,
+    mcp,
+    liveSessions: () => controller.runningSessionIds,
+    root: () => workspace.root,
+  });
+  runner.healing = healing.service;
+  controller.healing = healing.service;
+  setTimeout(() => void healing.store.prune().then((n) => n && log.info(`removed ${n} expired recovery state(s)`)).catch(() => undefined), 10_000);
+  // Disposed in order: the task queue stops recording results before the controller stops the runs for shutdown, so
+  // interrupted tasks stay `running` on disk and resume next time; the store releases its locks after the runs saved.
+  let taskQueueRef: TaskQueue | undefined;
+  const disposeQueue = () => taskQueueRef?.dispose();
+  const previousShutdown = shutdown;
+  shutdown = async () => {
+    disposeQueue();
+    await previousShutdown?.();
+  };
+  context.subscriptions.push({ dispose: disposeQueue });
   context.subscriptions.push(providers, tools, skills, workspace, store, tracker, controller, mcp, modelManager);
+  context.subscriptions.push({ dispose: () => void healing.store.dispose().catch(() => undefined) }, registerRecoverySnapshots(healing.store));
 
   // --- Background services -------------------------------------------------------------------
   // Keeps the local model server and (when enabled) Redis running while VS Code is open; see ServiceSupervisor.
@@ -487,13 +516,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // Persistent task queue: tasks run as chats one after another (or `queue.concurrency` at a time).
   const taskQueue = new TaskQueue(
     path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'task-queue.json'),
-    (task, started) => controller.runQueuedTask(task, started, getConfig().queue.concurrency > 1),
+    (task, started) => controller.runQueuedTask({ id: task.id, prompt: task.prompt, mode: task.mode, model: task.model, sessionId: task.sessionId, resume: task.resume }, started, getConfig().queue.concurrency > 1),
     () => getConfig().queue.concurrency,
-    log
+    log,
+    { resumable: (sid) => healing.service.resumeInfo(sid)?.phase === 'interrupted' }
   );
-  context.subscriptions.push(taskQueue);
-  void controller.loaded.then(() => taskQueue.load());
-  const agentsTree = new AgentsTreeProvider(controller, taskQueue);
+  taskQueueRef = taskQueue;
+  // Interrupted recoveries are indexed before the queue loads, so its interrupted tasks continue in their own chat.
+  const queueLoaded = controller.loaded
+    .then(() => healing.service.scanUnfinished().catch((e) => log.warn(`Self-healing: could not scan for interrupted recoveries: ${e instanceof Error ? e.message : String(e)}`)))
+    .then(() => taskQueue.load());
+  const agentsTree = new AgentsTreeProvider(controller, taskQueue, { recovery: true });
   const agentsView = vscode.window.createTreeView(AGENTS_VIEW_ID, { treeDataProvider: agentsTree, showCollapseAll: true });
   context.subscriptions.push(agentsTree, agentsView);
   const updateAgentsBadge = () => {
@@ -524,6 +557,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(tuner);
   settingsPanel.tuner = tuner;
   settingsPanel.catalog = catalog;
+  const recovery = new RecoveryCommands({
+    controller,
+    queue: taskQueue,
+    healing: healing.service,
+    store: healing.store,
+    memory: healing.memory,
+    root: () => workspace.root,
+    log,
+    reveal: () => view.reveal(),
+    showDashboard: () => settingsPanel.show('settings', 'dashboard'),
+    showProviders: () => settingsPanel.show('settings', 'providers'),
+    pickModel: () => vscode.commands.executeCommand('localpilot.selectModel'),
+    startServer: async () => {
+      const job = await modelManager.startOllama();
+      providers.invalidate();
+      return job.status === 'done';
+    },
+  });
+  context.subscriptions.push(...recovery.register());
+  settingsPanel.recoveryDashboard = async (days) => {
+    const summary = await telemetry.summary(days).catch(() => undefined);
+    return healing.service.dashboard(days, summary, workspace.root);
+  };
+  settingsPanel.onRecoveryAction = (sid, action, interventionId) => recovery.action(sid, action, interventionId);
+  settingsPanel.onMemoryReuse = (id, allowed) => recovery.memoryReuse(id, allowed);
+  settingsPanel.openRecoveryDiff = (sid, attempt, file) => recovery.openDiff(sid, attempt, file);
+  settingsPanel.loadChecks = () => {
+    const i = vscode.workspace.getConfiguration('localpilot').inspect<unknown>('healing.checks');
+    return healingView(workspace.root, { user: i?.globalValue, workspace: i?.workspaceValue ?? i?.workspaceFolderValue }, vscode.workspace.isTrusted);
+  };
+  settingsPanel.openChecks = async () => {
+    const root = workspace.root;
+    if (!root) {
+      void vscode.window.showErrorMessage('Open a folder first: .localpilot/checks.json belongs to a workspace.');
+      return;
+    }
+    const { file, created } = await ensureChecksFile(root);
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+    if (!vscode.workspace.isTrusted) {
+      void vscode.window.showWarningMessage('This workspace is not trusted: .localpilot/checks.json is ignored until you trust it.');
+    } else if (created) {
+      log.info(`Created ${file}`);
+    }
+  };
+  // Once the index is filled: the restored chat's interrupted card, and one notification for the recoveries left over.
+  void queueLoaded
+    .then(() => {
+      controller.refreshInterrupted();
+      recovery.notifyInterrupted(!!view.host?.visible);
+    })
+    .catch((e) => log.warn(`Self-healing: ${e instanceof Error ? e.message : String(e)}`));
   // Settings pushes state on every change; the git walk behind the checkpoint size is cached for a minute.
   let checkpointSize: { at: number; bytes: Promise<number> } | undefined;
   settingsPanel.checkpointBytes = () => {
@@ -2227,6 +2311,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     },
     observeChat: (post) => controller.attach({ post, visible: () => false }),
     telemetry: { summary: (days) => telemetry.summary(days), logs: (filter) => telemetry.logs(filter), dir: telemetry.dir },
+    lastOutcome: (sessionId) => controller.lastOutcome(sessionId),
+    recovery: {
+      state: (sessionId) => healing.store.load(sessionId),
+      interventions: (opts) => healing.store.listInterventions(opts),
+      resume: (sessionId) => resumeRecoveryApi(sessionId, taskQueue, controller, store),
+      // The chat's own guard: restoring files under a live engine would pull the ground from under its fix or validation.
+      rollback: async (sessionId, attempt) => {
+        if (controller.isRunning(sessionId)) {
+          throw new Error('chat is running — stop it before rolling back');
+        }
+        const wt = store.get(sessionId)?.worktree;
+        return healing.service.rollback(sessionId, attempt, wt ? path.join(wt.path, wt.subdir ?? '') : workspace.root);
+      },
+    },
   };
 }
 
@@ -2265,10 +2363,64 @@ export interface LocalPilotApi {
   observeChat(post: (msg: ToWebview) => void): vscode.Disposable;
   /** Local-only metrics and log mirror behind the Dashboard (nothing leaves the machine). */
   readonly telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: LogLevel; q?: string; limit?: number }): LogEntry[]; readonly dir: string };
+  /** Self-healing outcome of the chat's last turn (`completed`, `completed_unverified`, `incomplete`, `blocked`, …); undefined when none was reported. */
+  lastOutcome(sessionId: string): TaskOutcome | undefined;
+  /** Self-healing recovery state of a chat and the human-intervention queue. */
+  readonly recovery: {
+    /** The persisted recovery state of the chat's current or last task. */
+    state(sessionId: string): Promise<RecoveryState | undefined>;
+    /** Open intervention items (newest first); `includeResolved` adds closed ones. */
+    interventions(opts?: { includeResolved?: boolean; sessionId?: string }): Promise<InterventionRecord[]>;
+    /** Continues an interrupted or incomplete recovery in its chat (checks rerun first); a queue task goes back to the queue. Resolves with the final answer. */
+    resume(sessionId: string): Promise<string>;
+    /** Restores the files of the fix attempts (from `attempt` on, default all); files changed since by others are kept. Rejects while the chat runs. */
+    rollback(sessionId: string, attempt?: number): Promise<RollbackResult>;
+  };
 }
 
 export function deactivate(): Promise<void> | undefined {
   return shutdown?.();
+}
+
+const QUEUE_RESUMABLE: ReadonlySet<QueueTaskStatus> = new Set(['incomplete', 'needs_input', 'failed', 'cancelled']);
+
+/**
+ * `api.recovery.resume`, the same way as the Resume command: a queue task goes back to the queue (Retry keeps its chat)
+ * so its status and dependents follow; the promise settles with the chat's last answer once the queued run ends.
+ */
+export async function resumeRecoveryApi(
+  sessionId: string,
+  queue: Pick<TaskQueue, 'list' | 'retry' | 'onDidChange'>,
+  controller: Pick<ChatController, 'resumeRecovery'>,
+  store: Pick<SessionStore, 'get'>
+): Promise<string> {
+  const task = queueTaskFor(queue, { sessionId });
+  if (!task || !QUEUE_RESUMABLE.has(task.status)) {
+    return controller.resumeRecovery(sessionId);
+  }
+  if (!queue.retry(task.id)) {
+    throw new Error('this task cannot be resumed right now');
+  }
+  const id = task.id;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      const t = queue.list.find((x) => x.id === id);
+      return !t || (t.status !== 'queued' && t.status !== 'running');
+    };
+    if (done()) {
+      resolve();
+      return;
+    }
+    const sub = queue.onDidChange(() => {
+      if (done()) {
+        sub.dispose();
+        resolve();
+      }
+    });
+  });
+  const sid = queue.list.find((x) => x.id === id)?.sessionId ?? sessionId;
+  const last = [...(store.get(sid)?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && m.content.trim());
+  return last?.content ?? '';
 }
 
 function timeAgo(ts: number): string {

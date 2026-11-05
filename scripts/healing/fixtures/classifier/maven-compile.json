@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "maven", "kind": "build", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": null, "file": "src/main/java/com/example/Sum.java", "line": 12 },
+    { "category": "compile", "code": null, "file": "src/main/java/com/example/Api.java", "line": 5 }
+  ] }

@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "npm install old-widget", "root": "/work/proj",
+  "expected": [
+    { "category": "dependency", "code": "ERESOLVE", "file": null, "line": null }
+  ] }

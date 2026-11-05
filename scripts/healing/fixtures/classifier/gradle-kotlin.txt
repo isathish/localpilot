@@ -1,0 +1,10 @@
+> Task :app:compileKotlin FAILED
+e: file:///work/proj/app/src/main/kotlin/App.kt:7:13 Unresolved reference: greting
+e: /work/proj/app/src/main/kotlin/Util.kt: (3, 5): Type mismatch: inferred type is String but Int was expected
+
+> Task :app:test
+
+AppTest > greets() FAILED
+    org.opentest4j.AssertionFailedError at AppTest.kt:14
+
+FAILURE: Build failed with an exception.

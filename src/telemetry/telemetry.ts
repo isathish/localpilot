@@ -51,9 +51,19 @@ export type TelemetryEvent =
   | (Base & { type: 'hook'; event: string; durationMs: number; outcome: HookRunOutcome })
   /** The user kept or undid agent edits. Lines are counted against the pre-edit snapshot. */
   | (Base & { type: 'edit_decision'; decision: 'accepted' | 'rejected'; added: number; removed: number; files: number })
-  | (Base & { type: 'model_selected'; sid?: string; model: string; source: ChoiceSource; makeDefault?: boolean });
+  | (Base & { type: 'model_selected'; sid?: string; model: string; source: ChoiceSource; makeDefault?: boolean })
+  /** A self-healing step. Only the category and the 16-hex signature hash are kept, never code, messages, paths or human keys. */
+  | (Base & { type: 'recovery'; sid: string; action: RecoveryAction; category: RecoveryCategory; severity?: RecoverySeverity; signature?: string; attempt?: number; max?: number; durationMs?: number; outcome?: string; delegated?: boolean; depth?: number; /** Resource adjustments made before a retry (`context`, `timeout`, `model`…). */ adjust?: string[] });
 
-export type TaskAction = 'created' | 'completed' | 'aborted' | 'failed' | 'mistake_limit';
+export type TaskAction = 'created' | 'completed' | 'aborted' | 'failed' | 'mistake_limit' | 'incomplete' | 'blocked' | 'completed_unverified';
+export type RecoveryAction = 'detected' | 'retry' | 'fix_attempt' | 'validated' | 'rolled_back' | 'recovered' | 'duplicate' | 'escalated' | 'blocked' | 'exhausted' | 'resumed' | 'memory_hit' | 'accept_risk';
+export type RecoveryCategory =
+  | 'model_timeout' | 'model_unavailable' | 'model_overload' | 'model_output'
+  | 'compile' | 'typescript' | 'lint' | 'build' | 'dependency'
+  | 'unit_test' | 'integration_test' | 'runtime'
+  | 'database' | 'data_corruption' | 'mcp' | 'git_conflict' | 'security'
+  | 'tool' | 'permission' | 'check_timeout' | 'loop' | 'unknown';
+export type RecoverySeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type ChoiceSource = 'picker' | 'slash' | 'plan' | 'cli';
 export type MentionKind = 'file' | 'range' | 'folder' | 'url' | 'terminal' | 'workspace' | 'problems' | 'git' | 'selection' | 'editors' | 'other';
 export type HookRunOutcome = 'ok' | 'blocked' | 'failed' | 'timeout';
@@ -102,7 +112,7 @@ export interface DayPoint {
 }
 
 export interface ActivitySummary {
-  tasks: { created: number; completed: number; aborted: number; failed: number; mistakeLimit: number };
+  tasks: { created: number; completed: number; aborted: number; failed: number; mistakeLimit: number; incomplete: number; blocked: number; /** `completed_unverified`: done, but a required check could not run. */ unverified: number };
   edits: { accepted: number; rejected: number; acceptedAdded: number; acceptedRemoved: number; rejectedAdded: number; rejectedRemoved: number; acceptedFiles: number; rejectedFiles: number };
   hooks: { runs: number; ok: number; blocked: number; failed: number; timeout: number; duration: Percentiles; byEvent: { event: string; runs: number; failures: number }[] };
   mcp: { calls: number; errors: number; servers: { server: string; calls: number; errors: number; duration: Percentiles }[] };
@@ -112,6 +122,25 @@ export interface ActivitySummary {
   slash: { command: string; count: number }[];
   mentions: { kind: string; count: number }[];
 }
+/** Self-healing outcomes. `rate` = recovered / (recovered + escalated + exhausted + blocked), 0 when none ended. */
+export interface RecoverySummary {
+  detected: number;
+  recovered: number;
+  escalated: number;
+  blocked: number;
+  exhausted: number;
+  rate: number;
+  /** Time to recover, from the `durationMs` of `recovered` events. */
+  mttr: Percentiles;
+  byCategory: { category: string; detected: number; recovered: number; attempts: Percentiles }[];
+  /** The most frequent signature hashes (never human keys), top 10. */
+  topSignatures: { signature: string; count: number; recovered: number }[];
+  memory: { suggested: number; succeeded: number };
+  /** The newest 50 events, newest first. */
+  recent: { t: number; sid: string; category: string; action: RecoveryAction; signature?: string; attempt?: number }[];
+  acceptedRisks: number;
+}
+
 export interface TelemetrySummary {
   days: number;
   from: number;
@@ -157,6 +186,7 @@ export interface TelemetrySummary {
   worktrees: { created: number; applied: number; discarded: number; conflicts: number; files: number };
   /** Tasks, edit decisions, hooks, MCP calls, checkpoints and choices the user made. */
   activity: ActivitySummary;
+  recovery: RecoverySummary;
   errors: { t: number; kind: 'model' | 'tool' | 'run' | 'health' | 'hook' | 'mcp'; what: string; detail: string }[];
   storage: { events: number; bytes: number; files: number; oldest?: number; dir: string; /** Where new data goes right now. */ backend?: 'files' | 'redis' | 'fallback'; remoteError?: string };
 }
@@ -367,6 +397,9 @@ export class RemoteTelemetrySink implements TelemetrySink {
   }
 }
 
+/** A signature as telemetry may carry it: the 16-hex hash, never a human key like `TS2345@src/api/user.ts`. */
+const SIGNATURE_HASH = /^[0-9a-f]{16}$/;
+
 /**
  * Append-only store of local telemetry events and log lines. Events go to `events-YYYY-MM-DD.jsonl`, log lines to
  * `localpilot-YYYY-MM-DD.log`; both are pruned by the retention setting. Writes are batched and never awaited by
@@ -412,6 +445,9 @@ export class Telemetry {
       return;
     }
     const ev = { ...e, t: e.t ?? this.now } as TelemetryEvent;
+    if (ev.type === 'recovery' && ev.signature !== undefined && !SIGNATURE_HASH.test(ev.signature)) {
+      delete ev.signature;
+    }
     const active = ev.traceId ? undefined : this.tracing.active();
     if (active) {
       ev.traceId = active.traceId;
@@ -848,6 +884,12 @@ export function summarize(events: Iterable<TelemetryEvent>, range: { days: numbe
   return agg.finish();
 }
 
+/** The one recovery-rate definition: recovered / (recovered + escalated + exhausted + blocked), in percent, 0 when none ended. */
+export function recoveryRate(r: { recovered: number; escalated: number; exhausted: number; blocked: number }): number {
+  const ended = r.recovered + r.escalated + r.exhausted + r.blocked;
+  return ended ? Math.round((r.recovered / ended) * 1000) / 10 : 0;
+}
+
 /** Incremental form of `summarize`: feed events in any number of batches, then `finish()` (optionally with the real start). */
 export function aggregator(range: { days: number; from: number; to: number }, filter?: SummaryFilter): { add(e: TelemetryEvent): void; finish(from?: number): TelemetrySummary } {
   const onlyProviders = filter?.providers ? new Set(filter.providers) : undefined;
@@ -896,7 +938,11 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
   let genMsTotal = 0;
   type AgentAgg = { agent: string; runs: number; done: number; stopped: number; failed: number; dur: Samples; toolCalls: number };
   const agents = new Map<string, AgentAgg>();
-  const tasks = { created: 0, completed: 0, aborted: 0, failed: 0, mistakeLimit: 0 };
+  const tasks = { created: 0, completed: 0, aborted: 0, failed: 0, mistakeLimit: 0, incomplete: 0, blocked: 0, unverified: 0 };
+  const recovery = { detected: 0, recovered: 0, escalated: 0, blocked: 0, exhausted: 0, acceptedRisks: 0, suggested: 0, succeeded: 0, mttr: new Samples() };
+  const recoveryCategories = new Map<string, { category: string; detected: number; recovered: number; attempts: Samples }>();
+  const signatures = new Map<string, { signature: string; count: number; recovered: number }>();
+  const recoveryRecent: RecoverySummary['recent'] = [];
   const edits = { accepted: 0, rejected: 0, acceptedAdded: 0, acceptedRemoved: 0, rejectedAdded: 0, rejectedRemoved: 0, acceptedFiles: 0, rejectedFiles: 0 };
   const hooks = { runs: 0, ok: 0, blocked: 0, failed: 0, timeout: 0, dur: new Samples() };
   const hookEvents = new Map<string, { event: string; runs: number; failures: number }>();
@@ -1103,8 +1149,68 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
         }
         break;
       case 'task':
-        tasks[e.action === 'mistake_limit' ? 'mistakeLimit' : e.action]++;
+        tasks[e.action === 'mistake_limit' ? 'mistakeLimit' : e.action === 'completed_unverified' ? 'unverified' : e.action]++;
         break;
+      case 'recovery': {
+        const sig = e.signature && SIGNATURE_HASH.test(e.signature) ? e.signature : undefined;
+        let c = recoveryCategories.get(e.category);
+        if (!c) {
+          c = { category: e.category, detected: 0, recovered: 0, attempts: new Samples() };
+          recoveryCategories.set(e.category, c);
+        }
+        let s = sig ? signatures.get(sig) : undefined;
+        if (sig && !s && e.action === 'detected') {
+          s = { signature: sig, count: 0, recovered: 0 };
+          signatures.set(sig, s);
+        }
+        switch (e.action) {
+          case 'detected':
+            recovery.detected++;
+            c.detected++;
+            if (s) {
+              s.count++;
+            }
+            break;
+          case 'recovered':
+            recovery.recovered++;
+            c.recovered++;
+            if (s) {
+              s.recovered++;
+            }
+            if (e.durationMs !== undefined) {
+              recovery.mttr.add(e.durationMs);
+            }
+            if (e.outcome === 'memory') {
+              recovery.succeeded++;
+            }
+            break;
+          case 'escalated':
+            recovery.escalated++;
+            day.errors++;
+            noteError({ t: e.t, kind: 'run', what: 'self-healing', detail: `${e.category} escalated${e.attempt ? ` after ${e.attempt} attempt${e.attempt === 1 ? '' : 's'}` : ''}` });
+            break;
+          case 'blocked':
+            recovery.blocked++;
+            break;
+          case 'exhausted':
+            recovery.exhausted++;
+            break;
+          case 'memory_hit':
+            recovery.suggested++;
+            break;
+          case 'accept_risk':
+            recovery.acceptedRisks++;
+            break;
+        }
+        if (e.attempt !== undefined && (e.action === 'recovered' || e.action === 'escalated' || e.action === 'exhausted' || e.action === 'blocked')) {
+          c.attempts.add(e.attempt);
+        }
+        recoveryRecent.push({ t: e.t, sid: e.sid, category: e.category, action: e.action, signature: sig, attempt: e.attempt });
+        if (recoveryRecent.length > 400) {
+          recoveryRecent.sort((a, b) => b.t - a.t).length = 50;
+        }
+        break;
+      }
       case 'edit_decision': {
         const lines = e.added + e.removed;
         if (e.decision === 'accepted') {
@@ -1230,6 +1336,23 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
         modelSelections: ranked(modelSelections, 'model'),
         slash: ranked(slash, 'command', 15),
         mentions: ranked(mentions, 'kind'),
+      },
+      recovery: {
+        detected: recovery.detected,
+        recovered: recovery.recovered,
+        escalated: recovery.escalated,
+        blocked: recovery.blocked,
+        exhausted: recovery.exhausted,
+        rate: recoveryRate(recovery),
+        mttr: percentiles(recovery.mttr),
+        byCategory: [...recoveryCategories.values()]
+          .filter((c) => c.detected || c.recovered || c.attempts.count)
+          .map((c) => ({ category: c.category, detected: c.detected, recovered: c.recovered, attempts: percentiles(c.attempts) }))
+          .sort((a, b) => b.detected - a.detected || b.recovered - a.recovered),
+        topSignatures: [...signatures.values()].sort((a, b) => b.count - a.count || b.recovered - a.recovered).slice(0, 10),
+        memory: { suggested: recovery.suggested, succeeded: recovery.succeeded },
+        recent: recoveryRecent.sort((a, b) => b.t - a.t).slice(0, 50),
+        acceptedRisks: recovery.acceptedRisks,
       },
       errors: errors.slice(0, 25),
       storage: { events: count, bytes: 0, files: 0, dir: '' },

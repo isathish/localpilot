@@ -62,9 +62,10 @@ export class RunNotifier implements vscode.Disposable {
 
   /**
    * A run ended; `silent` for a stopped run or one of a group (those get {@link groupFinished}). An error is a warning
-   * with Retry; a run that changed files offers the review.
+   * with Retry; a self-healing run that ended incomplete or blocked (`attention`, `detail` = its report) is a warning
+   * that opens the chat; a run that changed files offers the review.
    */
-  finished(sessionId: string, title: string, silent = false, outcome: 'ok' | 'error' = 'ok', changedFiles = 0): void {
+  finished(sessionId: string, title: string, silent = false, outcome: 'ok' | 'error' | 'attention' = 'ok', changedFiles = 0, detail?: string): void {
     for (const [id, c] of this.commands) {
       if (c.sessionId === sessionId) {
         this.clear(id);
@@ -82,6 +83,15 @@ export class RunNotifier implements vscode.Disposable {
         } else if (pick === 'Retry') {
           void open();
           void this.actions?.retry(sessionId);
+        }
+      });
+      return;
+    }
+    if (outcome === 'attention') {
+      const why = detail?.split('\n').find((l) => l.trim())?.trim().slice(0, 200);
+      void vscode.window.showWarningMessage(`LocalPilot needs your attention: ${name}${why ? ` — ${why}` : ''}`, 'Open').then((pick) => {
+        if (pick) {
+          void open();
         }
       });
       return;

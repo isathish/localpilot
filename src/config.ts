@@ -7,6 +7,7 @@ import { DEFAULT_PROVIDERS } from './providers/defaultProviders';
 import { expandHome } from './providers/colibriSetup';
 import { VSCODE_LM_BASE_URL } from './providers/vscodeLmMessages';
 import type { OtlpSettings } from './telemetry/otlp';
+import { parseHealingConfig } from './healingSettings';
 import { getManagedPolicy, mergeManagedProviders, policyRedis, policyTelemetry } from './agent/managedPolicy';
 
 export interface WebSearchConfig {
@@ -52,6 +53,53 @@ export interface RoutingConfig {
   parallelModels?: boolean;
 }
 
+export type HealingCheckKind = 'build' | 'typecheck' | 'lint' | 'test' | 'security' | 'custom';
+
+/** A project check from `localpilot.healing.checks` (overrides or adds to the discovered ones). */
+export interface HealingCheckSetting {
+  id?: string;
+  kind: HealingCheckKind;
+  command: string;
+  cwd?: string;
+  scoped?: string;
+  timeoutSeconds?: number;
+  required?: boolean;
+  when?: string[];
+}
+
+/** Per-category override from `localpilot.healing.policies`, already clamped to the category's safety maximum. */
+export interface HealingPolicySetting {
+  attempts?: number;
+  backoffMs?: number[];
+  timeoutSeconds?: number;
+}
+
+/** Self-healing engine settings (`localpilot.healing.*`). */
+export interface HealingConfig {
+  enabled: boolean;
+  autoDetect: boolean;
+  autoRetry: boolean;
+  autoFix: boolean;
+  regressionRequired: boolean;
+  maxRepairAttempts: number;
+  maxTotalAttempts: number;
+  extraSteps: number;
+  /** Recovery deadline counted from the first detected failure, only while a recovery is active; 0 = none. */
+  taskDeadlineMinutes: number;
+  checkTiming: 'onComplete' | 'afterEdits';
+  scopeTests: boolean;
+  checkTimeoutSeconds: number;
+  checkTimeBudgetSeconds: number;
+  baseline: 'fast' | 'all' | 'off';
+  checks: HealingCheckSetting[];
+  policies: Record<string, HealingPolicySetting>;
+  dependencyInstall: 'ask' | 'never';
+  gitConflicts: 'escalate';
+  securityCheck: 'changed' | 'full' | 'off';
+  delegateFixes: boolean;
+  memory: 'workspace' | 'project' | 'off';
+}
+
 export interface LocalPilotConfig {
   providers: ProviderConfig[];
   defaultModel: string;
@@ -72,6 +120,8 @@ export interface LocalPilotConfig {
   maxToolOutputChars: number;
   /** Tool steps in a row that may all fail before the run stops and asks for guidance; 0 = no limit. */
   maxConsecutiveMistakes: number;
+  /** Self-healing: detect, classify, fix and re-check failures within budgets. */
+  healing: HealingConfig;
   /** Tools never offered to the model: our names, Claude Code / Cline names, or globs (`mcp_*`, `browser_*`). */
   disabledTools: string[];
   /** File-editing tool offered to the model: `auto` gives GPT/Codex/gpt-oss models apply_patch and others edit_file. */
@@ -206,6 +256,7 @@ export function getConfig(): LocalPilotConfig {
     preferredLanguage: (c.get<string>('preferredLanguage', 'auto') ?? 'auto').trim() || 'auto',
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
     maxConsecutiveMistakes: (() => { const n = Number(c.get<number>('maxConsecutiveMistakes', 6)); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6; })(),
+    healing: parseHealingConfig(<T>(key: string, def: T) => c.get<T>(key, def) as T),
     disabledTools: (c.get<string[]>('disabledTools', []) ?? []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()),
     editTool: (['auto', 'edit_file', 'apply_patch'] as const).find((m) => m === c.get<string>('editTool', 'auto')) ?? 'auto',
     diffPreview: (['onApproval', 'always', 'off'] as const).find((m) => m === c.get<string>('diffPreview', 'onApproval')) ?? 'onApproval',
@@ -378,8 +429,9 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
 }
 
 /** Security settings a repository must not change: `scope: application` in package.json, so only User settings accept them.
- *  OTLP export is user-only too: several of its keys are application-scoped, and a workspace must not redirect telemetry. */
-export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key.startsWith('approvals.') || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
+ *  OTLP export is user-only too: several of its keys are application-scoped, and a workspace must not redirect telemetry.
+ *  A repository cannot turn the self-healing security check off or allow dependency installs. */
+export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key === 'healing.dependencyInstall' || key === 'healing.securityCheck' || key.startsWith('approvals.') || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
 
 /** The most specific scope that sets `key`, so a write there actually takes effect (User when nothing overrides it). */
 export function configTarget(key: string): vscode.ConfigurationTarget {

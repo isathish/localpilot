@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "npm start", "root": "/work/proj",
+  "expected": [
+    { "category": "database", "code": "missing_table", "file": null, "line": null, "symbol": "users" }
+  ] }

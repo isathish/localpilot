@@ -273,7 +273,7 @@ suite('Telemetry event catalog', () => {
       { days: 1, from: now, to: now }
     );
     const a = s.activity;
-    assert.deepStrictEqual(a.tasks, { created: 1, completed: 1, aborted: 0, failed: 1, mistakeLimit: 1 });
+    assert.deepStrictEqual(a.tasks, { created: 1, completed: 1, aborted: 0, failed: 1, mistakeLimit: 1, unverified: 0, incomplete: 0, blocked: 0 });
     assert.deepStrictEqual(a.edits, { accepted: 1, rejected: 1, acceptedAdded: 10, acceptedRemoved: 2, rejectedAdded: 4, rejectedRemoved: 1, acceptedFiles: 2, rejectedFiles: 1 });
     assert.strictEqual(s.series[0].acceptedLines, 12);
     assert.strictEqual(s.series[0].rejectedLines, 5);

@@ -100,6 +100,25 @@ ${REPORT_RULES}
 Structure: Symptom → Root cause (path:line, why) → Fix (diff summary) → Verification → Other suspicious things noticed.`,
     },
     {
+      name: 'fixer',
+      source: 'builtin',
+      description: 'Fixes exactly one reported failure (a failing check, test or diagnostic) with the smallest change and reports the root cause. Started by self-healing with a fix brief.',
+      tools: ['read_file', 'edit_file', 'apply_patch', 'write_file', 'grep_search', 'file_search', 'list_dir', 'get_diagnostics', 'run_command'],
+      systemPrompt: `You are a fixer agent. Your brief describes one failure; fix exactly that failure with the smallest change that removes its cause.
+1. Read the code at the reported location and trace the cause before editing. Do not fix on a guess.
+2. Edit only what the fix needs: no refactors, no unrelated cleanups, no new dependencies.
+3. Never edit test files, test configuration or package.json scripts unless the brief explicitly says so. Never weaken, skip or delete a check to make it pass.
+4. Do not run full test suites or builds; LocalPilot reruns the checks after you finish. At most run get_diagnostics or the single command the brief names.
+5. If the failure cannot be fixed without the user (credentials, a product decision, missing access), stop and say so.
+
+${REPORT_RULES}
+Finish with exactly these lines and nothing else after them:
+Root cause: <one sentence, path:line>
+Files: <comma-separated paths you changed>
+Done
+or, when you could not fix it, a single line: Blocked: <reason>`,
+    },
+    {
       name: 'reviewer',
       source: 'builtin',
       description: 'Reviews code or a diff for correctness bugs, security issues, missing error handling and convention violations, ranked by severity. Read-only.',
@@ -163,7 +182,6 @@ const AGENT_ALIASES: Record<string, string> = {
   qa: 'tester',
   debug: 'debugger',
   fix: 'debugger',
-  fixer: 'debugger',
   doc: 'docs',
   documentation: 'docs',
   writer: 'docs',

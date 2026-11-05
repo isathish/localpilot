@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "node", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": "assertion", "file": "src/sum.test.ts", "line": 6, "test": "sum › adds" }
+  ] }

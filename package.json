@@ -867,6 +867,30 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "localpilot.recovery.showQueue",
+        "title": "Show Human Intervention Queue",
+        "category": "LocalPilot",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "localpilot.recovery.open",
+        "title": "Open Recovery Report",
+        "category": "LocalPilot",
+        "icon": "$(output)"
+      },
+      {
+        "command": "localpilot.recovery.resume",
+        "title": "Resume Recovery",
+        "category": "LocalPilot",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "localpilot.recovery.rollback",
+        "title": "Roll Back Self-Healing Fixes",
+        "category": "LocalPilot",
+        "icon": "$(discard)"
+      },
+      {
         "command": "localpilot.toggleAutoMode",
         "title": "Turn Auto Mode On/Off",
         "category": "LocalPilot",
@@ -1208,6 +1232,36 @@
           "command": "localpilot.queue.remove",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^queue-(queued|done|failed|cancelled|blocked)$/",
           "group": "inline@2"
+        },
+        {
+          "command": "localpilot.recovery.resume",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "inline@1"
+        },
+        {
+          "command": "localpilot.recovery.open",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "inline@2"
+        },
+        {
+          "command": "localpilot.queue.remove",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "inline@3"
+        },
+        {
+          "command": "localpilot.recovery.open",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "1_recovery@1"
+        },
+        {
+          "command": "localpilot.recovery.resume",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "1_recovery@2"
+        },
+        {
+          "command": "localpilot.recovery.rollback",
+          "when": "viewItem == queueTask.incomplete || viewItem == queueTask.needsInput",
+          "group": "1_recovery@3"
         }
       ],
       "commandPalette": [
@@ -1860,6 +1914,822 @@
           "default": 6,
           "minimum": 0,
           "markdownDescription": "Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired), and ask you for guidance. Any successful tool call resets the count; your next message continues normally. `0` = no limit."
+        },
+        "localpilot.healing.enabled": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Self-healing engine: when a build, test, tool or model call fails, LocalPilot detects and classifies the failure, diagnoses it, fixes it and re-runs the relevant checks until the task is complete or a budget (attempts, time, approvals) is reached, then explains why and asks you. Off = today's behaviour (no quality gate, including the security check). Ignored in an untrusted workspace, so a cloned repository cannot turn it off."
+        },
+        "localpilot.healing.autoDetect": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Classify tool, model and check failures after every step (category, severity, signature)."
+        },
+        "localpilot.healing.autoRetry": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Retry transient failures (model timeouts, unreachable servers, dropped MCP connections) with the category's backoff. Only calls that did not produce output are retried."
+        },
+        "localpilot.healing.autoFix": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Inject diagnosis and fix steps for deterministic failures (compile errors, failing tests, lint). Off = detect and report only."
+        },
+        "localpilot.healing.regressionRequired": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "A task is only **completed** when the full relevant test suite passes after a fix, not just the affected tests."
+        },
+        "localpilot.healing.maxRepairAttempts": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "markdownDescription": "Most fix-and-recheck attempts per code-fix category (compile, TypeScript, build, tests, runtime). `0` = never fix automatically."
+        },
+        "localpilot.healing.maxTotalAttempts": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 8,
+          "minimum": 0,
+          "maximum": 30,
+          "markdownDescription": "Most recovery attempts per task across all categories. When it is reached the task stops with its root cause and the next action."
+        },
+        "localpilot.healing.extraSteps": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 16,
+          "minimum": 0,
+          "maximum": 60,
+          "markdownDescription": "Extra model steps the engine may grant for recovery beyond `#localpilot.maxIterations#`."
+        },
+        "localpilot.healing.taskDeadlineMinutes": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 1440,
+          "markdownDescription": "Recovery deadline in minutes, counted from the first detected failure and applied only while a recovery is active. `0` = no deadline."
+        },
+        "localpilot.healing.checkTiming": {
+          "scope": "resource",
+          "type": "string",
+          "enum": [
+            "onComplete",
+            "afterEdits"
+          ],
+          "enumDescriptions": [
+            "Run the project checks when the agent says it is done",
+            "Also run fast checks (typecheck, lint) after each batch of edits"
+          ],
+          "default": "onComplete",
+          "markdownDescription": "When the project checks (build, typecheck, lint, tests) run."
+        },
+        "localpilot.healing.scopeTests": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the tests affected by the changed files first, before the full suite."
+        },
+        "localpilot.healing.checkTimeoutSeconds": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 300,
+          "minimum": 10,
+          "maximum": 3600,
+          "markdownDescription": "Default timeout per check in seconds (tests get twice as long). A check that times out is reported as unverified."
+        },
+        "localpilot.healing.checkTimeBudgetSeconds": {
+          "scope": "resource",
+          "type": "integer",
+          "default": 900,
+          "minimum": 30,
+          "maximum": 7200,
+          "markdownDescription": "Total time in seconds one quality-gate run may spend on checks."
+        },
+        "localpilot.healing.baseline": {
+          "scope": "resource",
+          "type": "string",
+          "enum": [
+            "fast",
+            "all",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Record failures of the fast checks (typecheck + lint) before the first edit",
+            "Record failures of every check, including tests, before the first edit",
+            "No baseline: every failure counts as new"
+          ],
+          "default": "fast",
+          "markdownDescription": "Which checks run before the agent's first edit, so failures that already existed are not blamed on (or fixed in) the task."
+        },
+        "localpilot.healing.checks": {
+          "scope": "resource",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Check id; an id of a discovered check (e.g. `npm:test`) overrides it. Ids starting with `security` are reserved for the built-in scan."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "build",
+                  "typecheck",
+                  "lint",
+                  "test",
+                  "custom"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "description": "Full command line."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Workspace-relative folder (absolute paths and `..` are rejected)."
+              },
+              "scoped": {
+                "type": "string",
+                "description": "Command for affected-only runs, with {files}, {tests} or {pkgs}."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600
+              },
+              "required": {
+                "type": "boolean",
+                "description": "A failing required check blocks completion."
+              },
+              "when": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Globs: only run when a changed file matches."
+              }
+            }
+          },
+          "markdownDescription": "Project checks that override or add to the discovered ones (`package.json` scripts, `pyproject.toml`, `Cargo.toml`, `go.mod`…). Ignored in an untrusted workspace."
+        },
+        "localpilot.healing.policies": {
+          "scope": "resource",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "model_timeout": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "model_unavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "model_overload": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "model_output": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "compile": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "typescript": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "lint": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "build": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "dependency": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "unit_test": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "integration_test": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "database": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "data_corruption": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "mcp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "git_conflict": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "security": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "tool": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "permission": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "check_timeout": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "loop": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            },
+            "unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "description": "Recovery attempts for this category (clamped to its safety maximum)."
+                },
+                "backoffMs": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "Waits in milliseconds before each retry; the last value repeats."
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600,
+                  "description": "Per-attempt timeout in seconds."
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Per-category retry policy overrides, e.g. `{ \"unit_test\": { \"attempts\": 2 } }`: `attempts`, `backoffMs` (array) and `timeoutSeconds`. Safety limits cannot be raised: `security` at most 3 remediation attempts, and `data_corruption`, `git_conflict`, `permission` and `loop` always escalate (0)."
+        },
+        "localpilot.healing.dependencyInstall": {
+          "scope": "application",
+          "type": "string",
+          "enum": [
+            "ask",
+            "never"
+          ],
+          "enumDescriptions": [
+            "Ask before installing or adding a package",
+            "Never install: report the task as blocked"
+          ],
+          "default": "ask",
+          "markdownDescription": "Missing dependencies: installs always ask for approval, or never happen. User settings only."
+        },
+        "localpilot.healing.gitConflicts": {
+          "scope": "resource",
+          "type": "string",
+          "enum": [
+            "escalate"
+          ],
+          "enumDescriptions": [
+            "Leave conflicted files untouched and ask you to review"
+          ],
+          "default": "escalate",
+          "markdownDescription": "Git merge conflicts are never resolved automatically: the conflicted files are left as they are and the task asks for your review."
+        },
+        "localpilot.healing.securityCheck": {
+          "scope": "application",
+          "type": "string",
+          "enum": [
+            "changed",
+            "full",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Scan changed files offline for secrets and risky code",
+            "Also check dependencies for known vulnerabilities (asks for network access)",
+            "No security check"
+          ],
+          "default": "changed",
+          "markdownDescription": "Security check before a task completes. A finding blocks completion until it is fixed or you accept the risk; there is no automatic bypass. User settings only, so a repository cannot turn it off; a trusted workspace can still turn off the whole engine with `localpilot.healing.enabled`."
+        },
+        "localpilot.healing.delegateFixes": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Fix independent groups of failures in parallel subagents."
+        },
+        "localpilot.healing.memory": {
+          "scope": "resource",
+          "type": "string",
+          "enum": [
+            "workspace",
+            "project",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Remember failures and fixes for this workspace (not shared)",
+            "Store them in the project's .localpilot folder",
+            "Do not remember failures"
+          ],
+          "default": "workspace",
+          "markdownDescription": "Failure memory: past failure signatures and the fixes that worked, offered as suggestions (always re-validated) when the same failure appears again."
         },
         "localpilot.editTool": {
           "type": "string",

@@ -1,0 +1,5 @@
+{ "input": "run_command", "command": "git status --porcelain", "exitCode": 0, "root": "/work/proj",
+  "expected": [
+    { "category": "git_conflict", "code": "CONFLICT", "file": "src/a.ts", "line": null },
+    { "category": "git_conflict", "code": "CONFLICT", "file": "src/new.ts", "line": null }
+  ] }

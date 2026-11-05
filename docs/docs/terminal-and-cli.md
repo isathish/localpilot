@@ -109,6 +109,7 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot history import [claude\|codex] [N\|all]` | Imports this folder's Claude Code chats (`~/.claude/projects/…`) and Codex chats (`~/.codex/sessions/…`) into the saved sessions; see [Importing chats](#importing-claude-code-and-codex-chats) |
 | `localpilot schedule create <name> --cron "…" --prompt "…"` | Runs a task on a schedule, unattended; see [Scheduled agents](#scheduled-agents) |
 | `localpilot --acp` | Serves the Agent Client Protocol on stdio for Zed, JetBrains IDEs and Neovim; see [Editors over ACP](acp.md) |
+| `localpilot recovery list\|show <id>\|resume <id>\|clear` | Self-healing state of saved sessions: list the interrupted, incomplete and blocked ones, show one (phase, attempt N/M, failures, root cause, next actions), continue one, or clear finished states; see [Self-healing in the CLI](#self-healing-in-the-cli) |
 | `localpilot work [--once] [--max N]` | Takes tasks from the [shared board](parallel-agents.md#the-shared-board) (`.localpilot/board`) one after another until none is left; run several for parallel workers |
 
 ### Benchmarking models
@@ -183,7 +184,7 @@ In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrad
 | `--agent`, `--ask`, `--plan`, `--multitask`, `--debug` | Mode (default `agent`) |
 | `-i`, `--isolate` | Work in an isolated git worktree. Your checkout is untouched while the agent works. A one-shot run applies the result back as uncommitted changes when it ends. Continuing the session later (`-c`, `-r`, `/resume`) works in your checkout again |
 | `--no-apply` | With `--isolate`: leave the result in the worktree and print its path |
-| `-c`, `--continue` | Continue the most recent session in this folder. With a task, it runs in that session; without one, the REPL opens in it |
+| `-c`, `--continue` | Continue the most recent session in this folder. With a task, it runs in that session; without one, the REPL opens in it. When that session has an interrupted or unfinished recovery, its state is printed first |
 | `-r`, `--resume [id]` | Resume a saved session by id or list number. Without an id, shows a numbered list (title, age, messages, model) and reads a number |
 | `--data-dir <dir>` | Where sessions are saved (default `~/.localpilot`; also `LOCALPILOT_DATA_DIR`) |
 | `--hooks-dir <dir>` | Also run the [hook scripts](claude-code-compatibility.md#hook-scripts-in-hook-folders) in this folder (repeatable; also `LOCALPILOT_HOOKS_DIR`) |
@@ -193,7 +194,9 @@ In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrad
 | `-y`, `--yes` | Approve every command, edit and network call |
 | `-C`, `--cwd <dir>` | Workspace root (default: current directory) |
 | `-p`, `--print` | Print only the final answer; no tool log, non-interactive. A one-shot run whose output is not a terminal (piped or redirected) also prints only the answer |
-| `--json` | One-shot runs: one JSON object per line on stdout (`assistant_delta`, `thinking_delta`, `tool_start`, `tool_end`, `tool_progress`, `status`, `compaction`, `subagent_start`, `subagent_end`, `hook`, `nudge`, each with `type` and `ts`), then `run_result` with `finishReason`, `text`, `usage`, `costUsd`, `durationMs`, `model` and `sessionId`. Errors go to stderr as `{"type":"error","message":…,"kind":…}`, including those before the run starts (no model reachable, a bad `-P`, `-s` or `-k`, an `--isolate` failure, an invalid MCP file). `eval` and `scan` keep `--json <file>` |
+| `--json` | One-shot runs: one JSON object per line on stdout (`assistant_delta`, `thinking_delta`, `tool_start`, `tool_end`, `tool_progress`, `status`, `compaction`, `subagent_start`, `subagent_end`, `hook`, `nudge`, `recovery`, each with `type` and `ts`), then `run_result` with `finishReason`, `outcome`, `contract`, `text`, `usage`, `costUsd`, `durationMs`, `model` and `sessionId`. Errors go to stderr as `{"type":"error","message":…,"kind":…}`, including those before the run starts (no model reachable, a bad `-P`, `-s` or `-k`, an `--isolate` failure, an invalid MCP file). `eval` and `scan` keep `--json <file>` |
+| `--require-verified` | One-shot runs: exit with `4` when the work is done but could not be verified (checks skipped, denied, timed out or missing) |
+| `--trust-workspace` | Use providers, MCP servers, approvals, hooks and `.localpilot/checks.json` from the workspace |
 | `--timeout <s>` | Stop the run after this long (`90`, `90s`, `5m`). One-shot runs only |
 | `--retries <n>` | Stop after `n` failed steps in a row (overrides `localpilot.maxConsecutiveMistakes`) |
 | `--yolo` | For CI: `--yes`, only `read_file`, `edit_file`, `apply_patch`, `write_file`, `run_command`, `grep_search`, `file_search` and `list_dir`, `--retries 3` unless given, and no MCP servers unless `--mcp`. One-shot runs only: without a task it exits with a usage error |
@@ -207,7 +210,17 @@ In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrad
 | `--settings`, `--setup` | Open LocalPilot Settings or the setup wizard in VS Code |
 | `-h`, `--help`; `-V`, `--version` | Help, version |
 
-One-shot runs exit with `0` when the run finished, `1` when it ended with an error (no model reachable, the server failed), `3` when it stopped at the consecutive-mistake limit, `124` on `--timeout` and `130` when stopped with Ctrl+C. Usage errors exit with `2`.
+One-shot runs exit with `0` when the run finished (verified or not), `1` when it ended with an error (no model reachable, the server failed), `3` when it stopped at the consecutive-mistake limit, `4` when the task is incomplete (checks still failing after the self-healing budget, or not verified with `--require-verified`), `5` when it is blocked and needs you (an approval, credentials, a git conflict or a security decision), `124` on `--timeout` and `130` when stopped with Ctrl+C. Usage errors exit with `2`. With `--json`, `finishReason` is `incomplete` or `blocked` in those cases.
+
+### Self-healing in the CLI
+
+The CLI runs the same [self-healing engine]({{ '/docs/self-healing/' | relative_url }}) as VS Code. Recovery steps print as notes, for example `⟲ self-healing 2/3 · typescript TS2345 src/api/user.ts:42 — root cause: …` and `✓ typecheck 4.1s ✗ test 12.0s (3 failing)`. At the end of the turn an `Incomplete:` or `Blocked:` block names the root cause and the next commands (`/recovery resume`, `/recovery rollback`, `localpilot -c "…"`). Installs use the usual approval prompt and always ask.
+
+- **Exit codes:** `4` incomplete, `5` blocked; `0` still covers *Not verified*, unless you pass `--require-verified`, which turns it into `4`. In CI, `localpilot --yolo --require-verified "fix the failing tests"` fails the job unless the checks really passed.
+- **NDJSON:** with `--json`, `recovery` events stream as lines and `run_result` carries `outcome` (`completed`, `completed_unverified`, `incomplete`, `blocked`, `failed`, `cancelled`), the completion `contract` and `finishReason` `incomplete` or `blocked`.
+- **Resume:** `localpilot -c` (or `-r <id>`) prints an interrupted recovery's phase, attempt N/M, category, root cause and next commands before the prompt. `/recovery resume` re-runs the checks and continues; edits are never replayed. `localpilot recovery list` shows every session with recovery state.
+- **Trust:** the workspace is untrusted by default in the CLI, so `.localpilot/checks.json`, a workspace `localpilot.healing.checks` value and a shared `project` failure memory are ignored until you pass `--trust-workspace` or set `LOCALPILOT_TRUST_WORKSPACE=1`. Discovered checks still run.
+- Recovery state is kept in `~/.localpilot/recovery/`.
 
 ### Saved sessions
 
@@ -261,6 +274,7 @@ Run `localpilot` with no task to start a session. These commands are available:
 | `/resume [N\|id]` | Switch to a saved session (without an argument, pick from the list) |
 | `/fork [name]` | Copy this session and continue in the copy; the original stays as it was. History shows "forked from …" |
 | `/doctor` | Run the checks from `localpilot doctor` |
+| `/recovery [status\|history\|resume\|rollback]` | This session's self-healing state: the current phase, attempt N/M and failures (`status`, the default), past attempts with root causes (`history`), continue an interrupted or unfinished recovery (`resume`), or undo the fix attempts (`rollback`) |
 | `/compact` (`/smol`) | Summarise older messages to free context, as in the chat |
 | `/context`, `/memory` | Context use; the instruction files in force and the saved memory notes (the same text as in the chat) |
 | `/skills`, `/agents`, `/plugins` | List skills (with their files), subagents and plugins |

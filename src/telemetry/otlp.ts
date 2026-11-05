@@ -186,6 +186,9 @@ const SEVERITY: Record<LogEntry['level'], number> = { trace: 1, debug: 5, info: 
 /** An event as a log record: body and `event.name` are `localpilot.<type>`, the fields are attributes. */
 export function eventRecord(e: TelemetryEvent): OtlpLogRecord {
   const { t, type, traceId, spanId, ...fields } = e;
+  if (e.type === 'recovery') {
+    delete (fields as { signature?: string }).signature;
+  }
   const failed = ('outcome' in e && (e.outcome === 'error' || e.outcome === 'failed')) || ('error' in e && e.error === true) || ('ok' in e && e.ok === false);
   return { t, severity: failed ? 'warn' : 'info', body: `localpilot.${type}`, attributes: { 'event.name': `localpilot.${type}`, ...fields }, traceId, spanId };
 }
@@ -380,6 +383,16 @@ export function eventMetrics(e: TelemetryEvent, m: Pick<MetricStore, 'add' | 're
       break;
     case 'health':
       m.add('localpilot.health.checks', 1, { provider: e.provider, ok: e.ok });
+      break;
+    case 'recovery':
+      // Names and outcomes only: the signature hash stays out of metric attributes.
+      m.add('localpilot.recovery.events', 1, { action: e.action, category: e.category });
+      if (e.outcome) {
+        m.add('localpilot.recovery.outcomes', 1, { outcome: e.outcome });
+      }
+      if (e.durationMs !== undefined) {
+        m.record('localpilot.recovery.duration_ms', e.durationMs, { category: e.category });
+      }
       break;
   }
 }

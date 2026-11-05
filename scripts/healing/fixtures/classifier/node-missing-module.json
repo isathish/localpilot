@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "node src/index.js", "root": "/work/proj",
+  "expected": [
+    { "category": "dependency", "code": "MODULE_NOT_FOUND", "file": "src/index.js", "line": 1, "symbol": "left-pad" }
+  ] }

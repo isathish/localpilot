@@ -5,8 +5,16 @@ import { IMAGE_EXT } from '../ui/images';
 import { ProviderConfig } from '../types';
 import { FinishReason } from './ndjson';
 
-/** Exit codes of one-shot runs: 0 done, 1 the run ended with an error, 3 the mistake limit, 124 timeout, 130 stopped. */
-export const EXIT = { ok: 0, error: 1, mistakeLimit: 3, timeout: 124, aborted: 130 } as const;
+/**
+ * Exit codes of one-shot runs: 0 done, 1 the run ended with an error, 3 the mistake limit, 4 incomplete (the quality
+ * gate found unresolved failures, or `--require-verified` and the work could not be verified), 5 blocked (needs an
+ * approval, credentials or a decision), 124 timeout, 130 stopped.
+ */
+export const EXIT = { ok: 0, error: 1, mistakeLimit: 3, incomplete: 4, blocked: 5, timeout: 124, aborted: 130 } as const;
+
+/** `--help` lines for the outcome exit codes and `--require-verified`. */
+export const REQUIRE_VERIFIED_HELP = '  --require-verified           exit 4 when the work is done but could not be verified (checks skipped or missing)';
+export const EXIT_CODES_HELP = 'Exit codes: 0 done, 1 error, 3 mistake limit, 4 incomplete, 5 blocked (needs input), 124 timeout, 130 stopped.';
 
 /** `--yolo`: the tools a scripted run gets (apply_patch too, since GPT-style models edit with it instead of edit_file). */
 export const YOLO_TOOLS = ['read_file', 'edit_file', 'apply_patch', 'write_file', 'run_command', 'grep_search', 'file_search', 'list_dir'];
@@ -21,6 +29,10 @@ export interface RunOutcome {
   errorKind?: string;
   /** False when it stopped at the step limit. */
   completed?: boolean;
+  /** The quality gate's verdict (`completed`, `completed_unverified`, `incomplete`, `blocked`, `failed`, `cancelled`). */
+  outcome?: string;
+  /** `--require-verified`: `completed_unverified` counts as incomplete. */
+  requireVerified?: boolean;
 }
 
 export function exitCodeFor(o: RunOutcome): number {
@@ -32,6 +44,18 @@ export function exitCodeFor(o: RunOutcome): number {
   }
   if (o.errorKind === 'mistake_limit') {
     return EXIT.mistakeLimit;
+  }
+  if (o.outcome === 'blocked') {
+    return EXIT.blocked;
+  }
+  if (o.outcome === 'incomplete' || (o.outcome === 'completed_unverified' && o.requireVerified)) {
+    return EXIT.incomplete;
+  }
+  if (o.outcome === 'failed') {
+    return EXIT.error;
+  }
+  if (o.outcome === 'cancelled') {
+    return EXIT.aborted;
   }
   return o.error ? EXIT.error : EXIT.ok;
 }
@@ -45,6 +69,18 @@ export function finishReasonFor(o: RunOutcome): FinishReason {
   }
   if (o.errorKind === 'mistake_limit') {
     return 'mistake_limit';
+  }
+  if (o.outcome === 'blocked') {
+    return 'blocked';
+  }
+  if (o.outcome === 'incomplete' || (o.outcome === 'completed_unverified' && o.requireVerified)) {
+    return 'incomplete';
+  }
+  if (o.outcome === 'failed') {
+    return 'error';
+  }
+  if (o.outcome === 'cancelled') {
+    return 'aborted';
   }
   if (o.error) {
     return 'error';

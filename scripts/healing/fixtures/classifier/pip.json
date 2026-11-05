@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "pip install pyyamll==6.0", "root": "/work/proj",
+  "expected": [
+    { "category": "dependency", "code": "pip_no_distribution", "file": null, "line": null, "symbol": "pyyamll" }
+  ] }

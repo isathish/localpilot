@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "python scripts/load.py", "root": "/work/proj",
+  "expected": [
+    { "category": "dependency", "code": "ModuleNotFoundError", "file": "scripts/load.py", "line": 3, "symbol": "yaml" }
+  ] }

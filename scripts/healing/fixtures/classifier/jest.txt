@@ -1,0 +1,48 @@
+ PASS  src/format.test.ts
+ FAIL  src/sum.test.ts (5.21 s)
+  sum
+    ✓ handles zero (2 ms)
+    ✕ adds (4 ms)
+
+  ● sum › adds
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 4
+
+       5 | describe('sum', () => {
+       6 |   it('adds', () => {
+    >  7 |     expect(sum(1, 2)).toBe(3);
+         |                       ^
+       8 |   });
+       9 | });
+
+      at Object.<anonymous> (src/sum.test.ts:7:23)
+
+ FAIL  src/api/routes.integration.test.ts
+  ● GET /users › returns the list
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 404
+
+      at Object.<anonymous> (src/api/routes.integration.test.ts:14:28)
+
+ FAIL  src/client.test.ts
+  ● Test suite failed to run
+
+    Cannot find module 'left-pad' from 'src/client.ts'
+
+    Require stack:
+      src/client.ts
+      src/client.test.ts
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/resolver.js:427:11)
+
+Test Suites: 3 failed, 1 passed, 4 total
+Tests:       2 failed, 3 passed, 5 total
+Snapshots:   0 total
+Time:        6.1 s
+Ran all test suites.

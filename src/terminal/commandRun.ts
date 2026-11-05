@@ -138,6 +138,8 @@ export interface CommandOutcome {
   detached?: { logPath: string; id: string };
   /** It could not be started at all. */
   failed?: string;
+  /** It was killed at its hard timeout (set only then). */
+  timedOut?: boolean;
 }
 
 export interface CommandRunOptions {
@@ -155,6 +157,8 @@ export interface CommandRunOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   capture?: OutputCapture;
+  /** Never detach (self-healing checks): a detach request (button, Ctrl+B) stops the command instead. */
+  noDetach?: boolean;
 }
 
 export type CommandRunState = 'running' | 'detached' | 'done';
@@ -179,8 +183,13 @@ export class CommandRun {
   private readonly cap: OutputCapture;
   private log?: CommandLog;
   private note = '';
+  private timedOut = false;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly onAbort = () => this.interrupt('[cancelled]');
+
+  get noDetach(): boolean {
+    return this.o.noDetach === true;
+  }
 
   constructor(private readonly o: CommandRunOptions) {
     let id = o.id;
@@ -196,7 +205,12 @@ export class CommandRun {
     if (o.detachAfterMs && o.detachAfterMs > 0) {
       this.timers.push(setTimeout(() => this.detach(), o.detachAfterMs));
     } else if (o.timeoutMs && o.timeoutMs > 0) {
-      this.timers.push(setTimeout(() => this.interrupt(`[timed out after ${Math.round(o.timeoutMs! / 1000)}s]`), o.timeoutMs));
+      this.timers.push(
+        setTimeout(() => {
+          this.timedOut = this.state === 'running';
+          this.interrupt(`[timed out after ${Math.round(o.timeoutMs! / 1000)}s]`);
+        }, o.timeoutMs)
+      );
     }
     if (o.signal?.aborted) {
       queueMicrotask(this.onAbort);
@@ -237,7 +251,7 @@ export class CommandRun {
     }
     const output = clean(this.cap.text() + (this.note ? `\n${this.note}` : ''));
     this.end();
-    this.settleResult({ output, exitCode });
+    this.settleResult(this.timedOut ? { output, exitCode, timedOut: true } : { output, exitCode });
   }
 
   /** The command could not be started. */
@@ -256,6 +270,10 @@ export class CommandRun {
   /** Proceed While Running: answer the tool now and keep the command going, its output appended to a log. */
   detach(): boolean {
     if (this.state !== 'running') {
+      return false;
+    }
+    if (this.o.noDetach) {
+      this.interrupt('[stopped: verification checks cannot run in the background]');
       return false;
     }
     this.clearTimers();
@@ -351,7 +369,7 @@ export function stopCommand(id: string): boolean {
 
 /** Detaches every command the agent is waiting for (the CLI's Ctrl+B). Returns how many. */
 export function detachWaiting(sessionId?: string): number {
-  return runningCommands(sessionId).filter((r) => r.state === 'running' && r.detach()).length;
+  return runningCommands(sessionId).filter((r) => r.state === 'running' && !r.noDetach && r.detach()).length;
 }
 
 /** Log file names start with the chat they belong to (`<session>~<call id>.log`), so deleting the chat finds them. */

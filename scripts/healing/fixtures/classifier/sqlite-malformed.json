@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "python", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "data_corruption", "code": "SQLITE_CORRUPT", "file": "app/store.py", "line": 40 }
+  ] }

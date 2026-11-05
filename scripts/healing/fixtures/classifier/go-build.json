@@ -1,0 +1,6 @@
+{ "input": "check", "ecosystem": "go", "kind": "build", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": null, "file": "sum.go", "line": 5 },
+    { "category": "compile", "code": null, "file": "sum.go", "line": 9 },
+    { "category": "dependency", "code": "missing_module", "file": "internal/api/handler.go", "line": 14, "symbol": "github.com/gorilla/mux" }
+  ] }

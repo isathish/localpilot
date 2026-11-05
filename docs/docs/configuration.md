@@ -228,6 +228,36 @@ Users see the policy in **Settings** (a note on the Agent & approvals, Providers
 | `localpilot.clarify.questions` | `smart` | When the agent asks before building: `smart` (new features and open-ended requests), `interview` (every change, then waits for your OK on the plan) or `minimal`. See [Questions before it starts]({{ '/docs/agent-modes/#questions-before-it-starts' | relative_url }}) |
 | `localpilot.autoClarify` | `true` | Detect vague requests and give the agent a workspace snapshot (editor, open files, errors, git), so it states its interpretation before acting |
 
+## Self-healing
+
+How LocalPilot detects, fixes and verifies failures. In the Settings screen they are under **Agent & approvals → Self-healing**, with the **Retry configuration** table, the detected checks for the workspace and **Open checks.json**. See [Self-healing & recovery]({{ '/docs/self-healing/' | relative_url }}).
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.healing.enabled` | `true` | The self-healing engine: detect, diagnose, fix and re-check until the task is verified or a budget is reached. Off = the behaviour without a quality gate (no checks, no security check). Ignored in an untrusted workspace, so a cloned repository cannot turn it off |
+| `localpilot.healing.autoDetect` | `true` | Classify tool, model and check failures after every step |
+| `localpilot.healing.autoRetry` | `true` | Retry transient failures (model timeouts, unreachable servers, dropped MCP connections) with backoff. Only calls that produced no output are retried |
+| `localpilot.healing.autoFix` | `true` | Diagnose and fix deterministic failures (compile errors, failing tests, required lint). Off = detect and report only |
+| `localpilot.healing.regressionRequired` | `true` | A task is only *completed* when the full relevant test suite passes after a fix, not just the affected tests |
+| `localpilot.healing.maxRepairAttempts` | `3` | Fix-and-recheck attempts per code-fix category (0–10). `0` = never fix automatically |
+| `localpilot.healing.maxTotalAttempts` | `8` | Recovery attempts per task across all categories (0–30) |
+| `localpilot.healing.extraSteps` | `16` | Extra model steps a recovery may use beyond `localpilot.maxIterations` (0–60) |
+| `localpilot.healing.taskDeadlineMinutes` | `60` | Recovery deadline, counted from the first detected failure and applied only while recovering. `0` = none |
+| `localpilot.healing.checkTiming` | `onComplete` | `onComplete`: run the checks when the agent says it is done. `afterEdits`: also a fast typecheck or build after steps with edits |
+| `localpilot.healing.scopeTests` | `true` | Run the tests affected by the changed files before the full suite |
+| `localpilot.healing.checkTimeoutSeconds` | `300` | Reserved; discovered checks currently use fixed limits by kind (build, typecheck and custom 300 s, lint 180 s, tests 600 s, security 120 s). To change a limit, set `timeoutSeconds` on the check in `localpilot.healing.checks` or `.localpilot/checks.json`. A timed-out check leaves the task *Not verified* |
+| `localpilot.healing.checkTimeBudgetSeconds` | `900` | Total time one verification run may spend on checks (30–7200) |
+| `localpilot.healing.baseline` | `fast` | Checks run before the first edit so preexisting failures are not blamed on the task: `fast` (typecheck + lint), `all` (tests too) or `off` |
+| `localpilot.healing.checks` | `[]` | Checks that override (same `id`) or add to the discovered ones: `id`, `kind`, `command`, `cwd`, `scoped`, `timeoutSeconds`, `required`, `when`. `.localpilot/checks.json` takes precedence. A workspace value is ignored in an untrusted workspace (and in the CLI without `--trust-workspace`) |
+| `localpilot.healing.policies` | `{}` | Per-category overrides, e.g. `{ "unit_test": { "attempts": 2, "backoffMs": [1000], "timeoutSeconds": 600 } }`. Safety limits cannot be raised: `security` at most 3 attempts; `data_corruption`, `git_conflict`, `permission` and `loop` always escalate |
+| `localpilot.healing.dependencyInstall` | `ask` | `ask`: every install shows a mandatory approval. `never`: a missing package is reported and the task is blocked. **User settings only** |
+| `localpilot.healing.gitConflicts` | `escalate` | The only value in this release: conflicted files are left untouched and handed to you for review. Never resolved automatically |
+| `localpilot.healing.securityCheck` | `changed` | `changed`: offline scan of changed files for secrets and risky code. `full`: also known-vulnerable dependencies (asks before going online). `off`. A finding blocks completion until fixed or you accept the risk. **User settings only**, so a repository cannot switch it off |
+| `localpilot.healing.delegateFixes` | `true` | Fix independent groups of failures in parallel fixer subagents |
+| `localpilot.healing.memory` | `workspace` | Failure memory: `workspace` (local storage), `project` (`.localpilot/recovery-memory.json`, read only in trusted workspaces) or `off` |
+
+There is no setting to bypass a security finding; the Settings screen shows *Security bypass: disabled (cannot be enabled)*.
+
 ## Telemetry & storage
 
 These settings control the local metrics behind the [Dashboard]({{ '/docs/dashboard/' | relative_url }}). The extension does not upload them unless you turn on OTLP export to your own collector. See [Privacy]({{ '/privacy/' | relative_url }}).

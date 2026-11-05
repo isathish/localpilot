@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "rust", "kind": "build", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": "E0308", "file": "src/main.rs", "line": 3 },
+    { "category": "dependency", "code": "E0432", "file": "src/lib.rs", "line": 1, "symbol": "serde" }
+  ] }

@@ -1,0 +1,11 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+/work/proj/src/Calc/Sum.cs(12,5): error CS1002: ; expected [/work/proj/src/Calc/Calc.csproj]
+/work/proj/src/Calc/Api.cs(30,17): error CS0103: The name 'totl' does not exist in the current context [/work/proj/src/Calc/Calc.csproj]
+/work/proj/src/Web/Web.csproj : error NU1101: Unable to find package Acme.Widgets. No packages exist with this id in source(s): nuget.org [/work/proj/Calc.sln]
+
+Build FAILED.
+
+/work/proj/src/Calc/Sum.cs(12,5): error CS1002: ; expected [/work/proj/src/Calc/Calc.csproj]
+    0 Warning(s)
+    3 Error(s)

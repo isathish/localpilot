@@ -1,0 +1,5 @@
+{ "input": "run_command", "command": "git merge feature/login", "root": "/work/proj",
+  "expected": [
+    { "category": "git_conflict", "code": "CONFLICT", "file": "src/a.ts", "line": null },
+    { "category": "git_conflict", "code": "CONFLICT", "file": "src/b.ts", "line": null }
+  ] }

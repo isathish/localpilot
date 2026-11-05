@@ -1,0 +1,6 @@
+{ "input": "check", "ecosystem": "dotnet", "kind": "build", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": "CS1002", "file": "src/Calc/Sum.cs", "line": 12 },
+    { "category": "compile", "code": "CS0103", "file": "src/Calc/Api.cs", "line": 30 },
+    { "category": "dependency", "code": "NU1101", "file": "src/Web/Web.csproj", "line": null, "symbol": "Acme.Widgets" }
+  ] }

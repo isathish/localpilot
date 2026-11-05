@@ -1222,3 +1222,126 @@ body.vscode-high-contrast .steps li:not(.on), body.vscode-high-contrast-light .s
 .redis-line > svg { width: 13px; height: 13px; flex: none; margin-top: 1px; }
 .redis-line code { font-size: 11px; }
 .redis-acts { margin: 0; }
+
+/* Self-healing: a value fixed by design (Security bypass) and the object settings edited in settings.json. */
+.field.fixed .ctl { opacity: 1; }
+.fixed-val { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.fixed-val svg { width: 14px; height: 14px; flex: none; }
+.field .ctl .row.json-row { flex-wrap: wrap; gap: 6px 8px; align-items: center; justify-content: space-between; }
+.field .ctl .row.json-row .btn { flex: none; }
+
+/* ---- Self-healing: retry configuration table and detected checks (Settings → Agent) */
+.heal-pol, .heal-checks { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.heal-sub { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.heal-note { display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.heal-note.warn { color: var(--warn-text); }
+.heal-note svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+.heal-pol .tblwrap, .heal-checks .tblwrap { border: 1px solid var(--border-soft); border-radius: 6px; }
+.heal-pol-tbl th[scope="row"] { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 12.5px; white-space: nowrap; }
+.heal-pol-tbl th[scope="row"] .cat { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.heal-pol-tbl td { vertical-align: middle; }
+.heal-pol-tbl .row.unit-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.heal-pol-tbl input[type="number"] { width: 64px; }
+.heal-pol-tbl input[type="text"] { width: 120px; font-family: var(--mono); font-size: 12px; }
+.heal-pol-tbl tr.fixed { color: var(--muted); }
+.heal-pol-tbl td.act { width: 1%; text-align: right; }
+.heal-checks-tbl td:nth-child(2) code { overflow-wrap: anywhere; }
+.heal-checks-tbl td:last-child { width: 1%; white-space: nowrap; }
+.heal-checks .btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---- Dashboard → Self-healing & recovery */
+#dash-rec { container: dash / inline-size; margin-bottom: 18px; }
+.rec-config { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rec-cfgs { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.rec-cfg { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--border-soft); border-radius: 999px; font-size: 12px; color: var(--fg); white-space: nowrap; }
+.rec-cfg svg { width: 12px; height: 12px; flex: none; stroke-width: 2; }
+.rec-cfg.on svg { color: var(--ok-text); }
+.rec-cfg.off { color: var(--muted); }
+.rec-cfg.locked { color: var(--muted); background: var(--tint); }
+.rec-cfg.num svg { color: var(--muted); }
+.rec-cfg b { font-variant-numeric: tabular-nums; }
+.rec-kpis .kpi[tabindex]:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+.rec-kpis .kpi[title] .kpi-s { text-decoration: underline dotted color-mix(in srgb, var(--muted) 60%, transparent); text-underline-offset: 3px; cursor: help; }
+.rec-current .rec-none { margin: 0; }
+.rec-cur { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rec-cur li { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; }
+.rec-cur li .dot { width: 8px; height: 8px; flex: none; }
+.rec-cur-t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rec-att { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rec-att b { color: var(--fg); }
+.rec-att .meter { width: 56px; }
+.rec-tabs { margin: 2px 0 10px; }
+.rec-tabs .chip { display: inline-flex; align-items: center; gap: 4px; }
+.rec-tabs .chip i { font-style: normal; font-variant-numeric: tabular-nums; opacity: .75; }
+.rec-tabs .chip.attn:not(.on) { border-color: color-mix(in srgb, var(--warn) 55%, var(--border-soft)); color: var(--fg); }
+.rec-view { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rec-view > .card { margin: 0; }
+.rec-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.rec-filter select { width: auto; max-width: 240px; height: 26px; padding-top: 0; padding-bottom: 0; font-size: 12px; }
+.rec-filter > .muted { flex: 1 1 220px; min-width: 0; }
+code.rec-key { font-family: var(--mono); font-size: 11.5px; padding: 1px 5px; border-radius: 4px; background: var(--tint); color: var(--fg); overflow-wrap: anywhere; white-space: normal; }
+code.rec-key.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 12%, transparent); }
+.rec-tbl td.act { width: 1%; text-align: right; white-space: nowrap; }
+.rec-tbl tr.fixed td { color: var(--muted); }
+.rec-tbl tr.rolled td.mono { text-decoration: line-through; color: var(--muted); }
+.rec-patches td.mono { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.rec-tbl td.act .btn + .btn { margin-left: 4px; }
+.rec-diff-row td { padding: 0 8px 8px; white-space: normal; }
+.rec-diff { margin: 0; max-height: 280px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--code-bg, var(--tint)); font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre; tab-size: 2; }
+.rec-diff .add { display: inline-block; min-width: 100%; color: var(--ok-text); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.rec-diff .del { display: inline-block; min-width: 100%; color: var(--error-text); background: color-mix(in srgb, var(--error) 10%, transparent); }
+.rec-diff .hunk { color: var(--muted); }
+.rec-rca { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rec-rca > li.card { margin: 0; padding: 10px 14px; }
+.rec-rca-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12.5px; }
+.rec-chain { grid-template-columns: minmax(84px, auto) minmax(0, 1fr); margin: 6px 0 0; }
+.rec-chain dd { overflow-wrap: anywhere; min-width: 0; }
+.rec-msg { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.rec-mem { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dash .card h3 .spacer { flex: 1; }
+.dash .card.rec-task h3, .dash .card.rec-reg h3, .dash .card.rec-iv h3 { flex-wrap: wrap; }
+.rec-tl { list-style: none; margin: 4px 0 0; padding: 0 0 0 4px; display: flex; flex-direction: column; }
+.rec-tl li { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 6px 0 6px 0; min-width: 0; font-size: 12.5px; }
+.rec-tl li + li::before { content: ''; position: absolute; left: 9px; top: -6px; height: 12px; border-left: 1px solid var(--border); }
+.rec-n { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--card); }
+.rec-tl li.ok .rec-n { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); color: var(--ok-text); }
+.rec-tl li.bad .rec-n { border-color: color-mix(in srgb, var(--error) 55%, var(--border)); color: var(--error-text); }
+.rec-step { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rec-task-f { margin-top: 6px; }
+.rec-task-f:empty { display: none; }
+.rec-more { margin-top: 8px; font-size: 12px; }
+.rec-more summary { cursor: pointer; color: var(--muted); }
+.rec-more[open] summary { margin-bottom: 6px; }
+.rec-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; overflow-wrap: anywhere; }
+.rec-risk { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--warn-text); overflow-wrap: anywhere; }
+.rec-risk svg, .rec-iv h3 svg, .rec-reg h3 svg { width: 14px; height: 14px; flex: none; }
+.rec-reg h3 svg { color: var(--ok-text); }
+.rec-reg.bad h3 svg, .rec-iv h3 svg { color: var(--warn-text); }
+.rec-reg.bad { border-color: color-mix(in srgb, var(--error) 45%, var(--border-soft)); }
+.rec-reg-n { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); }
+.rec-reg-n b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.rec-iv { border-color: color-mix(in srgb, var(--warn) 45%, var(--border-soft)); }
+.rec-iv-t { min-width: 0; overflow-wrap: anywhere; }
+.rec-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rec-src { margin: 8px 0 0; }
+.chart.hbars svg { overflow: visible; }
+.chart rect.hb-track { fill: var(--tint); }
+.chart rect.hb-track:hover { filter: none; }
+.chart .hb-v { fill: var(--fg); }
+@container dash (max-width: 480px) {
+  .rec-config > .btn { margin-left: auto; }
+  .rec-cur li { flex-wrap: wrap; }
+  .rec-att { width: 100%; padding-left: 18px; }
+  .rec-chain { grid-template-columns: minmax(0, 1fr); gap: 1px 0; }
+  .rec-chain dd { margin-bottom: 6px; }
+}
+/* Agent → Self-healing: the checks.json note next to its buttons. */
+.heal-checks .btnrow { align-items: center; }
+.heal-checks .btnrow > .muted { flex: 1 1 180px; min-width: 0; }
+.chart .hb-l, .chart .hb-v { font-size: 10.5px; }
+@container dash (max-width: 640px) {
+  .rec-tbl td.act { display: block; width: auto; margin: 4px 0 0; text-align: left; }
+  .rec-tbl td.act:empty { display: none; }
+  .rec-tbl tr.rec-diff-row td:first-child { font-weight: 400; font-size: 11.5px; }
+  .rec-patches td.mono { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+}

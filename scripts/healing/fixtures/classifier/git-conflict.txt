@@ -1,0 +1,5 @@
+Auto-merging src/a.ts
+CONFLICT (content): Merge conflict in src/a.ts
+Auto-merging src/b.ts
+CONFLICT (content): Merge conflict in src/b.ts
+Automatic merge failed; fix conflicts and then commit the result.

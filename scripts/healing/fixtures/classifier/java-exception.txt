@@ -1,0 +1,3 @@
+Exception in thread "main" java.lang.NullPointerException: Cannot invoke "String.length()" because "name" is null
+	at com.example.Greeter.greet(Greeter.java:9)
+	at com.example.Main.main(Main.java:5)

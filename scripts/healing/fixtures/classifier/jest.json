@@ -1,0 +1,6 @@
+{ "input": "check", "ecosystem": "node", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": "assertion", "file": "src/sum.test.ts", "line": 7, "test": "sum › adds" },
+    { "category": "integration_test", "code": "assertion", "file": "src/api/routes.integration.test.ts", "line": 14, "test": "GET /users › returns the list" },
+    { "category": "dependency", "code": "MODULE_NOT_FOUND", "file": "src/client.test.ts", "line": null, "symbol": "left-pad" }
+  ] }

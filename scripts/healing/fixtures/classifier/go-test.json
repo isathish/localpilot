@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "go", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": null, "file": "sum_test.go", "line": 12, "test": "TestSum" },
+    { "category": "integration_test", "code": null, "file": "api_test.go", "line": 30, "test": "TestAPIGetUser" }
+  ] }

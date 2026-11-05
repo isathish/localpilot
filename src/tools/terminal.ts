@@ -7,7 +7,7 @@ import { getConfig } from '../config';
 import { checkReadOnlyCommand, isReadOnlyOrSafe } from '../agent/commandGuard';
 import { profileInvocation } from '../terminal/profiles';
 import { agentTerminalProfile } from '../terminal/profileSetting';
-import { CommandRun, formatCommandOutcome, OutputCapture } from '../terminal/commandRun';
+import { CommandOutcome, CommandRun, formatCommandOutcome, OutputCapture, stripAnsi } from '../terminal/commandRun';
 import { IntegratedRunOptions, IntegratedRunResult } from '../terminal/terminalManager';
 import { Tool } from '../types';
 import { displayPath, resolveWorkspacePath } from './fs';
@@ -75,13 +75,15 @@ export const runCommandTool: Tool = {
         return { content: `${ctx.mode === 'ask' ? 'Ask' : 'Plan'} mode: ${guard.reason}. Only read-only commands run in ${ctx.mode === 'ask' ? 'Ask' : 'Plan'} mode.`, isError: true };
       }
     }
+    // Synthetic self-healing check: set by the engine only, never derived from the model's arguments.
+    const healing = ctx.healingExec?.origin === 'healing' ? ctx.healingExec : undefined;
     const dangerous = DANGEROUS.test(command);
     const confirm = args.requires_approval === true || args.requires_approval === 'true';
     const ok = await ctx.requestApproval(
       dangerous ? 'Potentially destructive command' : 'Run command',
       `$ ${command}\nin ${displayPath(vscode.Uri.file(cwd), ctx) || cwd}`,
       'terminal',
-      { dangerous, confirm, safeCommand: !dangerous && !confirm && isReadOnlyOrSafe(command).ok }
+      { dangerous, confirm, safeCommand: !dangerous && !confirm && (isReadOnlyOrSafe(command).ok || healing?.checkSpecMatch === true) }
     );
     if (!ok) {
       return { content: 'User declined to run the command.', isError: true };
@@ -92,17 +94,29 @@ export const runCommandTool: Tool = {
 
     const termCfg = getConfig().terminal;
     const explicit = Number(args.timeout_seconds) > 0;
-    const timeoutMs = Math.min(600, explicit ? Number(args.timeout_seconds) : 120) * 1000;
+    const timeoutMs = healing
+      ? Math.min(3600, Number(healing.timeoutSeconds) > 0 ? Number(healing.timeoutSeconds) : 120) * 1000
+      : Math.min(600, explicit ? Number(args.timeout_seconds) : 120) * 1000;
     // Background commands detach after a short look at their startup output; others after the auto-detach timer
     // (sooner when the model asked for a shorter timeout). With the timer off the old hard kill at the timeout applies.
+    // Healing checks never detach: a detached build would keep running and corrupt later checks.
     const auto = Math.max(0, termCfg.autoDetachSeconds) * 1000;
-    const detachAfterMs = args.background ? BACKGROUND_GRACE_MS : auto ? (explicit ? Math.min(auto, timeoutMs) : auto) : 0;
+    const detachAfterMs = healing ? 0 : args.background ? BACKGROUND_GRACE_MS : auto ? (explicit ? Math.min(auto, timeoutMs) : auto) : 0;
+    const report = (o: CommandOutcome) => {
+      try {
+        healing?.rawOutcome({ ...o, output: stripAnsi(o.output) });
+      } catch {
+        /* the engine's collector must not break the tool */
+      }
+    };
     const id = ctx.callId ?? `cmd-${Date.now().toString(36)}`;
     const onOutput = ctx.output;
     if (integrated && termCfg.runInIntegratedTerminal) {
       // Visible, branded terminal via shell integration; the user sees the command run live.
-      const r = await integrated.run(ctx.sessionId, command, cwd, ctx.signal, timeoutMs, termCfg.reveal, { id, onOutput, detachAfterMs }).catch(() => undefined);
+      const opts: IntegratedRunOptions = healing ? { id, onOutput, detachAfterMs, killOnTimeout: true, capture: new OutputCapture(50_000, 150_000) } : { id, onOutput, detachAfterMs };
+      const r = await integrated.run(ctx.sessionId, command, cwd, ctx.signal, timeoutMs, termCfg.reveal, opts).catch(() => undefined);
       if (r) {
+        report(r);
         const res = formatCommandOutcome(command, r);
         return { ...res, data: { ...res.data, terminal: true } };
       }
@@ -118,7 +132,7 @@ export const runCommandTool: Tool = {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    const run = new CommandRun({ id, sessionId: ctx.sessionId, command, kill: () => killTree(child), onOutput, detachAfterMs, timeoutMs, signal: ctx.signal, capture: new OutputCapture(50_000, 150_000) });
+    const run = new CommandRun({ id, sessionId: ctx.sessionId, command, kill: () => killTree(child), onOutput, detachAfterMs, timeoutMs, signal: ctx.signal, capture: new OutputCapture(50_000, 150_000), noDetach: !!healing });
     const push = (d: string) => run.push(d);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -126,7 +140,9 @@ export const runCommandTool: Tool = {
     child.stderr.on('data', push);
     child.on('error', (e) => run.fail(e.message));
     child.on('close', (code) => run.finish(code));
-    return formatCommandOutcome(command, await run.result);
+    const outcome = await run.result;
+    report(outcome);
+    return formatCommandOutcome(command, outcome);
   },
 };
 

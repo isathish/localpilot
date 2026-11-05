@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "custom", "kind": "custom", "root": "/work/proj",
+  "expected": [
+    { "category": "data_corruption", "code": "checksum_mismatch", "file": null, "line": null, "cls": "fatal" }
+  ] }

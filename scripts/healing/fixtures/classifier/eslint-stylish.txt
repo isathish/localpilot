@@ -1,0 +1,11 @@
+
+/work/proj/src/api/user.ts
+  12:5   error    'unused' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  20:10  warning  Unexpected console statement                 no-console
+  31:1   error    Expected '===' and instead saw '=='          eqeqeq
+
+/work/proj/src/index.ts
+  1:1  error  Parsing error: Unexpected token )
+
+✖ 4 problems (3 errors, 1 warning)
+  1 error and 0 warnings potentially fixable with the `--fix` option.

@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "cargo run", "root": "/work/proj",
+  "expected": [
+    { "category": "runtime", "code": "panic", "file": "src/main.rs", "line": 12 }
+  ] }

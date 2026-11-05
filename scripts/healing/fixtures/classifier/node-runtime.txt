@@ -1,0 +1,10 @@
+/work/proj/src/server.js:12
+    return user.name.toUpperCase();
+                     ^
+
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+    at getName (/work/proj/src/server.js:12:22)
+    at Object.<anonymous> (/work/proj/src/server.js:20:1)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v20.10.0

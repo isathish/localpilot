@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "java -cp target/classes com.example.Main", "root": "/work/proj",
+  "expected": [
+    { "category": "runtime", "code": "NullPointerException", "file": null, "line": null }
+  ] }

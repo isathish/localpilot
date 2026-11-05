@@ -1,0 +1,4 @@
+{ "input": "check", "ecosystem": "dotnet", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": null, "file": "tests/Calc.Tests/SumTests.cs", "line": 12, "test": "Calc.Tests.SumTests.Adds" }
+  ] }

@@ -26,6 +26,10 @@ export interface IntegratedRunOptions {
   onOutput?(chunk: string): void;
   /** Detach after this long instead of killing at `timeoutMs`; 0 or unset = never. */
   detachAfterMs?: number;
+  /** Never detach: at `timeoutMs` interrupt (Ctrl-C) and close the terminal with everything it runs (self-healing checks). */
+  killOnTimeout?: boolean;
+  /** Output buffer for the run (default: `OutputCapture`'s own limits). */
+  capture?: OutputCapture;
 }
 
 export { OutputCapture };
@@ -238,9 +242,11 @@ export class TerminalManager implements vscode.Disposable {
         forget();
       },
       onOutput: opts.onOutput,
-      detachAfterMs: opts.detachAfterMs,
+      detachAfterMs: opts.killOnTimeout ? 0 : opts.detachAfterMs,
       timeoutMs,
       signal,
+      capture: opts.capture,
+      noDetach: opts.killOnTimeout === true,
     });
     const reader = (async () => {
       for await (const chunk of exec.read()) {

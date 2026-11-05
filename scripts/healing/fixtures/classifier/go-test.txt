@@ -1,0 +1,8 @@
+=== RUN   TestSum
+--- FAIL: TestSum (0.00s)
+    sum_test.go:12: Sum(1, 2) = 4; want 3
+=== RUN   TestAPIGetUser
+--- FAIL: TestAPIGetUser (0.01s)
+    api_test.go:30: expected status 200, got 404
+FAIL
+FAIL	example.com/calc	0.004s

@@ -1,0 +1,32 @@
+
+ RUN  v1.6.0 /work/proj
+
+ ❯ src/sum.test.ts (2 tests | 1 failed) 6ms
+   × sum > adds
+     → expected 4 to be 3 // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/sum.test.ts > sum > adds
+AssertionError: expected 4 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 4
+
+ ❯ src/sum.test.ts:6:23
+      4| describe('sum', () => {
+      5|   it('adds', () => {
+      6|     expect(sum(1, 2)).toBe(3)
+       |                       ^
+      7|   })
+      8| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  10:12:01
+   Duration  412ms

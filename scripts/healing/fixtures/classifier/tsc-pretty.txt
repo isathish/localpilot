@@ -1,0 +1,21 @@
+src/components/Button.tsx:12:5 - error TS2741: Property 'label' is missing in type '{}' but required in type 'Props'.
+
+12     <Inner />
+       ~~~~~~~~~
+
+  src/components/Inner.tsx:3:3
+    3   label: string;
+        ~~~~~
+    'label' is declared here.
+
+src/index.ts:1:30 - error TS1005: ';' expected.
+
+1 import { Button } from './components/Button'
+                               ~~~~~~~~~~~~~~~~~~~~~
+
+
+Found 2 errors in 2 files.
+
+Errors  Files
+     1  src/components/Button.tsx:12
+     1  src/index.ts:1

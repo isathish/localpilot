@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "python -m app.util", "root": "/work/proj",
+  "expected": [
+    { "category": "compile", "code": "SyntaxError", "file": "app/util.py", "line": 12 }
+  ] }

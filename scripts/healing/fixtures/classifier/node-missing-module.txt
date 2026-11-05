@@ -1,0 +1,15 @@
+node:internal/modules/cjs/loader:1080
+  throw err;
+  ^
+
+Error: Cannot find module 'left-pad'
+Require stack:
+- /work/proj/src/index.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1077:15)
+    at Module._load (node:internal/modules/cjs/loader:922:27)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:121:18)
+    at Object.<anonymous> (/work/proj/src/index.js:1:17) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ '/work/proj/src/index.js' ]
+}

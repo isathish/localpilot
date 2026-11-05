@@ -1,0 +1,27 @@
+{
+  "input": "check",
+  "ecosystem": "gradle",
+  "kind": "build",
+  "root": "/work/proj",
+  "expected": [
+    {
+      "category": "compile",
+      "code": null,
+      "file": "app/src/main/kotlin/App.kt",
+      "line": 7
+    },
+    {
+      "category": "compile",
+      "code": null,
+      "file": "app/src/main/kotlin/Util.kt",
+      "line": 3
+    },
+    {
+      "category": "unit_test",
+      "code": "AssertionFailedError",
+      "file": null,
+      "line": null,
+      "test": "AppTest.greets"
+    }
+  ]
+}

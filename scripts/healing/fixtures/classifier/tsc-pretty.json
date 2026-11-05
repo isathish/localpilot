@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "node", "kind": "typecheck", "root": "/work/proj",
+  "expected": [
+    { "category": "typescript", "code": "TS2741", "file": "src/components/Button.tsx", "line": 12 },
+    { "category": "compile", "code": "TS1005", "file": "src/index.ts", "line": 1 }
+  ] }

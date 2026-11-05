@@ -2,7 +2,7 @@ import { HttpError } from '../providers/http';
 import { StreamEvent } from '../types';
 
 /** Why a model request failed, used to decide whether and how to retry. */
-export type ModelFailure = 'network' | 'server' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'auth' | 'quota' | 'unroutable' | 'other';
+export type ModelFailure = 'network' | 'server' | 'overload' | 'ratelimit' | 'overflow' | 'stall' | 'toolcall' | 'auth' | 'quota' | 'unroutable' | 'other';
 
 export class ModelStallError extends Error {
   constructor(public readonly phase: 'first-token' | 'mid-stream', seconds: number) {
@@ -13,6 +13,8 @@ export class ModelStallError extends Error {
 const OVERFLOW = /context (length|window|size)|too (long|large|many tokens)|exceeds? .*(limit|maximum|context)|maximum context|prompt is too long|input length|num_ctx|token limit|reduce the length/i;
 const UNROUTABLE = /no (eligible|available|healthy|matching|valid) (route|provider|account|target|deployment|connection)s?|no providers? (are |is )?(configured|connected|available)|all (providers|accounts|targets|routes) (failed|exhausted|unavailable)|no deployments? available|invalid model name passed in model=/i;
 const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits|insufficient (credits|balance|funds)/i;
+/** The server ran out of memory loading or running the model (Ollama, llama.cpp, vLLM): retrying unchanged rarely helps. */
+const OVERLOAD = /out of memory|\bOOM\b|CUDA error|failed to allocate|requires more system memory|insufficient memory|llama runner process has terminated/i;
 const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
 
 export function classifyModelError(e: unknown): ModelFailure {
@@ -41,6 +43,9 @@ export function classifyModelError(e: unknown): ModelFailure {
     if (/error parsing tool call/i.test(e.body)) {
       return 'toolcall';
     }
+    if (e.status >= 500 && OVERLOAD.test(e.body)) {
+      return 'overload';
+    }
     if (e.status >= 500 || e.status === 408) {
       return 'server';
     }
@@ -63,6 +68,9 @@ export function classifyModelError(e: unknown): ModelFailure {
   if (/rate.?limit|too many requests/i.test(msg)) {
     return 'ratelimit';
   }
+  if (OVERLOAD.test(msg)) {
+    return 'overload';
+  }
   if (/overloaded|internal server error|service unavailable|bad gateway/i.test(msg)) {
     return 'server';
   }
@@ -72,7 +80,8 @@ export function classifyModelError(e: unknown): ModelFailure {
   return 'other';
 }
 
-export const isTransient = (k: ModelFailure): boolean => k === 'network' || k === 'server' || k === 'ratelimit' || k === 'stall';
+/** `overload` stays transient here so the legacy path keeps retrying OOM 500s as before; the healing policy treats it as environmental. */
+export const isTransient = (k: ModelFailure): boolean => k === 'network' || k === 'server' || k === 'overload' || k === 'ratelimit' || k === 'stall';
 
 /**
  * How long to wait before retry `attempt` (1-based). Rate limits wait as long as the server asks (cloud APIs usually
@@ -95,6 +104,8 @@ export function describeModelError(kind: ModelFailure, raw: string, modelName: s
       return `Could not reach the model server for ${modelName}. Check that it is running (Settings → Providers → Check all connections) and try again.${detail ? ` (${detail})` : ''}`;
     case 'server':
       return `The model server returned an error for ${modelName}. It may be out of memory or restarting — try again, or pick a smaller model.${detail ? ` (${detail})` : ''}`;
+    case 'overload':
+      return `The model server ran out of memory running ${modelName}. Close other models or apps, lower the context window in Settings → Models, or pick a smaller model.${detail ? ` (${detail})` : ''}`;
     case 'ratelimit':
       return `The server is rate limiting requests for ${modelName}. Wait a moment and try again.${detail ? ` (${detail})` : ''}`;
     case 'auth':

@@ -35,6 +35,10 @@ import { FrontMatterError } from '../agent/frontMatterEdit';
 import { listRepos } from '../agent/repos';
 import { formatBytes } from '../agent/checkpoints';
 import { profileNames, profileOsKey, TerminalProfileEntry } from '../terminal/profiles';
+import { ensureChecksJson, HealingView, healingView as buildHealingView } from './healingChecksView';
+import type { RecoveryDashboard } from '../agent/healing/dashboardData';
+import type { RecoveryActionKind } from '../agent/healing/types';
+import { handleMemoryReuse, handleOpenRecoveryDiff, handleRecoveryAction, loadRecovery, RecoveryHooks } from './recoveryDashboardBridge';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
@@ -112,7 +116,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] } }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -135,7 +139,13 @@ type ToSettings =
       allProviders?: string[];
       includeDisabled?: boolean;
       providers?: string[];
+      /** Self-healing & recovery group; absent when no recovery service is wired into this window. */
+      recovery?: RecoveryDashboard;
+      recoveryError?: string;
+      /** Applied patches can open as a diff editor. */
+      recoveryDiff?: boolean;
     }
+  | { type: 'healingChecks'; healing?: HealingView; error?: string }
   | { type: 'tuneResult'; role: string; model: string; ok: boolean; error?: string }
   | { type: 'logs'; entries: LogEntry[]; level?: LogLevel; q?: string }
   | { type: 'logLine'; entry: LogEntry }
@@ -196,6 +206,16 @@ type FromSettings =
   | { type: 'clearTelemetry' }
   | { type: 'openLogFile' }
   | { type: 'openTelemetryFolder' }
+  /** Opens `.localpilot/checks.json`, created from a template when missing. */
+  | { type: 'openChecksJson' }
+  /** Re-reads the detected checks for the Agent → Self-healing block. */
+  | { type: 'loadChecks' }
+  /** A Human Intervention Queue action; `id` is the intervention. */
+  | { type: 'recoveryAction'; sessionId: string; action: RecoveryActionKind; id?: string }
+  /** Failure memory: "Don't suggest again" (allowed false) or "Suggest again". */
+  | { type: 'memoryReuse'; id: string; allowed: boolean }
+  /** "Open diff" on an applied patch. */
+  | { type: 'openRecoveryDiff'; sessionId: string; attempt: number; file: string }
   | { type: 'testOtlp' }
   | { type: 'testRedis' }
   | { type: 'loadCustomize' }
@@ -221,6 +241,9 @@ const SETTING_KEYS = [
   'maxConsecutiveMistakes', 'disabledTools',
   'markdownViewer.scrollSync', 'markdownViewer.outlineDepth', 'markdownViewer.frontMatter', 'markdownViewer.mermaid', 'markdownViewer.exportTheme',
   'pdfViewer.pageColors', 'pdfViewer.sidebar', 'pdfViewer.defaultZoom', 'pdfViewer.rangeThresholdMB', 'pdfViewer.maxFileSizeMB', 'pdf.maxReadSizeMB', 'pdf.maxChars',
+  'healing.enabled', 'healing.autoDetect', 'healing.autoRetry', 'healing.autoFix', 'healing.regressionRequired', 'healing.maxRepairAttempts', 'healing.maxTotalAttempts', 'healing.extraSteps', 'healing.taskDeadlineMinutes',
+  'healing.checkTiming', 'healing.scopeTests', 'healing.checkTimeoutSeconds', 'healing.checkTimeBudgetSeconds', 'healing.baseline', 'healing.checks', 'healing.policies', 'healing.dependencyInstall', 'healing.gitConflicts',
+  'healing.securityCheck', 'healing.delegateFixes', 'healing.memory',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -274,6 +297,19 @@ export class SettingsPanel implements vscode.Disposable {
   onCustomized?: () => void;
   /** Bytes held by chat checkpoints (file snapshots and git objects only checkpoint refs keep), for Memory & history. */
   checkpointBytes?: () => Promise<number>;
+  /** Self-healing & recovery dashboard for the last `days` days (store states joined with telemetry). */
+  recoveryDashboard?: (days: number) => Promise<RecoveryDashboard>;
+  /** Runs a Human Intervention Queue action and audits it like the chat card does; `acceptRisk` arrives only after the
+   *  panel's modal confirmation. false: not done. */
+  onRecoveryAction?: (sessionId: string, action: RecoveryActionKind, interventionId?: string) => Promise<boolean | void>;
+  /** Switches a failure-memory entry's suggestions off or on again; false when the entry is gone. */
+  onMemoryReuse?: (id: string, allowed: boolean) => Promise<boolean>;
+  /** Opens an applied patch as a diff: the snapshot in the attempt's directory against the current file. */
+  openRecoveryDiff?: (sessionId: string, attempt: number, file: string) => Promise<void>;
+  /** Detected checks for the Settings page; defaults to the first workspace folder's view. */
+  loadChecks?: () => Promise<HealingView>;
+  /** Opens `.localpilot/checks.json`; defaults to creating it from a template in the first workspace folder. */
+  openChecks?: () => Promise<void>;
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
@@ -743,6 +779,16 @@ export class SettingsPanel implements vscode.Disposable {
         }
         return;
       }
+      case 'openChecksJson':
+        return this.openChecks ? this.openChecks().then(() => this.pushChecks()) : this.openChecksJson();
+      case 'loadChecks':
+        return this.pushChecks();
+      case 'recoveryAction':
+        return handleRecoveryAction(m, this.recoveryHooks(), (t) => this.post(t), () => this.pushDashboard());
+      case 'memoryReuse':
+        return handleMemoryReuse(m, this.recoveryHooks(), (t) => this.post(t), () => this.pushDashboard());
+      case 'openRecoveryDiff':
+        return handleOpenRecoveryDiff(m, this.recoveryHooks(), (t) => this.post(t));
       case 'openTelemetryFolder':
         if (this.telemetry) {
           await fs.mkdir(this.telemetry.dir, { recursive: true });
@@ -752,8 +798,51 @@ export class SettingsPanel implements vscode.Disposable {
     }
   }
 
+  private recoveryHooks(): RecoveryHooks {
+    return {
+      onRecoveryAction: this.onRecoveryAction,
+      onMemoryReuse: this.onMemoryReuse,
+      openRecoveryDiff: this.openRecoveryDiff,
+      confirmRisk: async () => (await vscode.window.showWarningMessage('Accept this security risk? It is recorded in the audit log.', { modal: true }, 'Accept risk')) === 'Accept risk',
+    };
+  }
+
   private lastDashboardDays = 7;
   /** Enabled provider ids from the CLI config, so its model calls count on the dashboard too. */
+  private healingView(): Promise<HealingView> {
+    if (this.loadChecks) {
+      return this.loadChecks();
+    }
+    const i = vscode.workspace.getConfiguration('localpilot').inspect<unknown>('healing.checks');
+    return buildHealingView(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, { user: i?.globalValue, workspace: i?.workspaceValue ?? i?.workspaceFolderValue }, vscode.workspace.isTrusted);
+  }
+
+  private async pushChecks(): Promise<void> {
+    try {
+      this.post({ type: 'healingChecks', healing: await this.healingView() });
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      this.log.warn(`self-healing checks: ${error}`);
+      this.post({ type: 'healingChecks', error });
+    }
+  }
+
+  private async openChecksJson(): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) {
+      this.post({ type: 'toast', level: 'error', text: 'Open a folder first: checks.json belongs to a workspace' });
+      return;
+    }
+    const { file, created } = await ensureChecksJson(root);
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+    if (!vscode.workspace.isTrusted) {
+      this.post({ type: 'toast', level: 'warn', text: 'This workspace is not trusted: .localpilot/checks.json is ignored until you trust it' });
+    } else if (created) {
+      this.post({ type: 'toast', level: 'info', text: 'Created .localpilot/checks.json' });
+    }
+    return this.pushState();
+  }
+
   private async cliProviderIds(): Promise<string[]> {
     try {
       const cfg = JSON.parse(await fs.readFile(path.join(os.homedir(), '.localpilot', 'config.json'), 'utf8')) as Record<string, unknown>;
@@ -777,8 +866,10 @@ export class SettingsPanel implements vscode.Disposable {
   private async pushDashboard(days = this.lastDashboardDays): Promise<void> {
     this.lastDashboardDays = days;
     const { includeDisabled, providers: picked } = this.dashFilter;
+    // Recovery comes from the RecoveryStore, so it loads alongside (and without) telemetry.
+    const recovery = loadRecovery(this.recoveryDashboard, days).then((x) => ({ ...x, recoveryDiff: !!this.openRecoveryDiff }));
     if (!this.telemetry) {
-      return this.post({ type: 'dashboard', days, error: 'Telemetry is not available in this window', includeDisabled, providers: picked });
+      return this.post({ type: 'dashboard', days, error: 'Telemetry is not available in this window', includeDisabled, providers: picked, ...(await recovery) });
     }
     try {
       // By default only enabled providers count: disabling one hides its history, and providers that tests or old
@@ -797,11 +888,11 @@ export class SettingsPanel implements vscode.Disposable {
       const tuning = report && { ...report, history: report.history.map((h) => ({ ...h, manual: this.manualTunes.get(h.setting) === h.value || undefined })) };
       const hiddenProviders = [...hidden].map(([id, calls]) => ({ id, calls })).sort((a, b) => b.calls - a.calls);
       const allProviders = [...enabled, ...(includeDisabled ? hiddenProviders.map((h) => h.id) : [])];
-      this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile(), tuning, hiddenProviders, allProviders, includeDisabled, providers: picked });
+      this.post({ type: 'dashboard', days, summary, logFile: this.telemetry.logFile(), tuning, hiddenProviders, allProviders, includeDisabled, providers: picked, ...(await recovery) });
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       this.log.warn(`Dashboard metrics failed: ${error}`);
-      this.post({ type: 'dashboard', days, error, includeDisabled, providers: picked });
+      this.post({ type: 'dashboard', days, error, includeDisabled, providers: picked, ...(await recovery) });
     }
   }
 
@@ -1237,6 +1328,7 @@ export class SettingsPanel implements vscode.Disposable {
     const stats = await this.store.stats().catch(() => ({ count: this.store.list().length, bytes: 0, messages: 0 }));
     const checkpointBytes = this.page === 'settings' ? await this.checkpointBytes?.().catch(() => undefined) : undefined;
     const missingPaths = this.page === 'settings' ? await missingFolders().catch(() => []) : [];
+    const healing = this.page === 'settings' ? await this.healingView().catch((e) => { this.log.warn(`self-healing checks: ${e instanceof Error ? e.message : String(e)}`); return undefined; }) : undefined;
     // A newer push started while this one awaited: only the newest snapshot may reach the webview.
     if (seq !== this.pushSeq) {
       return;
@@ -1284,6 +1376,7 @@ export class SettingsPanel implements vscode.Disposable {
         }
       })(),
       settingsMeta: { missingPaths },
+      healing,
     });
     this.section = undefined;
     this.navigate = false;

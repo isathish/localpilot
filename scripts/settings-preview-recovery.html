@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<!-- Generated copy of settings-preview.html with the self-healing mocks (inlined below): open ?section=dashboard (?rec=empty|off, ?rectab=queue) or ?section=agent (?untrusted=1).
+     Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 (?web=0: web search off) -->
+<style>
+:root{
+--vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
+
+--vscode-editor-background:#1f1f1f;--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-widget-border:#2b2b2b;
+--vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-list-hoverBackground:#2a2d2e;
+--vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c;
+--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-focusBorder:#0078d4;
+--vscode-textLink-foreground:#4daafc;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#cca700;--vscode-testing-iconPassed:#73c991;
+--vscode-textCodeBlock-background:#2a2a2a;--vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;
+--vscode-notifications-background:#252526;
+--vscode-charts-blue:#3794ff;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-charts-orange:#d18616;--vscode-charts-purple:#b180d7;--vscode-charts-lines:#ffffff80;
+}
+html.light{
+--vscode-button-secondaryBackground:#e5e5e5;--vscode-button-secondaryForeground:#3b3b3b;--vscode-button-secondaryHoverBackground:#cccccc;--vscode-button-border:#0000001a;--vscode-icon-foreground:#3b3b3b;
+
+--vscode-editor-background:#ffffff;--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#717171;--vscode-widget-border:#e5e5e5;
+--vscode-sideBar-background:#f8f8f8;--vscode-editorWidget-background:#f3f3f3;--vscode-list-hoverBackground:#e8e8e8;
+--vscode-input-background:#ffffff;--vscode-input-foreground:#3b3b3b;--vscode-input-border:#cecece;
+--vscode-button-background:#005fb8;--vscode-button-hoverBackground:#0258a8;--vscode-focusBorder:#005fb8;
+--vscode-textLink-foreground:#005fb8;--vscode-errorForeground:#f85149;--vscode-editorWarning-foreground:#bf8803;--vscode-testing-iconPassed:#2ea043;
+--vscode-textCodeBlock-background:#f0f0f0;--vscode-notifications-background:#f3f3f3;
+--vscode-charts-blue:#0a66c2;--vscode-charts-green:#388a34;--vscode-charts-red:#e51400;--vscode-charts-yellow:#bf8803;--vscode-charts-orange:#d18616;--vscode-charts-purple:#652d90;--vscode-charts-lines:#00000080;
+}
+</style>
+<link rel="stylesheet" href="../media/settings.css"></head>
+<body data-logo="../media/logo.svg">
+<div id="app" aria-busy="true"><div class="loading"><span class="spinner"></span>Loading…</div></div>
+<div id="toasts" role="status" aria-live="polite"></div>
+<script>
+// Mock data for the Settings → Dashboard → Self-healing & recovery group and the Agent → Self-healing checks list, in the
+// shapes `recoveryDashboard()` (src/agent/healing/dashboardData.ts) and `healingView()` (src/ui/healingChecksView.ts)
+// return. Loaded by scripts/settings-preview-recovery.html; ?rec=empty gives a quiet workspace, ?rec=off no service.
+(function () {
+  const q = new URLSearchParams(location.search);
+  const now = Date.now(); const min = 60e3; const h = 60 * min;
+  const cats = ['model_timeout', 'model_unavailable', 'model_overload', 'model_output', 'compile', 'typescript', 'lint', 'build', 'dependency', 'unit_test', 'integration_test', 'runtime', 'database', 'data_corruption', 'mcp', 'git_conflict', 'security', 'tool', 'permission', 'check_timeout', 'loop', 'unknown'];
+  const attempts = { model_timeout: 3, model_unavailable: 3, model_overload: 2, model_output: 2, compile: 3, typescript: 3, lint: 2, build: 3, dependency: 1, unit_test: 3, integration_test: 2, runtime: 2, database: 1, data_corruption: 0, mcp: 2, git_conflict: 0, security: 2, tool: 1, permission: 0, check_timeout: 1, loop: 0, unknown: 1 };
+  const retryConfig = cats.map((c) => ({ category: c, cls: /^model_|mcp/.test(c) ? 'transient' : 'deterministic', strategy: /^model_(timeout|unavailable)/.test(c) ? 'retry' : c === 'model_overload' ? 'adjust_resources' : c === 'model_output' ? 'repair_output' : c === 'dependency' ? 'install' : c === 'mcp' ? 'reconnect' : attempts[c] ? 'fix' : 'escalate', attempts: c === 'unit_test' ? 4 : attempts[c], defaultAttempts: attempts[c], backoffMs: /^model_(timeout|unavailable)/.test(c) ? [1000, 2000, 4000] : c === 'mcp' ? [1000, 3000] : [], exponential: /^model_(timeout|unavailable)/.test(c), timeoutSeconds: c === 'unit_test' ? 600 : undefined, overridden: c === 'unit_test' }));
+  const diff = '--- a/src/api/user.ts\n+++ b/src/api/user.ts\n@@ -40,5 +40,5 @@ export async function loadUser(id: string) {\n   const row = await db.users.find(id);\n-  return toUser(row.id, row);\n+  return toUser(String(row.id), row);\n }\n';
+  const full = {
+    days: 7, generatedAt: now,
+    tiles: { enabled: true, detected: 14, recovered: 10, pendingIntervention: 2, rate: 76.9, mttrP50: 94000 },
+    config: { autoDetect: true, autoRetry: true, autoFix: true, regressionRequired: true, securityBypass: false, maxRepairAttempts: 3 },
+    current: [{ sessionId: 's_8f21c0d2e1', title: 'Add pagination to the users API', phase: 'fixing', attempt: 2, max: 3, category: 'typescript', signature: 'a1', key: 'TS2345@src/api/user.ts', updatedAt: now - 20000 }],
+    failureHistory: [
+      { t: now - 4 * min, sessionId: 's_8f21c0d2e1', category: 'typescript', severity: 'high', signature: 'a1', key: 'TS2345@src/api/user.ts', outcome: 'in progress', source: 'store' },
+      { t: now - 2 * h, sessionId: 's_77aa01bc33', category: 'unit_test', severity: 'medium', signature: 'b2', key: 'user pagination returns 20 rows@src/api/user.test.ts', outcome: 'fixed', source: 'store' },
+      { t: now - 3 * h, sessionId: 's_77aa01bc33', category: 'dependency', severity: 'high', signature: 'c3', key: 'zod', outcome: 'blocked', source: 'store' },
+      { t: now - 5 * h, sessionId: 's_19be4410aa', category: 'security', severity: 'critical', signature: 'd4', key: 'secret@src/config/keys.ts', outcome: 'escalated', source: 'store' },
+      { t: now - 26 * h, sessionId: 's_02cd99e1f0', category: 'model_timeout', signature: 'e5', key: 'e5f1a2b3', outcome: 'recovered', source: 'telemetry' },
+    ],
+    categories: ['dependency', 'model_timeout', 'security', 'typescript', 'unit_test'],
+    rca: [
+      { sessionId: 's_8f21c0d2e1', attempt: 2, category: 'typescript', signature: 'a1', key: 'TS2345@src/api/user.ts', failure: "Argument of type 'number' is not assignable to parameter of type 'string'.", rootCause: 'toUser() takes the id as a string since the schema change; the call site still passes the numeric row id.', strategy: 'fix', mode: 'inline', memoryUsed: 'm_42', t: now - 3 * min },
+      { sessionId: 's_8f21c0d2e1', attempt: 1, category: 'typescript', signature: 'a1', key: 'TS2345@src/api/user.ts', failure: "Argument of type 'number' is not assignable to parameter of type 'string'.", rootCause: 'Changed the parameter type of toUser instead of the caller.', strategy: 'fix', mode: 'inline', result: 'worse', t: now - 4 * min },
+      { sessionId: 's_77aa01bc33', attempt: 1, category: 'unit_test', signature: 'b2', key: 'user pagination returns 20 rows@src/api/user.test.ts', failure: 'expected 20 rows, got 21', rootCause: 'Off-by-one in the page end index.', strategy: 'fix', mode: 'delegate', result: 'fixed', t: now - 2 * h },
+    ],
+    attempts: [
+      { sessionId: 's_8f21c0d2e1', turnKey: 4, phase: 'fixing', startedAt: now - 6 * min, recoveryStartedAt: now - 4 * min, updatedAt: now - 20000, attempts: [
+        { n: 1, category: 'typescript', key: 'TS2345@src/api/user.ts', strategy: 'fix', mode: 'inline', startedAt: now - 4 * min, endedAt: now - 3.4 * min, durationMs: 36000, result: 'rolled_back', adjust: [], patches: 2 },
+        { n: 2, category: 'typescript', key: 'TS2345@src/api/user.ts', strategy: 'fix', mode: 'inline', startedAt: now - 3 * min, adjust: [], patches: 1 },
+      ], perCategory: [{ category: 'typescript', count: 2 }], approvals: [], acceptedRisks: [] },
+      { sessionId: 's_77aa01bc33', taskId: 'q_3', turnKey: 0, phase: 'blocked', outcome: 'blocked', startedAt: now - 3.2 * h, recoveryStartedAt: now - 3 * h, updatedAt: now - 2 * h, attempts: [
+        { n: 1, category: 'model_timeout', key: 'model_timeout', strategy: 'retry', mode: 'inline', startedAt: now - 3 * h, endedAt: now - 3 * h + 4000, durationMs: 4000, result: 'fixed', adjust: ['context 16384'], patches: 0 },
+        { n: 2, category: 'unit_test', key: 'user pagination returns 20 rows@src/api/user.test.ts', strategy: 'fix', mode: 'delegate', startedAt: now - 2.5 * h, endedAt: now - 2.4 * h, durationMs: 81000, result: 'fixed', adjust: [], patches: 1 },
+        { n: 3, category: 'dependency', key: 'zod', strategy: 'install', mode: 'inline', startedAt: now - 2.2 * h, endedAt: now - 2.2 * h + 2000, durationMs: 2000, result: 'blocked', adjust: [], patches: 0 },
+      ], perCategory: [{ category: 'model_timeout', count: 1 }, { category: 'unit_test', count: 1 }, { category: 'dependency', count: 1 }], approvals: [{ at: now - 2.2 * h, kind: 'install', command: 'npm install zod', decision: 'denied', mandatory: true, origin: 'healing' }], acceptedRisks: [] },
+      { sessionId: 's_19be4410aa', turnKey: 2, phase: 'completed', outcome: 'completed', startedAt: now - 6 * h, recoveryStartedAt: now - 5 * h, updatedAt: now - 4.5 * h, attempts: [], perCategory: [{ category: 'security', count: 1 }], approvals: [], acceptedRisks: [{ by: 'user', at: now - 4.6 * h, signatures: ['d4'], keys: ['secret@src/config/keys.ts'] }] },
+    ],
+    patches: [
+      { sessionId: 's_8f21c0d2e1', attempt: 1, file: 'src/api/user.ts', added: 1, removed: 1, result: 'rolled_back', diffHash: 'h1', preview: '--- a/src/api/user.ts\n+++ b/src/api/user.ts\n@@ -12,3 +12,3 @@\n-export function toUser(id: string, row: Row) {\n+export function toUser(id: string | number, row: Row) {\n', t: now - 3.4 * min },
+      { sessionId: 's_77aa01bc33', attempt: 2, file: 'src/api/paginate.ts', added: 1, removed: 1, result: 'kept', diffHash: 'h2', preview: '--- a/src/api/paginate.ts\n+++ b/src/api/paginate.ts\n@@ -8,1 +8,1 @@\n-  const end = start + size + 1;\n+  const end = start + size;\n', t: now - 2.4 * h },
+      { sessionId: 's_8f21c0d2e1', attempt: 2, file: 'src/api/user.ts', added: 1, removed: 1, diffHash: 'h3', preview: diff, t: now - 2 * min },
+    ],
+    retryConfig,
+    regression: [
+      { sessionId: 's_77aa01bc33', attempt: 2, t: now - 2.4 * h, before: 3, after: 2, fixed: ['user pagination returns 20 rows@src/api/user.test.ts'], introduced: [], preexisting: ['lint/no-unused-vars@src/legacy/old.ts'], foreign: ['TS2304@src/billing/invoice.ts'], durationMs: 41000 },
+      { sessionId: 's_8f21c0d2e1', attempt: 1, t: now - 3.4 * min, before: 1, after: 3, fixed: [], introduced: ['TS2322@src/api/admin.ts', 'TS2322@src/api/team.ts'], preexisting: [], foreign: [], durationMs: 12000 },
+    ],
+    interventions: [
+      { id: 'i_1', sessionId: 's_77aa01bc33', taskId: 'q_3', reason: 'approval_needed', category: 'dependency', title: 'Missing package zod in src/api/schema.ts', rootCause: "src/api/schema.ts imports 'zod', which is not in package.json.", evidence: "Error: Cannot find module 'zod'\n    at src/api/schema.ts:1:19", attemptsSummary: 'Install proposed (npm install zod); you declined.', patches: 1, nextActions: [{ action: 'approveInstall', label: 'Approve install', command: '/recovery approve' }, { action: 'installManually', label: 'I installed it' }, { action: 'rollback', label: 'Rollback fixes', command: '/recovery rollback' }, { action: 'dismiss', label: 'Dismiss' }], createdAt: now - 2.2 * h },
+      { id: 'i_2', sessionId: 's_5c0ffee123', reason: 'security', category: 'security', title: 'Hard-coded API key in src/config/stripe.ts:3', rootCause: 'A Stripe live key was written into the source.', attemptsSummary: '2 remediation attempts; the key is still referenced by tests.', patches: 2, nextActions: [{ action: 'resume', label: 'Resume', command: '/recovery resume' }, { action: 'retryWithGuidance', label: 'Retry with guidance' }, { action: 'acceptRisk', label: 'Accept risk' }], createdAt: now - 40 * min },
+    ],
+    analytics: {
+      rateByCategory: [{ category: 'typescript', detected: 5, recovered: 4, rate: 80 }, { category: 'unit_test', detected: 4, recovered: 4, rate: 100 }, { category: 'model_timeout', detected: 3, recovered: 3, rate: 100 }, { category: 'dependency', detected: 1, recovered: 0, rate: 0 }, { category: 'security', detected: 1, recovered: 0, rate: 0 }],
+      attemptsDistribution: [{ attempts: 1, tasks: 6 }, { attempts: 2, tasks: 3 }, { attempts: 3, tasks: 2 }],
+      mttr: { p50: 94000, p90: 410000 },
+      topSignatures: [{ signature: 'a1', key: 'TS2345@src/api/user.ts', count: 4, recovered: 3 }, { signature: 'b2', key: 'user pagination returns 20 rows@src/api/user.test.ts', count: 2, recovered: 2 }, { signature: 'e5', key: 'e5f1a2b3', count: 2, recovered: 2 }],
+      memory: { suggested: 5, succeeded: 3, hitRate: 60 }, acceptedRisks: 1, source: 'telemetry',
+    },
+  };
+  const empty = { ...full, tiles: { enabled: true, detected: 0, recovered: 0, pendingIntervention: 0, rate: 0, mttrP50: 0 }, current: [], failureHistory: [], categories: [], rca: [], attempts: [], patches: [], regression: [], interventions: [], analytics: { rateByCategory: [], attemptsDistribution: [], mttr: { p50: 0, p90: 0 }, topSignatures: [], memory: { suggested: 0, succeeded: 0, hitRate: 0 }, acceptedRisks: 0, source: 'store' } };
+  window.recoveryMock = (days) => (q.get('rec') === 'off' ? undefined : { ...(q.get('rec') === 'empty' ? empty : full), days: days > 0 ? days : 3650 });
+  window.healingMock = {
+    trusted: q.get('untrusted') !== '1', hasRoot: true, checksJson: 'present', disabled: ['npm:lint'],
+    checks: [
+      { id: 'tsc', kind: 'typecheck', command: 'npx tsc --noEmit -p .', required: true, source: 'discovered', ecosystem: 'node' },
+      { id: 'npm:test', kind: 'test', command: 'npm test', required: true, source: 'discovered', ecosystem: 'node' },
+      { id: 'custom:e2e', kind: 'test', command: 'npm run test:e2e', required: false, source: 'checks.json', ecosystem: 'node' },
+      { id: 'security:changed', kind: 'security', command: 'Secrets and unsafe code in changed files', required: true, source: 'discovered', ecosystem: 'any' },
+    ],
+    policies: cats.map((c) => ({ category: c, attempts: attempts[c], backoffMs: retryConfig.find((r) => r.category === c).backoffMs, max: c === 'security' ? 3 : ['data_corruption', 'git_conflict', 'permission', 'loop'].includes(c) ? 0 : 10 })),
+  };
+})();
+</script>
+<script>
+const q = new URLSearchParams(location.search);
+if (q.get('light')) document.documentElement.classList.add('light');
+// VS Code tags the body with the active theme kind; the stylesheet keys light/HC adjustments off these.
+document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
+if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df');
+const section = q.get('section') || 'providers';
+const page = q.get('page') || 'settings';
+const providers = [
+  { id: 'ollama', type: 'ollama', baseUrl: 'http://localhost:11434', displayName: 'Ollama' },
+  { id: 'lmstudio', type: 'openai', baseUrl: 'http://localhost:1234/v1', displayName: 'LM Studio' },
+  { id: 'docker', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', displayName: 'Docker Model Runner' },
+  { id: 'docker-lp-ollama', type: 'ollama', baseUrl: 'http://localhost:11435', displayName: 'Ollama (Docker · lp-ollama)', enabled: false },
+  { id: 'anthropic', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', displayName: 'Anthropic (Claude)', apiKey: '${secret:anthropic}' },
+  { id: 'openai', type: 'openai', baseUrl: 'https://api.openai.com/v1', displayName: 'OpenAI', apiKey: '${env:OPENAI_API_KEY}' },
+  { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true },
+];
+// ?local=1: a first-run machine with only local servers (no cloud providers, nothing disabled), e.g. for the setup wizard.
+if (q.get('local')) { providers.splice(0, providers.length, ...providers.filter((p) => !/^https:/.test(p.baseUrl) && !p.cloud && p.enabled !== false)); }
+// Key status as the extension reports it (never the key): keychain ok, env var missing, gateway without a key.
+const keys = { anthropic: { source: 'keychain', ok: true }, openai: { source: 'env', ok: false, env: 'OPENAI_API_KEY' }, omniroute: { source: 'none', ok: false } };
+const models = [
+  { id: 'ollama/gemma4:e4b', providerId: 'ollama', modelId: 'gemma4:e4b', name: 'gemma4:e4b', contextWindow: 131072, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, supportsFim: false },
+  { id: 'ollama/qwen2.5-coder:7b', providerId: 'ollama', modelId: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
+  { id: 'ollama/qwen2.5-coder:1.5b', providerId: 'ollama', modelId: 'qwen2.5-coder:1.5b', name: 'qwen2.5-coder:1.5b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
+  { id: 'docker/docker.io/ai/smollm2:latest', providerId: 'docker', modelId: 'docker.io/ai/smollm2:latest', name: 'smollm2:latest', contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false },
+  { id: 'anthropic/claude-sonnet-4-6', providerId: 'anthropic', modelId: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 1000000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, supportsFim: false, remote: true },
+  { id: 'lmstudio/qwen2.5-vl-7b', providerId: 'lmstudio', modelId: 'qwen2.5-vl-7b', name: 'qwen2.5-vl-7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: true },
+];
+const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, temperature: 0.2, thinking: 'off', keepAlive: '30m', compactionThreshold: 0.75, maxToolOutputChars: 24000,
+  'approvals.terminal': 'ask', 'approvals.write': 'always', 'approvals.delete': 'ask', 'approvals.network': 'always', 'parallel.maxConcurrency': 4, 'parallel.maxSubagentDepth': 2, autoClarify: true, 'routing.fast': '', 'routing.coding': '',
+  'webSearch.provider': 'duckduckgo', 'webSearch.searxngUrl': 'http://localhost:8888', 'webSearch.apiKey': '', 'webSearch.maxResults': 6,
+  'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
+  mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
+  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'memory.maxNoteChars': 8000, 'memory.maxNotes': 200, 'autoMode.enabled': false, 'autoMode.model': '', 'queue.concurrency': 1, 'supervisor.enabled': true, 'supervisor.intervalSeconds': 60, 'supervisor.autoInstall': false, 'gateways.litellmConfig': '', 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
+  'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '',
+  pluginPaths: [], 'hooks.enabled': true, 'browser.chromePath': '', 'colibri.path': '', 'colibri.model': '', 'colibri.port': 8000, 'colibri.kvSlots': 2,
+  'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': !q.get('recoff'), 'telemetry.retentionDays': 30,
+  // Keys added since the first harness, at their package.json defaults; ?web=0 turns the internet switch off.
+  prewarm: true, 'ollama.flashAttention': true, 'ollama.kvCacheType': 'q8_0', 'prompts.autoCorrect': true, 'compaction.strategy': 'agentic', 'approvals.mcp': 'always', 'approvals.dangerousAlwaysAsk': true,
+  notifications: 'whenHidden', 'clarify.questions': 'smart', 'worktrees.mode': 'always', 'worktrees.location': '', diffPreview: 'onApproval', editTool: 'auto', 'edit.reportNewErrors': true, 'checkpoints.enabled': true,
+  'webSearch.enabled': q.get('web') !== '0', 'chat.location': 'sidebar', 'terminal.profile': 'default', 'terminal.shellIntegrationTimeout': 4000, 'terminal.autoDetachSeconds': 300, 'memory.autoSave': true,
+  'history.includeCli': true, preferredLanguage: 'auto', showTips: true, 'plugins.marketplaces': ['anthropics/claude-plugins-official'], repos: {}, 'mcp.watchServerFiles': true, 'routing.parallelModels': true,
+  'models.autoTune': 'auto', 'colibri.modelsDir': '', 'colibri.backend': 'auto', 'telemetry.otlp.enabled': false, 'telemetry.otlp.endpoint': 'http://localhost:4318', 'telemetry.otlp.headers': {},
+  'telemetry.otlp.metricsInterval': 60, 'telemetry.otlp.exporters': ['otlp'], 'telemetry.otlp.traceSamplePercent': 100, 'telemetry.otlp.recordContent': false, maxConsecutiveMistakes: 6, disabledTools: [],
+  'markdownViewer.scrollSync': true, 'markdownViewer.outlineDepth': 3, 'markdownViewer.frontMatter': 'collapsed', 'markdownViewer.mermaid': true, 'markdownViewer.exportTheme': 'light', 'pdfViewer.pageColors': 'auto',
+  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000 };
+const settings = {};
+for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
+if (q.get('web') === '0') settings['webSearch.enabled'] = { value: false, default: true, scope: 'user', userValue: false };
+window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getItem('lp-settings-state') || 'null'), setState: (s) => localStorage.setItem('lp-settings-state', JSON.stringify(s)), postMessage(m) {
+  const send = (d) => {
+    if (d.type === 'probe' && q.get('local')) { d = { ...d, results: d.results.filter((r) => providers.some((p) => p.id === r.id)) }; }
+    window.dispatchEvent(new MessageEvent('message', { data: d }));
+  };
+  if (m.type === 'ready') {
+    send({ type: 'state', healing: window.healingMock, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings, models, keys,
+      skills: [{ name: 'release', description: 'Cut a release end to end: bump, changelog, tag, publish', source: 'workspace', used: 4, dir: '/repo/.localpilot/skills/release', removable: true }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: 'user', dir: '/Users/me/.claude/skills/pr-review', removable: true }, { name: 'pdf', description: 'Read, create, merge and fill PDF files with pypdf and reportlab', source: 'user', used: 2, dir: '/Users/me/.localpilot/skills/pdf', removable: true }, { name: 'debug', description: 'Reproduce, localise and fix a bug with a regression test', source: 'builtin', used: 11, dir: '/ext/skills/debug', removable: false }, { name: 'deploy', description: 'Deploy to the configured target and verify health', source: 'builtin', disabled: true, dir: '/ext/skills/deploy', removable: false }],
+      learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
+      agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
+      mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true, managed: q.get('managed') ? { source: '/Library/Application Support/LocalPilot/managed-settings.json', message: 'Questions: it-security@example.com', lines: ['Always blocked: Bash(curl:*), Read(.env)', 'Approvals: terminal needs approval, delete refused', 'Bypass modes and Auto mode are off', 'Cloud providers are off', 'Tool calls are logged to /var/log/localpilot/audit.jsonl'] } : undefined });
+  }
+  if ((m.type === 'set' || m.type === 'reset') && q.get('failSave')) {
+    // ?failSave=1: the host refuses every write (as with no folder open), so nothing changes and the control flips back.
+    setTimeout(() => send({ type: 'saved', id: m.id, key: m.key, ok: false, error: 'Open a folder to use workspace settings' }), 120);
+    return;
+  }
+  if (m.type === 'set' || m.type === 'reset') {
+    // Host round-trip: the write is confirmed, then the whole state is pushed again without navigating.
+    setTimeout(() => send({ type: 'saved', id: m.id, key: m.key, ok: true }), 100);
+    const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
+    if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
+    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
+  }
+  if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
+    { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },
+    { id: 'lmstudio', displayName: 'LM Studio', type: 'openai', baseUrl: 'http://localhost:1234/v1', configured: true, enabled: true, ok: false, latencyMs: 3, error: 'No response — is the server running?', source: 'settings' },
+    { id: 'docker', displayName: 'Docker Model Runner', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', configured: true, enabled: true, ok: true, latencyMs: 40, models: models.filter(m => m.providerId === 'docker'), source: 'settings' },
+    { id: 'docker-lp-ollama', displayName: 'Ollama (Docker · lp-ollama)', type: 'ollama', baseUrl: 'http://localhost:11435', configured: false, enabled: true, ok: true, latencyMs: 9, models: [models[1]], source: 'docker' },
+    { id: 'anthropic', displayName: 'Anthropic (Claude)', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', configured: true, enabled: true, ok: true, latencyMs: 210, models: [{ id: 'anthropic/claude-opus-5-5', name: 'Claude Opus 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }, { id: 'anthropic/claude-sonnet-5-5', name: 'Claude Sonnet 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }], source: 'settings' },
+    { id: 'openai', displayName: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com/v1', configured: true, enabled: true, ok: false, latencyMs: 0, models: [], error: 'Environment variable OPENAI_API_KEY is not set in VS Code\'s environment', source: 'settings' },
+    { id: 'omniroute', displayName: 'OmniRoute', type: 'openai', baseUrl: 'http://localhost:20128/v1', configured: true, enabled: true, ok: true, latencyMs: 18, models: [{ id: 'omniroute/auto/coding', name: 'auto/coding', contextWindow: 131072, supportsTools: true, supportsVision: false }], source: 'settings' },
+  ] }), 300);
+  if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
+  const sendModels = () => {
+    const installed = models.map(m => ({ ...m, gb: m.remote ? undefined : m.name.includes('gemma4') ? 6.6 : m.name.includes('7b') ? 4.7 : m.name.includes('vl') ? 6 : 1, fit: m.remote ? 'unknown' : 'ok', autoRoles: m.name.includes('gemma4') ? ['agent', 'vision'] : m.supportsVision ? [] : m.name.includes('7b') ? [] : m.name.includes('1.5b') ? ['completion'] : [], catalog: m.name.includes('gemma4') ? { key: 'gemma4', name: 'Gemma 4', vendor: 'Google DeepMind', tag: 'e4b' } : m.name.includes('qwen2.5-coder') ? { key: 'qwen2.5-coder', name: 'Qwen2.5 Coder', vendor: 'Alibaba', tag: m.name.split(':')[1] } : undefined, removable: m.providerId === 'ollama' ? 'ollama' : undefined }));
+    const cat = (key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, rec, inst, targets) => ({ key, name, vendor, description, roles, tag, paramsB, gb, fits, tight, recommendedFor: rec, installed: inst, targets });
+    send({ type: 'models', models: {
+      system: { platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 36, vramGb: 36, gpu: 'Apple M3 Pro', unifiedMemory: true, modelBudgetGb: 24, tier: 'large', summary: 'Apple M3 Pro · 36 GB unified memory' },
+      runtimes: [
+        { target: 'ollama', label: 'Ollama', installed: true, running: true, providerId: 'ollama', baseUrl: 'http://localhost:11434', canRemove: true },
+        { target: 'docker', label: 'Docker Model Runner', installed: true, running: true, providerId: 'docker', baseUrl: 'http://localhost:12434/engines/v1', canRemove: true },
+        { target: 'lmstudio', label: 'LM Studio', installed: true, running: q.get('lms') !== '0', providerId: 'lmstudio', baseUrl: 'http://localhost:1234/v1', canRemove: false, hint: 'Install from lmstudio.ai, then start the server in the Developer tab' },
+      ],
+      installed,
+      catalog: [
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], 'e2b', 2.3, 4.6, true, false, [], [], [{ target: 'ollama', id: 'gemma4:e2b' }, { target: 'docker', id: 'ai/gemma4:e2b' }, { target: 'lmstudio', id: 'lmstudio-community/gemma-4-E2B-it-GGUF' }]),
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], 'e4b', 4.5, 6.6, true, false, ['agent', 'vision', 'reasoning'], ['ollama/gemma4:e4b'], [{ target: 'ollama', id: 'gemma4:e4b' }, { target: 'docker', id: 'ai/gemma4:e4b' }]),
+        cat('gemma4', 'Gemma 4', 'Google DeepMind', 'Frontier-class small models: native tool calling, vision and optional thinking in every size.', ['agent', 'vision', 'reasoning'], '12b', 12, 8.0, true, false, [], [], [{ target: 'ollama', id: 'gemma4:12b' }, { target: 'docker', id: 'ai/gemma4' }]),
+        cat('nemotron-3.5-bolt', 'Nemotron 3.5 Bolt', 'NVIDIA', 'Compact frontier vision-language model for local coding, reasoning and tool use.', ['agent', 'vision', 'reasoning'], 'e4b', 4.5, 7.2, true, false, ['agent'], [], [{ target: 'ollama', id: 'nemotron-3.5-bolt:e4b' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '1.5b', 1.5, 1.0, true, false, ['completion'], ['ollama/qwen2.5-coder:1.5b'], [{ target: 'ollama', id: 'qwen2.5-coder:1.5b' }, { target: 'lmstudio', id: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '7b', 7, 4.7, true, false, ['agent'], ['ollama/qwen2.5-coder:7b'], [{ target: 'ollama', id: 'qwen2.5-coder:7b' }, { target: 'docker', id: 'ai/qwen2.5-coder' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '14b', 14, 9.0, true, false, [], [], [{ target: 'ollama', id: 'qwen2.5-coder:14b' }]),
+        cat('qwen2.5-coder', 'Qwen2.5 Coder', 'Alibaba', 'Best all-round coding family: native tool calling and fill-in-the-middle.', ['agent', 'completion'], '32b', 32, 20, true, true, [], [], [{ target: 'ollama', id: 'qwen2.5-coder:32b' }]),
+        cat('qwen3', 'Qwen3', 'Alibaba', 'Hybrid thinking model with strong general reasoning and tool use.', ['agent', 'reasoning'], '8b', 8, 5.2, true, false, ['reasoning'], [], [{ target: 'ollama', id: 'qwen3:8b' }, { target: 'docker', id: 'ai/qwen3' }]),
+        cat('devstral', 'Devstral', 'Mistral', 'Agentic coding model tuned for software-engineering tasks.', ['agent'], '24b', 24, 14, true, false, [], [], [{ target: 'ollama', id: 'devstral:24b' }]),
+        cat('qwen2.5vl', 'Qwen2.5 VL', 'Alibaba', 'Vision-language model for screenshots and UI bugs.', ['vision'], '7b', 7, 6, true, false, ['vision'], [], [{ target: 'ollama', id: 'qwen2.5vl:7b' }]),
+        cat('llama3.3', 'Llama 3.3', 'Meta', 'General assistant with tool calling; large.', ['agent'], '70b', 70, 43, false, false, [], [], [{ target: 'ollama', id: 'llama3.3:70b' }]),
+      ],
+      jobs: [
+        { id: 'j1', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:14b', status: 'running', progress: 0.42, detail: '3.8 GB / 9.0 GB · 12 MB/s', startedAt: Date.now() - 60000 },
+        { id: 'j0', kind: 'pull', target: 'ollama', model: 'qwen2.5-coder:7b', status: 'done', progress: 1, detail: 'Installed', startedAt: Date.now() - 600000, finishedAt: Date.now() - 300000 },
+      ],
+      starter: { agent: 'gemma4:e4b', completion: 'starcoder2:3b' },
+    } });
+  };
+  if (m.type === 'loadModels') setTimeout(sendModels, 200);
+  if (m.type === 'removeModel') {
+    // Host side of a delete: a running job (spinner on the row), then the model disappears from the list and the
+    // models view is pushed again. The confirmation dialog and the native notification live in VS Code.
+    const job = { id: 'rm' + Date.now(), kind: 'remove', target: m.target, model: m.model, status: 'running', progress: -1, detail: 'Removing…', startedAt: Date.now() };
+    send({ type: 'jobs', jobs: [job] });
+    setTimeout(() => { const i = models.findIndex((x) => x.providerId === m.providerId && x.modelId === m.model); if (i >= 0) models.splice(i, 1); send({ type: 'jobs', jobs: [{ ...job, status: 'done', progress: 1, detail: 'Done', finishedAt: Date.now() }] }); sendModels(); }, 700);
+  }
+  if (m.type === 'skillSearch') setTimeout(() => {
+    const reg = [
+      ['pdf', 'Read, create, merge and fill PDF files with pypdf and reportlab', 'anthropics/skills/skills', 'pdf', true, 'user'],
+      ['docx', 'Create and edit Word documents with python-docx, tracked changes aware', 'anthropics/skills/skills', 'docx', false],
+      ['xlsx', 'Build spreadsheets with formulas, charts and formatting via openpyxl', 'anthropics/skills/skills', 'xlsx', false],
+      ['brainstorming', 'Explore the problem space and alternatives before designing', 'obra/superpowers/skills', 'brainstorming', false],
+      ['writing-plans', 'Turn a design into a step-by-step implementation plan with verification', 'obra/superpowers/skills', 'writing-plans', false],
+      ['systematic-debugging', 'Four-phase debugging: reproduce, isolate, hypothesise, verify', 'obra/superpowers/skills', 'systematic-debugging', false],
+      ['azure-deploy', 'Deploy applications to Azure with azd, Bicep and validation', 'github/awesome-copilot/skills', 'azure-deploy', false],
+      ['release', 'Cut a release end to end', 'github/awesome-copilot/skills', 'release', true, 'workspace'],
+    ].map(([name, description, repo, dir, installed, installedSource]) => ({ name, description, repo, dir, installed, installedSource }));
+    const q = (m.q || '').toLowerCase();
+    const entries = reg.filter((e) => !q || `${e.name} ${e.description}`.toLowerCase().includes(q));
+    send({ type: 'skillRegistry', q: m.q, entries, refreshing: false, status: [{ repo: 'anthropics/skills/skills', skills: 16, fetched: Date.now() - 3600e3 }, { repo: 'obra/superpowers/skills', skills: 14, fetched: Date.now() - 3600e3 }, { repo: 'github/awesome-copilot/skills', skills: 120, fetched: Date.now() - 86400e3, error: 'GitHub API rate limit exceeded' }] });
+  }, 350);
+  if (m.type === 'installRegistrySkill') { setTimeout(() => send({ type: 'skillJob', name: m.name, status: 'running', detail: `Fetching ${m.repo}…` }), 200); setTimeout(() => send({ type: 'skillJob', name: m.name, status: 'done', detail: '/Users/me/.localpilot/skills/' + m.name }), 1400); }
+  if (m.type === 'gallerySearch' && m.source === 'docker') setTimeout(() => {
+    const lib = [
+      { name: 'ai/gemma4', description: '', capabilities: [], sizes: [], pulls: '1.6M', pullsCount: 1583074, cloud: false, url: 'https://hub.docker.com/r/ai/gemma4' },
+      { name: 'ai/qwen3', description: '', capabilities: [], sizes: [], pulls: '888.4K', pullsCount: 888390, cloud: false, url: 'https://hub.docker.com/r/ai/qwen3' },
+      { name: 'ai/smollm2', description: 'Compact instruction model for 8 GB machines', capabilities: [], sizes: [], pulls: '868.8K', pullsCount: 868841, cloud: false, url: 'https://hub.docker.com/r/ai/smollm2' },
+      { name: 'ai/mxbai-embed-large', description: '', capabilities: ['embedding'], sizes: [], pulls: '49.0K', pullsCount: 48979, cloud: false, url: 'https://hub.docker.com/r/ai/mxbai-embed-large' },
+    ];
+    const q = (m.q || '').toLowerCase().replace(/^ai\//, '');
+    const models = lib.filter((x) => (!q || x.name.includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    send({ type: 'gallery', source: 'docker', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: false });
+  }, 400);
+  if (m.type === 'gallerySearch' && m.source === 'huggingface') setTimeout(() => {
+    const lib = [
+      { name: 'unsloth/Qwen3-8B-GGUF', description: '', capabilities: [], sizes: ['8b'], pulls: '118.5K', pullsCount: 118500, cloud: false, url: 'https://huggingface.co/unsloth/Qwen3-8B-GGUF' },
+      { name: 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF', description: '', capabilities: [], sizes: ['7b'], pulls: '402.1K', pullsCount: 402100, cloud: false, url: 'https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF' },
+      { name: 'unsloth/gemma-3-4b-it-GGUF', description: '', capabilities: ['vision'], sizes: ['4b'], pulls: '96.2K', pullsCount: 96200, cloud: false, url: 'https://huggingface.co/unsloth/gemma-3-4b-it-GGUF' },
+    ];
+    const q = (m.q || '').toLowerCase();
+    const models = lib.filter((x) => (!q || x.name.toLowerCase().includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    send({ type: 'gallery', source: 'huggingface', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: m.page < 2 });
+  }, 400);
+  if (m.type === 'galleryTags' && m.source === 'docker') setTimeout(() => {
+    const t = (tag, sizeGb, extra) => ({ model: `${m.name}:${tag}`, tag, sizeGb, updated: '2 months ago', digest: 'abc', isLatest: false, cloud: false, format: /safetensors/.test(tag) ? 'safetensors' : /mlx/.test(tag) ? 'MLX' : 'GGUF', ...extra });
+    send({ type: 'galleryTags', source: 'docker', name: m.name, description: 'Qwen3 is the latest generation of large language models in the Qwen series (from Docker Hub README).', tags: [t('0.6b', 0.37), t('4b', 2.4), t('8b', 4.9, { isLatest: true }), t('8b-q8_0', 8.7), t('8b-mlx-4bit', 4.5), t('8b-safetensors', 16.4), t('14b', 9.0), t('32b', 19.8), t('235b-a22b', 142)] });
+  }, 500);
+  if (m.type === 'galleryTags' && m.source === 'huggingface') setTimeout(() => {
+    const t = (tag, sizeGb, extra) => ({ model: `hf.co/${m.name}:${tag}`, tag, sizeGb, context: '40K', inputs: 'Text', updated: '4 months ago', isLatest: tag === 'Q4_K_M', cloud: false, format: 'GGUF', ...extra });
+    send({ type: 'galleryTags', source: 'huggingface', name: m.name, tags: [t('UD-IQ2_M', 2.9), t('Q3_K_M', 3.8), t('Q4_K_M', 4.7), t('Q5_K_M', 5.4), t('Q6_K', 6.3), t('Q8_0', 8.1), t('BF16', 15.3)] });
+  }, 500);
+  if (m.type === 'gallerySearch' && (!m.source || m.source === 'ollama')) setTimeout(() => {
+    const lib = [
+      { name: 'qwen3', description: 'Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models.', capabilities: ['tools', 'thinking'], sizes: ['0.6b', '1.7b', '4b', '8b', '14b', '30b', '32b', '235b'], pulls: '12.4M', pullsCount: 12400000, cloud: false, url: 'https://ollama.com/library/qwen3' },
+      { name: 'qwen2.5-coder', description: 'The latest series of Code-Specific Qwen models, with significant improvements in code generation, code reasoning, and code fixing.', capabilities: ['tools'], sizes: ['0.5b', '1.5b', '3b', '7b', '14b', '32b'], pulls: '22.8M', pullsCount: 22800000, cloud: false, url: 'https://ollama.com/library/qwen2.5-coder' },
+      { name: 'gemma4', description: 'Frontier-class small models from Google DeepMind with native tool calling, vision and thinking.', capabilities: ['vision', 'tools', 'thinking'], sizes: ['e2b', 'e4b', '12b', '26b', '31b'], pulls: '3.1M', pullsCount: 3100000, cloud: false, url: 'https://ollama.com/library/gemma4' },
+      { name: 'nomic-embed-text', description: 'A high-performing open embedding model with a large token context window.', capabilities: ['embedding'], sizes: [], pulls: '41.2M', pullsCount: 41200000, cloud: false, url: 'https://ollama.com/library/nomic-embed-text' },
+      { name: 'glm-5.3', description: 'GLM-5.3 is a frontier reasoning model available through Ollama cloud.', capabilities: ['tools', 'thinking'], sizes: [], pulls: '890K', pullsCount: 890000, cloud: true, url: 'https://ollama.com/library/glm-5.3' },
+      { name: 'llama3.2', description: "Meta's Llama 3.2 goes small with 1B and 3B models.", capabilities: ['tools'], sizes: ['1b', '3b'], pulls: '38.9M', pullsCount: 38900000, cloud: false, url: 'https://ollama.com/library/llama3.2' },
+    ];
+    const q = (m.q || '').toLowerCase();
+    let models = lib.filter((x) => (!q || x.name.includes(q) || x.description.toLowerCase().includes(q)) && (!m.capability || x.capabilities.includes(m.capability)));
+    if (m.sort === 'name') models = [...models].sort((a, b) => a.name.localeCompare(b.name));
+    if (m.page > 1) models = models.map((x) => ({ ...x, name: `${x.name}-p${m.page}` }));
+    send({ type: 'gallery', source: 'ollama', q: m.q, capability: m.capability, sort: m.sort, page: m.page, models, hasMore: m.page < 3 && !q });
+  }, 400);
+  if (m.type === 'galleryTags' && (!m.source || m.source === 'ollama')) setTimeout(() => {
+    const t = (tag, sizeGb, context, inputs, extra) => ({ model: `${m.name}:${tag}`, tag, sizeGb, context, inputs, updated: '3 weeks ago', digest: 'abc123def456', isLatest: false, cloud: false, ...extra });
+    const byName = {
+      qwen3: [t('8b', 5.2, '40K', 'Text', { isLatest: true }), t('0.6b', 0.52, '40K', 'Text'), t('1.7b', 1.4, '40K', 'Text'), t('4b', 2.6, '40K', 'Text'), t('14b', 9.3, '40K', 'Text'), t('30b-a3b', 19, '40K', 'Text'), t('32b', 20, '40K', 'Text'), t('235b-a22b', 142, '40K', 'Text'), t('8b-q8_0', 8.9, '40K', 'Text'), t('8b-fp16', 16, '40K', 'Text'), t('4b-q8_0', 4.4, '40K', 'Text'), t('14b-q8_0', 16, '40K', 'Text')],
+      'qwen2.5-coder': [t('7b', 4.7, '32K', 'Text', { isLatest: true }), t('0.5b', 0.4, '32K', 'Text'), t('1.5b', 1.0, '32K', 'Text'), t('3b', 1.9, '32K', 'Text'), t('14b', 9.0, '32K', 'Text'), t('32b', 20, '32K', 'Text')],
+      gemma4: [t('e4b', 6.6, '128K', 'Text, Image', { isLatest: true }), t('e2b', 4.6, '128K', 'Text, Image'), t('12b', 8.0, '128K', 'Text, Image'), t('26b', 16, '128K', 'Text, Image'), t('31b', 19, '128K', 'Text, Image'), t('31b-cloud', undefined, '128K', 'Text, Image', { cloud: true })],
+    };
+    if (m.name === 'nomic-embed-text') { send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: [], error: 'ollama.com answered HTTP 503' }); return; }
+    send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: byName[m.name] || [t('latest', 2.0, '8K', 'Text', { isLatest: true })] });
+  }, 500);
+  // ?dash=error: the host fails to read the metrics; ?dash=silent: it never answers (the page gives up after 20 s).
+  if (m.type === 'dashboard' && q.get('dash') === 'silent') return;
+  if (m.type === 'dashboard' && q.get('dash') === 'error') { setTimeout(() => send({ type: 'dashboard', days: m.days, error: "EACCES: permission denied, open '/Users/me/.localpilot/telemetry/2026-11-05.jsonl'" }), 250); return; }
+  if (m.type === 'dashboard') setTimeout(() => {
+    const P = (p50, p95) => ({ p50, p95, avg: Math.round((p50 + p95) / 2) });
+    const days = m.days || 7; const n = days === 0 ? 30 : days; const series = [];
+    for (let i = n - 1; i >= 0; i--) { const d = new Date(Date.now() - i * 86400e3); const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; const f = 0.5 + Math.abs(Math.sin(i * 1.7)); const pt = Math.round(40000 * f), ct = Math.round(8000 * f); series.push({ day: k, runs: Math.round(6 * f), failedRuns: i % 4 === 0 ? 1 : 0, tokens: pt + ct, promptTokens: pt, completionTokens: ct, toolCalls: Math.round(40 * f), toolErrors: i % 3 === 0 ? 2 : 0, cachedTools: Math.round(4 * f), modelCalls: Math.round(22 * f), modelErrors: i % 4 === 0 ? 1 : 0, tokPerSec: Math.round((30 + 12 * Math.cos(i)) * 10) / 10, completionsShown: Math.round(60 * f), completionsAccepted: Math.round(19 * f), errors: i % 4 === 0 ? 2 : 0 }); }
+    const summary = {
+      days, from: Date.now() - n * 86400e3, to: Date.now(),
+      totals: { runs: 41, done: 34, stopped: 5, failed: 2, subagentRuns: 12, modelCalls: 163, modelErrors: 3, retries: 6, promptTokens: 284310, completionTokens: 61240, toolCalls: 288, toolErrors: 9, cachedTools: 22, isolatedRuns: 29, activeDays: Math.min(n, 6), tokPerSec: 34.6, runTime: P(42000, 210000), steps: P(4, 11) },
+      series,
+      hourly: [0, 0, 0, 0, 0, 0, 1, 3, 9, 18, 26, 31, 22, 14, 28, 35, 40, 33, 19, 12, 8, 5, 2, 1],
+      agents: [{ agent: 'coder', runs: 7, done: 6, stopped: 0, failed: 1, duration: P(48000, 160000), toolCalls: 61 }, { agent: 'explore', runs: 3, done: 3, stopped: 0, failed: 0, duration: P(9000, 21000), toolCalls: 17 }, { agent: 'tester', runs: 2, done: 1, stopped: 1, failed: 0, duration: P(70000, 70000), toolCalls: 14 }],
+      models: [
+        { model: 'qwen2.5-coder:7b', provider: 'ollama', calls: 118, promptTokens: 201000, completionTokens: 44800, tokPerSec: 38.4, ttft: P(640, 2900), duration: P(8200, 31000), errors: 1, last: Date.now() - 120000 },
+        { model: 'qwen3:14b', provider: 'ollama', calls: 31, promptTokens: 71000, completionTokens: 14100, tokPerSec: 17.9, ttft: P(1800, 9400), duration: P(21000, 88000), errors: 2, last: Date.now() - 3600000 },
+        { model: 'qwen2.5-coder:1.5b', provider: 'ollama', calls: 14, promptTokens: 12310, completionTokens: 2340, tokPerSec: 96.1, ttft: P(210, 480), duration: P(900, 2400), errors: 0, last: Date.now() - 7200000 },
+      ],
+      tools: [
+        { name: 'read_file', calls: 96, errors: 2, cached: 11, duration: P(12, 60), last: Date.now() }, { name: 'grep_search', calls: 54, errors: 1, cached: 6, duration: P(140, 900), last: Date.now() },
+        { name: 'edit_file', calls: 41, errors: 3, cached: 0, duration: P(35, 120), last: Date.now() }, { name: 'run_command', calls: 33, errors: 2, cached: 0, duration: P(2400, 19000), last: Date.now() },
+        { name: 'list_files', calls: 28, errors: 0, cached: 4, duration: P(20, 80), last: Date.now() }, { name: 'run_todos_parallel', calls: 9, errors: 0, cached: 0, duration: P(61000, 190000), last: Date.now() },
+        { name: 'get_diagnostics', calls: 15, errors: 1, cached: 0, duration: P(800, 2600), last: Date.now() }, { name: 'web_fetch', calls: 7, errors: 0, cached: 1, duration: P(1200, 4100), last: Date.now() },
+        { name: 'write_file', calls: 5, errors: 0, cached: 0, duration: P(18, 40), last: Date.now() },
+      ],
+      modes: [
+        { mode: 'agent', runs: 22, done: 19, stopped: 2, failed: 1, duration: P(38000, 190000), steps: P(5, 12), toolCalls: 171 }, { mode: 'multitask', runs: 7, done: 5, stopped: 1, failed: 1, duration: P(140000, 420000), steps: P(3, 6), toolCalls: 48 },
+        { mode: 'ask', runs: 8, done: 8, stopped: 0, failed: 0, duration: P(6000, 14000), steps: P(1, 2), toolCalls: 11 }, { mode: 'plan', runs: 3, done: 2, stopped: 1, failed: 0, duration: P(52000, 90000), steps: P(4, 7), toolCalls: 38 }, { mode: 'debug', runs: 1, done: 0, stopped: 1, failed: 0, duration: P(31000, 31000), steps: P(6, 6), toolCalls: 20 },
+      ],
+      completions: { requested: 412, shown: 236, accepted: 71, cached: 44, empty: 98, error: 4, acceptanceRate: 25.4, latency: P(380, 1400), byLanguage: [{ language: 'typescript', shown: 150, accepted: 48 }, { language: 'python', shown: 70, accepted: 15 }, { language: 'markdown', shown: 40, accepted: 6 }, { language: 'json', shown: 20, accepted: 2 }] },
+      health: [{ provider: 'ollama', checks: 240, ok: 238, uptime: 99.2, up: true, lastAt: Date.now() - 20000, latency: P(14, 60), models: 6 }, { provider: 'lmstudio', checks: 240, ok: 61, uptime: 25.4, up: false, lastAt: Date.now() - 20000, latency: P(9, 30), lastError: 'ECONNREFUSED 127.0.0.1:1234' }],
+      worktrees: { created: 9, applied: 6, discarded: 2, conflicts: 1, files: 23 },
+      errors: [
+        { t: Date.now() - 300000, kind: 'model', what: 'qwen3:14b', detail: 'stall' }, { t: Date.now() - 2400000, kind: 'run', what: 'multitask run', detail: 'ollama/qwen3:14b · failed after 3 steps' },
+        { t: Date.now() - 5400000, kind: 'health', what: 'lmstudio', detail: 'ECONNREFUSED 127.0.0.1:1234' }, { t: Date.now() - 9000000, kind: 'model', what: 'qwen2.5-coder:7b', detail: 'connection' },
+      ],
+      storage: { events: 4812, bytes: 1324000, files: 14, oldest: Date.now() - 7 * 86400e3, dir: '/Users/me/.localpilot/telemetry' },
+    };
+    // What usage taught about each installed model per role (Dashboard → Model tuning).
+    const tuning = {
+      mode: 'auto', analysed: { runs: 41, calls: 163, days: 14 },
+      suggestions: [
+        { role: 'fast', suggested: 'ollama/qwen2.5-coder:7b', current: 'ollama/gemma4:e4b', currentStruggling: false, reason: '1.8× faster first token on read-only subagents, same success rate', confidence: 'high', kind: 'setting' },
+        { role: 'completion', suggested: 'ollama/qwen2.5-coder:1.5b', current: '', reason: '31% of its suggestions accepted vs 18%', confidence: 'medium', kind: 'routing' },
+      ],
+      rankings: [
+        { label: 'Chat & agent', current: 'ollama/gemma4:e4b', models: [{ id: 'ollama/gemma4:e4b', evidence: 24, detail: '22 of 24 runs finished · 34 tok/s', bonus: 6 }, { id: 'ollama/qwen2.5-coder:7b', evidence: 9, detail: '8 of 9 runs finished · 41 tok/s', bonus: 3 }, { id: 'docker/smollm2:latest', evidence: 3, detail: '1 of 3 runs finished', bonus: -8 }] },
+        { label: 'Read-only subagents', current: 'ollama/gemma4:e4b', models: [{ id: 'ollama/qwen2.5-coder:7b', evidence: 12, detail: 'first token 0.6 s · 12 of 12 ok', bonus: 7 }, { id: 'ollama/gemma4:e4b', evidence: 10, detail: 'first token 1.1 s · 10 of 10 ok', bonus: 2 }] },
+        { label: 'Inline completions', current: '', models: [{ id: 'ollama/qwen2.5-coder:1.5b', evidence: 280, detail: '31% accepted · 380 ms', bonus: 5 }, { id: 'ollama/qwen2.5-coder:7b', evidence: 0, detail: '', bonus: 0 }] },
+      ],
+      history: [{ setting: 'routing.vision', value: 'ollama/gemma4:e4b', at: Date.now() - 86400e3 * 2 }],
+    };
+    send({ type: 'dashboard', days, summary, tuning, recovery: window.recoveryMock(days), logFile: '/Users/me/.localpilot/telemetry/localpilot-2026-10-24.log' });
+  }, 250);
+  if (m.type === 'loadChecks') setTimeout(() => send({ type: 'healingChecks', healing: window.healingMock }), 200);
+  if (m.type === 'recoveryAction' || m.type === 'memoryReuse') setTimeout(() => send({ type: 'toast', level: 'info', text: `${m.type}: ${m.action || (m.allowed ? 'suggest again' : "don't suggest again")}` }), 100);
+  if (m.type === 'logs') setTimeout(() => {
+    const L = (ago, level, msg) => ({ t: Date.now() - ago, level, msg });
+    const all = [L(900000, 'info', 'LocalPilot activating'), L(899000, 'info', 'loaded 14 skills from 3 folders'), L(880000, 'debug', 'discover: ollama reachable (6 models) in 14ms'), L(879000, 'warn', 'listModels failed for lmstudio: connect ECONNREFUSED 127.0.0.1:1234'),
+      L(600000, 'info', 'session s_8f21: agent turn started with ollama/qwen2.5-coder:7b'), L(590000, 'debug', 'tool read_file src/extension.ts (12ms)'), L(560000, 'debug', 'tool grep_search "registerCommand" (140ms)'), L(300000, 'error', 'model call failed: the model stopped responding (stall) after 90s'),
+      L(299000, 'warn', 'model call failed (stall), retry 1/2 in 1500ms'), L(120000, 'info', 'session s_8f21: turn finished in 42s · 5 steps · 9 tool calls'), L(20000, 'debug', 'inline completion: typescript · 380ms · shown'), L(2000, 'info', 'worktree for s_9a01 created in 1.8s')];
+    const rank = { trace: 0, debug: 1, info: 2, warn: 3, error: 4 }; const q = (m.q || '').toLowerCase();
+    send({ type: 'logs', entries: all.filter((e) => rank[e.level] >= rank[m.level || 'trace'] && (!q || e.msg.toLowerCase().includes(q))), level: m.level, q: m.q });
+    if (m.follow) { let i = 0; clearInterval(window.__logTick); window.__logTick = setInterval(() => { if (i++ > 6) { clearInterval(window.__logTick); return; } send({ type: 'logLine', entry: L(0, i % 3 ? 'debug' : 'info', `tool read_file media/settings.js (${10 + i * 3}ms)`) }); }, 1500); }
+  }, 150);
+} });
+</script>
+<script src="../media/settings.js"></script>
+<script>
+// ?expand=<provider id> opens that provider card, to check the editor without clicking.
+if (q.get('expand')) setTimeout(() => document.querySelector(`.prov[data-prov="${q.get('expand')}"] .prov-head`)?.click(), 400);
+// ?scope=workspace selects the Workspace scope; ?find=<text> types into the header search; ?click=<selector> clicks once
+// (e.g. ?failSave=1&click=.field .toggle to watch a refused write flip the switch back).
+if (q.get('scope') === 'workspace') setTimeout(() => document.querySelector('.top .scope [data-s="workspace"]')?.click(), 300);
+if (q.get('find')) setTimeout(() => { const i = document.querySelector('.top .find input'); if (i) { document.querySelector('.top').classList.add('finding'); i.focus(); i.value = q.get('find'); i.dispatchEvent(new Event('input')); } }, 400);
+if (q.get('rectab')) setTimeout(() => document.getElementById(`rec-tab-${q.get('rectab')}`)?.click(), 600);
+// ?recclick=<selector> clicks inside the group once its view is open (e.g. [data-patch="2"] to show a diff).
+if (q.get('recclick')) setTimeout(() => document.querySelector(`#dash-rec ${q.get('recclick')}`)?.click(), 800);
+// ?to=<selector> scrolls that element to the top (e.g. .heal-checks on ?section=agent).
+if (q.get('to')) setTimeout(() => document.querySelector(q.get('to'))?.scrollIntoView(), 900);
+// ?torec=1 scrolls the Self-healing & recovery group to the top.
+if (q.get('torec')) setTimeout(() => document.getElementById('dash-rec')?.previousElementSibling?.scrollIntoView(), 900);
+if (q.get('click')) setTimeout(() => document.querySelector(q.get('click'))?.click(), 500);
+</script>
+</body></html>

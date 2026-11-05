@@ -1,5 +1,6 @@
 /** Shared domain types used across providers, agent loop, tools and UI. */
 
+import type { CommandOutcome } from './terminal/commandRun';
 import type { ImageAttachment } from './ui/images';
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
@@ -66,6 +67,10 @@ export interface ChatMessage {
     failed?: boolean;
     /** Position of this message in the session's transcript archive (`<id>.archive.jsonl`), once a compaction archived it. */
     archived?: number;
+    /** Self-healing: a hidden fix prompt (attempt, category, signature) or, on the final answer, the outcome footer (`report`). */
+    healing?: { attempt?: number; category?: string; signature?: string; report?: string };
+    /** A message the self-healing engine added (e.g. the assistant tool call of a delegated fix) rather than the model. */
+    synthetic?: 'healing';
   };
 }
 
@@ -275,7 +280,20 @@ export interface ApprovalOptions {
   confirm?: boolean;
   /** File edits: the proposed contents, shown as side-by-side diffs while the approval waits (`localpilot.diffPreview`). */
   preview?: ProposedEdit[];
+  /**
+   * Self-healing verification checks: a turn-scoped allowance for this exact set of check commands. gateApproval
+   * honours it only when `!mandatory && !strict && !dangerous && !confirm` and `managed.approvals.terminal` is unset:
+   * then a granted allowance runs without a prompt, otherwise one prompt is shown and a yes calls `grant()`. In every
+   * other case the normal prompt is shown and `grant()` is never called.
+   */
+  healingAllowance?: { commandsHash: string; granted: boolean; grant: () => void };
 }
+
+/** Why a tool call did not run, reported by executeToolCalls next to the (unchanged) result text. */
+export type ToolCallDecision = {
+  deniedByUser?: boolean;
+  blockedBy?: 'policy' | 'rule' | 'hook' | 'setting' | 'unattended' | 'stopped';
+};
 
 /** A file's content as an edit tool is about to write it. */
 export interface ProposedEdit {
@@ -347,7 +365,23 @@ export interface ToolContext {
    * when no chat surface can show them (the tool then falls back to native pickers). Absent for subagents.
    */
   askUser?(questions: UserQuestion[]): Promise<UserAnswer[] | null | undefined>;
+  /**
+   * Set for a synthetic self-healing check / resolver command: no auto-detach (killed at the timeout), the higher
+   * healing timeout cap, the safe-command shortcut only when the command matches a check spec, and the raw unclamped
+   * outcome reported through `rawOutcome`.
+   */
+  healingExec?: {
+    origin: 'healing';
+    noAutoDetach: true;
+    timeoutSeconds: number;
+    checkSpecMatch: boolean;
+    /** Required: every synthetic exec site collects the raw outcome the classifier parses. */
+    rawOutcome: (o: HealingRawOutcome) => void;
+  };
 }
+
+/** The unclamped `run_command` outcome reported to the self-healing engine (full captured output). */
+export type HealingRawOutcome = CommandOutcome & { timedOut?: boolean };
 
 export interface ToolResult {
   content: string;
@@ -481,6 +515,8 @@ export interface Session extends SessionSummary {
   workingSet?: string[];
   /** Checkpoints taken before each user turn (git refs, or file snapshots outside git). */
   checkpoints?: import('./agent/checkpoints').SessionCheckpoints;
+  /** Self-healing summary of the last turn that ran recovery or verification. */
+  recovery?: import('./agent/healing/types').RecoverySummary;
 }
 
 export interface TodoItem {
@@ -546,6 +582,11 @@ export interface AgentEvent {
     /** A hook started or finished. Payload: { id, event, name, tool?, status: running|ok|failed|blocked, ms? }. */
     | 'hook'
     | 'todos'
+    /**
+     * The self-healing engine detected, retried, fixed, validated or escalated a failure; one card per task, updated
+     * in place by `payload.id`. Payload: RecoveryEventPayload (src/agent/healing/types.ts).
+     */
+    | 'recovery'
     | 'turn_end';
   payload?: unknown;
 }

@@ -3,6 +3,8 @@
  * tool-call parsing, context management and the parallel pool without VS Code.
  * Run: npm run smoke
  */
+// First: the self-healing module smokes resolve their fixtures from REPO_ROOT.
+import './healing/repoRoot';
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
 import { OpenAICompatProvider } from '../src/providers/openaiCompat';
@@ -86,6 +88,24 @@ import { vscodeLm } from './smokeVscodeLm';
 import { cliSlash } from './smokeCliSlash';
 import { automation } from './smokeAutomation';
 import { cliMcp } from './smokeCliMcp';
+import { healingSmoke } from './smokeHealing';
+import { jsonRepairSmoke } from './healing/jsonRepair.smoke';
+import { classifierSmoke } from './healing/classifier.smoke';
+import { checksSmoke } from './healing/checks.smoke';
+import { retrySmoke } from './healing/retry.smoke';
+import { storeSmoke } from './healing/store.smoke';
+import { memorySmoke } from './healing/memory.smoke';
+import { patchesSmoke } from './healing/patches.smoke';
+import { schedulerSmoke } from './healing/scheduler.smoke';
+import { rcaSmoke } from './healing/rca.smoke';
+import { checkRunnerSmoke } from './healing/checkRunner.smoke';
+import { gateSmoke } from './healing/gate.smoke';
+import { escalationSmoke } from './healing/escalation.smoke';
+import { dashboardSmoke } from './healing/dashboard.smoke';
+import { engineSmoke } from './healing/engine.smoke';
+import { smokeSettings } from './healing/smokeSettings';
+import { EXIT, exitCodeFor, finishReasonFor } from '../src/cli/headless';
+import { eventMetrics } from '../src/telemetry/otlp';
 import { AgentRunner } from '../src/agent/agentLoop';
 import { RunControl } from '../src/agent/runControl';
 import { WorktreeManager } from '../src/agent/worktrees';
@@ -2577,6 +2597,42 @@ async function redisStorage() {
   }
 }
 
+/** Self-healing outcomes at the CLI and OTLP edges: exit codes, NDJSON finish reasons, recovery metrics. */
+function healingOutcomes() {
+  console.log('\n[Self-healing outcomes: CLI exit codes, OTLP metrics]');
+  check('exit codes: incomplete 4, blocked 5, completed / completed_unverified 0', EXIT.incomplete === 4 && EXIT.blocked === 5 && exitCodeFor({ outcome: 'incomplete' }) === 4 && exitCodeFor({ outcome: 'blocked' }) === 5 && exitCodeFor({ outcome: 'completed' }) === 0 && exitCodeFor({ outcome: 'completed_unverified' }) === 0);
+  check('--require-verified: completed_unverified exits 4 (incomplete), completed still 0', exitCodeFor({ outcome: 'completed_unverified', requireVerified: true }) === 4 && exitCodeFor({ outcome: 'completed', requireVerified: true }) === 0 && finishReasonFor({ outcome: 'completed_unverified', requireVerified: true }) === 'incomplete');
+  check('finish reasons: incomplete / blocked; unverified without the flag is completed', finishReasonFor({ outcome: 'incomplete' }) === 'incomplete' && finishReasonFor({ outcome: 'blocked' }) === 'blocked' && finishReasonFor({ outcome: 'completed_unverified' }) === 'completed' && finishReasonFor({ outcome: 'completed' }) === 'completed');
+  check('outcomes do not mask stops: timeout, Ctrl+C and the mistake limit keep their codes', exitCodeFor({ outcome: 'incomplete', timedOut: true }) === EXIT.timeout && exitCodeFor({ outcome: 'blocked', aborted: true }) === EXIT.aborted && exitCodeFor({ outcome: 'incomplete', errorKind: 'mistake_limit' }) === EXIT.mistakeLimit && finishReasonFor({ outcome: 'blocked', errorKind: 'mistake_limit' }) === 'mistake_limit');
+  const sums: { name: string; value: number; attrs: Record<string, unknown> }[] = [];
+  const hists: { name: string; value: number; attrs: Record<string, unknown> }[] = [];
+  const sink = { add: (name: string, value: number, attrs: Record<string, unknown> = {}) => void sums.push({ name, value, attrs }), record: (name: string, value: number, attrs: Record<string, unknown> = {}) => void hists.push({ name, value, attrs }) };
+  eventMetrics({ t: 1, type: 'recovery', sid: 's1', action: 'recovered', category: 'typescript', signature: 'abcdef0123456789', attempt: 2, durationMs: 4200, outcome: 'completed' }, sink);
+  eventMetrics({ t: 2, type: 'recovery', sid: 's1', action: 'escalated', category: 'unit_test', signature: '0123456789abcdef', outcome: 'incomplete' }, sink);
+  const events = sums.filter((x) => x.name === 'localpilot.recovery.events');
+  const outcomes = sums.filter((x) => x.name === 'localpilot.recovery.outcomes');
+  const duration = hists.filter((x) => x.name === 'localpilot.recovery.duration_ms');
+  check('otlp: recovery events counted by action + category', events.length === 2 && events[0].attrs.action === 'recovered' && events[0].attrs.category === 'typescript' && events[1].attrs.action === 'escalated', events);
+  check('otlp: recovery outcomes counted, duration histogram by category', outcomes.map((x) => x.attrs.outcome).join() === 'completed,incomplete' && duration.length === 1 && duration[0].value === 4200 && duration[0].attrs.category === 'typescript', { outcomes, duration });
+  check('otlp: no signature (or session) in any recovery metric attribute', [...sums, ...hists].every((x) => !('signature' in x.attrs) && !('sid' in x.attrs) && !Object.values(x.attrs).some((v) => v === 'abcdef0123456789')), [...sums, ...hists]);
+}
+
+/** The self-healing module smokes (scripts/healing/*.smoke.ts) plus the agent-loop fault injection (smokeHealing). */
+async function healingSmokes() {
+  const modules: [string, (c: typeof check) => Promise<void>][] = [
+    ['JSON repair', jsonRepairSmoke], ['classifier', classifierSmoke], ['check discovery', checksSmoke], ['retry controller', retrySmoke],
+    ['recovery store', storeSmoke], ['failure memory', memorySmoke], ['patch manager', patchesSmoke], ['scheduler', schedulerSmoke],
+    ['root cause analysis', rcaSmoke], ['check runner', checkRunnerSmoke], ['quality gate', gateSmoke], ['escalation', escalationSmoke],
+    ['dashboard data', dashboardSmoke], ['engine', engineSmoke], ['settings schema', smokeSettings],
+  ];
+  for (const [name, fn] of modules) {
+    console.log(`\n[Self-healing: ${name}]`);
+    await fn(check);
+  }
+  healingOutcomes();
+  await healingSmoke(check);
+}
+
 (async () => {
   await telemetry();
   await redisStorage();
@@ -2615,6 +2671,7 @@ async function redisStorage() {
   await cliSlash(check);
   await automation(check);
   await cliMcp(check);
+  await healingSmokes();
   await pauseAndSteer();
   await reopenReplay();
   await skillsInHarness();

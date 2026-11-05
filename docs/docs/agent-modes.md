@@ -167,9 +167,21 @@ If the selected model has no function calling, LocalPilot asks it to write tool 
 
 LocalPilot parses these blocks and returns the results as a user message. This is less reliable than native tool calling. Prefer a model with tool support for Agent mode.
 
+## Self-healing in each mode
+
+The [self-healing engine]({{ '/docs/self-healing/' | relative_url }}) works in every mode, but how much it does depends on what the mode may change:
+
+| Mode | Self-healing |
+|---|---|
+| Agent, Debug | Full: when files changed, the project checks run before the task is reported done; failures are diagnosed, fixed and re-checked within the budgets |
+| Multitask | Full, after the workers report. Independent failures can be fixed by parallel **fixer** workers; the coordinator then runs the full suite once |
+| Plan, Ask | Detection and retry of transient model failures only. They change no files, so no checks run |
+
+A turn that only reads code, runs `git log`, or edits only documentation and assets runs no checks. The outcome (*Completed*, *Not verified*, *Incomplete* or *Blocked*) shows in the answer's footer and on the recovery card.
+
 ## Iteration limit and stopping
 
-A turn allows up to 40 model and tool round trips. Subagents get 25.
+A turn allows up to 40 model and tool round trips. Subagents get 25. While a recovery is active, self-healing may add up to 16 more (`localpilot.healing.extraSteps`), and with self-healing on, a run stopped by a limit ends with a root-cause report and the next action instead of a bare error.
 
 A run also stops when it keeps failing. After 6 steps in a row in which every tool call failed, or a tool call had to be sent back because it did not parse, the chat shows *LocalPilot ran into 6 errors in a row and stopped* with the latest error. Send a message to guide the agent and it continues normally. Any successful tool call resets the count. A step you deny at a prompt is not counted; a call refused by a `never` setting, the organization's policy or a non-interactive `localpilot -p` run is. Change the limit with `localpilot.maxConsecutiveMistakes` (`0` = no limit).
 

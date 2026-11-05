@@ -1,0 +1,4 @@
+{ "input": "run_command", "command": "npm install left-padd", "root": "/work/proj",
+  "expected": [
+    { "category": "dependency", "code": "E404", "file": null, "line": null, "symbol": "left-padd" }
+  ] }

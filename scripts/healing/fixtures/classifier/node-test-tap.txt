@@ -1,0 +1,35 @@
+TAP version 13
+# Subtest: sum
+    # Subtest: adds
+    not ok 1 - adds
+      ---
+      duration_ms: 0.712
+      location: '/work/proj/test/sum.test.js:4:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        4 !== 3
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 3
+      actual: 4
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (file:///work/proj/test/sum.test.js:5:12)
+      ...
+    1..1
+not ok 1 - sum
+  ---
+  duration_ms: 1.9
+  type: 'suite'
+  location: '/work/proj/test/sum.test.js:3:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# pass 0
+# fail 1

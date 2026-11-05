@@ -1,0 +1,5 @@
+{ "input": "check", "ecosystem": "node", "kind": "test", "root": "/work/proj",
+  "expected": [
+    { "category": "unit_test", "code": "assertion", "file": "test/sum.test.js", "line": 7, "test": "sum adds" },
+    { "category": "integration_test", "code": "Error", "file": "test/client.test.js", "line": 15, "test": "api client fetches users" }
+  ] }

@@ -1,0 +1,4 @@
+  File "/work/proj/app/util.py", line 12
+    def parse(text:
+                   ^
+SyntaxError: '(' was never closed

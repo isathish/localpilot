@@ -1,0 +1,5 @@
+# example.com/calc
+./sum.go:5:9: undefined: foo
+./sum.go:9:2: x declared and not used
+internal/api/handler.go:14:2: no required module provides package github.com/gorilla/mux; to add it:
+	go get github.com/gorilla/mux

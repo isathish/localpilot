@@ -59,6 +59,8 @@ interface Live {
   always: Set<string>;
   /** Tool calls started and not yet finished, oldest first (approvals belong to the newest). */
   open: string[];
+  /** Answer text sent in this prompt so far (the self-healing footer is sent at turn_end when it was not). */
+  streamed?: string;
 }
 
 type Json = Record<string, unknown>;
@@ -392,6 +394,7 @@ export class AcpServer {
     const running = { stop: () => ctl.abort(), cancelled: false };
     l.running = running;
     l.open = [];
+    l.streamed = '';
     const sid = l.session.id;
     let failed: { message: string; kind?: string } | undefined;
     try {
@@ -431,8 +434,17 @@ export class AcpServer {
     }
     switch (e.type) {
       case 'assistant_delta':
+        l.streamed = (l.streamed ?? '') + String(e.payload ?? '');
         this.update(sid, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: String(e.payload ?? '') } });
         return;
+      case 'turn_end': {
+        // The self-healing footer (Verified / Not verified / Incomplete) is appended to the answer, not streamed.
+        const report = (p.recovery as { report?: unknown } | undefined)?.report;
+        if (typeof report === 'string' && report && !(l.streamed ?? '').includes(report)) {
+          this.update(sid, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\n${report}` } });
+        }
+        return;
+      }
       case 'thinking_delta':
         this.update(sid, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: String(e.payload ?? '') } });
         return;

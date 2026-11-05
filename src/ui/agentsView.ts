@@ -4,10 +4,22 @@ import { ChatController } from './chatController';
 import { SessionSummary } from '../types';
 import { QueueTask, TaskQueue } from '../agent/taskQueue';
 
+/** Registered by the extension; opens a task's recovery report (`sessionId`, `interventionId?`). */
+export const RECOVERY_OPEN_COMMAND = 'localpilot.recovery.open';
+/** Registered by the extension; continues an incomplete or waiting task in its chat. */
+export const RECOVERY_RESUME_COMMAND = 'localpilot.recovery.resume';
+
+export interface AgentsTreeOptions {
+  /** The extension registered the recovery commands: incomplete/waiting tasks open their recovery report instead of the chat. */
+  recovery?: boolean;
+}
+
+const ATTENTION: ReadonlySet<QueueTask['status']> = new Set(['incomplete', 'needs_input']);
+
 type Node =
-  | { kind: 'group'; id: 'running' | 'recent' | 'queue'; label: string }
-  /** A task-queue entry; once started it opens the chat it runs in. */
-  | { kind: 'task'; task: QueueTask; position: number }
+  | { kind: 'group'; id: 'running' | 'recent' | 'queue' | 'attention'; label: string }
+  /** A task-queue entry; once started it opens the chat it runs in. `attention`: listed under "Needs attention". */
+  | { kind: 'task'; task: QueueTask; position: number; attention?: boolean }
   | { kind: 'session'; session: SessionSummary; running: boolean }
   | { kind: 'status'; sessionId: string; text: string }
   /** A running subagent of a session, with its own pause/stop controls. */
@@ -27,7 +39,7 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
   private readonly disposables: vscode.Disposable[] = [];
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly controller: ChatController, private readonly queue?: TaskQueue) {
+  constructor(private readonly controller: ChatController, private readonly queue?: TaskQueue, private readonly options: AgentsTreeOptions = {}) {
     const refresh = () => this.scheduleRefresh();
     this.disposables.push(controller.store.onDidChange(refresh), controller.onDidChangeRuns(refresh), controller.tracker.onDidChange(refresh), controller.onDidChangeActive(refresh));
     if (queue) {
@@ -50,11 +62,13 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       case 'task': {
         const t = n.task;
         const item = new vscode.TreeItem(t.prompt.split('\n')[0].slice(0, 80), vscode.TreeItemCollapsibleState.None);
-        item.id = t.id;
+        item.id = n.attention ? `attention/${t.id}` : t.id;
         const model = (t.model || '').split('/').pop();
         const after = t.dependsOn?.length ? ` · after ${t.dependsOn.map((d) => `#${this.queue!.list.findIndex((x) => x.id === d) + 1}`).join(', ')}` : '';
-        item.description = `#${n.position} · ${t.status}${t.status === 'running' && t.sessionId ? ` · ${this.controller.runStatus.get(t.sessionId) ?? 'Working…'}` : ''} · ${t.mode}${model ? ` · ${model}` : ''}${after}`;
-        item.tooltip = `${t.prompt}\n\n${t.status}${t.error ? `: ${t.error}` : ''}${t.model ? `\nModel: ${t.model}` : ''}`;
+        const status = t.status === 'needs_input' ? 'needs input' : t.status;
+        item.description = `#${n.position} · ${status}${t.status === 'running' && t.sessionId ? ` · ${this.controller.runStatus.get(t.sessionId) ?? 'Working…'}` : ''} · ${t.mode}${model ? ` · ${model}` : ''}${after}`;
+        const outcome = t.outcome && t.outcome !== t.status ? ` (${t.outcome.replace(/_/g, ' ')})` : '';
+        item.tooltip = `${t.prompt}\n\n${status}${outcome}${t.error ? `: ${t.error}` : ''}${t.model ? `\nModel: ${t.model}` : ''}${ATTENTION.has(t.status) && t.sessionId ? `\nClick to see ${this.options.recovery ? 'what happened' : 'the chat'}; Retry continues in the same chat.` : ''}`;
         const icons: Record<QueueTask['status'], [string, string?]> = {
           queued: ['clock'],
           running: ['loading~spin'],
@@ -62,12 +76,17 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
           failed: ['error', 'testing.iconFailed'],
           cancelled: ['circle-slash'],
           blocked: ['debug-step-over', 'list.warningForeground'],
+          incomplete: ['warning', 'list.warningForeground'],
+          needs_input: ['bell', 'list.warningForeground'],
         };
         const [icon, color] = icons[t.status];
         item.iconPath = new vscode.ThemeIcon(icon, color ? new vscode.ThemeColor(color) : undefined);
-        item.contextValue = `queue-${t.status}`;
+        // Exact values matched by package.json menus; the other statuses keep `queue-<status>`.
+        item.contextValue = t.status === 'incomplete' ? 'queueTask.incomplete' : t.status === 'needs_input' ? 'queueTask.needsInput' : `queue-${t.status}`;
         if (t.sessionId) {
-          item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [t.sessionId] };
+          item.command = ATTENTION.has(t.status) && this.options.recovery
+            ? { command: RECOVERY_OPEN_COMMAND, title: 'Open recovery report', arguments: [t.sessionId, t.interventionId] }
+            : { command: 'localpilot.openSession', title: 'Open', arguments: [t.sessionId] };
         }
         return item;
       }
@@ -161,11 +180,18 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       if (this.queue?.list.length) {
         const q = this.queue;
         groups.unshift({ kind: 'group', id: 'queue', label: `Queue (${q.activeCount} running, ${q.pendingCount} waiting${q.paused ? ', paused' : ''})` });
+        const attention = q.list.filter((t) => ATTENTION.has(t.status)).length;
+        if (attention) {
+          groups.unshift({ kind: 'group', id: 'attention', label: `Needs attention (${attention})` });
+        }
       }
       return groups;
     }
     if (n.kind === 'group' && n.id === 'queue') {
       return (this.queue?.list ?? []).map((task, i) => ({ kind: 'task', task, position: i + 1 }));
+    }
+    if (n.kind === 'group' && n.id === 'attention') {
+      return (this.queue?.list ?? []).flatMap((task, i): Node[] => (ATTENTION.has(task.status) ? [{ kind: 'task', task, position: i + 1, attention: true }] : []));
     }
     if (n.kind === 'group') {
       const all = sessions.filter((s) => running.has(s.id) === (n.id === 'running'));

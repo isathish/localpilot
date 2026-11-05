@@ -1,0 +1,9 @@
+Starting worker...
+Traceback (most recent call last):
+  File "/work/proj/app/main.py", line 22, in <module>
+    run()
+  File "/work/proj/app/main.py", line 18, in run
+    total = compute(items)
+  File "/work/proj/app/calc.py", line 7, in compute
+    return sum(i.price for i in items) / len(items)
+ZeroDivisionError: division by zero

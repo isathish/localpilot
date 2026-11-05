@@ -69,6 +69,8 @@ nav:
     url: /docs/agent-modes/
   - title: Parallel agents & changes
     url: /docs/parallel-agents/
+  - title: Self-healing & recovery
+    url: /docs/self-healing/
   - title: Skills & subagents
     url: /docs/skills-and-agents/
   - title: Claude Code compatibility

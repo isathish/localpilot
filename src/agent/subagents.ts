@@ -1,5 +1,5 @@
 import { getConfig } from '../config';
-import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext, ToolDefinition } from '../types';
+import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext, ToolDefinition, ToolResult } from '../types';
 import { AgentRunner, ApprovalHandler, claimsChange } from './agentLoop';
 import { nextWave, ParallelPool } from './parallel';
 import { RunControl } from './runControl';
@@ -11,6 +11,7 @@ import { agentToolFilter } from './toolAliases';
 import { findRepo } from './repos';
 import { reposFor } from '../tools/repos';
 import { releaseIntegratedTerminal } from '../tools/terminal';
+import { ChildWrites, childMutated, childRecovery, isHealingSynthetic, verificationLine } from './childEvents';
 
 /** Appended to every subagent persona (built-in or custom). */
 const SUBAGENT_CONTRACT = `# You are a subagent
@@ -107,7 +108,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
             description: 'Independent tasks to run in parallel',
             items: {
               type: 'object',
-              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this task must follow' }, repo: { type: 'string', description: 'Optional repository name (see the repos tool): the subagent works inside that repository instead of this workspace' } },
+              properties: { agent: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, skills: { type: 'array', items: { type: 'string' }, description: 'Optional installed skill names this task must follow' }, repo: { type: 'string', description: 'Optional repository name (see the repos tool): the subagent works inside that repository instead of this workspace' }},
               required: ['agent', 'prompt'],
             },
           },
@@ -129,7 +130,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         return { content: 'tasks must be a non-empty array', isError: true };
       }
       // Validate every task before any child runs: one malformed task must not throw away the others' reports.
-      const tasks = given.map((t) => ({ ...(t && typeof t === 'object' ? t : {}), prompt: t?.prompt ?? t?.task ?? t?.description })) as { agent: string; prompt: string; model?: string; skills?: unknown; repo?: unknown }[];
+      const tasks = given.map((t) => ({ ...(t && typeof t === 'object' ? t : {}), prompt: t?.prompt ?? t?.task ?? t?.description })) as { agent: string; prompt: string; model?: string; skills?: unknown; repo?: unknown; origin?: unknown }[];
       const invalid = tasks.map((t, i) => (typeof t.agent === 'string' && t.agent.trim() && typeof t.prompt === 'string' && t.prompt.trim() ? '' : `task ${i + 1}: needs "agent" and "prompt" strings`)).filter(Boolean);
       if (invalid.length) {
         return { content: `${invalid.join('; ')}. Nothing was run.`, isError: true };
@@ -144,12 +145,15 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       const pool = new ParallelPool(getConfig().parallel.maxConcurrency);
       // A subagent in another repository is told where it is: paths it writes are relative to that repository's root.
       const inRepo = (t: (typeof tasks)[number], i: number) => (roots[i] ? `You are working in the repository "${roots[i]!.name}" (${roots[i]!.path}). Every relative path is relative to that repository's root: write "server.js", not "${roots[i]!.name}/server.js". Make and verify the change there.\n\n${t.prompt}` : t.prompt);
-      const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path, isolatedFrom: undefined } : ctx, roots[i]?.name, strList(t.skills)));
+      // `origin: 'healing'` is honoured only on the engine's synthetic call; a model passing it gets an ordinary worker.
+      const origin = isHealingSynthetic(ctx) ? 'healing' : undefined;
+      const settled = await pool.map(tasks, (t, i) => runChild(t.agent, inRepo(t, i), t.model, roots[i] ? { ...ctx, workspaceRoot: roots[i]!.path, isolatedFrom: undefined } : ctx, roots[i]?.name, strList(t.skills), origin && t.origin === 'healing' ? origin : undefined));
       const out = settled.map((r, i) => {
         const header = `## Task ${i + 1} (${tasks[i].agent}${roots[i] ? ` in ${roots[i]!.name}` : ''}): ${String(tasks[i].prompt ?? '').slice(0, 80)}`;
         return r.status === 'fulfilled' ? `${header}\n${r.value.content}` : `${header}\nFAILED: ${String(r.reason)}`;
       });
-      return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected' || r.value.isError) };
+      const writtenFiles = [...new Set(settled.flatMap((r) => (r.status === 'fulfilled' ? (r.value.data?.writtenFiles ?? []) : [])))];
+      return { content: out.join('\n\n'), isError: settled.every((r) => r.status === 'rejected' || r.value.isError), data: writtenFiles.length ? { writtenFiles } : undefined };
     },
   };
 
@@ -159,7 +163,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     return { unknown: [...new Set(requested.filter((n) => !resolveAgentName(n, available)))], available };
   };
 
-  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string, extraSkills?: string[]) {
+  async function runChild(agentName: string, prompt: string, modelRef: string | undefined, ctx: ToolContext, label?: string, extraSkills?: string[], origin?: 'healing'): Promise<ToolResult & { data?: { writtenFiles: string[] } }> {
     if (ctx.signal.aborted) {
       return { content: 'Not started: the user stopped the run.', isError: true };
     }
@@ -196,7 +200,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     // pause or stop just this lane — the parent then carries on with a "stopped" report instead of failing.
     // Registered before subagent_start so a UI reacting to that event can already address the child.
     const control = ctx.control ? ctx.control.child(childId, label ? `${def.name} · ${label}` : def.name) : new RunControl(childId, undefined, ctx.signal, label ? `${def.name} · ${label}` : def.name);
-    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined } });
+    emit({ sessionId: ctx.sessionId, type: 'subagent_start', payload: { childId, agent: def.name, prompt, model: child.model || undefined, label: label || undefined, origin } });
     const announcedModel = child.model;
     const user: ChatMessage = { role: 'user', content: prompt };
     // The router may have picked a different (smaller) model for a read-only child. If that model stalls or cannot
@@ -212,12 +216,26 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
     let mutated = false;
     /** False when the child's turn hit its step limit instead of reaching a final answer. */
     let completed = true;
+    /** The worker's self-healing verdict (`turn_end.payload.recovery`), reported with its result. */
+    let recovery: Record<string, unknown> | undefined;
+    /** Files the child (or its own children) wrote: reported so the root session's healing engine can track them. */
+    const writes = new ChildWrites(ctx.workspaceRoot);
+    const written = () => {
+      const files = writes.list();
+      return files.length ? files : undefined;
+    };
+    const result = (content: string, isError?: boolean) => {
+      const writtenFiles = written();
+      return { content, isError, data: writtenFiles ? { writtenFiles } : undefined };
+    };
     const attempt = () =>
       runner.run({
         session: child,
         userMessage: user,
         modelRef: child.model || undefined,
         role,
+        // Only engine-started fixers run their own healing engine (worker mode); other children just route writes.
+        healingRole: origin === 'healing' ? 'fixer' : undefined,
         spreadModels: spreadable && !fellBack,
         // Agents registered from other sources may still name Claude Code or Cline tools.
         // Claude `mcp__…` entries are also kept as written: they are matched against the names MCP tools were registered under.
@@ -233,15 +251,16 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         signal: control.signal,
         control,
         requestApproval: (title, detail, kind, opts) => approval(ctx.sessionId, title, detail, kind, opts),
-        // Child progress is forwarded under the parent's session id so the UI can nest it.
+        // Child progress is forwarded under the parent's session id so the UI can nest it. The wrapper puts the child's
+        // own payload under `payload.data`: its tool `origin` and `recovery` fields are read there, not top-level.
         emit: (e) => {
+          writes.note(e);
           if (e.type === 'turn_end') {
             completed = (e.payload as { completed?: boolean } | undefined)?.completed !== false;
-          } else if (e.type === 'tool_end') {
-            const p = e.payload as { name?: string; isError?: boolean } | undefined;
-            if (p?.name && !p.isError && MUTATING_TOOLS.has(p.name)) {
-              mutated = true;
-            }
+            recovery = childRecovery(e.payload) ?? recovery;
+          } else if (childMutated(e, MUTATING_TOOLS)) {
+            // Engine-run verification commands (origin 'healing') neither block the fall-back nor back a claim.
+            mutated = true;
           }
           emit({ ...e, sessionId: ctx.sessionId, payload: { childId, agent: def.name, inner: e.type, data: e.payload }, type: e.type === 'turn_end' ? 'status' : e.type === 'assistant_delta' || e.type === 'thinking_delta' ? 'status' : e.type });
         },
@@ -270,28 +289,30 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         emit({ sessionId: ctx.sessionId, type: 'status', payload: `${def.name}: ${child.model || 'the routed model'} is not responding — retrying on ${ctx.modelRef}` });
         child.messages = [];
         child.contextTokens = 0;
+        recovery = undefined;
         child.model = ctx.modelRef!;
         text = await attempt();
       }
       if (control.aborted) {
         const partial = text ? ` Partial output:\n${text}` : '';
         const note = ctx.signal.aborted ? `Stopped by the user before it finished.${partial}` : `Subagent "${def.name}" was stopped by the user before it finished.${partial} Do not retry it; continue with what you have or do that part yourself.`;
-        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user' } });
-        return { content: note, isError: true };
+        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Stopped by user', writtenFiles: written() } });
+        return result(note, true);
       }
       if (!completed) {
-        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Ran out of steps' } });
-        return { content: `Subagent "${def.name}" ran out of steps before finishing.${text ? ` Partial output:\n${text}` : ''}`, isError: true };
+        emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: 'Ran out of steps', writtenFiles: written() } });
+        return result(`Subagent "${def.name}" ran out of steps before finishing.${text ? ` Partial output:\n${text}` : ''}`, true);
       }
-      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: child.model && child.model !== announcedModel ? child.model : undefined } });
+      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: child.model && child.model !== announcedModel ? child.model : undefined, recovery, writtenFiles: written() } });
       // Small models sometimes report work they never did. The parent can only verify what it is told, so say so
       // when the report claims a change but the worker made no edit, write or command at all.
       const unbacked = !mutated && child.mode === 'agent' && (claimsChange(text, prompt) || /\bI\s+(?:created|wrote|edited|updated|fixed|modified|added|saved|deleted|removed|renamed)\b/i.test(text));
-      return { content: `${text || '(subagent returned no text)'}${unbacked ? '\n\n[LocalPilot: this worker made no file edits, writes or commands, although its report says it changed something. Check before relying on it.]' : ''}` };
+      const verified = verificationLine(recovery);
+      return result(`${text || '(subagent returned no text)'}${verified ? `\n\n${verified}` : ''}${unbacked ? '\n\n[LocalPilot: this worker made no file edits, writes or commands, although its report says it changed something. Check before relying on it.]' : ''}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg } });
-      return { content: `Subagent failed: ${msg}`, isError: true };
+      emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg, writtenFiles: written() } });
+      return result(`Subagent failed: ${msg}`, true);
     } finally {
       control.dispose();
       releaseIntegratedTerminal(childId);
@@ -425,6 +446,8 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       let remaining = [...runnable];
       let wave = 0;
       const STOPPED = 'Stopped by the user before it finished.';
+      const todoWrites = new Set<string>();
+      const writesData = () => (todoWrites.size ? { writtenFiles: [...todoWrites] } : undefined);
       while (remaining.length) {
         if (ctx.signal.aborted) {
           break;
@@ -457,6 +480,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
           const brief = t.prompt?.trim() || `Carry out checklist item ${t.id}: "${t.title}". Use the tools to inspect the workspace, make the change (or produce the analysis) and verify it.`;
           const r = await runChild(t.agent!, `${brief}\n\nThis is checklist item ${t.id} ("${t.title}") of a larger task — stay within its scope. The full checklist, for context only:\n${checklist}${depText}`, t.model, ctx, t.title, t.skills);
           const ok = !r.isError;
+          r.data?.writtenFiles.forEach((f) => todoWrites.add(f));
           // Stopped mid-way: the item goes back to pending (not done, not skipped) so it can be run again.
           update(t.id, ok ? { status: 'done', result: r.content.slice(0, 2000) } : ctx.signal.aborted ? { status: 'pending', result: STOPPED } : { status: 'skipped', result: r.content.slice(0, 2000) });
           return r;
@@ -490,6 +514,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         return {
           content: `Stopped: ${done.length} of ${runnable.length} items finished; the rest are still pending.${done.length ? `\n\n${done.map(({ t, content }) => `## ${t.id}. ${t.title} (${t.agent})\n${content}`).join('\n\n')}` : ''}`,
           isError: true,
+          data: writesData(),
         };
       }
       const remainingIds = new Set(remaining.map((t) => t.id));
@@ -507,6 +532,7 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
       return {
         content: `${outcomes.length - failedCount}/${runnable.length} items completed in ${wave} wave${wave === 1 ? '' : 's'}.${failedCount ? ' Failed items were marked "skipped" — redo them yourself or re-run with fixes.' : ''}${stillWaiting.length ? `\nNot started: ${stillWaiting.join('; ')}.` : ''}\n\n${out.join('\n\n')}\n\nIntegrate the results, verify the combined change (diagnostics/tests), then update the remaining checklist items.`,
         isError: outcomes.length > 0 && failedCount === outcomes.length,
+        data: writesData(),
       };
     },
   };

@@ -1,0 +1,36 @@
+
+
+  sum
+    ✔ handles zero
+    1) adds
+
+  api client
+    2) fetches users
+
+
+  1 passing (12ms)
+  2 failing
+
+  1) sum
+       adds:
+
+      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+4 !== 3
+
+      + expected - actual
+
+      -4
+      +3
+      
+      at Context.<anonymous> (test/sum.test.js:7:12)
+      at process.processImmediate (node:internal/timers:476:21)
+
+  2) api client
+       fetches users:
+     Error: connect ECONNREFUSED 127.0.0.1:8080
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)
+      at Context.<anonymous> (test/client.test.js:15:9)
+
+
+

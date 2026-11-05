@@ -750,3 +750,12 @@ function safeSimple(words0: string[], depth: number): GuardVerdict {
   const line = [name, ...args.filter((a) => !/^--?(silent|s|q|quiet|watch=false|no-color|ci)$/.test(a))].join(' ');
   return SAFE_TASKS.some((re) => re.test(line)) ? { ok: true } : no();
 }
+
+/**
+ * Whether a synthetic self-healing call runs exactly a configured check: `command` must equal a spec's `command` or
+ * one of its filled scoped commands, byte for byte. The caller also requires origin `healing`; model-originated calls
+ * never get here, so workspace-relative executables (`node_modules/.bin/tsc`, `./gradlew`) stay non-safe for them.
+ */
+export function isSafeHealingCheck(command: string, specs: readonly { command: string; scopedFilled?: readonly string[] }[]): boolean {
+  return !!command && specs.some((s) => s.command === command || !!s.scopedFilled?.includes(command));
+}

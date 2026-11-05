@@ -72,13 +72,13 @@
     gallery: 'catalog library hugging face docker hub download pull install gguf',
     skills: 'skill playbook subagent registry install',
     customize: 'rules commands hooks skills plugins agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs hook scripts pretooluse taskstart taskcancel taskerror marketplace browse plugins',
-    agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify diff preview patch checkpoint restore snapshot diagnostics errors compaction summarise trim shell zsh bash powershell profile detach background language english spanish chinese japanese translate locale tips conversation repos repositories monorepo multi-root',
+    agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify diff preview patch checkpoint restore snapshot diagnostics errors compaction summarise trim shell zsh bash powershell profile detach background language english spanish chinese japanese translate locale tips conversation repos repositories monorepo multi-root self-healing recovery retry checks tests regression',
     completions: 'ghost text fim autocomplete tab suggestion',
     web: 'searxng brave tavily duckduckgo browser screenshot fetch internet offline online',
     documents: 'markdown reader preview mermaid outline toc front matter export pdf viewer zoom thumbnails page colours dark sepia scroll sync',
     memory: 'history chats notes retention transcripts',
     mcp: 'model context protocol server tools reconnect',
-    dashboard: 'telemetry metrics usage logs redis stats throughput',
+    dashboard: 'telemetry metrics usage logs redis stats throughput self-healing recovery failures root cause patches regression intervention',
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
   };
@@ -123,6 +123,12 @@
     ['documents', 'pdfViewer.pageColors', 'PDF page colours'], ['documents', 'pdfViewer.sidebar', 'PDF sidebar on open'], ['documents', 'pdfViewer.defaultZoom', 'PDF default zoom'],
     ['documents', 'pdfViewer.rangeThresholdMB', 'Load PDF page by page above (MB)'], ['documents', 'pdfViewer.maxFileSizeMB', 'Ask before opening PDFs larger than (MB)'],
     ['documents', 'pdf.maxReadSizeMB', 'Largest PDF the agent may read (MB)'], ['documents', 'pdf.maxChars', 'Most PDF text per read (characters)'],
+    ['agent', 'healing.enabled', 'Self-healing'], ['agent', 'healing.autoDetect', 'Detect failures at every step'], ['agent', 'healing.autoRetry', 'Retry transient failures'], ['agent', 'healing.autoFix', 'Fix failures automatically'],
+    ['agent', 'healing.regressionRequired', 'Require the full relevant test suite to pass'], ['agent', 'healing.scopeTests', 'Run affected tests first'], ['agent', 'healing.delegateFixes', 'Fix independent failures in parallel'],
+    ['agent', 'healing.maxRepairAttempts', 'Fix attempts per failure'], ['agent', 'healing.maxTotalAttempts', 'Recovery attempts per task'], ['agent', 'healing.extraSteps', 'Extra steps for recovery'], ['agent', 'healing.taskDeadlineMinutes', 'Recovery deadline'],
+    ['agent', 'healing.checkTiming', 'When checks run'], ['agent', 'healing.checkTimeoutSeconds', 'Time limit per check'], ['agent', 'healing.checkTimeBudgetSeconds', 'Time limit per verification run'], ['agent', 'healing.baseline', 'Failures that were there before'],
+    ['agent', 'healing.memory', 'Remember failures and fixes'], ['agent', 'healing.dependencyInstall', 'Installing missing packages'], ['agent', 'healing.securityCheck', 'Security check'], ['agent', 'healing.gitConflicts', 'Git conflicts'],
+    ['agent', 'healing.checks', 'Checks'], ['agent', 'healing.policies', 'Retry policies'],
   ];
   /** Every query word must hit the entry; label-prefix hits rank first, then label, key, then section words. */
   function findSettings(q) {
@@ -345,6 +351,8 @@
     gallery: { source: 'ollama', target: {}, pullRef: '', pullError: '', pullTarget: '', by: {} },
     // Dashboard: last summary + range, and the log viewer filters (follow streams new lines in).
     dash: { days: 7, summary: null, logFile: '', loading: false, logs: [], level: 'info', q: '', follow: true, timer: null, includeDisabled: false, provider: '', hidden: [], allProviders: null },
+    // Dashboard → Self-healing & recovery: the host's data for the range, the open view, its filters and expanded diffs.
+    rec: { data: null, error: '', loaded: false, tab: 'history', cat: '', open: {}, reuse: {}, canDiff: false, ro: null, raf: 0 },
     // Skill registry browser (Settings → Skills): query, results with installed state, per-repo index status, install jobs.
     skillReg: { q: '', filter: 'all', scope: '', entries: [], status: [], loading: false, loaded: false, refreshing: false, jobs: {} }, skillFilter: '' };
   const galleryState = (source) => (state.gallery.by[source] ||= { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {} });
@@ -459,7 +467,7 @@
   }
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   /** Mirrors isUserOnlySetting in src/config.ts (keep the two in step): written to User settings whatever scope is selected. */
-  const USER_ONLY = (k) => k === 'hooks.enabled' || k.startsWith('approvals.') || k.startsWith('autoMode.') || k.startsWith('telemetry.otlp.');
+  const USER_ONLY = (k) => k === 'hooks.enabled' || k === 'healing.dependencyInstall' || k === 'healing.securityCheck' || k.startsWith('approvals.') || k.startsWith('autoMode.') || k.startsWith('telemetry.otlp.');
   const userOnlyBadge = (key) => (USER_ONLY(key) ? '<span class="badge useronly" title="Applies to every workspace for safety; the Workspace switch does not change it">User only</span>' : '');
   const scopeBadge = (key) => { const s = S(key).scope; return userOnlyBadge(key) + (s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`); };
   const resetBtn = (key) => {
@@ -496,7 +504,7 @@
 
   /** Generic setting row. kind: text|number|password|select|toggle|textarea|range|seg.
    *  opts.after: a full-width line under the row (counts, buttons); opts.badges: extra HTML after the label;
-   *  opts.unit: suffix beside a number; opts.off: why the row is unavailable right now (controls are disabled). */
+   *  opts.unit: suffix beside a number (json: what one entry is called); opts.off: why the row is unavailable right now (controls are disabled). */
   function field(key, label, desc, kind, opts = {}) {
     const f = el('div', `field ${opts.wide ? 'wide' : ''}${USER_ONLY(key) && state.scope === 'workspace' ? ' useronly-ws' : ''}`);
     // Components declare the setting keys they render from and how to rebuild themselves, so a changed setting
@@ -525,6 +533,14 @@
       r.oninput = () => { w.querySelector('output').textContent = opts.fmt ? opts.fmt(Number(r.value)) : r.value; };
       r.onchange = () => set(key, Number(r.value));
       ctl.appendChild(w);
+    } else if (kind === 'json') {
+      // Arrays and objects without a form here: how many entries, and the key opened in settings.json (opts.unit names one entry).
+      const n = Array.isArray(v) ? v.length : v && typeof v === 'object' ? Object.keys(v).length : 0;
+      const ws = state.scope === 'workspace';
+      const b = el('button', 'btn sm', `${I.external}Edit in settings.json`);
+      b.title = `Open ${ws ? 'the workspace' : 'your User'} settings.json at localpilot.${key}`;
+      b.onclick = () => post({ type: 'command', id: ws ? 'workbench.action.openWorkspaceSettingsFile' : 'workbench.action.openSettingsJson', args: ws ? undefined : [{ revealSetting: { key: `localpilot.${key}`, edit: true } }] });
+      const r = el('div', 'row json-row'); r.append(el('span', 'muted small', n ? plural(n, opts.unit || 'entry') : 'None set'), b); ctl.appendChild(r);
     } else if (kind === 'textarea') {
       const t = el('textarea'); t.value = v ?? ''; t.placeholder = opts.placeholder || ''; t.setAttribute('aria-label', label);
       t.onchange = () => set(key, t.value);
@@ -2081,6 +2097,166 @@
       field('maxConsecutiveMistakes', 'Stop after errors in a row', 'A run stops and asks for guidance after this many steps in a row in which every tool call failed. Any successful tool call resets the count. <code>0</code> = no limit.', 'number', { min: 0, max: 50, step: 1 }),
       field('systemPromptAppend', 'Extra instructions', 'Appended to every system prompt — coding conventions, preferred libraries, language. Project rules in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code> and <code>.github/copilot-instructions.md</code> are loaded automatically.', 'textarea', { wide: true, placeholder: 'Always use TypeScript strict mode. Prefer small, pure functions. Use pnpm, not npm.' })
     ));
+    sec.appendChild(el('h2', 'sub', 'Self-healing'));
+    sec.appendChild(healingSettings());
+  }
+
+  /** The localpilot.healing.* rows. With the engine off the rest stays visible but disabled, like compactAt(). */
+  function healingSettings() {
+    const off = healingOff();
+    const o = { off };
+    const c = card(
+      field('healing.enabled', 'Self-healing', 'Detects failures while the agent works (model errors, failed tools, type errors, failing tests), finds the root cause, fixes it and re-runs the checks before calling a task done. Off: failures are reported as before.', 'toggle'),
+      field('healing.autoDetect', 'Detect failures at every step', 'Classifies failed tool calls, model errors and check results as they happen.', 'toggle', o),
+      field('healing.autoRetry', 'Retry transient failures', 'Timeouts, a model server that went away, overloaded models and flaky MCP tools are retried with backoff. A deterministic failure is never just repeated.', 'toggle', o),
+      field('healing.autoFix', 'Fix failures automatically', 'For compile errors, failing tests and similar the agent diagnoses the root cause and makes a targeted fix. Off: failures are detected and reported only.', 'toggle', o),
+      field('healing.regressionRequired', 'Require the full relevant test suite to pass', 'A task only counts as <b>completed</b> when the fix broke nothing else. Off: passing the failing checks is enough.', 'toggle', o),
+      field('healing.scopeTests', 'Run affected tests first', 'Tests near the changed files run before the full suite, so a failure shows up sooner.', 'toggle', o),
+      field('healing.delegateFixes', 'Fix independent failures in parallel', 'Unrelated groups of failures (different packages, different errors) are fixed by parallel subagents, within <b>Max concurrent tools / subagents</b>.', 'toggle', o),
+      field('healing.maxRepairAttempts', 'Fix attempts per failure', 'How often the agent may try to fix one code failure (compile error, failing test…) before it stops and asks you.', 'number', { ...o, min: 0, max: 10, step: 1 }),
+      field('healing.maxTotalAttempts', 'Recovery attempts per task', 'All retries and fixes of one task together, whatever the kind of failure.', 'number', { ...o, min: 0, max: 30, step: 1 }),
+      field('healing.extraSteps', 'Extra steps for recovery', 'Model steps a recovery may add on top of the usual step limit.', 'number', { ...o, min: 0, max: 60, step: 1 }),
+      field('healing.taskDeadlineMinutes', 'Recovery deadline', 'Counted from the first failure of a task: when it passes, the agent stops trying and reports what is left. Runs without failures have no deadline. <code>0</code> = no deadline.', 'number', { ...o, min: 0, max: 1440, step: 5, unit: 'min' }),
+      field('healing.checkTiming', 'When checks run', 'The typecheck, lint, build and test commands that verify the work.', 'select', { ...o, options: [['onComplete', 'When the task is done', 'once, before the agent reports back'], ['afterEdits', 'After every edit', 'catches a failure sooner, costs more time']] }),
+      field('healing.checkTimeoutSeconds', 'Time limit per check', 'Test commands get twice as long. A check that runs out of time leaves the task <b>Not verified</b>, not failed.', 'number', { ...o, min: 10, max: 3600, step: 10, unit: 's' }),
+      field('healing.checkTimeBudgetSeconds', 'Time limit per verification run', 'All checks of one verification run together.', 'number', { ...o, min: 30, max: 7200, step: 30, unit: 's' }),
+      field('healing.baseline', 'Failures that were there before', 'Checks run once before the agent changes anything, so failures it did not cause are not blamed on it.', 'select', { ...o, options: [['fast', 'Fast', 'typecheck and lint'], ['all', 'All checks', 'tests too'], ['off', 'Off', 'every failure counts']] }),
+      field('healing.memory', 'Remember failures and fixes', 'What fixed a failure before is suggested when the same failure comes back. <b>Workspace</b>: kept with VS Code\'s workspace storage. <b>Project</b>: <code>.localpilot/recovery-memory.json</code>, shareable with your team.', 'select', { ...o, options: [['workspace', 'Workspace'], ['project', 'Project', '.localpilot/recovery-memory.json'], ['off', 'Off']] }),
+      field('healing.dependencyInstall', 'Installing missing packages', 'An install always shows an approval card. <b>Never</b>: a missing package is reported and the task is blocked.', 'select', { ...o, options: [['ask', 'Ask every time'], ['never', 'Never install', 'report it and stop']] }),
+      field('healing.securityCheck', 'Security check', 'Scans changed files for secrets and unsafe code, offline. <b>Changed files + dependencies</b> also checks dependencies for known vulnerabilities (asks before going online). A finding blocks completion until it is fixed; a repository\'s settings cannot switch this off.', 'select', { ...o, options: [['changed', 'Changed files', 'offline'], ['full', 'Changed files + dependencies', 'asks before going online'], ['off', 'Off']] }),
+      field('healing.gitConflicts', 'Git conflicts', 'A merge conflict is never resolved automatically: your changes are kept and the conflict is handed to you to review.', 'select', { off: 'The only option in this release', options: [['escalate', 'Escalate to me']] }),
+      lockedRow('Security bypass', 'Disabled (cannot be enabled)', 'Security findings and approval rules are never skipped by self-healing. Only you can accept a risk, from the recovery card in the chat, and that is recorded in the audit log.'),
+      healingChecks(),
+      healingPolicies()
+    );
+    return component(c, ['healing.enabled'], healingSettings);
+  }
+  const healingOff = () => (effVal('healing.enabled') === false ? 'Self-healing is off — switch it on above' : '');
+  const HEAL_CAT_LABEL = {
+    model_timeout: 'Model stopped responding', model_unavailable: 'Model server unreachable', model_overload: 'Model out of memory', model_output: 'Malformed model output',
+    compile: 'Compile errors', typescript: 'Type errors', lint: 'Lint errors', build: 'Build failures', dependency: 'Missing packages',
+    unit_test: 'Failing unit tests', integration_test: 'Failing integration tests', runtime: 'Runtime errors',
+    database: 'Database and migrations', data_corruption: 'Data corruption', mcp: 'MCP tool failures', git_conflict: 'Git conflicts', security: 'Security findings',
+    tool: 'Failed tool calls', permission: 'Permissions and credentials', check_timeout: 'Checks that run out of time', loop: 'Loops and step limits', unknown: 'Other failures',
+  };
+  /** "1000, 2000" -> [1000, 2000]; null when an entry is not a whole number of ms from 0 to 600000 (the host's clamp). */
+  const parseWaits = (text) => {
+    const parts = String(text).split(/[\s,;]+/).filter(Boolean);
+    if (parts.length > 10 || parts.some((x) => !/^\d+$/.test(x) || Number(x) > 600000)) { return null; }
+    return parts.map(Number);
+  };
+  const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  /** Retry configuration: one row per failure category with the engine's defaults. A change writes the selected scope's
+   *  healing.policies with that category merged in; values equal to the default are dropped, so the entry goes away. */
+  function healingPolicies() {
+    const h = state.data && state.data.healing;
+    const own = ownValue('healing.policies'); const cur = own && typeof own === 'object' && !Array.isArray(own) ? own : {};
+    const wrap = el('div', 'heal-pol');
+    wrap.appendChild(el('div', 'heal-sub', 'Retry configuration'));
+    if (!h) { wrap.appendChild(el('div', 'muted small', 'Open the Settings page in a window with LocalPilot running to edit the retry configuration.')); }
+    else {
+      const tw = el('div', 'tblwrap');
+      const t = el('table', 'tbl heal-pol-tbl');
+      t.innerHTML = '<thead><tr><th scope="col">Failure</th><th scope="col">Attempts</th><th scope="col">Waits between retries</th><th scope="col">Time limit per attempt</th><th scope="col"><span class="sr">Reset</span></th></tr></thead>';
+      const tb = el('tbody');
+      for (const p of h.policies) {
+        const ov = cur[p.category] && typeof cur[p.category] === 'object' ? cur[p.category] : {};
+        const fixed = p.max === 0;
+        const name = HEAL_CAT_LABEL[p.category] || p.category;
+        const tr = el('tr', fixed ? 'fixed' : '');
+        tr.innerHTML = `<th scope="row">${esc(name)}<span class="cat">${esc(p.category)}</span></th><td></td><td></td><td></td><td class="act"></td>`;
+        const [, tdA, tdW, tdT, tdR] = tr.children;
+        const fk = (f) => `healing.policies:${p.category}:${f}`;
+        const num = (value, min, max, label, placeholder) => {
+          const i = el('input'); i.type = 'number'; i.min = min; i.max = max; i.step = 1; i.value = value ?? ''; i.placeholder = placeholder || ''; i.setAttribute('aria-label', `${name}: ${label}`); i.dataset.fk = fk(label); return i;
+        };
+        const att = num(ov.attempts ?? Math.min(p.attempts, p.max), 0, p.max, 'attempts');
+        const waits = el('input'); waits.type = 'text'; waits.value = (Array.isArray(ov.backoffMs) ? ov.backoffMs : p.backoffMs).join(', '); waits.placeholder = 'none'; waits.setAttribute('aria-label', `${name}: waits between retries in milliseconds`); waits.dataset.fk = fk('waits');
+        const tmo = num(ov.timeoutSeconds ?? p.timeoutSeconds, 1, 3600, 'time limit', 'default');
+        const unit = (input, u) => { const r = el('div', 'row unit-row'); r.append(input, el('span', 'unit', u)); return r; };
+        tdA.appendChild(fixed ? el('span', 'fixed-val', `${I.lock}0`) : unit(att, `max ${p.max}`));
+        tdW.appendChild(unit(waits, 'ms'));
+        tdT.appendChild(unit(tmo, 's'));
+        if (fixed) {
+          const why = p.category === 'data_corruption' || p.category === 'loop' ? 'Always stops and reports to you' : 'Always handed to you, never retried';
+          tr.title = why; [waits, tmo].forEach((x) => { x.disabled = true; x.title = why; });
+          tdA.querySelector('.fixed-val').title = why;
+        }
+        if (cur[p.category] !== undefined) {
+          const rb = el('button', 'reset', I.undo); rb.title = `Back to the default for ${name}`; rb.setAttribute('aria-label', rb.title); rb.dataset.fk = fk('reset');
+          rb.onclick = () => { const next = { ...cur }; delete next[p.category]; set('healing.policies', next); };
+          tdR.appendChild(rb);
+        }
+        const bad = (i, hint) => { i.classList.add('invalid'); i.setAttribute('aria-invalid', 'true'); i.title = `${hint} — not saved yet`; return true; };
+        const ok = (i) => { i.classList.remove('invalid'); i.removeAttribute('aria-invalid'); i.title = ''; };
+        const commit = () => {
+          const a = Number(att.value); const w = parseWaits(waits.value); const s = tmo.value === '' ? undefined : Number(tmo.value);
+          let invalid = false;
+          if (att.value === '' || !Number.isInteger(a) || a < 0 || a > p.max) { invalid = bad(att, `Enter a whole number from 0 to ${p.max}`); } else { ok(att); }
+          if (!w) { invalid = bad(waits, 'Whole milliseconds separated by commas, at most 10, each up to 600000'); } else { ok(waits); }
+          if (s !== undefined && (!Number.isInteger(s) || s < 1 || s > 3600)) { invalid = bad(tmo, 'Enter whole seconds from 1 to 3600, or leave empty for the default'); } else { ok(tmo); }
+          if (invalid) { return; }
+          const entry = {};
+          if (a !== Math.min(p.attempts, p.max)) { entry.attempts = a; }
+          if (!sameList(w, p.backoffMs)) { entry.backoffMs = w; }
+          if (s !== undefined && s !== p.timeoutSeconds) { entry.timeoutSeconds = s; }
+          const next = { ...cur };
+          if (Object.keys(entry).length) { next[p.category] = entry; } else { delete next[p.category]; }
+          if (JSON.stringify(next) !== JSON.stringify(cur)) { set('healing.policies', next); }
+        };
+        // Categories held at 0 never retry: nothing in their row can be saved.
+        if (!fixed) { [att, waits, tmo].forEach((x) => { x.onchange = commit; }); }
+        tb.appendChild(tr);
+      }
+      t.appendChild(tb); tw.appendChild(t); wrap.appendChild(tw);
+    }
+    const f = field('healing.policies', 'Retry configuration', 'How often each kind of failure is retried or fixed, how long to wait between retries (the last wait repeats) and how long one attempt may take. Security findings get at most 3 fix attempts; data corruption, git conflicts, permissions and loops always go to you. Changes are written to <code>localpilot.healing.policies</code>.', 'json', { off: healingOff(), unit: 'override', after: wrap });
+    return component(f, ['healing.enabled', 'healing.policies'], healingPolicies);
+  }
+  const CHECK_SOURCE = { discovered: ['Detected', 'Found in the project files'], 'checks.json': ['checks.json', '.localpilot/checks.json in this repository'] };
+  /** Detected checks for this workspace (read-only, from the host) plus the Open checks.json button. */
+  function healingChecks() {
+    const h = state.data && state.data.healing;
+    const wrap = el('div', 'heal-checks');
+    wrap.appendChild(el('div', 'heal-sub', 'Detected checks for this workspace'));
+    // The note is a flex row: the icon and one text span, so inline code and bold stay in the flow of the sentence.
+    const note = (cls, html) => { const m = /^(<svg[\s\S]*?<\/svg>)?([\s\S]*)$/.exec(html); return wrap.appendChild(el('div', `heal-note ${cls}`, `${m[1] || ''}<span>${m[2]}</span>`)); };
+    if (!h) { note('', 'Checks are listed once the page has loaded.'); }
+    else if (!h.hasRoot) { note('', 'Open a folder to see the checks that verify the work in it.'); }
+    else {
+      if (!h.trusted) { note('warn', `${I.warn}This workspace is not trusted: <code>.localpilot/checks.json</code> and the workspace value of <b>Checks</b> are ignored. Your User value still applies.`); }
+      if (h.checksJson === 'invalid') { note('warn', `${I.warn}<code>.localpilot/checks.json</code> is not valid JSON and is ignored.`); }
+      if (h.checks.length) {
+        const tw = el('div', 'tblwrap');
+        const t = el('table', 'tbl heal-checks-tbl');
+        t.innerHTML = '<thead><tr><th scope="col">Check</th><th scope="col">Command</th><th scope="col">From</th></tr></thead>';
+        const tb = el('tbody');
+        for (const c of h.checks) {
+          const [src, tip] = c.source === 'setting' ? (c.scope === 'workspace' ? ['Workspace settings', 'localpilot.healing.checks in the workspace settings'] : ['User settings', 'localpilot.healing.checks in your User settings']) : CHECK_SOURCE[c.source] || [c.source, ''];
+          const builtIn = c.kind === 'security' && c.source === 'discovered';
+          tb.appendChild(el('tr', '', `<td><b>${esc(c.id)}</b><div class="muted small">${esc(c.kind)}${c.required ? '' : ' · optional'}</div></td><td>${builtIn ? `<span class="muted">${esc(c.command)}</span>` : `<code title="${esc(c.cwd ? `in ${c.cwd}` : 'in the workspace folder')}">${esc(c.command)}</code>`}</td><td><span class="badge ${c.source === 'discovered' ? '' : c.source === 'setting' && c.scope === 'user' ? 'user' : 'workspace'}" title="${esc(tip)}">${esc(src)}</span></td>`));
+        }
+        t.appendChild(tb); tw.appendChild(t); wrap.appendChild(tw);
+      } else { note('', 'No checks found: add them below or in <code>.localpilot/checks.json</code>.'); }
+      if (h.disabled.length) { note('', `Turned off in <code>.localpilot/checks.json</code>: ${h.disabled.map((d) => `<code>${esc(d)}</code>`).join(', ')}`); }
+    }
+    const r = el('div', 'row btnrow');
+    const b = el('button', 'btn sm', `${I.external}Open checks.json`);
+    b.title = h && h.checksJson === 'missing' ? 'Create .localpilot/checks.json from a template and open it' : 'Open .localpilot/checks.json';
+    b.disabled = !h || !h.hasRoot;
+    b.onclick = () => post({ type: 'openChecksJson' });
+    const rl = el('button', 'btn sm ghost', `${I.refresh}Refresh`); rl.title = 'Look for checks in the workspace again'; rl.disabled = !h || !h.hasRoot;
+    rl.onclick = () => { rl.disabled = true; post({ type: 'loadChecks' }); };
+    r.append(b, rl, el('span', 'muted small', h && !h.trusted ? 'Ignored until you trust this workspace.' : 'checks.json is ignored in untrusted workspaces.'));
+    wrap.appendChild(r);
+    const f = field('healing.checks', 'Checks', 'Add or override the commands that verify the work, matched by <code>id</code>: <code>{ "id": "custom:e2e", "kind": "test", "command": "npm run test:e2e", "required": false }</code>. <code>.localpilot/checks.json</code> in the repository wins over this. <code>.localpilot/checks.json</code> and the workspace value of this setting are ignored in an untrusted workspace; your User value still applies.', 'json', { off: healingOff(), unit: 'check', after: wrap });
+    return component(f, ['healing.enabled', 'healing.checks'], healingChecks);
+  }
+  /** A value that is fixed by design, not by a setting: shown with a lock and nothing to change. */
+  function lockedRow(label, value, desc) {
+    const f = el('div', 'field locked fixed');
+    f.innerHTML = `<div><div class="lbl">${esc(label)}<span class="lock" role="img" title="Cannot be changed" aria-label="Cannot be changed">${I.lock}</span></div><div class="desc">${desc}</div></div><div class="ctl"><span class="fixed-val">${I.shield}${esc(value)}</span></div>`;
+    return f;
   }
 
   /** The threshold slider follows the strategy: with compaction off it has nothing to trigger. */
@@ -2875,7 +3051,7 @@
     const legend = keys.length > 1 || (keys[0] && keys[0].cls) ? `<div class="legend" aria-hidden="true">${keys.map((k, j) => `<span><i class="s${j} ${k.cls || ''}"></i>${esc(k.label)}</span>`).join('')}</div>` : '';
     // The SVG is only a picture for assistive tech: the focusable wrapper names it, and a hidden table carries the numbers.
     const table = `<table class="sr-only"><caption>${esc(data.title)}</caption><thead><tr>${data.cols.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}</tr></thead><tbody>${data.rows.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<th scope="row">${esc(c)}</th>`)).join('')}</tr>`).join('')}</tbody></table>`;
-    return { data, html: `<div class="chart ${cls}" tabindex="0" role="group" aria-roledescription="chart" aria-label="${esc(data.label)}. Left and Right arrow keys read each ${cls === 'hours' ? 'hour' : 'day'}."><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${inner}</svg>${legend}<div class="chart-val muted small" aria-live="polite"></div>${table}</div>` };
+    return { data, html: `<div class="chart ${cls}" tabindex="0" role="group" aria-roledescription="chart" aria-label="${esc(data.label)}. Left and Right arrow keys read each ${data.unit || (cls === 'hours' ? 'hour' : 'day')}."><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${inner}</svg>${legend}<div class="chart-val muted small" aria-live="polite"></div>${table}</div>` };
   }
   /** Donut with a centred headline; `parts`: [{ label, value, cls }]. */
   function donut(parts, centre, sub) {
@@ -2938,6 +3114,8 @@
     dashBusy();
   }
   const recordingOff = () => effVal('telemetry.enabled') === false;
+  /** Recovery comes from the RecoveryStore, so a running recovery or a waiting intervention refreshes with telemetry off too. */
+  const recLive = () => { const d = state.rec.data; return !!d && (d.current.length > 0 || d.interventions.length > 0); };
   /** What the numbers on screen were asked for: range, disabled providers in or out, one provider or all. */
   const dashKey = () => `${state.dash.days}|${state.dash.includeDisabled}|${state.dash.provider}`;
   /** The Provider filter and the "Not counting N disabled providers" line, refreshed with every reply. */
@@ -3030,6 +3208,337 @@
     more.append(moreBtn, menu); more._menu = menu;
     return more;
   }
+  // ------------------------------------------------------------------ self-healing & recovery (dashboard)
+  // Data from the host's recovery data service (RecoveryStore states joined with telemetry): signature keys arrive already
+  // resolved to `TS2345@src/api/user.ts`. Every value is escaped here; nothing in it is trusted markup.
+  const RATE_DEF = 'Recovery rate = recovered ÷ (recovered + escalated + exhausted + blocked) over the recovery episodes in the range. Failures that were already there or that another session caused never open an episode. 0% when nothing has ended yet.';
+  const REC_TABS = [['history', 'Failure history'], ['rca', 'Root cause analysis'], ['attempts', 'Recovery attempts'], ['patches', 'Applied patches'], ['retry', 'Retry configuration'], ['regression', 'Regression reports'], ['queue', 'Human intervention'], ['analytics', 'Performance analytics']];
+  const REC_PHASE = { idle: 'Idle', executing: 'Working', verifying: 'Running checks', detecting: 'Detecting', classifying: 'Classifying', retrying: 'Retrying', diagnosing: 'Diagnosing', fixing: 'Fixing', validating: 'Validating', rolling_back: 'Rolling back', resolving: 'Resolving a dependency', regression: 'Regression checks', escalating: 'Escalating', completing: 'Completing', interrupted: 'Interrupted', completed: 'Completed', completed_unverified: 'Not verified', incomplete: 'Incomplete', blocked: 'Blocked', failed: 'Failed', cancelled: 'Cancelled' };
+  const REC_RESULT = { fixed: 'Fixed', not_fixed: 'Not fixed', worse: 'Made it worse', rolled_back: 'Rolled back', duplicate: 'Same failure again', blocked: 'Blocked', recovered: 'Recovered', escalated: 'Escalated', exhausted: 'Attempts used up', detected: 'Detected', unresolved: 'Unresolved', retry: 'Retried', fix_attempt: 'Fixing', validated: 'Validated', resumed: 'Resumed', 'in progress': 'In progress', kept: 'Kept', ...REC_PHASE };
+  const REC_OK = new Set(['fixed', 'recovered', 'completed', 'validated', 'kept']);
+  const REC_BAD = new Set(['not_fixed', 'worse', 'blocked', 'escalated', 'exhausted', 'incomplete', 'failed', 'unresolved', 'duplicate']);
+  const REC_STRATEGY = { retry: 'Retry', reroute: 'Other model', adjust_resources: 'Adjust resources', repair_output: 'Repair output', fix: 'Targeted fix', diagnose: 'Diagnose', install: 'Install dependency', reconnect: 'Reconnect', validate_schema: 'Validate schema', isolate: 'Isolate', remediate: 'Remediate', escalate: 'Escalate', stop: 'Stop' };
+  const REC_REASON = { exhausted: 'Attempts used up', duplicate: 'Same failure after a fix', deadline: 'Deadline reached', loop: 'Loop or step limit', mistake_limit: 'Too many mistakes', approval_needed: 'Needs your approval', credentials: 'Credentials missing', git_conflict: 'Git conflict', security: 'Security finding', data_corruption: 'Data corruption', model_blocked: 'Model refused', user_edit_conflict: 'You edited the same files', model_unavailable: 'Model unavailable' };
+  const REC_ACTION_TIP = { resume: 'Continue the task in its chat: the checks run again first', rollback: 'Undo the fixes self-healing made for this task', approveInstall: 'Run the proposed install (it still goes through the approval rules)', acceptRisk: 'Keep the finding in the code; LocalPilot asks you to confirm and records the decision in the audit log', dismiss: 'Remove this item from the queue', openChat: 'Open the chat this task ran in', openMergeEditor: 'Resolve the conflict in the merge editor' };
+  const catLabel = (c) => HEAL_CAT_LABEL[c] || String(c || '').replace(/_/g, ' ');
+  const resLabel = (r) => REC_RESULT[r] || String(r || '—').replace(/_/g, ' ');
+  const resBadge = (r) => (r ? `<span class="badge ${REC_OK.has(r) ? 'ok' : REC_BAD.has(r) ? 'err' : r === 'rolled_back' || r === 'interrupted' || r === 'completed_unverified' ? 'warn' : ''}">${esc(resLabel(r))}</span>` : '<span class="muted">—</span>');
+  const sevBadge = (s) => (s ? `<span class="badge ${s === 'critical' || s === 'high' ? 'err' : s === 'medium' ? 'warn' : ''}">${esc(s)}</span>` : '<span class="muted">—</span>');
+  const sidShort = (sid) => `<span class="mono" title="${esc(sid)}">${esc(String(sid || '').slice(0, 8))}</span>`;
+  const recWhen = (t) => (t ? `<span title="${esc(new Date(t).toLocaleString())}">${esc(fmtTime(t, true))}</span>` : '<span class="muted">—</span>');
+  const recKey = (k) => `<code class="rec-key" title="${esc(k)}">${esc(k || '—')}</code>`;
+  function renderRecovery() {
+    const root = document.getElementById('dash-rec');
+    if (!root) { return; }
+    const rs = state.rec;
+    const r = rs.data;
+    if (!r) {
+      root.replaceChildren(rs.error ? recErr() : !rs.loaded ? skeleton('Loading recovery data…', 3, 'kpis') : el('p', 'empty', 'Self-healing is not available in this window.'));
+      return;
+    }
+    const t = r.tiles;
+    const kpis = el('div', 'kpis rec-kpis');
+    kpis.innerHTML = [
+      kpi('Engine', t.enabled ? 'On' : 'Off', t.enabled ? 'detects, fixes and re-checks failures' : 'failures are reported, not fixed', '', t.enabled ? '' : 'warn'),
+      kpi('Failures detected', fmtN(t.detected), r.days >= 3650 ? 'in everything recorded' : `in the last ${plural(r.days, 'day')}`),
+      kpi('Recovered', fmtN(t.recovered), t.detected ? `of ${fmtN(t.detected)} detected` : ''),
+      kpi('Pending intervention', fmtN(t.pendingIntervention), t.pendingIntervention ? 'waiting for you · see Human intervention' : 'nothing waiting', '', t.pendingIntervention ? 'warn' : ''),
+      kpi('Recovery rate', t.detected ? pct(t.rate) : '—', 'recovered ÷ ended episodes'),
+      kpi('Mean time to recover', t.mttrP50 ? fmtMs(t.mttrP50) : '—', t.mttrP50 ? 'median, first failure to verified fix' : 'no recovery yet'),
+    ].join('');
+    const rate = kpis.children[4]; rate.title = RATE_DEF; rate.tabIndex = 0; rate.setAttribute('aria-label', `Recovery rate ${t.detected ? pct(t.rate) : 'no data'}. ${RATE_DEF}`);
+    const nodes = [kpis, recConfigRow(r.config), recCurrent(r.current), recTabs(r)];
+    if (rs.error) { nodes.unshift(recErr()); }
+    const refocus = recFocusKey(root);
+    root.replaceChildren(...nodes);
+    for (const d of root.querySelectorAll('details[data-open]')) { d.ontoggle = () => { rs.open[d.getAttribute('data-open')] = d.open; }; }
+    if (refocus) { const n = root.querySelector(refocus); if (n) { n.focus({ preventScroll: true }); } }
+    drawCharts(root);
+    if (typeof ResizeObserver === 'function') {
+      if (!rs.ro) { rs.ro = new ResizeObserver(() => { cancelAnimationFrame(rs.raf); rs.raf = requestAnimationFrame(() => { const n = document.getElementById('dash-rec'); if (n) { drawCharts(n); } }); }); }
+      rs.ro.disconnect(); rs.ro.observe(root);
+    }
+  }
+  /** Selector for the control that has focus inside the group, so a rebuild (the 15 s refresh, a reply) puts it back. */
+  function recFocusKey(root) {
+    const a = document.activeElement;
+    if (!a || !a.getAttribute || !root.contains(a)) { return ''; }
+    const q = (v) => String(v).replace(/["\\]/g, '\\$&');
+    for (const k of ['data-ra', 'data-patch', 'data-opendiff', 'data-memory', 'data-tab']) {
+      const v = a.getAttribute(k);
+      if (v === null) { continue; }
+      const card = k === 'data-ra' && a.closest ? a.closest('[data-iv]') : null;
+      return `${card ? `[data-iv="${q(card.getAttribute('data-iv'))}"] ` : ''}[${k}="${q(v)}"]`;
+    }
+    return '';
+  }
+  /** `open` and the key for a `<details>` whose state survives the rebuilds. */
+  const recOpenAttr = (key) => ` data-open="${esc(key)}"${state.rec.open[key] ? ' open' : ''}`;
+  function recErr() {
+    const c = el('div', 'policy dash-err'); c.setAttribute('role', 'alert');
+    c.innerHTML = `${I.x}<div>Could not load recovery data: ${esc(state.rec.error)}</div>`;
+    return c;
+  }
+  /** The engine's switches as read-only chips, Security bypass locked, plus a way to the settings. */
+  function recConfigRow(c) {
+    const row = el('div', 'rec-config');
+    const chip = (label, on) => `<span class="rec-cfg ${on ? 'on' : 'off'}" role="listitem">${on ? I.check : I.x}<span>${esc(label)}<span class="sr-only">: ${on ? 'on' : 'off'}</span></span></span>`;
+    const items = el('div', 'rec-cfgs'); items.setAttribute('role', 'list'); items.setAttribute('aria-label', 'Self-healing configuration');
+    items.innerHTML = [
+      chip('Auto-detect', c.autoDetect), chip('Automatic retry', c.autoRetry), chip('Automatic code fixes', c.autoFix), chip('Regression testing required', c.regressionRequired),
+      `<span class="rec-cfg locked" role="listitem" title="Security findings and approval rules are never skipped by self-healing. This cannot be enabled.">${I.lock}<span>Security bypass: disabled</span></span>`,
+      `<span class="rec-cfg num" role="listitem">${I.refresh}<span>Max repair attempts <b>${esc(c.maxRepairAttempts)}</b></span></span>`,
+    ].join('');
+    const b = el('button', 'btn sm ghost', `${I.gear}Settings`); b.title = 'Settings → Agent → Self-healing'; b.setAttribute('aria-label', 'Self-healing settings');
+    b.onclick = () => { state.section = 'agent'; render(); };
+    row.append(items, b);
+    return row;
+  }
+  /** Running sessions in recovery: phase and attempt N/M with a meter. */
+  function recCurrent(cur) {
+    const c = el('div', 'card rec-current');
+    if (!cur.length) { c.innerHTML = '<h3>Current recovery</h3><p class="muted small rec-none">No task is recovering right now.</p>'; return c; }
+    c.innerHTML = `<h3>Current recovery <span class="count">${cur.length}</span></h3><ul class="rec-cur">${cur.map((x) => {
+      const share = x.max ? Math.min(100, (x.attempt / x.max) * 100) : 0;
+      return `<li><span class="dot busy" aria-hidden="true"></span><div class="rec-cur-t"><b>${esc(x.title || 'Chat')}</b> ${sidShort(x.sessionId)}<div class="muted small">${esc(REC_PHASE[x.phase] || x.phase)}${x.category ? ` · ${esc(catLabel(x.category))}` : ''}${x.key ? ` · ${recKey(x.key)}` : ''}</div></div><span class="rec-att">attempt <b>${esc(x.attempt)}/${esc(x.max)}</b><span class="meter" role="img" aria-label="attempt ${esc(x.attempt)} of ${esc(x.max)}"><i style="width:${share.toFixed(1)}%"></i></span></span></li>`;
+    }).join('')}</ul>`;
+    return c;
+  }
+  /** The eight views as tabs; arrow keys move between tabs (roving tabindex). */
+  function recTabs(r) {
+    const rs = state.rec;
+    const wrap = el('div', 'rec-views');
+    const list = el('div', 'chips rec-tabs'); list.setAttribute('role', 'tablist'); list.setAttribute('aria-label', 'Recovery views');
+    const count = { history: r.failureHistory.length, rca: r.rca.length, attempts: r.attempts.length, patches: r.patches.length, regression: r.regression.length, queue: r.interventions.length };
+    for (const [k, label] of REC_TABS) {
+      const on = rs.tab === k;
+      const b = el('button', `chip${on ? ' on' : ''}${k === 'queue' && count.queue ? ' attn' : ''}`, `${esc(label)}${count[k] !== undefined ? ` <i>${count[k]}</i>` : ''}`);
+      b.id = `rec-tab-${k}`; b.dataset.tab = k; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(on)); b.setAttribute('aria-controls', 'rec-panel'); b.tabIndex = on ? 0 : -1;
+      b.onclick = () => { if (rs.tab === k) { return; } rs.tab = k; renderRecovery(); const n = document.getElementById(`rec-tab-${k}`); if (n) { n.focus({ preventScroll: true }); } };
+      list.appendChild(b);
+    }
+    list.onkeydown = (e) => {
+      const bs = [...list.querySelectorAll('[role="tab"]')]; const i = bs.indexOf(document.activeElement); if (i < 0) { return; }
+      const to = e.key === 'ArrowRight' ? bs[(i + 1) % bs.length] : e.key === 'ArrowLeft' ? bs[(i - 1 + bs.length) % bs.length] : e.key === 'Home' ? bs[0] : e.key === 'End' ? bs[bs.length - 1] : null;
+      if (!to) { return; }
+      e.preventDefault(); to.click();
+    };
+    const panel = el('div', 'rec-panel'); panel.id = 'rec-panel'; panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', `rec-tab-${rs.tab}`);
+    const view = { history: recHistory, rca: recRca, attempts: recAttempts, patches: recPatches, retry: recRetry, regression: recRegression, queue: recQueue, analytics: recAnalytics }[rs.tab] || recHistory;
+    panel.appendChild(view(r));
+    wrap.append(list, panel);
+    return wrap;
+  }
+  const recEmpty = (text) => el('p', 'empty', esc(text));
+  /** Memory entry the failure's fix came from, by signature (RCA rows carry it). */
+  const memoryFor = (r) => { const m = new Map(); for (const x of r.rca) { if (x.memoryUsed && !m.has(x.signature)) { m.set(x.signature, { id: x.memoryUsed, allowed: x.memoryReuseAllowed }); } } return m; };
+  /** "Don't suggest again" for a failure-memory entry, "Suggest again" when it is off: the stored value, or the click
+   *  until the host's refresh brings the stored value back. */
+  function reuseBtn(id, allowed) {
+    const mine = state.rec.reuse[id];
+    const off = mine !== undefined ? mine === false : allowed === false;
+    const b = el('button', 'btn sm ghost', off ? 'Suggest again' : 'Don’t suggest again');
+    b.dataset.memory = id;
+    b.title = off ? 'Offer this remembered fix again when the same failure comes back' : 'Stop offering this remembered fix for similar failures';
+    b.onclick = () => { state.rec.reuse[id] = off; post({ type: 'memoryReuse', id, allowed: off }); renderRecovery(); };
+    return b;
+  }
+  function recHistory(r) {
+    const rs = state.rec;
+    const box = el('div', 'rec-view');
+    if (!r.failureHistory.length) { box.appendChild(recEmpty('No failures in this period. When a build, test, tool or model call fails, it is listed here with what happened next.')); return box; }
+    const bar = el('div', 'rec-filter');
+    const sel = el('select'); sel.setAttribute('aria-label', 'Category');
+    sel.replaceChildren(...[['', 'All categories'], ...r.categories.map((c) => [c, catLabel(c)])].map(([v, l]) => { const o = el('option', '', esc(l)); o.value = v; return o; }));
+    if (rs.cat && !r.categories.includes(rs.cat)) { rs.cat = ''; }
+    sel.value = rs.cat;
+    sel.onchange = () => { rs.cat = sel.value; renderRecovery(); const n = document.querySelector('#rec-panel .rec-filter select'); if (n) { n.focus({ preventScroll: true }); } };
+    const rows = r.failureHistory.filter((x) => !rs.cat || x.category === rs.cat);
+    bar.append(sel, el('span', 'muted small', `${plural(rows.length, 'failure')}${r.failureHistory.length >= 200 ? ' (the latest 200)' : ''}`));
+    box.appendChild(bar);
+    const mem = memoryFor(r);
+    const card = el('div', 'card tblwrap');
+    const t = el('table', 'tbl dash-tbl rec-tbl');
+    t.innerHTML = '<thead><tr><th scope="col">Failure</th><th scope="col">Time</th><th scope="col">Session</th><th scope="col">Category</th><th scope="col">Severity</th><th scope="col">Outcome</th><th scope="col"><span class="sr-only">Memory</span></th></tr></thead>';
+    const tb = el('tbody');
+    for (const x of rows) {
+      const tr = el('tr', '', `<td>${recKey(x.key)}${x.source === 'telemetry' ? ' <i title="Only the hash was recorded; the details have since been cleared">from metrics</i>' : ''}</td><td data-label="At">${recWhen(x.t)}</td><td data-label="Session">${sidShort(x.sessionId)}</td><td data-label="">${esc(catLabel(x.category))}</td><td data-label="">${sevBadge(x.severity)}</td><td data-label="">${resBadge(x.outcome)}</td><td class="act"></td>`);
+      const m = x.signature && mem.get(x.signature);
+      if (m) { tr.lastChild.appendChild(reuseBtn(m.id, m.allowed)); }
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb); card.appendChild(t); box.appendChild(card);
+    return box;
+  }
+  function recRca(r) {
+    const box = el('div', 'rec-view');
+    if (!r.rca.length) { box.appendChild(recEmpty('No diagnosis yet. Each fix attempt shows the failure, the root cause found, the strategy and whether it worked.')); return box; }
+    const ol = el('ol', 'rec-rca');
+    for (const x of r.rca) {
+      const li = el('li', 'card');
+      li.innerHTML = `<div class="rec-rca-h"><b>Attempt ${esc(x.attempt)}</b><span class="muted small">${esc(catLabel(x.category))} · ${recWhen(x.t)} · ${sidShort(x.sessionId)}</span><span class="spacer"></span>${resBadge(x.result || 'in progress')}</div>`
+        + `<dl class="kv rec-chain"><dt>Failure</dt><dd>${recKey(x.key)}${x.failure && x.failure !== x.key ? `<div class="rec-msg">${esc(x.failure)}</div>` : ''}</dd>`
+        + `<dt>Root cause</dt><dd>${x.rootCause ? esc(x.rootCause) : '<span class="muted">Not stated</span>'}</dd>`
+        + `<dt>Strategy</dt><dd>${esc(REC_STRATEGY[x.strategy] || x.strategy)}${x.mode === 'delegate' ? ' <span class="badge">parallel subagent</span>' : ''}</dd>`
+        + `${x.memoryUsed ? '<dt>From memory</dt><dd class="rec-mem"><span>A fix remembered from an earlier failure was suggested.</span></dd>' : ''}</dl>`;
+      if (x.memoryUsed) { li.querySelector('.rec-mem').appendChild(reuseBtn(x.memoryUsed, x.memoryReuseAllowed)); }
+      ol.appendChild(li);
+    }
+    box.appendChild(ol);
+    return box;
+  }
+  function recAttempts(r) {
+    const box = el('div', 'rec-view');
+    if (!r.attempts.length) { box.appendChild(recEmpty('No recovery attempts in this period.')); return box; }
+    for (const task of r.attempts) {
+      const c = el('div', 'card rec-task');
+      const total = task.attempts.reduce((a, x) => a + (x.durationMs || 0), 0);
+      const step = (a) => `<li class="${REC_OK.has(a.result) ? 'ok' : REC_BAD.has(a.result) ? 'bad' : ''}"><span class="rec-n">${esc(a.n)}</span><div class="rec-step"><div><b>${esc(REC_STRATEGY[a.strategy] || a.strategy)}</b> · ${esc(catLabel(a.category))} ${recKey(a.key)}</div><div class="muted small">${a.durationMs !== undefined ? fmtMs(a.durationMs) : 'running'}${a.patches ? ` · ${plural(a.patches, 'file')} patched` : ''}${a.mode === 'delegate' ? ' · subagent' : ''}${a.adjust.length ? ` · ${a.adjust.map((x) => `<span class="badge">${esc(x)}</span>`).join(' ')}` : ''}</div></div>${resBadge(a.result || 'in progress')}</li>`;
+      c.innerHTML = `<h3>${sidShort(task.sessionId)}<span class="muted small">turn ${esc(task.turnKey + 1)}${task.taskId ? ` · queued task ${esc(task.taskId)}` : ''} · ${recWhen(task.recoveryStartedAt || task.startedAt)}</span><span class="spacer"></span>${resBadge(task.outcome || task.phase)}</h3>`
+        + (task.attempts.length ? `<ol class="rec-tl">${task.attempts.map(step).join('')}</ol>` : '<p class="muted small">No attempts: the failure was reported without a fix.</p>')
+        + `<div class="rec-task-f muted small">${[total ? `${fmtMs(total)} in attempts` : '', ...task.perCategory.map((p) => `${esc(catLabel(p.category))} ${esc(p.count)}`)].filter(Boolean).join(' · ')}</div>`
+        + (task.approvals.length ? `<details class="rec-more"${recOpenAttr(`ap:${task.sessionId}|${task.turnKey}`)}><summary>${plural(task.approvals.length, 'approval')}</summary><ul class="rec-list">${task.approvals.map((a) => `<li>${recWhen(a.at)} <b>${esc(a.kind)}</b>${a.command ? ` <code>${esc(a.command)}</code>` : ''} · ${esc(a.decision)}${a.mandatory ? ' · always asked' : ''}${a.blockedBy ? ` · blocked by ${esc(a.blockedBy)}` : ''}</li>`).join('')}</ul></details>` : '')
+        + (task.acceptedRisks.length ? `<div class="rec-risk">${I.warn}<span>Risk accepted by you: ${task.acceptedRisks.map((x) => `${x.keys.map(recKey).join(', ')} ${recWhen(x.at)}`).join('; ')}</span></div>` : '');
+      box.appendChild(c);
+    }
+    return box;
+  }
+  /** Unified diff text with added/removed lines marked (escaped line by line). */
+  const diffHtml = (text) => String(text || '').split('\n').map((l) => `<span class="${/^\+(?!\+\+)/.test(l) ? 'add' : /^-(?!--)/.test(l) ? 'del' : /^@@/.test(l) ? 'hunk' : ''}">${esc(l)}</span>`).join('\n');
+  function recPatches(r) {
+    const rs = state.rec;
+    const box = el('div', 'rec-view');
+    if (!r.patches.length) { box.appendChild(recEmpty('No patches in this period. Files self-healing changes are listed here with a preview of the change and whether it was kept.')); return box; }
+    const card = el('div', 'card tblwrap');
+    const t = el('table', 'tbl dash-tbl rec-tbl rec-patches');
+    t.innerHTML = '<thead><tr><th scope="col">File</th><th scope="col">Lines</th><th scope="col">Attempt</th><th scope="col">Result</th><th scope="col">When</th><th scope="col"><span class="sr-only">Preview</span></th></tr></thead>';
+    const tb = el('tbody');
+    r.patches.forEach((p, i) => {
+      const k = `${p.sessionId}|${p.attempt}|${p.file}|${p.diffHash}`;
+      const open = !!rs.open[k];
+      const tr = el('tr', p.result === 'rolled_back' ? 'rolled' : '', `<td class="mono" title="${esc(p.file)}">${esc(p.file)}</td><td data-label=""><span class="ok-text">+${esc(p.added)}</span> <span class="err-text">−${esc(p.removed)}</span></td><td data-label="Attempt">${esc(p.attempt)}</td><td data-label="">${resBadge(p.result)}</td><td data-label="">${recWhen(p.t)}</td><td class="act"></td>`);
+      const b = el('button', 'btn sm ghost', open ? 'Hide diff' : 'Preview diff');
+      b.dataset.patch = String(i);
+      b.setAttribute('aria-expanded', String(open));
+      b.disabled = !p.preview;
+      b.title = p.preview ? `Show the change to ${p.file}` : 'No preview was kept for this change';
+      b.onclick = () => { rs.open[k] = !open; renderRecovery(); const n = document.querySelector(`#rec-panel [data-patch="${i}"]`); if (n) { n.focus({ preventScroll: true }); } };
+      const od = el('button', 'btn sm ghost', 'Open diff');
+      od.dataset.opendiff = String(i);
+      od.disabled = !rs.canDiff;
+      od.title = rs.canDiff ? `Open the whole change to ${p.file} in a diff editor` : 'Opening diffs is not available in this window';
+      od.onclick = () => post({ type: 'openRecoveryDiff', sessionId: p.sessionId, attempt: p.attempt, file: p.file });
+      tr.lastChild.appendChild(b); tr.lastChild.appendChild(od);
+      tb.appendChild(tr);
+      if (open && p.preview) { const d = el('tr', 'rec-diff-row'); d.innerHTML = `<td colspan="6"><pre class="rec-diff" tabindex="0" aria-label="Diff of ${esc(p.file)}">${diffHtml(p.preview)}</pre></td>`; tb.appendChild(d); }
+    });
+    t.appendChild(tb); card.appendChild(t); box.appendChild(card);
+    return box;
+  }
+  function recRetry(r) {
+    const box = el('div', 'rec-view');
+    const head = el('div', 'rec-filter');
+    head.appendChild(el('span', 'muted small', 'Effective policy per kind of failure: the defaults with your overrides. Security findings get at most 3 fix attempts; data corruption, git conflicts, permissions and loops always go to you.'));
+    const b = el('button', 'btn sm', `${I.gear}Edit`); b.title = 'Settings → Agent → Self-healing → Retry configuration'; b.setAttribute('aria-label', 'Edit the retry configuration');
+    b.onclick = () => { state.section = 'agent'; render(); };
+    head.appendChild(b);
+    box.appendChild(head);
+    const card = el('div', 'card tblwrap');
+    const waits = (p) => (p.backoffMs.length ? `${p.backoffMs.map((ms) => fmtMs(ms)).join(', ')}${p.exponential ? ' <i>exponential</i>' : ''}` : '<span class="muted">none</span>');
+    card.innerHTML = `<table class="tbl dash-tbl rec-tbl"><thead><tr><th scope="col">Failure kind</th><th scope="col">Attempts</th><th scope="col">Wait between</th><th scope="col">Time limit</th><th scope="col">Strategy</th></tr></thead><tbody>${r.retryConfig.map((p) => `<tr class="${p.attempts ? '' : 'fixed'}"><td>${esc(catLabel(p.category))}${p.overridden ? ' <span class="badge user">override</span>' : ''}</td><td data-label="Attempts"><b>${esc(p.attempts)}</b>${p.overridden && p.attempts !== p.defaultAttempts ? ` <i>default ${esc(p.defaultAttempts)}</i>` : ''}${p.attempts ? '' : ' <i>goes to you</i>'}</td><td data-label="Wait">${waits(p)}</td><td data-label="Limit">${p.timeoutSeconds ? `${esc(p.timeoutSeconds)} s` : '<span class="muted">default</span>'}</td><td data-label="">${esc(REC_STRATEGY[p.strategy] || p.strategy)}</td></tr>`).join('')}</tbody></table>`;
+    box.appendChild(card);
+    return box;
+  }
+  function recRegression(r) {
+    const box = el('div', 'rec-view');
+    if (!r.regression.length) { box.appendChild(recEmpty('No regression runs in this period. After a fix, the wider checks run again and are compared with the failures from before; the result is shown here.')); return box; }
+    const keys = (xs, cls) => (xs.length ? xs.map((k) => `<code class="rec-key ${cls}" title="${esc(k)}">${esc(k)}</code>`).join(' ') : '<span class="muted">none</span>');
+    for (const x of r.regression) {
+      const c = el('div', `card rec-reg${x.introduced.length ? ' bad' : ''}`);
+      c.innerHTML = `<h3>${x.introduced.length ? I.warn : I.check}Attempt ${esc(x.attempt)} <span class="muted small">${sidShort(x.sessionId)} · ${recWhen(x.t)}${x.durationMs ? ` · ${fmtMs(x.durationMs)}` : ''}</span></h3>`
+        + `<div class="rec-reg-n" role="list"><span role="listitem"><b>${esc(x.before)}</b> failing before</span><span role="listitem"><b>${esc(x.after)}</b> after</span><span role="listitem" class="${x.introduced.length ? 'err-text' : ''}"><b>${x.introduced.length}</b> introduced</span><span role="listitem"><b>${x.fixed.length}</b> fixed</span></div>`
+        + `<dl class="kv rec-chain"><dt>Introduced</dt><dd>${keys(x.introduced, 'bad')}</dd><dt>Fixed</dt><dd>${keys(x.fixed, '')}</dd><dt>Already failing</dt><dd>${keys(x.preexisting, '')}</dd><dt title="Failures in files another chat or subagent changed: not blamed on this task">Another session</dt><dd>${keys(x.foreign, '')}</dd></dl>`;
+      box.appendChild(c);
+    }
+    return box;
+  }
+  function recQueue(r) {
+    const box = el('div', 'rec-view');
+    if (!r.interventions.length) { box.appendChild(recEmpty('Nothing needs you. When self-healing stops (attempts used up, an approval, a conflict or a security finding), the task waits here with its root cause and what you can do.')); }
+    for (const iv of r.interventions) {
+      const c = el('div', 'card rec-iv');
+      c.dataset.iv = iv.id;
+      const sec = iv.category === 'security' || iv.reason === 'security';
+      c.innerHTML = `<h3>${I.warn}<span class="rec-iv-t">${esc(iv.title)}</span></h3>`
+        + `<div class="muted small">${esc(REC_REASON[iv.reason] || iv.reason)}${iv.category ? ` · ${esc(catLabel(iv.category))}` : ''} · ${sidShort(iv.sessionId)} · ${recWhen(iv.createdAt)}${iv.patches ? ` · ${plural(iv.patches, 'patched file')}` : ''}</div>`
+        + (iv.rootCause || iv.attemptsSummary ? `<dl class="kv rec-chain">${iv.rootCause ? `<dt>Root cause</dt><dd>${esc(iv.rootCause)}</dd>` : ''}${iv.attemptsSummary ? `<dt>Tried</dt><dd>${esc(iv.attemptsSummary)}</dd>` : ''}</dl>` : '')
+        + (iv.evidence ? `<details class="rec-more"${recOpenAttr(`iv:${iv.id}`)}><summary>Evidence</summary><pre class="rec-diff">${esc(iv.evidence)}</pre></details>` : '');
+      const acts = el('div', 'btnrow rec-acts');
+      // Guidance needs a typed instruction (the chat card has the box); accepting a risk is only for security findings.
+      const list = (iv.nextActions || []).filter((a) => a && a.action && a.action !== 'retryWithGuidance' && (a.action !== 'acceptRisk' || sec));
+      if (!list.some((a) => a.action === 'openChat')) { list.push({ action: 'openChat', label: 'Open chat' }); }
+      // Dismiss only resolves the item (it never accepts a risk), so every card can be cleared once it was handled elsewhere.
+      if (!list.some((a) => a.action === 'dismiss')) { list.push({ action: 'dismiss', label: 'Dismiss' }); }
+      list.forEach((a, i) => {
+        const b = el('button', `btn sm${a.action === 'acceptRisk' ? ' danger' : a.action === 'dismiss' ? ' ghost' : i === 0 ? ' primary' : ''}`, esc(a.label || a.action));
+        b.dataset.ra = a.action;
+        const tip = REC_ACTION_TIP[a.action] || a.label || a.action;
+        b.title = a.command ? `${tip} (${a.command})` : tip;
+        b.onclick = () => { acts.querySelectorAll('button').forEach((x) => { x.disabled = true; }); post({ type: 'recoveryAction', sessionId: iv.sessionId, action: a.action, id: iv.id }); };
+        acts.appendChild(b);
+      });
+      c.appendChild(acts);
+      box.appendChild(c);
+    }
+    const risks = r.attempts.flatMap((task) => task.acceptedRisks.map((x) => ({ ...x, sessionId: task.sessionId })));
+    if (risks.length) {
+      const rc = el('div', 'card rec-risks');
+      rc.innerHTML = `<h3>Accepted risks <span class="count">${risks.length}</span></h3><p class="muted small">Security findings you chose to keep. Each is in the audit log.</p><ul class="rec-list">${risks.map((x) => `<li>${recWhen(x.at)} ${sidShort(x.sessionId)} ${x.keys.map(recKey).join(', ')}</li>`).join('')}</ul>`;
+      box.appendChild(rc);
+    }
+    return box;
+  }
+  /** Horizontal bars, one row per category, in the dashboard chart conventions: chartFrame (hidden table, arrow-key readout
+   *  via wireChart), one series in the theme chart colour on a recessive track. `rows`: [{ label, value, note }]. */
+  function hbarChart(rows, opts, w) {
+    const rowH = 22, pad = 4, labW = Math.min(170, Math.round(w * 0.42)), valW = 40;
+    const h = rows.length * rowH + pad * 2; const iw = Math.max(20, w - labW - valW - 8);
+    const max = opts.max || niceMax(Math.max(1, ...rows.map((x) => x.value)));
+    const fit = (s) => { const n = Math.max(6, Math.floor(labW / 6.2)); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+    const fmt = opts.fmt || fmtN;
+    const marks = rows.map((x, i) => {
+      const y = pad + i * rowH; const bw = x.value ? Math.max(2, (x.value / max) * iw) : 0;
+      return `<text class="ax hb-l" x="${labW - 6}" y="${(y + rowH / 2 + 3.5).toFixed(1)}" text-anchor="end">${esc(fit(x.label))}</text><rect class="hb-track" x="${labW}" y="${(y + 6).toFixed(1)}" width="${iw.toFixed(1)}" height="${rowH - 12}" rx="2"/><rect class="s0" data-i="${i}" x="${labW}" y="${(y + 6).toFixed(1)}" width="${bw.toFixed(1)}" height="${rowH - 12}" rx="2"><title>${esc(x.label)}: ${esc(fmt(x.value))}${x.note ? ` (${esc(x.note)})` : ''}</title></rect><text class="ax hb-v" x="${(labW + iw + 6).toFixed(1)}" y="${(y + rowH / 2 + 3.5).toFixed(1)}">${esc(fmt(x.value))}</text>`;
+    }).join('');
+    const line = (i) => `${rows[i].label} · ${fmt(rows[i].value)}${rows[i].note ? ` · ${rows[i].note}` : ''}`;
+    const data = { title: opts.title, unit: opts.unit, label: `${opts.title}: ${rows.map((x) => `${x.label} ${fmt(x.value)}`).join(', ')}`, cols: [opts.col, opts.valueCol], rows: rows.map((x) => [x.label, `${fmt(x.value)}${x.note ? ` (${x.note})` : ''}`]), line };
+    return chartFrame(marks, [], w, h, data, 'hbars');
+  }
+  function recAnalytics(r) {
+    const a = r.analytics;
+    const box = el('div', 'rec-view');
+    if (!r.tiles.detected && !a.rateByCategory.length && !a.topSignatures.length) { box.appendChild(recEmpty('Nothing to analyse yet: the numbers appear once self-healing has handled a failure in this period.')); return box; }
+    const cols = el('div', 'dash-cols charts');
+    const rc = el('div', 'card');
+    rc.innerHTML = `<h3>Recovery rate by category <span class="count" title="${esc(RATE_DEF)}">recovered ÷ ended episodes</span></h3>`;
+    if (a.rateByCategory.length) { rc.appendChild(chartSlot((w) => hbarChart(a.rateByCategory.map((x) => ({ label: catLabel(x.category), value: x.rate, note: `${x.recovered} of ${x.detected} recovered` })), { title: 'Recovery rate by category', unit: 'category', col: 'Category', valueCol: 'Recovery rate', max: 100, fmt: (v) => `${Math.round(v)}%` }, w), 260, 600)); } else { rc.appendChild(el('p', 'empty', 'No episode has ended yet.')); }
+    cols.appendChild(rc);
+    const side = el('div', 'dash-side');
+    const dc = el('div', 'card');
+    dc.innerHTML = '<h3>Attempts per recovery <span class="count">tasks</span></h3>';
+    if (a.attemptsDistribution.length) { dc.appendChild(chartSlot((w) => hbarChart(a.attemptsDistribution.map((x) => ({ label: plural(x.attempts, 'attempt'), value: x.tasks })), { title: 'Recoveries by number of attempts', unit: 'row', col: 'Attempts', valueCol: 'Tasks' }, w), 220, 420)); } else { dc.appendChild(el('p', 'empty', 'No episode has ended yet.')); }
+    side.appendChild(dc);
+    const kc = el('div', 'card');
+    kc.innerHTML = `<h3>Time and memory</h3><dl class="kv dashkv"><dt>Time to recover</dt><dd>${a.mttr.p50 ? `<span class="pctl" title="median · 90th percentile">${fmtMs(a.mttr.p50)} <i>/ ${fmtMs(a.mttr.p90)}</i></span>` : '<span class="muted">—</span>'}</dd><dt title="Remembered fixes that were suggested, and how many of those attempts fixed the failure">Memory hits</dt><dd>${a.memory.suggested ? `<b>${pct(a.memory.hitRate)}</b> <span class="muted small">${fmtN(a.memory.succeeded)} of ${fmtN(a.memory.suggested)}</span>` : '<span class="muted">none suggested</span>'}</dd><dt>Accepted risks</dt><dd class="${a.acceptedRisks ? 'err-text' : 'muted'}">${fmtN(a.acceptedRisks)}</dd></dl><p class="muted small rec-src">${a.source === 'telemetry' ? 'Counts from usage metrics; rates per category and times from the recovery records.' : 'Usage metrics are off, so the counts come from the recovery records.'}</p>`;
+    side.appendChild(kc);
+    cols.appendChild(side);
+    box.appendChild(cols);
+    const tc = el('div', 'card tblwrap');
+    tc.innerHTML = `<h3>Recurring failures <span class="count">${a.topSignatures.length}</span></h3>` + (a.topSignatures.length ? `<table class="tbl dash-tbl rec-tbl"><thead><tr><th scope="col">Failure</th><th scope="col">Seen</th><th scope="col">Recovered</th><th scope="col">Share recovered</th></tr></thead><tbody>${a.topSignatures.map((x) => { const share = x.count ? (x.recovered / x.count) * 100 : 0; return `<tr><td>${recKey(x.key)}</td><td data-label="Seen">${fmtN(x.count)}</td><td data-label="Recovered">${fmtN(x.recovered)}</td><td data-label=""><span class="meter" role="img" aria-label="${pct(share)} recovered" title="${pct(share)} recovered"><i style="width:${share.toFixed(1)}%"></i></span></td></tr>`; }).join('')}</tbody></table>` : '<p class="empty">No failure came back more than once.</p>');
+    box.appendChild(tc);
+    return box;
+  }
+  // ------------------------------------------------------------------ end self-healing & recovery
   function secDashboard(sec) {
     head(sec, 'Dashboard', ''); sec.classList.add('dash-sec');
     sec.querySelector('.lead').replaceWith(privacyLead());
@@ -3066,6 +3575,9 @@
     const meta = el('p', 'dash-meta'); meta.id = 'dash-meta'; meta.setAttribute('aria-live', 'off'); sec.appendChild(meta);
     const body = el('div', 'dash'); body.id = 'dash'; sec.appendChild(body);
     renderDashboard();
+    sec.appendChild(el('h2', 'sub', 'Self-healing &amp; recovery'));
+    const rec = el('div', 'dash rec-dash'); rec.id = 'dash-rec'; rec.setAttribute('aria-live', 'off'); sec.appendChild(rec);
+    renderRecovery();
     // Logs
     sec.appendChild(el('h2', 'sub', 'Logs <span class="count" id="logCount"></span>'));
     const lc = el('div', 'card logcard');
@@ -3105,7 +3617,7 @@
     requestLogs();
     if (state.dash.timer) { clearInterval(state.dash.timer); }
     // Nothing new arrives while recording is off, so the tick only ages the "updated" caption.
-    state.dash.timer = setInterval(() => { if (state.page === 'settings' && state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading && !recordingOff()) { requestDashboard(); } else { dashMeta(); } }, 15000);
+    state.dash.timer = setInterval(() => { if (state.page === 'settings' && state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading && (!recordingOff() || recLive())) { requestDashboard(); } else { dashMeta(); } }, 15000);
   }
   // ------------------------------------------------------------------ telemetry
   /** host[:port] of a URL with any user:password@ dropped, so a Redis password never reaches the page. */
@@ -3993,8 +4505,17 @@
           state.dash.error = ''; state.dash.summary = m.summary; state.dash.summaryKey = dashKey(); state.dash.updatedAt = Date.now();
           state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
         }
-        if (state.page === 'settings' && state.section === 'dashboard') { renderDashboard(); syncDashFilters(); }
+        // The recovery group has its own source (the RecoveryStore): a telemetry error leaves it intact, and the reverse.
+        state.rec.loaded = true; state.rec.error = m.recoveryError || '';
+        // Fresh data carries the stored memory switches: they replace the clicks made since.
+        if (m.recovery) { state.rec.data = m.recovery; state.rec.reuse = {}; }
+        state.rec.canDiff = !!m.recoveryDiff;
+        if (state.page === 'settings' && state.section === 'dashboard') { renderDashboard(); syncDashFilters(); renderRecovery(); }
         if (state.page === 'settings' && state.section === 'telemetry') { renderStorage(); }
+        break;
+      case 'healingChecks':
+        if (m.error) { toast(`Could not read the checks: ${m.error}`, 'error'); refreshComponents(['healing.checks']); break; }
+        if (state.data && m.healing) { state.data.healing = m.healing; refreshComponents(['healing.checks']); }
         break;
       case 'otlpTest': {
         state.otlpTest = { ok: !!m.ok, status: m.status, url: m.url || '', error: m.ok ? '' : m.error || 'No answer from the collector' };

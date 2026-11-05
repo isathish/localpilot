@@ -1,0 +1,12 @@
+[INFO] --- maven-compiler-plugin:3.11.0:compile (default-compile) @ calc ---
+[INFO] Compiling 4 source files with javac [debug target 17] to target/classes
+[INFO] -------------------------------------------------------------
+[ERROR] COMPILATION ERROR : 
+[INFO] -------------------------------------------------------------
+[ERROR] /work/proj/src/main/java/com/example/Sum.java:[12,20] cannot find symbol
+  symbol:   variable totl
+  location: class com.example.Sum
+[ERROR] /work/proj/src/main/java/com/example/Api.java:[5,1] class, interface, enum, or record expected
+[INFO] 2 errors 
+[INFO] -------------------------------------------------------------
+[INFO] BUILD FAILURE

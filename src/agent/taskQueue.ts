@@ -2,9 +2,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Session } from '../types';
+import type { TaskOutcome } from './healing/types';
 import { nextWave } from './parallel';
 
-export type QueueTaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'blocked';
+/** `incomplete`: the run ended with checks still failing; `needs_input`: it stopped for a person (approval, credentials, conflict). */
+export type QueueTaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'blocked' | 'incomplete' | 'needs_input';
 
 export interface QueueTask {
   id: string;
@@ -21,6 +23,12 @@ export interface QueueTask {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  /** The self-healing outcome of the last run, when it reported one. */
+  outcome?: TaskOutcome;
+  /** The open human-intervention item the last run raised. */
+  interventionId?: string;
+  /** Continue in `sessionId` with a resume turn instead of sending the prompt again. */
+  resume?: boolean;
 }
 
 export interface QueueTaskInput {
@@ -31,7 +39,23 @@ export interface QueueTaskInput {
 }
 
 /** Runs one task as an agent chat. Calls `started` with the chat id first, then resolves when the run ends. */
-export type QueueRunner = (task: QueueTask, started: (sessionId: string) => void) => Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
+export type QueueRunner = (task: QueueTask, started: (sessionId: string) => void) => Promise<QueueRunResult>;
+
+export interface QueueRunResult {
+  ok: boolean;
+  error?: string;
+  cancelled?: boolean;
+  /** Missing when the run threw before reporting one (a final model failure): `ok` decides then. */
+  outcome?: TaskOutcome;
+  interventionId?: string;
+  /** The run was stopped because the window is closing (`stop('shutdown')`): not recorded, so `load()` picks it up again. */
+  shutdown?: boolean;
+}
+
+export interface TaskQueueOptions {
+  /** Whether an interrupted task's chat has recovery state to continue from (synchronous: checked during `load()`). */
+  resumable?: (sessionId: string) => boolean;
+}
 
 interface QueueFile {
   version: 1;
@@ -39,13 +63,56 @@ interface QueueFile {
   tasks: QueueTask[];
 }
 
-const FINISHED: ReadonlySet<QueueTaskStatus> = new Set(['done', 'failed', 'cancelled', 'blocked']);
+const FINISHED: ReadonlySet<QueueTaskStatus> = new Set(['done', 'failed', 'cancelled', 'blocked', 'incomplete', 'needs_input']);
+/** Finished without success: dependents of these are blocked rather than run on a broken base. */
+const UNSUCCESSFUL: ReadonlySet<QueueTaskStatus> = new Set(['failed', 'cancelled', 'blocked', 'incomplete', 'needs_input']);
+/** Outcomes whose retry continues in the same chat, where the recovery state lives. */
+const RESUMABLE: ReadonlySet<QueueTaskStatus> = new Set(['incomplete', 'needs_input']);
+
+function statusFor(r: QueueRunResult): QueueTaskStatus {
+  if (r.cancelled) {
+    return 'cancelled';
+  }
+  switch (r.outcome) {
+    case 'completed':
+    case 'completed_unverified':
+      return 'done';
+    case 'incomplete':
+      return 'incomplete';
+    case 'blocked':
+      return 'needs_input';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return r.ok ? 'done' : 'failed';
+  }
+}
+
+function errorFor(status: QueueTaskStatus, r: QueueRunResult): string | undefined {
+  switch (status) {
+    case 'done':
+      return undefined;
+    case 'cancelled':
+      return r.error || 'Stopped by the user.';
+    case 'incomplete':
+      return r.error || 'The task ended with problems still unresolved.';
+    case 'needs_input':
+      return r.error || 'The task is waiting for your input.';
+    default:
+      return r.error || 'The agent stopped without an answer.';
+  }
+}
 
 /**
  * Persistent agent task queue. Tasks run as ordinary chats, `concurrency()` at a time (1 = strictly sequential),
  * in the order they were added unless `dependsOn` says otherwise — scheduling uses the same dependency waves as
  * parallel checklists, so a failed prerequisite blocks its dependents instead of running them on a broken base.
- * The queue is saved after every change; tasks that were running when the window closed start again on load.
+ * The queue is saved after every change; tasks that were running when the window closed start again on load
+ * (continuing their chat when `resumable` says it has recovery state). A run ended by shutdown is not recorded and
+ * stays `running` on disk: either the queue is already disposed when it settles, or the runner reports `shutdown`
+ * (so the result does not depend on whether the queue or the chat controller is disposed first).
  */
 export class TaskQueue implements vscode.Disposable {
   private tasks: QueueTask[] = [];
@@ -60,7 +127,8 @@ export class TaskQueue implements vscode.Disposable {
     private readonly file: string,
     private readonly runner: QueueRunner,
     private readonly concurrency: () => number,
-    private readonly log?: vscode.LogOutputChannel
+    private readonly log?: vscode.LogOutputChannel,
+    private readonly options: TaskQueueOptions = {}
   ) {}
 
   get list(): readonly QueueTask[] {
@@ -76,20 +144,32 @@ export class TaskQueue implements vscode.Disposable {
     return this.tasks.filter((t) => t.status === 'queued').length;
   }
 
-  /** Reads the saved queue; interrupted runs go back to `queued`. Starts work unless the queue was paused. */
+  /** Reads the saved queue; interrupted runs go back to `queued` (resumable ones keep their chat). Starts work unless the queue was paused. */
   async load(): Promise<void> {
     try {
       const raw = JSON.parse(await fs.readFile(this.file, 'utf8')) as Partial<QueueFile>;
       this._paused = !!raw.paused;
       this.tasks = (Array.isArray(raw.tasks) ? raw.tasks : [])
         .filter((t): t is QueueTask => !!t && typeof t.id === 'string' && typeof t.prompt === 'string')
-        .map((t) => (t.status === 'running' ? { ...t, status: 'queued', sessionId: undefined, startedAt: undefined } : t));
+        .map((t) => (t.status === 'running' ? this.requeueInterrupted(t) : t));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.log?.warn(`Task queue: could not read ${this.file}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     this.changed();
+  }
+
+  private requeueInterrupted(t: QueueTask): QueueTask {
+    let resume = false;
+    if (t.sessionId && this.options.resumable) {
+      try {
+        resume = this.options.resumable(t.sessionId);
+      } catch (e) {
+        this.log?.warn(`Task queue: could not check whether ${t.id} can resume: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return resume ? { ...t, status: 'queued', resume: true, startedAt: undefined } : { ...t, status: 'queued', sessionId: undefined, startedAt: undefined, resume: undefined };
   }
 
   add(input: QueueTaskInput): QueueTask {
@@ -123,7 +203,7 @@ export class TaskQueue implements vscode.Disposable {
     return t;
   }
 
-  /** Puts a finished task (and anything it blocked) back in line. */
+  /** Puts a finished task (and anything it blocked) back in line; an incomplete or waiting one continues in its chat. */
   retry(id: string): boolean {
     const t = this.tasks.find((x) => x.id === id);
     // A cancelled task whose run is still winding down cannot start again yet: it would run twice.
@@ -142,7 +222,12 @@ export class TaskQueue implements vscode.Disposable {
     }
     for (const x of this.tasks) {
       if (again.has(x.id)) {
-        Object.assign(x, { status: 'queued', error: undefined, sessionId: undefined, startedAt: undefined, endedAt: undefined });
+        const resume = RESUMABLE.has(x.status) && !!x.sessionId;
+        Object.assign(x, { status: 'queued', error: undefined, outcome: undefined, interventionId: undefined, startedAt: undefined, endedAt: undefined });
+        x.resume = resume || undefined;
+        if (!resume) {
+          x.sessionId = undefined;
+        }
       }
     }
     this.changed();
@@ -205,7 +290,7 @@ export class TaskQueue implements vscode.Disposable {
     const ids = new Set(this.tasks.map((t) => t.id));
     // A prerequisite removed from the queue no longer holds anything up.
     const satisfied = new Set([...this.tasks.filter((t) => t.status === 'done').map((t) => t.id), ...pending.flatMap((t) => t.dependsOn ?? []).filter((d) => !ids.has(d))]);
-    const failed = new Set(this.tasks.filter((t) => t.status === 'failed' || t.status === 'cancelled' || t.status === 'blocked').map((t) => t.id));
+    const failed = new Set(this.tasks.filter((t) => UNSUCCESSFUL.has(t.status)).map((t) => t.id));
     const wave = nextWave(pending, satisfied, failed);
     let blockedAny = false;
     for (const t of [...wave.blocked, ...wave.cyclic]) {
@@ -247,17 +332,21 @@ export class TaskQueue implements vscode.Disposable {
       this.changed();
     };
     void this.runner(t, started)
-      .catch((e: unknown): { ok: boolean; error?: string; cancelled?: boolean } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      .catch((e: unknown): QueueRunResult => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
       .then((r) => {
-        if (this.runTokens.get(t.id) !== token) {
+        // Shutdown: the run was stopped by the window closing, not finished. Leave it `running` on disk for load().
+        if (this.disposed || r.shutdown || this.runTokens.get(t.id) !== token) {
           return;
         }
         this.runTokens.delete(t.id);
         this.running.delete(t.id);
         if (t.status === 'running') {
-          t.status = r.cancelled ? 'cancelled' : r.ok ? 'done' : 'failed';
-          t.error = r.ok ? undefined : r.cancelled ? r.error || 'Stopped by the user.' : r.error || 'The agent stopped without an answer.';
+          t.status = statusFor(r);
+          t.error = errorFor(t.status, r);
+          t.outcome = r.outcome;
+          t.interventionId = r.interventionId;
         }
+        delete t.resume;
         t.endedAt = Date.now();
         this.log?.info(`Task queue: ${t.id} ${t.status}${t.error ? ` — ${t.error}` : ''}`);
         this.changed();
