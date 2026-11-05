@@ -594,6 +594,12 @@ async function restoreFile(uri: vscode.Uri, content: string | undefined): Promis
     edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), content);
     await vscode.workspace.applyEdit(edit);
     await doc.save();
+    // The document may not have caught up with a change made on disk (a tool, a terminal, another process): the edit
+    // is then a no-op on the stale text and save() writes nothing. The disk decides; write the snapshot directly.
+    const disk = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+    if (disk !== content) {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+    }
   }
 }
 
