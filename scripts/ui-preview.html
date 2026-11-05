@@ -30,7 +30,7 @@ body{margin:0}
 <body>
 <div id="app">
   <div id="progress" class="progress hidden"></div>
-  <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist" aria-label="Chats"></nav><button id="btnNewTab" class="ib" title="New chat — runs in parallel (⌘⇧↵ sends the draft in a new tab)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0" title="All chats"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
+  <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist" aria-label="Chats"></nav><button id="btnNewTab" class="ib" title="New chat — runs in parallel" aria-label="New chat"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0" title="All chats"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
   <div id="bgruns" class="bgruns hidden"></div>
   <main id="messages"></main>
   <footer id="composer">
@@ -38,31 +38,40 @@ body{margin:0}
     <div id="tasks" class="panel hidden"><button id="tasksToggle" class="panel-head"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="tasksLabel">Tasks</span><span class="spacer"></span><span id="tasksMeter" class="meter"><i></i></span></button><ul id="tasksList" class="panel-body"></ul></div>
     <div id="changes" class="panel hidden"><div class="panel-head"><button id="changesToggle" class="panel-toggle"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="changesLabel"></span></button><span class="spacer"></span><button class="btn ghost" data-a="undoAll"><svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg><span class="long">Reject all</span></button><button class="btn primary" data-a="keepAll"><svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg><span class="long">Accept all</span></button></div><ul id="changesList" class="panel-body hidden"></ul></div>
     <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
+    <div id="autoApprove" class="autoapprove hidden"><button id="aaToggle" class="aa-head" aria-expanded="false" title="What the agent may do without asking"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span class="aa-k">Auto-approve:</span><span id="aaLabel" class="aa-v">none</span></button><div id="aaBody" class="aa-body hidden" role="group" aria-label="Auto-approve"></div></div>
     <div id="box" class="box">
       <div class="ctx-row"><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
       <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)"></textarea>
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/></svg></span><span id="thinkLabel" class="lbl">Think</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
-        <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent."><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg></button>
+        <button id="btnComposerMore" class="ib narrow-only" aria-label="More composer actions" title="More composer actions" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
+        <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project. Nothing is sent." aria-label="Improve prompt"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg></button>
         <button id="btnImage" class="ib" title="Attach image or take a screenshot (area, window, screen)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/></svg></button>
+        <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send" title="Send (Enter)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
-        <button id="btnPause" class="send pause hidden" title="Pause after the current step (⌥Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>
+        <button id="btnPause" class="send pause hidden" title="Pause after the current step" aria-label="Pause after the current step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>
         <button id="btnStop" class="send stop hidden" title="Stop (Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
       </div>
     </div>
   </footer>
   <div id="popover" class="popover hidden"></div>
-  <div id="toasts"></div>
+  <div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 </div>
 <script>
 // ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
 (() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');
   document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
-  if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df'); })();
+  // HC Dark / HC Light: black or white ground, borders instead of fills, and no selection background.
+  if (q.get('hc')) { const r = document.documentElement.style; const dark = !q.get('light');
+    const v = dark ? { 'sideBar-background': '#000', 'editor-background': '#000', 'input-background': '#000', 'chat-requestBackground': '#000', 'editorWidget-background': '#0c141f', 'notifications-background': '#0c141f', 'foreground': '#fff', 'descriptionForeground': '#ffffffb3', 'input-foreground': '#fff', 'icon-foreground': '#fff', 'contrastBorder': '#6fc3df', 'contrastActiveBorder': '#f38518', 'focusBorder': '#f38518', 'widget-border': '#6fc3df', 'chat-requestBorder': '#6fc3df', 'input-border': '#6fc3df', 'button-border': '#6fc3df', 'textLink-foreground': '#21a6ff', 'list-activeSelectionForeground': '#fff', 'toolbar-hoverBackground': 'transparent' }
+      : { 'contrastBorder': '#0f4a85', 'contrastActiveBorder': '#006bbd', 'focusBorder': '#006bbd', 'widget-border': '#0f4a85', 'chat-requestBorder': '#0f4a85', 'input-border': '#0f4a85', 'toolbar-hoverBackground': 'transparent' };
+    for (const [k, x] of Object.entries(v)) r.setProperty(`--vscode-${k}`, x);
+    r.setProperty('--vscode-list-activeSelectionBackground', 'transparent'); } })();
 </script>
 <script>
 const listeners=[]; const paused={};
@@ -72,10 +81,10 @@ window.acquireVsCodeApi=()=>({postMessage(m){
     const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'ollama/gemma4:12b',providerId:'ollama',name:'gemma4:12b',contextWindow:262144,supportsTools:true,supportsVision:true},{id:'ollama/gpt-oss:20b',providerId:'ollama',name:'gpt-oss:20b',contextWindow:131072,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true},
       // Cloud models (?cloud=0 hides them): shown in the picker with a "cloud" tag.
       ...(/cloud=0/.test(location.search)?[]:[{id:'anthropic/claude-sonnet-4-6',providerId:'anthropic',name:'Claude Sonnet 4.6',contextWindow:1000000,supportsTools:true,supportsVision:true,remote:true},{id:'openai/gpt-5',providerId:'openai',name:'gpt-5',contextWindow:400000,supportsTools:true,supportsVision:true,remote:true}])];
-    send({type:'init',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[{name:'pdf',description:'Read, create and edit PDF files'},{name:'release',description:'Cut a release end to end'},{name:'debug',description:'Reproduce, localise and fix a bug'}],agents:[],skillsMode:'auto',running:['s2']});
+    send({type:'init',platform:new URLSearchParams(location.search).get('platform')||'darwin',sessions:[{id:'s1',title:'Make dice parser friendlier',updatedAt:Date.now(),messageCount:6,mode:'agent'},{id:'s2',title:'Write tests for utils',updatedAt:Date.now()-5000,messageCount:2,mode:'agent'}],models,defaultModel:'ollama/qwen2.5-coder:14b',skills:[{name:'pdf',description:'Read, create and edit PDF files'},{name:'release',description:'Cut a release end to end'},{name:'debug',description:'Reproduce, localise and fix a bug'}],agents:[],skillsMode:'auto',running:['s2']});
     const oldT="def roll_dice(notation):\n    m = re.match(r'(\\d+)d(\\d+)', notation)\n    if not m:\n        raise ValueError('bad')\n    count, sides = int(m[1]), int(m[2])";
     const newT="def roll_dice(notation: str) -> int:\n    \"\"\"Roll dice such as '3d6+2', 'd20' or '2d10 - 1'.\"\"\"\n    m = re.fullmatch(r'\\s*(\\d*)\\s*d\\s*(\\d+)\\s*([+-]\\s*\\d+)?\\s*', notation, re.I)\n    if not m:\n        raise ValueError(f'Invalid dice notation: {notation!r}')\n    count = int(m.group(1) or 1)\n    sides = int(m.group(2))";
-    const session={id:'s1',title:'Make dice parser friendlier',mode:/plan=1/.test(location.search)?'plan':'multitask',model:'',contextTokens:9800,compactions:0,
+    const session={id:'s1',title:'Make dice parser friendlier',mode:/plan=1/.test(location.search)?'plan':'multitask',model:new URLSearchParams(location.search).get('model')||'',contextTokens:9800,compactions:0,
       todos:[{id:'1',title:'Read dice.py and tests',status:'done'},{id:'2',title:'Rewrite parser with a single regex',status:'done'},{id:'3',title:'Run tests and fix failures',status:'in_progress'},{id:'4',title:'Update README examples',status:'pending'}],
       messages:[
         {role:'user',content:'Make the dice notation parser more user friendly — allow spaces, a bare d6, and better errors.'},
@@ -114,7 +123,21 @@ window.acquireVsCodeApi=()=>({postMessage(m){
           {header:'Features',question:'Which extras should the history view include?',multiSelect:true,options:[{label:'Filter by notation',description:'e.g. only 3d6 rolls'},{label:'Statistics',description:'Average, min and max per notation'},{label:'Export CSV',description:'Download the history as a spreadsheet'}]},
           {question:'Anything else I should know?',options:[]}]}),50);
       } else {
-      setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal'}),50);
+      setTimeout(()=>send({type:'approval',id:'ap1',sessionId:'s1',title:'Run command',detail:'$ python -m pytest -q\nin DICE',kind:'terminal',mandatory:false,waitingSameKind:0}),50);
+      // ?grants=1: a mandatory (dangerous) prompt under the regular one, and "allow all in this chat" grants on the auto-approve bar.
+      if (/grants=1/.test(location.search)) {
+        setTimeout(()=>send({type:'approval',id:'ap2',sessionId:'s1',title:'Run command',detail:'$ rm -rf build dist\nin DICE',kind:'terminal',mandatory:true,mandatoryReason:'dangerous',waitingSameKind:0}),80);
+        setTimeout(()=>send({type:'approval',id:'ap3',sessionId:'s1',title:'Edit file',detail:'README.md',kind:'write',mandatory:true,mandatoryReason:'policy',waitingSameKind:0}),90);
+        setTimeout(()=>send({type:'approval',id:'ap4',sessionId:'s1',title:'Run command',detail:'$ npm test\nin DICE (worker 2)',kind:'terminal',mandatory:false,waitingSameKind:1}),100);
+      }
+      }
+      if (/grants=1/.test(location.search)) {
+        send({type:'autoApprove',summary:'Edit, Web',items:[{key:'write',label:'Edit files',value:'always',values:['ask','always']},{key:'terminal',label:'Commands',value:'safe',values:['ask','safe','always']},{key:'network',label:'Web',value:'always',values:['ask','always']}]});
+        send({type:'sessionGrants',sessionId:'s1',kinds:['terminal','network','mcp']});
+      }
+      // ?toast=1: a long error toast with an action, plus an info toast (wrapping, Dismiss, Open log).
+      if (/toast=1/.test(location.search)) {
+        setTimeout(()=>{ send({type:'toast',level:'info',text:'Started 2 agents'}); send({type:'toast',level:'error',text:'Could not create an isolated worktree (fatal: Unable to create \'/Users/me/dice/.git/worktrees/lp-8f2a/index.lock\': File exists. Another git process seems to be running in this repository); this chat edits the workspace directly. See the log for details.',action:{label:'Open log',msg:{type:'showLog'}}}); },150);
       }
     }
   }
@@ -122,6 +145,7 @@ window.acquireVsCodeApi=()=>({postMessage(m){
   if(m.type==='pause'){ paused[m.sessionId]=true; send({type:'paused',sessionId:m.sessionId,paused:true,holding:false}); setTimeout(()=>send({type:'paused',sessionId:m.sessionId,paused:true,holding:true}),700); }
   if(m.type==='resume'){ paused[m.sessionId]=false; send({type:'paused',sessionId:m.sessionId,paused:false,holding:false}); setTimeout(()=>send({type:'event',event:{sessionId:m.sessionId,type:'status',payload:'Continuing (3)…'}}),400); }
   if(m.type==='steer'){ const id='st'+Date.now(); send({type:'steerQueued',sessionId:m.sessionId,id,content:m.text,images:m.images}); if(!paused[m.sessionId]){ setTimeout(()=>{ send({type:'event',event:{sessionId:m.sessionId,type:'steer',payload:{ids:[id],count:1}}}); send({type:'event',event:{sessionId:m.sessionId,type:'assistant_delta',payload:'Noted — switching to that.'}}); },900); } }
+  if(m.type==='revokeGrant'){ window.__grants=(window.__grants||['terminal','network','mcp']).filter((k)=>k!==m.kind); send({type:'sessionGrants',sessionId:m.sessionId,kinds:window.__grants}); }
   if(m.type==='answer'){ console.log('answer', JSON.stringify(m.answers)); send({type:'questionResolved',id:m.id}); }
   if(m.type==='stop'){ send({type:'running',sessionId:m.sessionId,running:false}); }
   if(m.type==='suggestTasks'){ const recent=['Make the dice notation parser more user friendly','Write tests for utils']; const quick=[{kind:'fix',title:'Fix the 3 errors VS Code is showing',detail:'2 files · e.g. src/dice.py'},{kind:'review',title:'Review my uncommitted changes and tidy them up',detail:'4 changed files · finds mistakes, dead code and missing tests'},{kind:'docs',title:'Write a README that explains how to set up and run this project',detail:'Install steps, how to start it, how to run tests'},{kind:'test',title:'Run the test suite and fix anything that fails',detail:'Reports what was broken and how it was fixed'},{kind:'cleanup',title:'Resolve the 7 TODO / FIXME notes left in the code',detail:'Finishes or removes each one'},{kind:'explore',title:'Explain how this project is organised and where to start reading',detail:'A short guided tour, no changes made'}]; send({type:'taskSuggestions',source:'quick',items:quick,recent}); if(m.more){ setTimeout(()=>send({type:'taskSuggestions',source:'model',items:[{kind:'feature',title:'Let players save and reload a game',detail:'Adds a small save file and two menu options'},{kind:'fix',title:'Stop the game crashing when a dice string is empty',detail:'parser.py and the CLI entry point'}],recent}),900); } }
@@ -142,4 +166,10 @@ window.acquireVsCodeApi=()=>({postMessage(m){
 }});
 </script>
 <script src="../media/chat.js"></script>
+<script>
+// ?open=model|more|skills|history|ctx opens that menu (or the context card) once the session has loaded, for screenshots.
+(() => { const o = new URLSearchParams(location.search).get('open'); const id = { model: 'modelBtn', more: 'btnComposerMore', skills: 'skillsBtn', history: 'btnHistory', ctx: 'ctxMeter' }[o]; if (!id) return;
+  document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.popover, .ctxcard { animation: none !important; }' }));
+  setTimeout(() => { const b = document.getElementById(id); if (o === 'ctx') b.dispatchEvent(new MouseEvent('mouseenter')); else b.click(); }, 900); })();
+</script>
 </body></html>

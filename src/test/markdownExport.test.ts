@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { buildExportDocument, imageSources, inlineKatexFonts, printToPdfArgs, quoteForDraft, rewriteImageSources, sanitizeExportHtml, themeVars } from '../ui/markdown/export';
 import { DEFAULT_PREFS, prefsCss, readPrefs, sanitizePrefsPatch } from '../ui/markdown/prefs';
 import { validateViewerMessage } from '../ui/markdown/viewSession';
+import { askDraft, MAX_QUOTE, quoteCutNotice, validatePdfViewerMessage } from '../pdf/viewerMessages';
 
 suite('Markdown reader: export, Ask LocalPilot and reading controls', () => {
   test('the commands, menus and the export theme setting are contributed and registered', async function () {
@@ -77,8 +78,29 @@ suite('Markdown reader: export, Ask LocalPilot and reading controls', () => {
     assert.deepStrictEqual(validateViewerMessage({ type: 'prefs', patch: { width: 'wide' } }), { type: 'prefs', patch: { width: 'wide' } });
   });
 
-  test('a selection is quoted into the draft', () => {
+  test('a selection is quoted into the draft, cut at the one quote limit both viewers share', () => {
     assert.strictEqual(quoteForDraft('a\r\n\r\nb'), '> a\n>\n> b');
     assert.ok(quoteForDraft('x'.repeat(50), 10).endsWith('…'));
+    assert.strictEqual(MAX_QUOTE, 4000);
+    assert.strictEqual(quoteForDraft('x'.repeat(MAX_QUOTE)), `> ${'x'.repeat(MAX_QUOTE)}`, 'exactly the limit is kept whole');
+    assert.strictEqual(quoteForDraft('x'.repeat(MAX_QUOTE + 1)), `> ${'x'.repeat(MAX_QUOTE)}…`, 'one over is cut at the limit');
+    assert.strictEqual(quoteCutNotice(12345), 'Quoted the first 4,000 of 12,345 characters. Attach the file to include everything.');
+    assert.strictEqual(askDraft('guide.md'), 'About guide.md: ');
+  });
+
+  test('Ask messages: the key flag and the cut length pass validation, and both viewers share the shortcut', () => {
+    assert.deepStrictEqual(validateViewerMessage({ type: 'ask', key: true }), { type: 'ask', key: true });
+    assert.deepStrictEqual(validateViewerMessage({ type: 'ask', key: 'yes' }), { type: 'ask' });
+    assert.deepStrictEqual(validateViewerMessage({ type: 'askSelection', text: 'ab', line: 2, endLine: 5, total: 9000, key: true }), { type: 'askSelection', text: 'ab', line: 2, endLine: 5, total: 9000, key: true });
+    assert.deepStrictEqual(validateViewerMessage({ type: 'askSelection', text: 'ab', total: 1 }), { type: 'askSelection', text: 'ab', line: undefined });
+    const pdf = validatePdfViewerMessage({ type: 'askSelection', text: 'x'.repeat(MAX_QUOTE + 10), page: 1, total: MAX_QUOTE + 10, key: true });
+    assert.ok(pdf?.type === 'askSelection' && pdf.text.length === MAX_QUOTE && pdf.total === MAX_QUOTE + 10 && pdf.key === true);
+    const pkg = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON;
+    const kb = pkg.contributes.keybindings.find((k: { command: string }) => k.command === 'localpilot.askAboutDocument');
+    assert.ok(kb && kb.key === "ctrl+'" && kb.mac === "cmd+'");
+    for (const id of ['localpilot.pdfViewer', 'localpilot.markdownEditor']) {
+      assert.ok(pkg.contributes.customEditors.some((c: { viewType: string }) => c.viewType === id) && kb.when.includes(`activeCustomEditorId == ${id}`), id);
+    }
+    assert.ok(kb.when.includes('activeWebviewPanelId == localpilot.markdown'));
   });
 });

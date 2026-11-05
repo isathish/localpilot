@@ -4,4 +4,4 @@ Ghost-text suggestions come from a small fill-in-the-middle (FIM) model running 
 
 Good choices: `qwen2.5-coder:1.5b-base`, `qwen2.5-coder:7b-base`, `codestral`, `starcoder2`.
 
-Enable them under **Settings → Inline completions** (or *LocalPilot: Toggle Inline Completions*). LocalPilot picks the first FIM-capable model automatically; you can pin a specific one and tune the debounce and length.
+Enable them under **Settings → Inline completions** (or *LocalPilot: Turn Inline Completions On/Off*). LocalPilot picks the first FIM-capable model automatically; you can pin a specific one and tune the debounce and length.

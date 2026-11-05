@@ -1,7 +1,11 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ChatController } from './chatController';
 import { ALL_MODES, Session } from '../types';
+
+const REVIEW_CMD = 'localpilot.chat.reviewChanges';
+const UNDO_CMD = 'localpilot.chat.undoChanges';
 
 /**
  * Registers `@localpilot` in the built-in VS Code Chat view so users can reach the local agent from the
@@ -24,13 +28,19 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
     }
 
     const attachments: string[] = [];
+    let droppedBinary = false;
     for (const ref of request.references) {
       const v = ref.value;
-      if (v instanceof vscode.Uri) {
+      if (isBinaryReference(v)) {
+        droppedBinary = true;
+      } else if (v instanceof vscode.Uri) {
         attachments.push(vscode.workspace.asRelativePath(v));
       } else if (v instanceof vscode.Location) {
         attachments.push(`${vscode.workspace.asRelativePath(v.uri)}#L${v.range.start.line + 1}-L${v.range.end.line + 1}`);
       }
+    }
+    if (droppedBinary) {
+      stream.progress('Images are not passed through @localpilot yet; attach them in the LocalPilot chat');
     }
 
     const sink = {
@@ -125,18 +135,63 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
       cancel.dispose();
       detach.dispose();
     }
-    return { metadata: { sessionId } };
+    const changed = controller.tracker.forSession(sessionId);
+    if (changed.length) {
+      const n = changed.length;
+      stream.button(n > 1 ? { command: REVIEW_CMD, arguments: [sessionId], title: `Review ${n} changed files` } : { command: 'localpilot.showDiff', arguments: [sessionId, changed[0].fsPath], title: `Review ${path.basename(changed[0].fsPath)}` });
+      stream.button({ command: UNDO_CMD, arguments: [sessionId], title: `Undo ${n} file change${n > 1 ? 's' : ''}` });
+    }
+    stream.button({ command: 'localpilot.openSession', arguments: [sessionId], title: 'Open in LocalPilot' });
+    return { metadata: { sessionId, mode: controller.store.get(sessionId)?.mode ?? session.mode } };
   };
 
   const participant = vscode.chat.createChatParticipant('localpilot.agent', handler);
   participant.iconPath = vscode.Uri.joinPath(ctx.extensionUri, 'media', 'icon.svg');
   participant.followupProvider = {
-    provideFollowups: () => [
-      { prompt: 'Run the tests and fix any failures', label: 'Test & fix' },
-      { prompt: 'Review the changes you just made for bugs', label: 'Review changes' },
-    ],
+    provideFollowups: (result) => {
+      const mode = (result.metadata as { mode?: string } | undefined)?.mode ?? 'agent';
+      if (mode === 'plan') {
+        return [{ prompt: 'Build this plan', command: 'agent', label: 'Build it' }];
+      }
+      if (mode === 'agent' || mode === 'debug' || mode === 'multitask') {
+        return [
+          { prompt: 'Run the tests and fix any failures', label: 'Test & fix' },
+          { prompt: 'Review the changes you just made for bugs', label: 'Review changes' },
+        ];
+      }
+      return [];
+    },
   };
-  ctx.subscriptions.push(participant);
+  // Internal (not contributed, so hidden from the palette): the buttons outlive their turn in the chat history, so
+  // review opens every tracked file and undo re-counts and confirms before reverting the whole chat's edits.
+  ctx.subscriptions.push(
+    participant,
+    vscode.commands.registerCommand(REVIEW_CMD, (id: unknown) => typeof id === 'string' && controller.handle({ type: 'viewChanges', sessionId: id, scope: 'session' })),
+    vscode.commands.registerCommand(UNDO_CMD, async (id: unknown) => {
+      if (typeof id !== 'string') {
+        return;
+      }
+      const count = controller.tracker.forSession(id).length;
+      if (!count) {
+        void vscode.window.showInformationMessage('LocalPilot: nothing left to undo');
+        return;
+      }
+      const ok = await vscode.window.showWarningMessage(`Revert ${count === 1 ? 'the file' : `${count} files`} changed in this chat?`, { modal: true }, 'Revert');
+      if (ok === 'Revert') {
+        const reverted = await controller.tracker.undo(id);
+        vscode.window.setStatusBarMessage(`LocalPilot: reverted ${reverted} file${reverted === 1 ? '' : 's'}`, 2500);
+      }
+    }),
+  );
+}
+
+/** `vscode.ChatReferenceBinaryData` (pasted images) is not in every typings version, so it is looked up at runtime. */
+function isBinaryReference(v: unknown): boolean {
+  const ctor = (vscode as unknown as { ChatReferenceBinaryData?: abstract new (...args: never[]) => unknown }).ChatReferenceBinaryData;
+  if (ctor && v instanceof ctor) {
+    return true;
+  }
+  return !!v && typeof v === 'object' && typeof (v as { mimeType?: unknown }).mimeType === 'string' && typeof (v as { data?: unknown }).data === 'function';
 }
 
 function summarise(args: unknown): string {

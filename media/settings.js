@@ -43,19 +43,26 @@
     gauge: '<svg viewBox="0 0 16 16"><path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-4"/><path d="M2 13.5h12"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3M6 8h4M6 10.5h4"/></svg>',
     folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
+    pulse: '<svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l1.5-4 3 8 1.5-4h4"/></svg>',
+    warn: '<svg viewBox="0 0 16 16"><path d="M8 2.2l6.3 11.3H1.7z"/><path d="M8 6.6v3.2M8 11.7h.01"/></svg>',
+    gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>',
     scale: '<svg viewBox="0 0 16 16"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>',
+    pause: '<svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg>',
+    copy: '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>',
+    eye: '<svg viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>',
+    eyeOff: '<svg viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg>',
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['advanced', 'Advanced', I.wrench],
+    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['advanced', 'Advanced', I.wrench],
   ];
   /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
   const NAV_HOME = ['dashboard'];
   const NAV_GROUPS = [
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
     { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'customize', 'completions'] },
-    { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web'] },
-    { id: 'data', label: 'Data & system', items: ['memory', 'advanced'] },
+    { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web', 'documents'] },
+    { id: 'data', label: 'Data & system', items: ['memory', 'telemetry', 'advanced'] },
   ];
   /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
    *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
@@ -64,15 +71,19 @@
     models: 'installed download pull routing context temperature thinking memory budget default model',
     gallery: 'catalog library hugging face docker hub download pull install gguf',
     skills: 'skill playbook subagent registry install',
-    customize: 'rules commands hooks skills plugins agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs hook scripts pretooluse taskstart taskcancel taskerror',
-    agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify',
+    customize: 'rules commands hooks skills plugins agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs hook scripts pretooluse taskstart taskcancel taskerror marketplace browse plugins',
+    agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify diff preview patch checkpoint restore snapshot diagnostics errors compaction summarise trim shell zsh bash powershell profile detach background language english spanish chinese japanese translate locale tips conversation repos repositories monorepo multi-root',
     completions: 'ghost text fim autocomplete tab suggestion',
-    web: 'searxng brave tavily duckduckgo browser screenshot fetch',
+    web: 'searxng brave tavily duckduckgo browser screenshot fetch internet offline online',
+    documents: 'markdown reader preview mermaid outline toc front matter export pdf viewer zoom thumbnails page colours dark sepia scroll sync',
     memory: 'history chats notes retention transcripts',
     mcp: 'model context protocol server tools reconnect',
     dashboard: 'telemetry metrics usage logs redis stats throughput',
+    telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
   };
+  /** publisher.name from package.json, for the "@ext:" filter of VS Code's Settings editor. */
+  const EXT_ID = 'localpilot.localpilot-agent';
   const FIELD_INDEX = [
     ['providers', 'colibri.path', 'colibri folder'], ['providers', 'colibri.model', 'Colibri model'], ['providers', 'colibri.port', 'Colibri port'], ['providers', 'colibri.modelsDir', 'Colibri models folder'], ['providers', 'colibri.backend', 'Colibri GPU backend'], ['providers', 'colibri.kvSlots', 'Parallel conversations'],
     ['models', 'models.autoSetup', 'Offer automatic setup'], ['models', 'routing.enabled', 'Route automatically'], ['models', 'models.autoTune', 'Learn from usage'],
@@ -81,7 +92,7 @@
     ['models', 'routing.parallelModels', 'Spread parallel work across models'], ['models', 'contextWindow', 'Context window'], ['models', 'maxOutputTokens', 'Max output tokens'],
     ['models', 'temperature', 'Temperature'], ['models', 'thinking', 'Extended thinking'], ['models', 'keepAlive', 'Keep model loaded'], ['models', 'prewarm', 'Pre-load the model while you type'],
     ['models', 'ollama.flashAttention', 'Ollama flash attention'], ['models', 'ollama.kvCacheType', 'Ollama KV cache'],
-    ['providers', 'providers', 'Providers'], ['providers', 'gateways.litellmConfig', 'LiteLLM config file'], ['models', 'models.disabled', 'Hidden models'],
+    ['providers', 'providers', 'Providers'], ['mcp', 'mcpServers', 'MCP servers'], ['mcp', 'mcp.watchServerFiles', 'Restart MCP servers on file change'], ['providers', 'gateways.litellmConfig', 'LiteLLM config file'], ['models', 'models.disabled', 'Hidden models'],
     ['agent', 'autoMode.enabled', 'Review approvals with a local model (auto mode)'], ['agent', 'autoMode.model', 'Auto mode reviewer model'], ['agent', 'queue.concurrency', 'Queued tasks at once'],
     ['memory', 'memory.maxNoteChars', 'Largest memory note'], ['memory', 'memory.maxNotes', 'Memory notes per scope'],
     ['advanced', 'supervisor.enabled', 'Keep local services running'], ['advanced', 'supervisor.intervalSeconds', 'Service check interval'], ['advanced', 'supervisor.autoInstall', 'Install Ollama without asking'],
@@ -90,16 +101,28 @@
     ['agent', 'approvals.network', 'Network approval'], ['agent', 'approvals.mcp', 'MCP tools approval'], ['agent', 'approvals.dangerousAlwaysAsk', 'Always ask before destructive commands'], ['agent', 'notifications', 'Notifications'], ['agent', 'terminal.runInIntegratedTerminal', 'Run commands in a visible terminal'], ['agent', 'terminal.reveal', 'Reveal the terminal when a command runs'],
     ['agent', 'autoClarify', 'Interpret vague requests automatically'], ['agent', 'prompts.autoCorrect', 'Correct misspelled names in requests'], ['agent', 'clarify.questions', 'Questions before starting'],
     ['agent', 'hooks.enabled', 'Run hooks'], ['agent', 'worktrees.mode', 'Where agents work'], ['agent', 'worktrees.location', 'Worktree folder'],
-    ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compactionThreshold', 'Compact context at'],
+    ['agent', 'parallel.maxConcurrency', 'Max concurrent tools / subagents'], ['agent', 'parallel.maxSubagentDepth', 'Max subagent depth'], ['agent', 'compaction.strategy', 'Compaction strategy (when the context fills up)'], ['agent', 'compactionThreshold', 'Compact context at'],
     ['agent', 'maxToolOutputChars', 'Max tool output'], ['agent', 'systemPromptAppend', 'Extra instructions'],
+    ['agent', 'terminal.profile', 'Shell for agent commands'], ['agent', 'terminal.shellIntegrationTimeout', 'Wait for shell integration (ms)'], ['agent', 'terminal.autoDetachSeconds', 'Continue while a command keeps running after (s)'],
+    ['agent', 'preferredLanguage', 'Answer in (language)'], ['agent', 'showTips', 'Show tips while the agent thinks'], ['agent', 'repos', 'Extra repositories'],
+    ['memory', 'memory.autoSave', 'Save what a run taught automatically'], ['memory', 'history.includeCli', 'Include chats from the terminal CLI'], ['customize', 'plugins.marketplaces', 'Plugin marketplaces'],
     ['agent', 'maxConsecutiveMistakes', 'Stop after errors in a row'], ['agent', 'disabledTools', 'Tools (switch tools off)'],
+    ['agent', 'diffPreview', 'Show a diff of proposed edits'], ['agent', 'editTool', 'File-editing tool'], ['agent', 'edit.reportNewErrors', 'Tell the agent about errors its edit introduced'], ['agent', 'checkpoints.enabled', 'Checkpoint before each message'],
     ['completions', 'inlineCompletion.enabled', 'Enable inline completions'], ['completions', 'inlineCompletion.debounceMs', 'Debounce'], ['completions', 'inlineCompletion.maxTokens', 'Max tokens per suggestion'],
-    ['web', 'webSearch.provider', 'Search provider'], ['web', 'webSearch.searxngUrl', 'SearXNG URL'], ['web', 'webSearch.apiKey', 'Web search API key'], ['web', 'webSearch.maxResults', 'Max results'],
+    ['web', 'webSearch.enabled', 'Let the agent use the internet'], ['web', 'webSearch.provider', 'Search provider'], ['web', 'webSearch.searxngUrl', 'SearXNG URL'], ['web', 'webSearch.apiKey', 'Web search API key'], ['web', 'webSearch.maxResults', 'Max results'],
     ['web', 'browser.chromePath', 'Browser for screenshots'],
     ['memory', 'sessions.retention', 'Keep at most (chats)'], ['memory', 'storage.sessionsInMemory', 'Transcripts in memory'], ['memory', 'memory.enabled', 'Enable memory'],
     ['skills', 'skills.autoInstall', 'Registry skills'], ['skills', 'skills.autoInstallScope', 'Install skills into'], ['skills', 'skills.builtin', 'Built-in skills'],
-    ['dashboard', 'telemetry.enabled', 'Record usage metrics'], ['dashboard', 'telemetry.retentionDays', 'Keep metrics for'], ['dashboard', 'storage.redis.enabled', 'Store telemetry in Redis'], ['dashboard', 'storage.redis.url', 'Redis URL'],
+    ['telemetry', 'telemetry.enabled', 'Record usage metrics'], ['telemetry', 'telemetry.retentionDays', 'Keep metrics and logs for'], ['telemetry', 'storage.redis.enabled', 'Store telemetry in Redis'], ['telemetry', 'storage.redis.url', 'Redis URL'],
+    ['telemetry', 'telemetry.otlp.enabled', 'Send telemetry to an OTLP collector'], ['telemetry', 'telemetry.otlp.endpoint', 'OTLP endpoint'], ['telemetry', 'telemetry.otlp.headers', 'OTLP headers'],
+    ['telemetry', 'telemetry.otlp.metricsInterval', 'OTLP metric export interval'], ['telemetry', 'telemetry.otlp.exporters', 'OTLP exporters (logs, traces)'], ['telemetry', 'telemetry.otlp.traceSamplePercent', 'Trace sample percent'],
+    ['telemetry', 'telemetry.otlp.recordContent', 'Include prompts and tool results on spans'],
     ['advanced', 'showWelcomeOnStartup', 'Show setup on first run'], ['advanced', 'chat.location', 'Chat location'],
+    ['documents', 'markdownViewer.scrollSync', 'Keep reader and source scrolled together'], ['documents', 'markdownViewer.outlineDepth', 'Headings shown in the outline'], ['documents', 'markdownViewer.frontMatter', 'YAML front matter'],
+    ['documents', 'markdownViewer.mermaid', 'Render Mermaid diagrams'], ['documents', 'markdownViewer.exportTheme', 'Export as HTML / PDF colours'],
+    ['documents', 'pdfViewer.pageColors', 'PDF page colours'], ['documents', 'pdfViewer.sidebar', 'PDF sidebar on open'], ['documents', 'pdfViewer.defaultZoom', 'PDF default zoom'],
+    ['documents', 'pdfViewer.rangeThresholdMB', 'Load PDF page by page above (MB)'], ['documents', 'pdfViewer.maxFileSizeMB', 'Ask before opening PDFs larger than (MB)'],
+    ['documents', 'pdf.maxReadSizeMB', 'Largest PDF the agent may read (MB)'], ['documents', 'pdf.maxChars', 'Most PDF text per read (characters)'],
   ];
   /** Every query word must hit the entry; label-prefix hits rank first, then label, key, then section words. */
   function findSettings(q) {
@@ -321,7 +344,7 @@
     // the chosen install runtime per source; tag lists are fetched on expand.
     gallery: { source: 'ollama', target: {}, pullRef: '', pullError: '', pullTarget: '', by: {} },
     // Dashboard: last summary + range, and the log viewer filters (follow streams new lines in).
-    dash: { days: 7, summary: null, logFile: '', loading: false, logs: [], level: 'info', q: '', follow: true, timer: null },
+    dash: { days: 7, summary: null, logFile: '', loading: false, logs: [], level: 'info', q: '', follow: true, timer: null, includeDisabled: false, provider: '', hidden: [], allProviders: null },
     // Skill registry browser (Settings → Skills): query, results with installed state, per-repo index status, install jobs.
     skillReg: { q: '', filter: 'all', scope: '', entries: [], status: [], loading: false, loaded: false, refreshing: false, jobs: {} }, skillFilter: '' };
   const galleryState = (source) => (state.gallery.by[source] ||= { q: '', capability: '', sort: 'popular', page: 1, models: [], hasMore: false, loading: false, loaded: false, error: null, tags: {}, open: {} });
@@ -359,7 +382,22 @@
     head.onclick = (e) => { if (e.target.closest('button, a, input, select')) { return; } run(); };
     head.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); run(); } };
   }
-  function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); document.getElementById('toasts').appendChild(t); setTimeout(() => t.remove(), 3000); }
+  /** action: { label, command } adds a button that runs an allowed command; { label, msg } posts msg back to the host. Info toasts go after 3 s; warnings and errors
+   *  stay long enough to read (60 ms per character, 6 s at least), errors are announced at once and can be dismissed.
+   *  Hovering or focusing a toast holds it. */
+  function toast(text, level, action) {
+    const lv = level || 'info';
+    const t = el('div', `toast ${lv}${action ? ' has-action' : ''}`, `<span>${esc(text)}</span>`);
+    if (lv === 'error') { t.setAttribute('role', 'alert'); }
+    if (action && action.label && (action.command || action.msg)) { const b = el('button', 'btn sm', esc(action.label)); b.onclick = () => { post(action.msg || { type: 'command', id: action.command }); t.remove(); }; t.appendChild(b); }
+    if (lv === 'error') { const x = el('button', 'toast-x', I.x); x.setAttribute('aria-label', 'Dismiss'); x.title = 'Dismiss'; x.onclick = () => t.remove(); t.appendChild(x); }
+    let left = Math.max(lv === 'info' ? 3000 : Math.max(6000, String(text).length * 60), action ? 10000 : 0); let timer = 0; let since = 0;
+    const run = () => { since = Date.now(); timer = setTimeout(() => t.remove(), left); };
+    const hold = () => { if (timer) { clearTimeout(timer); timer = 0; left = Math.max(1500, left - (Date.now() - since)); } };
+    const resume = () => { if (!timer && !t.matches(':hover') && !t.contains(document.activeElement)) { run(); } };
+    t.onmouseenter = hold; t.onmouseleave = resume; t.addEventListener('focusin', hold); t.addEventListener('focusout', () => setTimeout(resume, 0));
+    document.getElementById('toasts').appendChild(t); run();
+  }
   const S = (key) => (state.data && state.data.settings[key]) || { value: undefined, default: undefined, scope: 'default' };
   const val = (key) => S(key).value;
   /** The value stored in the selected scope (not the merged one), so an edit never copies the other scope's value into it. */
@@ -373,6 +411,8 @@
     if (p.locked[key]) { return p.locked[key]; }
     return (p.disabledOptions[key] || []).includes(String(value)) ? 'Your organization requires approval here' : '';
   };
+  /** The value in effect: what the organisation's policy applies where it decides, otherwise the setting. */
+  const effVal = (key) => { const eff = POLICY() && POLICY().effective; return eff && Object.prototype.hasOwnProperty.call(eff, key) ? eff[key] : val(key); };
   const lockIcon = (why) => `<span class="lock" role="img" title="${esc(why ? `${MANAGED_TIP} — ${why}` : MANAGED_TIP)}" aria-label="${esc(MANAGED_TIP)}">${I.lock}</span>`;
   /** Mirrors providerAllowed in src/agent/managedPolicy.ts: why the policy keeps a provider of the user's from loading. */
   const providerPolicyBlock = (p) => {
@@ -385,40 +425,90 @@
     }
     return '';
   };
+  /** Writes awaiting the host's 'saved' reply, by request id: the header says "Saved" only once VS Code confirmed it,
+   *  and a refused write puts the control back to the stored value. */
+  const pendingSaves = new Map(); let saveSeq = 0;
   function set(key, value) {
     const refused = policyRefuses(key, value);
-    if (refused) { toast(`${MANAGED_TIP}: ${refused}`, 'error'); return; }
+    if (refused) { toast(`${MANAGED_TIP}: ${refused}`, 'error'); refreshComponents([key]); return; }
+    const id = ++saveSeq; pendingSaves.set(id, { key, scope: state.scope });
     state.pendingSave = Date.now();
-    post({ type: 'set', key, value, scope: state.scope });
-    if (state.scope === 'user' && S(key).workspaceValue !== undefined) { toast(`Saved to User settings, but this workspace overrides ${key} — switch to Workspace to change the value in effect`, 'error'); }
+    post({ type: 'set', key, value, scope: state.scope, id });
   }
-  /** Brief "Saved" acknowledgement in the header after a setting round-trips through VS Code. */
+  /** Brief "Saved" acknowledgement in the header after the host confirmed a write. */
   function flashSaved() {
     const t = app.querySelector('.top .saved'); if (!t) { return; }
     t.classList.add('show'); clearTimeout(flashSaved.timer); flashSaved.timer = setTimeout(() => t.classList.remove('show'), 1400);
   }
   /** Resets the scope that defines the value in effect, whichever scope is selected. */
-  function reset(key) { state.pendingSave = Date.now(); post({ type: 'reset', key, scope: S(key).scope === 'workspace' ? 'workspace' : 'user' }); }
+  function reset(key) { const id = ++saveSeq; pendingSaves.set(id, { key, reset: true }); state.pendingSave = Date.now(); post({ type: 'reset', key, scope: S(key).scope === 'workspace' ? 'workspace' : 'user', id }); }
+  function onSaved(m) {
+    const p = pendingSaves.get(m.id); pendingSaves.delete(m.id);
+    if (!pendingSaves.size) { state.pendingSave = 0; }
+    if (m.ok) {
+      flashSaved();
+      // Switching tuning on or off changes what the dashboard's Model tuning card can show.
+      if (p && p.key === 'models.autoTune' && state.page === 'settings' && state.section === 'dashboard') { requestDashboard(); }
+      if (p && !p.reset && p.scope === 'user' && !USER_ONLY(p.key) && S(p.key).workspaceValue !== undefined) { toast(`Saved to User settings, but this workspace overrides ${p.key} — switch to Workspace to change the value in effect`, 'warn'); }
+      return;
+    }
+    // Nothing was written, so the state still holds the old value: rebuilding the control flips a switch or segment back.
+    const key = (p && p.key) || m.key;
+    if (key) { if (state.page !== 'settings' || STRUCTURAL_KEYS.has(key)) { render(); } else { refreshComponents([key]); } }
+    toast(m.error || 'The setting could not be saved', 'error');
+  }
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-  const scopeBadge = (key) => { const s = S(key).scope; return s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`; };
-  const resetBtn = (key) => (S(key).scope === 'default' ? '' : `<button class="reset" data-reset="${esc(key)}" title="Reset to default">${I.undo}</button>`);
+  /** Mirrors isUserOnlySetting in src/config.ts (keep the two in step): written to User settings whatever scope is selected. */
+  const USER_ONLY = (k) => k === 'hooks.enabled' || k.startsWith('approvals.') || k.startsWith('autoMode.') || k.startsWith('telemetry.otlp.');
+  const userOnlyBadge = (key) => (USER_ONLY(key) ? '<span class="badge useronly" title="Applies to every workspace for safety; the Workspace switch does not change it">User only</span>' : '');
+  const scopeBadge = (key) => { const s = S(key).scope; return userOnlyBadge(key) + (s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`); };
+  const resetBtn = (key) => {
+    if (S(key).scope === 'default') { return ''; }
+    const t = S(key).scope === 'workspace' && S(key).userValue !== undefined ? 'Remove workspace override (User value applies)' : 'Reset to default';
+    return `<button class="reset" data-reset="${esc(key)}" title="${t}" aria-label="${t}">${I.undo}</button>`;
+  };
+  /** An on/off switch: the class and aria-checked flip together before onToggle(on) runs. */
+  function switchBtn(on, name, onToggle) {
+    const b = el('button', `toggle${on ? ' on' : ''}`); b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(!!on)); b.setAttribute('aria-label', name);
+    b.onclick = () => { const v = !b.classList.contains('on'); b.classList.toggle('on', v); b.setAttribute('aria-checked', String(v)); onToggle(v); };
+    return b;
+  }
+  /** Radio semantics for a row of buttons (`.on` = checked): roving tabindex, and arrows / Home / End move and select,
+   *  skipping disabled options. Call after the buttons are added and disabled. */
+  function radioGroup(g) {
+    if (!g.getAttribute('role')) { g.setAttribute('role', 'radiogroup'); }
+    const all = () => [...g.querySelectorAll(':scope > button')];
+    const off = (b) => b.disabled || b.getAttribute('aria-disabled') === 'true';
+    const sync = () => {
+      const bs = all(); const cur = bs.find((b) => b.classList.contains('on')) || bs.find((b) => !off(b));
+      bs.forEach((b) => { b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(b.classList.contains('on'))); b.tabIndex = b === cur ? 0 : -1; });
+    };
+    g.addEventListener('click', sync);
+    g.addEventListener('keydown', (e) => {
+      const bs = all().filter((b) => !off(b)); const i = bs.indexOf(document.activeElement); if (i < 0) { return; }
+      const to = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? bs[(i + 1) % bs.length] : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? bs[(i - 1 + bs.length) % bs.length] : e.key === 'Home' ? bs[0] : e.key === 'End' ? bs[bs.length - 1] : null;
+      if (!to) { return; }
+      e.preventDefault(); to.focus(); if (!to.classList.contains('on')) { to.click(); }
+    });
+    sync(); g._radioSync = sync;
+    return g;
+  }
 
-  /** Generic setting row. kind: text|number|password|select|toggle|textarea|range|seg */
+  /** Generic setting row. kind: text|number|password|select|toggle|textarea|range|seg.
+   *  opts.after: a full-width line under the row (counts, buttons); opts.badges: extra HTML after the label;
+   *  opts.unit: suffix beside a number; opts.off: why the row is unavailable right now (controls are disabled). */
   function field(key, label, desc, kind, opts = {}) {
-    const f = el('div', `field ${opts.wide ? 'wide' : ''}`);
+    const f = el('div', `field ${opts.wide ? 'wide' : ''}${USER_ONLY(key) && state.scope === 'workspace' ? ' useronly-ws' : ''}`);
     // Components declare the setting keys they render from and how to rebuild themselves, so a changed setting
     // refreshes just that element instead of the whole page (see refreshComponents).
     f.dataset.deps = key;
     f._rebuild = () => field(key, label, desc, kind, opts);
-    f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
+    f.innerHTML = `<div><div class="lbl">${esc(label)}${opts.badges || ''}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
     const ctl = f.querySelector('.ctl');
     // Where the policy decides the value (locked, or held at an approval floor), show what applies, not what is stored.
-    const eff = POLICY() && POLICY().effective;
-    const v = eff && Object.prototype.hasOwnProperty.call(eff, key) ? eff[key] : val(key);
+    const v = effVal(key);
     if (kind === 'toggle') {
-      const b = el('button', `toggle ${v ? 'on' : ''}`); b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(!!v)); b.setAttribute('aria-label', label);
-      b.onclick = () => { b.classList.toggle('on'); set(key, b.classList.contains('on')); };
-      ctl.appendChild(b);
+      const b = switchBtn(v, label, (on) => set(key, on)); b.dataset.fk = key; ctl.appendChild(b);
     } else if (kind === 'select') {
       const s = el('select'); s.setAttribute('aria-label', label);
       for (const [ov, ol, od] of opts.options) { const o = el('option'); o.value = ov; o.textContent = ol + (od ? ` — ${od}` : ''); if (String(ov) === String(v)) { o.selected = true; } s.appendChild(o); }
@@ -427,7 +517,7 @@
       ctl.appendChild(s);
     } else if (kind === 'seg') {
       const g = el('div', 'seg'); g.setAttribute('role', 'radiogroup'); g.setAttribute('aria-label', label);
-      for (const [ov, ol] of opts.options) { const b = el('button', String(ov) === String(v) ? 'on' : '', esc(ol)); b.onclick = () => { g.querySelectorAll('button').forEach((x) => x.classList.remove('on')); b.classList.add('on'); set(key, ov); }; g.appendChild(b); }
+      for (const [ov, ol] of opts.options) { const b = el('button', String(ov) === String(v) ? 'on' : '', esc(ol)); b.dataset.fk = `${key}=${ov}`; b.onclick = () => { if (b.classList.contains('on')) { return; } g.querySelectorAll('button').forEach((x) => x.classList.remove('on')); b.classList.add('on'); set(key, ov); }; g.appendChild(b); }
       ctl.appendChild(g);
     } else if (kind === 'range') {
       const w = el('div', 'range', `<input type="range" min="${opts.min}" max="${opts.max}" step="${opts.step}" value="${esc(v)}" aria-label="${esc(label)}"><output>${esc(opts.fmt ? opts.fmt(v) : v)}</output>`);
@@ -455,44 +545,205 @@
         else { i.classList.remove('invalid'); i.removeAttribute('aria-invalid'); i.title = ''; if (i.value !== (last ?? '')) { last = i.value; set(key, i.value); } }
       };
       i.onchange = commit; i.onblur = commit; i.oninput = debounce(commit, 700);
-      ctl.appendChild(i);
+      if (opts.unit) { const r = el('div', 'row unit-row'); r.append(i, el('span', 'unit', esc(opts.unit))); ctl.appendChild(r); } else if (kind === 'password') { const r = el('div', 'row pw-row'); r.append(i, eyeToggle(i, label)); ctl.appendChild(r); } else { ctl.appendChild(i); }
     }
     const why = policyRefuses(key, undefined);
     const floor = (POLICY() && POLICY().disabledOptions[key]) || [];
+    // A full-width line under the label and the control, so a switch keeps its corner and the buttons get the width.
     // Appended before the lock so its buttons (Redis setup, …) are disabled with the control.
-    if (opts.after) { ctl.appendChild(opts.after); }
+    if (opts.after) { opts.after.classList.add('after'); f.appendChild(opts.after); }
+    const controls = () => f.querySelectorAll(':scope > .ctl :is(button, input, select, textarea), :scope > .after :is(button, input, select, textarea)');
     if (why) {
       // Locked by the organisation: the control shows the value the policy applies, nothing here can change it.
       f.classList.add('locked');
       f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(why));
       const rb = f.querySelector('.reset'); if (rb) { rb.remove(); }
-      ctl.querySelectorAll('button, input, select, textarea').forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; });
+      controls().forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; });
+    } else if (opts.off) {
+      f.classList.add('off');
+      controls().forEach((x) => { x.disabled = true; x.title = opts.off; });
     } else if (floor.length && kind === 'seg') {
       const btns = ctl.querySelectorAll('.seg button');
-      opts.options.forEach(([ov], i) => { if (floor.includes(String(ov)) && btns[i]) { btns[i].disabled = true; btns[i].title = `${MANAGED_TIP} — your organization requires approval here`; } });
+      opts.options.forEach(([ov], i) => { if (floor.includes(String(ov)) && btns[i]) { btns[i].disabled = true; btns[i].setAttribute('aria-disabled', 'true'); btns[i].title = `${MANAGED_TIP} — your organization requires approval here`; } });
       f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(`${opts.options.filter(([ov]) => floor.includes(String(ov))).map(([, l]) => l).join(', ')} is not allowed`));
     }
+    const seg = ctl.querySelector(':scope > .seg'); if (seg) { radioGroup(seg); }
     return f;
+  }
+  /** Show / hide button for a password input; the label names what is revealed for screen readers. */
+  function eyeToggle(input, label) {
+    const b = el('button', 'btn sm ghost eye', I.eye); b.type = 'button';
+    const sync = () => { const shown = input.type === 'text'; b.innerHTML = shown ? I.eyeOff : I.eye; b.title = shown ? 'Hide' : 'Show'; b.setAttribute('aria-label', `${shown ? 'Hide' : 'Show'} ${label}`); b.setAttribute('aria-pressed', String(shown)); };
+    b.onclick = () => { input.type = input.type === 'text' ? 'password' : 'text'; sync(); };
+    sync();
+    return b;
   }
   const card = (...children) => { const c = el('div', 'card'); children.forEach((x) => x && c.appendChild(x)); return c; };
   /** Marks any element as a self-rebuilding component bound to the given setting keys. */
   const component = (node, deps, rebuild) => { node.dataset.deps = deps.join(','); node._rebuild = rebuild; return node; };
   /** Settings whose change restructures a page (lists, visibility) rather than one control — these re-render the section. */
-  const STRUCTURAL_KEYS = new Set(['providers', 'mcpServers', 'skillsPaths', 'pluginPaths', 'models.disabled', 'webSearch.provider']);
-  /** Rebuilds only the components that depend on the changed keys. Keeps a focused control intact (just refreshes its label). */
+  const STRUCTURAL_KEYS = new Set(['providers', 'mcpServers', 'models.disabled', 'webSearch.provider']);
+  const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
+  /** Typing into it: a rebuild would eat the text or the caret. A switch, button or checkbox is not. */
+  const isEditing = (a) => !!a && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && !/^(checkbox|radio|range|button)$/.test(a.type)));
+  /** Rebuilds only the components that depend on the changed keys. Keeps a field being typed in intact (just refreshes
+   *  its label); a component whose switch or checkbox was just used is rebuilt and the focus put back on the same control. */
   function refreshComponents(keys) {
     const want = new Set(keys);
     for (const node of [...app.querySelectorAll('[data-deps]')]) {
-      if (!node._rebuild || !node.dataset.deps.split(',').some((k) => want.has(k))) { continue; }
+      if (!node.isConnected || !node._rebuild || !node.dataset.deps.split(',').some((k) => want.has(k))) { continue; }
       const fresh = node._rebuild();
       wireGlobal(fresh);
-      if (node.contains(document.activeElement)) {
+      const act = document.activeElement;
+      const fk = node.contains(act) && act.dataset ? act.dataset.fk : '';
+      if (fk) {
+        node.replaceWith(fresh);
+        const n = fresh.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
+        if (n) { if (n.tagName !== 'BUTTON') { n.value = act.value; } n.focus({ preventScroll: true }); }
+        continue;
+      }
+      if (node.contains(act) && isEditing(act)) {
         const a = node.querySelector('.lbl'); const b = fresh.querySelector('.lbl');
         if (a && b) { a.replaceWith(b); }
         continue;
       }
+      const at = node.contains(act) ? [...node.querySelectorAll(FOCUSABLE)].indexOf(act) : -1;
       node.replaceWith(fresh);
+      const back = at >= 0 && fresh.querySelectorAll(FOCUSABLE)[at];
+      if (back && !back.disabled) { back.focus({ preventScroll: true }); }
     }
+  }
+  /** Replies to a "Browse…" folder dialog, by setting key: the editor that asked appends the picked path. */
+  const onPicked = {};
+  const missingPath = (p) => ((state.data && state.data.settingsMeta && state.data.settingsMeta.missingPaths) || []).includes(p);
+  const otherScope = () => (state.scope === 'workspace' ? 'user' : 'workspace');
+  const scopeName = (sc) => (sc === 'workspace' ? 'Workspace' : 'User');
+  /** The value written in one scope only (no fallback to the other scope or the default). */
+  const scopeValue = (key, sc) => (sc === 'workspace' ? S(key).workspaceValue : S(key).userValue);
+  const testValid = (validate, v) => !validate || (validate instanceof RegExp ? validate.test(v) : !!validate(v));
+  /** Editable list setting (folders, marketplaces). Edits the selected scope's own list; entries only the other scope has
+   *  are shown read-only (VS Code does not merge lists: the Workspace list replaces the User one). Enter adds; empty,
+   *  invalid and duplicate input is refused in place. opts: placeholder, validate (RegExp or fn), invalidHint, browse. */
+  function listEditor(key, label, desc, opts = {}) {
+    const build = () => {
+      const own = Array.isArray(ownValue(key)) ? ownValue(key) : [];
+      const other = scopeValue(key, otherScope());
+      const foreign = (Array.isArray(other) ? other : []).filter((x) => !own.includes(x));
+      const f = el('div', 'field wide list-ed');
+      f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`;
+      const ctl = el('div', 'ctl');
+      const ul = el('ul', 'list');
+      const missing = '<span class="badge warn" title="This folder does not exist on this machine">not found</span>';
+      own.forEach((p) => {
+        const li = el('li', '', `<code title="${esc(p)}">${esc(p)}</code>${missingPath(p) ? missing : ''}<button class="reset x" title="Remove" aria-label="${esc(`Remove ${p}`)}">${I.x}</button>`);
+        li.querySelector('button').onclick = () => set(key, own.filter((x) => x !== p));
+        ul.appendChild(li);
+      });
+      const sc = otherScope();
+      foreign.forEach((p) => {
+        const tip = sc === 'workspace' ? 'Set in Workspace settings, whose list replaces this one in this workspace' : 'Set in User settings — this Workspace list replaces it here';
+        ul.appendChild(el('li', 'inherited', `<code title="${esc(p)}">${esc(p)}</code>${missingPath(p) ? missing : ''}<span class="badge" title="${esc(tip)}">${sc === 'workspace' ? 'from Workspace' : 'inherited from User'}</span>`));
+      });
+      if (own.length || foreign.length) { ctl.appendChild(ul); }
+      const row = el('div', 'row list-add');
+      const input = el('input'); input.type = 'text'; input.placeholder = opts.placeholder || ''; input.setAttribute('aria-label', `${label}: entry to add`); input.dataset.fk = `${key}:add`;
+      const add = el('button', 'btn sm', `${I.plus}Add`);
+      const hint = el('div', 'list-hint err-text'); hint.id = `hint-${key.replace(/\W/g, '-')}`; hint.hidden = true; hint.setAttribute('role', 'alert');
+      const bad = (msg) => { input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', hint.id); hint.textContent = msg; hint.hidden = false; input.focus(); };
+      const clear = () => { input.classList.remove('invalid'); input.removeAttribute('aria-invalid'); hint.hidden = true; };
+      const commit = (raw) => {
+        const v = String(raw ?? '').trim();
+        if (!v) { bad('Type a value first'); return false; }
+        if (!testValid(opts.validate, v)) { bad(opts.invalidHint || 'Not a valid entry — not added'); return false; }
+        if (own.includes(v)) { bad('Already in the list'); return false; }
+        clear(); set(key, [...own, v]); return true;
+      };
+      add.onclick = () => { if (commit(input.value)) { input.value = ''; input.focus(); } };
+      input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add.onclick(); } };
+      input.oninput = clear;
+      row.append(input, add);
+      if (opts.browse) {
+        const b = el('button', 'btn sm', `${I.folder}Browse…`); b.title = 'Pick a folder';
+        b.onclick = () => post({ type: 'pickFolder', key });
+        onPicked[key] = (p) => { if (!(Array.isArray(ownValue(key)) ? ownValue(key) : []).includes(p)) { set(key, [...(Array.isArray(ownValue(key)) ? ownValue(key) : []), p]); } };
+        row.appendChild(b);
+      }
+      ctl.append(row, hint);
+      f.appendChild(ctl);
+      if (policyRefuses(key, undefined)) { f.classList.add('locked'); f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(policyRefuses(key, undefined))); f.querySelectorAll('.ctl :is(button, input)').forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; }); }
+      return component(f, [key], build);
+    };
+    return build();
+  }
+  /** Map setting (name → folder) as rows of two inputs. Writes the selected scope's own map only: VS Code merges maps, so
+   *  entries from the other scope stay in effect and are shown read-only. opts: nameRe, nameHint, namePlaceholder,
+   *  valuePlaceholder, browse, addLabel, empty (text when nothing is set), extra (read-only rows: { name, value, badge, tip }). */
+  const kvDrafts = {};
+  function keyValueEditor(key, label, desc, opts = {}) {
+    const build = () => {
+      const raw = scopeValue(key, state.scope);
+      const own = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const otherRaw = scopeValue(key, otherScope());
+      const inherited = Object.entries(otherRaw && typeof otherRaw === 'object' && !Array.isArray(otherRaw) ? otherRaw : {}).filter(([n]) => !(n in own));
+      const drafts = kvDrafts[key] || (kvDrafts[key] = []);
+      const f = el('div', 'field wide kv-ed');
+      f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>`;
+      const ctl = el('div', 'ctl');
+      const rows = el('div', 'kv-rows');
+      const entries = Object.entries(own);
+      const nameOk = (n) => (opts.nameRe ? opts.nameRe.test(n) : !!n);
+      const write = (list) => set(key, Object.fromEntries(list.filter(([n, v]) => n && v)));
+      const baseName = (p) => String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop().replace(/[^\w.-]+/g, '-').slice(0, 40) || 'repo';
+      // Saved rows (i < entries.length) and unsaved drafts share one layout; a draft is written once its name and folder are valid.
+      const all = [...entries.map(([n, v]) => ({ name: n, value: String(v ?? ''), saved: true })), ...drafts.map((d) => ({ ...d, saved: false }))];
+      all.forEach((r, i) => {
+        const row = el('div', `kv-row${r.saved ? '' : ' draft'}`);
+        const n = el('input'); n.type = 'text'; n.value = r.name; n.placeholder = opts.namePlaceholder || 'name'; n.setAttribute('aria-label', `${label}: name ${i + 1}`); n.dataset.fk = `${key}:n:${i}`; n.className = 'kv-name';
+        const v = el('input'); v.type = 'text'; v.value = r.value; v.placeholder = opts.valuePlaceholder || ''; v.setAttribute('aria-label', `${label}: folder for ${r.name || `row ${i + 1}`}`); v.dataset.fk = `${key}:v:${i}`; v.className = 'kv-val';
+        const hint = el('div', 'kv-hint err-text'); hint.id = `hint-${key.replace(/\W/g, '-')}-${i}`; hint.hidden = true; hint.setAttribute('role', 'alert');
+        const bad = (input, msg) => { input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', hint.id); hint.textContent = msg; hint.hidden = false; };
+        const ok = (input) => { input.classList.remove('invalid'); input.removeAttribute('aria-invalid'); };
+        const problem = (name) => (name && !nameOk(name) ? `${opts.nameHint || 'Not a valid name'} — not saved yet` : name && all.some((o, j) => j !== i && o.name === name && (o.saved || !r.saved)) ? 'Name already used — not saved yet' : '');
+        const commit = () => {
+          const name = n.value.trim(); const value = v.value.trim();
+          ok(n); hint.hidden = true;
+          // A draft keeps what was typed (also when it is not valid yet), so a rebuild of the list does not drop it.
+          if (!r.saved) { drafts[i - entries.length] = { name, value }; all[i] = { name, value, saved: false }; }
+          const why = problem(name);
+          if (why) { bad(n, why); return; }
+          if (!name || !value) { return; }
+          const list = all.filter((o) => o.saved).map((o) => [o.name, o.value]);
+          if (r.saved) { if (name === r.name && value === r.value) { return; } list[i] = [name, value]; } else { drafts.splice(i - entries.length, 1); list.push([name, value]); }
+          write(list);
+        };
+        if (problem(r.name)) { bad(n, problem(r.name)); }
+        n.onchange = commit; v.onchange = commit;
+        n.onkeydown = v.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+        const tags = el('span', 'kv-tags', missingPath(r.value) ? '<span class="badge warn" title="This folder does not exist on this machine">not found</span>' : '');
+        const acts = el('span', 'kv-acts');
+        if (opts.browse) {
+          const b = el('button', 'btn sm', `${I.folder}Browse…`); b.title = 'Pick a folder';
+          b.onclick = () => { onPicked[key] = (p) => { v.value = p; if (!n.value.trim()) { let nm = baseName(p); for (let k = 2; all.some((o, j) => j !== i && o.name === nm); k++) { nm = `${baseName(p)}-${k}`; } n.value = nm; } commit(); }; post({ type: 'pickFolder', key, name: n.value.trim() || undefined }); };
+          acts.appendChild(b);
+        }
+        const del = el('button', 'reset x', I.x); del.title = 'Remove'; del.setAttribute('aria-label', `Remove ${r.name || 'this row'}`);
+        del.onclick = () => { if (r.saved) { write(all.filter((o, j) => o.saved && j !== i).map((o) => [o.name, o.value])); } else { drafts.splice(i - entries.length, 1); refreshComponents([key]); } };
+        acts.appendChild(del);
+        row.append(n, v, tags, acts, hint);
+        rows.appendChild(row);
+      });
+      const extra = [...inherited.map(([n, v]) => ({ name: n, value: String(v ?? ''), badge: otherScope() === 'workspace' ? 'from Workspace' : 'inherited from User', tip: `Set in ${scopeName(otherScope())} settings; switch scope to edit it` })), ...(opts.extra || [])];
+      extra.forEach((x) => rows.appendChild(el('div', 'kv-row ro', `<b class="kv-name" title="${esc(x.name)}">${esc(x.name)}</b><code class="kv-val" title="${esc(x.value)}">${esc(x.value)}</code><span class="kv-tags">${missingPath(x.value) ? '<span class="badge warn">not found</span>' : ''}<span class="badge" title="${esc(x.tip || '')}">${esc(x.badge)}</span></span>`)));
+      if (!all.length && !inherited.length && opts.empty) { ctl.appendChild(el('div', 'muted small kv-empty', opts.empty)); }
+      if (all.length || extra.length) { ctl.appendChild(rows); }
+      const addBtn = el('button', 'btn sm kv-add', `${I.plus}${esc(opts.addLabel || 'Add')}`);
+      addBtn.onclick = () => { drafts.push({ name: '', value: '' }); refreshComponents([key]); const ins = app.querySelectorAll(`[data-fk^="${CSS.escape(key)}:n:"]`); if (ins.length) { ins[ins.length - 1].focus(); } };
+      ctl.appendChild(el('div', 'btnrow')).appendChild(addBtn);
+      f.appendChild(ctl);
+      if (policyRefuses(key, undefined)) { f.classList.add('locked'); f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(policyRefuses(key, undefined))); f.querySelectorAll('.ctl :is(button, input)').forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; }); }
+      return component(f, [key], build);
+    };
+    return build();
   }
   const enabledModels = () => (state.data.models || []).filter((m) => !m.disabled);
   const modelOptions = (filter) => enabledModels().filter(filter || (() => true)).map((m) => [m.id, m.name, `${m.providerId} · ${Math.round(m.contextWindow / 1024)}k${m.supportsTools ? ' · tools' : ''}${m.supportsVision ? ' · vision' : ''}${m.supportsFim ? ' · FIM' : ''}`]);
@@ -505,6 +756,7 @@
    * the page. The setup wizard is small and still renders as a whole.
    */
   let renderedSection = null;
+  let renderedSetupStep = -1;
   function render() {
     if (!state.data) { return; }
     // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt — unless
@@ -526,8 +778,16 @@
     app.removeAttribute('aria-busy');
     if (state.page === 'setup') {
       if (state.dash.timer) { stopDashboardTimer(); }
+      // Fade in only when the wizard opens or moves to another step; a probe result or a click on the same step
+      // swaps the content in place and keeps focus on the control that was used.
+      const enter = app.dataset.page !== 'setup' || renderedSetupStep !== state.setup.step;
+      const focusKey = !enter && act && app.contains(act) ? act.dataset.id || act.id : '';
+      renderedSetupStep = state.setup.step;
       app.innerHTML = ''; app.dataset.page = 'setup';
       renderSetup();
+      if (enter) { const w = app.querySelector('.setup'); if (w) { w.classList.add('enter'); } }
+      const back = focusKey && [...app.querySelectorAll('[data-id], [id]')].find((n) => (n.dataset.id || n.id) === focusKey);
+      if (back && !back.disabled) { back.focus({ preventScroll: true }); }
     } else {
       if (app.dataset.page !== 'settings') { app.innerHTML = ''; app.dataset.page = 'settings'; renderShell(); }
       syncShell();
@@ -542,9 +802,10 @@
       <div class="find" role="search"><button class="find-open" title="Search settings (⌘F)" aria-label="Search settings">${I.search}</button><label class="find-box">${I.search}<input type="search" placeholder="Search settings" aria-label="Search settings" aria-controls="find-list" aria-autocomplete="list" autocomplete="off" spellcheck="false"><kbd>⌘F</kbd></label><div class="find-list hidden" id="find-list" role="listbox" aria-label="Matching settings"></div></div>
       <span class="spacer"></span>
       <span class="saved" role="status" aria-live="polite">${I.check}Saved</span>
-      <div class="scope" role="radiogroup" aria-label="Settings scope"><button data-s="user">User</button><button data-s="workspace">Workspace</button></div>
+      <div class="scope" role="radiogroup" aria-label="Settings scope" title="User: all folders. Workspace: only this folder (.vscode/settings.json) — wins over User."><button data-s="user" aria-label="User settings">User</button><button data-s="workspace" aria-label="Workspace settings"><span class="long">Workspace</span><span class="short">Wksp</span></button></div>
       <button class="btn" data-cmd="localpilot.openChat" title="Open chat" aria-label="Open chat">${I.chat}Open chat</button>`;
-    top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled) { return; } state.scope = b.dataset.s; render(); }));
+    top.querySelectorAll('.scope button').forEach((b) => (b.onclick = () => { if (b.disabled || state.scope === b.dataset.s) { return; } state.scope = b.dataset.s; render(); }));
+    radioGroup(top.querySelector('.scope'));
     wireFind(top);
     app.appendChild(top);
     const layout = el('div', 'layout');
@@ -601,8 +862,20 @@
     };
     syncAllBtn();
     side.querySelectorAll('[data-cmd],[data-url]').forEach((a) => { a.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); } }; });
-    // Narrow layout turns the nav into a scrolling pill strip: show fades where more pills are hidden.
+    // Narrow layout turns the nav into a scrolling pill strip: show fades where more pills are hidden, and a ⋯ at its
+    // end lists every section. The list lives outside the strip, which would clip and fade it.
     side.onscroll = () => updateNavFades(side);
+    const navOrder = [...NAV_HOME, ...NAV_GROUPS.flatMap((g) => g.items)].map((id) => byId[id]).filter(Boolean);
+    const navMore = moreMenu(navOrder.map(([id, label, icon]) => [icon, label, () => { const a = side.querySelector(`[data-sec="${id}"]`); if (a) { go(a); } }]), 'navmore', {
+      html: '⋯', label: 'All sections', floating: true,
+      onOpen: (menu) => {
+        menu.querySelectorAll('button').forEach((b, i) => { const on = navOrder[i][0] === state.section; b.classList.toggle('on', on); if (on) { b.setAttribute('aria-current', 'page'); } else { b.removeAttribute('aria-current'); } });
+        const cur = menu.querySelector('button.on'); if (cur) { cur.focus({ preventScroll: true }); cur.scrollIntoView({ block: 'nearest' }); }
+      },
+    });
+    side.appendChild(navMore);
+    layout.appendChild(navMore._menu);
+    if (!renderShell.fades) { renderShell.fades = true; window.addEventListener('resize', () => { const s = app.querySelector('.side'); if (s) { updateNavFades(s); } }); }
     layout.appendChild(side);
     const main = el('main', 'content');
     main.appendChild(el('section', 'sec'));
@@ -619,22 +892,31 @@
     const close = () => { list.classList.add('hidden'); q.setAttribute('aria-expanded', 'false'); };
     const fold = () => { close(); top.classList.remove('finding'); };
     const paint = () => {
-      const v = q.value.trim(); hits = findSettings(v); sel = Math.min(sel, Math.max(0, hits.length - 1));
+      const v = q.value.trim(); hits = v ? [...findSettings(v), { ext: v }] : []; sel = Math.min(sel, Math.max(0, hits.length - 1));
       if (!v) { close(); return; }
-      list.innerHTML = hits.length ? hits.map((h, i) => `<div class="find-item${i === sel ? ' sel' : ''}" role="option" id="find-${i}" aria-selected="${i === sel}" data-i="${i}"><span class="ico">${secName[h.sec].icon}</span><span class="txt"><b>${esc(h.label)}</b><small>${h.key ? `${esc(secName[h.sec].label)} · <code>${esc(h.key)}</code>` : 'Section'}</small></span></div>`).join('')
-        : `<div class="find-none">No setting matches “${esc(v)}”</div>`;
+      const item = (h, i) => `<div class="find-item${h.ext ? ' ext' : ''}${i === sel ? ' sel' : ''}" role="option" id="find-${i}" aria-selected="${i === sel}" data-i="${i}">${h.ext
+        ? `<span class="ico">${I.external}</span><span class="txt"><b>Search “${esc(h.ext)}” in VS Code settings</b><small>All LocalPilot settings in the Settings editor</small></span>`
+        : `<span class="ico">${secName[h.sec].icon}</span><span class="txt"><b>${esc(h.label)}</b><small>${h.key ? `${esc(secName[h.sec].label)} · <code>${esc(h.key)}</code>` : 'Section'}</small></span>`}</div>`;
+      list.innerHTML = (hits.length > 1 ? '' : `<div class="find-none">No setting matches “${esc(v)}”</div>`) + hits.map(item).join('');
       list.classList.remove('hidden'); q.setAttribute('aria-expanded', 'true');
-      if (hits.length) { q.setAttribute('aria-activedescendant', `find-${sel}`); } else { q.removeAttribute('aria-activedescendant'); }
+      q.setAttribute('aria-activedescendant', `find-${sel}`);
     };
     const pick = (h) => {
       if (!h) { return; }
+      // The Settings editor finds every contributed key, including ones this page does not show.
+      if (h.ext) { q.value = ''; fold(); q.blur(); post({ type: 'command', id: 'workbench.action.openSettings', args: [`@ext:${EXT_ID} ${h.ext}`] }); return; }
       q.value = ''; fold(); q.blur();
-      state.section = h.sec; state.expanded = null; render();
+      state.section = h.sec; state.expanded = null;
+      // MCP fields live on the Servers tab; a search hit must not land on Browse.
+      if (h.sec === 'mcp' && h.key) { mcpCatState().view = 'installed'; }
+      render();
       if (!h.key) { window.scrollTo({ top: 0 }); return; }
       requestAnimationFrame(() => {
-        const row = [...app.querySelectorAll('[data-deps]')].find((e) => e.dataset.deps.split(/[\s,]+/).includes(h.key));
+        // The row itself, not a component around it that happens to depend on the same key.
+        const hits = [...app.querySelectorAll('[data-deps]')].filter((e) => e.dataset.deps.split(/[\s,]+/).includes(h.key));
+        const row = hits.find((e) => e.classList.contains('field')) || hits[0];
         if (!row) { return; }
-        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.scrollIntoView({ block: 'center', behavior: calm() ? 'auto' : 'smooth' });
         row.classList.remove('hit'); void row.offsetWidth; row.classList.add('hit');
         setTimeout(() => row.classList.remove('hit'), 1800);
         const ctl = row.querySelector('.ctl input, .ctl select, .ctl textarea, .ctl button'); if (ctl) { ctl.focus({ preventScroll: true }); }
@@ -667,8 +949,10 @@
     const d = state.data;
     app.querySelectorAll('.top .scope button').forEach((b) => {
       b.classList.toggle('on', state.scope === b.dataset.s);
-      if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? '' : 'Open a folder to edit workspace settings'; }
+      if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? 'Only this folder (.vscode/settings.json) — wins over User' : 'Open a folder to edit workspace settings'; } else { b.title = 'All folders'; }
     });
+    const sc = app.querySelector('.top .scope'); if (sc && sc._radioSync) { sc._radioSync(); }
+    app.dataset.scope = state.scope;
     app.querySelectorAll('.side [data-sec]').forEach((a) => { const on = a.dataset.sec === state.section; a.classList.toggle('on', on); a.setAttribute('aria-selected', String(on)); a.tabIndex = on ? 0 : -1; if (on) { a.setAttribute('aria-current', 'page'); } else { a.removeAttribute('aria-current'); } });
     const side = app.querySelector('.side'); const on = side && side.querySelector('[data-sec].on');
     if (side && on && side.scrollWidth > side.clientWidth + 2) { on.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'instant' }); }
@@ -682,7 +966,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, memory: secMemory, mcp: secMcp, dashboard: secDashboard, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -1102,8 +1386,7 @@
     if (state.focusKey === p.id) { state.focusKey = null; setTimeout(() => keyIn.focus(), 0); }
     if (state.focusUrl === p.id) { state.focusUrl = null; setTimeout(() => urlIn.focus(), 0); }
     if (!lm && !isRemoteUrl(p.baseUrl)) {
-      const cl = el('button', `toggle ${isCloud(p) ? 'on' : ''}`); cl.setAttribute('role', 'switch');
-      cl.onclick = () => upd({ cloud: isCloud(p) ? undefined : true });
+      const cl = switchBtn(isCloud(p), `Send prompts to cloud models: ${p.displayName || p.id}`, (on) => upd({ cloud: on ? true : undefined }));
       body.appendChild(row('Sends prompts to cloud models', 'Turn on for gateways such as OmniRoute or LiteLLM that run here but forward to cloud APIs. Automatic model picks then prefer local models over this one.', cl));
     }
     const cw = el('input'); cw.type = 'number'; cw.min = 1024; cw.step = 1024; cw.value = p.contextWindow ?? ''; cw.placeholder = 'auto';
@@ -1120,8 +1403,7 @@
     moreBtn.onclick = () => { state.provMore = more ? null : p.id; render(); };
     moreRow.appendChild(moreBtn); body.appendChild(moreRow);
     if (more) { for (const r of providerMore(p, probe, upd, row)) { body.appendChild(r); } }
-    const en = el('button', `toggle ${p.enabled !== false ? 'on' : ''}`); en.setAttribute('role', 'switch');
-    en.onclick = () => upd({ enabled: p.enabled === false ? undefined : false });
+    const en = switchBtn(p.enabled !== false, `Enable provider ${p.displayName || p.id}`, (on) => upd({ enabled: on ? undefined : false }));
     body.appendChild(row('Enabled', 'Disabled providers are kept in settings but never contacted.', en));
     const foot = el('div', 'prov-foot');
     // Gateways LocalPilot can install and start (OmniRoute, LiteLLM) get a Start button next to Test connection.
@@ -1259,8 +1541,7 @@
     const sorted = [...d.installed].sort((a, b) => (a.disabled ? 1 : 0) - (b.disabled ? 1 : 0) || a.providerId.localeCompare(b.providerId) || a.name.localeCompare(b.name));
     for (const m of sorted) {
       const row = el('div', `mrow ${m.disabled ? 'off' : ''}`);
-      const tg = el('button', `toggle ${m.disabled ? '' : 'on'}`); tg.setAttribute('role', 'switch'); tg.title = m.disabled ? 'Enable' : 'Disable (hidden from pickers and routing; stays installed)';
-      tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'toggleModel', id: m.id, enabled: !!m.disabled }); };
+      const tg = switchBtn(!m.disabled, `Enable model ${m.name}`, (on) => post({ type: 'toggleModel', id: m.id, enabled: on })); tg.title = m.disabled ? 'Enable' : 'Disable (hidden from pickers and routing; stays installed)';
       row.appendChild(tg);
       row.insertAdjacentHTML('beforeend', vendorMark((m.catalog && m.catalog.vendor) || vendorFromModelId(m.modelId || m.name), m.name));
       const caps = [m.supportsTools ? 'tools' : 'prompt tools', m.supportsVision ? 'vision' : '', m.supportsFim ? 'FIM' : ''].filter(Boolean).join(' · ');
@@ -1753,11 +2034,23 @@
     sec.appendChild(el('h2', 'sub', 'Terminal'));
     sec.appendChild(card(
       field('terminal.runInIntegratedTerminal', 'Run commands in a visible terminal', 'The agent\'s <code>run_command</code> calls run in a branded <b>LocalPilot Agent</b> terminal through shell integration, so you can watch them live. Falls back to a hidden process when the shell has no integration.', 'toggle'),
+      shellWait(),
       field('terminal.reveal', 'Reveal the terminal when a command runs', 'Shows the panel without stealing focus from the editor.', 'toggle'),
+      termProfile(),
+      field('terminal.autoDetachSeconds', 'Continue while a command keeps running after (s)', 'The command keeps running and its later output goes to a log the agent can read. <code>0</code> = never detach (stopped at its timeout).', 'number', { min: 0, max: 3600, step: 30 }),
       field('notifications', 'Notifications', 'A native notification when a chat finishes, or when an auto-approved command is still running after 30 seconds. The terminal CLI rings the bell after runs longer than 10 seconds.', 'seg', { options: [['whenHidden', 'When hidden'], ['always', 'Always'], ['off', 'Off']] })
     ));
-    sec.appendChild(el('h2', 'sub', 'Understanding requests'));
+    sec.appendChild(el('h2', 'sub', 'Edits &amp; checkpoints'));
     sec.appendChild(card(
+      field('diffPreview', 'Show a diff of proposed edits', 'Opens <i>Original ↔ LocalPilot (proposed)</i> beside the editor for <code>edit_file</code>, <code>write_file</code> and <code>apply_patch</code>. <b>On approval</b>: only while an edit waits for your approval.', 'seg', { options: [['onApproval', 'On approval'], ['always', 'Always'], ['off', 'Never']] }),
+      field('editTool', 'File-editing tool', 'Which tool the agent edits files with. Models trained on one format make fewer failed edits with it.', 'select', { options: [['auto', 'Auto', 'apply_patch for GPT / Codex / gpt-oss, edit_file for others'], ['edit_file', 'edit_file + write_file'], ['apply_patch', 'apply_patch', 'several files, one approval']] }),
+      field('edit.reportNewErrors', 'Tell the agent about errors its edit introduced', 'Waits up to 1.5 s for the language server and adds up to 10 new errors in the edited file to the tool result.', 'toggle'),
+      field('checkpoints.enabled', 'Checkpoint before each message', 'In git, a private ref records the working tree (including untracked files) without touching your index, branches or stash. Off: only files the agent edits are snapshotted. Restore from a message\'s checkpoint menu.', 'toggle')
+    ));
+    sec.appendChild(el('h2', 'sub', 'Conversation'));
+    sec.appendChild(card(
+      field('preferredLanguage', 'Answer in', 'Applies to chat and CLI. Code, identifiers and commands are never translated.', 'select', { options: [['auto', 'Auto — follow my language'], ...LANGUAGES.map((l) => [l, l])] }),
+      field('showTips', 'Show tips while the agent thinks', 'Short built-in feature tips in the chat status row after a few seconds of thinking. Nothing is fetched.', 'toggle'),
       field('autoClarify', 'Interpret vague requests automatically', 'When a prompt is short or says “fix this” / “make it faster” without naming a target, the agent is handed the active file, selection, open editors, recent edits, errors and git changes, states <i>Understood as: …</i> and proceeds. It only asks when two readings would lead to materially different work.', 'toggle'),
       field('prompts.autoCorrect', 'Correct misspelled names in requests', 'Fixes file names and code identifiers you mistyped (<code>dicee.py</code> → <code>dice.py</code>, <code>rollDise</code> → <code>rollDice</code>) against the names in the workspace before the agent starts, so it reads and searches the right thing. Plain words are never changed; corrections are shown under your message.', 'toggle'),
       field('clarify.questions', 'Questions before starting', 'When the agent asks you first, in a card in the chat with explained options and a recommended pick. <b>Smart</b>: for new features and open-ended or large requests, then it states a short plan and starts. <b>Interview</b>: for every change, and it waits for your OK on the plan. <b>Minimal</b>: only when it cannot tell which of two very different things you mean.', 'seg', { options: [['smart', 'Smart'], ['interview', 'Interview'], ['minimal', 'Minimal']] })
@@ -1771,16 +2064,55 @@
       field('worktrees.mode', 'Where agents work', 'Each agent can work in its own copy of the repository (a git worktree seeded with your uncommitted changes), so several agents never clobber each other or your open files. You review the result in the Changes panel and <b>Apply to workspace</b> or <b>Discard</b>. Outside a git repository agents edit directly.', 'select', { options: [['always', 'Always isolate', 'every agent chat gets its own copy (recommended)'], ['parallel', 'Only agents started together', 'Multitask batches and Best of N are isolated; a single chat edits the workspace'], ['off', 'Never', 'agents edit the workspace directly']] }),
       field('worktrees.location', 'Worktree folder', 'Where the copies live, one sub-folder per repository. Empty = <code>~/.localpilot/worktrees</code>. Setup commands for new copies (<code>npm ci</code>…) go in <code>.localpilot/worktrees.json</code> as <code>{ "setup": ["npm ci"] }</code>.', 'text', { placeholder: '~/.localpilot/worktrees', wide: true })
     ));
+    sec.appendChild(el('h2', 'sub', 'Repositories'));
+    const auto = ((state.data && state.data.autoRepos) || []).map((r) => ({ name: r.name, value: r.path, badge: 'automatic', tip: r.source === 'repos.json' ? 'From .localpilot/repos.json' : 'A folder of this workspace' }));
+    sec.appendChild(card(keyValueEditor('repos', 'Extra repositories', 'Other repositories the agent can list, search, edit and run commands in (the <code>repos</code> tool), one subagent per repository for cross-repository changes. Folders of a multi-root workspace and <code>.localpilot/repos.json</code> are included automatically.', {
+      nameRe: /^[\w.-]{1,40}$/, nameHint: 'Letters, digits, “.”, “-” and “_”, up to 40', namePlaceholder: 'name (e.g. api)', valuePlaceholder: '~/src/api', browse: true, addLabel: 'Add repository', extra: auto,
+      empty: 'Only this workspace. Add another repository so the agent can search, edit and run commands across both.',
+    })));
     sec.appendChild(el('h2', 'sub', 'Parallelism & context'));
     sec.appendChild(card(
       field('parallel.maxConcurrency', 'Max concurrent tools / subagents', 'Read-only tools and parallel subagents run concurrently up to this limit.', 'number', { min: 1, max: 16 }),
       field('parallel.maxSubagentDepth', 'Max subagent depth', 'Levels of subagents allowed. 1 = the agent may delegate but its subagents cannot start their own; 2 (default) = they can, one level deeper.', 'number', { min: 1, max: 4, step: 1 }),
       field('queue.concurrency', 'Queued tasks at once', 'Tasks from the task queue (Agents view → Queue, or <i>LocalPilot: Queue Agent Task…</i>). <code>1</code> runs them one after another; higher values run them side by side, each in its own worktree when <b>Where agents work</b> isolates them.', 'number', { min: 1, max: 8 }),
-      field('compactionThreshold', 'Compact context at', 'When the context reaches this share of the window, older messages are summarised automatically.', 'range', { min: 0.3, max: 0.95, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }),
+      field('compaction.strategy', 'When the context fills up', '<b>Summarise</b>: the model writes a structured summary of older messages (falls back to Trim). <b>Trim</b>: keeps your messages, the last replies and one line per tool call. <b>Never</b>: a chat that outgrows the window fails until you run <code>/compact</code> or start a new chat. The full transcript is archived before compaction either way.', 'seg', { options: [['agentic', 'Summarise (model)'], ['basic', 'Trim (instant)'], ['off', 'Never']] }),
+      compactAt(),
       field('maxToolOutputChars', 'Max tool output', 'Longer outputs are truncated (head + tail) before reaching the model.', 'number', { min: 2000, max: 200000, step: 1000 }),
       field('maxConsecutiveMistakes', 'Stop after errors in a row', 'A run stops and asks for guidance after this many steps in a row in which every tool call failed. Any successful tool call resets the count. <code>0</code> = no limit.', 'number', { min: 0, max: 50, step: 1 }),
-      field('systemPromptAppend', 'Extra instructions', 'Appended to every system prompt — coding conventions, preferred libraries, language. Project rules in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code> and <code>.github/copilot-instructions.md</code> are loaded automatically.', 'textarea', { wide: true, placeholder: 'Always use TypeScript strict mode. Prefer small, pure functions. Reply in English.' })
+      field('systemPromptAppend', 'Extra instructions', 'Appended to every system prompt — coding conventions, preferred libraries, language. Project rules in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code> and <code>.github/copilot-instructions.md</code> are loaded automatically.', 'textarea', { wide: true, placeholder: 'Always use TypeScript strict mode. Prefer small, pure functions. Use pnpm, not npm.' })
     ));
+  }
+
+  /** The threshold slider follows the strategy: with compaction off it has nothing to trigger. */
+  function compactAt() {
+    const off = effVal('compaction.strategy') === 'off';
+    const fmt = (v) => `${Math.round(v * 100)}%${off ? ' (off)' : ''}`;
+    const f = field('compactionThreshold', 'Compact context at', 'When the context reaches this share of the window, older messages are compacted automatically.', 'range', { min: 0.3, max: 0.95, step: 0.05, fmt, off: off ? 'Compaction is off — pick Summarise or Trim above' : '' });
+    return component(f, ['compactionThreshold', 'compaction.strategy'], compactAt);
+  }
+
+  /** The languages localpilot.preferredLanguage accepts (package.json enum, after "auto"). */
+  const LANGUAGES = ['English', 'Arabic', 'Portuguese (Brazil)', 'Czech', 'French', 'German', 'Hindi', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese (Portugal)', 'Russian', 'Simplified Chinese', 'Spanish', 'Traditional Chinese', 'Turkish'];
+  /** The agent's shell: VS Code's default or one of this OS's terminal profiles, plus the quick pick that explains each one. */
+  function termProfile() {
+    const names = (state.data && state.data.terminalProfiles) || [];
+    const f = field('terminal.profile', 'Shell for agent commands', 'Used by the <b>LocalPilot Agent</b> terminal, background commands and the hidden fallback process. Profiles come from <code>terminal.integrated.profiles</code> for this OS.', 'select', { options: [['default', 'VS Code default shell'], ...names.filter((n) => n !== 'default').map((n) => [n, n])] });
+    const ctl = f.querySelector('.ctl'); const sel = ctl.querySelector('select');
+    const pick = el('button', 'btn sm', 'Pick…'); pick.dataset.cmd = 'localpilot.selectTerminalProfile'; pick.title = 'Choose from the profiles with their shell paths'; pick.disabled = sel.disabled;
+    const row = el('div', 'row pick-row'); row.append(sel, pick); ctl.appendChild(row);
+    return component(f, ['terminal.profile'], termProfile);
+  }
+  /** Only relevant while commands run in the visible terminal. */
+  function shellWait() {
+    if (!effVal('terminal.runInIntegratedTerminal')) { const h = el('div'); h.hidden = true; return component(h, ['terminal.runInIntegratedTerminal', 'terminal.shellIntegrationTimeout'], shellWait); }
+    const f = field('terminal.shellIntegrationTimeout', 'Wait for shell integration (ms)', 'Raise it when a slow shell start-up (large <code>.zshrc</code>, conda) makes commands fall back to a hidden process.', 'number', { min: 500, max: 30000, step: 500 });
+    return component(f, ['terminal.runInIntegratedTerminal', 'terminal.shellIntegrationTimeout'], shellWait);
+  }
+  /** Learned notes need memory itself. */
+  function memAutoSave() {
+    const off = effVal('memory.enabled') === false;
+    const f = field('memory.autoSave', 'Save what a run taught automatically', 'After a run with 3+ tool calls in which the agent saved nothing, the same model may append up to three short notes (verified commands, conventions, pitfalls) to project memory. Runs after the answer; credentials are dropped.', 'toggle', { off: off ? 'Needs Enable memory' : '' });
+    return component(f, ['memory.enabled', 'memory.autoSave'], memAutoSave);
   }
 
   // ------------------------------------------------------------------ completions
@@ -1799,17 +2131,61 @@
   // ------------------------------------------------------------------ web search
   function secWeb(sec) {
     head(sec, 'Web search', 'Optional. The <code>web_search</code> and <code>web_fetch</code> tools are governed by the Network approval policy.');
+    sec.appendChild(card(
+      field('webSearch.enabled', 'Let the agent use the internet', '<code>web_search</code>, <code>web_fetch</code>, the browser tools and <code>@https://…</code> mentions. Off: these tools are removed from every request and URL mentions are refused. Model providers are not affected.', 'toggle')
+    ));
     const prov = val('webSearch.provider');
+    // Everything below needs internet access: with the switch off it stays visible but dimmed and inert.
+    const dependents = () => {
+      const off = effVal('webSearch.enabled') === false ? 'Internet access is off' : '';
+      const box = el('div', 'web-deps');
+      if (off) { box.appendChild(el('p', 'muted small dim-note', 'Internet access is off — turn it on above to use these.')); }
+      box.appendChild(el('h2', 'sub', 'Search'));
+      box.appendChild(card(
+        field('webSearch.provider', 'Search provider', '<b>DuckDuckGo</b> needs no key. <b>SearXNG</b> is self-hosted and fully private. <b>Brave</b> and <b>Tavily</b> need an API key.', 'select', { off, options: [['duckduckgo', 'DuckDuckGo'], ['searxng', 'SearXNG (self-hosted)'], ['brave', 'Brave Search'], ['tavily', 'Tavily']] }),
+        prov === 'searxng' ? field('webSearch.searxngUrl', 'SearXNG URL', 'Your instance, e.g. <code>http://localhost:8888</code>.', 'text', { off, placeholder: 'http://localhost:8888', validate: (v) => /^https?:\/\/.+/.test(v) }) : null,
+        prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', 'Kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>${env:NAME}</code> to read it from an environment variable.', 'password', { off, secret: true }) : null,
+        field('webSearch.maxResults', 'Max results', '', 'number', { off, min: 1, max: 20 })
+      ));
+      box.appendChild(el('h2', 'sub', 'Browser'));
+      box.appendChild(card(
+        field('browser.chromePath', 'Browser for screenshots', 'A Chromium-based browser run headless by <code>browser_screenshot</code> and <i>Screenshot a Web Page…</i>. Empty = auto-detect Chrome, Chromium, Edge, Brave or Arc.', 'text', { off, placeholder: 'auto-detect', wide: true })
+      ));
+      if (off) { box.querySelectorAll('.card').forEach((c) => { c.classList.add('dim'); c.setAttribute('aria-disabled', 'true'); }); }
+      return component(box, ['webSearch.enabled'], dependents);
+    };
+    sec.appendChild(dependents());
+  }
+
+  // ------------------------------------------------------------------ markdown & pdf
+  function secDocuments(sec) {
+    head(sec, 'Markdown & PDF', 'How LocalPilot\'s Markdown reader and PDF viewer show documents.');
+    sec.appendChild(el('h2', 'sub', 'Markdown reader'));
+    const md = el('div', 'btnrow');
+    md.innerHTML = `<span class="muted small">Opens the active Markdown file, or asks for one.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMarkdownViewer">${I.file}Open Markdown reader</button>`;
     sec.appendChild(card(
-      field('webSearch.provider', 'Search provider', '<b>DuckDuckGo</b> needs no key. <b>SearXNG</b> is self-hosted and fully private. <b>Brave</b> and <b>Tavily</b> need an API key.', 'select', { options: [['duckduckgo', 'DuckDuckGo'], ['searxng', 'SearXNG (self-hosted)'], ['brave', 'Brave Search'], ['tavily', 'Tavily']] }),
-      prov === 'searxng' ? field('webSearch.searxngUrl', 'SearXNG URL', 'Your instance, e.g. <code>http://localhost:8888</code>.', 'text', { placeholder: 'http://localhost:8888', validate: (v) => /^https?:\/\/.+/.test(v) }) : null,
-      prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', 'Kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>${env:NAME}</code> to read it from an environment variable.', 'password', { secret: true }) : null,
-      field('webSearch.maxResults', 'Max results', '', 'number', { min: 1, max: 20 })
+      field('markdownViewer.scrollSync', 'Keep reader and source scrolled together', 'Double-click a paragraph in the reader to jump to its source line.', 'toggle'),
+      field('markdownViewer.outlineDepth', 'Headings shown in the outline', 'Deepest heading level in the outline and in an inline <code>[[toc]]</code>.', 'seg', { options: [[2, 'H2'], [3, 'H3'], [4, 'H4'], [5, 'H5'], [6, 'H6']] }),
+      field('markdownViewer.frontMatter', 'YAML front matter', 'Shown as a Properties table above the document.', 'seg', { options: [['collapsed', 'Collapsed'], ['expanded', 'Expanded'], ['hidden', 'Hidden']] }),
+      field('markdownViewer.mermaid', 'Render Mermaid diagrams', 'Bundled; works offline.', 'toggle'),
+      field('markdownViewer.exportTheme', 'Export as HTML / PDF colours', '', 'seg', { options: [['light', 'Light'], ['match', 'Match VS Code theme']], after: md })
     ));
-    sec.appendChild(el('h2', 'sub', 'Browser'));
+    sec.appendChild(el('h2', 'sub', 'PDF viewer'));
+    const pdf = el('div', 'btnrow');
+    pdf.innerHTML = `<span class="muted small">PDFs also open in this viewer from the Explorer.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openPdf">${I.file}Open a PDF…</button>`;
     sec.appendChild(card(
-      field('browser.chromePath', 'Browser for screenshots', 'A Chromium-based browser run headless by <code>browser_screenshot</code> and <i>Screenshot a Web Page…</i>. Empty = auto-detect Chrome, Chromium, Edge, Brave or Arc.', 'text', { placeholder: 'auto-detect', wide: true })
+      field('pdfViewer.pageColors', 'Page colours', 'Auto darkens pages in dark themes and follows high-contrast themes; Dark also inverts photos.', 'seg', { options: [['auto', 'Auto'], ['original', 'Original'], ['dark', 'Dark'], ['sepia', 'Sepia']] }),
+      field('pdfViewer.sidebar', 'Sidebar on open', 'Hidden anyway while the viewer is narrower than 640 px.', 'select', { options: [['auto', 'Auto', 'outline if present, else thumbnails'], ['outline', 'Outline'], ['thumbnails', 'Pages'], ['hidden', 'Hidden']] }),
+      field('pdfViewer.defaultZoom', 'Default zoom', 'Files you have read before reopen at their last page and zoom.', 'select', { options: [['auto', 'Auto'], ['page-width', 'Page width'], ['page-fit', 'Whole page'], ['page-actual', 'Actual size']] }),
+      field('pdfViewer.rangeThresholdMB', 'Load page by page above', 'Larger files load on demand instead of all at once.', 'number', { min: 1, max: 2048, unit: 'MB' }),
+      field('pdfViewer.maxFileSizeMB', 'Ask before opening PDFs larger than', '', 'number', { min: 1, max: 10240, unit: 'MB', after: pdf })
     ));
+    sec.appendChild(el('h2', 'sub', 'PDFs the agent reads'));
+    sec.appendChild(card(
+      field('pdf.maxReadSizeMB', 'Largest PDF the agent may read', 'Applies to <code>read_pdf</code>, <code>read_file</code> and PDFs attached to a chat.', 'number', { min: 1, max: 2048, unit: 'MB' }),
+      field('pdf.maxChars', 'Most text per read (characters)', 'Still capped by <a data-sec="agent">Max tool output</a> (Agent &amp; approvals).', 'number', { min: 1000, max: 1000000, step: 1000 })
+    ));
+    sec.querySelectorAll('a[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
 
   // ------------------------------------------------------------------ memory & skills
@@ -1828,6 +2204,7 @@
     const retention = field('sessions.retention', 'Keep at most', 'Oldest idle chats are removed automatically when a new chat starts. Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
     hist.appendChild(retention);
     hist.appendChild(field('storage.sessionsInMemory', 'Transcripts in memory', 'Full chat transcripts kept in RAM (running chats and the one on screen always are). Older chats stay in the list and load from disk when you open or search them — lower this to save memory with long histories.', 'number', { min: 2, max: 500, step: 1 }));
+    hist.appendChild(field('history.includeCli', 'Include chats from the terminal CLI', 'Chats started with the <code>localpilot</code> CLI in this folder appear in history marked <b>CLI</b> (read from <code>~/.localpilot/workspaces/</code>). Takes effect after a window reload.', 'toggle'));
     const acts = el('div', 'btnrow');
     acts.innerHTML = `<span class="muted small">Clearing removes idle chats only; running agents keep going and pinned chats can be kept.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.showSessions">${I.chat}Browse chats</button><button class="btn sm danger" data-cmd="localpilot.clearHistory" ${ss.count ? '' : 'disabled'}>${I.trash}Clear chat history…</button>`;
     hist.appendChild(acts);
@@ -1838,6 +2215,7 @@
     mem.innerHTML = `<span class="muted small">${plural(d.memory.project, 'project note')} · ${plural(d.memory.global, 'global note')}</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
     sec.appendChild(card(
       field('memory.enabled', 'Enable memory', 'The agent can <code>memory_save</code> / <code>memory_read</code> notes in <code>.localpilot/memory/</code> (project, commit-able) and in global storage. A compact index is added to every prompt.', 'toggle', { after: mem }),
+      memAutoSave(),
       field('memory.maxNoteChars', 'Largest note', 'Characters per note. When a note grows past it, its oldest paragraphs are dropped (a leading heading is kept).', 'number', { min: 500, max: 100000, step: 500 }),
       field('memory.maxNotes', 'Notes per scope', 'Project and global each. Past it, the least recently updated notes are deleted (<code>README</code> is kept).', 'number', { min: 5, max: 2000, step: 5 })
     ));
@@ -1988,22 +2366,9 @@
 
     // ---- skill and plugin folders
     sec.appendChild(el('h2', 'sub', 'Skill & plugin folders'));
-    const pathList = (key, label, desc, placeholder) => {
-      const cur = () => (Array.isArray(val(key)) ? val(key) : []);
-      const paths = cur();
-      const f = el('div', 'field wide'); f.dataset.deps = key;
-      f.innerHTML = `<div><div class="lbl">${esc(label)}${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">${desc}</div></div>`;
-      const ctl = el('div', 'ctl');
-      const ul = el('ul', 'list');
-      paths.forEach((p) => { const li = el('li', '', `<code>${esc(p)}</code><button class="reset x" title="Remove">${I.x}</button>`); li.querySelector('button').onclick = () => set(key, cur().filter((x) => x !== p)); ul.appendChild(li); });
-      const addRow = el('div', 'row', `<input type="text" placeholder="${esc(placeholder)}" aria-label="${esc(label)}: folder to add"><button class="btn sm">${I.plus}Add</button>`);
-      addRow.querySelector('button').onclick = () => { const v = addRow.querySelector('input').value.trim(); if (v) { set(key, [...cur(), v]); } };
-      ctl.appendChild(ul); ctl.appendChild(addRow); f.appendChild(ctl);
-      return f;
-    };
     sec.appendChild(card(
-      pathList('skillsPaths', 'Extra skill folders', '<code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).', '/path/to/skills or ~/skills'),
-      pathList('pluginPaths', 'Extra plugin folders', 'Claude Code-style plugins (<code>.claude-plugin/plugin.json</code> bundling commands, agents, skills, hooks and <code>.mcp.json</code>). <code>.localpilot/plugins</code>, <code>.claude/plugins</code> and the same folders in your home are scanned automatically.', '/path/to/plugins')
+      listEditor('skillsPaths', 'Extra skill folders', '<code>.localpilot/skills</code>, <code>.claude/skills</code>, <code>.github/skills</code> and <code>~/.agents/skills</code> are scanned automatically. Add more folders here (each skill is a folder with <code>SKILL.md</code>).', { placeholder: '/path/to/skills or ~/skills', browse: true }),
+      listEditor('pluginPaths', 'Extra plugin folders', 'Claude Code-style plugins (<code>.claude-plugin/plugin.json</code> bundling commands, agents, skills, hooks and <code>.mcp.json</code>). <code>.localpilot/plugins</code>, <code>.claude/plugins</code> and the same folders in your home are scanned automatically.', { placeholder: '/path/to/plugins', browse: true })
     ));
 
     // ---- subagents
@@ -2025,7 +2390,7 @@
     ['command', 'Commands', 'Slash commands from <code>.localpilot/commands/</code> and <code>.claude/commands/</code> (and the same folders in your home). Switching one off writes <code>disabled: true</code> into its front matter.'],
     ['hook', 'Hooks', 'Scripts named after their event (<code>PreToolUse.sh</code>, <code>TaskStart.py</code>…) in <code>.localpilot/hooks/</code>, <code>.clinerules/hooks/</code>, <code>.cline/hooks/</code> and the same folders in your home, plus the hooks configured in <code>settings.json</code> (open the file to change those). A script runs while it is switched on (executable).'],
     ['skill', 'Skills', 'Playbooks the agent loads when a request matches. Install more from the registry in <b>Skills &amp; subagents</b>.'],
-    ['plugin', 'Plugins', 'Installed plugins (Claude Code format) and what they add. Switching one off writes <code>enabledPlugins</code> in <code>.localpilot/settings.json</code>. Find more with <b>LocalPilot: Browse Plugins…</b>.'],
+    ['plugin', 'Plugins', 'Installed plugins (Claude Code format) and what they add. Switching one off writes <code>enabledPlugins</code> in <code>.localpilot/settings.json</code>.'],
   ];
   function secCustomize(sec) {
     const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });
@@ -2045,6 +2410,11 @@
     const tab = CUSTOM_TABS.find(([k]) => k === c.tab) || CUSTOM_TABS[0];
     sec.appendChild(el('p', 'muted small', tab[2]));
     if (c.tab === 'skill') { customSkills(sec, skills); return; }
+    if (c.tab === 'plugin') {
+      const bar = el('div', 'btnrow cz-plugin-acts');
+      bar.innerHTML = `<button class="btn sm primary" data-cmd="localpilot.browsePlugins" title="Search the plugin marketplaces below and install">${I.search}Browse plugins…</button><button class="btn sm" data-cmd="localpilot.managePlugins" title="Update, switch off or uninstall installed plugins">${I.gear}Manage…</button>`;
+      sec.appendChild(bar);
+    }
     if (!d) { sec.appendChild(skeleton('Looking for rules, commands, hooks and plugins…', 3)); return; }
     if (c.tab === 'hook') { sec.appendChild(card(field('hooks.enabled', 'Run hooks', 'Turn off for a repository you do not trust: no hook (settings or script) runs.', 'toggle'))); }
     const kind = c.tab; const noun = { rule: 'rule', command: 'command', hook: 'hook', plugin: 'plugin' }[kind];
@@ -2069,6 +2439,12 @@
       if (!group.length) { box.appendChild(el('div', 'empty', sc === 'workspace' && !d.hasWorkspace ? 'Open a folder to see its items.' : `No ${noun}s here.`)); }
       for (const it of group) { box.appendChild(customRow(it, d)); }
       sec.appendChild(box);
+    }
+    if (kind === 'plugin') {
+      sec.appendChild(el('h2', 'sub', 'Marketplaces'));
+      sec.appendChild(card(listEditor('plugins.marketplaces', 'Plugin marketplaces', '<code>owner/repo</code> on GitHub, any git URL or a local folder with <code>.claude-plugin/marketplace.json</code>. Fetched with git, so private repos use your git credentials.', {
+        placeholder: 'owner/repo, git URL or folder', validate: /^([\w.-]+\/[\w.-]+|https?:\/\/\S+|git@\S+|[~\/.].*)$/, invalidHint: 'Use owner/repo, an https:// or git@ URL, or a folder path — not added', browse: true,
+      })));
     }
   }
   function customRow(it, d) {
@@ -2261,6 +2637,8 @@
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reconnect servers</button><span class="muted small">Servers start when LocalPilot activates and after you reload.</span>`;
     sec.appendChild(bar);
+    sec.appendChild(el('h2', 'sub', 'While developing a server'));
+    sec.appendChild(card(field('mcp.watchServerFiles', 'Restart local servers when their code changes', 'A stdio server restarts 500 ms after a workspace .js/.mjs/.cjs/.py file in its command, or a file under build/ or dist/, changes. Handy while developing a server.', 'toggle')));
   }
   /** Browse tab: the bundled catalog (plus the MCP registry once refreshed), searched and filtered by tag. */
   const mcpCatState = () => (state.mcpCat ||= { view: 'installed', q: '', tag: '', entries: [], loaded: false, loading: false, registry: false, error: '', jobs: {} });
@@ -2401,37 +2779,64 @@
   const pct = (p) => `${Math.round(Number(p) || 0)}%`;
   /** Dollars as the chat shows them: `$0.0123`, `<$0.0001`, or a dash when nothing was priced (local models are free). */
   const fmtUsd = (v) => (typeof v !== 'number' || !Number.isFinite(v) ? '—' : v > 0 && v < 0.0001 ? '&lt;$0.0001' : `$${v >= 1 ? v.toFixed(2) : v.toFixed(4)}`);
-  const fmtTime = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
-  /** Tiny inline SVG bar chart; `pick` maps a day point to a number. Bars are titled with day + value. */
-  function spark(series, pick, cls) {
+  /** Plain-text dollars for chart titles and axes (escaped by the chart itself). */
+  const usdText = (v) => (!v ? '$0' : v < 0.0001 ? '<$0.0001' : `$${v >= 100 ? Math.round(v) : v >= 0.01 ? v.toFixed(2) : v.toFixed(4)}`);
+  const p2 = (n) => String(n).padStart(2, '0');
+  /** HH:MM:SS; with `dated`, a time from an earlier day gets MM-DD in front. */
+  const fmtTime = (t, dated) => { const d = new Date(t); const hms = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; return dated && d.getTime() < new Date().setHours(0, 0, 0, 0) ? `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hms}` : hms; };
+  /** Tiny inline SVG bar chart; `pick` maps a day point to a number. Bars are titled with day + value; `what` names it for
+   *  screen readers ("Agent runs per day"), which hear the values (or the total and peak of a long range). */
+  function spark(series, pick, what, fmt = fmtN) {
     const vals = series.map(pick);
-    const max = Math.max(1, ...vals);
+    const max = Math.max(fmt === fmtN ? 1 : 1e-9, ...vals);
     const w = 100 / Math.max(1, vals.length);
-    const bars = vals.map((v, i) => `<rect x="${(i * w).toFixed(2)}" y="${(28 - (v / max) * 26).toFixed(2)}" width="${Math.max(0.6, w - 0.8).toFixed(2)}" height="${((v / max) * 26 + 0.5).toFixed(2)}" rx=".6"><title>${esc(series[i].day)} · ${fmtN(v)}</title></rect>`).join('');
-    return `<svg class="spark ${cls || ''}" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
+    const bars = vals.map((v, i) => `<rect x="${(i * w).toFixed(2)}" y="${(28 - (v / max) * 26).toFixed(2)}" width="${Math.max(0.6, w - 0.8).toFixed(2)}" height="${((v / max) * 26 + 0.5).toFixed(2)}" rx=".6"><title>${esc(series[i].day)} · ${fmt(v)}</title></rect>`).join('');
+    const plain = (v) => String(fmt(v)).replace('&lt;', '<');
+    const peak = vals.indexOf(Math.max(...vals));
+    const said = vals.length <= 14 ? vals.map(plain).join(', ') : `total ${plain(vals.reduce((a, b) => a + b, 0))}, peak ${plain(vals[peak])} on ${dayLabel(series[peak].day)}`;
+    return `<svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="${esc(`${what}, last ${vals.length} day${vals.length === 1 ? '' : 's'}: ${said}`)}">${bars}</svg>`;
   }
+  const NEEDS_ATTENTION = `<span class="kpi-flag">${I.warn}<span class="sr-only">Needs attention: </span></span>`;
   function kpi(label, value, sub, sparkHtml, tone) {
-    return `<div class="kpi ${tone || ''}"><div class="kpi-l">${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
+    return `<div class="kpi ${tone || ''}"><div class="kpi-l">${tone ? NEEDS_ATTENTION : ''}${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
   }
   // --- charts: plain inline SVG, theme chart colours, hover titles, real axis labels. No library, no canvas. ---
+  // Each chart is drawn for the width of its card (see chartSlot), so axis text stays ~9 px instead of shrinking with the
+  // viewBox. A chart returns { html, data }: data feeds the screen-reader summary and the arrow-key readout.
   const CH = { w: 600, h: 150, padL: 34, padR: 6, padT: 8, padB: 20 };
   const dayLabel = (day) => { const d = new Date(`${day}T12:00:00`); return isNaN(d) ? day : `${d.getDate()} ${d.toLocaleString(undefined, { month: 'short' })}`; };
   const niceMax = (v) => { if (v <= 0) { return 1; } const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; };
-  /** Y axis: 3 gridlines with labels; X axis: at most ~8 day labels. */
-  function axes(series, max, fmt) {
-    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+  /** Y axis: 3 gridlines with labels; X axis: one day label per ~60 px. */
+  function axes(series, max, fmt, w) {
+    const { h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
     let out = '';
     for (const f of [0, 0.5, 1]) { const y = padT + ih - f * ih; out += `<line class="grid" x1="${padL}" x2="${w - padR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="ax" x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${esc(fmt(max * f))}</text>`; }
-    const step = Math.max(1, Math.ceil(series.length / 8));
-    series.forEach((d, i) => { if (i % step === 0 || i === series.length - 1) { const x = padL + (i + 0.5) * (iw / series.length); out += `<text class="ax" x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle">${esc(dayLabel(d.day))}</text>`; } });
+    const step = Math.max(1, Math.ceil(series.length / Math.max(1, Math.floor(w / 60))));
+    // The last day is always labelled; the regular label before it is dropped when the two would touch.
+    const last = series.length - 1;
+    series.forEach((d, i) => { if (i === last || (i % step === 0 && last - i >= Math.ceil(step / 2))) { const x = padL + (i + 0.5) * (iw / series.length); out += `<text class="ax" x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle">${esc(dayLabel(d.day))}</text>`; } });
     return out;
   }
+  /** Readout and accessible summary for a day chart: totals per series (or the average for rates), the busiest day. */
+  function dayData(series, keys, vals, fmt, title, avg) {
+    const span = series.length > 1 ? `${dayLabel(series[0].day)} to ${dayLabel(series[series.length - 1].day)}` : dayLabel(series[0].day);
+    const sums = vals.map((v) => v.reduce((a, b) => a + b, 0));
+    const peak = sums.indexOf(Math.max(...sums));
+    const tot = keys.map((k, j) => vals.reduce((a, v) => a + v[j], 0));
+    const what = avg ? `average ${fmt(tot[0] / Math.max(1, vals.filter((v) => v[0]).length))}` : keys.length > 1 ? keys.map((k, j) => `${k.label} ${fmt(tot[j])}`).join(', ') : `total ${fmt(tot[0])}`;
+    return {
+      label: `${title}, ${span}, ${what}${!sums[peak] ? '' : keys.length > 1 ? `, busiest ${dayLabel(series[peak].day)}` : `, peak ${dayLabel(series[peak].day)} ${fmt(vals[peak][0])}`}`,
+      title, cols: ['Day', ...keys.map((k) => k.label)],
+      rows: series.map((d, i) => [dayLabel(d.day), ...vals[i].map((v) => fmt(v))]),
+      line: (i) => `${dayLabel(series[i].day)} · ${keys.map((k, j) => `${k.label} ${fmt(vals[i][j])}`).join(' · ')}`,
+    };
+  }
   /** Grouped or stacked bars per day. `keys`: [{ k, label, cls, pick }]. */
-  function barChart(series, keys, opts = {}) {
-    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+  function barChart(series, keys, opts = {}, w = CH.w) {
+    const { h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
     const stacked = !!opts.stacked;
     const vals = series.map((d) => keys.map((k) => Number(k.pick(d)) || 0));
-    const max = niceMax(Math.max(1, ...vals.map((v) => stacked ? v.reduce((a, b) => a + b, 0) : Math.max(...v))));
+    const max = niceMax(Math.max(opts.floor ?? 1, ...vals.map((v) => stacked ? v.reduce((a, b) => a + b, 0) : Math.max(...v))));
     const fmt = opts.fmt || fmtN;
     const slot = iw / Math.max(1, series.length); const gap = Math.min(6, slot * 0.25);
     const bw = stacked ? slot - gap : (slot - gap) / keys.length;
@@ -2443,31 +2848,34 @@
         const bh = (val / max) * ih;
         const x = padL + i * slot + gap / 2 + (stacked ? 0 : j * bw);
         const y = padT + ih - bh - (stacked ? (acc / max) * ih : 0);
-        bars += `<rect class="s${j} ${k.cls || ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - (stacked ? 0 : 1)).toFixed(1)}" height="${Math.max(0.5, bh).toFixed(1)}" rx="1"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(val))}</title></rect>`;
+        bars += `<rect class="s${j} ${k.cls || ''}" data-i="${i}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - (stacked ? 0 : 1)).toFixed(1)}" height="${Math.max(0.5, bh).toFixed(1)}" rx="1"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(val))}</title></rect>`;
         acc += val;
       });
     });
-    return chartFrame(`${axes(series, max, fmt)}${bars}`, keys);
+    return chartFrame(`${axes(series, max, fmt, w)}${bars}`, keys, w, CH.h, dayData(series, keys, vals, fmt, opts.title || 'Per day'));
   }
   /** One or more lines (with a soft area under the first) over the day series. */
-  function lineChart(series, keys, opts = {}) {
-    const { w, h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
+  function lineChart(series, keys, opts = {}, w = CH.w) {
+    const { h, padL, padR, padT, padB } = CH; const ih = h - padT - padB; const iw = w - padL - padR;
     const fmt = opts.fmt || fmtN;
-    const max = niceMax(Math.max(1, ...series.flatMap((d) => keys.map((k) => Number(k.pick(d)) || 0))));
+    const vals = series.map((d) => keys.map((k) => Number(k.pick(d)) || 0));
+    const max = niceMax(Math.max(1, ...vals.flat()));
     const px = (i) => padL + (i + 0.5) * (iw / Math.max(1, series.length)); const py = (v) => padT + ih - (v / max) * ih;
-    let out = axes(series, max, fmt);
+    let out = axes(series, max, fmt, w);
     keys.forEach((k, j) => {
-      const pts = series.map((d, i) => [px(i), py(Number(k.pick(d)) || 0), Number(k.pick(d)) || 0]);
+      const pts = series.map((d, i) => [px(i), py(vals[i][j]), vals[i][j]]);
       const path = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
       if (j === 0 && pts.length > 1) { out += `<path class="area s0" d="${path} L${pts[pts.length - 1][0].toFixed(1)} ${(padT + ih).toFixed(1)} L${pts[0][0].toFixed(1)} ${(padT + ih).toFixed(1)} Z"/>`; }
       out += `<path class="line s${j}" d="${path}"/>`;
-      out += pts.map((p, i) => `<circle class="pt s${j}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(p[2]))}</title></circle>`).join('');
+      out += pts.map((p, i) => `<circle class="pt s${j}" data-i="${i}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5"><title>${esc(dayLabel(series[i].day))} · ${esc(k.label)}: ${esc(fmt(p[2]))}</title></circle>`).join('');
     });
-    return chartFrame(out, keys);
+    return chartFrame(out, keys, w, CH.h, dayData(series, keys, vals, fmt, opts.title || 'Per day', opts.avg));
   }
-  function chartFrame(inner, keys) {
-    const legend = keys.length > 1 || keys[0].cls ? `<div class="legend">${keys.map((k, j) => `<span><i class="s${j} ${k.cls || ''}"></i>${esc(k.label)}</span>`).join('')}</div>` : '';
-    return `<div class="chart"><svg viewBox="0 0 ${CH.w} ${CH.h}" role="img">${inner}</svg>${legend}</div>`;
+  function chartFrame(inner, keys, w, h, data, cls = '') {
+    const legend = keys.length > 1 || (keys[0] && keys[0].cls) ? `<div class="legend" aria-hidden="true">${keys.map((k, j) => `<span><i class="s${j} ${k.cls || ''}"></i>${esc(k.label)}</span>`).join('')}</div>` : '';
+    // The SVG is only a picture for assistive tech: the focusable wrapper names it, and a hidden table carries the numbers.
+    const table = `<table class="sr-only"><caption>${esc(data.title)}</caption><thead><tr>${data.cols.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}</tr></thead><tbody>${data.rows.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<th scope="row">${esc(c)}</th>`)).join('')}</tr>`).join('')}</tbody></table>`;
+    return { data, html: `<div class="chart ${cls}" tabindex="0" role="group" aria-roledescription="chart" aria-label="${esc(data.label)}. Left and Right arrow keys read each ${cls === 'hours' ? 'hour' : 'day'}."><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${inner}</svg>${legend}<div class="chart-val muted small" aria-live="polite"></div>${table}</div>` };
   }
   /** Donut with a centred headline; `parts`: [{ label, value, cls }]. */
   function donut(parts, centre, sub) {
@@ -2477,83 +2885,426 @@
     return `<div class="donut"><svg viewBox="0 0 90 90" aria-hidden="true"><circle class="track" r="${r}" cx="45" cy="45"/>${arcs}<text class="dv" x="45" y="43" text-anchor="middle">${esc(centre)}</text><text class="ds" x="45" y="56" text-anchor="middle">${esc(sub || '')}</text></svg><ul class="dl">${parts.map((p) => `<li><i class="${p.cls}"></i>${esc(p.label)}<b>${fmtN(p.value)}</b></li>`).join('')}</ul></div>`;
   }
   /** 24-bucket histogram (activity by hour of day) with hour labels. */
-  function hourChart(hourly) {
-    const max = Math.max(1, ...hourly); const w = 240, h = 70, bw = w / 24;
-    const bars = hourly.map((v, i) => `<rect class="s0" x="${(i * bw + 1).toFixed(1)}" y="${(50 - (v / max) * 46).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${((v / max) * 46 + 0.5).toFixed(1)}" rx="1"><title>${String(i).padStart(2, '0')}:00 – ${String(i).padStart(2, '0')}:59 · ${fmtN(v)} calls</title></rect>`).join('');
-    const labels = [0, 6, 12, 18, 23].map((i) => `<text class="ax" x="${(i * bw + bw / 2).toFixed(1)}" y="64" text-anchor="middle">${String(i).padStart(2, '0')}</text>`).join('');
-    return `<div class="chart hours"><svg viewBox="0 0 ${w} ${h}" role="img">${bars}${labels}</svg></div>`;
+  function hourChart(hourly, w = 240) {
+    const max = Math.max(1, ...hourly); const h = 70, bw = w / 24;
+    const hr = (i) => `${String(i).padStart(2, '0')}:00 – ${String(i).padStart(2, '0')}:59`;
+    const bars = hourly.map((v, i) => `<rect class="s0" data-i="${i}" x="${(i * bw + 1).toFixed(1)}" y="${(50 - (v / max) * 46).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${((v / max) * 46 + 0.5).toFixed(1)}" rx="1"><title>${hr(i)} · ${fmtN(v)} calls</title></rect>`).join('');
+    const labels = (w < 200 ? [0, 12, 23] : [0, 6, 12, 18, 23]).map((i) => `<text class="ax" x="${(i * bw + bw / 2).toFixed(1)}" y="64" text-anchor="middle">${String(i).padStart(2, '0')}</text>`).join('');
+    const peak = hourly.indexOf(Math.max(...hourly));
+    const data = { title: 'Model calls by hour of day', label: `Model calls by hour of day, total ${fmtN(hourly.reduce((a, b) => a + b, 0))}, busiest ${hr(peak)} with ${fmtN(hourly[peak])}`, cols: ['Hour', 'Calls'], rows: hourly.map((v, i) => [hr(i), fmtN(v)]), line: (i) => `${hr(i)} · ${fmtN(hourly[i])} call${hourly[i] === 1 ? '' : 's'}` };
+    return chartFrame(`${bars}${labels}`, [], w, h, data, 'hours');
+  }
+  /** A chart drawn once its card is on the page, at the card's width, and again when the dashboard is resized. */
+  function chartSlot(draw, min = 280, max = 600) {
+    const slot = el('div', 'chart-slot');
+    slot._draw = () => {
+      const w = Math.round(Math.max(min, Math.min(max, slot.clientWidth || max)));
+      if (w === slot._w) { return; }
+      const was = slot.querySelector('.chart'); const focused = was && was.contains(document.activeElement); const at = was ? was._at : -1;
+      const r = draw(w); slot._w = w; slot.innerHTML = r.html;
+      wireChart(slot.firstElementChild, r.data, at);
+      if (focused) { slot.firstElementChild.focus({ preventScroll: true }); }
+    };
+    return slot;
+  }
+  function drawCharts(root) { root.querySelectorAll('.chart-slot').forEach((x) => x._draw && x._draw()); }
+  let chartRO = null; let chartRaf = 0;
+  /** Left/Right (Home/End) walk the bars; the highlighted day's values are read out under the chart. */
+  function wireChart(ch, data, at = -1) {
+    const n = data.rows.length; const out = ch.querySelector('.chart-val');
+    const show = (i) => {
+      ch._at = i; ch.classList.toggle('has-hl', i >= 0);
+      ch.querySelectorAll('[data-i]').forEach((x) => x.classList.toggle('hl', Number(x.dataset.i) === i));
+      out.textContent = i >= 0 ? data.line(i) : '';
+    };
+    ch.onkeydown = (e) => {
+      const i = ch._at ?? -1;
+      const next = e.key === 'ArrowRight' ? Math.min(n - 1, i + 1) : e.key === 'ArrowLeft' ? (i < 0 ? n - 1 : Math.max(0, i - 1)) : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : e.key === 'Escape' ? -1 : null;
+      if (next === null) { return; }
+      e.preventDefault(); show(next);
+    };
+    ch.onfocus = () => { if ((ch._at ?? -1) < 0) { show(n - 1); } };
+    ch.onblur = () => show(-1);
+    if (at >= 0 && at < n) { show(at); }
   }
   const pctl = (p) => p && (p.p50 || p.p95) ? `<span class="pctl" title="median · 95th percentile">${fmtMs(p.p50)} <i>/ ${fmtMs(p.p95)}</i></span>` : '<span class="muted">—</span>';
   function requestDashboard(days) {
     if (typeof days === 'number') { state.dash.days = days; }
     state.dash.loading = true;
-    post({ type: 'dashboard', days: state.dash.days });
+    post({ type: 'dashboard', days: state.dash.days, includeDisabled: state.dash.includeDisabled, providers: state.dash.provider ? [state.dash.provider] : [] });
+    // A host that never answers (extension reloading, telemetry wedged) must not leave the page loading forever.
+    clearTimeout(state.dash.ttl);
+    state.dash.ttl = setTimeout(() => { if (!state.dash.loading) { return; } state.dash.loading = false; state.dash.manual = false; state.dash.error = 'No answer from LocalPilot'; dashBusy(); renderDashboard(); }, 20000);
+    dashBusy();
+  }
+  const recordingOff = () => effVal('telemetry.enabled') === false;
+  /** What the numbers on screen were asked for: range, disabled providers in or out, one provider or all. */
+  const dashKey = () => `${state.dash.days}|${state.dash.includeDisabled}|${state.dash.provider}`;
+  /** The Provider filter and the "Not counting N disabled providers" line, refreshed with every reply. */
+  function syncDashFilters() {
+    const d = state.dash;
+    const sel = document.getElementById('dash-prov');
+    if (sel) {
+      const s = d.summary;
+      const ids = d.allProviders || (s ? [...new Set([...(s.providers || []).map((p) => p.provider), ...(s.models || []).map((m) => m.provider)])] : []);
+      if (d.provider && !ids.includes(d.provider)) { ids.push(d.provider); }
+      const sig = ids.join('\n');
+      if (sel.dataset.sig !== sig) {
+        sel.dataset.sig = sig;
+        sel.replaceChildren(...[['', 'All providers'], ...ids.map((id) => [id, id])].map(([v, l]) => { const o = el('option', '', esc(l)); o.value = v; return o; }));
+      }
+      sel.value = d.provider;
+      sel.closest('.dash-prov').hidden = ids.length < 2 && !d.provider;
+    }
+    const line = document.getElementById('dash-hidden');
+    if (!line) { return; }
+    const hid = d.hidden || [];
+    line.hidden = !hid.length;
+    if (!hid.length) { line.replaceChildren(); return; }
+    const calls = hid.reduce((a, h) => a + h.calls, 0);
+    const what = `${plural(hid.length, 'disabled provider')} (${plural(calls, 'call')})`;
+    const txt = el('span', '', esc(d.includeDisabled ? `Counting ${what}.` : `Not counting ${what}.`));
+    txt.title = hid.map((h) => `${h.id}: ${plural(h.calls, 'call')}`).join('\n');
+    const b = el('button', 'btn sm ghost', d.includeDisabled ? 'Exclude' : 'Include');
+    b.setAttribute('aria-pressed', String(d.includeDisabled));
+    b.title = d.includeDisabled ? 'Count only providers that are enabled now' : 'Also count model calls from providers that are disabled or removed';
+    b.onclick = () => {
+      d.includeDisabled = !d.includeDisabled;
+      if (!d.includeDisabled && d.provider && hid.some((h) => h.id === d.provider)) { d.provider = ''; }
+      d.manual = true; d.error = ''; requestDashboard(); syncDashFilters();
+      const nb = document.querySelector('#dash-hidden button'); if (nb) { nb.focus({ preventScroll: true }); }
+    };
+    line.replaceChildren(txt, b);
+  }
+  /** Loading state on the page: the old range's numbers dim while a different range loads, and Refresh spins. */
+  function dashBusy() {
+    const d = state.dash; const root = document.getElementById('dash'); const rb = document.getElementById('dash-refresh');
+    const stale = d.loading && !!d.summary && d.summaryKey !== dashKey();
+    if (root) { root.classList.toggle('stale', stale); if (d.loading) { root.setAttribute('aria-busy', 'true'); } else { root.removeAttribute('aria-busy'); } }
+    if (rb) { const busy = d.loading && (d.manual || stale); rb.classList.toggle('busy', busy); if (busy) { rb.setAttribute('aria-busy', 'true'); } else { rb.removeAttribute('aria-busy'); } }
+    dashMeta();
+  }
+  /** "Showing 30 Oct to 5 Nov · updated 12 s ago" under the toolbar. */
+  function dashMeta() {
+    const n = document.getElementById('dash-meta'); if (!n) { return; }
+    const s = state.dash.summary; if (!s || !s.to) { n.textContent = ''; return; }
+    const day = (t) => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    const ago = state.dash.updatedAt ? Math.round((Date.now() - state.dash.updatedAt) / 1000) : -1;
+    const upd = ago < 0 ? '' : ago < 5 ? ' · updated just now' : ago < 60 ? ` · updated ${ago} s ago` : ` · updated ${fmtAgo(state.dash.updatedAt)}`;
+    n.textContent = `Showing ${s.from && day(s.from) !== day(s.to) ? `${day(s.from)} to ${day(s.to)}` : day(s.to)}${upd}`;
   }
   function requestLogs() { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: state.dash.follow }); }
   function stopDashboardTimer() { if (state.dash.timer) { clearInterval(state.dash.timer); state.dash.timer = null; } if (state.dash.follow) { post({ type: 'logs', level: state.dash.level, q: state.dash.q, follow: false }); } }
+  /** A "…" button with a keyboard-navigable menu of [icon, label, fn, title, sec] items. `opts`: the button's html,
+   *  label and title; `floating` pins the menu to the viewport under the button, kept inside the window, so a scrolling or
+   *  masked parent cannot clip it (the caller may move `more._menu` out of such a parent); `onOpen(menu)` runs on open. */
+  function moreMenu(items, cls = '', opts = {}) {
+    const more = el('div', `dash-more ${cls}`);
+    const label = opts.label || 'More actions';
+    const moreBtn = el('button', 'btn sm', opts.html || '…'); moreBtn.setAttribute('aria-label', label); moreBtn.title = opts.title || label; moreBtn.setAttribute('aria-haspopup', 'menu'); moreBtn.setAttribute('aria-expanded', 'false');
+    const menu = el('div', `menu${opts.floating ? ' floating' : ''}`); menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', label); menu.hidden = true;
+    const close = (refocus) => { menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); window.removeEventListener('resize', onMove); document.removeEventListener('scroll', onMove, true); if (refocus) { moreBtn.focus(); } };
+    const outside = (e) => { if (!more.contains(e.target) && !menu.contains(e.target)) { close(false); } };
+    // A pinned menu would drift away from its button, so moving the page closes it (scrolling the menu itself does not).
+    const onMove = (e) => { if (!e || e.type === 'resize' || !menu.contains(e.target)) { close(false); } };
+    const place = () => {
+      const r = moreBtn.getBoundingClientRect(); const w = menu.offsetWidth; const h = menu.offsetHeight;
+      const below = r.bottom + 4 + h <= window.innerHeight - 8 || r.top < h + 12;
+      menu.style.right = 'auto';
+      menu.style.left = `${Math.round(Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)))}px`;
+      menu.style.top = `${Math.round(below ? r.bottom + 4 : r.top - 4 - h)}px`;
+    };
+    for (const [icon, label, fn, title, sec] of items) { const b = el('button', '', `${icon}${esc(label)}`); b.setAttribute('role', 'menuitem'); if (title) { b.title = title; } if (sec) { b.dataset.sec = sec; } b.onclick = () => { close(false); fn(); }; menu.appendChild(b); }
+    moreBtn.onclick = () => {
+      if (!menu.hidden) { close(false); return; }
+      menu.hidden = false; moreBtn.setAttribute('aria-expanded', 'true'); document.addEventListener('mousedown', outside, true);
+      if (opts.floating) { place(); }
+      (menu.querySelector('button.on') || menu.querySelector('button')).focus({ preventScroll: !!opts.floating });
+      if (opts.onOpen) { opts.onOpen(menu, moreBtn); }
+      if (opts.floating) { window.addEventListener('resize', onMove); document.addEventListener('scroll', onMove, true); }
+    };
+    menu.onkeydown = (e) => {
+      const btns = [...menu.querySelectorAll('button')]; const i = btns.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); btns[(i + (e.key === 'ArrowDown' ? 1 : btns.length - 1)) % btns.length].focus(); } else if (e.key === 'Tab') { close(false); }
+    };
+    more.append(moreBtn, menu); more._menu = menu;
+    return more;
+  }
   function secDashboard(sec) {
-    head(sec, 'Dashboard', 'Usage recorded on this machine in <code>~/.localpilot/telemetry</code>; nothing is sent anywhere.');
+    head(sec, 'Dashboard', ''); sec.classList.add('dash-sec');
+    sec.querySelector('.lead').replaceWith(privacyLead());
     const bar = el('div', 'dash-bar');
     const seg = el('div', 'seg');
-    for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { state.dash.days = d; render(); }; seg.appendChild(b); }
+    // The section is rebuilt on a range change, so focus moves to the new selected option (arrow keys keep working).
+    for (const [d, l] of DASH_RANGES) { const b = el('button', state.dash.days === d ? 'on' : '', esc(l)); b.onclick = () => { if (state.dash.days === d) { return; } const had = seg.contains(document.activeElement); state.dash.days = d; state.dash.error = ''; render(); const n = had && app.querySelector('.dash-bar .seg button.on'); if (n) { n.focus({ preventScroll: true }); } }; seg.appendChild(b); }
+    seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Time range'); radioGroup(seg);
     bar.appendChild(seg);
-    bar.appendChild(el('span', 'spacer'));
-    const refresh = el('button', `btn sm${state.dash.manual ? ' busy' : ''}`, `${I.refresh}Refresh`); refresh.id = 'dash-refresh'; refresh.onclick = () => { state.dash.manual = true; refresh.classList.add('busy'); requestDashboard(); }; bar.appendChild(refresh);
-    const exp = el('button', 'btn sm', `${I.download}Export…`); exp.title = 'Save every recorded event and the current log as JSON'; exp.onclick = () => post({ type: 'exportTelemetry' }); bar.appendChild(exp);
-    const folder = el('button', 'btn sm ghost', `${I.folder}Open folder`); folder.onclick = () => post({ type: 'openTelemetryFolder' }); bar.appendChild(folder);
+    const acts = el('div', 'dash-acts');
+    const refresh = el('button', 'btn sm', `${I.refresh}<span class="lbl">Refresh</span>`); refresh.id = 'dash-refresh'; refresh.setAttribute('aria-label', 'Refresh'); refresh.title = 'Refresh';
+    refresh.onclick = () => { state.dash.manual = true; state.dash.error = ''; requestDashboard(); };
+    const rangeName = () => { const r = DASH_RANGES.find(([d]) => d === state.dash.days); return state.dash.days > 0 && r ? r[1].toLowerCase().replace(/^\d/, (x) => `the last ${x}`) : 'everything recorded'; };
+    const exp = moreMenu([
+      [I.download, 'This range as JSON', () => post({ type: 'exportTelemetry', scope: 'range', days: state.dash.days }), `Raw events from ${rangeName()}`],
+      [I.file, 'Summary as CSV (models, tools, modes)', () => post({ type: 'exportTelemetry', scope: 'csv', days: state.dash.days }), `The model, tool and mode tables for ${rangeName()}, as the dashboard shows them`],
+      [I.download, 'Everything as JSON', () => post({ type: 'exportTelemetry', scope: 'all', days: 0 }), 'Every recorded event and the current log'],
+    ], 'dash-export', { html: `${I.download}<span class="lbl">Export…</span>`, label: 'Export telemetry', title: 'Export telemetry as JSON or CSV', floating: true });
+    const prov = el('div', 'dash-prov');
+    const provSel = el('select'); provSel.id = 'dash-prov'; provSel.setAttribute('aria-label', 'Provider');
+    provSel.onchange = () => { state.dash.provider = provSel.value; state.dash.manual = true; state.dash.error = ''; requestDashboard(); };
+    prov.title = 'Show one provider only'; prov.appendChild(provSel);
+    bar.appendChild(prov);
+    const more = moreMenu([
+      [I.folder, 'Open folder', () => post({ type: 'openTelemetryFolder' }), 'Open the folder with the recorded metrics and logs'],
+      [I.file, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
+      [I.gear, 'Telemetry settings', () => { state.section = 'telemetry'; render(); }, 'Recording, retention, Redis storage and OTLP export', 'telemetry'],
+    ]);
+    acts.append(refresh, exp, more);
+    bar.appendChild(acts);
     sec.appendChild(bar);
+    const hidden = el('p', 'dash-hidden'); hidden.id = 'dash-hidden'; hidden.hidden = true; hidden.setAttribute('aria-live', 'polite'); sec.appendChild(hidden);
+    syncDashFilters();
+    const meta = el('p', 'dash-meta'); meta.id = 'dash-meta'; meta.setAttribute('aria-live', 'off'); sec.appendChild(meta);
     const body = el('div', 'dash'); body.id = 'dash'; sec.appendChild(body);
     renderDashboard();
     // Logs
     sec.appendChild(el('h2', 'sub', 'Logs <span class="count" id="logCount"></span>'));
     const lc = el('div', 'card logcard');
     const tools = el('div', 'logbar');
-    const lvl = el('select'); lvl.setAttribute('aria-label', 'Minimum level');
+    const lvl = el('select'); lvl.id = 'logLevel'; lvl.setAttribute('aria-label', 'Minimum level');
     for (const [k, l] of [['trace', 'Trace'], ['debug', 'Debug'], ['info', 'Info'], ['warn', 'Warnings'], ['error', 'Errors']]) { const o = el('option', '', esc(l)); o.value = k; if (k === state.dash.level) { o.selected = true; } lvl.appendChild(o); }
     lvl.onchange = () => { state.dash.level = lvl.value; requestLogs(); };
-    const q = el('input'); q.type = 'text'; q.placeholder = 'Filter log lines…'; q.value = state.dash.q; q.setAttribute('aria-label', 'Filter log lines');
+    const q = el('input'); q.id = 'logQ'; q.type = 'text'; q.placeholder = 'Filter log lines…'; q.value = state.dash.q; q.setAttribute('aria-label', 'Filter log lines');
     q.oninput = debounce(() => { state.dash.q = q.value.trim(); requestLogs(); }, 250);
-    const follow = el('button', `btn sm ${state.dash.follow ? 'on' : ''}`, `${I.play}Follow`); follow.title = 'Stream new lines as they are written';
-    follow.onclick = () => { state.dash.follow = !state.dash.follow; follow.classList.toggle('on', state.dash.follow); requestLogs(); };
-    const openFile = el('button', 'btn sm', `${I.file}Open log file`); openFile.title = state.dash.logFile || "Today's log file"; openFile.onclick = () => post({ type: 'openLogFile' });
-    const channel = el('button', 'btn sm ghost', 'Output channel'); channel.onclick = () => post({ type: 'command', id: 'localpilot.showLogs' });
-    tools.append(lvl, q, follow, openFile, channel);
+    const follow = el('button', 'btn sm');
+    const syncFollow = () => { const on = state.dash.follow; follow.classList.toggle('on', on); follow.setAttribute('aria-pressed', String(on)); follow.innerHTML = on ? `${I.pause}Following` : `${I.play}Follow`; follow.title = on ? 'Following new lines as they are written — click to pause' : 'Paused — click to stream new lines as they are written'; };
+    follow.onclick = () => { state.dash.follow = !state.dash.follow; syncFollow(); requestLogs(); };
+    syncFollow();
+    const copy = el('button', 'btn sm ghost', `${I.copy}<span class="lbl">Copy</span>`); copy.title = 'Copy the lines shown here'; copy.setAttribute('aria-label', 'Copy the lines shown here');
+    copy.onclick = () => {
+      const lines = state.dash.logs.map((e) => `${new Date(e.t).toISOString()} ${String(e.level).toUpperCase()} ${e.msg}`);
+      if (!lines.length) { toast('Nothing to copy'); return; }
+      navigator.clipboard.writeText(lines.join('\n')).then(() => toast(`Copied ${plural(lines.length, 'line')}`), () => toast('Could not copy to the clipboard', 'error'));
+    };
+    const clear = el('button', 'btn sm ghost', `${I.x}<span class="lbl">Clear view</span>`); clear.title = 'Clear this view (the log file is kept)'; clear.setAttribute('aria-label', 'Clear view');
+    clear.onclick = () => { state.dash.logs = []; renderLogs(); };
+    const openFile = el('button', 'btn sm log-wide', `${I.file}Open log file`); openFile.title = state.dash.logFile || "Today's log file"; openFile.onclick = () => post({ type: 'openLogFile' });
+    const channel = el('button', 'btn sm ghost log-wide', `${I.external}Output channel`); channel.title = 'Show the LocalPilot output channel'; channel.onclick = () => post({ type: 'command', id: 'localpilot.showLogs' });
+    // Under 400 px the two "open elsewhere" buttons fold into one menu (CSS swaps them).
+    const logMore = moreMenu([
+      [I.file, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
+      [I.external, 'Output channel', () => post({ type: 'command', id: 'localpilot.showLogs' }), 'Show the LocalPilot output channel'],
+    ], 'log-narrow');
+    tools.append(lvl, q, follow, copy, clear, openFile, channel, logMore);
     lc.appendChild(tools);
-    const pre = el('div', 'logview'); pre.id = 'logview'; pre.setAttribute('role', 'log'); pre.setAttribute('aria-live', 'polite'); lc.appendChild(pre);
+    const pre = el('div', 'logview'); pre.id = 'logview'; pre.tabIndex = 0; pre.setAttribute('role', 'log'); pre.setAttribute('aria-live', 'polite'); pre.setAttribute('aria-label', 'Log lines'); lc.appendChild(pre);
+    const cap = el('p', 'logcap muted small hidden', `Showing the latest ${LOG_CAP} lines; open the log file for everything.`); cap.id = 'logCap'; lc.appendChild(cap);
     sec.appendChild(lc);
     renderLogs();
-    // Settings
-    sec.appendChild(el('h2', 'sub', 'Telemetry'));
-    const orgOtlp = POLICY() && POLICY().telemetryEndpoint;
-    if (orgOtlp) { sec.appendChild(el('div', 'policy', `${I.lock}<div><b>${MANAGED_TIP}</b> Usage metrics, traces and the log are exported to <code>${esc(orgOtlp)}</code>, whatever is set below or in <code>OTEL_*</code> variables.</div>`)); }
-    sec.appendChild(card(
-      field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine (or to the Redis server below, when you turn that on) so this page can show them. Turning it off stops recording; the log is still mirrored for the viewer above. <b>Nothing is sent anywhere you did not configure.</b>', 'toggle'),
-      field('telemetry.retentionDays', 'Keep for', 'Days of metrics and log files to keep; older files are deleted automatically. <code>0</code> keeps everything.', 'number', { min: 0, max: 3650, step: 1 })
-    ));
-    sec.appendChild(el('h2', 'sub', 'Redis storage (optional)'));
-    const redisActs = el('div', 'btnrow');
-    redisActs.innerHTML = `<span class="muted small">Installs or connects Redis: Docker if you have it (started for you if it is not running), otherwise Homebrew, apt/dnf, WSL or Memurai — or an existing server.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.setupRedis">${I.cpu}Set up Redis…</button>`;
-    sec.appendChild(card(
-      field('storage.redis.enabled', 'Store telemetry in Redis', 'Events and the log go to capped Redis streams instead of daily files, and — with <b>Redis Stack</b> — metrics become labelled time series (<code>localpilot:ts:*</code>) for Grafana or RedisInsight. VS Code then keeps only a short log tail in memory. Falls back to files whenever Redis is unreachable. <b>Telemetry goes to the server in the URL</b> — keep it on this machine unless you trust that server.', 'toggle', { after: redisActs }),
-      field('storage.redis.url', 'Redis URL', '<code>redis://[user:password@]host:port[/db]</code>, <code>rediss://</code> for TLS. Hidden because it can contain a password. Keep it on <code>127.0.0.1</code> unless the server is protected.', 'password', { placeholder: 'redis://127.0.0.1:6379', validate: validRedisUrl, invalidHint: 'Use redis://[user:password@]host[:port][/db] or rediss://… — not saved yet' })
-    ));
-    const danger = el('div', 'btnrow');
-    danger.innerHTML = `<span class="muted small" id="dashStorage"></span><span class="spacer"></span><button class="btn sm danger" id="dashClear">${I.trash}Delete all recorded data…</button>`;
-    danger.querySelector('#dashClear').onclick = () => post({ type: 'clearTelemetry' });
-    sec.appendChild(danger);
-    renderStorage();
     // Fresh numbers on open and every 15 s while this page is visible; the log follows live via logLine messages.
     requestDashboard();
     requestLogs();
     if (state.dash.timer) { clearInterval(state.dash.timer); }
-    state.dash.timer = setInterval(() => { if (state.page === 'settings' && state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading) { requestDashboard(); } }, 15000);
+    // Nothing new arrives while recording is off, so the tick only ages the "updated" caption.
+    state.dash.timer = setInterval(() => { if (state.page === 'settings' && state.section === 'dashboard' && document.visibilityState === 'visible' && !state.dash.loading && !recordingOff()) { requestDashboard(); } else { dashMeta(); } }, 15000);
+  }
+  // ------------------------------------------------------------------ telemetry
+  /** host[:port] of a URL with any user:password@ dropped, so a Redis password never reaches the page. */
+  function hostOf(url) {
+    const rest = String(url || '').trim().replace(/^[a-z][\w+.-]*:\/\//i, '');
+    return rest.split(/[/?#]/)[0].replace(/^.*@/, '');
+  }
+  const PRIVACY_DEPS = ['telemetry.enabled', 'storage.redis.enabled', 'storage.redis.url', 'telemetry.otlp.enabled', 'telemetry.otlp.endpoint'];
+  /** Where usage data goes besides this machine: the Redis server, the user's OTLP collector, the organisation's collector. */
+  function telemetryDests() {
+    const otlp = state.data && state.data.otlp;
+    const org = POLICY() && POLICY().telemetryEndpoint;
+    return [...new Set([
+      val('storage.redis.enabled') === true && hostOf(val('storage.redis.url') || 'redis://127.0.0.1:6379'),
+      // Export needs local recording; an OTEL_EXPORTER_OTLP_ENDPOINT variable decides where it goes.
+      !org && effVal('telemetry.otlp.enabled') === true && effVal('telemetry.enabled') !== false && hostOf((otlp && otlp.endpoint) || val('telemetry.otlp.endpoint')),
+      org && hostOf(org),
+    ].filter(Boolean))];
+  }
+  const privacyText = () => { const d = telemetryDests(); return d.length ? `Usage recorded on this machine and exported to ${d.map((h) => `<code>${esc(h)}</code>`).join(', ')}.` : 'Usage recorded on this machine in <code>~/.localpilot/telemetry</code>; nothing is sent anywhere.'; };
+  const privacyLead = () => component(el('p', 'lead', privacyText()), PRIVACY_DEPS, privacyLead);
+  /** OTEL_* variables in VS Code's environment win over these settings; such a row says so and cannot be edited. */
+  const OTLP_ENV = { 'telemetry.otlp.endpoint': ['OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', 'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'], 'telemetry.otlp.headers': ['OTEL_EXPORTER_OTLP_HEADERS'], 'telemetry.otlp.metricsInterval': ['OTEL_METRIC_EXPORT_INTERVAL'] };
+  const otlpEnvVars = (key) => { const env = (state.data && state.data.otlp && state.data.otlp.fromEnv) || []; return (OTLP_ENV[key] || []).filter((v) => env.includes(v)); };
+  /** Badges and the reason a telemetry.otlp.* row is unavailable: export is off, or an environment variable decides it. */
+  function otlpRow(key) {
+    const env = otlpEnvVars(key);
+    const badges = env.map((v) => `<span class="badge env" title="Set in the environment VS Code was started from; it overrides this setting">Overridden by ${esc(v)}</span>`).join('');
+    const off = effVal('telemetry.otlp.enabled') !== true ? 'Turn on “Send telemetry to an OTLP collector” first' : env.length ? `Overridden by ${env.join(', ')}` : '';
+    return { badges, off };
+  }
+  const OTLP_EXPORTERS = [['otlp', 'Logs & metrics (otlp)'], ['traces', 'Traces (run / model / tool spans)'], ['console', 'Also print exports to the LocalPilot log (console)']];
+  function secTelemetry(sec) {
+    head(sec, 'Telemetry', '');
+    sec.querySelector('.lead').replaceWith(privacyLead());
+    sec.appendChild(card(
+      field('telemetry.enabled', 'Record usage metrics', 'Model calls, tokens and latency, tool runs, agent turns, inline completions, provider health and worktree actions are appended to daily JSONL files on this machine (or to the Redis server below, when you turn that on) so the Dashboard can show them. Turning it off stops recording and any export; the log is still mirrored for the log viewer. <b>Nothing is sent anywhere you did not configure.</b>', 'toggle'),
+      field('telemetry.retentionDays', 'Keep metrics and logs for', 'Older daily files are deleted automatically. <code>0</code> keeps everything.', 'number', { min: 0, max: 3650, step: 1, unit: 'days' })
+    ));
+    sec.appendChild(el('h2', 'sub', 'Redis storage (optional)'));
+    const redisActs = el('div', 'btnrow');
+    redisActs.innerHTML = `<span class="muted small">Docker, Homebrew, apt/dnf, WSL or Memurai, or an existing server.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.setupRedis">${I.cpu}Set up Redis…</button>`;
+    sec.appendChild(card(
+      field('storage.redis.enabled', 'Store telemetry in Redis', 'Events and the log go to capped Redis streams instead of daily files, and — with <b>Redis Stack</b> — metrics become labelled time series (<code>localpilot:ts:*</code>) for Grafana or RedisInsight. VS Code then keeps only a short log tail in memory. Falls back to files whenever Redis is unreachable. <b>Telemetry goes to the server in the URL</b> — keep it on this machine unless you trust that server.', 'toggle', { after: redisActs }),
+      redisUrlField()
+    ));
+    sec.appendChild(el('h2', 'sub', 'Export to your OpenTelemetry collector'));
+    const otlpCard = el('div', 'card otlp');
+    const orgOtlp = POLICY() && POLICY().telemetryEndpoint;
+    if (orgOtlp) { otlpCard.appendChild(el('div', 'policy', `${I.lock}<div><b>${MANAGED_TIP}</b> Usage metrics, traces and the log are exported to <code>${esc(orgOtlp)}</code>, whatever is set below or in <code>OTEL_*</code> variables.</div>`)); }
+    otlpCard.appendChild(field('telemetry.otlp.enabled', 'Send telemetry to an OTLP collector', 'OTLP/HTTP JSON to otel-collector, Grafana Alloy, Langfuse, Phoenix… <code>OTEL_EXPORTER_OTLP_*</code> environment variables override these.', 'toggle'));
+    otlpCard.appendChild(otlpBody());
+    sec.appendChild(otlpCard);
+    sec.appendChild(el('h2', 'sub', 'Recorded data'));
+    const danger = el('div', 'btnrow');
+    danger.innerHTML = `<span class="muted small" id="dashStorage"></span><span class="spacer"></span><button class="btn sm danger" id="dashClear">${I.trash}Delete all recorded data…</button>`;
+    danger.querySelector('#dashClear').onclick = () => post({ type: 'clearTelemetry' });
+    sec.appendChild(card(danger));
+    renderStorage();
+    // The storage line under "Delete all recorded data" comes with the dashboard summary.
+    if (!state.dash.loading) { requestDashboard(); }
+  }
+  /** Everything under the OTLP switch. Rebuilt when export is switched or the exporters change (the sample rate shows only with traces). */
+  function otlpBody() {
+    const box = el('div', 'otlp-body');
+    box.appendChild(otlpEndpointField());
+    const exp = Array.isArray(effVal('telemetry.otlp.exporters')) ? effVal('telemetry.otlp.exporters') : ['otlp'];
+    box.appendChild(otlpExportersField(exp));
+    if (exp.includes('traces')) {
+      const r = otlpRow('telemetry.otlp.traceSamplePercent');
+      box.appendChild(field('telemetry.otlp.traceSamplePercent', 'Trace sample percent', 'Share of agent runs whose spans are exported. Lower it for busy collectors.', 'range', { min: 0, max: 100, step: 5, fmt: (v) => `${v}%`, ...r }));
+      const c = otlpRow('telemetry.otlp.recordContent');
+      box.appendChild(field('telemetry.otlp.recordContent', 'Include prompts and tool results on spans', '<span class="warn-note">Sends code and conversation text to the collector.</span> Off: spans carry names, timings, token counts and status only.', 'toggle', c));
+    }
+    const m = otlpRow('telemetry.otlp.metricsInterval');
+    box.appendChild(field('telemetry.otlp.metricsInterval', 'Metric export interval', 'How often counters and histograms are pushed.', 'number', { min: 1, max: 3600, step: 1, unit: 's', ...m }));
+    box.appendChild(otlpHeadersField());
+    return component(box, ['telemetry.otlp.enabled', 'telemetry.otlp.exporters'], otlpBody);
+  }
+  function otlpEndpointField() {
+    const r = otlpRow('telemetry.otlp.endpoint');
+    const t = state.otlpTest || {};
+    const res = el('div', 'otlp-result');
+    res.id = 'otlpResult'; res.setAttribute('role', 'status'); res.setAttribute('aria-live', 'polite');
+    res.innerHTML = t.busy ? '<span class="spinner"></span>Sending a test record…' : t.ok ? `<span class="muted">Collector answered HTTP ${esc(t.status)} from <code>${esc(t.url)}</code></span>` : t.error ? `<span class="err-text">${esc(t.error)}${t.url ? ` — <code>${esc(t.url)}</code>` : ''}</span>` : '';
+    res.classList.toggle('hidden', !res.innerHTML);
+    const f = field('telemetry.otlp.endpoint', 'Endpoint', '<code>/v1/logs</code>, <code>/v1/metrics</code> and <code>/v1/traces</code> are appended.', 'text', { placeholder: 'http://localhost:4318', validate: (v) => /^https?:\/\/\S+$/.test(v), invalidHint: 'Use http(s)://host:port — /v1/logs, /v1/metrics and /v1/traces are appended', after: res, ...r });
+    // Tests whatever is in effect (environment variables included), so it is offered whenever export is on.
+    const test = el('button', 'btn sm', `${I.bolt}Test connection`); test.title = 'Send one test record to the collector';
+    test.disabled = effVal('telemetry.otlp.enabled') !== true || !!t.busy || f.classList.contains('locked');
+    if (test.disabled && !t.busy) { test.title = r.off && effVal('telemetry.otlp.enabled') !== true ? r.off : MANAGED_TIP; }
+    test.onclick = () => {
+      state.otlpTest = { busy: true }; post({ type: 'testOtlp' });
+      const fresh = otlpEndpointField(); f.querySelector('#otlpResult').replaceWith(fresh.querySelector('#otlpResult')); test.disabled = true;
+    };
+    const ctl = f.querySelector('.ctl'); const input = ctl.querySelector('input');
+    const row = el('div', 'row'); input.replaceWith(row); row.append(input, test);
+    return component(f, ['telemetry.otlp.endpoint'], otlpEndpointField);
+  }
+  function otlpExportersField(exp) {
+    const key = 'telemetry.otlp.exporters';
+    const r = otlpRow(key);
+    const f = el('div', `field wide${r.off ? ' off' : ''}`);
+    f.innerHTML = `<div><div class="lbl">Exporters${r.badges}${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">What is sent. At least one stays on while export is on.</div></div><div class="ctl checks" role="group" aria-label="OTLP exporters"></div>`;
+    const ctl = f.querySelector('.ctl');
+    for (const [id, label] of OTLP_EXPORTERS) {
+      const l = el('label', 'check'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = exp.includes(id); cb.disabled = !!r.off; if (r.off) { cb.title = r.off; }
+      cb.onchange = () => {
+        const next = cb.checked ? [...exp.filter((x) => x !== id), id] : exp.filter((x) => x !== id);
+        if (!next.length) { cb.checked = true; toast('Keep at least one exporter', 'error'); return; }
+        set(key, OTLP_EXPORTERS.map(([x]) => x).filter((x) => next.includes(x)));
+      };
+      l.append(cb, el('span', '', esc(label))); ctl.appendChild(l);
+    }
+    const why = policyRefuses(key, undefined);
+    if (why) { f.classList.add('locked'); f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(why)); ctl.querySelectorAll('input').forEach((x) => { x.disabled = true; x.title = MANAGED_TIP; }); }
+    f.dataset.deps = key;
+    return f;
+  }
+  function otlpHeadersField() {
+    const key = 'telemetry.otlp.headers';
+    const r = otlpRow(key);
+    const f = el('div', `field wide${r.off ? ' off' : ''}`);
+    f.innerHTML = `<div><div class="lbl">Headers${r.badges}${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">Sent with every export, e.g. <code>Authorization</code> or <code>x-honeycomb-team</code>. Values are hidden here and in the log.</div></div><div class="ctl"></div>`;
+    const ctl = f.querySelector('.ctl');
+    const cur = val(key); let pairs = Object.entries(cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {}).map(([k, v]) => [k, String(v ?? '')]);
+    const save = () => { const o = {}; for (const [k, v] of pairs) { if (HEADER_NAME.test(k.trim())) { o[k.trim()] = v; } } if (JSON.stringify(o) !== JSON.stringify(cur || {})) { set(key, o); } };
+    const box = el('div', 'kv otlp-headers');
+    const draw = () => {
+      box.innerHTML = '';
+      pairs.forEach(([k, v], idx) => {
+        const row = el('div', 'kv-row');
+        const ki = el('input'); ki.type = 'text'; ki.value = k; ki.placeholder = 'Header-Name'; ki.setAttribute('aria-label', 'Header name');
+        const vi = el('input'); vi.type = 'password'; vi.value = v; vi.placeholder = 'value'; vi.autocomplete = 'off'; vi.setAttribute('aria-label', `Value of ${k || 'the header'}`);
+        const rm = el('button', 'btn sm', I.x); rm.title = 'Remove this header'; rm.setAttribute('aria-label', 'Remove this header');
+        const change = () => { ki.classList.toggle('invalid', !!ki.value.trim() && !HEADER_NAME.test(ki.value.trim())); pairs[idx] = [ki.value, vi.value]; save(); };
+        ki.onchange = change; vi.onchange = change;
+        rm.onclick = () => { pairs = pairs.filter((_, j) => j !== idx); save(); draw(); };
+        row.append(ki, vi, rm); box.appendChild(row);
+      });
+      const add = el('button', 'btn sm', `${I.plus}Add header`);
+      add.onclick = () => { pairs = [...pairs, ['', '']]; draw(); const ins = box.querySelectorAll('.kv-row input'); if (ins.length) { ins[ins.length - 2].focus(); } };
+      box.appendChild(add);
+      const why = policyRefuses(key, undefined);
+      if (why || r.off) { box.querySelectorAll('input, button').forEach((x) => { x.disabled = true; x.title = why ? MANAGED_TIP : r.off; }); }
+    };
+    draw();
+    ctl.appendChild(box);
+    const why = policyRefuses(key, undefined);
+    if (why) { f.classList.add('locked'); f.querySelector('.lbl').insertAdjacentHTML('beforeend', lockIcon(why)); }
+    return component(f, [key], otlpHeadersField);
   }
   function renderStorage() {
     const n = document.getElementById('dashStorage'); const s = state.dash.summary;
     if (!n || !s) { return; }
     const st = s.storage;
     const where = st.backend === 'redis' ? '<span class="badge ok">Redis</span> ' : st.backend === 'fallback' ? `<span class="badge warn" title="${esc(st.remoteError || '')}">Redis unreachable — using files</span> ` : '';
+    refreshRedisStatus();
     n.innerHTML = `${where}${fmtN(st.events)} events · ${fmtBytes(st.bytes)} in ${plural(st.files, 'file')}${st.oldest ? ` · since ${new Date(st.oldest).toLocaleDateString()}` : ''} · <code>${esc(st.dir)}</code>`;
+  }
+  /** The Redis URL with a status line under it: where telemetry goes right now (from the dashboard summary) and the
+   *  result of the last Test connection. */
+  function redisUrlField() {
+    const box = el('div', 'redis-status'); box.setAttribute('aria-live', 'polite'); box.appendChild(redisStatus());
+    const f = field('storage.redis.url', 'Redis URL', '<code>redis://[user:password@]host:port[/db]</code>, <code>rediss://</code> for TLS. Hidden because it can contain a password. Keep it on <code>127.0.0.1</code> unless the server is protected.', 'password', { placeholder: 'redis://127.0.0.1:6379', validate: validRedisUrl, invalidHint: 'Use redis://[user:password@]host[:port][/db] or rediss://… — not saved yet', after: box });
+    return component(f, ['storage.redis.url', 'storage.redis.enabled'], redisUrlField);
+  }
+  function redisStatus() {
+    const wrap = el('div', 'redis-lines'); wrap.id = 'redisStatus';
+    const on = effVal('storage.redis.enabled') === true;
+    const st = state.dash.summary && state.dash.summary.storage;
+    const t = state.redisTest || {};
+    const host = hostOf(val('storage.redis.url') || 'redis://127.0.0.1:6379');
+    const stack = (i) => (!i ? '' : i.timeSeries ? ' · Redis Stack (time series on)' : i.modules && i.modules.length ? ' · time series off (RedisTimeSeries not loaded)' : ' · plain Redis (time series off)');
+    const line = (dot, html) => `<div class="redis-line"><span class="dot ${dot}"></span><span>${html}</span></div>`;
+    let now;
+    if (!on) { now = line('', '<span class="muted">Off · saving to files on this machine</span>'); }
+    else if (st && st.backend === 'fallback') { now = line('warn', `<span class="warn-text">Not reachable: ${esc(st.remoteError || 'no answer')}, saving to files</span>`); }
+    else if (st && st.backend === 'redis') { now = line('ok', `<span>Connected to <code>${esc(host)}</code><span class="muted">${esc(stack(t.ok && t.info))}</span></span>`); }
+    else { now = line('', `<span class="muted">Not checked yet${st ? ' · new data still goes to files' : ''}</span>`); }
+    const res = t.busy ? `<div class="redis-line"><span class="spinner"></span><span>Testing <code>${esc(host)}</code>…</span></div>`
+      : t.ok && t.info ? `<div class="redis-line muted">${I.check}<span>Test: <code>${esc(t.info.host)}:${esc(t.info.port)}</code> answered in ${esc(t.info.latencyMs)} ms${t.info.version ? ` · Redis ${esc(t.info.version)}` : ''}${esc(stack(t.info))}</span></div>`
+        : t.error ? `<div class="redis-line err-text">${I.x}<span>Test failed: ${esc(t.error)}</span></div>` : '';
+    wrap.innerHTML = `${now}${res}`;
+    const row = el('div', 'btnrow redis-acts');
+    const test = el('button', 'btn sm', t.busy ? '<span class="spinner"></span>Testing…' : `${I.bolt}Test connection`); test.title = 'Connect to the saved Redis URL and send PING';
+    const why = policyRefuses('storage.redis.url', undefined);
+    test.disabled = !!t.busy || !!why; if (why) { test.title = MANAGED_TIP; }
+    test.onclick = () => { state.redisTest = { busy: true }; post({ type: 'testRedis' }); refreshRedisStatus(); };
+    row.appendChild(test);
+    const out = el('div'); out.append(wrap, row);
+    return out;
+  }
+  /** Swaps only the status block, so a URL being typed keeps its text and caret. */
+  function refreshRedisStatus() {
+    const box = document.querySelector('.redis-status'); if (!box) { return; }
+    const had = box.contains(document.activeElement);
+    box.replaceChildren(redisStatus());
+    if (had) { const b = box.querySelector('.redis-acts .btn'); if (b) { b.focus({ preventScroll: true }); } }
   }
   /** Same rules as the extension's parser: redis:// or rediss://, a host, an optional numeric port and db. */
   function validRedisUrl(v) {
@@ -2564,29 +3315,80 @@
       return false;
     }
   }
+  // Table scrollers: a right-edge fade while columns are hidden off the edge, kept current on resize and scroll.
+  const tblRO = typeof ResizeObserver === 'function' ? new ResizeObserver((es) => es.forEach((e) => edgeFade(e.target))) : null;
+  let tblScrollers = [];
+  function edgeFade(sc) {
+    const scrolls = sc.scrollWidth - sc.clientWidth > 1;
+    sc.classList.toggle('scrolls', scrolls);
+    sc.classList.toggle('more', scrolls && sc.scrollLeft + sc.clientWidth < sc.scrollWidth - 1);
+    // A region that scrolls must be reachable from the keyboard.
+    if (scrolls) { sc.tabIndex = 0; sc.setAttribute('role', 'region'); sc.setAttribute('aria-label', `${sc.dataset.name || 'Table'} (scrolls sideways)`); } else { sc.removeAttribute('tabindex'); sc.removeAttribute('role'); sc.removeAttribute('aria-label'); }
+  }
+  /** Wraps each card table in a scroller and copies every column header onto its cells, for the stacked narrow layout. */
+  function fitTables(root) {
+    if (tblRO) { tblScrollers = tblScrollers.filter((sc) => sc.isConnected || (tblRO.unobserve(sc), false)); }
+    root.querySelectorAll('.tblwrap > table.tbl').forEach((t) => {
+      const heads = [...t.querySelectorAll('thead th')].map((th) => (th.dataset.label ?? th.textContent).trim());
+      if (heads.length) { t.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => { if (heads[i] && !td.hasAttribute('data-label')) { td.dataset.label = heads[i]; } })); }
+      const sc = el('div', 'tblscroll'); const h = t.parentElement.querySelector('h3');
+      sc.dataset.name = h ? h.firstChild.textContent.trim() : 'Table';
+      t.replaceWith(sc); sc.appendChild(t);
+      sc.onscroll = () => edgeFade(sc);
+      if (tblRO) { tblRO.observe(sc); tblScrollers.push(sc); } else { requestAnimationFrame(() => edgeFade(sc)); }
+    });
+  }
   /** Provider display name for a recorded provider id (the id itself when the provider is no longer configured). */
   function provName(id) { const p = providersList().find((x) => x.id === id); return p ? p.displayName || p.id : id; }
   /** Model tuning: what usage says about each installed model per role, open suggestions and recent automatic changes. */
   function tuningCard(tu) {
-    if (!tu || tu.mode === 'off' || !tu.rankings.length) { return null; }
-    const c = el('div', 'card tblwrap');
-    const modeLabel = tu.mode === 'auto' ? 'tuning automatically' : 'suggesting only';
+    const c = el('div', 'card tblwrap tuning');
+    // The setting is the truth for on/off: a report from before the switch still says the old mode.
+    const mode = effVal('models.autoTune') || (tu && tu.mode) || 'auto';
+    if (mode === 'off' || !tu) {
+      c.innerHTML = `<h3>Model tuning <span class="count">${mode === 'off' ? 'off' : ''}</span></h3><p class="muted small">${mode === 'off' ? 'Off. LocalPilot is not learning from usage.' : 'Model tuning is not available in this window.'}</p>`;
+      if (mode === 'off') {
+        c.appendChild(field('models.autoTune', 'Learn from usage', '', 'select', { options: [['auto', 'Tune automatically', ''], ['suggest', 'Suggest only', ''], ['off', 'Off', '']] }));
+        c.appendChild(el('p', 'small', '<a data-sec="models">Change on Models</a>'));
+      }
+      return c;
+    }
+    const modeLabel = mode === 'auto' ? 'tuning automatically' : 'suggesting only';
     const shortId = (id) => id ? id.slice(id.indexOf('/') + 1) : 'auto';
     const conf = (x) => `<span class="badge ${x === 'high' ? 'ok' : x === 'medium' ? '' : 'muted'}">${esc(x)}</span>`;
     let html = `<h3>Model tuning <span class="count">${fmtN(tu.analysed.runs)} runs · ${fmtN(tu.analysed.calls)} model calls · last ${tu.analysed.days} days · ${esc(modeLabel)}</span></h3>`;
+    if (!tu.rankings.length) {
+      c.innerHTML = `${html}<p class="muted small">No installed models to compare yet.</p><div class="btnrow"><span class="spacer"></span><button class="btn sm" data-retune="1">${I.refresh}Analyse now</button></div>`;
+      const re0 = c.querySelector('[data-retune]'); re0.onclick = () => { re0.disabled = true; post({ type: 'retune' }); };
+      return c;
+    }
+    // What an Apply click did, shown in place of its button; an error clears after a while so the row can be tried again.
+    const res = state.dash.tuneResults || {}; const now = Date.now();
+    for (const [k, v] of Object.entries(res)) { if (!v.pending && now - v.at > (v.ok ? 300e3 : 30e3)) { delete res[k]; } }
+    const act = (g, i) => {
+      if (g.kind === 'routing') { return '<span class="muted small" title="The setting is on Auto, and Auto routing already uses this model">Auto uses it</span>'; }
+      const r = res[`${g.role}|${g.suggested}`];
+      if (r && r.pending) { return '<span class="muted small" role="status">Applying…</span>'; }
+      if (r && r.ok) { return `<span class="ok-text" role="status">${I.check}Applied</span>`; }
+      if (r && r.error) { return `<span class="err-text" role="alert" title="${esc(r.error)}">${esc(r.error)}</span>`; }
+      return `<button class="btn sm" data-tune="${i}" aria-label="Use ${esc(shortId(g.suggested))} for ${esc(roleLabel(g.role))}">Apply</button>`;
+    };
     if (tu.suggestions.length) {
-      html += `<table class="tbl dash-tbl tune"><thead><tr><th>Role</th><th>Suggested</th><th>Instead of</th><th>Why</th><th>Confidence</th><th></th></tr></thead><tbody>${tu.suggestions.map((g, i) => `<tr><td>${esc(roleLabel(g.role))}</td><td class="mono"><b>${esc(shortId(g.suggested))}</b></td><td class="mono muted">${esc(shortId(g.current))}${g.currentStruggling ? ' <span class="err-text">struggling</span>' : ''}</td><td class="small">${esc(g.reason)}</td><td>${conf(g.confidence)}</td><td>${g.kind === 'routing' ? '<span class="muted small" title="The setting is on Auto, and Auto routing already uses this model">Auto uses it</span>' : `<button class="btn sm" data-tune="${i}">Apply</button>`}</td></tr>`).join('')}</tbody></table>`;
+      html += `<table class="tbl dash-tbl tune"><thead><tr><th>Role</th><th>Suggested</th><th>Instead of</th><th>Confidence</th><th class="act"><span class="sr-only">Apply</span></th></tr></thead><tbody>${tu.suggestions.map((g, i) => `<tr class="sug"><td>${esc(roleLabel(g.role))}</td><td class="mono"><b>${esc(shortId(g.suggested))}</b></td><td class="mono muted">${esc(shortId(g.current))}${g.currentStruggling ? ' <span class="err-text">struggling</span>' : ''}</td><td>${conf(g.confidence)}</td><td class="act">${act(g, i)}</td></tr><tr class="why"><td colspan="5" class="small" data-label="Why">${esc(g.reason)}</td></tr>`).join('')}</tbody></table>`;
     } else {
       html += `<p class="muted small">${tu.analysed.runs + tu.analysed.calls ? 'Your current picks are the best installed fit for every role.' : 'No usage recorded yet — use the chat for a while and LocalPilot learns which installed models work best here.'}</p>`;
     }
     html += `<div class="dash-cols">${tu.rankings.map((r) => `<div><div class="lbl small">${esc(r.label)}${r.current ? ` <span class="muted">· set to ${esc(shortId(r.current))}</span>` : ''}</div><ol class="small rank">${r.models.map((m) => `<li><span class="mono">${esc(shortId(m.id))}</span> <span class="muted">${m.evidence ? esc(m.detail) : 'not measured yet'}${m.bonus ? ` · <span class="${m.bonus > 0 ? 'ok-text' : 'err-text'}">${m.bonus > 0 ? '+' : ''}${m.bonus}</span>` : ''}</span></li>`).join('')}</ol></div>`).join('')}</div>`;
+    // Applied suggestions drop out of the list once the dashboard refreshes; say what changed.
+    const gone = Object.entries(res).filter(([k, v]) => v.ok && !tu.suggestions.some((g) => `${g.role}|${g.suggested}` === k));
+    if (gone.length) { html += `<p class="ok-text small" role="status">${I.check}Applied: ${gone.map(([k]) => { const [role, model] = k.split('|'); return `${esc(shortId(model))} for ${esc(roleLabel(role))}`; }).join(' · ')}</p>`; }
     if (tu.history.length) {
-      html += `<p class="muted small">Recent automatic changes: ${tu.history.slice(0, 4).map((h) => `<code>${esc(h.setting)}</code> → ${esc(shortId(h.value))} (${new Date(h.at).toLocaleString()})`).join(' · ')}</p>`;
+      html += `<p class="muted small">Recent changes: ${tu.history.slice(0, 4).map((h) => `<code>${esc(h.setting)}</code> → ${esc(shortId(h.value))}${h.manual ? ' <span class="badge muted">manual</span>' : ''} (${new Date(h.at).toLocaleString()})`).join(' · ')}</p>`;
     }
     html += `<div class="btnrow"><span class="spacer"></span><button class="btn sm" data-retune="1">${I.refresh}Analyse now</button></div>`;
     c.innerHTML = html;
-    c.querySelectorAll('[data-tune]').forEach((b) => { b.onclick = () => { const g = tu.suggestions[Number(b.dataset.tune)]; b.disabled = true; post({ type: 'applyTune', role: g.role, model: g.suggested }); }; });
-    const re = c.querySelector('[data-retune]'); if (re) { re.onclick = () => { re.disabled = true; post({ type: 'retune' }); }; }
+    c.querySelectorAll('[data-tune]').forEach((b) => { b.onclick = () => { const g = tu.suggestions[Number(b.dataset.tune)]; res[`${g.role}|${g.suggested}`] = { pending: true, at: Date.now() }; state.dash.tuneResults = res; b.parentElement.innerHTML = '<span class="muted small" role="status">Applying…</span>'; post({ type: 'applyTune', role: g.role, model: g.suggested }); }; });
+    const re = c.querySelector('[data-retune]'); if (re) { re.onclick = () => { re.disabled = true; for (const k of Object.keys(res)) { if (res[k].error) { delete res[k]; } } post({ type: 'retune' }); }; }
     return c;
   }
   function roleLabel(role) { return ({ agent: 'Chat & agent', reasoning: 'Plan mode', coding: 'Coding subagents', fast: 'Read-only subagents', completion: 'Inline completions', vision: 'Images' })[role] || role; }
@@ -2594,12 +3396,27 @@
     const root = document.getElementById('dash');
     if (!root) { return; }
     const s = state.dash.summary;
-    if (!s) { root.replaceChildren(state.dash.loading ? skeleton('Loading usage metrics…', 6, 'kpis') : el('p', 'empty', 'No data yet.')); return; }
+    const off = recordingOff();
+    const turnOn = () => { if (policyRefuses('telemetry.enabled', true)) { return el('span', 'muted small', 'Set by your organization'); } const b = el('button', 'btn sm primary', 'Turn on'); b.title = 'Record usage metrics on this machine again'; b.onclick = () => { b.disabled = true; set('telemetry.enabled', true); }; return b; };
+    const offEmpty = () => { const p = el('div', 'empty dash-off'); p.append(el('span', '', 'Recording is off, so nothing is collected.'), turnOn()); return p; };
+    // A failed or missing reply keeps the last numbers on screen, dimmed under a retry card.
+    const errCard = () => {
+      if (!state.dash.error) { return null; }
+      const c = el('div', 'policy dash-err'); c.setAttribute('role', 'alert');
+      c.innerHTML = `${I.x}<div>Could not load usage metrics: ${esc(state.dash.error)}</div>`;
+      const b = el('button', 'btn sm', `${I.refresh}Try again`); b.onclick = () => { state.dash.error = ''; state.dash.manual = true; renderDashboard(); requestDashboard(); }; c.appendChild(b);
+      return c;
+    };
+    const finish = () => { const e = errCard(); root.classList.toggle('errored', !!e); if (e) { root.prepend(e); } dashBusy(); };
+    if (!s) {
+      root.replaceChildren(...(state.dash.loading ? [skeleton('Loading usage metrics…', 6, 'kpis')] : off ? [offEmpty()] : state.dash.error ? [] : [el('p', 'empty', 'No data yet.')]));
+      return finish();
+    }
     const t = s.totals;
     const empty = !t.runs && !t.modelCalls && !s.completions.requested && !s.health.length;
     if (empty) {
-      root.innerHTML = `<p class="empty">Nothing recorded in this period yet. Start a chat, use inline completions or run the CLI and the numbers appear here.</p>`;
-      return;
+      if (off) { root.replaceChildren(offEmpty()); } else { root.innerHTML = `<p class="empty">Nothing recorded in this period yet. Start a chat, use inline completions or run the CLI and the numbers appear here.</p>`; }
+      return finish();
     }
     const tokens = t.promptTokens + t.completionTokens;
     const okRate = t.runs ? Math.round((t.done / t.runs) * 100) : 0;
@@ -2612,43 +3429,72 @@
     const undoneLines = ed ? ed.rejectedAdded + ed.rejectedRemoved : 0;
     const hk = s.activity && s.activity.hooks;
     const hookFails = hk ? hk.failed + hk.timeout : 0;
+    // Calls that carried a price; older summaries without the provider split count every call of a priced model.
+    const priced = Array.isArray(s.providers) ? s.providers.reduce((a, p) => a + (p.pricedCalls || 0), 0) : s.models.filter((m) => m.costUsd !== undefined).reduce((a, m) => a + m.calls, 0);
+    const free = !t.costUsd && !priced;
+    // Tiles in reading order: the headline numbers first, then the detail. A tile with nothing to show yet is listed on one
+    // muted line under the grid instead of taking a box of its own.
+    const ser = (pick, what, fmt) => spark(s.series, pick, what, fmt);
+    const tiles = [
+      ['Agent runs', fmtN(t.runs), `${t.done} done · ${t.stopped} stopped · <span class="${t.failed ? 'err-text' : ''}">${t.failed} failed</span>${t.subagentRuns ? ` · ${t.subagentRuns} subagent` : ''}`, ser((d) => d.runs, 'Agent runs per day'), t.failed && okRate < 70 ? 'warn' : ''],
+      ['Tokens', fmtN(tokens), `${fmtN(t.promptTokens)} in · ${fmtN(t.completionTokens)} out${topTps ? ` · best <b>${topTps.tokPerSec}</b> tok/s` : ''}`, ser((d) => d.tokens, 'Tokens per day')],
+      !t.modelCalls ? ['Cost', '—'] : free ? ['Cost', 'Free', 'all calls ran locally'] : ['Cost', fmtUsd(t.costUsd || 0), `${fmtN(priced)} priced call${priced === 1 ? '' : 's'}${t.runs ? ` · avg <b>${fmtUsd((t.costUsd || 0) / t.runs)}</b> per run` : ''}`, ser((d) => d.costUsd || 0, 'Cost per day', fmtUsd)],
+      ['Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(provName(h.provider))} ${pct(h.uptime)}`).join(' · ') : '', '', health.length && up < health.length ? 'warn' : ''],
+      ['Model calls', fmtN(t.modelCalls), `${t.retries} retr${t.retries === 1 ? 'y' : 'ies'} · <span class="${t.modelErrors ? 'err-text' : ''}">${t.modelErrors} error${t.modelErrors === 1 ? '' : 's'}</span>`, ser((d) => d.modelCalls, 'Model calls per day')],
+      ['Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, ser((d) => d.toolCalls, 'Tool calls per day')],
+      ['Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}`, ser((d) => d.completionsShown, 'Inline completions shown per day')],
+      ['Throughput', t.tokPerSec ? `${t.tokPerSec} <span class="kpi-u">tok/s</span>` : '—', `generation speed across all calls${topTps ? ` · fastest ${esc(topTps.model)}` : ''}`, ser((d) => d.tokPerSec, 'Tokens per second by day')],
+      ['Turn time', t.runTime.p50 ? fmtMs(t.runTime.p50) : '—', `median · p95 ${fmtMs(t.runTime.p95)} · ${t.steps.p50} step${t.steps.p50 === 1 ? '' : 's'} per turn`, ''],
+      ['Cache hits', t.toolCalls ? pct((t.cachedTools / t.toolCalls) * 100) : '—', `${fmtN(t.cachedTools)} read-only tool calls answered from the turn cache`, ser((d) => d.cachedTools, 'Cached tool calls per day')],
+      ['Edits kept', keptLines + undoneLines ? pct((keptLines / (keptLines + undoneLines)) * 100) : '—', ed && ed.accepted + ed.rejected ? `+${fmtN(ed.acceptedAdded)} −${fmtN(ed.acceptedRemoved)} lines kept · <span class="${undoneLines ? 'err-text' : ''}">+${fmtN(ed.rejectedAdded)} −${fmtN(ed.rejectedRemoved)}</span> undone${ed.acceptedFiles + ed.rejectedFiles ? ` · files ${fmtN(ed.acceptedFiles)} kept / ${fmtN(ed.rejectedFiles)} undone` : ''}` : '', ser((d) => d.acceptedLines || 0, 'Lines kept per day')],
+      ['Hooks', hk && hk.runs ? fmtN(hk.runs) : '—', hk && hk.runs ? `<span class="${hookFails ? 'err-text' : ''}">${hookFails} failed</span>${hk.timeout ? ` (${hk.timeout} timed out)` : ''} · ${hk.blocked} blocked${hk.duration.p50 ? ` · ${fmtMs(hk.duration.p50)} median` : ''}` : '', ser((d) => d.hookFailures || 0, 'Hook failures per day'), hookFails ? 'warn' : ''],
+    ];
     const kpis = el('div', 'kpis');
-    kpis.innerHTML = [
-      kpi('Agent runs', fmtN(t.runs), `${t.done} done · ${t.stopped} stopped · <span class="${t.failed ? 'err-text' : ''}">${t.failed} failed</span>${t.subagentRuns ? ` · ${t.subagentRuns} subagent` : ''}`, spark(s.series, (d) => d.runs), t.failed && okRate < 70 ? 'warn' : ''),
-      kpi('Tokens', fmtN(tokens), `${fmtN(t.promptTokens)} in · ${fmtN(t.completionTokens)} out${t.costUsd ? ` · <b>${fmtUsd(t.costUsd)}</b>` : ''}${topTps ? ` · best <b>${topTps.tokPerSec}</b> tok/s` : ''}`, spark(s.series, (d) => d.tokens)),
-      kpi('Model calls', fmtN(t.modelCalls), `${t.retries} retr${t.retries === 1 ? 'y' : 'ies'} · <span class="${t.modelErrors ? 'err-text' : ''}">${t.modelErrors} error${t.modelErrors === 1 ? '' : 's'}</span>`, spark(s.series, (d) => d.modelCalls)),
-      kpi('Tool calls', fmtN(t.toolCalls), `<span class="${t.toolErrors ? 'err-text' : ''}">${t.toolErrors} failed</span>${t.toolCalls ? ` · ${pct(100 - (t.toolErrors / t.toolCalls) * 100)} ok` : ''}`, spark(s.series, (d) => d.toolCalls)),
-      kpi('Completions', c.shown + c.cached ? pct(c.acceptanceRate) : '—', c.requested ? `${fmtN(c.accepted)} accepted of ${fmtN(c.shown + c.cached)} shown · ${fmtN(c.requested)} requested${c.latency.p50 ? ` · ${fmtMs(c.latency.p50)} median` : ''}` : 'no inline completions yet', spark(s.series, (d) => d.completionsShown)),
-      kpi('Providers', health.length ? `${up}/${health.length} up` : '—', health.length ? health.map((h) => `<span class="dot ${h.up ? 'ok' : 'err'}"></span>${esc(provName(h.provider))} ${pct(h.uptime)}`).join(' · ') : 'no checks yet', '', health.length && up < health.length ? 'warn' : ''),
-      kpi('Throughput', t.tokPerSec ? `${t.tokPerSec} <span class="kpi-u">tok/s</span>` : '—', t.tokPerSec ? `generation speed across all calls${topTps ? ` · fastest ${esc(topTps.model)}` : ''}` : 'no completed calls yet', spark(s.series, (d) => d.tokPerSec)),
-      kpi('Turn time', t.runTime.p50 ? fmtMs(t.runTime.p50) : '—', t.runTime.p50 ? `median · p95 ${fmtMs(t.runTime.p95)} · ${t.steps.p50} step${t.steps.p50 === 1 ? '' : 's'} per turn` : 'no finished turns yet', ''),
-      kpi('Cache hits', t.toolCalls ? pct((t.cachedTools / t.toolCalls) * 100) : '—', t.toolCalls ? `${fmtN(t.cachedTools)} read-only tool calls answered from the turn cache` : 'no tool calls yet', spark(s.series, (d) => d.cachedTools)),
-      kpi('Edits kept', keptLines + undoneLines ? pct((keptLines / (keptLines + undoneLines)) * 100) : '—', ed && ed.accepted + ed.rejected ? `+${fmtN(ed.acceptedAdded)} −${fmtN(ed.acceptedRemoved)} lines kept · <span class="${undoneLines ? 'err-text' : ''}">+${fmtN(ed.rejectedAdded)} −${fmtN(ed.rejectedRemoved)}</span> undone` : 'no agent edits kept or undone yet', spark(s.series, (d) => d.acceptedLines || 0)),
-      kpi('Hooks', hk && hk.runs ? fmtN(hk.runs) : '—', hk && hk.runs ? `<span class="${hookFails ? 'err-text' : ''}">${hookFails} failed</span>${hk.timeout ? ` (${hk.timeout} timed out)` : ''} · ${hk.blocked} blocked${hk.duration.p50 ? ` · ${fmtMs(hk.duration.p50)} median` : ''}` : 'no hooks ran', spark(s.series, (d) => d.hookFailures || 0), hookFails ? 'warn' : ''),
-    ].join('');
+    kpis.innerHTML = tiles.filter((k) => k[1] !== '—').map(([label, value, sub, sp, tone]) => kpi(label, value, sub, sp, tone)).join('');
+    const noData = tiles.filter((k) => k[1] === '—').map((k) => k[0]);
     root.innerHTML = '';
+    if (off) {
+      const lastDay = [...s.series].reverse().find((d) => d.runs || d.modelCalls || d.toolCalls || d.completionsShown);
+      const ban = el('div', 'policy dash-rec');
+      ban.innerHTML = `${I.pulse}<div><b>Recording is off.</b> ${lastDay ? `These numbers stop at ${esc(dayLabel(lastDay.day))}.` : 'Nothing new is recorded.'}</div>`;
+      ban.appendChild(turnOn()); root.appendChild(ban);
+    }
     root.appendChild(kpis);
-    const tuning = tuningCard(state.dash.tuning);
-    if (tuning) { root.appendChild(tuning); }
+    if (noData.length) { root.appendChild(el('p', 'muted small kpi-none', `No data yet: ${noData.map(esc).join(' · ')}`)); }
+    root.appendChild(tuningCard(state.dash.tuning));
     // Charts: activity per day, tokens in/out, generation speed, outcomes, tool reliability, hour of day.
     const many = s.series.length > 1;
     if (many) {
       const charts = el('div', 'dash-cols charts');
       const act = el('div', 'card');
-      act.innerHTML = `<h3>Activity <span class="count">${t.activeDays} of ${s.series.length} day${s.series.length === 1 ? '' : 's'} active</span></h3>` + barChart(s.series, [{ label: 'Model calls', pick: (d) => d.modelCalls }, { label: 'Tool calls', pick: (d) => d.toolCalls }, { label: 'Agent runs', pick: (d) => d.runs }, { label: 'Errors', cls: 'err', pick: (d) => d.errors }]);
+      act.innerHTML = `<h3>Activity <span class="count">${t.activeDays} of ${s.series.length} day${s.series.length === 1 ? '' : 's'} active</span></h3>`;
+      act.appendChild(chartSlot((w) => barChart(s.series, [{ label: 'Model calls', pick: (d) => d.modelCalls }, { label: 'Tool calls', pick: (d) => d.toolCalls }, { label: 'Agent runs', pick: (d) => d.runs }, { label: 'Errors', cls: 'err', pick: (d) => d.errors }], { title: 'Activity per day' }, w)));
       charts.appendChild(act);
       const tok = el('div', 'card');
-      tok.innerHTML = `<h3>Tokens <span class="count">${fmtN(tokens)}</span></h3>` + barChart(s.series, [{ label: 'Prompt (in)', pick: (d) => d.promptTokens }, { label: 'Completion (out)', pick: (d) => d.completionTokens }], { stacked: true });
+      tok.innerHTML = `<h3>Tokens <span class="count">${fmtN(tokens)}</span></h3>`;
+      tok.appendChild(chartSlot((w) => barChart(s.series, [{ label: 'Prompt (in)', pick: (d) => d.promptTokens }, { label: 'Completion (out)', pick: (d) => d.completionTokens }], { stacked: true, title: 'Tokens per day' }, w)));
       charts.appendChild(tok);
+      if (t.costUsd > 0) { charts.appendChild(spendCard(s)); }
       root.appendChild(charts);
       const charts2 = el('div', 'dash-cols charts');
       const spd = el('div', 'card');
-      spd.innerHTML = `<h3>Generation speed <span class="count">tok/s per day</span></h3>` + lineChart(s.series, [{ label: 'Completion tokens / s', pick: (d) => d.tokPerSec }], { fmt: (v) => `${Math.round(v)}` });
+      spd.innerHTML = `<h3>Generation speed <span class="count">tok/s per day</span></h3>`;
+      spd.appendChild(chartSlot((w) => lineChart(s.series, [{ label: 'Completion tokens / s', pick: (d) => d.tokPerSec }], { fmt: (v) => `${Math.round(v)}`, title: 'Generation speed in tokens per second', avg: true }, w)));
       charts2.appendChild(spd);
       const acc = el('div', 'card');
-      acc.innerHTML = `<h3>Completions <span class="count">shown vs accepted</span></h3>` + barChart(s.series, [{ label: 'Shown', pick: (d) => d.completionsShown }, { label: 'Accepted', pick: (d) => d.completionsAccepted }]);
+      acc.innerHTML = `<h3>Completions <span class="count">shown vs accepted</span></h3>`;
+      acc.appendChild(chartSlot((w) => barChart(s.series, [{ label: 'Shown', pick: (d) => d.completionsShown }, { label: 'Accepted', pick: (d) => d.completionsAccepted }], { title: 'Inline completions per day' }, w)));
       charts2.appendChild(acc);
       root.appendChild(charts2);
+    } else {
+      // One day has no daily trend to draw, so its hours take the charts slot.
+      const charts = el('div', 'dash-cols charts one');
+      const hrs = el('div', 'card');
+      const peak = s.hourly.indexOf(Math.max(...s.hourly));
+      hrs.innerHTML = `<h3>${state.dash.days === 1 ? 'Today by hour' : 'By hour'} <span class="count">${s.hourly.some(Boolean) ? `busiest ${String(peak).padStart(2, '0')}:00` : ''}</span></h3>` + (s.hourly.some(Boolean) ? '' : '<p class="empty">No activity yet.</p>');
+      if (s.hourly.some(Boolean)) { hrs.appendChild(chartSlot((w) => hourChart(s.hourly, w), 180, 640)); }
+      charts.appendChild(hrs);
+      root.appendChild(charts);
     }
     const rings = el('div', 'dash-cols rings');
     const oc = el('div', 'card');
@@ -2657,15 +3503,26 @@
     const tc = el('div', 'card');
     tc.innerHTML = `<h3>Tool reliability</h3>` + (t.toolCalls ? donut([{ label: 'Succeeded', value: t.toolCalls - t.toolErrors - t.cachedTools, cls: 'ok' }, { label: 'From cache', value: t.cachedTools, cls: 's0' }, { label: 'Failed', value: t.toolErrors, cls: 'err' }], pct(100 - (t.toolErrors / t.toolCalls) * 100), 'ok') : '<p class="empty">No tool calls yet.</p>');
     rings.appendChild(tc);
-    const hc0 = el('div', 'card');
-    const peak = s.hourly.indexOf(Math.max(...s.hourly));
-    hc0.innerHTML = `<h3>Activity by hour <span class="count">${s.hourly.some(Boolean) ? `busiest ${String(peak).padStart(2, '0')}:00` : ''}</span></h3>` + (s.hourly.some(Boolean) ? hourChart(s.hourly) : '<p class="empty">No activity yet.</p>');
-    rings.appendChild(hc0);
+    if (many) {
+      const hc0 = el('div', 'card');
+      const peak = s.hourly.indexOf(Math.max(...s.hourly));
+      hc0.innerHTML = `<h3>Activity by hour <span class="count">${s.hourly.some(Boolean) ? `busiest ${String(peak).padStart(2, '0')}:00` : ''}</span></h3>` + (s.hourly.some(Boolean) ? '' : '<p class="empty">No activity yet.</p>');
+      if (s.hourly.some(Boolean)) { hc0.appendChild(chartSlot((w) => hourChart(s.hourly, w), 180, 360)); }
+      rings.appendChild(hc0);
+    }
     root.appendChild(rings);
     // Models
     const cols = el('div', 'dash-cols');
     const models = el('div', 'card tblwrap');
-    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span></h3>` + (s.models.length ? `<table class="tbl dash-tbl"><thead><tr><th>Model</th><th>Calls</th><th>Tokens in / out</th><th title="provider-reported cost, or the bundled prices; local models are free">Cost</th><th title="completion tokens per second of generation">tok/s</th><th title="time to first token: median / p95">First token</th><th title="whole request: median / p95">Request</th><th>Errors</th></tr></thead><tbody>${s.models.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(provName(m.provider))}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td class="${m.costUsd ? '' : 'muted'}"${m.costUsd === undefined ? ' title="local · free"' : ''}>${fmtUsd(m.costUsd)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${pctl(m.ttft)}</td><td>${pctl(m.duration)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
+    const so = state.dash.sort || { key: 'calls', dir: 'desc' };
+    const sorted = [...s.models].sort((a, b) => (MODEL_SORTS[so.key](a) - MODEL_SORTS[so.key](b)) * (so.dir === 'asc' ? 1 : -1) || b.calls - a.calls);
+    const sth = (key, label, title) => `<th data-label="${label}"${so.key === key ? ` aria-sort="${so.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}${title ? ` title="${title}"` : ''}><button class="th-sort${so.key === key ? ' on' : ''}" data-sort="${key}">${label}<span class="arr" aria-hidden="true">${so.key === key ? (so.dir === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>`;
+    const latency = (m) => (m.ttft.p50 || m.duration.p50 ? `<span class="pctl" title="p95: first token ${fmtMs(m.ttft.p95)} · request ${fmtMs(m.duration.p95)}">${m.ttft.p50 ? fmtMs(m.ttft.p50) : '—'} <i>·</i> ${fmtMs(m.duration.p50)}</span>` : '<span class="muted">—</span>');
+    // Stacked rows have no header to click, so a narrow dashboard sorts with a menu instead.
+    const sortSel = s.models.length > 1 ? `<select class="dash-sort" aria-label="Sort models">${[['calls', 'Calls'], ['tokens', 'Tokens'], ['cost', 'Cost'], ['tps', 'tok/s'], ['errors', 'Errors']].map(([k, l]) => `<option value="${k}"${so.key === k ? ' selected' : ''}>${l}</option>`).join('')}</select>` : '';
+    models.innerHTML = `<h3>Models <span class="count">${s.models.length}</span>${sortSel}</h3>` + (s.models.length ? `<table class="tbl dash-tbl models"><thead><tr><th>Model</th>${sth('calls', 'Calls')}${sth('tokens', 'Tokens', 'tokens in / out')}${sth('cost', 'Cost', 'provider-reported cost, or the bundled prices; local models are free')}${sth('tps', 'tok/s', 'completion tokens per second of generation')}<th data-label="Latency" title="median time to first token · median whole request; hover a value for the 95th percentile">Latency</th>${sth('errors', 'Errors')}</tr></thead><tbody>${sorted.map((m) => `<tr><td class="mono"><b>${esc(m.model)}</b><span class="muted small"> · ${esc(provName(m.provider))}</span></td><td>${fmtN(m.calls)}</td><td>${fmtN(m.promptTokens)} / ${fmtN(m.completionTokens)}</td><td class="${m.costUsd ? '' : 'muted'}"${m.costUsd === undefined ? ' title="local · free"' : ''}>${fmtUsd(m.costUsd)}</td><td>${m.tokPerSec ? `<b>${m.tokPerSec}</b>` : '—'}</td><td>${latency(m)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">No model calls in this period.</p>');
+    const ss = models.querySelector('.dash-sort'); if (ss) { ss.onchange = () => { state.dash.sort = { key: ss.value, dir: 'desc' }; renderDashboard(); const n = document.querySelector('#dash .dash-sort'); if (n) { n.focus({ preventScroll: true }); } }; }
+    models.querySelectorAll('[data-sort]').forEach((b) => { b.onclick = () => { const k = b.dataset.sort; state.dash.sort = { key: k, dir: so.key === k && so.dir === 'desc' ? 'asc' : 'desc' }; renderDashboard(); const n = document.querySelector(`#dash [data-sort="${k}"]`); if (n) { n.focus({ preventScroll: true }); } }; });
     cols.appendChild(models);
     // Modes
     const modes = el('div', 'card tblwrap');
@@ -2696,34 +3553,148 @@
     }
     cols2.appendChild(side);
     root.appendChild(cols2);
-    // Recent errors
-    if (s.errors.length) {
-      const ec = el('div', 'card tblwrap');
-      ec.innerHTML = `<h3>Recent problems <span class="count">${s.errors.length}</span></h3><table class="tbl dash-tbl errs"><tbody>${s.errors.slice(0, 12).map((e) => `<tr><td class="muted small nowrap">${fmtAgo(e.t)}</td><td><span class="badge ${e.kind === 'health' ? 'warn' : 'err'}">${esc(e.kind)}</span></td><td class="mono">${esc(e.kind === 'health' ? provName(e.what) : e.what)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join('')}</tbody></table>`;
-      root.appendChild(ec);
+    const actCards = activityCards(s);
+    if (actCards.length === 1) { root.appendChild(actCards[0]); } else if (actCards.length) {
+      const cols3 = el('div', 'dash-cols'); cols3.appendChild(actCards[0]);
+      const side3 = el('div', 'dash-side'); actCards.slice(1).forEach((x) => side3.appendChild(x)); cols3.appendChild(side3);
+      root.appendChild(cols3);
     }
+    // Recent errors
+    if (s.errors.length) { root.appendChild(problemsCard(s.errors)); }
+    root.querySelectorAll('[data-sec]').forEach((a) => { a.onclick = () => { state.section = a.dataset.sec; render(); }; });
+    drawCharts(root);
+    if (!chartRO && typeof ResizeObserver === 'function') { chartRO = new ResizeObserver(() => { cancelAnimationFrame(chartRaf); chartRaf = requestAnimationFrame(() => { const r = document.getElementById('dash'); if (r) { drawCharts(r); } }); }); }
+    if (chartRO) { chartRO.disconnect(); chartRO.observe(root); }
+    fitTables(root);
+    finish();
     renderStorage();
   }
+  const ERR_KINDS = [['', 'All'], ['model', 'Model'], ['tool', 'Tool'], ['run', 'Run'], ['health', 'Health'], ['hook', 'Hook'], ['mcp', 'MCP']];
+  /** Recent problems, filterable by kind. A row opens the log at that problem: filter = what failed, warnings and up. */
+  function problemsCard(errors) {
+    const d = state.dash; const kind = d.errKind || '';
+    const count = (k) => (k ? errors.filter((e) => e.kind === k).length : errors.length);
+    const list = kind ? errors.filter((e) => e.kind === kind) : errors;
+    const shown = d.errAll ? list : list.slice(0, 12);
+    const ec = el('div', 'card probs');
+    ec.innerHTML = `<h3>Recent problems <span class="count">${errors.length}</span></h3>`;
+    const chips = el('div', 'chips small err-kinds'); chips.setAttribute('role', 'group'); chips.setAttribute('aria-label', 'Show problems of kind');
+    for (const [k, l] of ERR_KINDS) {
+      const n = count(k); if (k && !n && k !== kind) { continue; }
+      const b = el('button', `chip${k === kind ? ' on' : ''}`, `${esc(l)}<i>${n}</i>`); b.setAttribute('aria-pressed', String(k === kind));
+      b.onclick = () => { if (k === kind) { return; } d.errKind = k; d.errAll = false; const fresh = problemsCard(errors); ec.replaceWith(fresh); const nb = fresh.querySelector('.err-kinds .chip.on'); if (nb) { nb.focus({ preventScroll: true }); } };
+      chips.appendChild(b);
+    }
+    ec.appendChild(chips);
+    const ul = el('ul', 'errlist');
+    for (const e of shown) {
+      const li = el('li', '');
+      const what = e.kind === 'health' ? provName(e.what) : e.what;
+      const row = el('button', 'err-row', `<span class="et muted" title="${esc(new Date(e.t).toLocaleString())}">${fmtAgo(e.t)}</span><span class="badge ${e.kind === 'health' ? 'warn' : 'err'}">${esc(e.kind)}</span><span class="ew mono" title="${esc(what)}">${esc(what)}</span><span class="ed muted" title="${esc(e.detail)}">${esc(e.detail)}</span>`);
+      row.title = 'Show matching warnings and errors in the log below';
+      row.onclick = () => showInLog(e.what);
+      li.appendChild(row);
+      if (e.kind === 'health') { const a = el('button', 'inline-link', 'Providers'); a.dataset.sec = 'providers'; a.title = 'Check this provider on the Providers page'; a.onclick = () => { state.section = 'providers'; render(); }; li.appendChild(a); }
+      ul.appendChild(li);
+    }
+    if (!shown.length) { ec.appendChild(el('p', 'muted small', 'No problems of this kind in this period.')); } else { ec.appendChild(ul); }
+    if (list.length > 12) {
+      const more = el('button', 'inline-link err-more', d.errAll ? 'Show fewer' : `Show all (${list.length})`);
+      more.onclick = () => { d.errAll = !d.errAll; const fresh = problemsCard(errors); ec.replaceWith(fresh); const nb = fresh.querySelector('.err-more'); if (nb) { nb.focus({ preventScroll: true }); } };
+      ec.appendChild(el('p', 'dash-foot small')).appendChild(more);
+    }
+    return ec;
+  }
+  /** Filters the log viewer to one problem and brings it into view. */
+  function showInLog(what) {
+    state.dash.q = String(what || ''); state.dash.level = 'warn';
+    const q = document.getElementById('logQ'); if (q) { q.value = state.dash.q; }
+    const lvl = document.getElementById('logLevel'); if (lvl) { lvl.value = 'warn'; }
+    requestLogs();
+    const v = document.getElementById('logview');
+    if (v) { v.closest('.logcard').scrollIntoView({ block: 'center', behavior: calm() ? 'auto' : 'smooth' }); v.focus({ preventScroll: true }); }
+  }
+  const MODEL_SORTS = { calls: (m) => m.calls, tokens: (m) => m.promptTokens + m.completionTokens, cost: (m) => m.costUsd ?? -1, tps: (m) => m.tokPerSec || 0, errors: (m) => m.errors };
+  /** Spend per day, stacked by provider when the summary splits it (the three biggest, the rest as Other). */
+  function spendCard(s) {
+    const t = s.totals; const card = el('div', 'card');
+    const spenders = (s.providers || []).filter((p) => p.costUsd > 0);
+    const split = spenders.length > 1 && s.series.some((d) => d.costByProvider);
+    let keys = [{ label: spenders.length === 1 ? `${provName(spenders[0].provider)} ${usdText(spenders[0].costUsd)}` : 'Spend', pick: (d) => d.costUsd || 0 }];
+    if (split) {
+      const by = (d, id) => (d.costByProvider || {})[id] || 0;
+      const rest = spenders.slice(3);
+      keys = spenders.slice(0, 3).map((p) => ({ label: `${provName(p.provider)} ${usdText(p.costUsd)}`, pick: (d) => by(d, p.provider) }));
+      if (rest.length) { keys.push({ label: `Other ${usdText(rest.reduce((a, p) => a + p.costUsd, 0))}`, pick: (d) => rest.reduce((a, p) => a + by(d, p.provider), 0) }); }
+    }
+    card.innerHTML = `<h3>Spend <span class="count">${fmtUsd(t.costUsd)}${spenders.length > 1 ? ` · ${spenders.length} providers` : ''}</span></h3>`;
+    card.appendChild(chartSlot((w) => barChart(s.series, keys, { stacked: true, fmt: usdText, floor: 0.0001, title: 'Spend per day' }, w)));
+    return card;
+  }
+  /** MCP servers, hooks by event and the choices the user made (slash commands, mentions, modes, models, checkpoints, tasks). */
+  function activityCards(s) {
+    const a = s.activity; if (!a) { return []; }
+    const out = [];
+    const mcpSet = Object.keys(val('mcpServers') || {}).length + (state.data.mcp || []).length;
+    if (a.mcp && (a.mcp.calls || mcpSet)) {
+      const mc = el('div', 'card tblwrap');
+      const srv = a.mcp.servers || [];
+      mc.innerHTML = `<h3>MCP servers <span class="count">${srv.length ? `${plural(srv.length, 'server')} · ` : ''}${plural(a.mcp.calls, 'call')}</span></h3>` + (a.mcp.calls ? `<table class="tbl dash-tbl"><thead><tr><th>Server</th><th>Calls</th><th>Failed</th><th title="median / p95">Duration</th><th>Share</th></tr></thead><tbody>${srv.map((m) => { const share = (m.calls / a.mcp.calls) * 100; return `<tr><td class="mono">${esc(m.server)}</td><td>${fmtN(m.calls)}</td><td class="${m.errors ? 'err-text' : 'muted'}">${m.errors}${m.calls ? ` <i class="muted">(${pct((m.errors / m.calls) * 100)})</i>` : ''}</td><td>${pctl(m.duration)}</td><td><span class="meter" title="${pct(share)} of all MCP calls"><i style="width:${share.toFixed(1)}%"></i></span></td></tr>`; }).join('')}</tbody></table><p class="dash-foot muted small"><button class="inline-link" data-sec="mcp">MCP servers</button></p>` : `<p class="empty">No MCP tool calls in this period. <button class="inline-link" data-sec="mcp">MCP servers</button></p>`);
+      out.push(mc);
+    }
+    const hk = a.hooks;
+    if (hk && hk.runs) {
+      const hc = el('div', 'card tblwrap');
+      hc.innerHTML = `<h3>Hooks <span class="count">${plural(hk.runs, 'run')}</span></h3>` + (hk.byEvent.length ? `<table class="tbl dash-tbl"><thead><tr><th>Event</th><th>Runs</th><th>Failures</th></tr></thead><tbody>${hk.byEvent.map((e) => `<tr><td class="mono">${esc(e.event)}</td><td>${fmtN(e.runs)}</td><td class="${e.failures ? 'err-text' : 'muted'}">${e.failures}</td></tr>`).join('')}</tbody></table>` : '') + `<p class="dash-foot muted small">${hk.ok} ok · ${hk.blocked} blocked · <span class="${hk.failed ? 'err-text' : ''}">${hk.failed} failed</span> · <span class="${hk.timeout ? 'err-text' : ''}">${hk.timeout} timed out</span> · <button class="inline-link" data-sec="customize">Customize hooks</button></p>`;
+      out.push(hc);
+    }
+    const chips = (list, label, n) => list && list.length ? `<div class="chips small">${list.slice(0, n).map((x) => `<span class="chip">${esc(label(x))}<i>${fmtN(x.count)}</i></span>`).join('')}</div>` : '';
+    const parts = (pairs) => pairs.filter(([n]) => n).map(([n, l, cls]) => `<span class="${cls || ''}">${fmtN(n)} ${l}</span>`).join(' · ');
+    const cp = a.checkpoints || {}; const tk = a.tasks || {};
+    const rows = [
+      ['Tasks', parts([[tk.created, 'created'], [tk.completed, 'completed'], [tk.aborted, 'aborted'], [tk.failed, 'failed', 'err-text'], [tk.mistakeLimit, 'hit mistake limit', 'warn-text']])],
+      ['Slash commands', chips(a.slash, (x) => (String(x.command).startsWith('/') ? x.command : `/${x.command}`), 8)],
+      ['Mentions', chips(a.mentions, (x) => `@${x.kind}`, 10)],
+      ['Mode switches', chips(a.modeSwitches, (x) => x.to, 10)],
+      ['Models picked', chips(a.modelSelections, (x) => x.model.slice(x.model.indexOf('/') + 1), 5)],
+      ['Checkpoints', parts([[cp.created, 'created'], [cp.restores, 'restored'], [cp.rewinds, 'rewound'], [cp.failed, 'failed', 'err-text']])],
+    ].filter(([, v]) => v);
+    if (rows.length) {
+      const hw = el('div', 'card');
+      hw.innerHTML = `<h3>How you work</h3><dl class="kv dashkv habits">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+      out.push(hw);
+    }
+    return out;
+  }
   const LOG_RANK = { trace: 0, debug: 1, info: 2, warn: 3, error: 4 };
-  function logLine(e) { return `<div class="ll ${e.level}"><span class="lt">${fmtTime(e.t)}</span><span class="lv">${e.level}</span><span class="lm">${esc(e.msg)}</span></div>`; }
+  const LOG_CAP = 500;
+  const startOfToday = () => new Date().setHours(0, 0, 0, 0);
+  function logLine(e) { return `<div class="ll ${e.level}"><span class="lt" title="${esc(new Date(e.t).toISOString())}">${fmtTime(e.t, true)}</span><span class="lv">${e.level}</span><span class="lm">${esc(e.msg)}</span></div>`; }
+  /** The count in the heading, the wider time column once a line from an earlier day is shown, and the cap notice. */
+  function logChrome(v) {
+    const logs = state.dash.logs; const n = document.getElementById('logCount'); const cap = document.getElementById('logCap');
+    if (n) { n.textContent = logs.length ? String(logs.length) : ''; }
+    const sod = startOfToday(); v.classList.toggle('dated', logs.some((e) => e.t < sod));
+    if (cap) { cap.classList.toggle('hidden', logs.length < LOG_CAP); }
+  }
   function renderLogs() {
-    const v = document.getElementById('logview'); const n = document.getElementById('logCount');
+    const v = document.getElementById('logview');
     if (!v) { return; }
     const atBottom = v.scrollHeight - v.scrollTop - v.clientHeight < 40;
     v.innerHTML = state.dash.logs.length ? state.dash.logs.map(logLine).join('') : `<p class="empty">${state.dash.q ? 'No log lines match.' : 'Nothing logged yet.'}</p>`;
-    if (n) { n.textContent = state.dash.logs.length ? String(state.dash.logs.length) : ''; }
+    logChrome(v);
     if (atBottom || state.dash.follow) { v.scrollTop = v.scrollHeight; }
   }
   function appendLog(e) {
     if (LOG_RANK[e.level] < LOG_RANK[state.dash.level] || (state.dash.q && !e.msg.toLowerCase().includes(state.dash.q.toLowerCase()))) { return; }
     state.dash.logs.push(e);
-    if (state.dash.logs.length > 500) { state.dash.logs.shift(); }
+    if (state.dash.logs.length > LOG_CAP) { state.dash.logs.shift(); }
     const v = document.getElementById('logview');
     if (!v) { return; }
     const empty = v.querySelector('.empty'); if (empty) { empty.remove(); }
     v.insertAdjacentHTML('beforeend', logLine(e));
-    while (v.childElementCount > 500) { v.firstElementChild.remove(); }
-    const n = document.getElementById('logCount'); if (n) { n.textContent = String(state.dash.logs.length); }
+    while (v.childElementCount > LOG_CAP) { v.firstElementChild.remove(); }
+    logChrome(v);
     if (state.dash.follow) { v.scrollTop = v.scrollHeight; }
   }
 
@@ -2758,7 +3729,9 @@
     sec.appendChild(grid);
     sec.appendChild(el('h2', 'sub', 'About'));
     const about = el('div', 'card');
-    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions && typeof d.sessions === 'object' ? d.sessions.count : d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${plural(providersList().filter((p) => p.enabled !== false).length, 'provider')}</dd><dt>Privacy</dt><dd>Your code goes only to the model servers listed under Providers (plus web tools and MCP servers you enable). No cloud telemetry, no account — Dashboard metrics stay on this machine.</dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
+    about.innerHTML = `<div class="field wide"><dl class="kv"><dt>Version</dt><dd>${esc(d.version)}</dd><dt>Chats</dt><dd>${d.sessions && typeof d.sessions === 'object' ? d.sessions.count : d.sessions}</dd><dt>Models</dt><dd>${(d.models || []).length} from ${plural(providersList().filter((p) => p.enabled !== false).length, 'provider')}</dd><dt>Privacy</dt><dd data-privacy></dd><dt>Author</dt><dd><a data-url="https://github.com/isathish">Sathishkumar Nagarajan</a> · <a data-url="https://github.com/isathish">@isathish on GitHub</a></dd><dt>Links</dt><dd><a data-url="https://isathish.github.io/localpilot/">Website</a> · <a data-url="https://isathish.github.io/localpilot/docs/configuration/">Configuration reference</a> · <a data-url="https://github.com/isathish/localpilot/issues">Report an issue</a></dd></dl></div>`;
+    const privacy = () => { const d = telemetryDests(); return component(el('dd', '', `Your code goes only to the model servers listed under Providers (plus web tools and MCP servers you enable). No account. ${d.length ? `Usage is recorded on this machine and exported to ${d.map((h) => `<code>${esc(h)}</code>`).join(', ')}.` : 'Dashboard metrics stay on this machine; no telemetry is sent anywhere.'}`), PRIVACY_DEPS, privacy); };
+    about.querySelector('[data-privacy]').replaceWith(privacy());
     sec.appendChild(about);
   }
 
@@ -2767,7 +3740,7 @@
     const d = state.data;
     const su = state.setup;
     const wrap = el('div', 'setup');
-    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs on your machine. Let's connect a model server — it takes about a minute.</p></div><div class="steps">${[0, 1, 2].map((i) => `<i class="${i <= su.step ? 'on' : ''}"></i>`).join('')}</div>`;
+    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs on your machine. Let's connect a model server — it takes about a minute.</p></div><ol class="steps" aria-label="Setup progress">${['Find server', 'Choose model', 'Approvals'].map((n, i) => `<li class="${i <= su.step ? 'on' : ''}"${i === su.step ? ` aria-current="step"><span class="sr-only">Step ${i + 1} of 3: ${n}</span>` : '>'}</li>`).join('')}</ol>`;
     const c = el('div', 'card');
     if (su.step === 0) {
       c.innerHTML = `<h3>1 · Find your model server</h3><p class="hint">LocalPilot is checking the usual local ports. Start a server if nothing shows up, then check again.</p>`;
@@ -2777,8 +3750,12 @@
       else {
         // Configured servers and anything reachable are listed; silent well-known ports stay out of the way.
         for (const r of results.filter((x) => x.ok || x.configured)) {
-          const tag = r.source === 'docker' ? '<span class="tag">Docker</span>' : !r.configured ? '<span class="tag">new</span>' : '';
-          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${r.ok ? 'ok' : 'err'}"></span><div class="t"><b>${esc(r.displayName)}${tag}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${r.ok ? `${r.models.length} model${r.models.length === 1 ? '' : 's'}` : 'not running'}</span>`));
+          const cloud = probeCloud(r);
+          const tag = (r.source === 'docker' ? '<span class="tag">Docker</span>' : !r.configured ? '<span class="tag">new</span>' : '') + (cloud ? '<span class="tag cloud" title="Prompts and code sent to this provider leave this machine">cloud</span>' : '');
+          // A cloud API that fails is rarely "not running": say the key is missing, or show what the server answered.
+          const err = String(r.error || 'unreachable').replace(/\s+/g, ' ').trim();
+          const why = r.ok ? `${r.models.length} model${r.models.length === 1 ? '' : 's'}` : !cloud ? 'not running' : keyState(probeProvider(r)).warn ? `<span class="warn-text">API key missing</span> · <button class="inline-link" data-cmd="localpilot.setProviderApiKey" data-args='${esc(JSON.stringify([r.id]))}' aria-label="Add the API key for ${esc(r.displayName)}">Add key</button>` : `<span class="err-text" title="${esc(err)}">${esc(err.length > 48 ? `${err.slice(0, 46)}…` : err)}</span>`;
+          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${r.ok ? 'ok' : 'err'}"></span><div class="t"><b>${esc(r.displayName)}${tag}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${why}</span>`));
         }
         if (state.dmr === 'no-tcp') {
           det.appendChild(el('div', 'srv', `<span class="dot warn"></span><div class="t"><b>Docker Model Runner</b><span>running, but host access is off — run <code>docker desktop enable model-runner --tcp=12434</code> and check again</span></div>`));
@@ -2812,7 +3789,8 @@
       c.appendChild(foot);
     } else if (su.step === 1) {
       const found = (state.probe || []).filter((r) => r.ok && r.enabled !== false);
-      const all = found.flatMap((r) => r.models.map((m) => ({ ...m, provider: r.displayName })));
+      const all = found.flatMap((r) => r.models.map((m) => ({ ...m, provider: r.displayName, cloud: probeCloud(r) })));
+      const best = recommend(found);
       c.innerHTML = `<h3>2 · Choose a default model</h3><p class="hint">For agent mode pick a tool-capable model (gemma4 e2b–12b, nemotron-3.5-bolt, devstral, gpt-oss). You can switch per chat at any time.</p>`;
       const list = el('div', 'mdl-list');
       if (!all.length) {
@@ -2821,8 +3799,8 @@
         list.appendChild(e);
       }
       for (const m of all) {
-        const b = el('button', `mdl ${su.model === m.id ? 'on' : ''}`, `${vendorMark(vendorFromModelId(m.modelId || m.name), m.name)}<div class="t"><b>${esc(m.name)}</b><span>${esc(m.provider)} · ${Math.round(m.contextWindow / 1024)}k context</span></div><div class="tags">${m.id === recommend(found) ? '<span class="badge brand">recommended</span>' : ''}${m.supportsTools ? '<span class="badge ok">tools</span>' : '<span class="badge">prompt tools</span>'}${m.supportsVision ? '<span class="badge">vision</span>' : ''}${m.supportsFim ? '<span class="badge">FIM</span>' : ''}</div>`);
-        b.onclick = () => { su.model = m.id; render(); };
+        const b = el('button', `mdl ${su.model === m.id ? 'on' : ''}`, `${vendorMark(vendorFromModelId(m.modelId || m.name), m.name)}<div class="t"><b>${esc(m.name)}</b><span>${esc(m.provider)} · ${Math.round(m.contextWindow / 1024)}k context</span></div><div class="tags">${m.id === best ? '<span class="badge brand">recommended</span>' : ''}${m.cloud ? '<span class="badge cloud" title="Runs on a cloud API: prompts and code leave this machine">cloud</span>' : ''}${m.supportsTools ? '<span class="badge ok">tools</span>' : '<span class="badge">prompt tools</span>'}${m.supportsVision ? '<span class="badge">vision</span>' : ''}${m.supportsFim ? '<span class="badge">FIM</span>' : ''}</div>`);
+        b.dataset.id = `mdl:${m.id}`; b.onclick = () => { su.model = m.id; render(); };
         list.appendChild(b);
       }
       c.appendChild(list);
@@ -2838,15 +3816,15 @@
         // Preset values the organisation locks or forbids are not saved (finishSetup skips them); say which.
         const held = Object.entries(p.v).filter(([x, v]) => policyRefuses(`approvals.${x}`, v)).map(([x]) => x);
         const b = el('button', `ap ${su.approvals === k ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>${held.length ? `<span class="muted small">${lockIcon('')} Your organization sets ${esc(held.join(', '))}</span>` : ''}`);
-        b.onclick = () => { su.approvals = k; render(); };
+        b.dataset.id = `ap:${k}`; b.onclick = () => { su.approvals = k; render(); };
         presets.appendChild(b);
       }
       c.appendChild(presets);
       const fim = (state.probe || []).some((r) => r.ok && r.models.some((m) => m.supportsFim));
       const row = el('div', 'field');
       row.style.borderBottom = 'none';
-      row.innerHTML = `<div><div class="lbl">Inline completions</div><div class="desc">Ghost-text suggestions while you type.${fim ? '' : ' Needs a small FIM model such as <code>qwen2.5-coder:1.5b-base</code> — you can enable it later.'}</div></div><div class="ctl"><button class="toggle ${su.inline ? 'on' : ''}" role="switch"></button></div>`;
-      row.querySelector('.toggle').onclick = (e) => { su.inline = !su.inline; e.target.classList.toggle('on'); };
+      row.innerHTML = `<div><div class="lbl">Inline completions</div><div class="desc">Ghost-text suggestions while you type.${fim ? '' : ' Needs a small FIM model such as <code>qwen2.5-coder:1.5b-base</code> — you can enable it later.'}</div></div><div class="ctl"></div>`;
+      row.querySelector('.ctl').appendChild(switchBtn(su.inline, 'Inline completions', (on) => { su.inline = on; }));
       c.appendChild(row);
       const foot = el('div', 'foot');
       foot.innerHTML = `<button class="btn link" id="back">Back</button><span class="spacer"></span><button class="btn brand" id="done">${I.check}Finish & open chat</button>`;
@@ -2857,16 +3835,23 @@
     wrap.appendChild(c);
     const foot = el('p', 'muted small');
     foot.style.textAlign = 'center'; foot.style.marginTop = '18px';
-    foot.innerHTML = `Local servers keep your code on your machine. <a data-url="https://isathish.github.io/localpilot/docs/getting-started/">Getting started guide</a> · <a id="toSettings">All settings</a>`;
+    const picked = su.step > 0 && su.model ? (state.probe || []).find((r) => r.ok && r.enabled !== false && r.models.some((m) => m.id === su.model)) : undefined;
+    const away = picked && probeCloud(picked) ? hostOf(picked.baseUrl) : '';
+    foot.innerHTML = `${away ? `<span class="warn-text">This model runs at <b>${esc(away)}</b>: prompts and code are sent there.</span>` : 'Local servers keep your code on your machine.'} <a data-url="https://isathish.github.io/localpilot/docs/getting-started/">Getting started guide</a> · <a id="toSettings">All settings</a>`;
     foot.querySelector('#toSettings').onclick = () => { post({ type: 'leaveSetup' }); state.page = 'settings'; render(); };
     wrap.appendChild(foot);
     app.appendChild(wrap);
     wireGlobal(app);
+    app.querySelectorAll('.setup [data-cmd="localpilot.setProviderApiKey"]').forEach((b) => { const run = b.onclick; b.onclick = () => { state.keyAdded = true; run(); }; });
     if (!state.probe && !state.busy) { state.busy = true; post({ type: 'probe' }); }
   }
+  /** The configured provider behind a probe result (cloud flag, key settings), or the result itself for a discovered server. */
+  function probeProvider(r) { const p = providersList().find((x) => x.id === r.id); return p ? { ...r, ...p } : r; }
+  const probeCloud = (r) => isCloud(probeProvider(r));
   function recommend(found) {
-    const all = found.flatMap((r) => r.models);
-    const score = (m) => { const n = m.name.toLowerCase(); const sz = /(\d+(?:\.\d+)?)b/.exec(n); const b = sz ? parseFloat(sz[1]) : 7; return (m.supportsTools ? 10 : 0) + (/coder|devstral|codestral/.test(n) ? 5 : 0) + (/gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) ? 8 : 0) + (/qwen|llama|mistral|gemma|deepseek|gpt-oss|nemotron/.test(n) ? 2 : 0) + Math.min(b, 32) / 8 - (b > 40 ? 3 : 0) - (/embed|rerank|vl|llava|whisper/.test(n) ? 20 : 0); };
+    const all = found.flatMap((r) => { const cloud = probeCloud(r); return r.models.map((m) => ({ ...m, cloud })); });
+    // A local model wins over a comparable cloud one: the cloud penalty outweighs the tool and family bonuses together.
+    const score = (m) => { const n = m.name.toLowerCase(); const sz = /(\d+(?:\.\d+)?)b/.exec(n); const b = sz ? parseFloat(sz[1]) : 7; return (m.supportsTools ? 10 : 0) + (/coder|devstral|codestral/.test(n) ? 5 : 0) + (/gemma4|gemma-4|nemotron-3\.5-bolt/.test(n) ? 8 : 0) + (/qwen|llama|mistral|gemma|deepseek|gpt-oss|nemotron/.test(n) ? 2 : 0) + Math.min(b, 32) / 8 - (b > 40 ? 3 : 0) - (/embed|rerank|vl|llava|whisper/.test(n) ? 20 : 0) - (m.cloud ? 15 : 0); };
     return [...all].sort((a, b) => score(b) - score(a))[0]?.id || '';
   }
 
@@ -2890,7 +3875,6 @@
       case 'state': {
         const prev = state.data;
         state.data = m;
-        if (prev && state.pendingSave && Date.now() - state.pendingSave < 10_000) { state.pendingSave = 0; flashSaved(); }
         const nav = !prev || m.navigate !== false;
         const navChanged = nav && ((m.page && m.page !== state.page) || (m.section && m.section !== state.section));
         // Entering the wizard starts from the current settings, so finishing it without changes keeps them.
@@ -2900,12 +3884,16 @@
         }
         if (nav && m.page) { state.page = m.page; }
         if (nav && m.section) { state.section = m.section; }
+        // A key added from the wizard's "Add key" link: check the providers again so the row turns green.
+        if (state.keyAdded && state.page === 'setup') { state.keyAdded = false; state.busy = true; post({ type: 'probe' }); }
         if (nav && m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }
         if (!prev || navChanged || state.page === 'setup' || !app.querySelector('main.content > .sec')) { render(); break; }
         // A settings round-trip: find what actually changed and refresh only those components.
         const keys = new Set([...Object.keys(prev.settings || {}), ...Object.keys(m.settings || {})]);
         const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
-        const SECTION_DATA = { providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], customize: ['skills'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        // The resolved OTLP target (environment variables included) feeds the privacy wording and the Telemetry rows.
+        if (JSON.stringify(prev.otlp) !== JSON.stringify(m.otlp)) { changed.push(...PRIVACY_DEPS, 'telemetry.otlp.enabled', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval'); }
+        const SECTION_DATA = { agent: ['terminalProfiles', 'autoRepos'], providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], customize: ['skills'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
         const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
         if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
         if (changed.length) { refreshComponents(changed); }
@@ -2989,13 +3977,36 @@
         state.busy = m.busy;
         if (!m.busy) { render(); }
         break;
+      case 'tuneResult':
+        (state.dash.tuneResults = state.dash.tuneResults || {})[`${m.role}|${m.model}`] = { ok: !!m.ok, error: m.ok ? '' : m.error || 'Could not apply', at: Date.now() };
+        if (state.page === 'settings' && state.section === 'dashboard' && state.dash.summary) { renderDashboard(); }
+        break;
       case 'dashboard':
-        // A slower reply for a range the user has since switched away from must not overwrite the selection.
+        // A slower reply for a range or filter the user has since switched away from must not overwrite the selection.
         if (typeof m.days === 'number' && m.days !== state.dash.days) { break; }
-        state.dash.loading = false;
-        if (state.dash.manual) { state.dash.manual = false; const rb = document.getElementById('dash-refresh'); if (rb) { rb.classList.remove('busy'); } }
-        state.dash.summary = m.summary; state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
-        if (state.page === 'settings' && state.section === 'dashboard') { renderDashboard(); }
+        if (typeof m.includeDisabled === 'boolean' && m.includeDisabled !== state.dash.includeDisabled) { break; }
+        if (Array.isArray(m.providers) && (m.providers[0] || '') !== state.dash.provider) { break; }
+        if (Array.isArray(m.hiddenProviders)) { state.dash.hidden = m.hiddenProviders; }
+        if (Array.isArray(m.allProviders)) { state.dash.allProviders = m.allProviders; }
+        state.dash.loading = false; state.dash.manual = false; clearTimeout(state.dash.ttl);
+        if (m.error || !m.summary) { state.dash.error = m.error || 'No numbers in the reply'; } else {
+          state.dash.error = ''; state.dash.summary = m.summary; state.dash.summaryKey = dashKey(); state.dash.updatedAt = Date.now();
+          state.dash.logFile = m.logFile || ''; state.dash.tuning = m.tuning || null;
+        }
+        if (state.page === 'settings' && state.section === 'dashboard') { renderDashboard(); syncDashFilters(); }
+        if (state.page === 'settings' && state.section === 'telemetry') { renderStorage(); }
+        break;
+      case 'otlpTest': {
+        state.otlpTest = { ok: !!m.ok, status: m.status, url: m.url || '', error: m.ok ? '' : m.error || 'No answer from the collector' };
+        const old = document.getElementById('otlpResult');
+        const f = old && old.closest('.field');
+        // Only the result line and the button change, so an endpoint being typed in keeps its text and caret.
+        if (f && f._rebuild) { const fresh = f._rebuild(); old.replaceWith(fresh.querySelector('#otlpResult')); const tb = f.querySelector('.ctl .row .btn'); const nb = fresh.querySelector('.ctl .row .btn'); if (tb && nb) { tb.replaceWith(nb); } }
+        break;
+      }
+      case 'redisTest':
+        state.redisTest = { ok: !!m.ok, info: m.info, error: m.ok ? '' : m.error || 'No answer from Redis' };
+        refreshRedisStatus();
         break;
       case 'logs':
         state.dash.logs = Array.isArray(m.entries) ? m.entries : [];
@@ -3004,8 +4015,14 @@
       case 'logLine':
         if (state.page === 'settings' && state.section === 'dashboard' && m.entry) { appendLog(m.entry); }
         break;
+      case 'saved':
+        onSaved(m);
+        break;
       case 'toast':
-        toast(m.text, m.level);
+        toast(m.text, m.level, m.action);
+        break;
+      case 'pickedFolder':
+        if (onPicked[m.key]) { onPicked[m.key](m.path, m.name); }
         break;
       case 'customize': {
         const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });

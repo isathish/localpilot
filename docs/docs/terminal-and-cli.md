@@ -52,7 +52,7 @@ LocalPilot records the commands you run in any VS Code terminal that has shell i
 
 ### Install
 
-- **Inside VS Code.** Run *LocalPilot: Open LocalPilot Terminal*. It is also in the chat toolbar's ⋯ menu, and in the terminal **+** dropdown as the **LocalPilot** profile. The CLI is already on `PATH` in that terminal.
+- **Inside VS Code.** Run *LocalPilot: Open Terminal*. It is also in the chat toolbar's ⋯ menu, and in the terminal **+** dropdown as the **LocalPilot** profile. The CLI is already on `PATH` in that terminal.
 - **In any shell.** Run *LocalPilot: Install 'localpilot' CLI in PATH*. It writes `~/.local/bin/localpilot` (Windows: `%USERPROFILE%\bin\localpilot.cmd`). The script finds the newest installed LocalPilot after updates. It needs Node.js 18.17+ (20+ recommended); with an older or missing `node` the script uses VS Code's bundled runtime. Reading PDFs (`read_pdf`, PDF attachments) needs Node.js 22.13 or newer; on an older Node that tool returns an error and everything else works. If `~/.local/bin` is not on your `PATH`, the notification tells you the line to add.
 
 ### Examples

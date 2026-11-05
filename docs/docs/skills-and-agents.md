@@ -145,7 +145,7 @@ A registry skill is only chosen on a specific match:
 - A replacement download is staged first, so a failed update keeps the copy you have. With `GITHUB_TOKEN` or `GH_TOKEN` set, private repositories work for both the index and the files.
 - Right after start-up or adding a repository, the first request waits up to 5 seconds for its index, so it is not matched against an empty list.
 
-To search the registry yourself, run `localpilot skill search <words>` in a terminal (add `--install` to install the best match), use *LocalPilot: Browse Skill Registry (Quick Pick)…*, or type `/skill browse <words>` in the chat.
+To search the registry yourself, run `localpilot skill search <words>` in a terminal (add `--install` to install the best match), use *LocalPilot: Browse Skill Registry…*, or type `/skill browse <words>` in the chat.
 
 ### Per-chat skill settings
 
@@ -153,7 +153,7 @@ The **Skills** button under the composer changes skill behaviour for one chat. T
 
 | Control | Effect | Slash command |
 |---|---|---|
-| Mode | **Inherit global**, **Auto**, **Ask** or **Off**. Per chat, **Off** also turns off suggestions and preloading: only skills you force or pin are used | `/skill mode auto\|ask\|off\|inherit` |
+| Mode | **Use global setting**, **Auto**, **Ask** or **Off**. Per chat, **Off** also turns off suggestions and preloading: only skills you force or pin are used | `/skill mode auto\|ask\|off\|inherit` |
 | Pin | The skill's instructions are loaded into every request of the chat, whatever you type. Useful for a project convention or a release procedure | `/skill pin <name>`, `/skill unpin <name>` |
 
 `/skills` lists all skills and shows the chat's current mode and pins.

@@ -21,6 +21,8 @@ export interface TrackedChange {
 const SCHEME = 'localpilot-original';
 /** Before-contents larger than this stay in memory only (same limit as untracked files in git checkpoints). */
 const MAX_PERSISTED_CHARS = 20 * 1024 * 1024;
+/** How long the agent's version of rejected files is kept so the toast's Undo can put it back. */
+export const REDO_WINDOW_MS = 30_000;
 
 /**
  * Records the pre-edit snapshot of every file an agent touches so the user can review (diff),
@@ -45,6 +47,11 @@ export class ChangeTracker implements vscode.Disposable {
   private readonly addedDeco: vscode.TextEditorDecorationType;
   private readonly modifiedDeco: vscode.TextEditorDecorationType;
   private readonly disposables: vscode.Disposable[] = [];
+  /** Per reject (keyed by the token {@link reject} returns): the files it reverted, with the content they had just before it. */
+  private redoBuf = new Map<number, { entries: { change: TrackedChange; content: string | undefined }[]; until: number; timer: ReturnType<typeof setTimeout> }>();
+  private redoSeq = 0;
+  /** Clock for the redo window; tests replace it. */
+  now: () => number = () => Date.now();
 
   constructor(private readonly log: vscode.LogOutputChannel) {
     this.addedDeco = vscode.window.createTextEditorDecorationType({
@@ -453,17 +460,67 @@ export class ChangeTracker implements vscode.Disposable {
 
   /** Revert the file(s) to the snapshot taken before the agent touched them. */
   async undo(sessionId: string, fsPath?: string): Promise<number> {
+    return (await this.reject(sessionId, fsPath)).count;
+  }
+
+  /** {@link undo}, plus a token that {@link redo} takes to put back exactly these files; each reject keeps its own window. */
+  async reject(sessionId: string, fsPath?: string): Promise<{ count: number; token?: number }> {
     let n = 0;
     const undone = this.forSession(sessionId).filter((c) => !fsPath || c.fsPath === fsPath);
     // Measured before the files are rewritten.
     await recordEditDecision('rejected', this.withLiveText(undone));
+    const redo: { change: TrackedChange; content: string | undefined }[] = [];
     for (const c of undone) {
       try {
+        const content = await currentText(c.fsPath);
         await restoreFile(vscode.Uri.file(c.fsPath), c.original);
         n++;
         this.changes.delete(`${c.sessionId}|${c.fsPath}`);
+        redo.push({ change: c, content });
       } catch (e) {
         this.log.error(`undo failed for ${c.fsPath}: ${String(e)}`);
+      }
+    }
+    const token = redo.length ? this.setRedo(redo) : undefined;
+    this._onDidChange.fire();
+    this.decorateVisible();
+    return { count: n, token };
+  }
+
+  private setRedo(entries: { change: TrackedChange; content: string | undefined }[]): number {
+    const token = ++this.redoSeq;
+    const timer = setTimeout(() => this.clearRedo(token), REDO_WINDOW_MS);
+    timer.unref?.();
+    this.redoBuf.set(token, { entries, until: this.now() + REDO_WINDOW_MS, timer });
+    return token;
+  }
+
+  private clearRedo(token: number): void {
+    const b = this.redoBuf.get(token);
+    if (b) {
+      clearTimeout(b.timer);
+      this.redoBuf.delete(token);
+    }
+  }
+
+  /** Undo one reject (by its token) within {@link REDO_WINDOW_MS}: the agent's content goes back and the files are tracked again. */
+  async redo(token: number): Promise<number> {
+    const b = this.redoBuf.get(token);
+    this.clearRedo(token);
+    if (!b || this.now() > b.until) {
+      return 0;
+    }
+    let n = 0;
+    for (const { change, content } of b.entries) {
+      try {
+        await restoreFile(vscode.Uri.file(change.fsPath), content);
+        n++;
+        const key = `${change.sessionId}|${change.fsPath}`;
+        if (!this.changes.has(key)) {
+          this.changes.set(key, change);
+        }
+      } catch (e) {
+        this.log.error(`redo failed for ${change.fsPath}: ${String(e)}`);
       }
     }
     this._onDidChange.fire();
@@ -498,10 +555,24 @@ export class ChangeTracker implements vscode.Disposable {
   }
 
   dispose(): void {
+    [...this.redoBuf.keys()].forEach((t) => this.clearRedo(t));
     this.disposables.forEach((d) => d.dispose());
     this.addedDeco.dispose();
     this.modifiedDeco.dispose();
     this._onDidChange.dispose();
+  }
+}
+
+/** A file's text as the user sees it (unsaved editor text over the disk copy), or undefined when it does not exist. */
+async function currentText(fsPath: string): Promise<string | undefined> {
+  const dirty = vscode.workspace.textDocuments.find((d) => d.isDirty && samePath(d.uri.fsPath, fsPath));
+  if (dirty) {
+    return dirty.getText();
+  }
+  try {
+    return Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8').replace(/^\uFEFF/, '');
+  } catch {
+    return undefined;
   }
 }
 

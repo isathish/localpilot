@@ -1,6 +1,6 @@
 import { getConfig } from '../config';
 import { AgentEvent, ChatMessage, Session, TodoItem, Tool, ToolContext, ToolDefinition } from '../types';
-import { AgentRunner, ApprovalHandler } from './agentLoop';
+import { AgentRunner, ApprovalHandler, claimsChange } from './agentLoop';
 import { nextWave, ParallelPool } from './parallel';
 import { RunControl } from './runControl';
 import { SkillManager } from './skills';
@@ -284,7 +284,10 @@ export function createAgentTools(runner: AgentRunner, skills: SkillManager, emit
         return { content: `Subagent "${def.name}" ran out of steps before finishing.${text ? ` Partial output:\n${text}` : ''}`, isError: true };
       }
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, result: text, model: child.model && child.model !== announcedModel ? child.model : undefined } });
-      return { content: text || '(subagent returned no text)' };
+      // Small models sometimes report work they never did. The parent can only verify what it is told, so say so
+      // when the report claims a change but the worker made no edit, write or command at all.
+      const unbacked = !mutated && child.mode === 'agent' && (claimsChange(text, prompt) || /\bI\s+(?:created|wrote|edited|updated|fixed|modified|added|saved|deleted|removed|renamed)\b/i.test(text));
+      return { content: `${text || '(subagent returned no text)'}${unbacked ? '\n\n[LocalPilot: this worker made no file edits, writes or commands, although its report says it changed something. Check before relying on it.]' : ''}` };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       emit({ sessionId: ctx.sessionId, type: 'subagent_end', payload: { childId, agent: def.name, error: msg } });

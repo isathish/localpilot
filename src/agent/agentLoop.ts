@@ -17,7 +17,7 @@ import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
-import { callKey, classifyModelError, describeModelError, isTransient, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
+import { callKey, classifyModelError, describeModelError, isTransient, ModelFailure, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
 import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
@@ -76,6 +76,8 @@ export interface AgentRunOptions {
   /** Called once the top-level run has appended its user message to the session. */
   onUserMessage?: (m: ChatMessage) => void;
   modelRef?: string;
+  /** Runs this turn in another mode (an empty-chat suggestion) without changing the chat's own mode. */
+  mode?: Session['mode'];
   /** Routing role for this run (subagents pass `fast` for read-only work). Defaults to agent / reasoning in Plan mode. */
   role?: ModelRole;
   /** Restrict tool set (subagents). */
@@ -127,6 +129,13 @@ const MAX_MODEL_RETRIES = 2;
 const RETRY_BACKOFF_MS = [800, 2500];
 /** Tool calls the server could not parse are handed back to the model at most this many times per run. */
 const MAX_TOOLCALL_REPAIRS = 2;
+/** The kind a failed turn reports to the chat, which picks the fix it offers (start the server, set a key, compact). */
+export type TurnErrorKind = 'connection' | 'auth' | 'ratelimit' | 'stall' | 'context' | 'server' | 'other';
+
+export function errorKind(k: ModelFailure): TurnErrorKind {
+  return k === 'network' || k === 'unroutable' ? 'connection' : k === 'auth' || k === 'quota' ? 'auth' : k === 'overflow' ? 'context' : k === 'ratelimit' || k === 'stall' || k === 'server' ? k : 'other';
+}
+
 /** Local models may need to load weights and prefill a long prompt before the first token. */
 const FIRST_TOKEN_TIMEOUT_MS = 180_000;
 /** Once streaming, this much silence means the server hung (a slow token is seconds, not a minute). */
@@ -207,11 +216,11 @@ export class AgentRunner {
     let outcome: 'done' | 'stopped' | 'failed' = 'done';
     const topLevel = (o.depth ?? 0) === 0;
     if (topLevel && !o.session.messages.some((m) => m.role === 'user')) {
-      this.telemetry?.record({ type: 'task', sid: o.session.id, action: 'created', mode: o.session.mode });
+      this.telemetry?.record({ type: 'task', sid: o.session.id, action: 'created', mode: o.mode ?? o.session.mode });
     }
     let error: string | undefined;
     let reply: string | undefined;
-    const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
+    const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.mode ?? o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
     try {
       const tracing = this.telemetry?.tracing;
       const text = await (tracing ? tracing.with(span, () => this.runTurn(o, stats)) : this.runTurn(o, stats));
@@ -232,11 +241,11 @@ export class AgentRunner {
       this.telemetry?.record({
         type: 'run',
         sid: o.session.id,
-        mode: o.session.mode,
+        mode: o.mode ?? o.session.mode,
         model: stats.model || o.session.model || '',
         depth: o.depth ?? 0,
         agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined,
-        role: (o.depth ?? 0) > 0 && (o.role ?? 'agent') === 'agent' ? 'coding' : o.role ?? (o.session.mode === 'plan' ? 'reasoning' : 'agent'),
+        role: (o.depth ?? 0) > 0 && (o.role ?? 'agent') === 'agent' ? 'coding' : o.role ?? ((o.mode ?? o.session.mode) === 'plan' ? 'reasoning' : 'agent'),
         outcome,
         durationMs: Date.now() - stats.startedAt,
         steps: stats.steps,
@@ -248,7 +257,7 @@ export class AgentRunner {
       });
       endRunSpan(span, { model: stats.model || o.session.model, outcome, error, steps: stats.steps, toolCalls: stats.toolCalls, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens, output: reply });
       if (topLevel) {
-        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? (stats.mistakeLimited ? 'mistake_limit' : 'completed') : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.session.mode });
+        this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? (stats.mistakeLimited ? 'mistake_limit' : 'completed') : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.mode ?? o.session.mode });
       }
     }
   }
@@ -287,6 +296,7 @@ export class AgentRunner {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
     const session = o.session;
+    const turnMode = o.mode ?? session.mode;
     const emit = o.emit;
     const status = (text: string) => emit({ sessionId: session.id, type: 'status', payload: text });
     const hookRow = (h: HookRunInfo) => emit({ sessionId: session.id, type: 'hook', payload: h });
@@ -297,7 +307,7 @@ export class AgentRunner {
     let route: Awaited<ReturnType<ProviderRegistry['route']>>;
     try {
       route = await this.providers.route({
-        role: o.role ?? (session.mode === 'plan' ? 'reasoning' : 'agent'),
+        role: o.role ?? (turnMode === 'plan' ? 'reasoning' : 'agent'),
         modelRef: requested,
         fresh: true,
         needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
@@ -314,7 +324,11 @@ export class AgentRunner {
       this.log.error(`model routing failed: ${friendly}`);
       session.messages.push({ ...o.userMessage, meta: { ...o.userMessage.meta, timestamp: Date.now() } });
       session.messages.push({ role: 'assistant', content: `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
-      emit({ sessionId: session.id, type: 'error', payload: friendly });
+      const slash = requested?.indexOf('/') ?? -1;
+      const providerType = (slash > 0 ? this.providers.get(requested!.slice(0, slash))?.type : undefined) ?? (cfg.providers.some((p) => p.enabled !== false && p.type === 'ollama') ? 'ollama' : undefined);
+      // Routing fails when no server answers or no model is installed: the fix is the same as for a refused connection.
+      const kind = errorKind(classifyModelError(e));
+      emit({ sessionId: session.id, type: 'error', payload: { message: friendly, kind: kind === 'other' ? 'connection' : kind, provider: providerType } });
       const err = e instanceof Error ? e : new Error(friendly);
       (err as Error & { reported?: boolean }).reported = true;
       throw err;
@@ -351,7 +365,7 @@ export class AgentRunner {
     const ctxMgr = new ContextManager({ compactionThreshold: cfg.compactionThreshold, maxToolOutputChars: cfg.maxToolOutputChars, keepAlive: cfg.keepAlive || undefined, scale: () => tokenCalibration.scale(model.id), sessionId: session.id, strategy: cfg.compactionStrategy });
     const pool = new ParallelPool(cfg.parallel.maxConcurrency);
 
-    const toolsEnabled = session.mode !== 'ask' || true; // ask mode still gets read-only tools
+    const toolsEnabled = turnMode !== 'ask' || true; // ask mode still gets read-only tools
     // Situational tools (git/CI, board, repositories, security) only when the recent conversation or the workspace calls for them.
     const recent = [...session.messages.filter((m) => m.role === 'user' && !m.meta?.toolResults && !m.meta?.toolImages).slice(-3).map((m) => userText(m.content)), userText(o.userMessage.content), o.roleOverride ?? ''].join('\n');
     // Shared state (the board, repos.json) lives in the real checkout, not in an isolated worktree.
@@ -362,7 +376,7 @@ export class AgentRunner {
     const omit = o.toolFilter ? undefined : irrelevantTools(recent, root, root ? listRepos(root, (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath), getConfig().repos).length : 0);
     offered.forEach((n) => omit?.delete(n));
     // Scratch runs (benchmark) work in throwaway folders: this project's memory is neither shown nor written.
-    const selected = this.selectTools(session.mode, o.toolFilter, omit).filter((t) => !o.scratch || !t.definition.name.startsWith('memory_'));
+    const selected = this.selectTools(turnMode, o.toolFilter, omit).filter((t) => !o.scratch || !t.definition.name.startsWith('memory_'));
     // GPT/Codex/gpt-oss models edit with apply_patch, the rest with edit_file/write_file (localpilot.editTool).
     const editOmit = editToolsToOmit(selected.map((t) => t.definition.name), model.id, getConfig().editTool);
     const toolList = selected.filter((t) => !editOmit.has(t.definition.name));
@@ -382,7 +396,7 @@ export class AgentRunner {
     const contextPaths = o.scratch ? [] : this.workspace.contextPaths(o.userMessage.content, session.workingSet);
     const system = await buildSystemPrompt({
       contextPaths,
-      mode: session.mode,
+      mode: turnMode,
       workspaceRoot: o.workspaceRoot,
       model,
       toolsEnabled,
@@ -408,7 +422,7 @@ export class AgentRunner {
     if (conditional.length) {
       emit({ sessionId: session.id, type: 'rules_applied', payload: { files: conditional.map((f) => f.label) } });
     }
-    const turnContext = buildTurnContext({ mode: session.mode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
+    const turnContext = buildTurnContext({ mode: turnMode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
     const isolated = !!o.isolatedFrom;
     const systemIsolated = isolated && !o.scratch
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
@@ -492,13 +506,13 @@ export class AgentRunner {
 
     // A first request to build something: ask the open questions in one card before work starts (clarify.questions).
     // Only when the chat can show questions — queued and API runs have nobody to answer.
-    if (depth === 0 && !o.roleOverride && o.askUser && !o.unattended && needsQuestions(o.userMessage.content, cfg.clarify, { mode: session.mode, hasHistory: session.messages.some((m) => m.role === 'assistant' && !!m.content.trim()) })) {
+    if (depth === 0 && !o.roleOverride && o.askUser && !o.unattended && needsQuestions(o.userMessage.content, cfg.clarify, { mode: turnMode, hasHistory: session.messages.some((m) => m.role === 'assistant' && !!m.content.trim()) })) {
       session.messages.push({ role: 'user', content: questionSteer(cfg.clarify), meta: { timestamp: Date.now(), hidden: true } });
     }
 
     // "Implement the plan": the checklist already holds delegable items, so make the fan-out the first step
     // instead of hoping the model remembers run_todos_parallel.
-    if (depth === 0 && session.mode === 'agent' && !o.roleOverride) {
+    if (depth === 0 && turnMode === 'agent' && !o.roleOverride) {
       const delegable = (session.todos ?? []).filter((t) => t.status === 'pending' && t.agent);
       if (delegable.length && isImplementPlanRequest(userText(o.userMessage.content))) {
         session.messages.push({
@@ -674,8 +688,8 @@ export class AgentRunner {
       control,
       depth,
       modelRef: model.id,
-      readOnly: !isWriteMode(session.mode),
-      mode: session.mode,
+      readOnly: !isWriteMode(turnMode),
+      mode: turnMode,
       progress: (t) => status(t),
       // Edits inside an isolated worktree need no undo snapshots: discarding the worktree is the undo, and the
       // tracker stays about files in the real workspace (those applied from the worktree).
@@ -718,7 +732,7 @@ export class AgentRunner {
     const toolCache = new Map<string, Promise<{ msg: ChatMessage; isError: boolean }>>();
     // A model that cannot think gets no `think` at all (Ollama rejects any value but false for it).
     // Reassigned to false when the model spends a whole reply thinking (see the empty-completion retry below).
-    let think = model.supportsThinking === false ? undefined : thinkFor(thinkingLevel(session, cfg.thinking), { mode: session.mode, depth });
+    let think = model.supportsThinking === false ? undefined : thinkFor(thinkingLevel(session, cfg.thinking), { mode: turnMode, depth });
     let toolsExecuted = 0;
     /** Tools that change the workspace (edits, deletes, commands) — a claimed change with none of these is a claim only. */
     let mutationsExecuted = 0;
@@ -863,7 +877,7 @@ export class AgentRunner {
           // Priced from the bundled model facts unless the provider reported a cost; subagents pass theirs upwards.
           const priced = withCost(usage, model);
           const traced = recordModelSpan(this.telemetry?.tracing, { sid: session.id, model: model.modelId, provider: model.providerId, startMs: requestedAt, outcome, reason, finishReason: finish, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, ttftMs: firstAt ? firstAt - requestedAt : undefined, maxTokens: cfg.maxOutputTokens, temperature: cfg.temperature, input: () => session.messages, output: calls.length ? `${text}\n${calls.map((c) => `[tool call] ${c.name} ${c.arguments}`).join('\n')}` : text });
-          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: session.mode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, cacheReadTokens: usage?.cacheReadTokens, cacheWriteTokens: usage?.cacheWriteTokens, costUsd: priced?.costUsd, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason, ...traced });
+          this.telemetry?.record({ type: 'model', sid: session.id, model: model.modelId, provider: model.providerId, mode: turnMode, depth, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens, cacheReadTokens: usage?.cacheReadTokens, cacheWriteTokens: usage?.cacheWriteTokens, costUsd: priced?.costUsd, ttftMs: firstAt ? firstAt - requestedAt : undefined, durationMs: Date.now() - requestedAt, outcome, reason, ...traced });
           session.usage = addUsage(session.usage, priced, model.modelId, model.providerId);
           o.onUsage?.(priced, model.modelId, model.providerId);
         };
@@ -1022,7 +1036,7 @@ export class AgentRunner {
           this.release(model.id, session.id);
           this.log.error(`model call failed: ${msg}`);
           const friendly = describeModelError(kind, msg, model.name);
-          emit({ sessionId: session.id, type: 'error', payload: friendly });
+          emit({ sessionId: session.id, type: 'error', payload: { message: friendly, kind: errorKind(kind), provider: provider.type } });
           // meta.error lets the transcript show the failure as an error box (with Retry) after the live turn is gone.
           session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
           const err = e instanceof Error ? e : new Error(msg);
@@ -1155,7 +1169,7 @@ export class AgentRunner {
         // run, in agent mode, when nothing was executed and the reply is a bare claim, push back.
         // Small models also stop after announcing an action ("I will edit the file with edit_file.") or after
         // writing the call as text. The nudge fires once per run, so a false positive costs one short turn.
-        const canNudge = isWriteMode(session.mode) && toolDefs.length > 0 && nudges < MAX_NUDGES && depth === 0;
+        const canNudge = isWriteMode(turnMode) && toolDefs.length > 0 && nudges < MAX_NUDGES && depth === 0;
         const toolNames = toolDefs.map((t) => t.name);
         const shown = canNudge && showsToolCallAsText(text, toolNames);
         // Workers already ran and reported, yet the reply re-announces the hand-off ("I'll report back when they finish").
@@ -1226,8 +1240,8 @@ export class AgentRunner {
       // it instead of being spread away from an idle model.
       this.unassign(session.id);
       // A coordinator that has not delegated yet uses the shell to do the work itself (echo > file); send it to the workers.
-      const coordinatorFirst = session.mode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
-      const { messages: results, perCall, hookStop, failed } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, session.mode, policy, coordinatorFirst);
+      const coordinatorFirst = turnMode === 'multitask' && delegationsExecuted === 0 && !calls.some((c) => DELEGATION_TOOLS.has(c.name));
+      const { messages: results, perCall, hookStop, failed } = await this.executeToolCalls(calls, toolList, toolCtx, pool, ctxMgr, emit, session.id, nativeTools, toolCache, model.supportsVision, callCounts, turnMode, policy, coordinatorFirst);
       toolsExecuted += calls.length;
       // Delegation counts as work done: the workers edited files on the agent's behalf, so a later
       // "created both files" is a report, not a claim.
@@ -1298,7 +1312,7 @@ export class AgentRunner {
     const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
     const savedByModel = turnMsgs.some((m) => m.toolCalls?.some((c) => c.name === 'memory_save'));
     // Not for scratch runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
-    if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.scratch && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(session.mode)) {
+    if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.scratch && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(turnMode)) {
       // At most 90 s, and cancelled by the next run: on a one-slot server it must never hold the model the user is waiting for.
       const memoryAbort = new AbortController();
       this.backgroundAborts.add(memoryAbort);

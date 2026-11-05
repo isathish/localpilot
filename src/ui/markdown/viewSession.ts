@@ -10,6 +10,8 @@ import { buildExportDocument, exportImageSrc, ExportTarget, imageSources, inline
 import { LEGACY_FONT_KEY, PREFS_KEY, prefsCss, ReaderPrefs, readPrefs, sanitizePrefsPatch } from './prefs';
 import { parseLinkTarget, renderMarkdown } from './render';
 import { isPdfPath, openPdf } from '../pdf/open';
+import { askDraft, MAX_QUOTE, quoteCutNotice } from '../../pdf/viewerMessages';
+import { noteViewerKeyAsk, viewerAnsweredKey } from '../viewerKeyAsk';
 
 export type Source = { kind: 'file'; uri: vscode.Uri } | { kind: 'text'; title: string; text: string };
 
@@ -20,6 +22,8 @@ type FromViewer =
   | { type: 'openEditor' }
   | { type: 'saveAs'; svg?: string; name?: string }
   | { type: 'copy' }
+  /** The toolbar's Find button: VS Code's find widget for this webview. */
+  | { type: 'find' }
   | { type: 'openLink'; href: string }
   | { type: 'openPath'; path: string; line?: number; endLine?: number; anchor?: string; page?: number }
   | { type: 'fontSize'; delta: number }
@@ -27,8 +31,14 @@ type FromViewer =
   | { type: 'openSourceAt'; line: number }
   | { type: 'prefs'; patch: Partial<ReaderPrefs> }
   | { type: 'exportHtml'; html: string; target: ExportTarget; preface?: string; vars?: string; themeClass?: string }
-  | { type: 'ask' }
-  | { type: 'askSelection'; text: string; line?: number };
+  /** `key`: sent by Ctrl/Cmd+' in the webview (the keybinding's command then stands down). */
+  | { type: 'ask'; key?: boolean }
+  /** `text` is cut to the quote limit by the webview; `total` is the selection's full length when it was cut. */
+  | { type: 'askSelection'; text: string; line?: number; endLine?: number; total?: number; key?: boolean }
+  /** The More menu's "Viewer settings…": Settings → Markdown & PDF. */
+  | { type: 'openSettings' }
+  /** Close on the error card or the deleted-file banner. */
+  | { type: 'close' };
 
 type ToViewer =
   | {
@@ -44,6 +54,8 @@ type ToViewer =
       prefsCss: Record<string, string>;
       /** Whether the Ask LocalPilot actions have a chat to go to. */
       canAsk: boolean;
+      /** Characters of a selection quoted into the chat draft (`MAX_QUOTE`). */
+      maxQuote: number;
       frontMatter?: Record<string, unknown>;
       frontMatterMode: 'collapsed' | 'expanded' | 'hidden';
       mermaidSrc?: string;
@@ -60,7 +72,12 @@ type ToViewer =
   | { type: 'scrollToLine'; line: number }
   | { type: 'scrollToAnchor'; anchor: string }
   | { type: 'prefs'; prefs: ReaderPrefs; css: Record<string, string> }
-  | { type: 'requestExport'; target: ExportTarget };
+  | { type: 'requestExport'; target: ExportTarget }
+  /** The document could not be rendered: the view replaces it with a card offering Retry. */
+  | { type: 'error'; title: string; message: string }
+  /** The file was deleted or moved away; the view keeps the last render under a banner until it comes back. */
+  | { type: 'deleted' }
+  | { type: 'restored' };
 
 /** The chat entry points the Ask actions use (`ChatController` satisfies it). */
 export interface ReaderChat {
@@ -102,6 +119,9 @@ export function validateViewerMessage(raw: unknown): FromViewer | undefined {
     case 'reload':
     case 'openEditor':
     case 'copy':
+    case 'find':
+    case 'openSettings':
+    case 'close':
       return { type: m.type };
     case 'clientError':
       return { type: 'clientError', where: str(m.where, 200) ?? '?', message: str(m.message, 4000) ?? '?', stack: str(m.stack, 8000) };
@@ -137,20 +157,40 @@ export function validateViewerMessage(raw: unknown): FromViewer | undefined {
       return { type: 'exportHtml', html, target, preface: str(m.preface, MAX_TEXT * 10), vars: str(m.vars, 200_000), themeClass: str(m.themeClass, 100) };
     }
     case 'ask':
-      return { type: 'ask' };
+      return m.key === true ? { type: 'ask', key: true } : { type: 'ask' };
     case 'askSelection': {
       const text = str(m.text);
-      return text?.trim() ? { type: 'askSelection', text, line: int(m.line) } : undefined;
+      if (!text?.trim()) {
+        return undefined;
+      }
+      const total = int(m.total);
+      const endLine = int(m.endLine);
+      return {
+        type: 'askSelection',
+        text,
+        line: int(m.line),
+        ...(endLine !== undefined ? { endLine } : {}),
+        ...(total !== undefined && total > text.length ? { total } : {}),
+        ...(m.key === true ? { key: true } : {}),
+      };
     }
   }
   return undefined;
 }
 
-/** Attaches a file (Markdown or PDF) to the visible chat and drafts a question about it. */
-export async function askAboutFile(chat: ReaderChat, uri: vscode.Uri): Promise<void> {
+/**
+ * Attaches a file (Markdown or PDF) to the visible chat and drafts a question about it. `fromViewer`: the reader's own
+ * Ask; otherwise (the command) a viewer that already answered the same Ctrl/Cmd+' press wins.
+ */
+export async function askAboutFile(chat: ReaderChat, uri: vscode.Uri, fromViewer = false): Promise<void> {
+  if (!fromViewer && (await viewerAnsweredKey(uri))) {
+    return;
+  }
   await vscode.commands.executeCommand('localpilot.openChat');
-  chat.addToComposer('About this document: ', uri.scheme === 'file' ? [vscode.workspace.asRelativePath(uri)] : []);
+  chat.addToComposer(askDraft(path.posix.basename(uri.path)), uri.scheme === 'file' ? [vscode.workspace.asRelativePath(uri)] : []);
 }
+
+let sessionSeq = 0;
 
 /**
  * One reader webview bound to one Markdown source: used by the reader panel (`MarkdownViewer`) and by the
@@ -160,6 +200,10 @@ export async function askAboutFile(chat: ReaderChat, uri: vscode.Uri): Promise<v
 export class MarkdownViewSession implements vscode.Disposable {
   /** Every open reader (panel and custom editors): reading preferences are pushed to all of them. */
   private static readonly all = new Set<MarkdownViewSession>();
+  /** One listener for every reader: `localpilot.markdownViewer.*` changes re-render them; disposed with the last reader. */
+  private static configSub?: vscode.Disposable;
+  /** Identifies a reader of text from the chat (no file URI) to the Ctrl/Cmd+' de-duplication. */
+  private readonly id = `localpilot-reader:${++sessionSeq}`;
   source?: Source;
   private watchers: vscode.Disposable[] = [];
   private readonly subs: vscode.Disposable[] = [];
@@ -174,6 +218,8 @@ export class MarkdownViewSession implements vscode.Disposable {
   /** The webview script has booted (messages posted before that are lost). */
   private ready = false;
   private pendingExport?: ExportTarget;
+  /** The watched file is gone; set until it is created again. */
+  private deleted = false;
 
   /** The reader whose tab is focused, if any. */
   static active(): MarkdownViewSession | undefined {
@@ -189,6 +235,12 @@ export class MarkdownViewSession implements vscode.Disposable {
 
   constructor(private readonly opts: ViewSessionOptions) {
     MarkdownViewSession.all.add(this);
+    MarkdownViewSession.configSub ??= vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('localpilot.markdownViewer')) {
+        // Front matter, outline depth, Mermaid and scroll sync all travel with the render.
+        MarkdownViewSession.all.forEach((s) => void s.renderOrReport());
+      }
+    });
     const { webview } = opts;
     webview.options = { enableScripts: true, localResourceRoots: this.roots() };
     webview.html = this.html();
@@ -217,7 +269,20 @@ export class MarkdownViewSession implements vscode.Disposable {
       this.allowResources(vscode.Uri.file(path.dirname(source.uri.fsPath)));
       this.watch(source.uri);
     }
-    await this.render();
+    await this.renderOrReport();
+  }
+
+  /** Renders, and on failure shows the error card instead of leaving the view on "Rendering…" or a stale page. */
+  private async renderOrReport(): Promise<void> {
+    try {
+      await this.render();
+    } catch (e) {
+      const s = this.source;
+      const name = s?.kind === 'file' ? path.basename(s.uri.fsPath) : (s?.title ?? 'document');
+      const message = e instanceof Error ? e.message : String(e);
+      this.opts.log.warn(`markdown reader: could not render ${name}: ${message}`);
+      this.post({ type: 'error', title: `Couldn't render ${name}`, message });
+    }
   }
 
   scrollToAnchor(anchor: string): void {
@@ -249,19 +314,46 @@ export class MarkdownViewSession implements vscode.Disposable {
     const same = (u: vscode.Uri) => u.toString() === uri.toString();
     const schedule = () => {
       clearTimeout(this.reloadTimer);
-      this.reloadTimer = setTimeout(() => void this.render(), 200);
+      this.reloadTimer = setTimeout(() => void this.renderOrReport(), 200);
+    };
+    let deleteTimer: NodeJS.Timeout | undefined;
+    // Editors that save atomically delete and recreate the file; only a file still missing a moment later counts as deleted.
+    const onDelete = () => {
+      clearTimeout(deleteTimer);
+      deleteTimer = setTimeout(() => {
+        void vscode.workspace.fs.stat(uri).then(
+          () => undefined,
+          () => {
+            if (!this.deleted && this.source?.kind === 'file' && same(this.source.uri)) {
+              this.deleted = true;
+              this.post({ type: 'deleted' });
+            }
+          }
+        );
+      }, 300);
+    };
+    const onCreate = () => {
+      clearTimeout(deleteTimer);
+      if (this.deleted) {
+        this.deleted = false;
+        this.post({ type: 'restored' });
+      }
+      schedule();
     };
     const fsw = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(uri.fsPath)), path.basename(uri.fsPath)));
     this.watchers.push(
       fsw,
       fsw.onDidChange(schedule),
-      fsw.onDidCreate(schedule),
+      fsw.onDidCreate(onCreate),
+      fsw.onDidDelete(onDelete),
+      { dispose: () => clearTimeout(deleteTimer) },
       vscode.workspace.onDidChangeTextDocument((e) => same(e.document.uri) && e.contentChanges.length > 0 && schedule())
     );
   }
 
   private unwatch(): void {
     clearTimeout(this.reloadTimer);
+    this.deleted = false;
     this.watchers.forEach((d) => d.dispose());
     this.watchers = [];
   }
@@ -334,6 +426,7 @@ export class MarkdownViewSession implements vscode.Disposable {
       prefs: this.prefs(),
       prefsCss: prefsCss(this.prefs()),
       canAsk: !!this.opts.chat,
+      maxQuote: MAX_QUOTE,
       frontMatter: cfg.frontMatter === 'hidden' ? undefined : out.frontMatter,
       frontMatterMode: cfg.frontMatter,
       mermaidSrc: cfg.mermaid && out.hasMermaid ? webview.asWebviewUri(vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'webview', 'mermaid.js')).toString() : undefined,
@@ -376,35 +469,61 @@ export class MarkdownViewSession implements vscode.Disposable {
     }
   }
 
-  /** Ask LocalPilot about the whole document: a file is attached, text from the chat is quoted into the draft. */
+  /** The command's Ask (palette, editor title, Ctrl/Cmd+'): skipped when this reader's webview already answered the key. */
   async ask(): Promise<void> {
+    const s = this.source;
+    if (s && (await viewerAnsweredKey(s.kind === 'file' ? s.uri : this.id))) {
+      return;
+    }
+    return this.askDocument();
+  }
+
+  /**
+   * Ask LocalPilot about the whole document: a file is attached; text from the chat is quoted into the draft, or,
+   * over the quote limit, attached whole as a Markdown file so nothing is cut.
+   */
+  private async askDocument(): Promise<void> {
     const { chat } = this.opts;
     const s = this.source;
     if (!chat || !s) {
       return;
     }
     if (s.kind === 'file') {
-      return askAboutFile(chat, s.uri);
+      return askAboutFile(chat, s.uri, true);
     }
     await vscode.commands.executeCommand('localpilot.openChat');
-    chat.draft(`About the document "${s.title}":\n\n${quoteForDraft(s.text)}\n\n`);
+    if (s.text.length <= MAX_QUOTE) {
+      chat.draft(`${askDraft(s.title)}\n\n${quoteForDraft(s.text)}\n\n`);
+      return;
+    }
+    // Chat attachments are read by path, and text from the chat has none: it goes to a private temp file.
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'localpilot-reader-'));
+    const file = path.join(dir, `${slugName(s.title) || 'document'}.md`);
+    await fsp.writeFile(file, s.text, 'utf8');
+    chat.addToComposer(askDraft(s.title), [file]);
   }
 
-  private async askSelection(text: string, line: number | undefined): Promise<void> {
+  private async askSelection(m: Extract<FromViewer, { type: 'askSelection' }>): Promise<void> {
     const { chat } = this.opts;
     const s = this.source;
     if (!chat || !s) {
       return;
     }
     await vscode.commands.executeCommand('localpilot.openChat');
-    const draft = `${quoteForDraft(text)}\n\n`;
+    const draft = `${quoteForDraft(m.text)}\n\n`;
+    const total = Math.max(m.total ?? 0, m.text.length);
+    if (total > MAX_QUOTE) {
+      this.post({ type: 'toast', text: quoteCutNotice(total) });
+    }
     if (s.kind !== 'file') {
       chat.draft(draft);
       return;
     }
-    // data-line is 0-based in the rendered body; the attachment wants the 1-based source line.
+    // data-line is 0-based in the rendered body; the attachment wants 1-based source lines.
     const rel = vscode.workspace.asRelativePath(s.uri);
-    chat.addToComposer(draft, [line === undefined ? rel : `${rel}#L${line + this.frontMatterLines + 1}`]);
+    const from = m.line === undefined ? undefined : m.line + this.frontMatterLines + 1;
+    const to = m.endLine === undefined ? undefined : m.endLine + this.frontMatterLines + 1;
+    chat.addToComposer(draft, [from === undefined ? rel : to !== undefined && to > from ? `${rel}#L${from}-L${to}` : `${rel}#L${from}`]);
   }
 
   /** Editor → view: the first visible source line, throttled to 50 ms with a trailing update. */
@@ -444,9 +563,20 @@ export class MarkdownViewSession implements vscode.Disposable {
         return;
       case 'ready':
         this.ready = true;
-        return this.render();
+        await this.renderOrReport();
+        // A reloaded webview starts without the banner.
+        if (this.deleted) {
+          this.post({ type: 'deleted' });
+        }
+        return;
       case 'reload':
-        return this.render();
+        return this.renderOrReport();
+      case 'close':
+        this.opts.panel?.dispose();
+        return;
+      case 'openSettings':
+        await vscode.commands.executeCommand('localpilot.openSettings', 'documents');
+        return;
       case 'openEditor':
         if (s?.kind === 'file') {
           await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(s.uri), { preview: false, viewColumn: this.opts.isCustomEditor ? vscode.ViewColumn.Beside : vscode.ViewColumn.One });
@@ -460,6 +590,9 @@ export class MarkdownViewSession implements vscode.Disposable {
       case 'copy':
         await vscode.env.clipboard.writeText(await this.currentText());
         this.post({ type: 'toast', text: 'Markdown copied' });
+        return;
+      case 'find':
+        await vscode.commands.executeCommand('editor.action.webvieweditor.showFind');
         return;
       case 'openLink': {
         const t = parseLinkTarget(m.href);
@@ -475,9 +608,15 @@ export class MarkdownViewSession implements vscode.Disposable {
       case 'prefs':
         return this.updatePrefs(m.patch);
       case 'ask':
-        return this.ask();
+        if (m.key) {
+          noteViewerKeyAsk(s?.kind === 'file' ? s.uri : this.id);
+        }
+        return this.askDocument();
       case 'askSelection':
-        return this.askSelection(m.text, m.line);
+        if (m.key) {
+          noteViewerKeyAsk(s?.kind === 'file' ? s.uri : this.id);
+        }
+        return this.askSelection(m);
       case 'exportHtml':
         return this.exportDocument(m);
       case 'revealLine': {
@@ -722,31 +861,41 @@ export class MarkdownViewSession implements vscode.Disposable {
 <header id="bar" class="bar">
   <div class="meta"><b id="title">Document</b><span id="subtitle"></span></div>
   <span class="spacer"></span>
-  <button id="toc" class="ib" title="Outline (o)" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
-  <button id="wrap" class="ib" title="Wrap long code lines (w)" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8m1.5-1.5L8 12l1.5 1.5M2.5 12h3"/></svg></button>
-  <button id="smaller" class="ib" title="Smaller text (−)"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
-  <button id="larger" class="ib" title="Larger text (+)"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
-  <button id="copy" class="ib" title="Copy Markdown"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
-  <button id="save" class="ib" title="Save as…"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
-  <button id="open" class="ib" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
-  <button id="prefs" class="ib txt" title="Reading settings (a)" aria-haspopup="true" aria-expanded="false">Aa</button>
-  <button id="more" class="ib" title="More actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
-  <button id="ask" class="ib hidden" title="Ask LocalPilot about this document"><svg viewBox="0 0 16 16"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5A1.5 1.5 0 0 1 12 10.5H7L4 13v-2.5a1.5 1.5 0 0 1-1.5-1.5Z"/></svg></button>
+  <button id="toc" class="ib" title="Outline (o)" aria-label="Outline" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
+  <button id="find" class="ib" title="Find (Ctrl+F)" aria-label="Find in document"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg></button>
+  <button id="wrap" class="ib" title="Wrap long code lines (w)" aria-label="Wrap long code lines" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8m1.5-1.5L8 12l1.5 1.5M2.5 12h3"/></svg></button>
+  <button id="smaller" class="ib" title="Smaller text (−)" aria-label="Smaller text"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
+  <button id="larger" class="ib" title="Larger text (+)" aria-label="Larger text"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
+  <button id="copy" class="ib wide-only" title="Copy Markdown" aria-label="Copy Markdown"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+  <button id="save" class="ib wide-only" title="Save as…"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
+  <button id="open" class="ib wide-only" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
+  <button id="ask" class="ask hidden" title="Ask LocalPilot about this document" aria-label="Ask LocalPilot about this document"><svg viewBox="0 0 16 16"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5A1.5 1.5 0 0 1 12 10.5H7L4 13v-2.5a1.5 1.5 0 0 1-1.5-1.5Z"/></svg><span>Ask</span></button>
+  <button id="prefs" class="ib txt" title="Reading settings (a)" aria-label="Reading settings" aria-haspopup="true" aria-expanded="false">Aa</button>
+  <button id="more" class="ib" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
 </header>
 <div id="prefs-pop" class="pop hidden" role="dialog" aria-label="Reading settings">
-  <div class="row"><span>Width</span><div class="seg" data-key="width"><button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button></div></div>
-  <div class="row"><span>Font</span><div class="seg" data-key="font"><button data-v="sans">Sans</button><button data-v="serif">Serif</button><button data-v="editor">Editor</button></div></div>
-  <div class="row"><span>Line height</span><div class="seg" data-key="lineHeight"><button data-v="1.5">Tight</button><button data-v="1.65">Normal</button><button data-v="1.8">Loose</button></div></div>
-  <div class="row"><span>Text size</span><div class="seg"><button data-size="-1" title="Smaller text">−</button><output id="size-val">15</output><button data-size="1" title="Larger text">+</button></div></div>
+  <div class="row"><span id="pl-width">Width</span><div class="seg" data-key="width" role="group" aria-labelledby="pl-width"><button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button></div></div>
+  <div class="row"><span id="pl-font">Font</span><div class="seg" data-key="font" role="group" aria-labelledby="pl-font"><button data-v="sans">Sans</button><button data-v="serif">Serif</button><button data-v="editor">Editor</button></div></div>
+  <div class="row"><span id="pl-lh">Line height</span><div class="seg" data-key="lineHeight" role="group" aria-labelledby="pl-lh"><button data-v="1.5">Tight</button><button data-v="1.65">Normal</button><button data-v="1.8">Loose</button></div></div>
+  <div class="row"><span id="pl-size">Text size</span><div class="seg" role="group" aria-labelledby="pl-size"><button data-size="-1" title="Smaller text" aria-label="Smaller text">−</button><output id="size-val" aria-live="polite" aria-label="Text size">15</output><button data-size="1" title="Larger text" aria-label="Larger text">+</button></div></div>
+  <div class="row reset"><button id="prefs-reset" class="linkish" data-reset="1" title="Width, font, line height and text size back to their defaults">Reset to defaults</button></div>
 </div>
 <div id="more-pop" class="pop menu hidden" role="menu">
+  <button role="menuitem" class="narrow-only" data-act="copy">Copy Markdown</button>
+  <button role="menuitem" class="narrow-only" data-act="save">Save as…</button>
+  <button role="menuitem" class="narrow-only" data-act="open">Open in editor</button>
+  <button role="menuitemcheckbox" class="narrow-only" data-act="wrap" aria-checked="false">Wrap long code lines</button>
+  <hr class="narrow-only" />
   <button role="menuitem" data-act="html">Export HTML…</button>
   <button role="menuitem" data-act="pdf">Export PDF…</button>
   <button role="menuitem" data-act="clipboard">Copy HTML</button>
+  <hr />
+  <button role="menuitem" id="more-settings" data-act="settings">Viewer settings…</button>
 </div>
-<button id="ask-sel" class="ask-sel hidden" title="Ask LocalPilot about the selection">Ask LocalPilot</button>
+<button id="ask-sel" class="ask-sel hidden" title="Ask LocalPilot (Ctrl+')" aria-keyshortcuts="Control+'">Ask LocalPilot</button>
+<div id="ask-live" class="sr-only" aria-live="polite"></div>
 <div id="layout" class="layout">
-  <nav id="outline" class="outline hidden" aria-label="Outline"><input id="filter" class="filter hidden" type="search" placeholder="Filter headings" aria-label="Filter headings" /><div id="outline-list"></div></nav>
+  <nav id="outline" class="outline hidden" aria-label="Outline"><input id="filter" class="filter hidden" type="search" placeholder="Filter headings (/)" aria-label="Filter headings" /><div id="outline-list"></div></nav>
   <main id="doc" class="doc" aria-live="polite"><div class="loading">Rendering…</div></main>
 </div>
 <div id="toasts"></div>
@@ -757,6 +906,10 @@ export class MarkdownViewSession implements vscode.Disposable {
 
   dispose(): void {
     MarkdownViewSession.all.delete(this);
+    if (!MarkdownViewSession.all.size) {
+      MarkdownViewSession.configSub?.dispose();
+      MarkdownViewSession.configSub = undefined;
+    }
     this.disposed = true;
     this.unwatch();
     clearTimeout(this.syncTimer);

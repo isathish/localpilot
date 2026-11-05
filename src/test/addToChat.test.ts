@@ -65,15 +65,15 @@ suite('Add to Chat and code actions', () => {
     assert.deepStrictEqual(await run(undefined, ''), { text: '', clip: '' });
   });
 
-  test('code actions: add, explain and improve; fix is preferred; empty selection grows to ±3 lines', async () => {
+  test('code actions: add, explain and refactor; fix is preferred; empty selection grows to ±3 lines', async () => {
     const doc = await vscode.workspace.openTextDocument({ language: 'typescript', content: Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`).join('\n') });
     const provider = new LocalPilotCodeActions();
     const ctx = (diagnostics: vscode.Diagnostic[], only?: vscode.CodeActionKind): vscode.CodeActionContext => ({ diagnostics, only, triggerKind: vscode.CodeActionTriggerKind.Invoke });
     const actions = provider.provideCodeActions(doc, new vscode.Range(10, 2, 10, 2), ctx([]));
     const byTitle = (t: string) => actions.find((a) => a.title === t);
     assert.strictEqual(byTitle('Add to LocalPilot Chat')?.kind?.value, vscode.CodeActionKind.QuickFix.value);
-    assert.strictEqual(byTitle('Explain with LocalPilot')?.kind?.value, vscode.CodeActionKind.RefactorExtract.value);
-    assert.strictEqual(byTitle('Improve with LocalPilot')?.kind?.value, vscode.CodeActionKind.RefactorRewrite.value);
+    assert.strictEqual(byTitle('Explain Selection with LocalPilot')?.kind?.value, 'localpilot.explain');
+    assert.strictEqual(byTitle('Refactor Selection with LocalPilot')?.kind?.value, vscode.CodeActionKind.RefactorRewrite.value);
     assert.ok(!byTitle('Edit with LocalPilot…'), 'inline edit needs a selection');
     const range = byTitle('Add to LocalPilot Chat')!.command!.arguments![1] as vscode.Range;
     assert.deepStrictEqual([range.start.line, range.end.line], [7, 13]);
@@ -92,7 +92,7 @@ suite('Add to Chat and code actions', () => {
     const doc = await vscode.workspace.openTextDocument({ language: 'typescript', content: Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`).join('\n') });
     const provider = new LocalPilotCodeActions();
     const auto: vscode.CodeActionContext = { diagnostics: [], only: undefined, triggerKind: vscode.CodeActionTriggerKind.Automatic };
-    const titles = ['Add to LocalPilot Chat', 'Explain with LocalPilot', 'Improve with LocalPilot'];
+    const titles = ['Add to LocalPilot Chat', 'Explain Selection with LocalPilot', 'Refactor Selection with LocalPilot'];
     const cursor = provider.provideCodeActions(doc, new vscode.Range(10, 2, 10, 2), auto).map((a) => a.title);
     assert.deepStrictEqual(cursor.filter((t) => titles.includes(t)), []);
     const selected = provider.provideCodeActions(doc, new vscode.Range(3, 0, 5, 0), auto).map((a) => a.title);

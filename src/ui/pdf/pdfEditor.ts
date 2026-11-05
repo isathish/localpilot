@@ -3,18 +3,22 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { getConfig } from '../../config';
 import {
+  askDraft,
   FromPdfViewer,
   isAllowedExternalLink,
   MAX_PENDING_RANGES,
+  MAX_QUOTE,
   pageFromFragment,
   PdfPosition,
   PdfViewerPrefs,
+  quoteCutNotice,
   rangeAllowed,
   rememberPosition,
   selectionDraft,
   validatePdfViewerMessage,
 } from '../../pdf/viewerMessages';
 import { ImageAttachment } from '../images';
+import { noteViewerKeyAsk } from '../viewerKeyAsk';
 import { livePdfViews, PDF_VIEW_TYPE } from './open';
 
 /** What the viewer hands to the chat: the file to attach, a page reference, a draft and page images. */
@@ -33,6 +37,7 @@ type ToPdfViewer =
   | { type: 'open'; mode: 'range'; length: number; initial: Uint8Array; name: string; size: number; page?: number; scale?: string | number; prefs: PdfViewerPrefs }
   | { type: 'rangeData'; id: number; begin: number; data: Uint8Array }
   | { type: 'rangeError'; id: number; message: string }
+  | { type: 'loading'; name: string; size: number }
   | { type: 'reload' }
   | { type: 'goToPage'; page: number }
   | { type: 'prefs'; prefs: PdfViewerPrefs }
@@ -164,6 +169,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     let pending = 0;
     let force = false;
     let firstOpen = true;
+    /** The too-large panel is up: a raised limit (Change limit…) opens the file without another click. */
+    let blocked = false;
     const post = (m: ToPdfViewer) => void webview.postMessage(m);
 
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
@@ -185,10 +192,13 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
       const name = path.posix.basename(doc.uri.path);
       const { rangeThresholdMB, maxFileSizeMB } = getConfig().pdfViewer;
       const max = maxFileSizeMB * 1024 * 1024;
-      if (doc.size > max && !force) {
+      blocked = doc.size > max && !force;
+      if (blocked) {
         post({ type: 'tooLarge', size: doc.size, max });
         return;
       }
+      // Reading a large file can take a moment; the viewer shows what it is opening meanwhile.
+      post({ type: 'loading', name, size: doc.size });
       const saved = this.ctx.workspaceState.get<Record<string, PdfPosition>>(POSITIONS_KEY, {})[key];
       // The link's page wins the first time; reloads keep whatever the webview is showing.
       const at = firstOpen ? { page: doc.initialPage ?? saved?.page, scale: saved?.scale } : {};
@@ -239,11 +249,35 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         case 'reveal':
           await vscode.commands.executeCommand('revealFileInOS', doc.uri);
           return;
-        case 'ask':
-          this.hooks.addToComposer('About this PDF: ', [vscode.workspace.asRelativePath(doc.uri)]);
+        case 'ask': {
+          if (m.key) {
+            noteViewerKeyAsk(doc.uri);
+          }
+          this.hooks.addToComposer(askDraft(path.posix.basename(doc.uri.path)), [vscode.workspace.asRelativePath(doc.uri)]);
+          // Attached all the same, but the agent's read would be refused: say so now and offer what does work.
+          const limit = getConfig().pdf.maxReadSizeMB;
+          if (doc.size > limit * 1024 * 1024) {
+            const size = `${(doc.size / 1048576).toFixed(doc.size < 10 * 1048576 ? 1 : 0)} MB`;
+            const pick = await vscode.window.showWarningMessage(`This PDF (${size}) is over the ${limit} MB the agent may read. Ask about a selection, or attach a page as an image.`, 'Attach this page as image', 'Raise limit…');
+            if (pick === 'Attach this page as image') {
+              post({ type: 'attachPageImage' });
+            } else if (pick === 'Raise limit…') {
+              await vscode.commands.executeCommand('localpilot.openSettings', 'documents');
+            }
+          }
+          return;
+        }
+        case 'openSettings':
+          await vscode.commands.executeCommand('localpilot.openSettings', 'documents');
           return;
         case 'askSelection':
+          if (m.key) {
+            noteViewerKeyAsk(doc.uri);
+          }
           this.hooks.addToComposer(selectionDraft(m.text), [`${vscode.workspace.asRelativePath(doc.uri)}#page=${m.page}`]);
+          if (m.total) {
+            post({ type: 'toast', text: quoteCutNotice(m.total) });
+          }
           return;
         case 'attachImage':
           this.hooks.attachImage({ name: m.name, data: m.data, mime: m.mime });
@@ -279,6 +313,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
       }),
       doc.onDidChange(() => post({ type: 'reload' })),
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (blocked && e.affectsConfiguration('localpilot.pdfViewer.maxFileSizeMB')) {
+          void open().catch((err) => this.log.warn(`PDF viewer: reopen failed: ${err instanceof Error ? err.message : String(err)}`));
+        }
+      }),
       panel.onDidChangeViewState(() => {
         if (panel.active) {
           this.active = panel;
@@ -311,6 +350,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
       wasm: `${pdfjs('wasm')}/`,
       iccs: `${pdfjs('iccs')}/`,
       images: `${pdfjs('images')}/`,
+      maxQuote: MAX_QUOTE,
     }).replace(/</g, '\\u003c');
     // 'wasm-unsafe-eval' only allows WebAssembly (JPX, JBIG2, ICC decoders); the worker starts from a blob of the
     // packaged worker file; connect-src lets the main thread fetch cmaps and fonts. No eval, no remote source.
@@ -334,7 +374,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
   <span class="pagebox"><input id="page" type="number" min="1" value="1" aria-label="Page" title="Page (Ctrl+G)" /><span id="total" class="muted">/ –</span></span>
   <span class="sep"></span>
   <button id="zoomOut" class="ib" title="Zoom out (Ctrl+-)"><svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg></button>
-  <select id="zoom" title="Zoom" aria-label="Zoom">
+  <select id="zoom" title="Zoom. Reset zoom (Ctrl+0)" aria-label="Zoom">
+    <option value="default" id="zoomDefault">Default (Auto)</option>
     <option value="auto">Auto</option><option value="page-width">Page width</option><option value="page-fit">Page fit</option><option value="page-actual">Actual size</option>
     <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option>
     <option value="custom" id="zoomCustom" hidden></option>
@@ -342,10 +383,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
   <button id="zoomIn" class="ib" title="Zoom in (Ctrl+=)"><svg viewBox="0 0 16 16"><path d="M4 8h8M8 4v8"/></svg></button>
   <button id="rotate" class="ib" title="Rotate clockwise (r)"><svg viewBox="0 0 16 16"><path d="M12.5 7.5A4.5 4.5 0 1 1 11 4.2M11.5 2v2.5H9"/></svg></button>
   <span class="spacer"></span>
-  <button id="colors" class="ib" title="Page colours" aria-haspopup="menu"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
+  <button id="colors" class="ib" title="Page colours" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
   <button id="findToggle" class="ib" title="Find (Ctrl+F)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg></button>
-  <button id="ask" class="ask" title="Ask LocalPilot about this PDF"><svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg><span>Ask</span></button>
-  <button id="more" class="ib" title="More actions" aria-haspopup="menu"><svg viewBox="0 0 16 16"><path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2.2"/></svg></button>
+  <button id="ask" class="ask" title="Ask LocalPilot about this PDF" aria-label="Ask LocalPilot about this PDF"><svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg><span>Ask</span></button>
+  <button id="more" class="ib" title="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2.2"/></svg></button>
 </header>
 <div id="findbar" class="findbar hidden" role="search">
   <input id="findInput" type="search" placeholder="Find in document" aria-label="Find in document" />
@@ -361,14 +402,16 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <div id="progress" class="progress hidden"><div></div></div>
 <div id="layout" class="layout">
   <nav id="sidebar" class="sidebar hidden" aria-label="Document navigation">
-    <div class="tabs" role="tablist"><button id="tabOutline" role="tab">Outline</button><button id="tabThumbs" role="tab">Pages</button></div>
-    <div id="outlineView" class="outline" role="tree"></div>
-    <div id="thumbsView" class="thumbs hidden"></div>
+    <div class="tabs" role="tablist" aria-label="Sidebar view"><button id="tabOutline" role="tab" aria-controls="outlineView">Outline</button><button id="tabThumbs" role="tab" aria-controls="thumbsView">Pages</button></div>
+    <div id="outlineView" class="outline" role="tabpanel" aria-labelledby="tabOutline"></div>
+    <div id="thumbsView" class="thumbs hidden" role="tabpanel" aria-labelledby="tabThumbs"></div>
   </nav>
   <div id="viewerContainer" class="viewer-container" tabindex="0"><div id="viewer" class="pdfViewer"></div></div>
+  <div id="loading" class="loading-state" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="loadingText"></span></div>
 </div>
-<div id="panel" class="panel hidden" role="dialog" aria-live="polite"></div>
-<button id="askSel" class="ask-sel hidden" title="Ask LocalPilot about the selected text">Ask about selection</button>
+<div id="panel" class="panel hidden" role="dialog" aria-live="polite" aria-labelledby="panelTitle"></div>
+<button id="askSel" class="ask-sel hidden" title="Ask LocalPilot (Ctrl+')" aria-keyshortcuts="Control+'">Ask LocalPilot</button>
+<div id="askLive" class="sr-only" aria-live="polite"></div>
 <div id="menu" class="menu hidden" role="menu"></div>
 <div id="toasts"></div>
 <script nonce="${nonce}" type="module">

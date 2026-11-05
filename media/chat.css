@@ -52,6 +52,11 @@ body { background: var(--bg); color: var(--fg); font-family: var(--vscode-font-f
 .spacer { flex: 1 1 0; min-width: 0; }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
 button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+/* Filled buttons and on-state controls share the ring's colour, so an inset ring vanished on them; draw it outside instead. */
+:is(.btn.primary, .send, .seg button.on, .chip.on):focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+/* A segmented control clips its buttons to the rounded frame; let a focused one's ring show past it. */
+.seg:has(> button:focus-visible) { overflow: visible; } .seg > button:first-child { border-radius: 4px 0 0 4px; } .seg > button:last-child { border-radius: 0 4px 4px 0; } .seg > button:focus-visible { position: relative; z-index: 1; }
+body.vscode-high-contrast :is(.btn.primary, .send, .seg button.on, .chip.on):focus-visible, body.vscode-high-contrast-light :is(.btn.primary, .send, .seg button.on, .chip.on):focus-visible { outline-color: var(--vscode-contrastActiveBorder, var(--focus)); }
 textarea:focus { outline: none; }
 svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -88,15 +93,20 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tab.loading { background: var(--tint-2); color: var(--fg); border-color: var(--border-soft); }
 .tab.loading .t { color: var(--fg); }
 .tab.loading .ind { opacity: .45; }
-.tab .close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); flex: none; opacity: 0; transition: opacity .12s, background .12s; }
-.tab .close svg { width: 11px; height: 11px; }
-.tab:hover .close, .tab.active .close, .tab:focus-visible .close { opacity: 1; }
-.tab .close:hover { background: var(--tint-2); color: var(--fg); }
+/* Close / stop is a sibling button laid over the tab's right end, so it is reachable by keyboard. */
+.tabw { position: relative; display: inline-flex; flex: 0 0 auto; min-width: 0; }
+.tabw > .tab { padding-right: 26px; }
+.tabs .close { position: absolute; top: 4px; right: 4px; display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 4px; color: var(--muted); opacity: 0; transition: opacity .12s, background .12s; }
+.tabs .close svg { width: 11px; height: 11px; }
+.tabw:hover > .close, .tab.active + .close, .tab:focus-visible + .close, .tabs .close:focus-visible { opacity: 1; }
+.tabs .close:hover { background: var(--tint-2); color: var(--fg); }
 /* A running tab shows its stop square only when it is the active tab or hovered — the dot already says "running". */
-.tab.running .close { color: var(--brand-text); } .tab.running .close:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.tab.running + .close { color: var(--brand-text); } .tab.running + .close:hover { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); }
+/* First click on a running tab's stop: a "Stop?" pill that a second click confirms. */
+.tabs .close.confirm, .tab.running + .close.confirm { opacity: 1; padding: 0 7px; border-radius: 9px; font-size: var(--fs-xs); font-weight: 600; color: var(--error-text); background: color-mix(in srgb, var(--error) 16%, var(--bg)); }
 .tab.pinned .ind { color: var(--brand-text); }
 .tab.selected { background: color-mix(in srgb, var(--focus) 18%, transparent); border-color: color-mix(in srgb, var(--focus) 55%, transparent); color: var(--fg); }
-.tab.selected .close { opacity: 1; }
+.tab.selected + .close { opacity: 1; }
 .tab.more { padding: 0 8px; color: var(--muted); border-style: dashed; border-color: var(--border-soft); }
 .tab .rename { width: 120px; height: 20px; padding: 0 4px; border: 1px solid var(--focus); border-radius: 3px; background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); outline: none; }
 .tabbar .ib { width: 24px; height: 24px; }
@@ -108,6 +118,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .bgruns { display: flex; flex-direction: column; gap: 1px; padding: 3px 8px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--brand) 5%, transparent); flex: none; container: bgruns / inline-size; }
 .bgrun { display: flex; align-items: center; gap: 8px; min-height: 22px; padding: 0 2px 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs); color: var(--muted); cursor: pointer; min-width: 0; }
 .bgrun:hover { background: var(--tint); color: var(--fg); }
+.bgrun .open { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; min-height: 22px; text-align: left; color: inherit; font-size: inherit; border-radius: var(--radius-sm); }
 .bgrun .spin { width: 9px; height: 9px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 .bgrun .dot.live { margin: 0 2px; }
 .bgrun .t { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; max-width: 45%; }
@@ -464,6 +475,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .approval .actions .btn { min-width: 0; flex: 0 1 auto; white-space: nowrap; }
 .btn .long { display: inline; }
 .btn .short { display: none; }
+.approval .khint { padding: 0 10px 8px; margin-top: -2px; text-align: right; font-size: var(--fs-xs); color: var(--muted); }
+.approval .khint kbd { font-family: var(--mono); font-size: 10px; padding: 0 3px; border-radius: 3px; background: var(--tint-2); color: var(--fg-2); }
+/* The key hints stay visible down to 330 px, so labels shorten first. */
+@container (max-width: 460px) { .approval .actions .btn .long { display: none; } .approval .actions .btn .short { display: inline; } }
 @container (max-width: 330px) { .approval .actions .btn .long { display: none; } .approval .actions .btn .short { display: inline; } .approval .actions .btn kbd { display: none; } .approval .head .kind { display: none; } }
 
 /* composer */
@@ -475,6 +490,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .approval .reason.hidden { display: none; }
 .approval .reason input { flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--editor-bg); color: var(--fg); font: inherit; font-size: var(--fs-sm); }
 .approval .reason input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+/* Mandatory prompts: why there is no "allow all" button. */
+.approval .always { margin-top: -4px; padding: 0 10px 8px; text-align: right; font-size: var(--fs-xs); color: var(--muted); }
 /* A step the user denied: neutral, not a failure. */
 .step.denied .ico, .card.edit.denied .card-head .ico { color: var(--muted); }
 .step.denied > summary .meta, .card.edit.denied .card-head .stat { color: var(--muted); font-style: italic; }
@@ -489,16 +506,26 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .aa-head .aa-v { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .aa-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 4px 6px 19px; }
 .aa-body.hidden { display: none; }
-.aa-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.aa-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.aa-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
+/* A name with its tags keeps its full width; when the choices no longer fit beside it they wrap under it, right-aligned. */
+.aa-row .seg { margin-left: auto; }
+.aa-name { flex: 1 0 auto; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
 .aa-lock { font-style: normal; margin-left: 4px; padding: 0 4px; border: 1px solid var(--border-soft); border-radius: 3px; color: var(--muted); }
+.aa-ws { font-style: normal; margin-left: 4px; color: var(--muted); font-size: var(--fs-xs); cursor: help; }
 .aa-row .seg { display: inline-flex; flex: none; border: 1px solid var(--border-soft); border-radius: 4px; overflow: hidden; }
 .aa-row .seg button { padding: 1px 7px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
 .aa-row .seg button + button { border-left: 1px solid var(--border-soft); }
 .aa-row .seg button:hover:not(:disabled):not(.on) { background: var(--tint); color: var(--fg); }
 .aa-row .seg button.on { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--fg); }
 .aa-row .seg button:disabled { opacity: .45; cursor: not-allowed; }
+/* "Allow all … in this chat" grants: removable chips above the bar's toggle. */
+.aa-grants { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 4px; min-width: 0; }
+.aa-grants .grant { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 18px; padding: 0 3px 0 7px; border: 1px solid var(--border-soft); border-radius: 999px; background: color-mix(in srgb, var(--brand) 10%, transparent); color: var(--fg-2); font-size: var(--fs-xs); }
+.aa-grants .grant span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aa-grants .grant .x { display: inline-grid; place-items: center; width: 13px; height: 13px; border-radius: 50%; color: var(--muted); line-height: 1; }
+.aa-grants .grant:hover { color: var(--fg); border-color: var(--border); } .aa-grants .grant:hover .x { background: var(--tint-2); color: var(--fg); }
 @container (max-width: 300px) { .aa-name .aa-lock { display: none; } }
+.aa-row .seg button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .question .q { padding: 8px 10px 4px; border-top: 1px solid var(--border-soft); }
 .question .q-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; line-height: 1.4; }
 .question .q-chip { flex: none; font-size: var(--fs-xs); color: var(--muted); border: 1px solid var(--border-soft); border-radius: 10px; padding: 0 7px; line-height: 16px; }
@@ -564,10 +591,18 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .change .kind.create { color: var(--ok-text); } .change .kind.modify { color: var(--warn-text); } .change .kind.delete { color: var(--error-text); } .change .kind.rename { color: var(--muted); }
 .change .stat { flex: none; display: inline-flex; gap: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; } .change .stat i { font-style: normal; } .change .stat .add { color: var(--ok-text); } .change .stat .del { color: var(--error-text); }
 /* Isolated-worktree changes: not in the workspace yet, so the panel is tinted and headed by Apply / Discard. */
+/* Inline "Reject N files?" in place of the changes head. */
+.panel-head.confirm { flex-wrap: wrap; row-gap: 4px; padding-left: 10px; background: color-mix(in srgb, var(--error) 7%, transparent); }
+.panel-head.confirm .q { flex: 1 1 160px; min-width: 0; font-size: var(--fs-sm); }
+.panel-head.confirm .why { color: var(--muted); }
+.panel-head.confirm .acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.panel-head.confirm .btn.danger { border-color: color-mix(in srgb, var(--error) 50%, var(--border-soft)); }
+.panel-head.confirm .btn.danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
 .panel.isolated > .panel-head { background: color-mix(in srgb, var(--brand) 7%, transparent); }
 .panel.isolated .panel-toggle { color: var(--fg); }
 .change .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-family: var(--mono); font-size: 11.5px; }
-.change .acts { display: none; gap: 2px; flex: none; } .change:hover .acts { display: inline-flex; }
+.change .acts { display: none; gap: 2px; flex: none; } .change:hover .acts, .change:focus-within .acts { display: inline-flex; }
+.change button.name { display: block; padding: 0; border-radius: 3px; color: inherit; } .change button.name[aria-disabled="true"] { cursor: default; }
 .change .acts button { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted); }
 .change .acts button:hover { background: var(--tint-2); color: var(--fg); } .change .acts svg { width: 12px; height: 12px; }
 .status { display: flex; align-items: center; gap: 8px; min-height: 18px; padding: 0 4px; font-size: var(--fs-sm); color: var(--muted); overflow: hidden; }
@@ -705,14 +740,18 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .plan-todos .todo { display: flex; align-items: flex-start; gap: 9px; padding: 3px 0; font-size: var(--fs-sm); line-height: 1.45; }
 .plan-todos .todo i { flex: none; width: 13px; height: 13px; margin-top: 3px; border: 1.5px solid var(--muted); border-radius: 50%; } .plan-todos .todo.done i { background: var(--ok); border-color: var(--ok); } .plan-todos .todo.done span { text-decoration: line-through; color: var(--muted); }
 .plan-todos .todo em { font-style: normal; font-size: var(--fs-xs); color: var(--muted); margin-left: auto; padding-left: 8px; white-space: nowrap; }
-.plan-foot { display: flex; align-items: center; gap: 10px; } .plan-foot .hint { flex: 1; font-size: var(--fs-xs); color: var(--muted); }
+.plan-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; } .plan-foot .hint { flex: 1 1 170px; font-size: var(--fs-xs); color: var(--muted); }
+/* Narrow cards put the hint on its own line and keep Revise / Build together on the right. */
+.plan-foot .plan-acts { display: flex; gap: 6px; flex: none; margin-left: auto; } .plan-foot .revise { height: 30px; padding: 0 10px; }
 .plan-foot .build { background: var(--accent); color: var(--accent-fg); font-weight: 600; height: 30px; padding: 0 12px; border-radius: var(--radius); gap: 6px; } .plan-foot .build kbd { font-family: inherit; font-size: var(--fs-xs); opacity: .8; } .plan-foot .build:disabled { opacity: .6; }
 
 /* popover menu */
 .popover { position: fixed; z-index: 60; min-width: 220px; max-width: min(360px, calc(100vw - 20px)); max-height: 60vh; overflow: auto; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; font-size: var(--fs-sm); animation: fadeUp .12s ease-out; }
 .popover .search { width: 100%; box-sizing: border-box; margin: 2px 0 4px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-soft); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); }
 .popover .search:focus { outline: none; border-color: var(--focus); }
-.popover .grp { padding: 7px 8px 3px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.popover .grp { display: flex; align-items: center; gap: 6px; padding: 7px 8px 3px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.popover .grp .gico { display: inline-grid; place-items: center; width: 12px; } .popover .grp .gico svg { width: 12px; height: 12px; }
+.popover .list > .grp:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
 .popover .item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; min-width: 0; }
 .popover .item:hover { background: var(--tint-2); }
 .popover .item.sel { background: var(--sel); color: var(--sel-fg); }
@@ -720,20 +759,25 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .popover .item .ico { display: inline-grid; place-items: center; width: 16px; color: var(--muted); } .popover .item .ico svg { width: 14px; height: 14px; }
 .popover .item .txt { flex: 1; min-width: 0; }
 .popover .item .lbl { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.popover .item .desc { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popover .item .desc { font-size: 11px; color: var(--muted); white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .popover .item .check { width: 14px; color: var(--accent); } .popover .item .check svg { width: 13px; height: 13px; }
 .popover .item .star { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: none; border-radius: var(--radius-sm); background: none; color: var(--muted); opacity: 0; cursor: pointer; flex: none; }
 .popover .item .star svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
 .popover .item:hover .star, .popover .item.sel .star, .popover .item .star:focus-visible { opacity: .8; }
 .popover .item .star.on { opacity: 1; color: var(--brand, #f2a33a); } .popover .item .star.on svg { fill: currentColor; }
 .popover .item.sel .star.on { color: inherit; }
-.popover .item .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
-.popover .item.sel .tag { background: rgba(255,255,255,.15); color: inherit; }
+.popover .item .tag { font-size: 10px; padding: 0 5px; border: 1px solid transparent; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
+/* On a selected row: an outline instead of a fill that can vanish into the selection colour. */
+.popover .item.sel .tag { background: transparent; border-color: currentColor; color: inherit; }
+.popover .item .tag.capped { background: transparent; border-color: var(--border-soft); cursor: help; }
 .popover .empty-i { padding: 8px; color: var(--muted); }
+.popover .empty-i.note { padding: 6px 8px; font-size: var(--fs-xs); }
+.popover .mspin { width: 10px; height: 10px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+.popover .mfoot { position: sticky; bottom: -4px; display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 4px -4px -4px; padding: 5px 12px; border-top: 1px solid var(--border-soft); background: var(--vscode-editorWidget-background, var(--bg)); font-size: 10.5px; color: var(--muted); }
 .popover hr { border: none; border-top: 1px solid var(--border-soft); margin: 4px 0; }
 
 /* All chats: searchable, date-grouped history with per-row actions */
-.hist { display: flex; flex-direction: column; width: min(340px, calc(100vw - 28px)); }
+.hist { display: flex; flex-direction: column; width: min(340px, calc(100vw - 28px)); container-type: inline-size; }
 .hist > .search { margin: 2px 0; }
 .hist-list { overflow: auto; max-height: min(400px, calc(60vh - 110px)); padding: 2px 0; scrollbar-width: thin; }
 .hist-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px 5px 8px; border-radius: var(--radius-sm); cursor: pointer; min-width: 0; min-height: 36px; }
@@ -763,8 +807,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-list .empty-i.more { font-size: 11px; text-align: center; }
 .hist-row .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--tint-2); color: var(--muted); flex: none; }
 .hist-row .acts { display: none; align-items: center; gap: 1px; flex: none; }
-.hist-row.sel .acts, .hist-row:hover .acts, .hist-row.confirm .acts { display: inline-flex; }
-.hist-row.sel .tag, .hist-row:hover .tag, .hist-row.confirm .tag { display: none; }
+.hist-row.sel .acts, .hist-row:hover .acts, .hist-row.confirm .acts, .hist-row:focus-within .acts { display: inline-flex; }
+.hist-row.sel .tag, .hist-row:hover .tag, .hist-row.confirm .tag, .hist-row:focus-within .tag { display: none; }
 .hist-row .acts button { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); }
 .hist-row .acts button:hover { background: var(--hover); color: var(--fg); }
 .hist-row .acts button[aria-pressed="true"] { color: var(--brand-text); }
@@ -774,7 +818,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-row .acts .danger { color: var(--error-text); } .hist-row .acts .danger:hover { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-text); }
 .hist-row input.rename { flex: 1 1 auto; min-width: 0; height: 20px; padding: 0 4px; border: 1px solid var(--focus); border-radius: 3px; background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: var(--fs-sm); outline: none; }
 .hist-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 2px 2px; margin-top: 2px; border-top: 1px solid var(--border-soft); }
-.hist-foot .spacer { flex: 1 1 auto; }
+.hist-foot .hist-acts { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.hist-foot .hist-acts.tidy { margin-left: auto; }
+.hist-foot .hist-acts.tidy .lbl { display: none; }
+@container (min-width: 320px) { .hist-foot .hist-acts.tidy .lbl { display: inline; } }
 .hist-foot button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: var(--radius-sm); font-size: 11px; color: var(--muted); white-space: nowrap; }
 .hist-foot button:hover:not(:disabled) { background: var(--tint-2); color: var(--fg); }
 .hist-foot button:disabled { opacity: .45; cursor: default; }
@@ -782,14 +829,22 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .hist-foot button.danger:hover:not(:disabled) { color: var(--error-text); }
 
 /* toasts */
-#toasts { position: fixed; left: 50%; bottom: calc(var(--composer-h, 108px) + 10px); transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 70; pointer-events: none; max-width: 90%; }
+#toasts, #toastAlerts { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+#toasts { position: fixed; left: 0; right: 0; bottom: calc(var(--composer-h, 108px) + 10px); z-index: 70; pointer-events: none; }
+#toastAlerts { align-self: stretch; } #toastAlerts:empty { display: none; }
 .jump { position: fixed; left: 50%; transform: translateX(-50%); z-index: 60; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--vscode-notifications-background, var(--bg)); color: var(--fg); border: 1px solid var(--border); box-shadow: var(--shadow); font: inherit; font-size: var(--fs-sm); cursor: pointer; animation: fadeUp .18s ease-out; }
 .jump:hover { background: var(--tint); }
 .jump svg { width: 12px; height: 12px; transform: rotate(90deg); }
 .jump.hidden { display: none; }
-.toast { background: var(--vscode-notifications-background, var(--bg)); color: var(--vscode-notifications-foreground, var(--fg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 12px; font-size: var(--fs-sm); box-shadow: var(--shadow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: fadeUp .18s ease-out; }
+/* Toasts wrap (three lines at most), take clicks (dismiss, action, hover to pause) and never cover the width edge to edge. */
+.toast { display: flex; align-items: flex-start; gap: 6px; max-width: calc(100% - 24px); pointer-events: auto; background: var(--vscode-notifications-background, var(--bg)); color: var(--vscode-notifications-foreground, var(--fg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 4px 6px 12px; font-size: var(--fs-sm); line-height: 1.4; box-shadow: var(--shadow); animation: fadeUp .18s ease-out; }
 .toast.error { border-color: color-mix(in srgb, var(--error) 60%, transparent); }
 .toast.warn { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
+.toast .tt { min-width: 0; padding-top: 1px; white-space: normal; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.toast .ta { flex: none; height: 22px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--link); font-weight: 600; white-space: nowrap; }
+.toast .ta:hover { background: var(--tint-2); }
+.toast .tx { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--muted); font-size: 15px; line-height: 1; }
+.toast .tx:hover { background: var(--tint-2); color: var(--fg); }
 
 @media (max-width: 300px) {
   .turn { padding-left: 10px; padding-right: 10px; }
@@ -822,6 +877,19 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .pick.model .ico { display: inline-grid; }
   .ctx { display: none; }
 }
+/* 300–360 px: Skills, Rules and Improve prompt move into the ⋯ menu, and the model picker takes the freed room with its
+   short name (no provider prefix or :tag). The context ring and Send stay. */
+.ib.narrow-only { display: none; }
+.pick.model .nm-short { display: none; }
+@container (max-width: 360px) {
+  .pick.skills, #btnRules, #btnImprove { display: none; }
+  #btnComposerMore { display: inline-grid; }
+  .pick.mode .chev { display: none; }
+  .pick.model { flex: 1 1 auto; min-width: 72px; max-width: none; }
+  .pick.model .nm-full { display: none; }
+  .pick.model .nm-short { display: inline; }
+}
+@container (max-width: 260px) { .pick.model { flex: none; min-width: 0; } }
 /* Wide hosts (editor tab, a wide Panel): scroll areas stay full width so scrollbars sit at the window edge; the content is centred at a readable measure. */
 @media (min-width: 900px) {
   #messages { padding-inline: max(0px, calc((100% - 884px) / 2)); }
@@ -839,11 +907,17 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 @media (max-height: 420px) {
   /* Permission prompts fold to one row (title · actions) over a two-line detail, so they fit above the input. */
   .approval { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  /* The title keeps at least 80 px; the buttons go to their short labels, but the primary one still says "Allow once". */
+  .approval { grid-template-columns: minmax(80px, 1fr) auto; }
   .approval .head { grid-column: 1; grid-row: 1; padding-block: 5px; min-width: 0; }
   .approval .head > span:not(.kind) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .approval .actions { grid-column: 2; grid-row: 1; padding: 4px 8px; }
+  .approval .actions { grid-column: 2; grid-row: 1; padding: 4px 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .approval .actions .btn .long { display: none; } .approval .actions .btn .short { display: inline; } .approval .actions .btn kbd { display: none; }
+  .approval .actions .btn[data-a="allow"] .long { display: inline; } .approval .actions .btn[data-a="allow"] .short { display: none; }
   .approval .sess, .approval pre { grid-column: 1 / -1; }
   .approval pre { max-height: 4.6em; padding-block: 4px; border-bottom: none; }
+  /* Too narrow for one row: unfold back to the stacked card. */
+  @container (max-width: 360px) { .approval { display: block; } }
 }
 @media (max-height: 360px) {
   .bgruns { display: none; }
@@ -1010,7 +1084,7 @@ pre.numbered .t { padding-right: 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   /* "Running" stays legible as a static, dimmed glyph instead of an endless spin. */
-  .step.running .ico svg, .tab .spin, .bgrun .spin, .status .spinner, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
+  .step.running .ico svg, .tab .spin, .bgrun .spin, .popover .mspin, .status .spinner, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
   .dot.live { animation: none !important; }
   .step.running .label > b { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--fg); animation: none; }
   .typing i, .boot-dots i, .caret { animation: none !important; opacity: .7; }
@@ -1047,12 +1121,14 @@ button.copied, button.copied:hover { color: var(--ok-text) !important; }
 .suggestion .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); }
 .suggestion .ico svg { width: 14px; height: 14px; }
 .suggestion:hover .ico { color: var(--fg); }
+.suggestion[aria-disabled="true"] { cursor: default; color: var(--muted); opacity: .6; } .suggestion[aria-disabled="true"]:hover { background: transparent; } .suggestion[aria-disabled="true"]:hover .ico { color: var(--muted); }
 .suggestion .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggestion .mode { flex: none; font-size: var(--fs-xs); color: var(--muted); }
 .recent { margin-top: 18px; text-align: left; }
 .recent-h { display: flex; align-items: center; padding: 0 8px 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
 .recent-h button { margin-left: auto; font-size: var(--fs-xs); font-weight: 400; color: var(--link); padding: 2px 6px; border-radius: var(--radius-sm); }
 .recent-h button:hover { background: var(--tint); }
+.empty > .notice { margin: 0 0 14px; }
 .recent-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 30px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--fg); font-size: var(--fs-sm); text-align: left; }
 .recent-row:hover { background: var(--tint); }
 .recent-row .ico { display: inline-grid; place-items: center; width: 16px; flex: none; color: var(--muted); } .recent-row .ico svg { width: 13px; height: 13px; }
@@ -1064,11 +1140,11 @@ button.copied, button.copied:hover { color: var(--ok-text) !important; }
 /* Failed turn: message, then Change model / Retry on their own row. */
 .error-box { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px; }
 .error-box .msg { flex: 1 1 200px; }
-.err-acts { display: inline-flex; gap: 6px; margin-left: auto; flex: none; color: var(--fg); }
+.err-acts { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 1 auto; max-width: 100%; color: var(--fg); }
+/* Narrow sidebar: the secondary actions keep their icons and titles, the fix keeps its label. */
+@container messages (max-width: 380px) { .err-acts [data-a="log"] span, .err-acts [data-a="model"] span { display: none; } }
 .err-acts .btn svg { width: 12px; height: 12px; }
 
-/* Approvals keep their buttons plain; the shortcuts are in the tooltips. */
-.approval .btn kbd { display: none; }
 .approval .actions { gap: 6px; }
 
 /* Model picker: "no model" is a warning that invites a click (the picker offers setup); "finding" is quiet. */
@@ -1151,6 +1227,8 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 /* Task header (U2): the first prompt under the tab strip. */
 .taskhead { flex: none; margin: 6px 10px 0; padding: 4px 6px 6px 4px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--tint); font-size: var(--fs-sm); min-width: 0; }
 .taskhead.collapsed { padding-bottom: 4px; }
+/* The first prompt is on screen as a turn: the card would only repeat it. */
+.taskhead.away { display: none; }
 .taskhead .th-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .taskhead .th-toggle { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 4px 0 0; color: var(--muted); font-weight: 600; flex: none; border-radius: var(--radius-sm); }
 .taskhead .th-toggle:hover { color: var(--fg); }
@@ -1178,15 +1256,22 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 .ctxcard .r { display: flex; justify-content: space-between; gap: 10px; line-height: 1.7; font-variant-numeric: tabular-nums; }
 .ctxcard .r span { color: var(--muted); } .ctxcard .r b { font-weight: 500; }
 .ctxcard .r.sep { border-top: 1px solid var(--border-soft); margin-top: 4px; padding-top: 4px; }
-.ctxcard .note { margin-top: 4px; font-size: var(--fs-xs); color: var(--warn-text, var(--muted)); }
+.ctxcard .note { margin: 6px 0 0; padding: 4px 0 0; border: none; border-top: 1px solid var(--border-soft); border-radius: 0; font-size: var(--fs-xs); line-height: 1.5; color: var(--muted); }
+.ctxcard .note .link { color: var(--link); font-size: inherit; text-align: left; } .ctxcard .note .link:hover { text-decoration: underline; }
+.ctxcard .q + .note { margin-top: 6px; }
 .ctxcard .hint { margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); }
 .ctxcard .q { line-height: 1.45; } .ctxcard .q b { display: block; margin-bottom: 2px; }
 .ctxcard .acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 
 /* Feature tips (U8) under the status row, and the What's new card on the empty chat. */
-.tiprow { display: flex; align-items: baseline; gap: 6px; padding: 0 4px 2px 24px; font-size: var(--fs-xs); color: var(--muted); animation: fadeUp .2s ease-out; }
+.tiprow { display: flex; align-items: center; gap: 6px; padding: 0 4px 2px 24px; font-size: var(--fs-xs); color: var(--muted); animation: fadeUp .2s ease-out; }
 .tiprow .k { flex: none; font-weight: 600; color: var(--brand-text, var(--accent)); }
 .tiprow .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Hidden until the row is hovered or focused; the hit area stays 24 px even at the narrowest width. */
+.tiprow .tip-x { width: 24px; height: 24px; margin-left: auto; opacity: 0; }
+.tiprow:hover .tip-x, .tiprow:focus-within .tip-x, .tiprow .tip-x[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .tiprow .tip-x { opacity: 1; } }
+.tiprow .tip-x svg { width: 12px; height: 12px; }
 .tiprow code, .tiprow kbd { font-family: var(--mono); font-size: .95em; background: var(--tint-2); padding: 0 4px; border-radius: 3px; }
 .whatsnew { margin: 0 0 14px; padding: 8px 10px 8px 12px; border: 1px solid var(--border-soft); border-left: 2px solid var(--brand); border-radius: var(--radius); background: var(--tint); text-align: left; color: var(--fg); font-size: var(--fs-sm); }
 .whatsnew .wn-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
@@ -1213,3 +1298,17 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 .turn .actions button[aria-disabled="true"]:not(.off) { opacity: .45; cursor: default; background: none; color: var(--muted); }
 #changes .panel-head .btn[aria-disabled="true"] { opacity: .5; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .ctxcard, .tiprow { animation: none; } .taskhead .th-toggle .chev svg { transition: none; } }
+
+/* ════ High contrast: themes draw no fills for hover and selection, only borders. Tints and shadows go away, selected
+   and active rows get the theme's active border, hovered controls a dashed one, and dimmed text returns to full strength. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) { --tint: transparent; --tint-2: transparent; --sel: transparent; --shadow: none; --border-soft: var(--vscode-contrastBorder, var(--border)); }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item.sel, .hist-row.sel, .task-row .ac .opt.sel, .tab.active, .tab.selected, .aa-row .seg button.on) { outline: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item, .hist-row, .tab, .ib, .pick, .ctxbtn, .btn.ghost, .aa-grants .grant, .toast button):hover { outline: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.afoot .acts, .afoot .info i, .task-row .rm, .lane .ico, .lane .who, .lane.pending::after, .work .chev, .work .time, .work .facts:not(:empty)::before, .step .meta, .step.explore > summary .label .muted, .step.explore > summary .label .dot, .pill i, .pill .model, .par .lbl i, .report > summary .n, .note.hook i, .aa-head .chev svg, .panel .chev svg, .todo .todo-after, .popover .item.sel .desc, .hist-row .desc.snippet, pre.numbered .n, .a2, .tk-op, .dot.idle, .step.subhost.workers .lane .who, .step.subhost.workers .lane .now, .plan-foot .build kbd) { opacity: 1; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .toast { border-color: var(--vscode-contrastBorder, var(--border)); }
+/* /clear confirmation above the composer: one quiet row, the destructive button keeps the error colour. */
+.confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 6px; padding: 6px 8px; font-size: var(--fs-sm); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-soft)); background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: var(--radius-sm); }
+.confirm-row > svg { flex: none; width: 14px; height: 14px; color: var(--warn); }
+.confirm-row .msg { flex: 1 1 160px; min-width: 0; }
+.confirm-row .acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.confirm-row .btn.danger { border-color: color-mix(in srgb, var(--error) 50%, var(--border-soft)); } .confirm-row .btn.danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }

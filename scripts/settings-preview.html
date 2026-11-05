@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 -->
+<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 (?web=0: web search off) -->
 <style>
 :root{
 --vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
@@ -29,7 +29,7 @@ html.light{
 <link rel="stylesheet" href="../media/settings.css"></head>
 <body data-logo="../media/logo.svg">
 <div id="app" aria-busy="true"><div class="loading"><span class="spinner"></span>Loading…</div></div>
-<div id="toasts"></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 <script>
 const q = new URLSearchParams(location.search);
 if (q.get('light')) document.documentElement.classList.add('light');
@@ -67,9 +67,19 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'memory.maxNoteChars': 8000, 'memory.maxNotes': 200, 'autoMode.enabled': false, 'autoMode.model': '', 'queue.concurrency': 1, 'supervisor.enabled': true, 'supervisor.intervalSeconds': 60, 'supervisor.autoInstall': false, 'gateways.litellmConfig': '', 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
   'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '',
   pluginPaths: [], 'hooks.enabled': true, 'browser.chromePath': '', 'colibri.path': '', 'colibri.model': '', 'colibri.port': 8000, 'colibri.kvSlots': 2,
-  'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': true, 'telemetry.retentionDays': 30 };
+  'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': !q.get('recoff'), 'telemetry.retentionDays': 30,
+  // Keys added since the first harness, at their package.json defaults; ?web=0 turns the internet switch off.
+  prewarm: true, 'ollama.flashAttention': true, 'ollama.kvCacheType': 'q8_0', 'prompts.autoCorrect': true, 'compaction.strategy': 'agentic', 'approvals.mcp': 'always', 'approvals.dangerousAlwaysAsk': true,
+  notifications: 'whenHidden', 'clarify.questions': 'smart', 'worktrees.mode': 'always', 'worktrees.location': '', diffPreview: 'onApproval', editTool: 'auto', 'edit.reportNewErrors': true, 'checkpoints.enabled': true,
+  'webSearch.enabled': q.get('web') !== '0', 'chat.location': 'sidebar', 'terminal.profile': 'default', 'terminal.shellIntegrationTimeout': 4000, 'terminal.autoDetachSeconds': 300, 'memory.autoSave': true,
+  'history.includeCli': true, preferredLanguage: 'auto', showTips: true, 'plugins.marketplaces': ['anthropics/claude-plugins-official'], repos: {}, 'mcp.watchServerFiles': true, 'routing.parallelModels': true,
+  'models.autoTune': 'auto', 'colibri.modelsDir': '', 'colibri.backend': 'auto', 'telemetry.otlp.enabled': false, 'telemetry.otlp.endpoint': 'http://localhost:4318', 'telemetry.otlp.headers': {},
+  'telemetry.otlp.metricsInterval': 60, 'telemetry.otlp.exporters': ['otlp'], 'telemetry.otlp.traceSamplePercent': 100, 'telemetry.otlp.recordContent': false, maxConsecutiveMistakes: 6, disabledTools: [],
+  'markdownViewer.scrollSync': true, 'markdownViewer.outlineDepth': 3, 'markdownViewer.frontMatter': 'collapsed', 'markdownViewer.mermaid': true, 'markdownViewer.exportTheme': 'light', 'pdfViewer.pageColors': 'auto',
+  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000 };
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
+if (q.get('web') === '0') settings['webSearch.enabled'] = { value: false, default: true, scope: 'user', userValue: false };
 window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getItem('lp-settings-state') || 'null'), setState: (s) => localStorage.setItem('lp-settings-state', JSON.stringify(s)), postMessage(m) {
   const send = (d) => {
     if (d.type === 'probe' && q.get('local')) { d = { ...d, results: d.results.filter((r) => providers.some((p) => p.id === r.id)) }; }
@@ -82,8 +92,14 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
       agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
       mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true, managed: q.get('managed') ? { source: '/Library/Application Support/LocalPilot/managed-settings.json', message: 'Questions: it-security@example.com', lines: ['Always blocked: Bash(curl:*), Read(.env)', 'Approvals: terminal needs approval, delete refused', 'Bypass modes and Auto mode are off', 'Cloud providers are off', 'Tool calls are logged to /var/log/localpilot/audit.jsonl'] } : undefined });
   }
+  if ((m.type === 'set' || m.type === 'reset') && q.get('failSave')) {
+    // ?failSave=1: the host refuses every write (as with no folder open), so nothing changes and the control flips back.
+    setTimeout(() => send({ type: 'saved', id: m.id, key: m.key, ok: false, error: 'Open a folder to use workspace settings' }), 120);
+    return;
+  }
   if (m.type === 'set' || m.type === 'reset') {
-    // Host round-trip: the setting is written, then the whole state is pushed again without navigating.
+    // Host round-trip: the write is confirmed, then the whole state is pushed again without navigating.
+    setTimeout(() => send({ type: 'saved', id: m.id, key: m.key, ok: true }), 100);
     const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
     if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
     setTimeout(() => send({ type: 'state', navigate: false, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
@@ -208,6 +224,9 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     if (m.name === 'nomic-embed-text') { send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: [], error: 'ollama.com answered HTTP 503' }); return; }
     send({ type: 'galleryTags', source: 'ollama', name: m.name, tags: byName[m.name] || [t('latest', 2.0, '8K', 'Text', { isLatest: true })] });
   }, 500);
+  // ?dash=error: the host fails to read the metrics; ?dash=silent: it never answers (the page gives up after 20 s).
+  if (m.type === 'dashboard' && q.get('dash') === 'silent') return;
+  if (m.type === 'dashboard' && q.get('dash') === 'error') { setTimeout(() => send({ type: 'dashboard', days: m.days, error: "EACCES: permission denied, open '/Users/me/.localpilot/telemetry/2026-11-05.jsonl'" }), 250); return; }
   if (m.type === 'dashboard') setTimeout(() => {
     const P = (p50, p95) => ({ p50, p95, avg: Math.round((p50 + p95) / 2) });
     const days = m.days || 7; const n = days === 0 ? 30 : days; const series = [];
@@ -274,5 +293,10 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
 <script>
 // ?expand=<provider id> opens that provider card, to check the editor without clicking.
 if (q.get('expand')) setTimeout(() => document.querySelector(`.prov[data-prov="${q.get('expand')}"] .prov-head`)?.click(), 400);
+// ?scope=workspace selects the Workspace scope; ?find=<text> types into the header search; ?click=<selector> clicks once
+// (e.g. ?failSave=1&click=.field .toggle to watch a refused write flip the switch back).
+if (q.get('scope') === 'workspace') setTimeout(() => document.querySelector('.top .scope [data-s="workspace"]')?.click(), 300);
+if (q.get('find')) setTimeout(() => { const i = document.querySelector('.top .find input'); if (i) { document.querySelector('.top').classList.add('finding'); i.focus(); i.value = q.get('find'); i.dispatchEvent(new Event('input')); } }, 400);
+if (q.get('click')) setTimeout(() => document.querySelector(q.get('click'))?.click(), 500);
 </script>
 </body></html>

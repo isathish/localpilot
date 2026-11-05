@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
-import { AgentEvent } from '../types';
+import { AgentEvent, Session } from '../types';
 import { LONG_COMMAND_MS, shouldNotify } from './notifyPolicy';
 
 interface RunningCommand {
@@ -12,8 +12,14 @@ interface RunningCommand {
   long?: boolean;
 }
 
+/** What the notification buttons do that only the chat controller can: replay the failed turn, keep the changes. */
+export interface RunNotifierActions {
+  retry(sessionId: string): unknown;
+  keep(sessionId: string): unknown;
+}
+
 /**
- * Native notifications (`localpilot.notifications`): a chat run finishing, and an auto-approved command that is still
+ * Native notifications (`localpilot.notifications`): a chat run or a batch of agents finishing, and an auto-approved command that is still
  * running after 30 s (a status-bar item plus one message per command). By default only while the chat view is hidden
  * or the window has no focus.
  */
@@ -21,7 +27,10 @@ export class RunNotifier implements vscode.Disposable {
   private commands = new Map<string, RunningCommand>();
   private status?: vscode.StatusBarItem;
 
-  constructor(private readonly chatVisible: () => boolean) {}
+  constructor(
+    private readonly chatVisible: () => boolean,
+    private readonly actions?: RunNotifierActions
+  ) {}
 
   private due(): boolean {
     return shouldNotify(getConfig().notifications, this.chatVisible(), vscode.window.state?.focused ?? true);
@@ -51,8 +60,11 @@ export class RunNotifier implements vscode.Disposable {
     }
   }
 
-  /** A run ended; `silent` for a stopped run or one of a group (those get their own review offer). */
-  finished(sessionId: string, title: string, silent = false): void {
+  /**
+   * A run ended; `silent` for a stopped run or one of a group (those get {@link groupFinished}). An error is a warning
+   * with Retry; a run that changed files offers the review.
+   */
+  finished(sessionId: string, title: string, silent = false, outcome: 'ok' | 'error' = 'ok', changedFiles = 0): void {
     for (const [id, c] of this.commands) {
       if (c.sessionId === sessionId) {
         this.clear(id);
@@ -61,9 +73,49 @@ export class RunNotifier implements vscode.Disposable {
     if (silent || !this.due()) {
       return;
     }
-    void vscode.window.showInformationMessage(`LocalPilot finished: ${title || 'chat'}`, 'Open').then((pick) => {
+    const name = title || 'chat';
+    const open = () => vscode.commands.executeCommand('localpilot.openSession', sessionId);
+    if (outcome === 'error') {
+      void vscode.window.showWarningMessage(`LocalPilot stopped with an error: ${name}`, 'Open', ...(this.actions ? ['Retry'] : [])).then((pick) => {
+        if (pick === 'Open') {
+          void open();
+        } else if (pick === 'Retry') {
+          void open();
+          void this.actions?.retry(sessionId);
+        }
+      });
+      return;
+    }
+    if (changedFiles > 0) {
+      const files = `${changedFiles} file${changedFiles === 1 ? '' : 's'} changed`;
+      void vscode.window.showInformationMessage(`LocalPilot finished: ${name}. ${files}`, 'Review', ...(this.actions ? ['Keep All'] : [])).then((pick) => {
+        if (pick === 'Review') {
+          void open();
+        } else if (pick === 'Keep All') {
+          void this.actions?.keep(sessionId);
+        }
+      });
+      return;
+    }
+    void vscode.window.showInformationMessage(`LocalPilot finished: ${name}`, 'Open').then((pick) => {
       if (pick) {
-        void vscode.commands.executeCommand('localpilot.openSession', sessionId);
+        void open();
+      }
+    });
+  }
+
+  /** The last agent of a batch (Best of N or split tasks) finished: offer to compare and apply their results. */
+  groupFinished(group: NonNullable<Session['group']>, count: number): void {
+    if (!this.due()) {
+      return;
+    }
+    const text =
+      group.kind === 'bestOf'
+        ? `All ${count} agents finished “${group.prompt.slice(0, 50)}”. Compare their results and apply the best one.`
+        : `All ${count} agents finished their tasks. Review what each one changed and apply what you like.`;
+    void vscode.window.showInformationMessage(text, 'Compare results').then((pick) => {
+      if (pick) {
+        void vscode.commands.executeCommand('localpilot.compareResults', group.id);
       }
     });
   }

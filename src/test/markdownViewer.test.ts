@@ -34,9 +34,9 @@ suite('LocalPilot Markdown reader', () => {
     // A webview panel became the active tab in some group.
     const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
     assert.ok(tabs.some((t) => t.input instanceof vscode.TabInputWebview && /localpilot\.markdown/.test((t.input as vscode.TabInputWebview).viewType) && t.label === 'READ-ME-TEST.md'), tabs.map((t) => `${t.label}`).join(', '));
-    // Calling again with no argument and no active editor is a no-op with a hint, not an error.
+    // (With no file and no Markdown editor on screen the command asks for a file with the native open dialog, which a
+    // test host cannot answer, so that path is not exercised here.)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
-    await vscode.commands.executeCommand('localpilot.openMarkdownViewer');
     await fs.rm(file, { force: true });
   });
 

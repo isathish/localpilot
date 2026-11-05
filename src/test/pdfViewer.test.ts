@@ -85,6 +85,13 @@ suite('PDF viewer: pure rules', () => {
     assert.ok(named?.type === 'attachImage' && !named.name.includes('/') && named.name.endsWith('.png'));
   });
 
+  test('openSettings (Viewer settings…, Change limit…) is accepted; unknown types are still dropped', () => {
+    assert.deepStrictEqual(validatePdfViewerMessage({ type: 'openSettings' }), { type: 'openSettings' });
+    assert.deepStrictEqual(validatePdfViewerMessage({ type: 'openSettings', section: 'agent' }), { type: 'openSettings' });
+    assert.strictEqual(validatePdfViewerMessage({ type: 'runCommand', id: 'workbench.action.terminal.new' }), undefined);
+    assert.strictEqual(validatePdfViewerMessage({ type: 'opensettings' }), undefined);
+  });
+
   test('other messages are checked field by field; unknown ones are dropped', () => {
     assert.strictEqual(validatePdfViewerMessage({ type: 'eval', code: '1' }), undefined);
     assert.strictEqual(validatePdfViewerMessage(null), undefined);

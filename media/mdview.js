@@ -5,7 +5,7 @@
   const vscode = acquireVsCodeApi();
   const nonce = (document.currentScript && document.currentScript.nonce) || '';
   const $ = (id) => document.getElementById(id);
-  const els = { doc: $('doc'), outline: $('outline'), list: $('outline-list'), filter: $('filter'), title: $('title'), subtitle: $('subtitle'), toc: $('toc'), wrap: $('wrap'), copy: $('copy'), save: $('save'), open: $('open'), smaller: $('smaller'), larger: $('larger'), toasts: $('toasts'), prefs: $('prefs'), prefsPop: $('prefs-pop'), sizeVal: $('size-val'), more: $('more'), morePop: $('more-pop'), ask: $('ask'), askSel: $('ask-sel') };
+  const els = { doc: $('doc'), outline: $('outline'), list: $('outline-list'), filter: $('filter'), title: $('title'), subtitle: $('subtitle'), toc: $('toc'), find: $('find'), wrap: $('wrap'), copy: $('copy'), save: $('save'), open: $('open'), smaller: $('smaller'), larger: $('larger'), toasts: $('toasts'), prefs: $('prefs'), prefsPop: $('prefs-pop'), sizeVal: $('size-val'), more: $('more'), morePop: $('more-pop'), ask: $('ask'), askSel: $('ask-sel') };
   const post = (m) => vscode.postMessage(m);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const state = Object.assign({ outline: null, wrap: false }, vscode.getState() || {});
@@ -14,7 +14,19 @@
   let view = { syncScroll: false, isFile: false, outlineDepth: 3, pathRef: '', lineOffset: 0 };
   let generation = 0;
   let canAsk = false;
-  let prefs = { fontSize: 15, width: 'normal', font: 'sans', lineHeight: 1.65 };
+  /** Characters of a selection quoted into the chat (the host's MAX_QUOTE, sent with each render). */
+  let maxQuote = Infinity;
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const ASK_KEY = isMac ? "⌘'" : "Ctrl+'";
+  // Older markup (and the preview harness) may lack the live region; it is created here then.
+  els.askLive = $('ask-live') || Object.assign(document.body.appendChild(document.createElement('div')), { id: 'ask-live', className: 'sr-only' });
+  els.askLive.setAttribute('aria-live', 'polite');
+  els.askSel.textContent = 'Ask LocalPilot';
+  els.askSel.title = `Ask LocalPilot (${ASK_KEY})`;
+  els.ask.title = `Ask LocalPilot about this document (${ASK_KEY})`;
+  for (const b of [els.askSel, els.ask]) { b.setAttribute('aria-keyshortcuts', isMac ? "Meta+'" : "Control+'"); }
+  const DEFAULT_PREFS = { fontSize: 15, width: 'normal', font: 'sans', lineHeight: 1.65 };
+  let prefs = Object.assign({}, DEFAULT_PREFS);
   /** Settles when the current document's Mermaid diagrams are drawn (an export waits for it). */
   let mermaidDone = Promise.resolve();
 
@@ -88,7 +100,8 @@
     els.list.innerHTML = items.length ? `<div class="grp">On this page</div>${items.map((i) => `<a href="#${esc(i.id)}" class="l${i.level - minLevel + 1}" data-id="${esc(i.id)}">${esc(i.text)}</a>`).join('')}` : '';
     els.filter.classList.toggle('hidden', items.length <= 12);
     if (els.filter.value) { applyFilter(); }
-    const wantToc = state.outline === null ? items.length >= 4 && window.innerWidth >= 720 : state.outline;
+    // A narrow reader keeps the drawer as the user left it; it never opens over the page by itself.
+    const wantToc = narrow.matches ? !els.outline.classList.contains('hidden') : state.outline === null ? items.length >= 4 && window.innerWidth >= 720 : state.outline;
     setOutline(!!wantToc && items.length > 0, false);
     els.toc.disabled = !items.length;
     // [[toc]] / [TOC] on its own line expands to a nested list of the headings.
@@ -156,25 +169,41 @@
     return `<details class="props"${mode === 'expanded' ? ' open' : ''}><summary>Properties (${keys.length})</summary><table>${rows}</table></details>`;
   }
 
-  function setOutline(on, remember) {
+  // Under 640 px the outline is a drawer over the page: a scrim behind it, and a click outside or Escape closes it.
+  const scrim = document.createElement('div'); scrim.className = 'scrim hidden'; scrim.setAttribute('aria-hidden', 'true');
+  els.outline.before(scrim);
+  const narrow = window.matchMedia('(max-width: 640px)');
+  const drawerOpen = () => narrow.matches && !els.outline.classList.contains('hidden');
+  function setOutline(on, remember, moveFocus) {
+    const was = !els.outline.classList.contains('hidden');
     els.outline.classList.toggle('hidden', !on);
+    scrim.classList.toggle('hidden', !on);
     els.toc.setAttribute('aria-pressed', String(on));
     document.body.classList.toggle('with-outline', on);
     if (remember) { state.outline = on; save(); }
+    if (!moveFocus || !narrow.matches || was === on) { return; }
+    if (on) { const a = els.list.querySelector('a:not(.hidden)'); if (a) { a.focus({ preventScroll: true }); } } else { els.toc.focus({ preventScroll: true }); }
   }
+  const closeDrawer = () => { if (drawerOpen()) { setOutline(false, false, true); } };
+  scrim.addEventListener('mousedown', closeDrawer);
+  els.doc.addEventListener('mousedown', closeDrawer);
+  els.list.addEventListener('click', (e) => { if (e.target.closest('a[href]')) { closeDrawer(); } });
   function applyFilter() {
     const q = els.filter.value.trim().toLowerCase();
     for (const a of els.list.querySelectorAll('a')) { a.classList.toggle('hidden', !!q && !a.textContent.toLowerCase().includes(q)); }
   }
   els.filter.addEventListener('input', applyFilter);
   els.filter.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { els.filter.value = ''; applyFilter(); els.doc.focus(); }
+    // In the drawer, a first Escape clears the filter and a second one closes the drawer.
+    if (e.key === 'Escape' && drawerOpen() && els.filter.value) { els.filter.value = ''; applyFilter(); e.stopPropagation(); }
+    else if (e.key === 'Escape' && !drawerOpen()) { els.filter.value = ''; applyFilter(); els.doc.focus(); }
     else if (e.key === 'Enter') { const a = els.list.querySelector('a:not(.hidden)'); if (a) { a.click(); } }
   });
   function setWrap(on) {
     state.wrap = on; save();
     document.body.classList.toggle('wrap-code', on);
     els.wrap.setAttribute('aria-pressed', String(on));
+    const item = els.morePop.querySelector('[data-act="wrap"]'); if (item) { item.setAttribute('aria-checked', String(on)); }
   }
   setWrap(!!state.wrap);
 
@@ -398,7 +427,8 @@
     const r = btn.getBoundingClientRect();
     pop.style.top = `${r.bottom + 4}px`;
     pop.style.right = `${Math.max(6, window.innerWidth - r.right)}px`;
-    const first = pop.querySelector('button'); if (first) { first.focus({ preventScroll: true }); }
+    // Narrow-only items are display:none on wide readers; focus the first one that is shown.
+    const first = [...pop.querySelectorAll('button')].find((b) => b.offsetParent); if (first) { first.focus({ preventScroll: true }); }
   }
   const closePops = () => { for (const [b, p] of pops) { if (!p.classList.contains('hidden')) { setPop(b, p, false); } } };
   els.prefs.onclick = () => setPop(els.prefs, els.prefsPop, els.prefsPop.classList.contains('hidden'));
@@ -406,6 +436,7 @@
   document.addEventListener('mousedown', (e) => { if (!e.target.closest('.pop, #prefs, #more')) { closePops(); } });
   els.prefsPop.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) { return; }
+    if (b.dataset.reset) { applyPrefs(DEFAULT_PREFS); post({ type: 'prefs', patch: DEFAULT_PREFS }); return; }
     if (b.dataset.size) { post({ type: 'fontSize', delta: Number(b.dataset.size) }); return; }
     const key = b.closest('.seg').dataset.key;
     const value = key === 'lineHeight' ? Number(b.dataset.v) : b.dataset.v;
@@ -415,6 +446,10 @@
   els.morePop.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-act]'); if (!b) { return; }
     closePops();
+    // Toolbar actions folded into the menu on narrow readers.
+    const bar = { copy: els.copy, save: els.save, open: els.open, wrap: els.wrap }[b.dataset.act];
+    if (bar) { bar.click(); return; }
+    if (b.dataset.act === 'settings') { post({ type: 'openSettings' }); return; }
     if (b.dataset.act !== 'clipboard') { toast(`Preparing ${b.dataset.act.toUpperCase()}…`); }
     void sendExport(b.dataset.act);
   });
@@ -442,29 +477,49 @@
     if (!text || !node || !node.closest('article.md')) { return undefined; }
     return { text, range, node };
   }
+  function setAskSel(show) {
+    const was = !els.askSel.classList.contains('hidden');
+    els.askSel.classList.toggle('hidden', !show);
+    if (show !== was) { els.askLive.textContent = show ? 'Ask LocalPilot button available' : ''; }
+  }
+  /** Shows the pill below the end of the selection (its last line box), as in the PDF viewer; hidden when it scrolled out of view. */
+  function placeAskSel() {
+    const s = canAsk && selectionInDoc();
+    const rects = s ? s.range.getClientRects() : [];
+    const r = rects.length ? rects[rects.length - 1] : s && s.range.getBoundingClientRect();
+    const box = els.doc.getBoundingClientRect();
+    if (!s || !r || r.bottom < box.top || r.top > box.bottom) { setAskSel(false); return; }
+    setAskSel(true);
+    els.askSel.style.top = `${Math.max(44, Math.min(window.innerHeight - 34, r.bottom + 6))}px`;
+    els.askSel.style.left = `${Math.max(6, Math.min(window.innerWidth - els.askSel.offsetWidth - 6, r.right - els.askSel.offsetWidth))}px`;
+  }
   let selTimer = 0;
-  document.addEventListener('selectionchange', () => {
-    clearTimeout(selTimer);
-    selTimer = setTimeout(() => {
-      const s = canAsk && selectionInDoc();
-      els.askSel.classList.toggle('hidden', !s);
-      if (!s) { return; }
-      const r = s.range.getBoundingClientRect();
-      els.askSel.style.top = `${Math.max(44, Math.min(window.innerHeight - 34, r.bottom + 6))}px`;
-      els.askSel.style.left = `${Math.max(6, Math.min(window.innerWidth - els.askSel.offsetWidth - 6, r.right - els.askSel.offsetWidth))}px`;
-    }, 120);
-  });
+  document.addEventListener('selectionchange', () => { clearTimeout(selTimer); selTimer = setTimeout(placeAskSel, 120); });
+  /** The source lines a selection covers (0-based, body-relative): the start block's line to the line before the block after the end block. */
+  function selectionLines(s) {
+    const blockOf = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return e ? e.closest('[data-line]') : null; };
+    const first = blockOf(s.range.startContainer) || s.node.closest('[data-line]');
+    const last = blockOf(s.range.endContainer);
+    const line = first ? blockLine(first) : undefined;
+    const endStart = last ? blockLine(last) : undefined;
+    if (line === undefined || endStart === undefined) { return { line }; }
+    const next = lineBlocks().find((b) => b.line > endStart);
+    const endLine = next ? next.line - 1 : Math.max(endStart, markdown.split('\n').length - 1 - view.lineOffset);
+    return { line, endLine: Math.max(line, endLine) };
+  }
+  function askAboutSelection(key) {
+    const s = selectionInDoc(); if (!s) { setAskSel(false); return; }
+    const text = s.text.slice(0, maxQuote);
+    post({ type: 'askSelection', text, ...selectionLines(s), ...(s.text.length > text.length ? { total: s.text.length } : {}), ...(key ? { key: true } : {}) });
+    setAskSel(false);
+  }
   els.askSel.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
-  els.askSel.onclick = () => {
-    const s = selectionInDoc(); if (!s) { return; }
-    const el = s.node.closest('[data-line]') || (s.range.startContainer.parentElement && s.range.startContainer.parentElement.closest('[data-line]'));
-    const line = el ? blockLine(el) : undefined;
-    post({ type: 'askSelection', text: s.text.slice(0, 20000), line });
-    els.askSel.classList.add('hidden');
-  };
-  els.doc.addEventListener('scroll', () => els.askSel.classList.add('hidden'), { passive: true });
+  els.askSel.onclick = () => askAboutSelection(false);
+  let selFrame = 0;
+  els.doc.addEventListener('scroll', () => { if (!selFrame && !els.askSel.classList.contains('hidden')) { selFrame = requestAnimationFrame(() => { selFrame = 0; placeAskSel(); }); } }, { passive: true });
 
-  els.toc.onclick = () => setOutline(els.outline.classList.contains('hidden'), true);
+  els.toc.onclick = () => setOutline(els.outline.classList.contains('hidden'), true, true);
+  els.find.onclick = () => post({ type: 'find' });
   els.wrap.onclick = () => setWrap(!state.wrap);
   els.copy.onclick = () => post({ type: 'copy' });
   els.save.onclick = () => post({ type: 'saveAs' });
@@ -472,8 +527,19 @@
   els.smaller.onclick = () => post({ type: 'fontSize', delta: -1 });
   els.larger.onclick = () => post({ type: 'fontSize', delta: 1 });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && document.querySelector('.pop:not(.hidden)')) { closePops(); return; }
+    if (e.key === 'Escape') {
+      // Focus goes back to the button that opened the popover, or to the outline button when the drawer closes.
+      const open = pops.find(([, p]) => !p.classList.contains('hidden'));
+      if (open) { closePops(); open[0].focus({ preventScroll: true }); return; }
+      if (drawerOpen()) { e.preventDefault(); closeDrawer(); return; }
+    }
     if (e.target.closest('input, textarea')) { return; }
+    // Ctrl/Cmd+' asks about the selection in the document, else about the document (the host drops the keybinding's duplicate).
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "'") {
+      e.preventDefault();
+      if (canAsk) { if (selectionInDoc()) { askAboutSelection(true); } else { post({ type: 'ask', key: true }); } }
+      return;
+    }
     if (e.key === 'a' && !e.metaKey && !e.ctrlKey && !e.altKey) { els.prefs.click(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && !window.getSelection().toString()) { e.preventDefault(); els.copy.click(); }
@@ -500,6 +566,22 @@
     for (const n of t.content.querySelectorAll('script,iframe,object,embed,link,meta,base,form,style')) { n.remove(); }
     for (const n of t.content.querySelectorAll('*')) { for (const a of [...n.attributes]) { if (/^on/i.test(a.name) || (/^(href|src|xlink:href|action|formaction|srcdoc)$/i.test(a.name) && /^\s*(javascript|vbscript|data:text\/html)/i.test(a.value))) { n.removeAttribute(a.name); } } }
     return t.innerHTML;
+  }
+  // Error, empty-document and deleted-file states. Buttons post their action as the message type.
+  function stateCard(kind, title, message, actions) {
+    const d = document.createElement('div'); d.className = `state-card ${kind}`; d.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    d.innerHTML = `${title ? `<div class="sc-title">${esc(title)}</div>` : ''}${message ? `<div class="sc-msg">${esc(message)}</div>` : ''}<div class="sc-acts">${actions.map(([t, label, primary]) => `<button class="btn${primary ? ' primary' : ''}" data-post="${esc(t)}">${esc(label)}</button>`).join('')}</div>`;
+    d.addEventListener('click', (e) => { const b = e.target.closest('button[data-post]'); if (b) { post({ type: b.dataset.post }); } });
+    return d;
+  }
+  function showDeleted(on) {
+    let b = $('deleted');
+    if (!on) { if (b) { b.remove(); } return; }
+    if (b) { return; }
+    b = document.createElement('div'); b.id = 'deleted'; b.className = 'banner'; b.setAttribute('role', 'status');
+    b.innerHTML = '<span class="bn-msg">This file was deleted or moved. You are reading the last version.</span><span class="bn-acts"><button class="btn" data-post="saveAs">Save a copy…</button><button class="btn" data-post="close">Close</button></span>';
+    b.addEventListener('click', (e) => { const x = e.target.closest('button[data-post]'); if (x) { post({ type: x.dataset.post }); } });
+    $('layout').before(b);
   }
   let reported = 0;
   function reportError(where, err) {
@@ -532,8 +614,9 @@
       if (m.prefsCss) { applyPrefs(m.prefs, m.prefsCss); }
       else { document.documentElement.style.setProperty('--fs', `${Number(m.fontSize) || 14}px`); }
       canAsk = !!m.canAsk;
+      maxQuote = Number(m.maxQuote) || Infinity;
       els.ask.classList.toggle('hidden', !canAsk);
-      els.title.textContent = m.title || ''; els.subtitle.textContent = `${m.subtitle || ''} · ${words.toLocaleString()} words · ~${Math.max(1, Math.round(words / 220))} min`;
+      els.title.textContent = m.title || ''; els.subtitle.textContent = words > 0 ? `${m.subtitle || ''} · ${words.toLocaleString()} words · ~${Math.max(1, Math.round(words / 220))} min` : (m.subtitle || '');
       const open = els.doc.querySelector('details.props');
       els.doc.innerHTML = `${properties(m.frontMatter, m.frontMatterMode)}<article class="md">${scrub(m.html)}</article>`;
       // Keep the Properties table as the reader left it across live reloads.
@@ -541,14 +624,26 @@
       if (props && open) { props.open = open.open; }
       els.save.title = m.isFile ? 'Save a copy as…' : 'Save as…';
       els.open.title = m.isFile ? 'Open in editor' : 'Open as a new Markdown document';
+      els.morePop.querySelector('[data-act="save"]').textContent = els.save.title;
+      els.morePop.querySelector('[data-act="open"]').textContent = els.open.title;
       els.doc.title = m.isFile ? 'Double-click a block to open the source at that line' : '';
-      decorate(els.doc.querySelector('article'));
+      const article = els.doc.querySelector('article');
+      decorate(article);
+      if (!article.textContent.trim() && !article.querySelector('img, svg, table, hr, pre, input')) { article.replaceWith(stateCard('empty', '', 'This document is empty.', [['openEditor', m.isFile ? 'Open in editor' : 'Open as Markdown', true]])); }
       els.doc.scrollTop = y; // live reload keeps your place
       suppressUntil = Date.now() + 300;
       state.source = m.persist && m.persist.kind === 'file' ? m.persist : undefined;
       save();
       mermaidDone = renderMermaid(gen);
-    } else if (m.type === 'prefs') { applyPrefs(m.prefs, m.css); }
+    } else if (m.type === 'error') {
+      // The render failed: the last page would be stale and "Rendering…" would never end, so say so and offer a way out.
+      generation++;
+      els.doc.innerHTML = ''; els.doc.title = '';
+      els.doc.appendChild(stateCard('error', String(m.title || "Couldn't render this document"), String(m.message || ''), [['reload', 'Retry', true], ['openEditor', 'Open in editor'], ['close', 'Close']]));
+      const first = els.doc.querySelector('.state-card button'); if (first) { first.focus(); }
+    } else if (m.type === 'deleted') { showDeleted(true); }
+    else if (m.type === 'restored') { showDeleted(false); }
+    else if (m.type === 'prefs') { applyPrefs(m.prefs, m.css); }
     else if (m.type === 'requestExport') { void sendExport(m.target); }
     else if (m.type === 'scrollToLine') {
       if (view.syncScroll && Number.isFinite(m.line)) { scrollToLine(m.line); }

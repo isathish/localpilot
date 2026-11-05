@@ -6,14 +6,14 @@ permalink: /docs/configuration/
 
 The easiest way to configure LocalPilot is its own **Settings** screen. Click the gear icon in the chat toolbar or run *LocalPilot: Settings*. The screen has:
 
-- a sidebar with **Dashboard** pinned at the top, then collapsible groups: **Models** (Providers, Models, Model gallery), **Agent** (Agent & approvals, Skills & subagents, Inline completions), **Tools & integrations** (MCP servers, Web search), **Data & system** (Memory & history, Advanced) and **Help**
+- a sidebar with **Dashboard** pinned at the top, then collapsible groups: **Models** (Providers, Models, Model gallery), **Agent** (Agent & approvals, Skills & subagents, Inline completions), **Tools & integrations** (MCP servers, Web search, Markdown & PDF), **Data & system** (Memory & history, Telemetry, Advanced) and **Help**
 - a marker showing whether a value comes from your User or Workspace settings
 - a reset button for every value
 - a **provider manager** with a *Test connection* button that lists the models each server exposes
 
 Click a group header to fold it; a folded group still shows the page you are on. The buttons above the groups fold the sidebar to an icon rail and expand or collapse every group. Both choices are remembered. In a narrow editor the sidebar becomes a strip of pills with every page.
 
-The first time LocalPilot starts without a reachable model server or default model, it opens the **Welcome / Setup** wizard. The wizard detects Ollama, LM Studio, llama.cpp and vLLM, recommends a model and sets an approval preset (*Careful*, *Balanced* or *Autonomous*). Run it again any time with *LocalPilot: Welcome / Setup*. Turn off the automatic prompt with `localpilot.showWelcomeOnStartup`.
+The first time LocalPilot starts without a reachable model server or default model, it opens the **Setup** wizard. The wizard detects Ollama, LM Studio, llama.cpp and vLLM, recommends a model and sets an approval preset (*Careful*, *Balanced* or *Autonomous*). Run it again any time with *LocalPilot: Open Setup*. Turn off the automatic prompt with `localpilot.showWelcomeOnStartup`.
 
 All settings are also in **Settings → Extensions → LocalPilot** and in `settings.json`. The keys are listed below.
 
@@ -49,7 +49,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 
 ## colibri
 
-Settings for [colibri]({{ '/docs/models/#colibri-huge-moe-models-from-disk' | relative_url }}), which runs very large mixture-of-experts models by streaming experts from disk. They are used by *LocalPilot: Start colibri*. A running `coli serve` is detected whatever these are set to. They are also at the bottom of **Settings → Providers**, with a **Start colibri** button.
+Settings for [colibri]({{ '/docs/models/#colibri-huge-moe-models-from-disk' | relative_url }}), which runs very large mixture-of-experts models by streaming experts from disk. They are used by *LocalPilot: Start Colibri Server*. A running `coli serve` is detected whatever these are set to. They are also at the bottom of **Settings → Providers**, with a **Start colibri** button.
 
 ![Settings → Providers → Huge MoE models (colibri): folder, model, models folder, GPU backend, port and parallel conversations, with Stop and Start colibri buttons]({{ '/assets/screenshots/settings-colibri.png' | relative_url }})
 
@@ -146,7 +146,7 @@ Values: `always`, `ask`, `never`. `approvals.terminal` also takes `safe`: read-o
 
 `localpilot.notifications` (`whenHidden`, `always`, `off`): a native notification when a chat finishes, or when an auto-approved command is still running after 30 seconds. With `whenHidden` this happens only while the chat view is hidden or the window is not focused. The terminal CLI rings the bell after runs longer than 10 seconds unless this is `off`.
 
-**Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Toggle Auto Mode**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
+**Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Turn Auto Mode On/Off**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
 
 ## Repositories
 
@@ -264,7 +264,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | `localpilot.memory.autoSave` | `true` | After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable project facts (build and test commands, conventions, pitfalls) and append at most three short notes to project memory. Runs after the answer; anything that looks like a credential is dropped. Needs `localpilot.memory.enabled` |
 | `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
 | `localpilot.memory.maxNotes` | `200` | Notes kept per scope; past it the least recently updated are removed (`README` is kept) |
-| `localpilot.showWelcomeOnStartup` | `true` | Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model |
+| `localpilot.showWelcomeOnStartup` | `true` | Open the **Setup** screen (*LocalPilot: Open Setup*) the first time LocalPilot starts without a reachable model server or default model |
 
 ## Web search
 

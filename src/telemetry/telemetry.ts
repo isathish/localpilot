@@ -95,6 +95,10 @@ export interface DayPoint {
   acceptedLines: number;
   rejectedLines: number;
   hookFailures: number;
+  /** US dollars spent on priced model calls that day (0 when every call ran locally). */
+  costUsd: number;
+  /** The day's spend split by provider id; only providers with priced calls appear. */
+  costByProvider: Record<string, number>;
 }
 
 export interface ActivitySummary {
@@ -143,6 +147,8 @@ export interface TelemetrySummary {
   hourly: number[];
   /** Subagent runs grouped by agent persona. */
   agents: { agent: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; toolCalls: number }[];
+  /** Model calls and spend per provider, most expensive first. `pricedCalls` counts calls that carried a price. */
+  providers: { provider: string; calls: number; pricedCalls: number; costUsd: number }[];
   models: { model: string; provider: string; calls: number; promptTokens: number; completionTokens: number; /** Absent when no call of this model had a price. */ costUsd?: number; tokPerSec: number; ttft: Percentiles; duration: Percentiles; errors: number; last: number }[];
   tools: { name: string; calls: number; errors: number; cached: number; duration: Percentiles; last: number }[];
   modes: { mode: string; runs: number; done: number; stopped: number; failed: number; duration: Percentiles; steps: Percentiles; toolCalls: number }[];
@@ -850,7 +856,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
     const k = dayKey(t);
     let p = byDay.get(k);
     if (!p) {
-      p = { day: k, runs: 0, failedRuns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, modelCalls: 0, modelErrors: 0, tokPerSec: 0, completionsShown: 0, completionsAccepted: 0, errors: 0, acceptedLines: 0, rejectedLines: 0, hookFailures: 0 };
+      p = { day: k, runs: 0, failedRuns: 0, tokens: 0, promptTokens: 0, completionTokens: 0, toolCalls: 0, toolErrors: 0, cachedTools: 0, modelCalls: 0, modelErrors: 0, tokPerSec: 0, completionsShown: 0, completionsAccepted: 0, errors: 0, acceptedLines: 0, rejectedLines: 0, hookFailures: 0, costUsd: 0, costByProvider: {} };
       byDay.set(k, p);
     }
     return p;
@@ -870,6 +876,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
   const modes = new Map<string, ModeAgg>();
   type HealthAgg = { provider: string; checks: number; ok: number; up: boolean; lastAt: number; dur: Samples; lastError?: string; models?: number };
   const health = new Map<string, HealthAgg>();
+  const providers = new Map<string, { provider: string; calls: number; pricedCalls: number; costUsd: number }>();
   const completions = { requested: 0, shown: 0, accepted: 0, cached: 0, empty: 0, error: 0, latency: new Samples() };
   const langs = new Map<string, { language: string; shown: number; accepted: number }>();
   const worktrees = { created: 0, applied: 0, discarded: 0, conflicts: 0, files: 0 };
@@ -920,6 +927,12 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
         }
         m.calls++;
         m.last = Math.max(m.last, e.t);
+        let pv = providers.get(e.provider);
+        if (!pv) {
+          pv = { provider: e.provider, calls: 0, pricedCalls: 0, costUsd: 0 };
+          providers.set(e.provider, pv);
+        }
+        pv.calls++;
         day.modelCalls++;
         totals.modelCalls++;
         hourly[new Date(e.t).getHours()]++;
@@ -931,6 +944,10 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
           if (typeof e.costUsd === 'number' && Number.isFinite(e.costUsd)) {
             m.costUsd = (m.costUsd ?? 0) + e.costUsd;
             totals.costUsd += e.costUsd;
+            day.costUsd += e.costUsd;
+            day.costByProvider[e.provider] = (day.costByProvider[e.provider] ?? 0) + e.costUsd;
+            pv.pricedCalls++;
+            pv.costUsd += e.costUsd;
           }
           day.tokens += (e.promptTokens ?? 0) + (e.completionTokens ?? 0);
           day.promptTokens += e.promptTokens ?? 0;
@@ -1180,6 +1197,7 @@ export function aggregator(range: { days: number; from: number; to: number }, fi
       series,
       hourly,
       agents: [...agents.values()].map((a) => ({ agent: a.agent, runs: a.runs, done: a.done, stopped: a.stopped, failed: a.failed, duration: percentiles(a.dur), toolCalls: a.toolCalls })).sort((a, b) => b.runs - a.runs),
+      providers: [...providers.values()].sort((a, b) => b.costUsd - a.costUsd || b.calls - a.calls),
       models: [...models.values()]
         .map((m) => ({ model: m.model, provider: m.provider, calls: m.calls, promptTokens: m.promptTokens, completionTokens: m.completionTokens, costUsd: m.costUsd, tokPerSec: m.genMs ? Math.round((m.completionTokens / m.genMs) * 1000 * 10) / 10 : 0, ttft: percentiles(m.ttft), duration: percentiles(m.dur), errors: m.errors, last: m.last }))
         .sort((a, b) => b.calls - a.calls),

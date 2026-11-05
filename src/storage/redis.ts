@@ -296,3 +296,48 @@ export class RedisClient {
     }
   }
 }
+
+export interface RedisPingInfo {
+  host: string;
+  port: number;
+  tls: boolean;
+  db: number;
+  latencyMs: number;
+  version?: string;
+  mode?: string;
+  /** Loaded module names, lower-case (`timeseries`, `search`, `rejson`…); empty on plain Redis. */
+  modules: string[];
+  timeSeries: boolean;
+}
+
+/**
+ * Connects, authenticates, and sends PING plus INFO server/modules. Never throws; the error text never contains the
+ * password (Redis does not echo it, and any occurrence is masked anyway).
+ */
+export async function pingRedis(url: string, timeoutMs = 3000): Promise<{ ok: boolean; info?: RedisPingInfo; error?: string }> {
+  let client: RedisClient | undefined;
+  let secret = '';
+  try {
+    client = new RedisClient(url, { connectTimeoutMs: timeoutMs, commandTimeoutMs: timeoutMs });
+    const t = client.target;
+    secret = t.password ?? '';
+    const started = Date.now();
+    const [pong, server, mods] = await client.pipeline([['PING'], ['INFO', 'server'], ['INFO', 'modules']]);
+    if (pong instanceof RedisError) {
+      throw pong;
+    }
+    const latencyMs = Date.now() - started;
+    const text = (r: RedisReply) => (typeof r === 'string' ? r : '');
+    const infoField = (k: string) => text(server).match(new RegExp(`^${k}:(.*)$`, 'm'))?.[1]?.trim() || undefined;
+    const modules = [...text(mods).matchAll(/^module:name=([^,\r\n]+)/gm)].map((m) => m[1].toLowerCase());
+    return {
+      ok: true,
+      info: { host: t.host, port: t.port, tls: t.tls, db: t.db, latencyMs, version: infoField('redis_version'), mode: infoField('redis_mode'), modules, timeSeries: modules.includes('timeseries') },
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: secret ? msg.split(secret).join('***') : msg };
+  } finally {
+    client?.close();
+  }
+}

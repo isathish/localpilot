@@ -209,7 +209,7 @@
       },
       {
         "command": "localpilot.statusMenu",
-        "title": "LocalPilot Menu…",
+        "title": "Show Quick Menu…",
         "category": "LocalPilot",
         "icon": "$(localpilot-logo)"
       },
@@ -230,6 +230,37 @@
         "title": "Chat Actions…",
         "category": "LocalPilot",
         "icon": "$(kebab-vertical)"
+      },
+      {
+        "command": "localpilot.renameSession",
+        "title": "Rename…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.pinSession",
+        "title": "Pin / Unpin",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.forkSession",
+        "title": "Fork",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.exportSession",
+        "title": "Export as Markdown",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.deleteSession",
+        "title": "Delete…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.openChangedFile",
+        "title": "Open File",
+        "category": "LocalPilot",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "localpilot.openSession",
@@ -364,7 +395,7 @@
       },
       {
         "command": "localpilot.selectModel",
-        "title": "Select Model",
+        "title": "Select Default Model…",
         "category": "LocalPilot",
         "icon": "$(server)"
       },
@@ -440,7 +471,7 @@
       },
       {
         "command": "localpilot.toggleInlineCompletions",
-        "title": "Toggle Inline Completions",
+        "title": "Turn Inline Completions On/Off",
         "category": "LocalPilot"
       },
       {
@@ -451,7 +482,7 @@
       },
       {
         "command": "localpilot.browseSkills",
-        "title": "Browse Skill Registry (Quick Pick)…",
+        "title": "Browse Skill Registry…",
         "category": "LocalPilot",
         "icon": "$(library)"
       },
@@ -501,7 +532,7 @@
       },
       {
         "command": "localpilot.setupRedis",
-        "title": "Set Up Redis Storage (optional, saves memory)",
+        "title": "Set Up Redis Storage…",
         "category": "LocalPilot",
         "icon": "$(database)"
       },
@@ -518,7 +549,7 @@
       },
       {
         "command": "localpilot.startColibri",
-        "title": "Start colibri (stream huge MoE models from disk)",
+        "title": "Start Colibri Server",
         "category": "LocalPilot",
         "icon": "$(server-process)"
       },
@@ -536,7 +567,7 @@
       },
       {
         "command": "localpilot.stopColibri",
-        "title": "Stop colibri",
+        "title": "Stop Colibri Server",
         "category": "LocalPilot",
         "icon": "$(debug-stop)"
       },
@@ -554,7 +585,7 @@
       },
       {
         "command": "localpilot.openWelcome",
-        "title": "Welcome / Setup",
+        "title": "Open Setup",
         "category": "LocalPilot",
         "icon": "$(rocket)"
       },
@@ -608,7 +639,7 @@
       },
       {
         "command": "localpilot.openTerminal",
-        "title": "Open LocalPilot Terminal",
+        "title": "Open Terminal",
         "category": "LocalPilot",
         "icon": "$(localpilot-logo)"
       },
@@ -730,27 +761,27 @@
       },
       {
         "command": "localpilot.explainSelection",
-        "title": "Explain",
+        "title": "Explain Selection",
         "category": "LocalPilot"
       },
       {
         "command": "localpilot.fixSelection",
-        "title": "Fix",
+        "title": "Fix Selection",
         "category": "LocalPilot"
       },
       {
         "command": "localpilot.refactorSelection",
-        "title": "Refactor",
+        "title": "Refactor Selection",
         "category": "LocalPilot"
       },
       {
         "command": "localpilot.generateTests",
-        "title": "Generate Tests",
+        "title": "Generate Tests for Selection",
         "category": "LocalPilot"
       },
       {
         "command": "localpilot.generateDocs",
-        "title": "Add Documentation",
+        "title": "Document Selection",
         "category": "LocalPilot"
       },
       {
@@ -837,7 +868,7 @@
       },
       {
         "command": "localpilot.toggleAutoMode",
-        "title": "Toggle Auto Mode",
+        "title": "Turn Auto Mode On/Off",
         "category": "LocalPilot",
         "icon": "$(zap)"
       },
@@ -942,19 +973,34 @@
           "group": "9_logs@2"
         },
         {
-          "command": "localpilot.openChat",
-          "when": "view =~ /^localpilot\\.agentsView/",
-          "group": "navigation@0"
-        },
-        {
-          "command": "localpilot.runParallelTasks",
+          "command": "localpilot.newSession",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@1"
         },
         {
-          "command": "localpilot.queue.add",
+          "command": "localpilot.runParallelTasks",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@2"
+        },
+        {
+          "command": "localpilot.queue.add",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.pauseAll",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.anyRunning && !localpilot.anyPaused",
+          "group": "navigation@4"
+        },
+        {
+          "command": "localpilot.resumeAll",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.anyPaused",
+          "group": "navigation@4"
+        },
+        {
+          "command": "localpilot.stopAll",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.anyRunning",
+          "group": "navigation@5"
         },
         {
           "command": "localpilot.runBestOfN",
@@ -963,23 +1009,8 @@
         },
         {
           "command": "localpilot.compareResults",
-          "when": "view =~ /^localpilot\\.agentsView/",
+          "when": "view =~ /^localpilot\\.agentsView/ && localpilot.hasBatches",
           "group": "2_batch@2"
-        },
-        {
-          "command": "localpilot.newSession",
-          "when": "view =~ /^localpilot\\.agentsView/",
-          "group": "navigation@2"
-        },
-        {
-          "command": "localpilot.pauseAll",
-          "when": "view =~ /^localpilot\\.agentsView/",
-          "group": "navigation@3"
-        },
-        {
-          "command": "localpilot.stopAll",
-          "when": "view =~ /^localpilot\\.agentsView/",
-          "group": "navigation@4"
         },
         {
           "command": "localpilot.keepAllChanges",
@@ -1025,17 +1056,17 @@
       "view/item/context": [
         {
           "command": "localpilot.pauseSession",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-running",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-running/",
           "group": "inline@1"
         },
         {
           "command": "localpilot.resumeSession",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-paused",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-paused/",
           "group": "inline@1"
         },
         {
           "command": "localpilot.stopSession",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(running|paused)$/",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(running|paused)/",
           "group": "inline@2"
         },
         {
@@ -1055,37 +1086,37 @@
         },
         {
           "command": "localpilot.applyWorktree",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-isolated",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-isolated",
           "group": "inline@1"
         },
         {
           "command": "localpilot.discardWorktree",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-isolated",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-isolated",
           "group": "inline@2"
         },
         {
           "command": "localpilot.applyWorktree",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(paused|idle)[^ ]*-isolated/",
           "group": "1_worktree@1"
         },
         {
           "command": "localpilot.discardWorktree",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(paused|idle)[^ ]*-isolated/",
           "group": "1_worktree@2"
         },
         {
           "command": "localpilot.openWorktree",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(isolated|running|paused)$/",
-          "group": "1_worktree@3"
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /-isolated/",
+          "group": "1_worktree@0"
         },
         {
           "command": "localpilot.keepChanges",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-changed",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-changed",
           "group": "inline@1"
         },
         {
           "command": "localpilot.undoChanges",
-          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-changed",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-changed",
           "group": "inline@2"
         },
         {
@@ -1102,6 +1133,46 @@
           "command": "localpilot.undoChanges",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
           "group": "inline@2"
+        },
+        {
+          "command": "localpilot.openChatInEditor",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "localpilot.renameSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "localpilot.pinSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "2_edit@2"
+        },
+        {
+          "command": "localpilot.forkSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "3_copy@1"
+        },
+        {
+          "command": "localpilot.exportSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "3_copy@2"
+        },
+        {
+          "command": "localpilot.deleteSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session/",
+          "group": "9_delete@1"
+        },
+        {
+          "command": "localpilot.openChangedFile",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
+          "group": "1_open@1"
+        },
+        {
+          "command": "localpilot.showDiff",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == file",
+          "group": "1_open@2"
         },
         {
           "command": "localpilot.queue.pause",
@@ -1140,6 +1211,14 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "localpilot.keepAllChanges",
+          "when": "localpilot.hasChanges"
+        },
+        {
+          "command": "localpilot.undoAllChanges",
+          "when": "localpilot.hasChanges"
+        },
         {
           "command": "localpilot.openSession",
           "when": "false"
@@ -1227,6 +1306,46 @@
         {
           "command": "localpilot.queue.remove",
           "when": "false"
+        },
+        {
+          "command": "localpilot.renameSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.pinSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.forkSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.exportSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.openChangedFile",
+          "when": "false"
+        },
+        {
+          "command": "localpilot.pauseAll",
+          "when": "localpilot.anyRunning && !localpilot.anyPaused"
+        },
+        {
+          "command": "localpilot.resumeAll",
+          "when": "localpilot.anyPaused"
+        },
+        {
+          "command": "localpilot.stopAll",
+          "when": "localpilot.anyRunning"
+        },
+        {
+          "command": "localpilot.compareResults",
+          "when": "localpilot.hasBatches"
         }
       ],
       "editor/title": [
@@ -1371,23 +1490,18 @@
           "group": "localpilot@0"
         },
         {
-          "command": "localpilot.attachImage",
-          "when": "resourceExtname =~ /\\.(png|jpe?g|gif|webp)$/",
-          "group": "localpilot"
-        },
-        {
           "command": "localpilot.openMarkdownViewer",
-          "when": "resourceExtname =~ /\\.(md|markdown)$/",
-          "group": "localpilot"
+          "when": "resourceExtname =~ /\\.(md|markdown)$/i",
+          "group": "navigation@9"
         },
         {
           "command": "localpilot.openPdf",
-          "when": "resourceExtname == .pdf",
+          "when": "resourceExtname =~ /\\.pdf$/i",
           "group": "navigation@9"
         },
         {
           "command": "localpilot.askAboutDocument",
-          "when": "resourceExtname =~ /\\.(md|markdown|pdf)$/",
+          "when": "resourceExtname =~ /\\.(md|markdown|pdf)$/i",
           "group": "localpilot@2"
         }
       ]
@@ -1396,7 +1510,8 @@
       {
         "command": "localpilot.openChat",
         "key": "ctrl+shift+l",
-        "mac": "cmd+shift+l"
+        "mac": "cmd+shift+l",
+        "when": "!editorTextFocus"
       },
       {
         "command": "localpilot.newSession",
@@ -1430,6 +1545,12 @@
         "key": "ctrl+'",
         "mac": "cmd+'",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "localpilot.askAboutDocument",
+        "key": "ctrl+'",
+        "mac": "cmd+'",
+        "when": "activeCustomEditorId == localpilot.pdfViewer || activeCustomEditorId == localpilot.markdownEditor || activeWebviewPanelId == localpilot.markdown"
       }
     ],
     "configuration": {
@@ -1957,7 +2078,7 @@
           "scope": "application",
           "type": "boolean",
           "default": false,
-          "markdownDescription": "**Auto mode**: an action that would ask for approval (see `#localpilot.approvals.terminal#` and the other approval settings, or an `ask` permission rule) is first reviewed by a small local model. The reviewer approves actions that clearly serve your request and stay inside the project. Everything else still asks you. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking. Toggle with **LocalPilot: Toggle Auto Mode**."
+          "markdownDescription": "**Auto mode**: an action that would ask for approval (see `#localpilot.approvals.terminal#` and the other approval settings, or an `ask` permission rule) is first reviewed by a small local model. The reviewer approves actions that clearly serve your request and stay inside the project. Everything else still asks you. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking. Turn it on or off with **LocalPilot: Turn Auto Mode On/Off**."
         },
         "localpilot.autoMode.model": {
           "scope": "application",
@@ -2410,7 +2531,7 @@
           "type": "boolean",
           "default": true,
           "order": 0,
-          "markdownDescription": "Open the **Welcome / Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Welcome / Setup*."
+          "markdownDescription": "Open the **Setup** screen the first time LocalPilot starts without a reachable model server or default model. Run it again any time with *LocalPilot: Open Setup*."
         },
         "localpilot.chat.location": {
           "type": "string",
@@ -2592,8 +2713,7 @@
               "markdown": "media/walkthrough/setup.md"
             },
             "completionEvents": [
-              "onCommand:localpilot.openWelcome",
-              "onSettingChanged:localpilot.defaultModel"
+              "onContext:localpilot.hasModels"
             ]
           },
           {
@@ -2629,6 +2749,28 @@
             },
             "completionEvents": [
               "onCommand:localpilot.runParallelTasks"
+            ]
+          },
+          {
+            "id": "editor",
+            "title": "Work in the editor",
+            "description": "Edit a selection in place with Cmd/Ctrl+Alt+K, fix problems from the light bulb, and explain or fix terminal output.\n[Try inline edit](command:localpilot.inlineEdit)",
+            "media": {
+              "markdown": "media/walkthrough/editor.md"
+            },
+            "completionEvents": [
+              "onCommand:localpilot.inlineEdit"
+            ]
+          },
+          {
+            "id": "extend",
+            "title": "Extend with skills and MCP",
+            "description": "Teach the agent your workflows with skills, connect tools through MCP servers, or install a plugin that bundles both.\n[Manage skills](command:localpilot.manageSkills)\n[Browse plugins](command:localpilot.browsePlugins)",
+            "media": {
+              "markdown": "media/walkthrough/extend.md"
+            },
+            "completionEvents": [
+              "onCommand:localpilot.browsePlugins"
             ]
           },
           {

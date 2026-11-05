@@ -3,40 +3,54 @@
      Mermaid needs a build first (dist/webview/mermaid.js). window.__send({type:'scrollToLine', line: 30}) drives scroll sync. -->
 <html><head><meta charset="utf-8"><title>LocalPilot Markdown reader preview</title>
 <style>
-:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-textLink-foreground:#4daafc; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-notifications-background:#252526; --vscode-notifications-foreground:#ccc; --vscode-errorForeground:#f48771; --vscode-editorInfo-foreground:#3794ff; --vscode-editorWarning-foreground:#cca700; --vscode-editorError-foreground:#f14c4c; --vscode-input-background:#3c3c3c; --vscode-input-foreground:#ccc; }
-.vscode-light { --vscode-editor-background:#ffffff; --vscode-editor-foreground:#1f1f1f; --vscode-foreground:#3b3b3b; --vscode-descriptionForeground:#717171; --vscode-widget-border:#d4d4d4; --vscode-textLink-foreground:#005fb8; --vscode-notifications-background:#fff; --vscode-notifications-foreground:#3b3b3b; --vscode-errorForeground:#a1260d; --vscode-editorInfo-foreground:#1a85ff; --vscode-editorWarning-foreground:#bf8803; --vscode-editorError-foreground:#e51400; --vscode-input-background:#fff; --vscode-input-foreground:#3b3b3b; }
-.vscode-high-contrast { --vscode-editor-background:#000; --vscode-editor-foreground:#fff; --vscode-foreground:#fff; --vscode-descriptionForeground:#fff; --vscode-contrastBorder:#6fc3df; --vscode-contrastActiveBorder:#f38518; --vscode-textLink-foreground:#21a6ff; }
+:root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-textLink-foreground:#4daafc; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-notifications-background:#252526; --vscode-notifications-foreground:#ccc; --vscode-errorForeground:#f48771; --vscode-editorInfo-foreground:#3794ff; --vscode-editorWarning-foreground:#cca700; --vscode-editorError-foreground:#f14c4c; --vscode-input-background:#3c3c3c; --vscode-input-foreground:#ccc; --vscode-button-background:#0078d4; --vscode-button-foreground:#fff; --vscode-button-hoverBackground:#026ec1; }
+.vscode-light { --vscode-editor-background:#ffffff; --vscode-editor-foreground:#1f1f1f; --vscode-foreground:#3b3b3b; --vscode-descriptionForeground:#717171; --vscode-widget-border:#d4d4d4; --vscode-textLink-foreground:#005fb8; --vscode-notifications-background:#fff; --vscode-notifications-foreground:#3b3b3b; --vscode-errorForeground:#a1260d; --vscode-editorInfo-foreground:#1a85ff; --vscode-editorWarning-foreground:#bf8803; --vscode-editorError-foreground:#e51400; --vscode-input-background:#fff; --vscode-input-foreground:#3b3b3b; --vscode-button-background:#005fb8; --vscode-button-hoverBackground:#0258a8; }
+.vscode-high-contrast { --vscode-editor-background:#000; --vscode-editor-foreground:#fff; --vscode-foreground:#fff; --vscode-descriptionForeground:#fff; --vscode-contrastBorder:#6fc3df; --vscode-contrastActiveBorder:#f38518; --vscode-textLink-foreground:#21a6ff; --vscode-button-background:#000; --vscode-button-foreground:#fff; }
 .vscode-high-contrast-light { --vscode-editor-background:#fff; --vscode-editor-foreground:#000; --vscode-foreground:#000; --vscode-descriptionForeground:#000; --vscode-contrastBorder:#0f4a85; --vscode-contrastActiveBorder:#b5200d; --vscode-textLink-foreground:#0f4a85; }
 </style>
 <link rel="stylesheet" href="../dist/webview/katex/katex.min.css">
 <link rel="stylesheet" href="../media/mdview.css">
 </head><body class="vscode-dark">
 <header id="bar" class="bar">
-  <div class="meta"><b id="title">Document</b><span id="subtitle"></span></div><span class="spacer"></span>
-  <button id="toc" class="ib" title="Outline" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
-  <button id="wrap" class="ib" title="Wrap" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8m1.5-1.5L8 12l1.5 1.5M2.5 12h3"/></svg></button>
-  <button id="smaller" class="ib" title="Smaller"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
-  <button id="larger" class="ib" title="Larger"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
-  <button id="copy" class="ib" title="Copy"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
-  <button id="save" class="ib" title="Save as"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
-  <button id="open" class="ib" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
-  <button id="prefs" class="ib txt" title="Reading settings (a)" aria-haspopup="true" aria-expanded="false">Aa</button>
-  <button id="more" class="ib" title="More actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
-  <button id="ask" class="ib hidden" title="Ask LocalPilot about this document"><svg viewBox="0 0 16 16"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5A1.5 1.5 0 0 1 12 10.5H7L4 13v-2.5a1.5 1.5 0 0 1-1.5-1.5Z"/></svg></button>
+  <div class="meta"><b id="title">Document</b><span id="subtitle"></span></div>
+  <span class="spacer"></span>
+  <button id="toc" class="ib" title="Outline (o)" aria-label="Outline" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg></button>
+  <button id="find" class="ib" title="Find (Ctrl+F)" aria-label="Find in document"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg></button>
+  <button id="wrap" class="ib" title="Wrap long code lines (w)" aria-label="Wrap long code lines" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8m1.5-1.5L8 12l1.5 1.5M2.5 12h3"/></svg></button>
+  <button id="smaller" class="ib" title="Smaller text (−)" aria-label="Smaller text"><svg viewBox="0 0 16 16"><path d="M3 11.5 7 4l4 7.5M4.6 9h4.8M12 6.5h2.5"/></svg></button>
+  <button id="larger" class="ib" title="Larger text (+)" aria-label="Larger text"><svg viewBox="0 0 16 16"><path d="M2.5 11.5 6.5 4l4 7.5M4.1 9h4.8M12.5 5.5v3M11 7h3"/></svg></button>
+  <button id="copy" class="ib wide-only" title="Copy Markdown" aria-label="Copy Markdown"><svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+  <button id="save" class="ib wide-only" title="Save as…"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg></button>
+  <button id="open" class="ib wide-only" title="Open in editor"><svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg></button>
+  <button id="ask" class="ask hidden" title="Ask LocalPilot about this document" aria-label="Ask LocalPilot about this document"><svg viewBox="0 0 16 16"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5A1.5 1.5 0 0 1 12 10.5H7L4 13v-2.5a1.5 1.5 0 0 1-1.5-1.5Z"/></svg><span>Ask</span></button>
+  <button id="prefs" class="ib txt" title="Reading settings (a)" aria-label="Reading settings" aria-haspopup="true" aria-expanded="false">Aa</button>
+  <button id="more" class="ib" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
 </header>
 <div id="prefs-pop" class="pop hidden" role="dialog" aria-label="Reading settings">
-  <div class="row"><span>Width</span><div class="seg" data-key="width"><button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button></div></div>
-  <div class="row"><span>Font</span><div class="seg" data-key="font"><button data-v="sans">Sans</button><button data-v="serif">Serif</button><button data-v="editor">Editor</button></div></div>
-  <div class="row"><span>Line height</span><div class="seg" data-key="lineHeight"><button data-v="1.5">Tight</button><button data-v="1.65">Normal</button><button data-v="1.8">Loose</button></div></div>
-  <div class="row"><span>Text size</span><div class="seg"><button data-size="-1" title="Smaller text">−</button><output id="size-val">15</output><button data-size="1" title="Larger text">+</button></div></div>
+  <div class="row"><span id="pl-width">Width</span><div class="seg" data-key="width" role="group" aria-labelledby="pl-width"><button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button></div></div>
+  <div class="row"><span id="pl-font">Font</span><div class="seg" data-key="font" role="group" aria-labelledby="pl-font"><button data-v="sans">Sans</button><button data-v="serif">Serif</button><button data-v="editor">Editor</button></div></div>
+  <div class="row"><span id="pl-lh">Line height</span><div class="seg" data-key="lineHeight" role="group" aria-labelledby="pl-lh"><button data-v="1.5">Tight</button><button data-v="1.65">Normal</button><button data-v="1.8">Loose</button></div></div>
+  <div class="row"><span id="pl-size">Text size</span><div class="seg" role="group" aria-labelledby="pl-size"><button data-size="-1" title="Smaller text" aria-label="Smaller text">−</button><output id="size-val" aria-live="polite" aria-label="Text size">15</output><button data-size="1" title="Larger text" aria-label="Larger text">+</button></div></div>
+  <div class="row reset"><button id="prefs-reset" class="linkish" data-reset="1" title="Width, font, line height and text size back to their defaults">Reset to defaults</button></div>
 </div>
 <div id="more-pop" class="pop menu hidden" role="menu">
+  <button role="menuitem" class="narrow-only" data-act="copy">Copy Markdown</button>
+  <button role="menuitem" class="narrow-only" data-act="save">Save as…</button>
+  <button role="menuitem" class="narrow-only" data-act="open">Open in editor</button>
+  <button role="menuitemcheckbox" class="narrow-only" data-act="wrap" aria-checked="false">Wrap long code lines</button>
+  <hr class="narrow-only" />
   <button role="menuitem" data-act="html">Export HTML…</button>
   <button role="menuitem" data-act="pdf">Export PDF…</button>
   <button role="menuitem" data-act="clipboard">Copy HTML</button>
+  <hr />
+  <button role="menuitem" id="more-settings" data-act="settings">Viewer settings…</button>
 </div>
-<button id="ask-sel" class="ask-sel hidden" title="Ask LocalPilot about the selection">Ask LocalPilot</button>
-<div id="layout" class="layout"><nav id="outline" class="outline hidden"><input id="filter" class="filter hidden" type="search" placeholder="Filter headings" /><div id="outline-list"></div></nav><main id="doc" class="doc"><div class="loading">Rendering…</div></main></div>
+<button id="ask-sel" class="ask-sel hidden" title="Ask LocalPilot (Ctrl+')" aria-keyshortcuts="Control+'">Ask LocalPilot</button>
+<div id="ask-live" class="sr-only" aria-live="polite"></div>
+<div id="layout" class="layout">
+  <nav id="outline" class="outline hidden" aria-label="Outline"><input id="filter" class="filter hidden" type="search" placeholder="Filter headings (/)" aria-label="Filter headings" /><div id="outline-list"></div></nav>
+  <main id="doc" class="doc" aria-live="polite"><div class="loading">Rendering…</div></main>
+</div>
 <div id="toasts"></div>
 <script>
 const theme = new URLSearchParams(location.search).get('theme');

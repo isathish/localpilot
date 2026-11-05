@@ -2,13 +2,14 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
+  const calmMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   const els = {
     messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
     modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), skillsBtn: $('skillsBtn'), skillsLabel: $('skillsLabel'), ctx: $('ctxMeter'), usage: $('usagePill'),
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'), improve: $('btnImprove'),
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
-    popover: $('popover'), newTab: $('btnNewTab'), history: $('btnHistory'), bgruns: $('bgruns'),
+    popover: $('popover'), newTab: $('btnNewTab'), btnComposerMore: $('btnComposerMore'), history: $('btnHistory'), bgruns: $('bgruns'),
   };
   // Webview state survives the view being hidden/restored: which chats are open as tabs.
   const persisted = (typeof vscode.getState === 'function' && vscode.getState()) || {};
@@ -31,6 +32,9 @@
     diff: '<svg viewBox="0 0 16 16"><path d="M5 2.5v6M2 5.5h6M8.5 12h5.5"/></svg>',
     bot: '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1" fill="currentColor"/><circle cx="15" cy="9.5" r="1" fill="currentColor"/></svg>',
     warn: '<svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.8v.2"/></svg>',
+    book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
+    closeOthers: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 3.5V3.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-.5M5 8l3 3M8 8l-3 3"/></svg>',
+    rules: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>',
     sparkle: '<svg viewBox="0 0 16 16"><path d="M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4z"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg>',
     folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
@@ -65,6 +69,8 @@
     cursor: '<svg viewBox="0 0 16 16"><path d="M3 2l10 6-4.5 1L6 13z"/></svg>',
     memory: '<svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>',
     plan: '<svg viewBox="0 0 16 16"><path d="M4 3h8v10H4z"/><path d="M6 6h4M6 8.5h4M6 11h2"/></svg>',
+    gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6L5 5M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4"/></svg>',
+    key: '<svg viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="3"/><path d="M7.6 8.4L13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2"/></svg>',
     ask: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.6 1.6c-.6.4-.8.7-.8 1.4M8 11.5h.01"/></svg>',
   };
   /** The one quiet "running" marker used wherever a spinner would only add noise: tabs, background rows, worker lanes. */
@@ -79,9 +85,14 @@
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   /** Consecutive calls to these fold into one "Explored" row in the transcript (see foldExplore). */
   const EXPLORE_TOOLS = new Set([...READ_TOOLS, 'gather_context', 'read_pdf', 'repo_graph', 'analyze_workspace', 'mcp_read_resource', 'git_status', 'ci_status']);
+  // Built-in slash commands by group: [command, description, group]. A trailing space means the command takes an argument;
+  // the rest run as soon as they are picked. /smol (same as /compact) still works when typed.
   const SLASH = [
-    ['/help', 'Show commands'], ['/model ', 'Switch model for this chat'], ['/mode agent', 'Agent mode'], ['/mode ask', 'Ask mode'], ['/mode plan', 'Plan mode'],
-    ['/compact', 'Summarise older messages'], ['/smol', 'Summarise older messages (same as /compact)'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one'], ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md'], ['/team ', 'Split a task for background workers and the shared board'], ['/clear', 'Clear this chat'], ['/skills', 'List skills'], ['/agents', 'List subagents'], ['/commands', 'List custom slash commands'], ['/skill ', 'Run a task with a skill'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder'], ['/skill browse ', 'Search and install from the skill catalog'], ['/agent ', 'Delegate to a subagent'], ['/memory', 'Instruction files and saved memory notes'], ['/permissions', 'Permission rules from settings.json'], ['/hooks', 'Configured hooks'], ['/context', 'Context usage'], ['/board', 'Shared task board'],
+    ['/clear', 'Clear this chat', 'Chat'], ['/compact', 'Summarise older messages', 'Chat'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one', 'Chat'], ['/context', 'Context usage', 'Chat'],
+    ['/mode agent', 'Agent mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode ask', 'Ask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
+    ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md', 'Plan & delegate'], ['/team ', 'Split a task for background workers and the shared board', 'Plan & delegate'], ['/agent ', 'Delegate to a subagent', 'Plan & delegate'],
+    ['/help', 'Show commands', 'Info'], ['/memory', 'Instruction files and saved memory notes', 'Info'], ['/permissions', 'Permission rules from settings.json', 'Info'], ['/hooks', 'Configured hooks', 'Info'], ['/board', 'Shared task board', 'Info'], ['/agents', 'List subagents', 'Info'], ['/commands', 'List custom slash commands', 'Info'],
+    ['/skills', 'List skills', 'Skills'], ['/skill ', 'Run a task with a skill', 'Skills'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder', 'Skills'], ['/skill browse ', 'Search and install from the skill catalog', 'Skills'],
   ];
   const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
@@ -111,7 +122,26 @@
   // Toasts float just above the composer, however tall the draft, approvals and task panels make it.
   const composerEl = document.getElementById('composer');
   if (composerEl && window.ResizeObserver) { new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', `${composerEl.offsetHeight}px`)).observe(composerEl); }
-  function toast(text, level) { const t = el('div', `toast ${level || 'info'}`, esc(text)); els.toasts.appendChild(t); setTimeout(() => t.remove(), 3200); }
+  /**
+   * `action` ({ label, msg }) adds a button that posts `msg` back to the host. Errors go to the role="alert" region so a
+   * screen reader interrupts for them; warnings and errors stay long enough to read (60 ms a character, 8 s at least),
+   * and hovering or focusing a toast holds it.
+   */
+  function toast(text, level, action) {
+    const lv = level || 'info';
+    const t = el('div', `toast ${lv}`, `<span class="tt">${esc(text)}</span>`); t.title = text;
+    if (action && action.label && action.msg) { const b = el('button', 'ta', esc(action.label)); b.onclick = () => { post(action.msg); t.remove(); }; t.appendChild(b); }
+    const x = el('button', 'tx', '×'); x.setAttribute('aria-label', 'Dismiss'); x.title = 'Dismiss'; x.onclick = () => t.remove(); t.appendChild(x);
+    const ms = lv === 'info' ? (action ? 10000 : 3200) : Math.max(8000, String(text).length * 60);
+    let left = ms; let since = 0; let timer = 0;
+    const run = () => { clearTimeout(timer); since = Date.now(); timer = setTimeout(() => t.remove(), left); };
+    const hold = () => { if (!timer) { return; } clearTimeout(timer); timer = 0; left = Math.max(1500, left - (Date.now() - since)); };
+    t.addEventListener('mouseenter', hold); t.addEventListener('focusin', hold);
+    t.addEventListener('mouseleave', () => { if (!t.contains(document.activeElement)) { run(); } });
+    t.addEventListener('focusout', (e) => { if (!t.contains(e.relatedTarget) && !t.matches(':hover')) { run(); } });
+    const alerts = lv === 'error' && document.getElementById('toastAlerts');
+    (alerts || els.toasts).appendChild(t); run();
+  }
   // "Stick to bottom" is decided from scroll events (layout is already clean there) instead of forcing a layout on every
   // call — followLive runs once per frame while streaming and that read was the single biggest CPU cost of a long reply.
   let stickToBottom = true;
@@ -1077,7 +1107,7 @@
       // A failed turn: any partial answer, then the same error box the live turn showed (actions added on the latest turn).
       const partial = m.content && m.content.trim() && m.content !== `(error: ${err})` ? m.content : '';
       if (partial) { d.appendChild(el('div', 'body', renderMarkdown(partial))); }
-      d.appendChild(el('div', 'error-box', `<span class="msg">${esc(err)}</span>`));
+      d.appendChild(errorBox(err));
       return d;
     }
     if (m.content && m.content.trim()) {
@@ -1105,12 +1135,35 @@
     };
     return f;
   }
-  /** Retry (same request again) and Change model (opens the picker; Retry then uses the new model) on a failed turn. */
+  /**
+   * The fix for a failed turn, by error kind: start Ollama or open the model settings when the server is unreachable,
+   * set the API key when it was rejected, compact and retry when the prompt was too long; Retry otherwise. Change model
+   * stays the secondary action and Show log is always there.
+   */
   function errorActions(box, sid) {
-    const acts = el('span', 'err-acts', `<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry">${I.layers}<span>Change model</span></button><button class="btn sm primary" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`);
+    const kind = box.dataset.kind || '', ollama = box.dataset.provider === 'ollama';
+    const fix = kind === 'connection' ? (ollama ? { a: 'ollama', icon: I.play, label: 'Start Ollama', title: 'Start the local Ollama server (and pull a model if none is installed), then Retry' } : { a: 'models', icon: I.gear, label: 'Open model settings', title: 'Check the model server and its models in Settings, then Retry' })
+      : kind === 'auth' ? { a: 'key', icon: I.key, label: 'Set API key…', title: 'Enter a valid API key in Settings → Providers, then Retry' }
+      : kind === 'context' ? { a: 'compact', icon: I.layers, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' }
+      : null;
+    const retryBtn = `<button class="btn sm ${fix ? '' : 'primary'}" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`;
+    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.layers}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
+    // Rate limited: Retry counts down the moment the server is likely to accept requests again.
+    if (kind === 'ratelimit') {
+      const span = acts.querySelector('[data-a="retry"] span'); let left = 10;
+      const tick = () => { if (!span.isConnected && left < 10) { return; } span.textContent = left > 0 ? `Retry in ${left}s` : 'Retry'; if (left-- > 0) { setTimeout(tick, 1000); } };
+      tick();
+    }
     acts.onclick = (e) => {
-      const b = e.target.closest('[data-a]'); if (!b || state.running.has(sid)) { return; }
-      if (b.dataset.a === 'retry') { b.disabled = true; b.classList.add('busy'); post({ type: 'retry', sessionId: sid }); }
+      const b = e.target.closest('[data-a]'); if (!b) { return; }
+      const a = b.dataset.a;
+      if (a === 'log') { post({ type: 'showLog' }); return; }
+      if (state.running.has(sid)) { return; }
+      if (a === 'retry') { b.disabled = true; b.classList.add('busy'); post({ type: 'retry', sessionId: sid }); }
+      else if (a === 'compact') { b.disabled = true; b.classList.add('busy'); post({ type: 'compactNow', sessionId: sid, retry: true }); }
+      else if (a === 'ollama') { post({ type: 'autoSetupModels' }); }
+      else if (a === 'models') { post({ type: 'openSettings', section: 'models' }); }
+      else if (a === 'key') { post({ type: 'openSettings', section: 'providers' }); }
       else { els.modelBtn.click(); }
     };
     box.appendChild(acts);
@@ -1131,6 +1184,7 @@
     const stick = !same || m.scrollHeight - m.scrollTop - m.clientHeight < 160;
     const y = m.scrollTop;
     const open = same ? [...m.querySelectorAll('details')].map((d, i) => (d.open ? i : -1)).filter((i) => i >= 0) : [];
+    if (!same) { const cr = document.querySelector('.confirm-row'); if (cr) { cr.remove(); } }
     els.messages.innerHTML = '';
     els.messages.dataset.sid = s ? s.id : '';
     if (!s) { return; }
@@ -1221,14 +1275,15 @@
         ${s.plan.summary ? `<p>${esc(s.plan.summary)}</p>` : ''}
         <button class="link" data-a="detail">Read detailed plan</button>
         <div class="plan-todos"><div class="n">${todos.length} todo${todos.length === 1 ? '' : 's'}</div>${todos.map((t) => `<div class="todo ${t.status}"><i></i><span>${esc(t.title)}</span>${t.agent ? `<em>${esc(t.agent)}</em>` : ''}</div>`).join('')}</div>
-        <div class="plan-foot"><span class="hint">Build switches to Agent mode and runs the checklist — independent items in parallel.</span><button class="btn build" data-a="build">Build <kbd>⌘↩</kbd></button></div>
+        <div class="plan-foot"><span class="hint">Build switches to Agent mode and runs the checklist — independent items in parallel.</span><span class="plan-acts"><button class="btn ghost revise" data-a="revise" title="Ask for changes to this plan; the chat stays in Plan mode">Revise</button><button class="btn build" data-a="build">Build <kbd>${kb('Mod+Enter')}</kbd></button></span></div>
       </div>`;
     d.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b) { return; }
       if (b.dataset.a === 'build') { post({ type: 'buildPlan', sessionId: s.id }); b.disabled = true; b.textContent = 'Building…'; }
+      else if (b.dataset.a === 'revise') { if (state.session && state.session.id === s.id) { setMode('plan'); } state.revising = s.id; syncPlaceholder(); els.input.focus(); }
       else if (b.dataset.a === 'open' && s.plan.file) { post({ type: 'openFile', path: s.plan.file }); }
       else if (b.dataset.a === 'copy') { navigator.clipboard.writeText(todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')).then(() => toast('Checklist copied')); }
-      else if (b.dataset.a === 'detail') { const prev = d.previousElementSibling; if (prev && prev.classList.contains('assistant')) { prev.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }
+      else if (b.dataset.a === 'detail') { const prev = d.previousElementSibling; if (prev && prev.classList.contains('assistant')) { prev.scrollIntoView({ behavior: calmMotion() ? 'auto' : 'smooth', block: 'start' }); } }
     };
     return d;
   }
@@ -1236,6 +1291,13 @@
     // No greeting or explainer: a short list of things to start with, then the recent chats.
     const wrap = el('div', 'empty');
     const news = whatsNewCard(); if (news) { wrap.appendChild(news); }
+    // Without a model nothing can answer: setting one up comes first, and the suggestions wait for it.
+    const noModels = !state.models.length && !state.modelsLoading;
+    if (noModels) {
+      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
+      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
+      wrap.appendChild(n);
+    }
     wrap.appendChild(el('div', 'recent-h', 'Start with'));
     const sug = el('div', 'suggestions');
     // Suggestions name the file you are on (sent by the host as the active editor changes); without one, project-wide ones.
@@ -1252,8 +1314,10 @@
     ];
     for (const [icon, label, prompt, mode] of picks) {
       const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span><span class="mode" title="${mode === 'ask' ? 'Answers without changing files' : 'Edits files and runs commands'}">${mode === 'ask' ? 'Ask' : 'Agent'}</span>`);
-      b.title = prompt;
-      b.onclick = () => { setMode(mode); els.input.value = prompt; sendCurrent(true); };
+      b.title = noModels ? 'Set up a model first' : prompt;
+      if (noModels) { b.setAttribute('aria-disabled', 'true'); }
+      // The suggestion's mode applies to that turn only: the chat keeps the mode the user picked.
+      b.onclick = () => { if (noModels) { return; } els.input.value = prompt; sendCurrent(true, { modeOverride: mode }); };
       sug.appendChild(b);
     }
     wrap.appendChild(sug);
@@ -1269,11 +1333,6 @@
       }
       r.querySelector('[data-a="all"]').onclick = () => els.history.click();
       wrap.appendChild(r);
-    }
-    if (!state.models.length && !state.modelsLoading) {
-      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
-      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
-      wrap.appendChild(n);
     }
     els.messages.appendChild(wrap);
   }
@@ -1414,14 +1473,28 @@
     live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
     live.thinkingEl = null;
   }
-  /** An `error` event's text: a plain string, or `{ kind, message }` (the consecutive-mistake limit). */
+  /** An `error` event's text: a plain string (older transcripts), or `{ message, kind, provider }`; the mistake limit has `latest`. */
   function errorText(p) { return p && typeof p === 'object' ? String(p.message || p.latest || 'Error') : String(p); }
-  /** Error row for an `error` event; the mistake limit names the latest failure and how to carry on. */
+  /** The kind of a stored error (the transcript keeps only its text), read from the wording describeModelError uses. */
+  function guessErrorKind(text) {
+    const t = String(text || '');
+    return /could not reach the model server|no model|not running|ECONNREFUSED|fetch failed|has no provider it can send/i.test(t) ? 'connection'
+      : /rejected the API key|api key|unauthori[sz]ed|out of credits|quota/i.test(t) ? 'auth'
+      : /rate limit/i.test(t) ? 'ratelimit'
+      : /too long|context (window|length)|maximum context|prompt is too/i.test(t) ? 'context' : '';
+  }
+  /** Ollama is the likely server when the chat's model is on it, or when no model was found at all. */
+  function guessProvider() { const cm = currentModel(); return cm ? (/ollama/i.test(`${cm.providerId} ${state.providerNames && state.providerNames[cm.providerId] || ''}`) && !cm.remote ? 'ollama' : '') : (!state.models.length ? 'ollama' : ''); }
+  /** Error row for an `error` event or a stored failure; the mistake limit names the latest failure and how to carry on. */
   function errorBox(p) {
     if (p && typeof p === 'object' && p.kind === 'mistake_limit') {
       return el('div', 'error-box mistake-limit', `<span class="msg">LocalPilot ran into ${esc(p.count)} errors in a row and stopped.<br>Latest: <code>${esc(p.latest || 'unknown error')}</code><br>Send a message to guide it and continue.</span>`);
     }
-    return el('div', 'error-box', `<span class="msg">${esc(errorText(p))}</span>`);
+    const box = el('div', 'error-box', `<span class="msg">${esc(errorText(p))}</span>`);
+    const obj = p && typeof p === 'object';
+    box.dataset.kind = obj && p.kind ? String(p.kind) : guessErrorKind(errorText(p));
+    box.dataset.provider = obj && p.provider ? String(p.provider) : guessProvider();
+    return box;
   }
   /** Inline note under a retracted reply: why the model is being asked to act instead of the turn ending. */
   function nudgeNote(reason) {
@@ -1475,6 +1548,8 @@
       const r = turns[i].getBoundingClientRect();
       if (r.top < top) { target = r.bottom <= top + 4 ? turns[i] : null; break; }
     }
+    syncFirstTurnShown();
+    if (target && taskHeadCovers(target)) { target = null; }
     stickyTarget = target;
     if (!target) { stickyUser.classList.add('hidden'); return; }
     const ut = target.querySelector('.utext');
@@ -1486,7 +1561,7 @@
   const scheduleSticky = () => { if (!stickyPending) { stickyPending = true; requestAnimationFrame(updateStickyUser); } };
   els.messages.addEventListener('scroll', scheduleSticky, { passive: true });
   window.addEventListener('resize', scheduleSticky);
-  stickyUser.onclick = () => { if (stickyTarget && stickyTarget.isConnected) { stickyTarget.scrollIntoView({ block: 'start', behavior: 'smooth' }); } stickyUser.classList.add('hidden'); };
+  stickyUser.onclick = () => { if (stickyTarget && stickyTarget.isConnected) { stickyTarget.scrollIntoView({ block: 'start', behavior: calmMotion() ? 'auto' : 'smooth' }); } stickyUser.classList.add('hidden'); };
   function scheduleRender(live) {
     // Agents streaming in other tabs render nothing until their tab is shown — a live turn is marked dirty instead.
     if (!state.session || state.session.id !== live.sid) { live.dirty = true; return; }
@@ -1778,7 +1853,7 @@
     const sid = state.session && state.session.id; const p = (sid && state.paused.get(sid)) || { paused: false, holding: false };
     els.pause.classList.toggle('on', p.paused);
     els.pause.innerHTML = p.paused ? I.play : I.pause;
-    els.pause.title = p.paused ? (p.holding ? 'Resume (⌥Esc)' : 'Pausing after the current step… click to cancel') : 'Pause after the current step (⌥Esc)';
+    els.pause.title = p.paused ? (p.holding ? `Resume (${kb('Alt+Esc')})` : 'Pausing after the current step… click to cancel') : `Pause after the current step (${kb('Alt+Esc')})`;
     els.progress.classList.toggle('paused', p.paused);
     document.body.classList.toggle('paused', !!(sid && state.running.has(sid) && p.paused));
     syncPlaceholder();
@@ -1789,7 +1864,7 @@
     const model = currentModel() || state.models[0];
     const win = model ? effectiveWindow(model) : 32768; const used = s.contextTokens || 0; const pct = Math.min(100, Math.round((used / win) * 100));
     els.ctx.style.setProperty('--pct', pct); els.ctx.querySelector('.txt').textContent = `${pct}%`;
-    const native = model && model.contextWindow > win ? ` (model supports ${model.contextWindow.toLocaleString()} — raise the Context window setting)` : '';
+    const native = model && model.contextWindow > win ? model.contextWindow : 0;
     // The breakdown lives in the hover card (ctxCard); a native tooltip would cover it.
     state.ctxInfo = { used, win, pct, native, compactions: s.compactions || 0 };
     els.ctx.removeAttribute('title'); els.ctx.setAttribute('aria-label', `Context ${pct}% used: ${used.toLocaleString()} of ${win.toLocaleString()} tokens. Click to compact`);
@@ -1799,8 +1874,16 @@
     els.ctx.className = `ctx ${pct > 85 ? 'danger' : pct > 65 ? 'warn' : ''}${model ? '' : ' hidden'}`;
     updateUsage();
   }
-  /** Compact token count: 950, 12.3k, 123k, 1.2M. */
-  function fmtTok(n) { const v = Number(n) > 0 ? Number(n) : 0; return v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e5 ? `${Math.round(v / 1e3)}k` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(Math.round(v)); }
+  /** Shortcut text for the host's platform: kb('Mod+Shift+Enter') is ⌘⇧↩ on macOS and Ctrl+Shift+Enter on Windows and Linux. */
+  function kb(spec) { const mac = state.platform === 'darwin'; return spec.split('+').map((k) => (mac ? { Mod: '⌘', Alt: '⌥', Shift: '⇧', Enter: '↩' } : { Mod: 'Ctrl+', Alt: 'Alt+', Shift: 'Shift+', Enter: 'Enter' })[k] || k).join(''); }
+  /** Titles that name a shortcut follow the platform the host reports in `init`. */
+  function syncShortcutTitles() {
+    els.newTab.title = `New chat — runs in parallel (${kb('Mod+Shift+Enter')} sends the draft in a new tab)`;
+    if (els.improve && !els.improve.classList.contains('busy')) { els.improve.title = improveTitle(); }
+    if (state.session) { syncPause(); } else { els.pause.title = `Pause after the current step (${kb('Alt+Esc')})`; }
+  }
+  /** Compact decimal token count, as providers quote windows: 950, 12.3k, 32.8k, 400k, 1M. */
+  function fmtTok(n) { const v = Number(n) > 0 ? Number(n) : 0; return v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(/\.0$/, '')}M` : v >= 1e5 ? `${Math.round(v / 1e3)}k` : v >= 1e3 ? `${(v / 1e3).toFixed(1).replace(/\.0$/, '')}k` : String(Math.round(v)); }
   function fmtUsd(v) { return v > 0 && v < 0.0001 ? '<$0.0001' : `$${v >= 1 ? v.toFixed(2) : v.toFixed(4)}`; }
   function fmtBytes(b) { const v = Number(b) || 0; return v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB` : v >= 1024 ? `${Math.round(v / 1024)} KB` : `${v} B`; }
   /** Tokens and cost of the open chat: its list row is refreshed while it runs, the loaded session only when it opens. */
@@ -1824,8 +1907,12 @@
   }
   // The window a model is actually given: the Context window setting capped by the model (0 = the model's maximum).
   function effectiveWindow(m) { const native = m.contextWindow > 0 ? m.contextWindow : 32768; const want = state.contextWindow > 0 ? state.contextWindow : native; return Math.max(4096, Math.min(native, want)); }
-  function ctxLabel(m) { const w = effectiveWindow(m); return `${(w / 1024).toFixed(0)}k${m.contextWindow > w ? ` of ${(m.contextWindow / 1024).toFixed(0)}k` : ''}`; }
-  function syncMode() { syncPlaceholder(); const m = MODES[(state.session && state.session.mode) || 'agent']; els.modeLabel.textContent = m.label; els.modeIcon.innerHTML = m.icon; els.modeBtn.setAttribute('aria-label', `Mode: ${m.label}. ${m.desc}`); }
+  function ctxCapped(m) { return m.contextWindow > effectiveWindow(m); }
+  function ctxLabel(m) { const w = effectiveWindow(m); return ctxCapped(m) ? `${fmtTok(w)} used of ${fmtTok(m.contextWindow)}` : `${fmtTok(w)} ctx`; }
+  function syncMode() { syncPlaceholder(); const m = MODES[(state.session && state.session.mode) || 'agent']; els.modeLabel.textContent = m.label; els.modeIcon.innerHTML = m.icon; const tip = `Mode: ${m.label} (${kb('Mod+.')} to switch)`; els.modeBtn.title = tip; els.modeBtn.setAttribute('aria-label', tip); }
+  /** Keyboard mode switch (Shift+Tab with a draft, Ctrl/Cmd+.). The toast sits in the polite #toasts live region, so it is
+   *  also what a screen reader hears: "Mode: Plan — investigate and prepare a plan…". */
+  function rotateMode() { const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; const m = MODES[next]; setMode(next); toast(`Mode: ${m.label} — ${m.desc.charAt(0).toLowerCase()}${m.desc.slice(1)}`); }
   function setMode(mode) { if (!state.session || state.session.mode === mode) { return; } state.session.mode = mode; syncMode(); post({ type: 'setMode', sessionId: state.session.id, mode }); }
   /** What the router resolves Auto to right now (sent by the host); falls back to the default model until it arrives. */
   function autoModelId() { return state.autoModel || state.defaultModel || ''; }
@@ -1838,8 +1925,11 @@
     if (!state.models.length) { els.modelLabel.innerHTML = state.modelsLoading ? '<span class="spinner"></span>Finding models…' : 'Set up a model'; els.modelBtn.title = state.modelsLoading ? 'Looking for local model servers…' : 'No models found — click to set one up, look again, or add a cloud provider'; return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
-    els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${esc(name)}` : esc(name);
-    els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)} context${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}${m.remote ? ' · cloud: prompts leave this machine' : ''}` : 'Model';
+    // Narrow composers show the short form: no provider prefix, no ':latest' / ':14b' tag (the full id is in the title).
+    const shortName = name.split('/').pop().replace(/:[^:/]+$/, '') || name;
+    const label = shortName === name ? esc(name) : `<span class="nm-full">${esc(name)}</span><span class="nm-short">${esc(shortName)}</span>`;
+    els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${label}` : label;
+    els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)}${ctxCapped(m) ? ' (Settings → Models → Context window)' : ''}${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}${m.remote ? ' · cloud: prompts leave this machine' : ''}` : explicit || 'Model';
   }
   function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }
   // ------------------------------------------------------------------ chat tabs (multitasking)
@@ -1893,19 +1983,31 @@
     const { list, active, hidden } = tabList();
     // The store broadcasts on every save while agents stream; only rebuild the DOM when something visible changed.
     if (els.tabs.querySelector('.rename')) { renderTabs.pending = true; return; }
-    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.paused.get(s.id) && state.paused.get(s.id).paused ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0, state.selected.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}`;
+    const sig = list.map((s) => [s.id, s.title, s.pinned ? 1 : 0, s.id === active ? 1 : 0, state.running.has(s.id) ? 1 : 0, state.paused.get(s.id) && state.paused.get(s.id).paused ? 1 : 0, state.loadingTab === s.id ? 1 : 0, state.unread.has(s.id) ? 1 : 0, state.attention.has(s.id) ? 1 : 0, state.selected.has(s.id) ? 1 : 0].join(':')).join('|') + `#${hidden}#${state.running.size}#${stopArm.id || ''}`;
     if (sig === tabSig) { for (const tab of els.tabs.querySelectorAll('.tab[data-id]')) { const s = list.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } renderBgRuns(); return; }
     tabSig = sig;
+    const refocus = document.activeElement && document.activeElement.closest && document.activeElement.closest('.tabs .close') ? document.activeElement.dataset.id : null;
     els.tabs.innerHTML = '';
     for (const s of list) {
       const running = state.running.has(s.id); const isActive = s.id === active;
       const cls = ['tab', isActive && 'active', running && 'running', state.loadingTab === s.id && 'loading', state.unread.has(s.id) && 'unread', state.attention.has(s.id) && 'attention', s.pinned && 'pinned', state.selected.has(s.id) && 'selected'].filter(Boolean).join(' ');
-      const b = el('button', cls, `<span class="ind">${tabIndicator(s)}</span><span class="t">${esc(s.title || 'New chat')}</span><span class="close" role="button" title="${running ? 'Stop this agent' : s.pinned ? 'Pinned — unpin to close' : 'Close tab'}" aria-label="${running ? 'Stop' : 'Close'}">${running ? I.stop : I.x}</span>`);
+      const b = el('button', cls, `<span class="ind">${tabIndicator(s)}</span><span class="t">${esc(s.title || 'New chat')}</span>`);
+      // Close / stop is a sibling button laid over the tab (a button inside a button is not reachable by keyboard).
+      const armed = running && stopArm.id === s.id; const title = s.title || 'New chat'; const name = title.length > 40 ? `${title.slice(0, 39)}…` : title;
+      const x = el('button', `close${armed ? ' confirm' : ''}`, armed ? 'Stop?' : running ? I.stop : I.x);
+      x.dataset.id = s.id; x.tabIndex = isActive ? 0 : -1;
+      x.title = armed ? 'Click again to stop this agent' : running ? 'Stop this agent' : s.pinned ? 'Pinned — unpin to close' : 'Close tab';
+      x.setAttribute('aria-label', armed ? `Confirm: stop the agent in “${name}”` : running ? `Stop the agent in “${name}”` : `Close chat “${name}”`);
+      x.onclick = (e) => {
+        e.stopPropagation();
+        if (state.selected.size > 1 && state.selected.has(s.id)) { closeSelected(); }
+        else if (running) { if (armed) { disarmStop(); post({ type: 'stop', sessionId: s.id }); } else { armStop(s.id); } }
+        else if (s.pinned) { toast('Unpin the chat to close its tab'); } else { closeTab(s.id); }
+      };
       b.dataset.id = s.id; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(isActive)); b.tabIndex = isActive ? 0 : -1;
       if (state.loadingTab === s.id) { b.setAttribute('aria-busy', 'true'); }
       b.title = tabTitle(s);
       b.onclick = (e) => {
-        if (e.target.closest('.close')) { e.stopPropagation(); if (state.selected.size > 1 && state.selected.has(s.id)) { closeSelected(); } else if (running) { post({ type: 'stop', sessionId: s.id }); } else if (s.pinned) { toast('Unpin the chat to close its tab'); } else { closeTab(s.id); } return; }
         // ⌘/Ctrl-click toggles a tab in the selection, Shift-click selects a range; plain click switches and clears the selection.
         if (e.metaKey || e.ctrlKey) { toggleSelect(s.id); return; }
         if (e.shiftKey) { selectRange(s.id); return; }
@@ -1914,9 +2016,11 @@
       };
       b.onauxclick = (e) => { if (e.button === 1) { e.preventDefault(); if (state.selected.size > 1 && state.selected.has(s.id)) { closeSelected(); } else if (!running && !s.pinned) { closeTab(s.id); } } };
       b.oncontextmenu = (e) => { e.preventDefault(); openTabMenu(b, s); };
-      b.ondblclick = (e) => { if (!e.target.closest('.close')) { startRename(b, s); } };
-      els.tabs.appendChild(b);
+      b.ondblclick = () => startRename(b, s);
+      const w = el('span', 'tabw'); w.setAttribute('role', 'presentation'); w.append(b, x);
+      els.tabs.appendChild(w);
     }
+    if (refocus) { const x = els.tabs.querySelector(`.close[data-id="${CSS.escape(refocus)}"]`); if (x) { x.focus(); } }
     if (hidden > 0) {
       const more = el('button', 'tab more', `<span class="t">+${hidden}</span>`);
       more.title = `${hidden} more chat${hidden === 1 ? '' : 's'} — open All chats`; more.tabIndex = -1;
@@ -1930,6 +2034,10 @@
     renderBgRuns();
     saveState();
   }
+  // Stopping a running tab from its × takes two clicks: the first turns it into a "Stop?" pill for 2 s.
+  const stopArm = { id: null, timer: 0 };
+  function armStop(id) { clearTimeout(stopArm.timer); stopArm.id = id; stopArm.timer = setTimeout(disarmStop, 2000); tabSig = ''; renderTabs(); }
+  function disarmStop() { clearTimeout(stopArm.timer); if (stopArm.id) { stopArm.id = null; tabSig = ''; renderTabs(); } }
   function tabEdges() {
     const t = els.tabs; const max = t.scrollWidth - t.clientWidth;
     t.classList.toggle('ovf-l', max > 1 && t.scrollLeft > 1);
@@ -2039,9 +2147,12 @@
   // Vertical wheel scrolls the tab strip sideways (mouse users have no horizontal wheel).
   els.tabs.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && els.tabs.scrollWidth > els.tabs.clientWidth) { els.tabs.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
   els.tabs.addEventListener('keydown', (e) => {
-    const tabs = [...els.tabs.querySelectorAll('.tab:not(.more)')]; const i = tabs.indexOf(document.activeElement);
+    const tabs = [...els.tabs.querySelectorAll('.tab')]; const i = tabs.indexOf(document.activeElement);
     if (i < 0 || e.target.classList.contains('rename')) { return; }
-    const go = (j) => { e.preventDefault(); const t = tabs[(j + tabs.length) % tabs.length]; t.focus(); selectTab(t.dataset.id); };
+    // The "+N" tab takes part in arrow navigation; Enter on it opens All chats (its own click).
+    const go = (j) => { e.preventDefault(); const t = tabs[(j + tabs.length) % tabs.length]; t.focus(); if (t.dataset.id) { selectTab(t.dataset.id); } };
+    if (!tabs[i].dataset.id) { if (e.key === 'ArrowRight') { go(i + 1); } else if (e.key === 'ArrowLeft') { go(i - 1); } else if (e.key === 'Home') { go(0); } else if (e.key === 'End') { go(tabs.length - 1); } return; }
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); const s = tabList().list.find((x) => x.id === tabs[i].dataset.id); if (s) { openTabMenu(tabs[i], s); } return; }
     if (e.key === 'ArrowRight') { go(i + 1); } else if (e.key === 'ArrowLeft') { go(i - 1); } else if (e.key === 'Home') { go(0); } else if (e.key === 'End') { go(tabs.length - 1); }
     else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (state.selected.size > 1) { closeSelected(); } else { const id = tabs[i].dataset.id; if (!state.running.has(id)) { closeTab(id); } } }
     else if (e.key === 'Escape') { clearSelection(); }
@@ -2064,8 +2175,8 @@
     if (!runs.length) { return; }
     for (const s of runs.slice(0, 3)) {
       const paused = state.paused.get(s.id) && state.paused.get(s.id).paused;
-      const row = el('div', `bgrun ${paused ? 'paused' : ''}`, `${paused ? `<span class="pausedind">${I.pause}</span>` : LIVE_DOT}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent">${I.stop}</button>`);
-      row.title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
+      const row = el('div', `bgrun ${paused ? 'paused' : ''}`, `<button class="open">${paused ? `<span class="pausedind">${I.pause}</span>` : LIVE_DOT}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span></button><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}" aria-label="${paused ? 'Resume' : 'Pause'} “${esc(s.title || 'New chat')}”">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent" aria-label="Stop “${esc(s.title || 'New chat')}”">${I.stop}</button>`);
+      row.querySelector('.open').title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
       row.onclick = (e) => { if (e.target.closest('.pausebtn')) { post({ type: paused ? 'resume' : 'pause', sessionId: s.id }); return; } if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
       els.bgruns.appendChild(row);
     }
@@ -2148,7 +2259,7 @@
     const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden');
     menuState = { items: [], sel: 0 };
     // Sort and the pinned filter carry over between openings; the query and a selection do not.
-    Object.assign(hist, { open: true, q: '', pending: false, sel: 0, confirm: null, renaming: null, sig: '', sort: hist.userSort, page: null, selecting: false, picked: new Set() });
+    Object.assign(hist, { open: true, hold: false, stale: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, sig: '', sort: hist.userSort, page: null, selecting: false, picked: new Set() });
     const box = el('div', 'hist');
     const search = el('input', 'search'); search.placeholder = 'Search chats and messages…'; search.setAttribute('aria-label', 'Search chats');
     const bar = el('div', 'hist-bar');
@@ -2167,16 +2278,24 @@
     list.onscroll = () => { if (!hist.pending && list.scrollTop + list.clientHeight >= list.scrollHeight - 60) { histRequest(true); } };
     histRequest(false);
     search.onkeydown = historyKeys;
-    p.onkeydown = (e) => { if (e.target !== search && !e.target.classList.contains('rename') && e.target.tagName !== 'SELECT') { historyKeys(e); } };
+    // A focused button or the sort select handles its own keys: Enter there presses the button, it does not open the selected chat.
+    p.onkeydown = (e) => { if (e.target === search) { return; } if (e.target.classList.contains('rename') || e.target.tagName === 'SELECT' || (e.target.closest('button') && (e.key === 'Enter' || e.key === ' '))) { return; } historyKeys(e); };
     renderHistory();
     placePopover(els.history);
     search.focus();
+  }
+  /** Between a press and its click, renderHistory waits (the pressed button must still exist when the click lands); one
+   *  render catches up after the mouseup. */
+  function holdHistory() {
+    hist.hold = true;
+    window.addEventListener('mouseup', () => { hist.hold = false; setTimeout(() => { if (hist.stale) { hist.stale = false; hist.sig = ''; renderHistory(); } }, 0); }, { once: true, capture: true });
   }
   /** Open a chat from the panel; picking the one already open just closes the panel. */
   function historyOpen(id) { if (id === activeId()) { closeMenu(); els.input.focus(); } else { selectTab(id); } }
   function renderHistory() {
     const p = els.popover; const list = p.querySelector('.hist-list'); const foot = p.querySelector('.hist-foot'); const bar = p.querySelector('.hist-bar');
     if (!hist.open || !list || hist.renaming) { return; }
+    if (hist.hold) { hist.stale = true; return; }
     const rows = historyRows(); const active = activeId(); const q = hist.q.trim();
     for (const id of [...hist.picked]) { if (!state.sessions.some((s) => s.id === id)) { hist.picked.delete(id); } }
     hist.sel = Math.max(0, Math.min(hist.sel, rows.length - 1));
@@ -2184,6 +2303,9 @@
     const sig = [q, hist.pending ? 1 : 0, hist.sel, hist.confirm || '', active || '', state.running.size, hist.sort, hist.pinnedOnly ? 1 : 0, hist.selecting ? [...hist.picked].join(',') : '-', page ? page.total : '', ...rows.map(({ s, g, hit }) => `${s.id}:${g}:${s.title}:${s.pinned ? 1 : 0}:${s.messageCount}:${state.unread.has(s.id) ? 1 : 0}:${state.status.get(s.id) || ''}:${hit ? hit.snippet : ''}:${s.bytes || 0}:${chatTokens(s)}`)].join('|');
     if (sig === hist.sig) { return; }
     hist.sig = sig;
+    // Re-rendering replaces the buttons: a keyboard user's focus goes back to the same action (or the search box).
+    const fa = document.activeElement; const fb = fa && fa.dataset && fa.dataset.a && p.contains(fa) ? fa : null;
+    const refocus = fb ? { a: fb.dataset.a, row: (fb.closest('.hist-row') || { dataset: {} }).dataset.id, zone: fb.closest('.hist-foot') ? '.hist-foot' : fb.closest('.hist-bar') ? '.hist-bar' : '' } : null;
     renderHistoryBar(bar, rows, page);
     const y = list.scrollTop;
     list.innerHTML = '';
@@ -2204,8 +2326,10 @@
       const ico = hist.selecting ? `<input type="checkbox" class="pick-box" tabindex="-1" aria-label="Select" ${picked ? 'checked' : ''}>` : running ? LIVE_DOT : s.pinned ? I.pin : mode.icon;
       row.innerHTML = `<span class="ico">${ico}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span>${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</span>${tag}${hist.selecting ? '' : `<span class="acts">${acts}</span>`}`;
       row.title = `${s.title || 'New chat'}\n${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${new Date(s.updatedAt).toLocaleString()}${meta ? `\n${meta}` : ''}${s.pinned ? '\nPinned' : ''}${s.origin === 'cli' ? '\nStarted in the terminal CLI' : s.origin === 'claude-code' ? '\nImported from Claude Code' : s.origin === 'codex' ? '\nImported from Codex' : ''}${parent ? `\nForked from ${parent}` : ''}`;
-      // mousedown (not click) so the search box keeps focus, like the other menus.
-      row.onmousedown = (e) => { if (e.button !== 0) { return; } e.preventDefault(); if (hist.selecting) { hist.sel = i; togglePicked(s.id); return; } const b = e.target.closest('[data-a]'); if (b) { historyAction(b.dataset.a, s, row); } else { historyOpen(s.id); } };
+      // Actions run on click, so the row buttons also work from the keyboard; mousedown only keeps focus in the search box
+      // and holds re-renders until the click lands (a running chat's status would otherwise replace the row mid-click).
+      row.onmousedown = (e) => { if (e.button !== 0 || e.target.closest('.rename')) { return; } e.preventDefault(); holdHistory(); };
+      row.onclick = (e) => { if (e.target.closest('.rename')) { return; } if (hist.selecting) { hist.sel = i; togglePicked(s.id); return; } const b = e.target.closest('[data-a]'); if (b) { historyAction(b.dataset.a, s, row); } else { historyOpen(s.id); } };
       row.onmouseenter = () => { if (hist.sel !== i) { hist.sel = i; for (const r of list.querySelectorAll('.hist-row.sel')) { r.classList.remove('sel'); r.setAttribute('aria-selected', 'false'); } row.classList.add('sel'); row.setAttribute('aria-selected', 'true'); } };
       row.oncontextmenu = (e) => { e.preventDefault(); hist.sel = i; historyAction('more', s, row); };
       list.appendChild(row);
@@ -2218,9 +2342,11 @@
     list.scrollTop = y;
     const selRow = list.querySelector('.hist-row.sel'); if (selRow && hist.reveal) { selRow.scrollIntoView({ block: 'nearest' }); } hist.reveal = false;
     const idle = state.sessions.filter((s) => !state.running.has(s.id) && (s.messageCount > 0 || s.pinned || s.plan));
-    foot.innerHTML = `<button data-a="new" title="Start another chat — the current one keeps running">${I.sparkle}<span>New chat</span></button><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}<span class="spacer"></span><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close other tabs">${I.x}</button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}</button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button>`;
-    foot.onmousedown = (e) => {
-      const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; } e.preventDefault();
+    // Wide enough (≥320 px), the tidy-up buttons carry a short label; narrower they are icons with the same aria-label.
+    foot.innerHTML = `<div class="hist-acts"><button data-a="new" title="Start another chat — the current one keeps running">${I.sparkle}<span>New chat</span></button><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
+    foot.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
+    foot.onclick = (e) => {
+      const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
       const a = b.dataset.a;
       if (a === 'new') { closeMenu(); post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); }
       else if (a === 'multi') { openParallelComposer(); }
@@ -2229,6 +2355,14 @@
       else if (a === 'clear') { confirmClearHistory(); }
       else if (a === 'settings') { closeMenu(); post({ type: 'openSettings', section: 'memory' }); }
     };
+    if (refocus) { restoreHistoryFocus(refocus); }
+  }
+  function restoreHistoryFocus(f) {
+    const p = els.popover; if (!hist.open || hist.renaming || (document.activeElement && document.activeElement !== document.body && p.contains(document.activeElement))) { return; }
+    const scope = f.row ? p.querySelector(`.hist-row[data-id="${CSS.escape(f.row)}"]`) : f.zone ? p.querySelector(f.zone) : null;
+    const next = { delete: 'cancel', cancel: 'delete', confirm: 'delete' }[f.a];
+    const t = scope && (scope.querySelector(`[data-a="${f.a}"]`) || (next && scope.querySelector(`[data-a="${next}"]`)));
+    (t && !t.disabled ? t : p.querySelector('.hist > .search') || els.input).focus();
   }
   /** Model, tokens, cost (priced cloud models only) and size on disk of a history row. */
   function historyMeta(s) {
@@ -2263,8 +2397,9 @@
       bar.innerHTML = hist.confirm === PICKED
         ? `<span class="q">Delete ${n} chat${n === 1 ? '' : 's'}${running ? ` (stops ${running} running)` : ''}? Cannot be undone.</span><span class="spacer"></span><button data-a="dodelete" class="danger">Delete</button><button data-a="nodelete">Keep</button>`
         : `<button data-a="all" title="Select every chat in this list (${all.length})">Select all</button><button data-a="none" ${n ? '' : 'disabled'}>Select none</button><span class="spacer"></span><button data-a="delpicked" class="danger" ${n ? '' : 'disabled'} title="Also removes their transcript archives, checkpoints and command logs">${I.trash}<span>Delete ${n} selected${n ? ` (${fmtBytes(bytes)})` : ''}</span></button><button data-a="done" title="Leave selection (Esc)">Done</button>`;
-      bar.onmousedown = (e) => {
-        const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; } e.preventDefault();
+      bar.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
+      bar.onclick = (e) => {
+        const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
         const a = b.dataset.a;
         if (a === 'all') { hist.picked = new Set(all); } else if (a === 'none') { hist.picked = new Set(); } else if (a === 'done') { setSelecting(false); return; }
         else if (a === 'delpicked') { hist.confirm = PICKED; } else if (a === 'nodelete') { hist.confirm = null; } else if (a === 'dodelete') { deletePicked(); return; }
@@ -2276,8 +2411,9 @@
     const total = page ? page.total : rows.length;
     bar.innerHTML = `<select class="sort" aria-label="Sort chats" title="Sort">${HIST_SORTS.map(([v, l]) => `<option value="${v}"${v === hist.sort ? ' selected' : ''}>${l}</option>`).join('')}</select><button data-a="pinned" aria-pressed="${hist.pinnedOnly}" title="Show pinned chats only">${I.pin}<span>Pinned</span></button><span class="spacer"></span><span class="n">${total} chat${total === 1 ? '' : 's'}</span><button data-a="select" title="Select several chats to delete them together">Select</button>`;
     bar.onchange = (e) => { if (e.target.classList.contains('sort')) { setHistSort(e.target.value); const search = els.popover.querySelector('.hist > .search'); if (search) { search.focus(); } } };
-    bar.onmousedown = (e) => {
-      const b = e.target.closest('[data-a]'); if (!b) { return; } e.preventDefault();
+    bar.onmousedown = (e) => { if (e.target.closest('[data-a]')) { e.preventDefault(); holdHistory(); } };
+    bar.onclick = (e) => {
+      const b = e.target.closest('[data-a]'); if (!b) { return; }
       if (b.dataset.a === 'pinned') { hist.pinnedOnly = !hist.pinnedOnly; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); }
       else if (b.dataset.a === 'select') { setSelecting(true); }
     };
@@ -2500,7 +2636,9 @@
     const mode = state.session && MODES[state.session.mode];
     // A one-row textarea shows one line of placeholder; narrow composers get the short form of the long hints.
     const wide = els.box.clientWidth >= 380;
-    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? 'Type to steer this agent (used at its next step), ⌘⇧↵ for a new tab…' : 'Steer this agent…') : mode && state.session.mode !== 'agent' && els.box.clientWidth >= 300 ? mode.placeholder : basePlaceholder();
+    // Revise on a plan card: the next message is feedback on the plan, until it is sent.
+    if (sid && state.revising === sid && !state.running.has(sid)) { els.input.placeholder = 'What should change in the plan?'; return; }
+    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? `Type to steer this agent (used at its next step), ${kb('Mod+Shift+Enter')} for a new tab…` : 'Steer this agent…') : mode && state.session.mode !== 'agent' && els.box.clientWidth >= 300 ? mode.placeholder : basePlaceholder();
   }
   let tasksSig = '';
   /** Per-session open/closed choice for the Tasks panel, once the user has toggled it. */
@@ -2544,10 +2682,16 @@
     b.title = `View changes: ${n} file${n === 1 ? '' : 's'} changed since your last message, in one diff`; b.setAttribute('aria-label', b.title);
   }
   let changesSig = '';
+  /** The inline "Reject N files?" row while it is open. */
+  let rejectConfirm = null;
   function renderChanges() {
     const s = state.session; const files = s ? state.changes.get(s.id) || [] : [];
     const wt = s ? state.worktree.get(s.id) : null;
-    els.changes.classList.toggle('hidden', !files.length); if (!files.length) { changesSig = ''; return; }
+    els.changes.classList.toggle('hidden', !files.length);
+    // The confirm row belongs to one chat and one count: switching chats, a worktree or an emptied list drops it.
+    if (rejectConfirm && (!files.length || wt || rejectConfirm.dataset.sid !== s.id)) { closeRejectConfirm(false); }
+    if (rejectConfirm) { rejectConfirm.querySelector('.q').firstChild.textContent = `Reject ${files.length} file${files.length === 1 ? '' : 's'}? `; }
+    if (!files.length) { changesSig = ''; return; }
     const added = files.reduce((n, f) => n + (f.added || 0), 0); const removed = files.reduce((n, f) => n + (f.removed || 0), 0);
     els.changesLabel.textContent = `${files.length} file${files.length === 1 ? '' : 's'} changed${wt ? ` in isolated copy${added || removed ? ` · +${added} −${removed}` : ''}` : ''}`;
     // Isolated worktree: the agent's edits are not in the workspace yet — Apply brings them over, Discard throws the copy away.
@@ -2575,7 +2719,8 @@
     for (const f of files) {
       const stat = f.added || f.removed ? `<span class="stat"><i class="add">+${f.added || 0}</i><i class="del">−${f.removed || 0}</i></span>` : '';
       const acts = wt ? '' : `<span class="acts"><button data-a="undo" title="Reject">${I.undo}</button><button data-a="keep" title="Accept">${I.check}</button></span>`;
-      const li = el('li', 'change', `<span class="kind ${f.kind}">${KIND[f.kind] || 'M'}</span><span class="name" title="${esc(f.path)}">${esc(f.path)}</span>${stat}${acts}`);
+      // The name is a button so the diff opens from the keyboard (Enter / Space); Accept and Reject follow it in tab order.
+      const li = el('li', 'change', `<span class="kind ${f.kind}">${KIND[f.kind] || 'M'}</span><button class="name" title="${esc(f.path)}${f.kind === 'delete' ? '' : ' — open the diff'}" aria-label="${esc(f.path)}${f.kind === 'delete' ? ' (deleted)' : ', open the diff'}"${f.kind === 'delete' ? ' aria-disabled="true"' : ''}>${esc(f.path)}</button>${stat}${acts.replace('title="Reject"', `title="Reject" aria-label="Reject ${esc(f.path)}"`).replace('title="Accept"', `title="Accept" aria-label="Accept ${esc(f.path)}"`)}`);
       li.onclick = (e) => { const a = e.target.closest('[data-a]'); if (a) { post({ type: a.dataset.a === 'undo' ? 'undoChanges' : 'keepChanges', sessionId: s.id, fsPath: f.fsPath }); return; } if (f.kind !== 'delete') { post({ type: 'showDiff', sessionId: s.id, fsPath: f.fsPath }); } };
       els.changesList.appendChild(li);
     }
@@ -2631,14 +2776,14 @@
   }
   function openMenu(anchor, items, opts = {}) {
     const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden');
-    menuState = { items: [], sel: 0, onPick: opts.onPick };
+    menuState = { items: [], sel: 0, onPick: opts.onPick, inline: !!opts.inline };
     let search = null;
     if (opts.search) { search = el('input', 'search'); search.placeholder = opts.search; p.appendChild(search); }
     const list = el('div', 'list'); p.appendChild(list);
     list.id = 'lpMenuList'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', opts.label || (anchor.getAttribute && (anchor.getAttribute('aria-label') || anchor.title)) || 'Options');
     const render = (q) => {
       list.innerHTML = ''; menuState.items = [];
-      const ql = (q || '').toLowerCase(); let lastGroup = null;
+      const ql = (q || '').toLowerCase(); let lastGroup = null; let notes = 0;
       // `fuzzy` menus rank what was typed by match quality and highlight the matched letters; `onNoMatch` offers
       // something to do with text that matches nothing.
       let shown = items;
@@ -2652,31 +2797,45 @@
       }
       for (const it of shown) {
         if (it.hr) { if (!ql) { list.appendChild(el('hr')); } continue; }
+        // A status line (searching, nothing found): shown, never highlighted or picked.
+        if (it.note) { const n = el('div', `empty-i note${it.spin ? ' searching' : ''}`, `${it.spin ? '<span class="mspin" aria-hidden="true"></span>' : ''}<span>${esc(it.label)}</span>`); n.setAttribute('role', 'status'); list.appendChild(n); notes++; continue; }
         if (!opts.fuzzy && ql && !(`${it.label} ${it.desc || ''} ${it.group || ''}`.toLowerCase().includes(ql))) { continue; }
-        if (it.group && it.group !== lastGroup && !ql) { list.appendChild(el('div', 'grp', esc(it.group))); lastGroup = it.group; }
+        if (it.group && it.group !== lastGroup && !ql) { list.appendChild(el('div', 'grp', `${it.groupIcon ? `<span class="gico" aria-hidden="true">${it.groupIcon}</span>` : ''}${esc(it.group)}`)); lastGroup = it.group; }
         const star = it.onStar ? `<button class="star${it.starred ? ' on' : ''}" title="${it.starred ? 'Unstar' : 'Star: pin to the top'}" aria-label="${it.starred ? 'Unstar' : 'Star'} ${esc(it.label)}" aria-pressed="${it.starred ? 'true' : 'false'}">${STAR_ICON}</button>` : '';
-        const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${it.labelHtml || esc(it.label)}</span>${it.desc ? `<span class="desc">${it.descHtml || esc(it.desc)}</span>` : ''}</span>${it.tag ? `<span class="tag">${esc(it.tag)}</span>` : ''}${star}<span class="check">${it.selected ? I.check : ''}</span>`);
+        const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${it.labelHtml || esc(it.label)}</span>${it.desc ? `<span class="desc">${it.descHtml || esc(it.desc)}</span>` : ''}</span>${(it.tags || [it.tag && { text: it.tag }]).filter(Boolean).map((t) => `<span class="tag${t.cls ? ` ${t.cls}` : ''}"${t.title ? ` title="${esc(t.title)}"` : ''}>${esc(t.text)}</span>`).join('')}${star}<span class="check">${it.selected ? I.check : ''}</span>`);
+        if (it.desc) { row.title = it.desc; }
         row.onmousedown = (e) => { e.preventDefault(); pick(it); };
-        if (it.onStar) { row.querySelector('.star').onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); it.onStar(search ? search.value : ''); }; }
+        // Mouse down only keeps focus and the menu; the toggle runs on click so Enter / Space on a focused star work too.
+        if (it.onStar) { const st = row.querySelector('.star'); st.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); }; st.onclick = (e) => { e.preventDefault(); e.stopPropagation(); star(it); }; }
         row.setAttribute('role', 'option'); row.id = `lpOpt${menuState.items.length}`;
         menuState.items.push({ it, row }); list.appendChild(row);
       }
-      if (!menuState.items.length) { list.appendChild(el('div', 'empty-i', 'No matches')); }
+      if (!menuState.items.length && !notes) { list.appendChild(el('div', 'empty-i', 'No matches')); }
       // Ranked results start on the best match; otherwise on the current choice.
       menuState.sel = opts.fuzzy && ql ? 0 : Math.max(0, menuState.items.findIndex((x) => x.it.selected)); highlight();
     };
     const highlight = () => { menuState.items.forEach((x, i) => x.row.classList.toggle('sel', i === menuState.sel)); menuA11y(anchor, search, list); };
+    menuState.highlight = highlight;
+    // Starring re-opens the menu (the row moves to Starred); keep the highlight on the same row.
+    const star = (it) => {
+      const keep = it.label; it.onStar(search ? search.value : '');
+      if (menuState && menuState.highlight) { const j = menuState.items.findIndex((x) => x.it.label === keep && x.it.onStar); if (j >= 0) { menuState.sel = j; menuState.highlight(); menuState.items[j].row.scrollIntoView({ block: 'nearest' }); } }
+    };
     // Return focus to the composer unless the picked action opened something that took it.
     const pick = (it) => { closeMenu(); it.onPick && it.onPick(); if (!document.activeElement || document.activeElement === document.body) { els.input.focus(); } };
     if (search && opts.query) { search.value = opts.query; }
     render(search ? search.value : '');
+    if (items.some((it) => it.onStar)) { p.appendChild(el('div', 'mfoot', `<span>↑↓ move</span><span>↵ pick</span><span>⇧↵ star</span>`)); }
     placePopover(anchor);
     const key = (e) => {
       if (!menuState || e.isComposing || e.keyCode === 229) { return; }
-      if (e.key === 'ArrowDown') { e.preventDefault(); menuState.sel = (menuState.sel + 1) % menuState.items.length; highlight(); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); menuState.sel = (menuState.sel - 1 + menuState.items.length) % menuState.items.length; highlight(); }
+      const n = menuState.items.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (n) { menuState.sel = (menuState.sel + 1) % n; highlight(); } }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) { menuState.sel = (menuState.sel - 1 + n) % n; highlight(); } }
+      else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); const x = menuState.items[menuState.sel]; if (x && x.it.onStar) { star(x.it); } }
       else if (e.key === 'Enter') { e.preventDefault(); const x = menuState.items[menuState.sel]; if (x) { pick(x.it); } }
-      else if (e.key === 'Escape') { e.preventDefault(); closeMenu(); els.input.focus(); }
+      // Back to the button that opened the menu (a tab, the model picker …); inline menus belong to the composer.
+      else if (e.key === 'Escape') { e.preventDefault(); closeMenu(); (anchor !== els.box && anchor.isConnected && typeof anchor.focus === 'function' && anchor.matches('button, [tabindex]') ? anchor : els.input).focus(); }
     };
     p.onkeydown = key;
     if (search) { search.oninput = () => render(search.value); search.onkeydown = key; search.focus(); } else { p.tabIndex = -1; list.tabIndex = -1; if (anchor !== els.box) { list.focus(); } menuA11y(anchor, search, list); }
@@ -2711,7 +2870,7 @@
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
     const favs = new Set(state.favorites || []);
     const provName = (pid) => (state.providerNames && state.providerNames[pid]) || pid;
-    const row = (m, group) => ({ group, label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)} ctx${m.supportsTools ? ' · tools' : ' · text tools'}${m.remote && m.supportsVision ? ' · vision' : ''}`, tag: m.remote ? 'cloud' : m.supportsVision ? 'vision' : undefined, icon: I.bot, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
+    const row = (m, group) => ({ group, label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)}${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tags: [m.remote && { text: 'cloud', title: 'Cloud model: prompts leave this machine' }, ctxCapped(m) && { text: 'capped', cls: 'capped', title: 'Limited by Settings → Models → Context window' }], icon: I.bot, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
     for (const m of state.models) { if (favs.has(m.id)) { items.push(row(m, 'Starred')); } }
     for (const m of state.models) { if (!favs.has(m.id)) { items.push(row(m, provName(m.providerId))); } }
     items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, noSearch: true, onPick: () => { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
@@ -2793,13 +2952,14 @@
   // Rules, commands, hooks and skills: opens Settings → Customize.
   const improveBtn = document.getElementById('btnImprove');
   if (improveBtn) {
-    const rulesBtn = el('button', 'ib', '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>');
+    const rulesBtn = el('button', 'ib', I.rules);
     rulesBtn.id = 'btnRules'; rulesBtn.title = 'Rules, commands, hooks and skills — switch them on or off, edit or create them'; rulesBtn.setAttribute('aria-label', 'Customize rules, commands, hooks and skills');
     rulesBtn.onclick = () => post({ type: 'openSettings', section: 'customize' });
     improveBtn.before(rulesBtn);
   }
   // MCP servers: a popover with a switch, status dot and restart per server, and the total tool count (context cost).
   const MCP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/></svg>';
+  const SLASH_GROUPS = { Chat: { order: 0, icon: I.bot }, 'Plan & delegate': { order: 1, icon: I.plan }, Info: { order: 2, icon: I.ask }, Custom: { order: 3, icon: I.sparkle }, Skills: { order: 4, icon: I.book }, MCP: { order: 5, icon: MCP_ICON } };
   const GEAR_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>';
   let mcpBtn = null;
   function syncMcp() {
@@ -2846,11 +3006,12 @@
       else if (b.dataset.a === 'toggle' && s) { const enabled = s.state === 'disabled'; s.state = enabled ? 'connecting' : 'disabled'; renderMcp(); post({ type: 'mcpToggle', name, enabled }); }
     };
   }
-  els.skillsBtn.onclick = () => {
+  els.skillsBtn.onclick = () => openSkillsMenu(els.skillsBtn);
+  function openSkillsMenu(anchor) {
     const ss = sessionSkills(); const pinned = new Set(ss.pinned || []); const g = state.skillsMode || 'auto';
     const items = [
-      { group: 'This chat', label: `Inherit global (${SKILL_MODES[g].label})`, desc: 'Follow Settings → Skills', icon: I.sparkle, selected: !ss.mode, onPick: () => setSkills({ mode: undefined }) },
-      ...Object.entries(SKILL_MODES).map(([k, m]) => ({ group: 'This chat', label: m.label, desc: m.desc, icon: k === 'off' ? I.x : I.book, selected: ss.mode === k, onPick: () => setSkills({ mode: k }) })),
+      { label: `Use global setting (${SKILL_MODES[g].label})`, desc: 'Follow Settings → Skills; changing it there changes this chat too', icon: I.sparkle, selected: !ss.mode, onPick: () => setSkills({ mode: undefined }) },
+      ...Object.entries(SKILL_MODES).map(([k, m]) => ({ group: 'Override for this chat', label: m.label, desc: m.desc, icon: k === 'off' ? I.x : I.book, selected: ss.mode === k, onPick: () => setSkills({ mode: k }) })),
     ];
     if (state.skills.length) {
       items.push({ hr: true });
@@ -2860,8 +3021,8 @@
       }
     }
     items.push({ hr: true }, { label: 'Manage skills…', desc: 'Install from the registry, enable / disable, remove', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'skills' }) });
-    openMenu(els.skillsBtn, items, { search: state.skills.length > 6 ? 'Search skills…' : undefined });
-  };
+    openMenu(anchor, items, { search: state.skills.length > 6 ? 'Search skills…' : undefined, label: 'Skills for this chat' });
+  }
   function openContextMenu() {
     post({ type: 'requestOpenFiles' });
     const items = [
@@ -2893,6 +3054,7 @@
     ];
   }
   // Improve prompt: the model rewrites the draft in place (streamed), the user reviews it and sends; ⌘Z brings the original back.
+  function improveTitle() { return `Improve prompt — rewrite the draft into a precise request using the open file and project (${kb('Mod+I')}). Nothing is sent.`; }
   let improving = null; let improveUndo = null;
   function improvePrompt() {
     if (!state.session) { return; }
@@ -2909,7 +3071,7 @@
     if (m.delta) { improving.text += m.delta; if (onTab) { els.input.value = improving.text.replace(/^\s+/, ''); autoGrow(); els.input.scrollTop = els.input.scrollHeight; } return; }
     if (!m.done) { return; }
     const { original } = improving; improving = null;
-    els.improve.classList.remove('busy'); els.improve.title = 'Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent.';
+    els.improve.classList.remove('busy'); els.improve.title = improveTitle();
     els.input.readOnly = false; els.box.classList.remove('improving');
     if (!onTab) {
       const d = state.drafts.get(m.sessionId); const text = m.error || !m.text ? original : m.text;
@@ -2921,11 +3083,22 @@
       if (m.error && m.error !== 'cancelled') { toast(m.error, 'error'); }
     } else {
       els.input.value = m.text; improveUndo = { original, improved: m.text };
-      toast(`Prompt improved — review it, then send. ${/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+'}Z restores yours.`);
+      toast(`Prompt improved — review it, then send. ${kb('Mod+Z')} restores yours.`);
     }
     autoGrow(); updateSendEnabled(); els.input.focus();
   }
   if (els.improve) { els.improve.onclick = improvePrompt; }
+  // Narrow composers (≤360 px) fold Skills, Rules and Improve prompt into one menu so the model name stays readable.
+  if (els.btnComposerMore) {
+    els.btnComposerMore.onclick = () => {
+      const ss = sessionSkills(); const pinned = (ss.pinned || []).length;
+      openMenu(els.btnComposerMore, [
+        { label: `Skills: ${pinned ? `${pinned} pinned` : SKILL_MODES[effectiveSkillsMode()].label}`, desc: 'Skill lookups and pinned skills for this chat', icon: I.book, onPick: () => openSkillsMenu(els.btnComposerMore) },
+        { label: 'Customize rules…', desc: 'Rules, commands, hooks and skills', icon: I.rules, onPick: () => post({ type: 'openSettings', section: 'customize' }) },
+        { label: improving ? 'Cancel improving' : `Improve prompt (${kb('Mod+I')})`, desc: 'Rewrites the draft into a precise request. Nothing is sent', icon: I.sparkle, onPick: improvePrompt },
+      ], { label: 'More composer actions' });
+    };
+  }
   els.image.onclick = () => visionBlocked() ? toast(els.image.title, 'error') : openMenu(els.image, [
     { label: 'Image file…', desc: 'PNG, JPEG, GIF or WebP · or paste / drop onto the composer', icon: I.image, onPick: () => post({ type: 'pickImage' }) },
     { hr: true },
@@ -2937,17 +3110,21 @@
   function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
   function showInlineMenu(t) {
     if (t.kind === '/') {
-      const items = SLASH.filter(([c]) => c.startsWith(t.tok) || (c.endsWith(' ') && t.tok.startsWith(c.trim() + ' '))).map(([c, d]) => ({ label: c.trim(), desc: d, icon: I.sparkle, onPick: () => { els.input.value = c; els.input.focus(); updateSendEnabled(); } }))
+      const fill = (v) => { els.input.value = v; els.input.focus(); updateSendEnabled(); };
+      const items = SLASH.filter(([c]) => c.startsWith(t.tok) || (c.endsWith(' ') && t.tok.startsWith(c.trim() + ' '))).map(([c, d, g]) => ({ group: g, label: c.trim(), desc: d, onPick: () => { fill(c); if (!c.endsWith(' ')) { sendCurrent(); } } }))
         // Custom commands from .claude/commands, .localpilot/commands and plugins.
-        .concat((state.commands || []).filter((c) => c.invoke.startsWith(t.tok) || t.tok.startsWith(c.invoke + ' ')).map((c) => ({ label: `${c.invoke}${c.argumentHint ? ' ' + c.argumentHint : ''}`, desc: `${c.description || ''}${c.source ? ` · ${c.source}` : ''}`, icon: I.sparkle, onPick: () => { els.input.value = `${c.invoke} `; els.input.focus(); updateSendEnabled(); } })))
+        .concat((state.commands || []).filter((c) => c.invoke.startsWith(t.tok) || t.tok.startsWith(c.invoke + ' ')).map((c) => ({ group: 'Custom', label: `${c.invoke}${c.argumentHint ? ' ' + c.argumentHint : ''}`, desc: `${c.description || ''}${c.source ? ` · ${c.source}` : ''}`, onPick: () => fill(`${c.invoke} `) })))
         // Enabled skills run directly as /<skill-name> <task>.
-        .concat(!t.tok.includes(' ') ? state.skills.filter((s) => `/${s.name}`.toLowerCase().startsWith(t.tok.toLowerCase())).map((s) => ({ group: 'Skills', label: `/${s.name}`, desc: s.description, icon: I.book || I.sparkle, onPick: () => { els.input.value = `/${s.name} `; els.input.focus(); updateSendEnabled(); } })) : [])
+        .concat(!t.tok.includes(' ') ? state.skills.filter((s) => `/${s.name}`.toLowerCase().startsWith(t.tok.toLowerCase())).map((s) => ({ group: 'Skills', label: `/${s.name}`, desc: s.description, onPick: () => fill(`/${s.name} `) })) : [])
         // MCP prompts of the connected servers: /mcp:<server>:<prompt> args…
-        .concat((state.mcp || []).flatMap((sv) => sv.prompts || []).filter((pr) => pr.invoke.startsWith(t.tok) || t.tok.startsWith(pr.invoke + ' ')).map((pr) => ({ group: 'MCP', label: pr.usage, desc: pr.description || '', icon: MCP_ICON, onPick: () => { els.input.value = `${pr.invoke} `; els.input.focus(); updateSendEnabled(); } })))
-        .concat(t.tok.startsWith('/skill ') ? state.skills.filter((s) => `/skill ${s.name}`.startsWith(t.tok.trimEnd())).map((s) => ({ label: `/skill ${s.name}`, desc: s.description, icon: I.sparkle, onPick: () => { els.input.value = `/skill ${s.name} `; els.input.focus(); } })) : [])
-        .concat(t.tok.startsWith('/agent ') ? state.agents.filter((a) => `/agent ${a.name}`.startsWith(t.tok.trimEnd())).map((a) => ({ label: `/agent ${a.name}`, desc: a.description, icon: I.agent, onPick: () => { els.input.value = `/agent ${a.name} `; els.input.focus(); } })) : []);
+        .concat((state.mcp || []).flatMap((sv) => sv.prompts || []).filter((pr) => pr.invoke.startsWith(t.tok) || t.tok.startsWith(pr.invoke + ' ')).map((pr) => ({ group: 'MCP', label: pr.usage, desc: pr.description || '', onPick: () => fill(`${pr.invoke} `) })))
+        .concat(t.tok.startsWith('/skill ') ? state.skills.filter((s) => `/skill ${s.name}`.startsWith(t.tok.trimEnd())).map((s) => ({ group: 'Skills', label: `/skill ${s.name}`, desc: s.description, onPick: () => fill(`/skill ${s.name} `) })) : [])
+        .concat(t.tok.startsWith('/agent ') ? state.agents.filter((a) => `/agent ${a.name}`.startsWith(t.tok.trimEnd())).map((a) => ({ group: 'Plan & delegate', label: `/agent ${a.name}`, desc: a.description, onPick: () => fill(`/agent ${a.name} `) })) : [])
+        // One heading per group, in a fixed order; each group has its own icon on the heading and its rows.
+        .map((it, n) => ({ ...it, n, icon: (/^\/mode (\w+)$/.test(it.label) && MODES[it.label.slice(6)] || SLASH_GROUPS[it.group]).icon, groupIcon: SLASH_GROUPS[it.group].icon }))
+        .sort((a, b) => SLASH_GROUPS[a.group].order - SLASH_GROUPS[b.group].order || a.n - b.n);
       if (!items.length) { return closeMenu(); }
-      openMenu(els.box, items); els.input.focus();
+      openMenu(els.box, items, { inline: true }); els.input.focus();
     } else {
       if (!state.openFiles.length) { post({ type: 'requestOpenFiles' }); }
       const q = t.tok.toLowerCase();
@@ -2959,8 +3136,13 @@
       // Commits whose message matches (or the one a typed hash names) follow the files.
       const commits = mentionHits.query === t.tok && !t.quoted ? mentionHits.commits.map((c) => ({ label: `Commit ${c.sha}`, desc: c.subject, icon: I.git, onPick: () => applyMention(c.sha) })) : [];
       const items = (t.quoted ? [] : MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))).concat(files, commits);
-      if (!items.length) { return closeMenu(); }
-      openMenu(els.box, items); els.input.focus();
+      // The menu stays open while the host searches and when nothing matches, so the @ never just goes quiet.
+      if (mentionHits.query !== t.tok) { items.push({ note: true, spin: true, label: 'Searching files…' }); }
+      else if (!files.length && !commits.length) {
+        items.push({ note: true, label: t.tok ? `No files match “${t.tok}”` : 'No files in this workspace' },
+          { label: 'Browse files…', desc: 'Pick files to attach', icon: I.folder, onPick: () => { dropMentionToken(); post({ type: 'pickAttachment' }); } });
+      }
+      openMenu(els.box, items, { inline: true }); els.input.focus();
     }
   }
   // Workspace-wide @ search: the host ranks its file index (open editors, then recent attachments, then fuzzy score).
@@ -2999,6 +3181,8 @@
     const t = tokenAt();
     if (t && t.kind === '@' && t.tok === m.query && document.activeElement === els.input) { showInlineMenu(t); }
   }
+  /** Removes the half-typed `@token` before the caret (its file is being picked another way). */
+  function dropMentionToken() { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); els.input.value = before + els.input.value.slice(pos); els.input.selectionStart = els.input.selectionEnd = before.length; updateSendEnabled(); }
   /** Paths outside the plain `@path` alphabet (spaces, brackets …) are quoted: `@"docs/my file.md"`. */
   function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); const token = /^[\w./-]+$/.test(name) ? name : `"${name}"`; els.input.value = `${before}@${token} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + token.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
   /** `@path`, `@path#L3-L9`, `@"path with spaces"`, `@https://…` and `@<commit>` in a draft; also what the composer highlights. */
@@ -3163,7 +3347,21 @@
     return text ? `${block}\n\n${text}` : block;
   }
   function clearQuote() { if (state.session) { quotes.delete(state.session.id); } renderQuote(); }
-  function sendCurrent(fromSuggestion) {
+  /** /clear asks first, in a row above the composer: Enter or Clear confirms, Escape or Cancel keeps the chat. */
+  function confirmClear() {
+    closeMenu();
+    const old = document.querySelector('.confirm-row'); if (old) { old.querySelector('[data-a="clear"]').focus(); return; }
+    const row = el('div', 'confirm-row', `${I.warn}<span class="msg">Clear this chat? Messages are removed; files are not touched.</span><span class="acts"><button class="btn sm" data-a="cancel">Cancel</button><button class="btn sm danger" data-a="clear">Clear</button></span>`);
+    row.setAttribute('role', 'alertdialog'); row.setAttribute('aria-label', 'Clear this chat?');
+    const done = (clear) => { row.remove(); if (clear && /^\/clear\s*$/i.test(els.input.value.trim())) { sendCurrent(false, { confirmed: true }); } else { els.input.focus(); } };
+    row.onclick = (e) => { const b = e.target.closest('[data-a]'); if (b) { done(b.dataset.a === 'clear'); } };
+    row.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); } };
+    els.box.parentNode.insertBefore(row, els.box);
+    row.querySelector('[data-a="clear"]').focus();
+  }
+  /** `opts.modeOverride`: an empty-chat suggestion runs that one turn in Ask or Agent mode; `opts.confirmed` skips the /clear confirm. */
+  function sendCurrent(fromSuggestion, opts = {}) {
+    if (/^\/clear\s*$/i.test(els.input.value.trim()) && !opts.confirmed && state.session && state.session.messages.length) { confirmClear(); return; }
     if (improving && state.session && improving.sid === state.session.id) { toast('Still improving the prompt — wait for it, or click the sparkle to cancel'); return; }
     const text = quoted(els.input.value.trim());
     if ((!text && !state.images.length) || !state.session) { return; }
@@ -3171,14 +3369,15 @@
       const p = state.paused.get(state.session.id);
       // Paused: the message is plainly meant for this agent. Running: ask, since a new tab is just as likely.
       if (p && p.paused) { steerCurrent(); return; }
-      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: 'Starts a new turn here when this one ends', icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: 'Starts another agent in parallel (⌘⇧↵)', icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); els.input.focus(); return;
+      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: 'Starts a new turn here when this one ends', icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: `Starts another agent in parallel (${kb('Mod+Shift+Enter')})`, icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); els.input.focus(); return;
     }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     if (tooManyAttachments(attachments)) { return; }
     const images = state.images.map((i) => i.data);
     const finalText = text || 'Describe what you see in the attached image(s).';
-    post({ type: 'send', sessionId: state.session.id, text: finalText, attachments, images: images.length ? images : undefined });
+    post({ type: 'send', sessionId: state.session.id, text: finalText, attachments, images: images.length ? images : undefined, ...(opts.modeOverride ? { modeOverride: opts.modeOverride } : {}) });
+    if (state.revising === state.session.id) { state.revising = null; syncPlaceholder(); }
     state.history.unshift(finalText); state.history = state.history.slice(0, 50); state.histIdx = -1;
     const empty = els.messages.querySelector('.empty'); if (empty) { empty.remove(); }
     if (!finalText.startsWith('/')) {
@@ -3195,7 +3394,7 @@
     els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); scrollToBottom(true);
     if (!fromSuggestion) { els.input.focus(); }
   }
-  els.input.addEventListener('input', () => { autoGrow(); updateSendEnabled(); warmModel(); const t = tokenAt(); if (t) { showInlineMenu(t); } else if (menuState && !els.popover.querySelector('.search')) { closeMenu(); } });
+  els.input.addEventListener('input', () => { const cr = document.querySelector('.confirm-row'); if (cr) { cr.remove(); } autoGrow(); updateSendEnabled(); warmModel(); const t = tokenAt(); if (t) { showInlineMenu(t); } else if (menuState && !els.popover.querySelector('.search')) { closeMenu(); } });
   // Typing is the strongest signal that a request is coming: ask the host to load the model now (throttled; the
   // host throttles per model too) so the first token is not preceded by a 5–30 s weight load.
   let warmedAt = 0;
@@ -3205,9 +3404,18 @@
     post({ type: 'warm', sessionId: state.session.id });
   }
   els.input.addEventListener('focus', warmModel);
+  // Moving the caret out of the @ or / token (arrows, Home/End, a click) closes its menu; typing a space already does.
+  const leftToken = () => { if (menuState && menuState.inline && !tokenAt()) { closeMenu(); } };
+  els.input.addEventListener('keyup', (e) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) { leftToken(); } });
+  els.input.addEventListener('mouseup', leftToken);
+  /** When the user last pressed a key in the composer: a prompt that appears mid-sentence must not take focus. */
+  let lastComposerKey = 0;
   els.input.addEventListener('keydown', (e) => {
+    lastComposerKey = Date.now();
     // An IME (Japanese, Chinese, Korean …) uses Enter and the arrows to confirm or pick a candidate: not ours.
     if (e.isComposing || e.keyCode === 229) { return; }
+    // Tab from the composer goes straight to a waiting prompt, whose shortcuts only listen once focus is in it.
+    if (e.key === 'Tab' && !e.shiftKey && !menuState) { const card = els.approvals.firstElementChild; if (card && card._focusFirst) { e.preventDefault(); card._focusFirst(); return; } }
     if (menuState && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key) && !els.popover.querySelector('.search')) {
       if (e.key === 'Tab') { e.preventDefault(); const x = menuState.items[menuState.sel]; if (x) { closeMenu(); x.it.onPick && x.it.onPick(); } return; }
       if (e.key === 'Enter') { const x = menuState.items[menuState.sel]; if (x && x.it.label !== els.input.value.trim()) { e.preventDefault(); closeMenu(); x.it.onPick && x.it.onPick(); return; } closeMenu(); }
@@ -3223,8 +3431,10 @@
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && improveUndo && els.input.value === improveUndo.improved) { e.preventDefault(); els.input.value = improveUndo.original; improveUndo = null; autoGrow(); updateSendEnabled(); return; }
     if (improving && state.session && improving.sid === state.session.id && e.key === 'Enter') { e.preventDefault(); return; }
     if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendInNewTab(); return; }
-    // Shift+Tab rotates the mode (Agent → Multitask → Debug → Plan → Ask), like Cursor.
-    if (e.key === 'Tab' && e.shiftKey && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; setMode(next); toast(`${MODES[next].label} mode`); return; }
+    // Ctrl/Cmd+. rotates the mode (Agent → Multitask → Debug → Plan → Ask); so does Shift+Tab while there is a draft, like
+    // Cursor. An empty composer lets Shift+Tab move focus back, so keyboard users can leave it.
+    const modeKey = e.key === '.' && !e.shiftKey && !e.altKey && (state.platform === 'darwin' ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
+    if ((modeKey || (e.key === 'Tab' && e.shiftKey && els.input.value.trim())) && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); rotateMode(); return; }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !els.input.value.trim() && state.session && els.messages.querySelector('.plancard') && !state.running.has(state.session.id)) { e.preventDefault(); post({ type: 'buildPlan', sessionId: state.session.id }); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
     if (e.defaultPrevented) { return; }
@@ -3240,12 +3450,30 @@
   els.tasksToggle.onclick = () => { if (state.session) { tasksUserOpen.set(state.session.id, !els.tasks.classList.contains('open')); } renderTasks(); };
   els.tasks.classList.add('open');
   els.changesToggle.onclick = () => { els.changes.classList.toggle('open'); els.changesList.classList.toggle('hidden'); };
+  // Reject all rewrites files on disk, so it asks first in place of the panel head (like "Delete n chats?" in history).
+  function closeRejectConfirm(refocus) {
+    if (!rejectConfirm) { return; }
+    const head = els.changes.querySelector('.panel-head:not(.confirm)');
+    rejectConfirm.remove(); rejectConfirm = null; head.classList.remove('hidden');
+    if (refocus) { const b = head.querySelector('[data-a="undoAll"]'); if (b) { b.focus(); } }
+  }
+  function openRejectConfirm() {
+    const s = state.session; const n = (state.changes.get(s.id) || []).length; if (!n) { return; }
+    const head = els.changes.querySelector('.panel-head:not(.confirm)');
+    const row = el('div', 'panel-head confirm', `<span class="q">Reject ${n} file${n === 1 ? '' : 's'}? <span class="why">Their edits are removed from disk.</span></span><span class="acts"><button class="btn ghost" data-c="keep">Keep</button><button class="btn danger" data-c="reject">${I.undo}Reject</button></span>`);
+    row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Confirm reject all'); row.dataset.sid = s.id;
+    row.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } const sid = row.dataset.sid; closeRejectConfirm(b.dataset.c === 'keep'); if (b.dataset.c === 'reject') { post({ type: 'undoChanges', sessionId: sid }); } };
+    row.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeRejectConfirm(true); } };
+    head.classList.add('hidden'); head.after(row); rejectConfirm = row;
+    row.querySelector('[data-c="keep"]').focus();
+  }
   els.changes.querySelector('.panel-head').onclick = (e) => {
     const a = e.target.closest('[data-a]'); if (!a || !state.session || a.getAttribute('aria-disabled') === 'true') { return; }
     const act = a.dataset.a;
     if (act === 'applyWorktree' || act === 'discardWorktree') { post({ type: act, sessionId: state.session.id }); return; }
     if (act === 'reviewAll') { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'session' }); return; }
-    post({ type: act === 'undoAll' ? 'undoChanges' : 'keepChanges', sessionId: state.session.id });
+    if (act === 'undoAll') { openRejectConfirm(); return; }
+    post({ type: 'keepChanges', sessionId: state.session.id });
   };
   els.box.addEventListener('dragover', (e) => { e.preventDefault(); els.box.classList.add('drop'); });
   els.box.addEventListener('dragleave', () => els.box.classList.remove('drop'));
@@ -3356,7 +3584,7 @@
   }
   function armSendWatchdog(sid, ms) {
     clearTimeout(state.pendingSend.get(sid));
-    state.pendingSend.set(sid, setTimeout(() => { if (!state.running.has(sid)) { const shown = state.session && state.session.id === sid; rejectSend(sid); if (shown) { toast('The request did not start — check the LocalPilot output log and try again', 'error'); } } else { state.pendingSend.delete(sid); } }, ms));
+    state.pendingSend.set(sid, setTimeout(() => { if (!state.running.has(sid)) { const shown = state.session && state.session.id === sid; rejectSend(sid); if (shown) { toast('The request did not start — check the LocalPilot output log and try again', 'error', { label: 'Open log', msg: { type: 'showLog' } }); } } else { state.pendingSend.delete(sid); } }, ms));
   }
   /** A send that never became a run: drop its placeholder turn and the bubble drawn for it. */
   function rejectSend(sid) {
@@ -3371,14 +3599,14 @@
   }
   function dispatch(m) {
     switch (m.type) {
-      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (state.session) { updateCtx(); } if (hist.open) { histRefresh(); } break;
       case 'sessionPage': histPage(m); break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
         if (switching && prev) { saveDraft(prev); }
         state.session = m.session; state.session.liveFrom = m.liveFrom; state.session.offers = m.offers; state.loadingTab = null; state.activeHint = null; state.unread.delete(m.session.id); clearTimeout(selectTab.timer);
-        dismissBoot(); renderSession(); renderChanges(); renderTasks(); renderTabs(); renderQueue(); renderQuote(); scheduleSticky();
+        dismissBoot(); renderSession(); renderChanges(); renderTasks(); renderTabs(); renderQueue(); renderQuote(); renderGrants(); scheduleSticky();
         if (switching) { closeMenu(); restoreDraft(m.session.id); const y = state.scroll.get(m.session.id); if (y !== undefined && !state.running.has(m.session.id)) { els.messages.scrollTop = y; } }
         // Don't yank focus away from a rename box, popover search or anything else the user is typing in.
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
@@ -3388,7 +3616,8 @@
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'mcpStatus': state.mcp = m.servers || []; syncMcp(); break;
       case 'autoApprove': renderAutoApprove(m); break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length) { if (asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } if (state.session && !state.session.messages.length) { renderSession(); } } else if (hadNone && wasLoading && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'sessionGrants': if (m.kinds && m.kinds.length) { grants.set(m.sessionId, m.kinds); } else { grants.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderGrants(); } break;
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length && asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } /* The empty chat's notice and suggestions depend on having a model: redraw when that flips, either way. */ if ((hadNone !== !m.models.length || (hadNone && wasLoading)) && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'skillInstall': {
         // The session redraw replaces a settled offer; this settles chips still inside a live turn.
@@ -3442,7 +3671,7 @@
       case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
       case 'question': state.approvalSid.set(m.id, m.sessionId); renderQuestion(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your answer'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Question waiting in “${(s && s.title) || 'another chat'}”`); } break;
       case 'questionResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
-      case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level); } if (m.level === 'error') { editChecks.forEach((c) => c.release && c.release()); } break;
+      case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level, m.action); } if (m.level === 'error') { editChecks.forEach((c) => c.release && c.release()); } break;
       case 'checkpointExistsResult': { const c = editChecks.get(`${m.sessionId}:${m.index}`); if (c) { c.done(m); } break; }
       case 'editAndRegenerateResult': { const c = editChecks.get(`${m.sessionId}:${m.index}`); if (c && c.release) { c.release(); } break; }
       case 'improvedPrompt': improvedPrompt(m); break;
@@ -3489,16 +3718,31 @@
     $('aaLabel').textContent = m.summary || 'none';
     body.innerHTML = (m.items || []).map((it) => {
       const lock = it.locked || { values: [] };
-      const seg = it.values.map((v) => { const off = lock.values.includes(v); return `<button data-k="${esc(it.key)}" data-v="${esc(v)}" role="radio" aria-checked="${v === it.value}" class="${v === it.value ? 'on' : ''}"${off ? ` disabled title="${esc(lock.reason)}"` : ''}>${esc(AA_NAMES[v] || v)}</button>`; }).join('');
-      return `<div class="aa-row${it.locked ? ' locked' : ''}"><span class="aa-name"${it.locked ? ` title="${esc(it.locked.reason)}"` : ''}>${esc(it.label)}${it.locked ? ' <i class="aa-lock">policy</i>' : ''}</span><span class="seg" role="radiogroup" aria-label="${esc(it.label)}">${seg}</span></div>`;
+      // Roving tabindex: one tab stop per row, on the checked choice (or the first enabled one).
+      const stop = it.values.includes(it.value) && !lock.values.includes(it.value) ? it.value : it.values.find((v) => !lock.values.includes(v));
+      const seg = it.values.map((v) => { const off = lock.values.includes(v); return `<button data-k="${esc(it.key)}" data-v="${esc(v)}" role="radio" aria-checked="${v === it.value}" tabindex="${v === stop ? 0 : -1}" class="${v === it.value ? 'on' : ''}"${off ? ` disabled title="${esc(lock.reason)}"` : ''}>${esc(AA_NAMES[v] || v)}</button>`; }).join('');
+      const ws = it.overriddenBy === 'workspace' ? ' <i class="aa-ws" title="Set in this workspace\'s settings — changes here apply to the workspace">workspace</i>' : '';
+      return `<div class="aa-row${it.locked ? ' locked' : ''}"><span class="aa-name"${it.locked ? ` title="${esc(it.locked.reason)}"` : ''}>${esc(it.label)}${it.locked ? ' <i class="aa-lock">policy</i>' : ''}${ws}</span><span class="seg" role="radiogroup" aria-label="${esc(it.label)}${it.overriddenBy === 'workspace' ? ' (workspace setting)' : ''}">${seg}</span></div>`;
     }).join('');
   }
   if ($('aaToggle')) {
     $('aaToggle').onclick = () => { const open = $('aaBody').classList.toggle('hidden') === false; $('autoApprove').classList.toggle('open', open); $('aaToggle').setAttribute('aria-expanded', String(open)); };
+    const pickAa = (b) => {
+      for (const x of b.parentElement.children) { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); x.tabIndex = x === b ? 0 : -1; }
+      post({ type: 'setApproval', key: b.dataset.k, value: b.dataset.v });
+    };
     $('aaBody').onclick = (e) => {
       const b = e.target.closest('button[data-k]'); if (!b || b.disabled || b.classList.contains('on')) { return; }
-      for (const x of b.parentElement.children) { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); }
-      post({ type: 'setApproval', key: b.dataset.k, value: b.dataset.v });
+      pickAa(b);
+    };
+    // Radiogroup keys: arrows move and select (skipping choices the policy rules out), Home/End jump to the ends.
+    $('aaBody').onkeydown = (e) => {
+      const b = e.target.closest('button[data-k]'); if (!b) { return; }
+      const opts = [...b.parentElement.children].filter((x) => !x.disabled); const i = opts.indexOf(b);
+      const n = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: opts.length - 1 }[e.key];
+      if (n === undefined || !opts.length) { return; }
+      e.preventDefault();
+      const t = opts[(n + opts.length) % opts.length]; t.focus(); if (!t.classList.contains('on')) { pickAa(t); }
     };
   }
 
@@ -3514,14 +3758,57 @@
     const d = els.approvals.querySelector(`[data-id="${CSS.escape(id)}"]`);
     if (!d) { return; }
     if (d._dispose) { d._dispose(); }
-    d.remove();
+    d.remove(); syncWaiting();
+  }
+  /** Keys answer a prompt only when focus is on the prompt itself (or nowhere), never while the user types elsewhere. */
+  function promptKeyTarget(d, e) {
+    const t = e.target;
+    if (t === document.body || t === document.documentElement) { return true; }
+    return d.contains(t) && !(t.closest && t.closest('input, textarea, select'));
+  }
+  /** Focus a new prompt's main button when the user isn't typing; otherwise say how to reach it. */
+  function offerPromptFocus(d, first, hint) {
+    d._focusFirst = () => { const b = first(); if (b) { b.focus(); } };
+    const a = document.activeElement;
+    const idle = !els.input.value.trim() && Date.now() - lastComposerKey > 1500 && (!a || a === document.body || a === els.input);
+    if (idle && els.approvals.firstElementChild === d) { d._focusFirst(); return; }
+    const h = el('div', 'khint', `Press <kbd>Tab</kbd> to answer, or ${hint}`); d.appendChild(h);
+    // Once the prompt has focus the hint has done its job.
+    d.addEventListener('focusin', () => h.remove(), { once: true });
+  }
+  const GRANT_LABEL = { terminal: 'Allow all commands in this chat', write: 'Allow all edits in this chat', delete: 'Allow all deletes in this chat', network: 'Allow all network access in this chat', mcp: 'Allow all MCP tools in this chat' };
+  const GRANT_NOUN = { terminal: 'command', write: 'edit', delete: 'delete', network: 'network request', mcp: 'MCP tool call' };
+  const GRANT_CHIP = { terminal: 'Commands', write: 'Edits', delete: 'Deletes', network: 'Network', mcp: 'MCP tools' };
+  /** "Allow all … in this chat" also answers the other prompts of that kind in the chat (parallel workers): say how many. */
+  function syncWaiting() {
+    const cards = [...els.approvals.querySelectorAll('.approval[data-kind]:not([data-mandatory])')];
+    for (const c of cards) {
+      const b = c.querySelector('[data-a="session"]'); if (!b) { continue; }
+      const n = Math.max(+c.dataset.waiting || 0, cards.filter((o) => o !== c && o.dataset.kind === c.dataset.kind && o.dataset.sid === c.dataset.sid).length);
+      b.title = n ? `Also approves ${n} waiting worker${n === 1 ? '' : 's'} (A)` : `Allow every ${GRANT_NOUN[c.dataset.kind] || 'action of this kind'} for the rest of this chat (A)`;
+    }
+  }
+  // "Allow all … in this chat" grants per chat, shown as removable chips at the start of the auto-approve bar.
+  const grants = new Map();
+  function renderGrants() {
+    const box = $('autoApprove'); const head = $('aaToggle'); if (!box || !head) { return; }
+    let strip = $('aaGrants');
+    const kinds = (state.session && grants.get(state.session.id)) || [];
+    if (!kinds.length) { if (strip) { strip.remove(); } box.classList.toggle('has-grants', false); return; }
+    if (!strip) { strip = el('div', 'aa-grants'); strip.id = 'aaGrants'; strip.setAttribute('role', 'group'); strip.setAttribute('aria-label', 'Allowed for this chat'); strip.onclick = (e) => { const b = e.target.closest('button[data-kind]'); if (b && state.session) { post({ type: 'revokeGrant', sessionId: state.session.id, kind: b.dataset.kind }); } }; box.insertBefore(strip, head); }
+    box.classList.remove('hidden'); box.classList.add('has-grants');
+    strip.innerHTML = `<span class="aa-k">This chat:</span>` + kinds.map((k) => { const n = GRANT_CHIP[k] || k; return `<button class="grant" data-kind="${esc(k)}" title="${esc(GRANT_LABEL[k] || n)} — click to ask again" aria-label="Stop allowing ${esc(n.toLowerCase())} in this chat"><span>${esc(n)}</span><span class="x" aria-hidden="true">×</span></button>`; }).join('');
   }
   function renderApproval(a) {
     if (els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) { return; }
     const d = el('div', 'approval'); d.dataset.id = a.id;
     const kind = { terminal: 'Run command', write: 'Edit file', delete: 'Delete', network: 'Network', mcp: 'MCP tool' }[a.kind] || a.kind;
     const other = !state.session || state.session.id !== a.sessionId; const sess = other ? state.sessions.find((s) => s.id === a.sessionId) : null;
-    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><button class="btn ghost" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button><button class="btn" data-a="session" title="Allow for this session (A)"><span class="long">Allow for session</span><span class="short">Session</span> <kbd>A</kbd></button><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>`;
+    // A dangerous command or an organization rule asks every time, so there is no "allow all" to offer.
+    const why = a.mandatory ? (a.mandatoryReason === 'policy' ? 'Always asks — required by your organization' : a.kind === 'terminal' ? 'Always asks — dangerous command' : 'Always asks for this action') : '';
+    d.dataset.kind = a.kind; d.dataset.sid = a.sessionId; d.dataset.waiting = String(a.waitingSameKind || 0); if (a.mandatory) { d.dataset.mandatory = '1'; }
+    const all = a.mandatory ? '' : `<button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button>`;
+    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><button class="btn ghost" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button>${all}<button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>${why ? `<div class="always">${esc(why)}</div>` : ''}`;
     d.querySelector('pre').textContent = a.detail;
     const answer = (act, feedback) => { const f = act === 'deny' && feedback ? String(feedback).trim() : ''; post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session', ...(f ? { feedback: f } : {}) }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
     // Deny with a reason: the reason box, or whatever is in the composer when Deny is clicked (then the draft is used up).
@@ -3530,11 +3817,12 @@
     const denyWithDraft = () => { const draft = els.input.value.trim(); if (draft) { els.input.value = ''; autoGrow(); updateSendEnabled(); } answer('deny', draft); };
     reasonIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); answer('deny', reasonIn.value); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); reasonBox.classList.add('hidden'); els.input.focus(); } };
     // Y/A/N answer the oldest pending prompt only; with several queued, one keypress must not resolve them all.
-    const key = (e) => { if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d) { return; } if (e.target === els.input && els.input.value) { return; } if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; } const k = e.key.toLowerCase(); if (k === 'n' && e.shiftKey) { openReason(); } else if (k === 'y') { answer('allow'); } else if (k === 'a') { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); e.stopPropagation(); };
+    const key = (e) => { if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d || !promptKeyTarget(d, e)) { return; } const k = e.key.toLowerCase(); if (k === 'n' && e.shiftKey) { openReason(); } else if (k === 'y') { answer('allow'); } else if (k === 'a' && !a.mandatory) { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); e.stopPropagation(); };
     d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (!b) { return; } const act = b.dataset.a; if (act === 'open') { selectTab(a.sessionId); return; } if (act === 'reason') { openReason(); return; } if (act === 'denyReason') { answer('deny', reasonIn.value); return; } if (act === 'deny') { denyWithDraft(); return; } answer(act); };
     document.addEventListener('keydown', key, true);
     d._dispose = () => document.removeEventListener('keydown', key, true);
-    els.approvals.appendChild(d);
+    els.approvals.appendChild(d); syncWaiting();
+    offerPromptFocus(d, () => d.querySelector('[data-a="allow"]'), '<kbd>Y</kbd> / <kbd>N</kbd>');
     // The footer scrolls on short hosts (bottom Panel); prompts sit at its top.
     els.approvals.parentElement.scrollTop = 0;
     if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
@@ -3577,8 +3865,8 @@
     });
     const key = (e) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d) { return; }
-      if (e.target === els.input && els.input.value) { return; }
-      if (e.target !== els.input && e.target.closest && e.target.closest('.popover, .rename, input, textarea, select')) { return; }
+      // Esc skips only from inside the card; Esc in the composer keeps meaning "stop the run".
+      if (!promptKeyTarget(d, e) || (e.key === 'Escape' && !d.contains(e.target))) { return; }
       if (/^[1-9]$/.test(e.key)) { const qi = qs.findIndex((_, i) => !answered(i)); const at = qi < 0 ? qs.length - 1 : qi; const oi = +e.key - 1; if (qs[at] && qs[at].options && oi < qs[at].options.length) { pick(at, oi); e.preventDefault(); e.stopPropagation(); } return; }
       if (e.key === 'Enter' && !submitBtn.disabled) { e.preventDefault(); e.stopPropagation(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
     };
@@ -3586,6 +3874,7 @@
     d._dispose = () => document.removeEventListener('keydown', key, true);
     els.approvals.appendChild(d);
     sync();
+    offerPromptFocus(d, () => d.querySelector('.opt[data-o]') || d.querySelector('input[data-q]'), '<kbd>1</kbd>–<kbd>9</kbd>');
     els.approvals.parentElement.scrollTop = 0;
     if (state.session && state.session.id === a.sessionId) { scrollToBottom(false); }
   }
@@ -3601,8 +3890,47 @@
   /** Chats whose prompt is shown in full instead of clamped. */
   const taskOpen = new Set();
   const viewState = () => (typeof vscode.getState === 'function' && vscode.getState()) || {};
-  function headCollapsed() { return !!viewState().taskHeadCollapsed; }
-  function setHeadCollapsed(v) { if (typeof vscode.setState === 'function') { vscode.setState({ ...viewState(), taskHeadCollapsed: v }); } }
+  // Folded by default (one line); expanding is the reader's choice and is remembered.
+  function headCollapsed() { return viewState().taskHeadExpanded !== true; }
+  function setHeadCollapsed(v) { if (typeof vscode.setState === 'function') { vscode.setState({ ...viewState(), taskHeadExpanded: !v }); } }
+  // While the first prompt is on screen as a turn, the card would only repeat it: it steps aside until that turn scrolls away.
+  let firstTurnEl = null;
+  const firstTurnIo = window.IntersectionObserver ? new IntersectionObserver((entries) => {
+    for (const en of entries) { if (en.target === firstTurnEl) { setAway(en.isIntersecting); } }
+    scheduleSticky();
+  }, { root: els.messages }) : null;
+  function firstTurnOf(s) {
+    if (!s) { return null; }
+    const idx = (s.messages || []).findIndex((x) => x.role === 'user' && !(x.meta && x.meta.summary));
+    const el0 = idx >= 0 ? els.messages.querySelector(`:scope > .turn.user[data-index="${idx}"]`) : null;
+    // A just-sent first message is drawn before the host numbers it.
+    if (el0) { return el0; }
+    const lone = els.messages.querySelector(':scope > .turn.user');
+    return lone && lone.dataset.index === 'undefined' && !els.messages.querySelector(':scope > .turn.user[data-index]:not([data-index="undefined"])') ? lone : null;
+  }
+  function watchFirstTurn() {
+    const t = firstTurnOf(state.session);
+    if (t === firstTurnEl) { return; }
+    if (firstTurnIo && firstTurnEl) { firstTurnIo.unobserve(firstTurnEl); }
+    firstTurnEl = t; setAway(false);
+    if (firstTurnIo && t) { firstTurnIo.observe(t); }
+  }
+  if (window.MutationObserver) { new MutationObserver(watchFirstTurn).observe(els.messages, { childList: true }); }
+  /** Scrolling settles it at once too: the observer reports on its own schedule, the sticky row decides now. */
+  function syncFirstTurnShown() {
+    if (!firstTurnEl || !firstTurnEl.isConnected) { return; }
+    const r = firstTurnEl.getBoundingClientRect(); const v = els.messages.getBoundingClientRect();
+    setAway(r.bottom > v.top && r.top < v.bottom);
+  }
+  /** Shows or hides the card without moving the transcript: the scroll offset absorbs the card's height. */
+  function setAway(v) {
+    if (taskHead.classList.contains('away') === v) { return; }
+    const m = els.messages; const before = m.getBoundingClientRect().top;
+    taskHead.classList.toggle('away', v);
+    m.scrollTop += m.getBoundingClientRect().top - before;
+  }
+  /** True while the card stands for the first prompt (shown, not stepped aside): the sticky row then leaves that turn to it. */
+  function taskHeadCovers(turn) { return turn === firstTurnEl && !taskHead.classList.contains('hidden') && !taskHead.classList.contains('away'); }
   function firstPrompt(s) {
     const m = (s.messages || []).find((x) => x.role === 'user' && !(x.meta && x.meta.summary));
     if (!m) { return ''; }
@@ -3627,9 +3955,9 @@
       : cwd ? `<span class="badge" title="Working folder: ${esc(cwd)}">${I.folder}<span>${esc(leaf(cwd))}</span></span>` : '';
     const tok = p ? `<span class="pill" title="${esc(usageText(u))}">↑${fmtTok(p.input)} ↓${fmtTok(p.output)}</span>` : '';
     const cost = p && p.cost !== undefined && !local ? `<span class="pill cost" title="Cost reported by the provider">${fmtUsd(p.cost)}</span>` : '';
-    taskHead.className = `taskhead${collapsed ? ' collapsed' : ''}`;
+    taskHead.className = `taskhead${collapsed ? ' collapsed' : ''}${taskHead.classList.contains('away') ? ' away' : ''}`;
     taskHead.innerHTML = `<div class="th-row"><button class="th-toggle" aria-expanded="${!collapsed}" title="${collapsed ? 'Show the task' : 'Fold the task away'}"><span class="chev">${I.chev}</span><span class="th-k">Task</span></button>`
-      + `<span class="th-line">${collapsed ? esc(prompt.split('\n')[0]) : ''}</span>${where}${tok}${cost}`
+      + `<span class="th-line"${collapsed ? ` title="${esc(prompt.slice(0, 400))}"` : ''}>${collapsed ? esc(prompt.split('\n')[0]) : ''}</span>${collapsed && !wt ? '' : where}${tok}${cost}`
       + `<button class="ib" data-th="copy" title="Copy the task" aria-label="Copy the task">${I.copy}</button>`
       + `<button class="ib" data-th="delete" title="Delete this chat${bytes ? ` (${fmtBytes(bytes)} on disk)` : ''}" aria-label="Delete this chat${bytes ? `, ${fmtBytes(bytes)} on disk` : ''}">${I.trash}</button></div>`
       + (collapsed ? '' : `<div class="th-text${open ? ' open' : ''}" tabindex="0" role="button" aria-expanded="${open}">${inline(prompt).replace(/\n/g, '<br>')}</div>`);
@@ -3682,8 +4010,12 @@
     const at = Math.round(uiPrefs.compactionThreshold * 100);
     h += row('Auto-compact', uiPrefs.autoCompact ? `at ${at}% · ${n(Math.round(c.win * uiPrefs.compactionThreshold))}` : 'off', 'sep');
     if (c.compactions) { h += row('Compacted', `${c.compactions}×`); }
-    if (c.native) { h += `<div class="note">${esc(c.native.trim().replace(/^\(|\)$/g, ''))}</div>`; }
+    if (c.native) { h += ctxRaiseNote(c); }
     return h;
+  }
+  /** The model can take more than the Context window setting gives it: say so, with the way to raise it. */
+  function ctxRaiseNote(c) {
+    return `<div class="note">The model supports ${fmtTok(c.native)} tokens; this chat gets ${fmtTok(c.win)}. <button class="link" data-c="raise" title="Settings → Models → Context window">Raise context window…</button></div>`;
   }
   function placeCtxCard() {
     const r = els.ctx.getBoundingClientRect(); const w = ctxCard.offsetWidth; const h = ctxCard.offsetHeight;
@@ -3698,7 +4030,7 @@
     ctxCard.classList.toggle('confirm', mode === 'confirm');
     if (mode === 'confirm') { ctxCard.setAttribute('aria-label', 'Compact this chat?'); } else { ctxCard.removeAttribute('aria-label'); }
     ctxCard.innerHTML = mode === 'confirm'
-      ? `<div class="q"><b>Compact this chat?</b> Older messages are summarised to free up context. The latest turns are kept as they are.</div><div class="acts"><button class="btn" data-c="cancel">Cancel</button><button class="btn primary" data-c="compact">Compact</button></div>`
+      ? `<div class="q"><b>Compact this chat?</b> Older messages are summarised to free up context. The latest turns are kept as they are.</div>${state.ctxInfo.native ? ctxRaiseNote(state.ctxInfo) : ''}<div class="acts"><button class="btn" data-c="cancel">Cancel</button><button class="btn primary" data-c="compact">Compact</button></div>`
       : `${ctxRows()}<div class="hint">${busy ? 'You can compact once the agent finishes' : 'Click to compact now'}</div>`;
     ctxCard.classList.remove('hidden'); placeCtxCard();
     if (mode === 'confirm') { ctxCard.querySelector('[data-c="compact"]').focus(); }
@@ -3712,12 +4044,15 @@
     showCtxCard('confirm');
   }
   const ctxHover = () => { if (ctxMode !== 'confirm') { showCtxCard('hover'); } };
-  const ctxLeave = () => { if (ctxMode === 'hover') { hideCtxCard(); } };
+  // A short grace period lets the pointer cross to the card (it holds the Raise context window link) without it closing.
+  const ctxLeave = () => { setTimeout(() => { if (ctxMode === 'hover' && !ctxCard.matches(':hover') && !els.ctx.matches(':hover') && !ctxCard.contains(document.activeElement) && document.activeElement !== els.ctx) { hideCtxCard(); } }, 150); };
+  ctxCard.addEventListener('mouseleave', ctxLeave); ctxCard.addEventListener('focusout', ctxLeave);
   els.ctx.addEventListener('mouseenter', ctxHover); els.ctx.addEventListener('focus', ctxHover);
   els.ctx.addEventListener('mouseleave', ctxLeave); els.ctx.addEventListener('blur', ctxLeave);
   ctxCard.addEventListener('click', (e) => {
     const b = e.target.closest('[data-c]'); if (!b) { return; }
     if (b.dataset.c === 'compact' && state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); }
+    if (b.dataset.c === 'raise') { hideCtxCard(); post({ type: 'openSettings', section: 'models' }); return; }
     hideCtxCard(); els.input.focus();
   });
   ctxCard.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxCard(); els.ctx.focus(); } });
@@ -3737,9 +4072,9 @@
       'Click a message you sent to edit it, then rewind and resend from there.',
       '<b>Multitask</b> mode splits the work across background workers that run at the same time.',
       '<b>Best of N</b> runs one prompt on several models side by side; apply the best result.',
-      `<kbd>${mod}⇧↵</kbd> sends the draft in a new tab: another agent, in parallel.`,
+      `<kbd>${kb('Mod+Shift+Enter')}</kbd> sends the draft in a new tab: another agent, in parallel.`,
       'Select text in an answer and click <b>Quote</b> to reply to just that part.',
-      '<kbd>⇧Tab</kbd> in the composer cycles Agent, Multitask, Debug, Plan and Ask.',
+      `<kbd>${mod}.</kbd> in the composer (or <kbd>${kb('Shift+Tab')}</kbd> with a draft) cycles Agent, Multitask, Debug, Plan and Ask.`,
       '<b>Plan</b> mode investigates read-only and prepares a checklist you build with one click.',
       `<kbd>${alt}Esc</kbd> pauses after the current step; <kbd>Esc</kbd> stops the agent.`,
       `<kbd>${mod}I</kbd> rewrites your draft into a precise request without sending it.`,
@@ -3752,9 +4087,14 @@
       `<kbd>${alt}↑</kbd> / <kbd>${alt}↓</kbd> switch between chat tabs.`,
     ];
   }
-  const tipRow = el('div', 'tiprow hidden', '<span class="k">Tip</span><span class="t"></span>');
+  const tipRow = el('div', 'tiprow hidden', `<span class="k">Tip</span><span class="t"></span><button class="ib tip-x" title="Hide tips" aria-label="Hide tips" aria-haspopup="menu">${I.x}</button>`);
   tipRow.setAttribute('role', 'note');
   els.status.after(tipRow);
+  let tipsHidden = false;
+  tipRow.querySelector('.tip-x').onclick = (e) => openMenu(e.currentTarget, [
+    { label: 'Hide for this session', desc: 'Tips come back when the chat view reloads', icon: I.x, onPick: () => { tipsHidden = true; tipRow.classList.add('hidden'); } },
+    { label: 'Turn tips off', desc: 'Change it in Settings → Agent & approvals', icon: I.gear, onPick: () => { tipsHidden = true; tipRow.classList.add('hidden'); post({ type: 'setTipsEnabled', enabled: false }); } },
+  ], { label: 'Hide tips' });
   let thinkingSince = 0; let tipShownAt = 0; let tipIdx = Math.floor(Math.random() * 22);
   /** The model is working on its answer: reasoning streams, or the typing dots wait for its first token. Not when paused or asking. */
   function agentThinking() {
@@ -3764,7 +4104,7 @@
     return !!(live && (live.thinkingEl || live.body.querySelector('.typing')));
   }
   setInterval(() => {
-    if (!uiPrefs.showTips || !agentThinking()) { thinkingSince = 0; tipRow.classList.add('hidden'); return; }
+    if (!uiPrefs.showTips || tipsHidden || !agentThinking()) { thinkingSince = 0; tipRow.classList.add('hidden'); return; }
     const now = Date.now(); if (!thinkingSince) { thinkingSince = now; }
     if (now - thinkingSince < 4000) { return; }
     if (tipRow.classList.contains('hidden') || now - tipShownAt > 9000) {
@@ -3886,7 +4226,7 @@
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
   // ------------------------------------------------------------------ accessibility
-  for (const b of [els.modeBtn, els.modelBtn, els.skillsBtn, $('thinkBtn')]) { if (b) { b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false'); } }
+  for (const b of [els.modeBtn, els.modelBtn, els.skillsBtn, $('thinkBtn'), els.btnComposerMore]) { if (b) { b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false'); } }
   /** Says "3 of 12: /compact" in an assertive live region as the selection in a menu moves. */
   function srAnnounce(text) {
     let r = document.getElementById('srLive');

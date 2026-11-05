@@ -44,16 +44,19 @@ body{margin:0}
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/></svg></span><span id="thinkLabel" class="lbl">Think</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
+        <button id="btnComposerMore" class="ib narrow-only" aria-label="More composer actions" title="More composer actions" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
         <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
+        <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
         <button id="btnPause" class="send pause hidden"><svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
       </div>
     </div>
   </footer>
-<div id="popover" class="popover hidden"></div><div id="toasts"></div>
+<div id="popover" class="popover hidden"></div><div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 <script>
 // ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
 (() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');
@@ -95,7 +98,7 @@ window.sim={
   reopen(){ sessionStorage.setItem('lp-preview', JSON.stringify({sessions:[...sessions.values()],active:active&&active.id,running:[...running],replays:[...replays.entries()],seq})); location.reload(); }
 };
 window.acquireVsCodeApi=()=>({getState(){return window.acquireVsCodeApi_state;},setState(v){window.acquireVsCodeApi_state=v;},postMessage(m){
-  if(m.type==='ready'){ if(window.__reopen){ window.__reopen=false; send({type:'init',sessions:list(),activeSessionId:active.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[...running],paused:[],platform:'darwin'}); send(sessionMsg(active)); for(const [sid,r] of replays){ send({type:'replay',sessionId:sid,items:r.items,startedAt:r.startedAt,status:'Working…',truncated:false}); } return; } const a=create('Add input validation'); create('Write tests for utils'); send({type:'init',sessions:list(),activeSessionId:a.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[],platform:'darwin'}); activate(a); }
+  if(m.type==='ready'){ if(window.__reopen){ window.__reopen=false; send({type:'init',sessions:list(),activeSessionId:active.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[...running],paused:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); send(sessionMsg(active)); for(const [sid,r] of replays){ send({type:'replay',sessionId:sid,items:r.items,startedAt:r.startedAt,status:'Working…',truncated:false}); } return; } const a=create('Add input validation'); create('Write tests for utils'); send({type:'init',sessions:list(),activeSessionId:a.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); activate(a); }
   else if(m.type==='selectSession'){ activate(sessions.get(m.id)); }
   else if(m.type==='newSession'){ const s=create(m.text?m.text.slice(0,60):'New chat'); activate(s); if(m.text){ window.sim.start(s.id,m.text); setTimeout(()=>{window.sim.text(s.id,'Working on it…'); window.sim.end(s.id);},1500); } }
   else if(m.type==='runParallel'){ const made=m.tasks.map(t=>create(t.slice(0,60))); made.forEach((s,i)=>{ window.sim.start(s.id,m.tasks[i]); setTimeout(()=>{window.sim.text(s.id,'Done: '+m.tasks[i]); window.sim.end(s.id);},2500+i*1500); }); activate(made[0]); }

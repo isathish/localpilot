@@ -377,8 +377,9 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
   });
 }
 
-/** Security settings a repository must not change: `scope: application` in package.json, so only User settings accept them. */
-export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key.startsWith('approvals.') || key.startsWith('autoMode.');
+/** Security settings a repository must not change: `scope: application` in package.json, so only User settings accept them.
+ *  OTLP export is user-only too: several of its keys are application-scoped, and a workspace must not redirect telemetry. */
+export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key.startsWith('approvals.') || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
 
 /** The most specific scope that sets `key`, so a write there actually takes effect (User when nothing overrides it). */
 export function configTarget(key: string): vscode.ConfigurationTarget {

@@ -193,7 +193,7 @@ For everyday agent work, prefer a colibri model that fits in RAM, such as `qwen3
 
 ### Start colibri from VS Code
 
-Run **LocalPilot: Start colibri (stream huge MoE models from disk)** (`localpilot.startColibri`):
+Run **LocalPilot: Start Colibri Server** (`localpilot.startColibri`):
 
 1. If `localpilot.colibri.path` is empty, pick your colibri checkout folder, use `coli` on your PATH, or open colibri on GitHub.
 2. LocalPilot opens a terminal named **LocalPilot · colibri** and runs:

@@ -1,11 +1,13 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as http from 'http';
 import { AddressInfo } from 'net';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { probeProvider, recommendModel, sanitizeMcpServers, sanitizeProvider } from '../ui/settingsPanel';
 import { resolveApiKey } from '../providers/cloud';
 import { ProviderSecrets } from '../providers/secrets';
-import { DEFAULT_PROVIDERS, providerScope } from '../config';
+import { DEFAULT_PROVIDERS, isUserOnlySetting, providerScope } from '../config';
 
 /** Minimal Ollama look-alike: enough of /api/version, /api/tags and /api/show for discovery. */
 function fakeOllama(): Promise<{ url: string; close(): void }> {
@@ -137,9 +139,44 @@ suite('LocalPilot settings & setup', () => {
     assert.strictEqual(c.walkthroughs[0].id, 'localpilot.gettingStarted');
     assert.ok(c.walkthroughs[0].steps.length >= 4);
     assert.strictEqual(c.configuration.properties['localpilot.showWelcomeOnStartup'].default, true);
+    // The model step completes only once a model is actually reachable, not when the setup screen is opened.
+    assert.deepStrictEqual(c.walkthroughs[0].steps[0].completionEvents, ['onContext:localpilot.hasModels']);
+    const extPath = vscode.extensions.getExtension('localpilot.localpilot-agent')!.extensionPath;
     for (const step of c.walkthroughs[0].steps) {
       assert.ok(step.media.markdown.startsWith('media/walkthrough/'), `walkthrough media must ship in the VSIX: ${step.media.markdown}`);
+      assert.ok(fs.existsSync(path.join(extPath, step.media.markdown)), `walkthrough step ${step.id} has its markdown: ${step.media.markdown}`);
     }
+    for (const id of ['editor', 'extend']) {
+      assert.ok(c.walkthroughs[0].steps.some((s: { id: string }) => s.id === id), `walkthrough has the ${id} step`);
+    }
+    // Cmd/Ctrl+Shift+L must leave the editor's Select All Occurrences alone.
+    const openChatKey = (c.keybindings as { command: string; when?: string }[]).find((k) => k.command === 'localpilot.openChat');
+    assert.ok(openChatKey?.when?.includes('!editorTextFocus'), `openChat keybinding must be scoped outside the text editor, got ${openChatKey?.when}`);
+  });
+
+  test('Agents view: row context menus are registered, hidden from the palette, and the title bar is gated on run state', async () => {
+    const c = vscode.extensions.getExtension('localpilot.localpilot-agent')!.packageJSON.contributes;
+    const menus = c.menus as Record<string, { command: string; when?: string; group?: string }[]>;
+    const commands = await vscode.commands.getCommands(true);
+    const rowCommands = ['localpilot.renameSession', 'localpilot.pinSession', 'localpilot.forkSession', 'localpilot.exportSession', 'localpilot.deleteSession', 'localpilot.openChangedFile'];
+    for (const id of rowCommands) {
+      assert.ok(commands.includes(id), `missing command ${id}`);
+      assert.ok(c.commands.some((x: { command: string }) => x.command === id), `${id} is declared`);
+      assert.ok(menus.commandPalette.some((m) => m.command === id && m.when === 'false'), `${id} is hidden from the Command Palette`);
+      assert.ok(menus['view/item/context'].some((m) => m.command === id && /agentsView/.test(m.when ?? '')), `${id} is on an Agents-view row`);
+    }
+    const agentsTitle = menus['view/title'].filter((m) => /agentsView/.test(m.when ?? ''));
+    assert.ok(!agentsTitle.some((m) => m.command === 'localpilot.openChat'), 'the Agents header does not repeat Open Chat');
+    assert.ok(menus['view/title'].some((m) => m.command === 'localpilot.openSettings' && /chatView/.test(m.when ?? '')), 'the chat view keeps its gear');
+    const when = (id: string) => agentsTitle.find((m) => m.command === id)?.when ?? '';
+    assert.match(when('localpilot.pauseAll'), /localpilot\.anyRunning && !localpilot\.anyPaused/);
+    assert.match(when('localpilot.resumeAll'), /localpilot\.anyPaused/);
+    assert.match(when('localpilot.stopAll'), /localpilot\.anyRunning/);
+    assert.match(when('localpilot.compareResults'), /localpilot\.hasBatches/);
+    // Worktree actions only on isolated rows, and apply/discard never while the agent is running.
+    const ctx = menus['view/item/context'];
+    const apply = ctx.filter((m) => m.command === 'localpilot.applyWorktree').map((m) => m.when ?? '');
+    assert.ok(apply.length && apply.every((w) => /isolated/.test(w) && !/running/.test(w)), `applyWorktree must be scoped to idle/paused isolated rows: ${apply.join(' | ')}`);
   });
 
   test('openSettings opens one webview panel; openWelcome re-targets the same panel', async function () {
@@ -323,5 +360,111 @@ suite('LocalPilot settings & setup', () => {
     const inFolder = providerScope({ globalValue: user, workspaceValue: ws, workspaceFolderValue: folder });
     assert.strictEqual(inFolder.target, vscode.ConfigurationTarget.WorkspaceFolder);
     assert.deepStrictEqual(inFolder.list, folder);
+  });
+
+  test('Settings page can edit and find the edit, internet and OTLP settings', () => {
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
+    const read = (rel: string) => fs.readFileSync(path.join(ext.extensionPath, rel), 'utf8');
+    const panel = read('src/ui/settingsPanel.ts');
+    const webview = read('media/settings.js');
+    const settingKeys = /const SETTING_KEYS = \[([\s\S]*?)\] as const;/.exec(panel)?.[1] ?? '';
+    const allowed = /const ALLOWED_COMMANDS = new Set\(\[([\s\S]*?)\]\);/.exec(panel)?.[1] ?? '';
+    const fieldIndex = /const FIELD_INDEX = \[([\s\S]*?)\n {2}\];/.exec(webview)?.[1] ?? '';
+    assert.ok(settingKeys && allowed && fieldIndex, 'SETTING_KEYS, ALLOWED_COMMANDS and FIELD_INDEX are found');
+    const props = ext.packageJSON.contributes.configuration.properties ?? Object.assign({}, ...[].concat(ext.packageJSON.contributes.configuration).map((c: { properties: object }) => c.properties));
+    const keys = [
+      'diffPreview', 'editTool', 'edit.reportNewErrors', 'checkpoints.enabled', 'webSearch.enabled',
+      'telemetry.otlp.enabled', 'telemetry.otlp.endpoint', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval', 'telemetry.otlp.exporters', 'telemetry.otlp.traceSamplePercent', 'telemetry.otlp.recordContent',
+    ];
+    for (const key of keys) {
+      assert.ok(settingKeys.includes(`'${key}'`), `${key} is writable from Settings (SETTING_KEYS)`);
+      assert.match(fieldIndex, new RegExp(`\\['\\w+', '${key.replace(/\./g, '\\.')}', '`), `${key} is in the settings search (FIELD_INDEX)`);
+      assert.ok(props[`localpilot.${key}`], `localpilot.${key} is declared in package.json`);
+    }
+    assert.ok(allowed.includes(`'localpilot.telemetry.testOtlp'`), 'Settings may run the OTLP test command');
+    assert.strictEqual(isUserOnlySetting('telemetry.otlp.endpoint'), true, 'OTLP export is never written to workspace settings');
+    assert.strictEqual(isUserOnlySetting('telemetry.enabled'), false);
+  });
+
+  test('Settings page can edit and find the viewer, PDF and compaction settings', () => {
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
+    const read = (rel: string) => fs.readFileSync(path.join(ext.extensionPath, rel), 'utf8');
+    const panel = read('src/ui/settingsPanel.ts');
+    const webview = read('media/settings.js');
+    const settingKeys = /const SETTING_KEYS = \[([\s\S]*?)\] as const;/.exec(panel)?.[1] ?? '';
+    const allowed = /const ALLOWED_COMMANDS = new Set\(\[([\s\S]*?)\]\);/.exec(panel)?.[1] ?? '';
+    const fieldIndex = /const FIELD_INDEX = \[([\s\S]*?)\n {2}\];/.exec(webview)?.[1] ?? '';
+    const props = ext.packageJSON.contributes.configuration.properties ?? Object.assign({}, ...[].concat(ext.packageJSON.contributes.configuration).map((c: { properties: object }) => c.properties));
+    const documents = [
+      'markdownViewer.scrollSync', 'markdownViewer.outlineDepth', 'markdownViewer.frontMatter', 'markdownViewer.mermaid', 'markdownViewer.exportTheme',
+      'pdfViewer.pageColors', 'pdfViewer.sidebar', 'pdfViewer.defaultZoom', 'pdfViewer.rangeThresholdMB', 'pdfViewer.maxFileSizeMB', 'pdf.maxReadSizeMB', 'pdf.maxChars',
+    ];
+    for (const key of documents) {
+      assert.ok(settingKeys.includes(`'${key}'`), `${key} is writable from Settings (SETTING_KEYS)`);
+      assert.match(fieldIndex, new RegExp(`\\['documents', '${key.replace(/\./g, '\\.')}', '`), `${key} is in the settings search under Markdown & PDF`);
+      assert.ok(props[`localpilot.${key}`], `localpilot.${key} is declared in package.json`);
+    }
+    assert.ok(settingKeys.includes(`'compaction.strategy'`), 'compaction.strategy is writable from Settings');
+    assert.match(fieldIndex, /\['agent', 'compaction\.strategy', '/, 'compaction.strategy is in the settings search');
+    assert.ok(props['localpilot.compaction.strategy'], 'localpilot.compaction.strategy is declared in package.json');
+    for (const id of ['localpilot.openMarkdownViewer', 'localpilot.openPdf']) {
+      assert.ok(allowed.includes(`'${id}'`), `Settings may run ${id}`);
+    }
+  });
+
+  test('Settings page can edit and find the terminal, conversation, memory, plugin marketplace and repository settings', () => {
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
+    const read = (rel: string) => fs.readFileSync(path.join(ext.extensionPath, rel), 'utf8');
+    const panel = read('src/ui/settingsPanel.ts');
+    const webview = read('media/settings.js');
+    const settingKeys = /const SETTING_KEYS = \[([\s\S]*?)\] as const;/.exec(panel)?.[1] ?? '';
+    const allowed = /const ALLOWED_COMMANDS = new Set\(\[([\s\S]*?)\]\);/.exec(panel)?.[1] ?? '';
+    const fieldIndex = /const FIELD_INDEX = \[([\s\S]*?)\n {2}\];/.exec(webview)?.[1] ?? '';
+    const props = ext.packageJSON.contributes.configuration.properties ?? Object.assign({}, ...[].concat(ext.packageJSON.contributes.configuration).map((c: { properties: object }) => c.properties));
+    const keys: [string, string][] = [
+      ['agent', 'terminal.profile'], ['agent', 'terminal.shellIntegrationTimeout'], ['agent', 'terminal.autoDetachSeconds'],
+      ['memory', 'memory.autoSave'], ['memory', 'history.includeCli'], ['agent', 'preferredLanguage'], ['agent', 'showTips'],
+      ['customize', 'plugins.marketplaces'], ['agent', 'repos'], ['mcp', 'mcp.watchServerFiles'],
+    ];
+    for (const [section, key] of keys) {
+      assert.ok(settingKeys.includes(`'${key}'`), `${key} is writable from Settings (SETTING_KEYS)`);
+      assert.match(fieldIndex, new RegExp(`\\['${section}', '${key.replace(/\./g, '\\.')}', '`), `${key} is in the settings search under ${section}`);
+      assert.ok(props[`localpilot.${key}`], `localpilot.${key} is declared in package.json`);
+    }
+    for (const id of ['localpilot.selectTerminalProfile', 'workbench.action.reloadWindow', 'localpilot.browsePlugins', 'localpilot.managePlugins']) {
+      assert.ok(allowed.includes(`'${id}'`), `Settings may run ${id}`);
+    }
+    const fromWebview = /type FromSettings =([\s\S]*?);\n/.exec(panel)?.[1] ?? '';
+    assert.match(fromWebview, /\{ type: 'pickFolder'; key: string/, 'the webview can ask for a folder dialog (Browse…)');
+    // The language options mirror the package.json enum.
+    const langs = (props['localpilot.preferredLanguage'].enum as string[]).filter((l) => l !== 'auto');
+    for (const l of langs) {
+      assert.ok(webview.includes(`'${l}'`), `"${l}" is offered in Answer in`);
+    }
+  });
+
+  test('every setting the Settings page writes can be found in its search, and the search hands off to VS Code settings', () => {
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
+    const read = (rel: string) => fs.readFileSync(path.join(ext.extensionPath, rel), 'utf8');
+    const panel = read('src/ui/settingsPanel.ts');
+    const webview = read('media/settings.js');
+    const settingKeys = [...(/const SETTING_KEYS = \[([\s\S]*?)\] as const;/.exec(panel)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const fieldIndex = /const FIELD_INDEX = \[([\s\S]*?)\n {2}\];/.exec(webview)?.[1] ?? '';
+    const indexed = new Set([...fieldIndex.matchAll(/\['\w+', '([^']+)', '/g)].map((m) => m[1]));
+    assert.ok(settingKeys.length > 50 && indexed.size > 50, 'SETTING_KEYS and FIELD_INDEX are found');
+    const missing = settingKeys.filter((k) => !indexed.has(k));
+    assert.deepStrictEqual(missing, [], `every SETTING_KEY has a FIELD_INDEX entry (missing: ${missing.join(', ')})`);
+    // "Search in VS Code settings" filters the Settings editor to this extension.
+    const extId = /const EXT_ID = '([^']+)'/.exec(webview)?.[1];
+    assert.strictEqual(extId, `${ext.packageJSON.publisher}.${ext.packageJSON.name}`);
+    const allowed = /const ALLOWED_COMMANDS = new Set\(\[([\s\S]*?)\]\);/.exec(panel)?.[1] ?? '';
+    assert.ok(allowed.includes(`'workbench.action.openSettings'`), 'Settings may open the VS Code Settings editor');
+    // The webview's User-only list mirrors isUserOnlySetting.
+    const userOnly = /const USER_ONLY = \(k\) => (.*);/.exec(webview)?.[1] ?? '';
+    for (const key of settingKeys) {
+      const prefixes = [...userOnly.matchAll(/k\.startsWith\('([^']+)'\)/g)].map((m) => m[1]);
+      const exact = [...userOnly.matchAll(/k === '([^']+)'/g)].map((m) => m[1]);
+      assert.strictEqual(exact.includes(key) || prefixes.some((p) => key.startsWith(p)), isUserOnlySetting(key), `USER_ONLY in settings.js agrees with isUserOnlySetting for ${key}`);
+    }
   });
 });

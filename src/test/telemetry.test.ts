@@ -3,8 +3,8 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { parseLogLine, Telemetry } from '../telemetry/telemetry';
-import type { LogEntry, TelemetryRemote, TelemetrySummary } from '../telemetry/telemetry';
+import { parseLogLine, summarize, Telemetry } from '../telemetry/telemetry';
+import type { LogEntry, TelemetryEvent, TelemetryRemote, TelemetrySummary } from '../telemetry/telemetry';
 
 type Api = { telemetry: { summary(days: number): Promise<TelemetrySummary>; logs(filter?: { level?: string; q?: string }): LogEntry[]; dir: string } };
 
@@ -85,5 +85,25 @@ suite('LocalPilot dashboard & telemetry', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test('spend is summed per day and per provider; local calls stay free', () => {
+    const day = 86_400_000;
+    const to = new Date(2026, 3, 10, 12).getTime();
+    const from = new Date(2026, 3, 8).getTime();
+    const call = (t: number, provider: string, costUsd?: number): TelemetryEvent => ({ type: 'model', t, sid: 's', model: `${provider}-m`, provider, mode: 'agent', depth: 0, promptTokens: 100, completionTokens: 10, costUsd, durationMs: 500, outcome: 'ok' });
+    const s = summarize([call(to - 2 * day, 'openai', 0.25), call(to, 'anthropic', 0.5), call(to, 'ollama')], { days: 3, from, to });
+    assert.strictEqual(s.series.length, 3);
+    assert.strictEqual(s.series[0].costUsd, 0.25);
+    assert.deepStrictEqual(s.series[0].costByProvider, { openai: 0.25 });
+    assert.strictEqual(s.series[1].costUsd, 0, 'a day without calls costs nothing');
+    assert.strictEqual(s.series[2].costUsd, 0.5);
+    assert.deepStrictEqual(s.series[2].costByProvider, { anthropic: 0.5 });
+    assert.strictEqual(s.totals.costUsd, 0.75);
+    assert.deepStrictEqual(s.providers, [
+      { provider: 'anthropic', calls: 1, pricedCalls: 1, costUsd: 0.5 },
+      { provider: 'openai', calls: 1, pricedCalls: 1, costUsd: 0.25 },
+      { provider: 'ollama', calls: 1, pricedCalls: 0, costUsd: 0 },
+    ]);
   });
 });

@@ -52,7 +52,11 @@ module.exports = {
   DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
   ConfigurationTarget: { Global: 1 },
   // Module-level references in UI modules pulled in by ChatController.
-  CodeActionKind: { QuickFix: 'quickfix', RefactorRewrite: 'refactor.rewrite' },
+  // Hierarchical kinds like VS Code's (`Empty.append('x')`, `contains`), enough for providers declared at load time.
+  CodeActionKind: (() => {
+    const kind = (value) => ({ value, append: (part) => kind(value ? `${value}.${part}` : part), contains: (other) => !value || other.value === value || other.value.startsWith(`${value}.`), intersects: (other) => kind(value).contains(other) || other.contains(kind(value)) });
+    return { Empty: kind(''), QuickFix: kind('quickfix'), Refactor: kind('refactor'), RefactorRewrite: kind('refactor.rewrite'), Source: kind('source') };
+  })(),
   ViewColumn: { Active: -1, Beside: -2 },
   ThemeIcon: class { constructor(id) { this.id = id; } },
   ThemeColor: class { constructor(id) { this.id = id; } },

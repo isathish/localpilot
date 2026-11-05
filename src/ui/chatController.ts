@@ -8,7 +8,7 @@ import { ChangeTracker } from '../agent/changeTracker';
 import { ChangedFile, gitCheckpoint, relativeIn, RestoreType } from '../agent/checkpoints';
 import { rewindAttachments } from './rewindDraft';
 import { SkillManager } from '../agent/skills';
-import { getConfig, setDefaultModel, setSkillEnabled } from '../config';
+import { configTarget, getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { currentEditor, EditorState, WorkspaceContext } from '../context/workspaceContext';
 import { FileIndex } from '../context/fileIndex';
@@ -94,7 +94,13 @@ export type ToWebview =
   | { type: 'event'; event: AgentEvent }
   /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
   | { type: 'skillInstall'; sessionId: string; name: string; ok: boolean; error?: string }
-  | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string }
+  /**
+   * `mandatory`: asked every time (no "Allow for session"), because the command is dangerous or the organization's
+   * policy requires it. `waitingSameKind`: other prompts of this chat (parallel workers) an "allow all" would answer too.
+   */
+  | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string; mandatory: boolean; mandatoryReason?: 'dangerous' | 'policy'; waitingSameKind: number }
+  /** The kinds a chat answered "Allow all … in this chat" for, shown as removable chips by the auto-approve bar. */
+  | { type: 'sessionGrants'; sessionId: string; kinds: string[] }
   /** The agent asks the user questions (ask_user); answered with `answer`. */
   | { type: 'question'; id: string; sessionId: string; questions: UserQuestion[] }
   | { type: 'questionResolved'; id: string }
@@ -147,7 +153,8 @@ export type ToWebview =
   | { type: 'taskSuggestions'; source: 'quick' | 'model'; items: TaskSuggestion[]; recent: string[] }
   /** Open the multitask launcher (from the Command Palette / Agents view). */
   | { type: 'openLauncher'; kind?: 'tasks' | 'bestof' }
-  | { type: 'toast'; level: 'info' | 'warn' | 'error'; text: string }
+  /** `action`: a button on the toast that posts `msg` back (e.g. Undo after Reject). */
+  | { type: 'toast'; level: 'info' | 'warn' | 'error'; text: string; action?: { label: string; msg: FromWebview } }
   /** "Improve prompt" progress: the rewritten draft streams in (`delta`), then `done` or `error`. */
   | { type: 'improvedPrompt'; sessionId: string; delta?: string; done?: boolean; text?: string; error?: string };
 
@@ -170,7 +177,8 @@ export type FromWebview =
   | { type: 'pinSession'; id: string }
   | { type: 'forkSession'; id: string; uptoIndex?: number }
   | { type: 'exportSession'; id: string; format?: 'markdown' | 'html' }
-  | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[] }
+  /** `modeOverride`: an empty-chat suggestion runs this one turn in Ask or Agent mode; the chat keeps its own mode. */
+  | { type: 'send'; sessionId: string; text: string; attachments?: string[]; images?: string[]; modeOverride?: string }
   | { type: 'retry'; sessionId: string }
   | { type: 'stop'; sessionId: string }
   /** Proceed While Running / Stop on a running command row (`id` = the run_command tool call id). */
@@ -196,6 +204,10 @@ export type FromWebview =
   | { type: 'resumeChild'; sessionId: string; childId: string }
   /** `feedback`: the reason given with a denial; the agent reads it instead of a bare refusal. */
   | { type: 'approval'; id: string; approved: boolean; remember?: boolean; feedback?: string }
+  /** Take back an "Allow all … in this chat" grant: the next action of that kind asks again. */
+  | { type: 'revokeGrant'; sessionId: string; kind: string }
+  /** The toast's "Open log" button. */
+  | { type: 'showLog' }
   /** A toggle in the composer's auto-approve bar (`approvals.<key>` or `autoMode`). */
   | { type: 'setApproval'; key: string; value: string }
   /** Answers to a `question` prompt; `answers: null` = skipped. */
@@ -219,9 +231,11 @@ export type FromWebview =
   | { type: 'attachActive' }
   | { type: 'attachRef'; ref: string }
   | { type: 'pickAttachment' }
-  | { type: 'compactNow'; sessionId: string }
+  /** `retry`: "Compact and retry" on a turn the model rejected as too long sends the last message again afterwards. */
+  | { type: 'compactNow'; sessionId: string; retry?: boolean }
   | { type: 'clearSession'; sessionId: string }
   | { type: 'openSettings'; section?: string }
+  | { type: 'setTipsEnabled'; enabled: boolean }
   | { type: 'autoSetupModels' }
   | { type: 'openExternal'; url: string }
   | { type: 'openInEditor' }
@@ -238,6 +252,8 @@ export type FromWebview =
   | { type: 'clientError'; where: string; message: string; stack?: string }
   | { type: 'keepChanges'; sessionId: string; fsPath?: string }
   | { type: 'undoChanges'; sessionId: string; fsPath?: string }
+  /** Undo of the last reject, within the tracker's redo window. */
+  | { type: 'redoChanges'; sessionId: string; token: number }
   | { type: 'showDiff'; sessionId: string; fsPath: string }
   /** `restoreType`: files only (`workspace`), conversation only (`task`) or both (the default). */
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number; restoreType?: RestoreType }
@@ -275,8 +291,9 @@ interface PendingApproval {
   title: string;
   detail: string;
   kind: string;
-  /** Required by the organization's policy: answered each time, never remembered for the session. */
+  /** Answered each time, never remembered for the session: a dangerous command or the organization's policy. */
   mandatory?: boolean;
+  mandatoryReason?: 'dangerous' | 'policy';
   resolve: (d: ApprovalDecision) => void;
   /** A native notification for this prompt is already on screen. */
   mirrored: boolean;
@@ -314,9 +331,17 @@ export class ChatController implements vscode.Disposable {
   private offers = new Map<string, SkillOffer>();
   private approvals = new Map<string, PendingApproval>();
   /** Native notifications for finished runs and long auto-approved commands (`localpilot.notifications`). */
-  private readonly notifier = new RunNotifier(() => this.anySurfaceVisible());
+  private readonly notifier = new RunNotifier(() => this.anySurfaceVisible(), {
+    retry: (id) => this.retry(id),
+    keep: (id) => {
+      this.tracker.keep(id);
+      this.pushChanges(id);
+    },
+  });
   /** ask_user prompts waiting for the user, by id. */
   private questions = new Map<string, { sessionId: string; questions: UserQuestion[]; resolve: (a: UserAnswer[] | null | undefined) => void; mirrored: boolean }>();
+  /** Run status from before a session started waiting on a prompt, restored once its last prompt is answered. */
+  private statusBeforePrompt = new Map<string, string | undefined>();
   private sessionApprovalMemory = new Map<string, Set<string>>();
   /** Change-tracker turn key of the last run started; keys only increase so Restore checkpoint survives compaction, /clear and Edit. */
   private lastCheckpoint = 0;
@@ -515,6 +540,10 @@ export class ChatController implements vscode.Disposable {
   }
 
   private broadcast(msg: ToWebview): void {
+    // A toast that points at the log gets a button that opens it.
+    if (msg.type === 'toast' && !msg.action && /\blog\b/i.test(msg.text)) {
+      msg = { ...msg, action: { label: 'Open log', msg: { type: 'showLog' } } };
+    }
     this.record(msg);
     if (msg.type === 'event') {
       this._onAgentEvent.fire(msg.event);
@@ -778,6 +807,8 @@ export class ChatController implements vscode.Disposable {
     this.broadcast(this.sessionMsg(s));
     this.pushChanges(s.id);
     this._onDidChangeActive.fire(s);
+    // A prompt of the chat the user just left is now out of sight.
+    this.mirrorPendingApprovals();
   }
 
   private pushChanges(sessionId: string): void {
@@ -1426,7 +1457,7 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       case 'send':
-        await this.send(msg.sessionId, msg.text, msg.attachments ?? [], msg.images);
+        await this.send(msg.sessionId, msg.text, msg.attachments ?? [], msg.images, msg.modeOverride === 'ask' || msg.modeOverride === 'agent' ? { mode: msg.modeOverride } : {});
         return;
       case 'retry':
         await this.retry(msg.sessionId);
@@ -1560,6 +1591,14 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       }
+      case 'revokeGrant':
+        if (this.sessionApprovalMemory.get(msg.sessionId)?.delete(msg.kind)) {
+          this.broadcastGrants(msg.sessionId);
+        }
+        return;
+      case 'showLog':
+        await vscode.commands.executeCommand('localpilot.showLogs');
+        return;
       case 'answer':
         this.settleQuestion(msg.id, msg.answers);
         return;
@@ -1729,6 +1768,7 @@ export class ChatController implements vscode.Disposable {
           return;
         }
         let finished: () => void = () => undefined;
+        let compacted = false;
         this.compacting.set(s.id, new Promise<void>((r) => (finished = r)));
         try {
           const { provider, model: picked } = await this.providers.resolve(s.model);
@@ -1760,12 +1800,16 @@ export class ChatController implements vscode.Disposable {
             }
           }
           this.broadcast({ type: 'toast', level: 'info', text: res.removed > 0 ? `Compacted ${res.removed} messages: ${res.before.toLocaleString()} → ${res.after.toLocaleString()} tokens` : 'Nothing to compact yet — the conversation is still short' });
+          compacted = true;
         } catch (e) {
           this.log.warn(`compact: ${e instanceof Error ? e.message : String(e)}`);
           this.broadcast({ type: 'toast', level: 'error', text: `Could not compact — the conversation was left as it was (${e instanceof Error ? e.message : String(e)})` });
         } finally {
           this.compacting.delete(s.id);
           finished();
+        }
+        if (msg.retry && compacted && this.store.get(s.id)) {
+          await this.retry(s.id);
         }
         return;
       }
@@ -1792,6 +1836,16 @@ export class ChatController implements vscode.Disposable {
       case 'openSettings':
         await vscode.commands.executeCommand('localpilot.openSettings', msg.section);
         return;
+      case 'setTipsEnabled': {
+        // The only setting the chat writes directly; the uiPrefs push that follows the change hides the row everywhere.
+        // Written to the scope that holds the value in effect, so a workspace showTips: true doesn't win silently.
+        const enabled = msg.enabled === true;
+        await vscode.workspace.getConfiguration('localpilot').update('showTips', enabled, configTarget('showTips'));
+        if (!enabled && vscode.workspace.getConfiguration('localpilot').get<boolean>('showTips') === false) {
+          this.toast('Tips turned off. Turn them back on in Settings → Agent & approvals.');
+        }
+        return;
+      }
       case 'autoSetupModels':
         await vscode.commands.executeCommand('localpilot.autoSetupModels');
         return;
@@ -1883,8 +1937,13 @@ export class ChatController implements vscode.Disposable {
         this.tracker.keep(msg.sessionId, msg.fsPath);
         return;
       case 'undoChanges': {
-        const n = await this.tracker.undo(msg.sessionId, msg.fsPath);
-        this.broadcast({ type: 'toast', level: 'info', text: `Reverted ${n} file${n === 1 ? '' : 's'}` });
+        const { count: n, token } = await this.tracker.reject(msg.sessionId, msg.fsPath);
+        this.broadcast({ type: 'toast', level: 'info', text: `Reverted ${n} file${n === 1 ? '' : 's'}`, ...(token !== undefined ? { action: { label: 'Undo', msg: { type: 'redoChanges', sessionId: msg.sessionId, token } } } : {}) });
+        return;
+      }
+      case 'redoChanges': {
+        const n = typeof msg.token === 'number' ? await this.tracker.redo(msg.token) : 0;
+        this.broadcast({ type: 'toast', level: n ? 'info' : 'warn', text: n ? `Restored the agent's edits to ${n} file${n === 1 ? '' : 's'}` : 'Too late to undo: the rejected edits are no longer kept' });
         return;
       }
       case 'showDiff': {
@@ -1956,7 +2015,7 @@ export class ChatController implements vscode.Disposable {
         await this.viewChanges(msg.sessionId, msg.scope);
         return;
       case 'openCheckpointSetting':
-        await vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.checkpoints.enabled');
+        await vscode.commands.executeCommand('localpilot.openSettings', 'agent');
         return;
     }
   }
@@ -2257,6 +2316,11 @@ export class ChatController implements vscode.Disposable {
     for (const r of runningCommands()) {
       post({ type: 'commandState', sessionId: r.sessionId, id: r.id, state: r.state, logPath: r.logPath });
     }
+    for (const [id, kinds] of this.sessionApprovalMemory) {
+      if (kinds.size) {
+        post({ type: 'sessionGrants', sessionId: id, kinds: [...kinds] });
+      }
+    }
     const s = this.activeSession;
     if (s) {
       post(this.sessionMsg(s));
@@ -2449,7 +2513,7 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean } = {}): Promise<string> {
+  async send(sessionId: string, text: string, attachments: string[] = [], images?: string[], opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean; mode?: Session['mode'] } = {}): Promise<string> {
     if (!this.store.get(sessionId)) {
       throw new Error('Session not found');
     }
@@ -2488,7 +2552,7 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean }): Promise<string> {
+  private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; unattended?: boolean; mode?: Session['mode'] }): Promise<string> {
     const mcpSlash = opts.display ? undefined : parseMcpSlash(text);
     let mcpPromptImages = 0;
     if (mcpSlash) {
@@ -2652,6 +2716,7 @@ export class ChatController implements vscode.Disposable {
           }
         },
         modelRef: opts.modelRef,
+        mode: planTurn ? undefined : opts.mode,
         permissionAllow: opts.permissionAllow,
         signal: control.signal,
         control,
@@ -2700,6 +2765,7 @@ export class ChatController implements vscode.Disposable {
       });
       return result;
     } catch (e) {
+      turnErrored = true;
       // The agent loop already surfaced model failures with a friendlier message; don't show them twice.
       if (!(e as { reported?: boolean }).reported) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -2736,17 +2802,11 @@ export class ChatController implements vscode.Disposable {
       this.pushChanges(sessionId);
       // Last agent of a batch done: offer the review (compare and pick for Best of N, review each for split tasks).
       if (session.group && session.group.size > 1 && !this.groupSessions(session.group.id).some((s) => this.runs.has(s.id))) {
-        const g = session.group;
-        const label = g.kind === 'bestOf' ? 'Compare results' : 'Review results';
-        const text = g.kind === 'bestOf' ? `All ${g.size} agents finished “${g.prompt.slice(0, 50)}”. Compare their results and apply the best one.` : `All ${g.size} agents finished their tasks. Review what each one changed and apply what you like.`;
-        void vscode.window.showInformationMessage(text, label).then((pick) => {
-          if (pick) {
-            void vscode.commands.executeCommand('localpilot.compareResults', g.id);
-          }
-        });
+        this.notifier.groupFinished(session.group, session.group.size);
       }
       // A run the user stopped needs no notice; group runs get the review offer above instead.
-      this.notifier.finished(sessionId, session.title, control.aborted || (!!session.group && session.group.size > 1));
+      const silent = control.aborted || (!!session.group && session.group.size > 1);
+      this.notifier.finished(sessionId, session.title, silent, turnErrored ? 'error' : 'ok', this.tracker.forSession(sessionId).length);
     }
   }
 
@@ -2881,7 +2941,9 @@ export class ChatController implements vscode.Disposable {
         continue;
       }
       this.tracker.forget(s.id);
-      this.sessionApprovalMemory.delete(s.id);
+      if (this.sessionApprovalMemory.delete(s.id)) {
+        this.broadcastGrants(s.id);
+      }
       this.afterTurn.clear(s.id);
       if (s.hadMessages) {
         await this.runner.hooks?.sessionEnd(s.id, 'other', s.root);
@@ -3117,9 +3179,23 @@ export class ChatController implements vscode.Disposable {
   }
 
   private approvalMandatory(kind: string, mandatory?: boolean): boolean {
-    // An organization floor for this kind (or a policy that forbids bypassing prompts) is never answered from session memory.
+    return !!this.mandatoryReason(kind, mandatory);
+  }
+
+  /**
+   * Why a prompt is asked every time, if it is. An organization floor for this kind (or a policy that forbids bypassing
+   * prompts) is never answered from session memory; a caller's `mandatory` is a destructive command or an
+   * organization `ask` rule, told apart by whether the policy has any ask rules for non-terminal actions.
+   */
+  private mandatoryReason(kind: string, mandatory?: boolean): 'dangerous' | 'policy' | undefined {
     const managed = getManagedPolicy(this.log);
-    return !!mandatory || !!managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions;
+    if (managed.approvals[kind as keyof typeof managed.approvals] || managed.disableBypassPermissions) {
+      return 'policy';
+    }
+    if (!mandatory) {
+      return undefined;
+    }
+    return kind !== 'terminal' && managed.permissions.ask.length ? 'policy' : 'dangerous';
   }
 
   /** False when `requestApproval` would answer from "Allow for session" without showing anything. */
@@ -3128,14 +3204,15 @@ export class ChatController implements vscode.Disposable {
   }
 
   requestApproval(sessionId: string, title: string, detail: string, kind: string, opts?: { mandatory?: boolean }): Promise<ApprovalDecision> {
-    const mandatory = this.approvalMandatory(kind, opts?.mandatory);
+    const mandatoryReason = this.mandatoryReason(kind, opts?.mandatory);
+    const mandatory = !!mandatoryReason;
     if (!this.willPromptApproval(sessionId, kind, mandatory)) {
       return Promise.resolve({ ok: true });
     }
     this.notifier.asked(sessionId);
     const id = `${sessionId}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     return new Promise<ApprovalDecision>((resolve) => {
-      this.approvals.set(id, { sessionId, title, detail, kind, mandatory, resolve, mirrored: false });
+      this.approvals.set(id, { sessionId, title, detail, kind, mandatory, mandatoryReason, resolve, mirrored: false });
       if (this.promptsNative(sessionId)) {
         // The @localpilot participant runs this session, or no surface can show the card — fall back to a native dialog.
         void vscode.window.showWarningMessage(`${title}\n${detail}`.slice(0, 1000), { modal: true }, ...(mandatory ? ['Allow'] : ['Allow', 'Allow for session'])).then((choice) => {
@@ -3150,7 +3227,9 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       // Recorded in the replay buffer too, so a chat that is closed and reopened while the agent waits shows the prompt again.
-      this.broadcast({ type: 'approval', id, sessionId, title, detail, kind });
+      const waitingSameKind = mandatory ? 0 : [...this.approvals].filter(([other, p]) => other !== id && p.sessionId === sessionId && p.kind === kind && !p.mandatory).length;
+      this.broadcast({ type: 'approval', id, sessionId, title, detail, kind, mandatory, mandatoryReason, waitingSameKind });
+      this.markWaiting(sessionId, `Waiting for your approval: ${title}`);
       this.mirrorPendingApprovals();
     });
   }
@@ -3165,6 +3244,42 @@ export class ChatController implements vscode.Disposable {
     this.forgetApproval(id);
     pending.resolve(toDecision({ ok, feedback }));
     this.broadcast({ type: 'approvalResolved', id });
+    this.clearWaiting(pending.sessionId);
+  }
+
+  /** Whether the session waits on an approval or a question shown in the chat. */
+  hasPendingPrompt(sessionId: string): boolean {
+    return [...this.approvals.values(), ...this.questions.values()].some((p) => p.sessionId === sessionId);
+  }
+
+  /** Number of sessions waiting on the user. */
+  pendingCount(): number {
+    return new Set([...this.approvals.values(), ...this.questions.values()].map((p) => p.sessionId)).size;
+  }
+
+  private markWaiting(sessionId: string, status: string): void {
+    if (!this.statusBeforePrompt.has(sessionId)) {
+      this.statusBeforePrompt.set(sessionId, this.runStatus.get(sessionId));
+    }
+    this.runStatus.set(sessionId, status);
+    this._onDidChangeRuns.fire();
+  }
+
+  private clearWaiting(sessionId: string): void {
+    const next = [...this.approvals.values()].find((p) => p.sessionId === sessionId);
+    if (next || [...this.questions.values()].some((p) => p.sessionId === sessionId)) {
+      this.runStatus.set(sessionId, next ? `Waiting for your approval: ${next.title}` : 'Waiting for your answer');
+    } else if (this.statusBeforePrompt.has(sessionId)) {
+      const before = this.statusBeforePrompt.get(sessionId);
+      this.statusBeforePrompt.delete(sessionId);
+      // A run that ended meanwhile already cleared its status.
+      if (this.runs.has(sessionId) && before !== undefined) {
+        this.runStatus.set(sessionId, before);
+      } else {
+        this.runStatus.delete(sessionId);
+      }
+    }
+    this._onDidChangeRuns.fire();
   }
 
   /**
@@ -3180,6 +3295,7 @@ export class ChatController implements vscode.Disposable {
     return new Promise((resolve) => {
       this.questions.set(id, { sessionId, questions, resolve, mirrored: false });
       this.broadcast({ type: 'question', id, sessionId, questions });
+      this.markWaiting(sessionId, 'Waiting for your answer');
       this.mirrorPendingApprovals();
     });
   }
@@ -3193,28 +3309,33 @@ export class ChatController implements vscode.Disposable {
     this.forgetApproval(id);
     pending.resolve(answers);
     this.broadcast({ type: 'questionResolved', id });
+    this.clearWaiting(pending.sessionId);
   }
 
   /**
-   * While no chat surface is visible, every prompt still waiting gets a native notification (once), so an agent that
-   * raised it just before the chat was hidden, closed or moved never stalls unnoticed. Chosen in the notification, the
-   * answer also closes the prompt in the webview; dismissed, the prompt simply stays in the chat.
+   * Every prompt the user cannot see (no chat surface visible, or the chat shows another session, as for a background
+   * agent of a parallel batch) gets a native notification, once, so an agent never stalls unnoticed. Chosen in the
+   * notification, the answer also closes the prompt in the webview; dismissed, the prompt simply stays in the chat.
    */
   private mirrorPendingApprovals(): void {
-    if ((!this.approvals.size && !this.questions.size) || this.anySurfaceVisible()) {
+    if (!this.approvals.size && !this.questions.size) {
       return;
     }
+    const visible = this.anySurfaceVisible();
+    const unseen = (sessionId: string): boolean => !visible || sessionId !== this.activeSessionId;
     for (const pending of this.questions.values()) {
-      if (pending.mirrored) {
+      if (pending.mirrored || !unseen(pending.sessionId)) {
         continue;
       }
       pending.mirrored = true;
       const session = this.store.get(pending.sessionId);
       const n = pending.questions.length;
-      void vscode.window.showInformationMessage(`LocalPilot${session ? ` · ${session.title}` : ''} has ${n === 1 ? 'a question' : `${n} questions`} for you`, 'Show chat').then((choice) => choice && vscode.commands.executeCommand('localpilot.openChat'));
+      void vscode.window
+        .showInformationMessage(`LocalPilot${session ? ` · ${session.title}` : ''} has ${n === 1 ? 'a question' : `${n} questions`} for you`, 'Show chat')
+        .then((choice) => choice && vscode.commands.executeCommand('localpilot.openSession', pending.sessionId));
     }
     for (const [id, pending] of this.approvals) {
-      if (pending.mirrored) {
+      if (pending.mirrored || !unseen(pending.sessionId)) {
         continue;
       }
       pending.mirrored = true;
@@ -3226,7 +3347,7 @@ export class ChatController implements vscode.Disposable {
             return; // already answered in the webview
           }
           if (choice === 'Show chat') {
-            void vscode.commands.executeCommand('localpilot.openChat');
+            void vscode.commands.executeCommand('localpilot.openSession', pending.sessionId);
             return;
           }
           if (choice === undefined) {
@@ -3242,8 +3363,16 @@ export class ChatController implements vscode.Disposable {
 
   rememberApproval(sessionId: string, kind: string): void {
     const set = this.sessionApprovalMemory.get(sessionId) ?? new Set<string>();
+    const added = !set.has(kind);
     set.add(kind);
     this.sessionApprovalMemory.set(sessionId, set);
+    if (added) {
+      this.broadcastGrants(sessionId);
+    }
+  }
+
+  private broadcastGrants(sessionId: string): void {
+    this.broadcast({ type: 'sessionGrants', sessionId, kinds: [...(this.sessionApprovalMemory.get(sessionId) ?? [])] });
   }
 
   /** Slash commands handled locally (no model call). Returns undefined when the text is a normal prompt. */

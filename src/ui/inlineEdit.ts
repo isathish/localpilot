@@ -271,7 +271,9 @@ export function singleLine(block: string, sep: string): string | undefined {
 
 /** Quick-fix / refactor light-bulb actions. */
 export class LocalPilotCodeActions implements vscode.CodeActionProvider {
-  static readonly kinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.RefactorExtract, vscode.CodeActionKind.RefactorRewrite];
+  // Explaining changes nothing, so it is not a refactoring; it gets its own kind instead of Refactor > Extract.
+  static readonly explainKind = vscode.CodeActionKind.Empty.append('localpilot.explain');
+  static readonly kinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.RefactorRewrite, LocalPilotCodeActions.explainKind];
 
   provideCodeActions(doc: vscode.TextDocument, range: vscode.Range | vscode.Selection, ctx: vscode.CodeActionContext): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
@@ -301,8 +303,8 @@ export class LocalPilotCodeActions implements vscode.CodeActionProvider {
       }
     };
     action('Add to LocalPilot Chat', vscode.CodeActionKind.QuickFix, 'localpilot.addToChat');
-    action('Explain with LocalPilot', vscode.CodeActionKind.RefactorExtract, 'localpilot.explainSelection');
-    action('Improve with LocalPilot', vscode.CodeActionKind.RefactorRewrite, 'localpilot.refactorSelection');
+    action('Explain Selection with LocalPilot', LocalPilotCodeActions.explainKind, 'localpilot.explainSelection');
+    action('Refactor Selection with LocalPilot', vscode.CodeActionKind.RefactorRewrite, 'localpilot.refactorSelection');
     if (!range.isEmpty && wanted(vscode.CodeActionKind.RefactorRewrite)) {
       const edit = new vscode.CodeAction('Edit with LocalPilot…', vscode.CodeActionKind.RefactorRewrite);
       edit.command = { command: 'localpilot.inlineEdit', title: 'Edit with LocalPilot' };

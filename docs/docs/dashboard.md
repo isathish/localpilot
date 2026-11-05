@@ -88,6 +88,8 @@ The CLI writes its own log to `~/.localpilot/cli.log` (add `-v` for debug lines)
 
 ## Telemetry settings
 
+Recording, retention, Redis storage and OpenTelemetry export are set in **Settings → Telemetry** (under *Data & system* in the sidebar, or **Telemetry settings** in the Dashboard's toolbar). The page's first line says where usage data goes: only this machine, or also the Redis server and OTLP collector you configured, shown by host and port (a password in the Redis URL is never shown). **Delete all recorded data…** is on the same page.
+
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `localpilot.telemetry.enabled` | `true` | Record usage metrics locally. Turning it off stops recording and also stops [learning from usage]({{ '/docs/models/#learning-from-your-usage' | relative_url }}). The log is still mirrored for the viewer. |
@@ -98,13 +100,13 @@ With Redis on, the data goes to the server you configured rather than staying in
 
 ## Export to OpenTelemetry
 
-Turn on `localpilot.telemetry.otlp.enabled` to also send telemetry to your own collector (otel-collector, Grafana Alloy, or a self-hosted Langfuse or Phoenix through their OTLP endpoints). It is plain OTLP/HTTP with JSON bodies, works in VS Code and the CLI, and carries the resource attributes `service.name=localpilot` and `service.version`. Export needs `localpilot.telemetry.enabled`: while local recording is off nothing is exported, not even log lines, and a warning in the log says so.
+In **Settings → Telemetry → Export to your OpenTelemetry collector**, switch on *Send telemetry to an OTLP collector* (`localpilot.telemetry.otlp.enabled`) to also send telemetry to your own collector (otel-collector, Grafana Alloy, or a self-hosted Langfuse or Phoenix through their OTLP endpoints). It is plain OTLP/HTTP with JSON bodies, works in VS Code and the CLI, and carries the resource attributes `service.name=localpilot` and `service.version`. Export needs `localpilot.telemetry.enabled`: while local recording is off nothing is exported, not even log lines, and a warning in the log says so.
 
 - **Logs** (`/v1/logs`): every event above as a record named `localpilot.<type>` with its fields as attributes, plus the LocalPilot log lines.
 - **Metrics** (`/v1/metrics`, every `metricsInterval` seconds, cumulative): `localpilot.events`, `localpilot.model.requests`, `localpilot.model.duration`, `localpilot.model.ttft`, `localpilot.tokens`, `localpilot.tool.calls`, `localpilot.tool.duration`, `localpilot.runs`, `localpilot.run.duration`, and counters for completions, tasks, hooks, MCP calls and accepted/rejected edit lines.
 - **Traces** (`/v1/traces`, add `traces` to `localpilot.telemetry.otlp.exporters`): an `invoke_agent` span per run (subagents nest under the tool call that started them), a `chat <model>` span per model request and an `execute_tool <name>` span per tool call, with `gen_ai.*` attributes (model, provider, token usage, finish reason, tool name and call id). `traceSamplePercent` keeps that share of runs. Prompts, replies, tool input/output and error text are added only with `recordContent: true`; without it a failed span's status message is just `tool error` or the run outcome. Events recorded during a span get its `traceId` and `spanId`, so logs and traces link up.
 
-Exports are batched (up to 512 items, at least every 5 seconds); at most 2048 wait while the collector is unreachable, and the oldest are dropped first. The standard variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL` (only `http/json`; other values log a warning) and `OTEL_METRIC_EXPORT_INTERVAL` override the settings. Set `LOCALPILOT_OTEL_DEBUG=1` to log the resolved configuration and the result of every export. **LocalPilot: Test OTLP Connection** sends one `localpilot.test.connection` record and shows the HTTP status.
+Exports are batched (up to 512 items, at least every 5 seconds); at most 2048 wait while the collector is unreachable, and the oldest are dropped first. The standard variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL` (only `http/json`; other values log a warning) and `OTEL_METRIC_EXPORT_INTERVAL` override the settings. Set `LOCALPILOT_OTEL_DEBUG=1` to log the resolved configuration and the result of every export. **Test connection** next to the endpoint in Settings (or **LocalPilot: Test OTLP Connection**) sends one `localpilot.test.connection` record and shows the collector's HTTP status or the error under the field. A field that an environment variable overrides is marked *Overridden by OTEL_…* and cannot be edited there. The OTLP settings are User settings only; a workspace cannot redirect your telemetry.
 
 **Export…** writes every recorded event plus the current log buffer to a JSON file you choose. **Delete all recorded data…** removes the folder's contents after you confirm.
 

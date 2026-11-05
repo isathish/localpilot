@@ -18,8 +18,12 @@ export type FromPdfViewer =
   | { type: 'openAnyway' }
   | { type: 'openExternal' }
   | { type: 'reveal' }
-  | { type: 'ask' }
-  | { type: 'askSelection'; text: string; page: number }
+  /** `key`: sent by Ctrl/Cmd+' in the webview (the keybinding's command then stands down). */
+  | { type: 'ask'; key?: boolean }
+  /** "Viewer settings…" and the too-large panel's "Change limit…": Settings → Markdown & PDF. */
+  | { type: 'openSettings' }
+  /** `text` is cut to `MAX_QUOTE` by the webview; `total` is the selection's full length when it was cut. */
+  | { type: 'askSelection'; text: string; page: number; total?: number; key?: boolean }
   | { type: 'attachImage'; name: string; data: string; mime: 'image/png' }
   | { type: 'copyText'; text: string }
   | { type: 'position'; page: number; scale: string | number }
@@ -30,7 +34,7 @@ export const MAX_PAGE_IMAGE_BYTES = 12 * 1024 * 1024;
 /** Largest single range the webview may ask for, and the most requests in flight at once. */
 export const MAX_RANGE_BYTES = 4 * 1024 * 1024;
 export const MAX_PENDING_RANGES = 8;
-/** Characters of a selection quoted into the chat draft. */
+/** Characters of a selection or document quoted into the chat draft, the one limit of both viewers (sent to their webviews). */
 export const MAX_QUOTE = 4000;
 /** Per-file reading positions kept in workspace state. */
 export const MAX_POSITIONS = 200;
@@ -68,8 +72,10 @@ export function validatePdfViewerMessage(raw: unknown): FromPdfViewer | undefine
     case 'openAnyway':
     case 'openExternal':
     case 'reveal':
-    case 'ask':
+    case 'openSettings':
       return { type: m.type };
+    case 'ask':
+      return m.key === true ? { type: 'ask', key: true } : { type: 'ask' };
     case 'clientError':
       return { type: 'clientError', where: str(m.where, 200) ?? '?', message: str(m.message, 4000) ?? '?', stack: str(m.stack, 8000) };
     case 'range': {
@@ -85,7 +91,8 @@ export function validatePdfViewerMessage(raw: unknown): FromPdfViewer | undefine
     case 'askSelection': {
       const text = typeof m.text === 'string' ? m.text.slice(0, MAX_QUOTE).trim() : '';
       const page = int(m.page, 1e6);
-      return text && page ? { type: 'askSelection', text, page } : undefined;
+      const total = int(m.total, 1e8);
+      return text && page ? { type: 'askSelection', text, page, ...(total !== undefined && total > text.length ? { total } : {}), ...(m.key === true ? { key: true } : {}) } : undefined;
     }
     case 'attachImage': {
       const img = validatePageImage(m);
@@ -152,6 +159,14 @@ export function rememberPosition(all: Record<string, PdfPosition>, key: string, 
   }
   next[key] = pos;
   return next;
+}
+
+/** The draft both viewers (PDF and Markdown) start an "Ask about this document" with. */
+export const askDraft = (fileName: string): string => `About ${fileName}: `;
+
+/** The viewer toast when a selection was longer than the quote limit. */
+export function quoteCutNotice(total: number): string {
+  return `Quoted the first ${MAX_QUOTE.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} characters. Attach the file to include everything.`;
 }
 
 /** The draft placed in the chat for "Ask about selection": the selection quoted, then room for the question. */

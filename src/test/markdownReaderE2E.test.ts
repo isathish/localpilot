@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { buildExportDocument, exportImageSrc, MAX_INLINE_IMAGE } from '../ui/markdown/export';
 import { DEFAULT_PREFS } from '../ui/markdown/prefs';
 import { askAboutFile, ReaderChat } from '../ui/markdown/viewSession';
+import { askDraft } from '../pdf/viewerMessages';
 
 // 1×1 transparent PNG.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
@@ -34,7 +35,7 @@ suite('Markdown reader: Ask LocalPilot and export end to end', () => {
     const drafts: string[] = [];
     const chat: ReaderChat = { addToComposer: (text, attachments) => void calls.push({ text, attachments }), draft: (t) => void drafts.push(t) };
     await askAboutFile(chat, vscode.Uri.file(file));
-    assert.deepStrictEqual(calls, [{ text: 'About this document: ', attachments: [vscode.workspace.asRelativePath(vscode.Uri.file(file))] }]);
+    assert.deepStrictEqual(calls, [{ text: askDraft('ask.md'), attachments: [vscode.workspace.asRelativePath(vscode.Uri.file(file))] }]);
     assert.deepStrictEqual(drafts, [], 'no separate, unbuffered draft');
   });
 

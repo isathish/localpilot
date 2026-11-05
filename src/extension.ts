@@ -79,6 +79,7 @@ import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } 
 import { RedisTelemetry } from './storage/redisTelemetry';
 import { setTelemetryRecorder } from './telemetry/catalog';
 import { attachOtlp } from './telemetry/otlpSetup';
+import { resolveOtlpConfig } from './telemetry/otlp';
 import { probeRedis, restartRedis, setupRedis } from './storage/redisSetup';
 import { TaskQueue } from './agent/taskQueue';
 import { AutoReviewer } from './agent/autoReviewer';
@@ -499,11 +500,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const n = controller.runningSessionIds.length;
     agentsView.badge = n ? { value: n, tooltip: `${n} agent${n === 1 ? '' : 's'} running` } : undefined;
     void vscode.commands.executeCommand('setContext', 'localpilot.hasChanges', tracker.count > 0);
+    // Drive the Agents title bar: Pause/Resume/Stop All and Compare Results only show when they would do something.
+    void vscode.commands.executeCommand('setContext', 'localpilot.anyRunning', n > 0);
+    void vscode.commands.executeCommand('setContext', 'localpilot.anyPaused', controller.pausedSessionIds.length > 0);
+    void vscode.commands.executeCommand('setContext', 'localpilot.hasBatches', store.list().some((s) => s.group));
   };
-  context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge));
+  context.subscriptions.push(controller.onDidChangeRuns(updateAgentsBadge), tracker.onDidChange(updateAgentsBadge), store.onDidChange(updateAgentsBadge));
+  updateAgentsBadge();
   registerChatParticipant(context, controller);
   registerUriHandler(context, controller, () => view.reveal());
-  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry, providerSecrets, () => tools.list().map((t) => ({ name: t.definition.name, description: t.definition.description.split(/(?<=\.)\s/)[0].slice(0, 160) })));
+  const settingsPanel = new SettingsPanel(context, providers, modelManager, skills, mcp, memory, store, log, () => controller.runningSessionIds, telemetry, providerSecrets, () => tools.list().map((t) => ({ name: t.definition.name, description: t.definition.description.split(/(?<=\.)\s/)[0].slice(0, 160) })),
+    () => otlp.test(),
+    // Resolved fresh: the state push after a settings change can run before otlp.sync() has caught up.
+    () => {
+      const t = getConfig().telemetry;
+      const c = resolveOtlpConfig(t.otlp, process.env, String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'));
+      const offBecause = !c.enabled ? 'localpilot.telemetry.otlp.enabled' : !t.enabled ? 'localpilot.telemetry.enabled' : undefined;
+      return { enabled: !offBecause, offBecause, endpoint: c.endpoint, fromEnv: c.fromEnv };
+    });
   settingsPanel.learner = learner;
   // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
   const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
@@ -563,12 +577,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   status.name = 'LocalPilot';
   status.command = 'localpilot.statusMenu';
   context.subscriptions.push(status);
+  // What the status bar last showed, so its menu offers setup when no model is reachable and names the same model.
+  let statusModels = -1;
+  let statusModel: string | undefined;
   const refreshStatus = async () => {
     const cfg = getConfig();
     const models = await providers.listModels().catch(() => []);
+    statusModels = models.length;
+    void vscode.commands.executeCommand('setContext', 'localpilot.hasModels', models.length > 0);
     // Show what will actually answer: the router substitutes an offline/disabled default with the best available model.
     const routed = models.length ? await providers.route({ start: false }).catch(() => undefined) : undefined;
     const current = routed?.model.id ?? cfg.defaultModel ?? 'no model';
+    statusModel = routed?.model.id ?? cfg.defaultModel;
     const pulling = modelManager.activeJobs.find((j) => j.kind === 'pull');
     const running = controller.runningSessionIds.length;
     const name = current.split('/').pop();
@@ -584,7 +604,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     status.backgroundColor = models.length || pulling ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
     status.tooltip = pulling
       ? `LocalPilot · downloading ${pulling.model} — ${pulling.detail}`
-      : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}${cfg.autoMode.enabled ? '\nAuto mode on: a local reviewer approves safe actions' : ''}\nClick for chat, models, layout and settings`;
+      : !models.length
+        ? 'LocalPilot: no model server found. Click to set one up.'
+        : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}${cfg.autoMode.enabled ? '\nAuto mode on: a local reviewer approves safe actions' : ''}\nClick for chat, models, layout and settings`;
+    const waiting = controller.pendingCount();
+    if (waiting) {
+      status.text += ` $(bell-dot) ${waiting}`;
+      status.tooltip = `${waiting === 1 ? '1 agent needs' : `${waiting} agents need`} your approval\n${status.tooltip}`;
+    }
     status.show();
   };
   void refreshStatus();
@@ -681,6 +708,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   void detection.then(warmCompletion);
   context.subscriptions.push(vscode.window.onDidChangeWindowState((s) => s.focused && warmCompletion()));
 
+  // Once ever, when the first run already finds a model: say which one answers and offer the walkthrough.
+  const READY_SHOWN_KEY = 'localpilot.readyShown';
+  const offerTour = async () => {
+    if (context.globalState.get(READY_SHOWN_KEY)) {
+      return;
+    }
+    await context.globalState.update(READY_SHOWN_KEY, true);
+    const routed = await providers.route({ start: false }).catch(() => undefined);
+    const model = (routed?.model.id ?? getConfig().defaultModel ?? 'a local model').split('/').pop();
+    const pkg = context.extension.packageJSON as { publisher?: string; name?: string };
+    const pick = await vscode.window.showInformationMessage(`LocalPilot is ready with ${model}.`, 'Open chat', 'Take the tour');
+    if (pick === 'Open chat') {
+      void vscode.commands.executeCommand('localpilot.openChat');
+    } else if (pick === 'Take the tour') {
+      void vscode.commands.executeCommand('workbench.action.openWalkthrough', `${pkg.publisher ?? 'localpilot'}.${pkg.name ?? 'localpilot-agent'}#localpilot.gettingStarted`, false);
+    }
+  };
   // First run: open the setup screen when nothing has been configured yet and no local model server is reachable.
   if (!context.globalState.get(WELCOMED_KEY) && getConfig().showWelcomeOnStartup) {
     void detection.then(() => providers.listModels().catch(() => [])).then((models) => {
@@ -691,6 +735,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         settingsPanel.show('setup');
       } else {
         void context.globalState.update(WELCOMED_KEY, true);
+        void offerTour();
       }
     });
   } else {
@@ -741,10 +786,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
 
   cmd('localpilot.openSettings', (section?: unknown) => settingsPanel.show('settings', typeof section === 'string' ? (section as SettingsSection) : undefined));
   cmd('localpilot.openMarkdownViewer', async (arg?: unknown) => {
-    // Explorer / editor-title pass a Uri; the palette uses the active editor.
-    const uri = arg instanceof vscode.Uri ? arg : vscode.window.activeTextEditor?.document.uri;
+    // Explorer / editor-title pass a Uri; the palette uses the active editor, then a Markdown file on screen (the
+    // Settings page has the focus when its button runs this), then asks for a file.
+    const uri =
+      arg instanceof vscode.Uri
+        ? arg
+        : (vscode.window.activeTextEditor?.document.uri ??
+          vscode.window.visibleTextEditors.find((e) => e.document.languageId === 'markdown')?.document.uri ??
+          (await vscode.window.showOpenDialog({ canSelectMany: false, openLabel: 'Open in Markdown Reader', filters: { Markdown: ['md', 'markdown', 'mdx'] }, defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri }))?.[0]);
     if (!uri) {
-      void vscode.window.showInformationMessage('Open a Markdown file first, or use "Open as document" on a chat answer.');
       return;
     }
     await markdownViewer.showFile(uri);
@@ -780,7 +830,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
 
   cmd('localpilot.openChat', () => view.reveal());
-  cmd('localpilot.openChatInEditor', () => view.openInEditor());
+  cmd('localpilot.openChatInEditor', async (arg?: unknown) => {
+    // From an Agents-view row: open that chat, not the one on screen.
+    const id = (arg as { session?: { id: string } } | undefined)?.session?.id;
+    if (id) {
+      await controller.handle({ type: 'selectSession', id });
+    }
+    view.openInEditor();
+  });
   cmd('localpilot.moveChat', () => view.pickLocation());
   // The views switch containers through their `when` clauses; a settings change (from Move Chat To…, the Settings
   // UI or settings.json) only needs the chat revealed in its new home — a container is hidden until something focuses it.
@@ -803,18 +860,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.statusMenu', async () => {
     const cfg = getConfig();
     const where = CHAT_LOCATIONS.find((l) => l.id === getChatLocation());
+    const modelName = statusModel?.split('/').pop();
     const items: (vscode.QuickPickItem & { run?: () => unknown })[] = [
+      ...(statusModels === 0
+        ? [
+            { label: '$(rocket) Set Up Models Automatically', description: 'installs Ollama and a starter model', run: () => vscode.commands.executeCommand('localpilot.autoSetupModels') },
+            { label: '$(refresh) Check for model servers again', run: () => vscode.commands.executeCommand('localpilot.refreshModels') },
+            { label: '$(gear) Open Setup', run: () => vscode.commands.executeCommand('localpilot.openWelcome') },
+            { label: '', kind: vscode.QuickPickItemKind.Separator },
+          ]
+        : []),
       { label: '$(localpilot-logo) Open Chat', description: where ? `in the ${where.label}` : undefined, run: () => view.reveal() },
       { label: '$(add) New Chat', run: () => vscode.commands.executeCommand('localpilot.newSession') },
       { label: '$(run-all) Run Tasks in Parallel…', run: () => vscode.commands.executeCommand('localpilot.runParallelTasks') },
       { label: '', kind: vscode.QuickPickItemKind.Separator },
-      { label: '$(server) Select Model…', description: cfg.defaultModel || 'auto', run: () => vscode.commands.executeCommand('localpilot.selectModel') },
+      { label: '$(server) Select Default Model…', description: modelName ? `${modelName}${statusModel === cfg.defaultModel ? ' (default)' : ''}` : statusModels === 0 ? 'no model' : 'auto', run: () => vscode.commands.executeCommand('localpilot.selectModel') },
       { label: '$(library) Manage Models', run: () => vscode.commands.executeCommand('localpilot.manageModels') },
       { label: '$(search) Browse Ollama Model Gallery…', run: () => vscode.commands.executeCommand('localpilot.browseModelGallery') },
       { label: '$(book) Manage Skills', run: () => vscode.commands.executeCommand('localpilot.manageSkills') },
       { label: `$(${cfg.autoMode.enabled ? 'check' : 'circle-large-outline'}) Auto Mode`, description: cfg.autoMode.enabled ? 'on — safe actions approved by a local reviewer' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleAutoMode') },
       { label: '$(list-ordered) Queue Agent Task…', description: taskQueue.list.length ? `${taskQueue.activeCount} running, ${taskQueue.pendingCount} waiting` : undefined, run: () => vscode.commands.executeCommand('localpilot.queue.add') },
       { label: `$(${cfg.inlineCompletion.enabled ? 'check' : 'circle-large-outline'}) Inline Completions`, description: cfg.inlineCompletion.enabled ? 'on' : 'off', run: () => vscode.commands.executeCommand('localpilot.toggleInlineCompletions') },
+      { label: 'Tools', kind: vscode.QuickPickItemKind.Separator },
+      { label: '$(extensions) Plugins…', run: () => vscode.commands.executeCommand('localpilot.browsePlugins') },
+      { label: '$(plug) MCP Servers…', run: () => vscode.commands.executeCommand('localpilot.openSettings', 'mcp') },
+      { label: '$(server-process) Background Services', run: () => vscode.commands.executeCommand('localpilot.showBackgroundServices') },
       { label: '', kind: vscode.QuickPickItemKind.Separator },
       { label: '$(layout) Move Chat To…', description: where?.label, run: () => view.pickLocation() },
       { label: '$(settings-gear) Settings', run: () => vscode.commands.executeCommand('localpilot.openSettings') },
@@ -863,29 +933,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     qp.onDidHide(() => qp.dispose());
     qp.show();
   });
-  cmd('localpilot.sessionMenu', async (arg?: unknown) => {
-    // From the Agents view the argument is the row's tree node: act on that chat, not the one on screen.
-    const node = arg as { sessionId?: string; session?: { id: string } } | undefined;
-    const id = typeof arg === 'string' ? arg : node?.session?.id ?? node?.sessionId;
-    const s = id ? controller.store.get(id) : controller.activeSession;
-    if (!s) {
-      return;
-    }
+  const sessionAction = async (s: Session, action: string): Promise<void> => {
     const changed = tracker.forSession(s.id).length;
-    const pick = await vscode.window.showQuickPick(
-      [
-        { label: '$(edit) Rename', action: 'rename' },
-        { label: `$(pinned) ${s.pinned ? 'Unpin' : 'Pin'}`, action: 'pin' },
-        { label: '$(git-branch) Fork', action: 'fork' },
-        { label: '$(export) Export as Markdown', action: 'export' },
-        { label: '$(fold) Compact context', action: 'compact' },
-        ...(changed ? [{ label: `$(check-all) Keep all ${changed} changes`, action: 'keep' }, { label: `$(discard) Undo all ${changed} changes`, action: 'undo' }] : []),
-        { label: '$(clear-all) Clear messages', action: 'clear' },
-        { label: '$(trash) Delete chat', action: 'delete' },
-      ],
-      { title: s.title, placeHolder: 'Chat actions' }
-    );
-    switch (pick?.action) {
+    switch (action) {
       case 'rename': {
         const title = await vscode.window.showInputBox({ prompt: 'Chat title', value: s.title });
         if (title) {
@@ -916,7 +966,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         }
         return;
     }
+  };
+  cmd('localpilot.sessionMenu', async (arg?: unknown) => {
+    // From the Agents view the argument is the row's tree node: act on that chat, not the one on screen.
+    const node = arg as { sessionId?: string; session?: { id: string } } | undefined;
+    const id = typeof arg === 'string' ? arg : node?.session?.id ?? node?.sessionId;
+    const s = id ? controller.store.get(id) : controller.activeSession;
+    if (!s) {
+      return;
+    }
+    const changed = tracker.forSession(s.id).length;
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: '$(edit) Rename', action: 'rename' },
+        { label: `$(pinned) ${s.pinned ? 'Unpin' : 'Pin'}`, action: 'pin' },
+        { label: '$(git-branch) Fork', action: 'fork' },
+        { label: '$(export) Export as Markdown', action: 'export' },
+        { label: '$(fold) Compact context', action: 'compact' },
+        ...(changed ? [{ label: `$(check-all) Keep all ${changed} changes`, action: 'keep' }, { label: `$(discard) Undo all ${changed} changes`, action: 'undo' }] : []),
+        { label: '$(clear-all) Clear messages', action: 'clear' },
+        { label: '$(trash) Delete chat', action: 'delete' },
+      ],
+      { title: s.title, placeHolder: 'Chat actions' }
+    );
+    if (pick) {
+      await sessionAction(s, pick.action);
+    }
   });
+  // Rename / pin / fork / export / delete straight from an Agents-view row's context menu.
+  for (const action of ['rename', 'pin', 'fork', 'export', 'delete'] as const) {
+    cmd(`localpilot.${action}Session`, async (arg?: unknown) => {
+      const node = arg as { sessionId?: string; session?: { id: string } } | undefined;
+      const id = typeof arg === 'string' ? arg : node?.session?.id ?? node?.sessionId;
+      const s = id ? controller.store.get(id) : controller.activeSession;
+      if (s) {
+        await sessionAction(s, action);
+      }
+    });
+  }
   // Session argument: id (palette / API) or an Agents-view node.
   const worktreeSession = (arg: unknown): string | undefined => {
     if (typeof arg === 'string') {
@@ -928,6 +1015,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.applyWorktree', async (arg?: unknown) => {
     const id = worktreeSession(arg);
     if (!id) {
+      return;
+    }
+    const s = store.get(id);
+    if (!s?.worktree) {
+      void vscode.window.showInformationMessage(`"${s?.title ?? 'This chat'}" has no isolated worktree, so its changes are already in the workspace.`);
+      return;
+    }
+    if (controller.runningSessionIds.includes(id) && !controller.isPaused(id)) {
+      if ((await vscode.window.showInformationMessage('Pause or stop the agent before applying its changes.', 'Pause')) === 'Pause') {
+        controller.pause(id);
+      }
       return;
     }
     const res = await controller.applyWorktree(id);
@@ -944,6 +1042,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const id = worktreeSession(arg);
     const s = id ? store.get(id) : undefined;
     if (!s?.worktree) {
+      void vscode.window.showInformationMessage(`"${s?.title ?? 'This chat'}" has no isolated worktree to discard.`);
       return;
     }
     const n = (await worktrees.changes(s.worktree).catch(() => [])).length;
@@ -1175,7 +1274,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     // Pause first so stopping a queued task's chat does not let the queue start the next one.
     const hadQueued = !taskQueue.paused && taskQueue.pendingCount > 0;
     taskQueue.setPaused(true);
-    controller.runningSessionIds.forEach((id) => controller.stop(id));
+    const ids = controller.runningSessionIds;
+    ids.forEach((id) => controller.stop(id));
+    if (ids.length) {
+      vscode.window.setStatusBarMessage(`LocalPilot: stopped ${plural(ids.length, 'agent')}`, 2500);
+    }
     if (hadQueued) {
       void vscode.window.showInformationMessage('Queue paused — Resume Queue to continue.', 'Resume Queue').then((r) => r && taskQueue.setPaused(false));
     }
@@ -1189,12 +1292,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       void vscode.window.showInformationMessage('No agent is running in the current chat.');
     }
   });
-  cmd('localpilot.pauseAll', () => controller.runningSessionIds.forEach((id) => controller.pause(id)));
-  cmd('localpilot.resumeAll', () => controller.runningSessionIds.forEach((id) => controller.resume(id)));
+  cmd('localpilot.pauseAll', () => {
+    const ids = controller.runningSessionIds.filter((id) => !controller.isPaused(id));
+    ids.forEach((id) => controller.pause(id));
+    vscode.window.setStatusBarMessage(ids.length ? `LocalPilot: paused ${plural(ids.length, 'agent')}` : 'LocalPilot: no running agents to pause', 2500);
+  });
+  cmd('localpilot.resumeAll', () => {
+    const ids = controller.pausedSessionIds;
+    ids.forEach((id) => controller.resume(id));
+    vscode.window.setStatusBarMessage(ids.length ? `LocalPilot: resumed ${plural(ids.length, 'agent')}` : 'LocalPilot: no paused agents to resume', 2500);
+  });
   cmd('localpilot.pauseChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'pauseChild', ...c }); } });
   cmd('localpilot.resumeChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'resumeChild', ...c }); } });
   cmd('localpilot.stopChild', (arg?: unknown) => { const c = childArg(arg); if (c) { void controller.handle({ type: 'stopChild', ...c }); } });
-  cmd('localpilot.showDiff', (sessionId: unknown, fsPath: unknown) => typeof sessionId === 'string' && typeof fsPath === 'string' && tracker.showDiff(sessionId, fsPath));
+  cmd('localpilot.showDiff', (sessionId: unknown, fsPath: unknown) => {
+    // Agents-view context menu passes the file node instead of (sessionId, fsPath).
+    const n = sessionId as { sessionId?: string; fsPath?: string } | undefined;
+    const [sid, file] = typeof sessionId === 'string' ? [sessionId, fsPath] : [n?.sessionId, n?.fsPath];
+    return typeof sid === 'string' && typeof file === 'string' && tracker.showDiff(sid, file);
+  });
+  cmd('localpilot.openChangedFile', (node?: unknown) => {
+    const fsPath = (node as { fsPath?: string } | undefined)?.fsPath;
+    if (fsPath) {
+      void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fsPath));
+    }
+  });
   cmd('localpilot.keepChanges', (node?: unknown) => {
     const n = node as { sessionId?: string; fsPath?: string; session?: { id: string } } | undefined;
     const sid = n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;
@@ -1263,7 +1385,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       void vscode.window.showInformationMessage(`OTLP collector answered HTTP ${r.status} — ${where}`);
     } else {
       log.warn(`OTLP test to ${r.url} failed: ${r.error}`);
-      void vscode.window.showErrorMessage(`OTLP test failed: ${r.error} — ${where}`, 'Open Settings').then((a) => a && vscode.commands.executeCommand('workbench.action.openSettings', 'localpilot.telemetry.otlp'));
+      void vscode.window.showErrorMessage(`OTLP test failed: ${r.error} — ${where}`, 'Open Settings').then((a) => a && settingsPanel.show('settings', 'telemetry'));
     }
   });
   cmd('localpilot.tuneModels', () => tuner.runCommand());

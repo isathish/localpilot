@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'url';
+import { MAX_QUOTE } from '../../pdf/viewerMessages';
 import { prefsCss, ReaderPrefs } from './prefs';
 
 /** Largest decorated HTML the webview may send back for an export. */
@@ -170,7 +171,7 @@ export function printToPdfArgs(url: string, target: string, profileDir: string):
 }
 
 /** `> `-quotes a selection for a chat draft. */
-export function quoteForDraft(text: string, max = 2000): string {
+export function quoteForDraft(text: string, max = MAX_QUOTE): string {
   const t = text.replace(/\r\n?/g, '\n').trim();
   const cut = t.length > max ? `${t.slice(0, max).trimEnd()}…` : t;
   return cut

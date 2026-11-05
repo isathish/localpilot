@@ -13,7 +13,9 @@ type Node =
   /** A running subagent of a session, with its own pause/stop controls. */
   | { kind: 'child'; sessionId: string; childId: string; label: string; paused: boolean }
   | { kind: 'file'; sessionId: string; fsPath: string; create: boolean }
-  | { kind: 'empty'; label: string };
+  | { kind: 'empty'; label: string }
+  /** Last row of a truncated list: opens the full chat picker. */
+  | { kind: 'more'; total: number };
 
 /**
  * "Agents" panel: every chat session is an independent agent. Running ones appear on top with a live
@@ -84,7 +86,17 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
           item.tooltip = `${item.tooltip}\nIsolated worktree: ${s.worktree!.path}\nApply its changes to the workspace or discard them from the context menu.`;
         }
         item.iconPath = new vscode.ThemeIcon(paused ? 'debug-pause' : n.running ? 'loading~spin' : s.pinned ? 'pinned' : s.mode === 'agent' ? 'localpilot-logo' : s.mode === 'plan' ? 'checklist' : 'comment-discussion');
-        item.contextValue = paused ? 'session-paused' : n.running ? 'session-running' : isolated ? 'session-isolated' : files ? 'session-changed' : 'session';
+        // session-<running|paused|idle>[-changed][-isolated]: `-changed` (idle, in-place edits) drives Keep/Undo, `-isolated` the worktree actions.
+        const state = paused ? 'paused' : n.running ? 'running' : 'idle';
+        item.contextValue = `session-${state}${state === 'idle' && files && !isolated ? '-changed' : ''}${isolated ? '-isolated' : ''}`;
+        if (this.controller.hasPendingPrompt(s.id)) {
+          // Keeps the `session-running` / `session-paused` prefix so Pause and Stop stay in the context menu while the agent waits.
+          const question = this.controller.runStatus.get(s.id)?.startsWith('Waiting for your answer');
+          item.iconPath = new vscode.ThemeIcon('bell-dot', new vscode.ThemeColor('list.warningForeground'));
+          item.description = `${question ? 'has a question' : 'needs approval'}${model ? ` · ${model}` : ''}${isolated ? ' · isolated' : ''}`;
+          item.tooltip = `${item.tooltip}\n${this.controller.runStatus.get(s.id) ?? 'Waiting for you'}\nClick to open the chat and answer.`;
+          item.contextValue = `session-${state === 'idle' ? 'running' : state}-waiting${isolated ? '-isolated' : ''}`;
+        }
         item.command = { command: 'localpilot.openSession', title: 'Open', arguments: [s.id] };
         if (this.controller.activeSession?.id === s.id) {
           item.resourceUri = vscode.Uri.parse(`localpilot-active:${s.id}`);
@@ -116,6 +128,12 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
         item.command = { command: 'localpilot.showDiff', title: 'Show diff', arguments: [n.sessionId, n.fsPath] };
         return item;
       }
+      case 'more': {
+        const item = new vscode.TreeItem(`Show all ${n.total} chats…`, vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon('history');
+        item.command = { command: 'localpilot.showSessions', title: 'Show all chats' };
+        return item;
+      }
       case 'empty': {
         const item = new vscode.TreeItem(n.label, vscode.TreeItemCollapsibleState.None);
         item.iconPath = new vscode.ThemeIcon('info');
@@ -136,7 +154,10 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       if (running.size) {
         groups.push({ kind: 'group', id: 'running', label: `Running (${running.size})` });
       }
-      groups.push({ kind: 'group', id: 'recent', label: running.size ? 'Idle' : 'Sessions' });
+      // While agents run, an empty Idle group is just noise.
+      if (!running.size || sessions.some((s) => !running.has(s.id))) {
+        groups.push({ kind: 'group', id: 'recent', label: running.size ? 'Idle' : 'Sessions' });
+      }
       if (this.queue?.list.length) {
         const q = this.queue;
         groups.unshift({ kind: 'group', id: 'queue', label: `Queue (${q.activeCount} running, ${q.pendingCount} waiting${q.paused ? ', paused' : ''})` });
@@ -147,11 +168,13 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       return (this.queue?.list ?? []).map((task, i) => ({ kind: 'task', task, position: i + 1 }));
     }
     if (n.kind === 'group') {
-      const list = sessions.filter((s) => running.has(s.id) === (n.id === 'running')).slice(0, n.id === 'running' ? 50 : 25);
-      if (!list.length) {
-        return [{ kind: 'empty', label: 'No sessions yet — press + to start one' }];
+      const all = sessions.filter((s) => running.has(s.id) === (n.id === 'running'));
+      const limit = n.id === 'running' ? 50 : 25;
+      if (!all.length) {
+        return sessions.length ? [] : [{ kind: 'empty', label: 'No chats yet. Start one with New Chat (+) or Run Tasks in Parallel.' }];
       }
-      return list.map((s) => ({ kind: 'session', session: s, running: running.has(s.id) }));
+      const out: Node[] = all.slice(0, limit).map((s) => ({ kind: 'session', session: s, running: running.has(s.id) }));
+      return all.length > limit ? [...out, { kind: 'more', total: sessions.length }] : out;
     }
     if (n.kind === 'session') {
       const out: Node[] = [];

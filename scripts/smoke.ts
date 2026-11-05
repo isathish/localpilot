@@ -2165,6 +2165,10 @@ async function skillsInHarness() {
         if (has(/Y-REPORT/)) { text('Swarm done.'); } else { tool('s1', 'run_parallel_subagents', { tasks: [{ agent: 'explore', prompt: 'CHILD-X look around the repo' }, { agent: 'coder', prompt: 'CHILD-Y run the quuxaudit on src' }] }); }
       } else if (task.includes('DEDUPE-GO')) {
         if (has(/items completed/)) { text('Dedupe done.'); } else { tool('d1', 'run_todos_parallel', { tasks: [{ title: 'Create ONE', agent: 'coder', prompt: 'make ONE' }, { title: 'Create TWO', agent: 'coder', prompt: 'make TWO' }] }); }
+      } else if (task.includes('LIAR-GO')) {
+        if (has(/LIAR-REPORT/)) { text('Liar done.'); } else { tool('l1', 'run_parallel_subagents', { tasks: [{ agent: 'coder', prompt: 'Create the file liar.txt containing x' }] }); }
+      } else if (task.includes('Create the file liar.txt')) {
+        text('LIAR-REPORT I created liar.txt with the content x.');
       } else if (task.includes('make ONE') || task.includes('make TWO')) {
         text('made');
       } else if (task.includes('MANGLED-GO')) {
@@ -2216,6 +2220,12 @@ async function skillsInHarness() {
     const out2 = await run(s2, 'DEDUPE-GO');
     const fan = s2.messages.find((m) => m.role === 'tool' && m.toolName === 'run_todos_parallel');
     check('run_todos_parallel: inline tasks matching pending items run them in place (no duplicates, both done)', out2 === 'Dedupe done.' && s2.todos?.length === 2 && s2.todos.every((t) => t.status === 'done' && t.result === 'made') && /2\/2 items completed/.test(fan?.content ?? ''), { out2, todos: s2.todos, fan: fan?.content.slice(0, 120) });
+
+    // A worker whose report claims a change it never made is flagged to the parent; an honest one is not.
+    const sl = mkSession('sk-liar');
+    const outL = await run(sl, 'LIAR-GO');
+    const liar = sl.messages.find((m) => m.role === 'tool' && m.toolName === 'run_parallel_subagents');
+    check('subagent report claiming a change without any edit is flagged to the parent', outL === 'Liar done.' && /made no file edits, writes or commands/.test(liar?.content ?? ''), liar?.content);
 
     // 3. load_skill tolerates a mangled name, refuses invented and disabled ones with guidance.
     const out3 = await run(mkSession('sk3'), 'MANGLED-GO');
@@ -2316,7 +2326,8 @@ async function reopenReplay() {
     firstVisible = false; secondVisible = false;
     controller.surfaceVisibilityChanged();
     controller.surfaceVisibilityChanged();
-    check('hidden chat: the pending approval is mirrored as one notification', notes.length === n0 + 1 && /Open the gate/.test(notes[n0] ?? ''), notes.slice(n0));
+    // Mirrored once, whenever it first went out of sight (leaving the chat or hiding every surface), never twice.
+    check('hidden chat: the pending approval is mirrored as one notification', notes.filter((t) => /Open the gate/.test(t)).length === 1 && notes.length - n0 <= 1, notes);
 
     // Answer from the webview: the run continues, both surfaces see the prompt resolved, replay forgets it.
     await controller.handle({ type: 'approval', id: approval!.id, approved: true });

@@ -337,7 +337,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="progress" class="progress hidden" aria-hidden="true"></div>
   <header id="tabbar" class="tabbar">
     <nav id="tabs" class="tabs" role="tablist" aria-label="Chats"></nav>
-    <button id="btnNewTab" class="ib" title="New chat — runs in parallel (⌘⇧↵ sends the draft in a new tab)">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
+    <button id="btnNewTab" class="ib" title="New chat — runs in parallel" aria-label="New chat">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
     <button id="btnHistory" class="ib badge" data-n="0" title="All chats">${svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/>')}</button>
   </header>
   <div id="bgruns" class="bgruns hidden" aria-label="Agents running in other tabs"></div>
@@ -373,18 +373,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico">${svg('<path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/>')}</span><span id="thinkLabel" class="lbl">Think</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico">${svg('<path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/>')}</span><span id="skillsLabel" class="lbl">Skills</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <span class="spacer"></span>
-        <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project (⌘I). Nothing is sent.">${svg('<path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/>')}</button>
+        <button id="btnComposerMore" class="ib narrow-only" aria-label="More composer actions" title="More composer actions" aria-haspopup="listbox">${svg('<path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/>')}</button>
+        <button id="btnImprove" class="ib" title="Improve prompt — rewrite the draft into a precise request using the open file and project. Nothing is sent." aria-label="Improve prompt">${svg('<path d="M8 2.5l1.2 2.8L12 6.5 9.2 7.7 8 10.5 6.8 7.7 4 6.5l2.8-1.2zM12.5 10l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/>')}</button>
         <button id="btnImage" class="ib" title="Attach image or take a screenshot (area, window, screen)">${svg('<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/>')}</button>
         <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx" title="Context usage"><span class="ring"></span><span class="txt">0%</span></button>
         <button id="btnSend" class="send" title="Send (Enter)">${svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>')}</button>
-        <button id="btnPause" class="send pause hidden" title="Pause after the current step (⌥Esc)">${svg('<path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/>')}</button>
+        <button id="btnPause" class="send pause hidden" title="Pause after the current step" aria-label="Pause after the current step">${svg('<path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/>')}</button>
         <button id="btnStop" class="send stop hidden" title="Stop (Esc)">${svg('<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>')}</button>
       </div>
     </div>
   </footer>
   <div id="popover" class="popover hidden"></div>
-  <div id="toasts"></div>
+  <div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 </div>
 <script nonce="${nonce}" src="${media('chat.js')}"></script>
 </body>

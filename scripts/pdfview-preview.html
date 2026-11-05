@@ -2,7 +2,7 @@
 <!-- Dev harness for media/pdfview.js: needs a build first (dist/pdfjs) and an HTTP server at the repo root, because
      module imports do not load from file:// (e.g. `python3 -m http.server` then open /scripts/pdfview-preview.html).
      ?theme=light | hc | hcl switches the theme, ?pages=N sets the page count, ?colors=dark|sepia|original the page
-     colours, ?range=1 loads through the range transport. Messages the viewer posts land in window.__posted. -->
+     colours, ?range=1 loads through the range transport, ?loading=1 stays on the loading state. Messages the viewer posts land in window.__posted. -->
 <html><head><meta charset="utf-8"><title>LocalPilot PDF viewer preview</title>
 <style>
 :root { --vscode-editor-background:#1e1e1e; --vscode-editor-foreground:#d4d4d4; --vscode-foreground:#ccc; --vscode-descriptionForeground:#9d9d9d; --vscode-widget-border:#454545; --vscode-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --vscode-editor-font-family:Menlo,monospace; --vscode-focusBorder:#007fd4; --vscode-errorForeground:#f48771; --vscode-input-background:#3c3c3c; --vscode-input-foreground:#ccc; --vscode-button-background:#0e639c; --vscode-button-foreground:#fff; --vscode-button-hoverBackground:#1177bb; --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryForeground:#ccc; --vscode-editorWidget-background:#252526; --vscode-menu-background:#252526; --vscode-menu-selectionBackground:#04395e; --vscode-dropdown-background:#3c3c3c; --vscode-progressBar-background:#0e70c0; }
@@ -54,6 +54,7 @@
     <div id="thumbsView" class="thumbs hidden"></div>
   </nav>
   <div id="viewerContainer" class="viewer-container" tabindex="0"><div id="viewer" class="pdfViewer"></div></div>
+  <div id="loading" class="loading-state" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="loadingText"></span></div>
 </div>
 <div id="panel" class="panel hidden" role="dialog" aria-live="polite"></div>
 <button id="askSel" class="ask-sel hidden" title="Ask LocalPilot about the selected text">Ask about selection</button>
@@ -98,6 +99,9 @@ window.acquireVsCodeApi = () => ({
   postMessage(m) {
     window.__posted.push(m);
     if (m.type === 'ready') {
+      window.__send({ type: 'loading', name: 'preview.pdf', size: bytes.length });
+      // ?loading=1 stops here, so the loading state stays on screen.
+      if (q.get('loading')) { return; }
       window.__send(q.get('range')
         ? { type: 'open', mode: 'range', length: bytes.length, initial: bytes.slice(0, 1024), name: 'preview.pdf', size: bytes.length, prefs }
         : { type: 'open', mode: 'data', data: bytes.slice(), name: 'preview.pdf', size: bytes.length, prefs });

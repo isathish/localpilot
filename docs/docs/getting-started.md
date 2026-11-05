@@ -46,7 +46,7 @@ Pick one:
 
 Click the LocalPilot icon in the Activity Bar, or press <kbd>⌘⇧L</kbd> (<kbd>Ctrl+Shift+L</kbd> on Windows and Linux).
 
-On first launch the **Welcome / Setup** screen opens. It looks for running model servers on their default ports.
+On first launch the **Setup** screen opens. It looks for running model servers on their default ports.
 
 ![Setup step 1: LocalPilot found Ollama with 3 models and Docker Model Runner with 1; LM Studio is not running. Below the list: add a custom endpoint or use a cloud API]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
 
@@ -90,7 +90,7 @@ Auto-detection also probes Docker Model Runner, Jan, SGLang, KoboldCpp and Docke
 
 ![Setup step 3: Careful, Balanced (the default) or Autonomous, and an optional switch for inline completions]({{ '/assets/screenshots/setup-approvals.png' | relative_url }})
 
-You can rerun the wizard with *LocalPilot: Welcome / Setup*. To switch models later, use the picker under the composer or the model name in the status bar. If the picker says *No models found*, click **Set up automatically**, or start your server and press **Refresh**.
+You can rerun the wizard with *LocalPilot: Open Setup*. To switch models later, use the picker under the composer or the model name in the status bar. If the picker says *No models found*, click **Set up automatically**, or start your server and press **Refresh**.
 
 ## 5. Run your first task
 

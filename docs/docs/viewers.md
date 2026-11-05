@@ -64,6 +64,8 @@ Exports use light colours by default; set `localpilot.markdownViewer.exportTheme
 
 ### Settings
 
+Change these in **Settings → Markdown & PDF** (run *LocalPilot: Settings*, or choose **Viewer settings…** in the reader's **More** menu), or in `settings.json`:
+
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.markdownViewer.scrollSync` | `true` | Keep the reader and the source editor scrolled together |
@@ -96,7 +98,8 @@ To make the viewer the default (or stop it being the default), set `workbench.ed
 | Home / End | First or last page |
 | Cmd/Ctrl+G | Go to a page |
 | Cmd/Ctrl+F | Find |
-| Cmd/Ctrl+= / Cmd/Ctrl+- / Cmd/Ctrl+0 | Zoom in, out, automatic |
+| Cmd/Ctrl+= / Cmd/Ctrl+- / Cmd/Ctrl+0 | Zoom in, out, back to the default zoom (`localpilot.pdfViewer.defaultZoom`) |
+| Cmd/Ctrl+' | Ask LocalPilot about the selected text, or about the PDF when nothing is selected |
 | Cmd/Ctrl+scroll | Zoom |
 | `r` / Shift+`r` | Rotate clockwise or counter-clockwise |
 
@@ -114,7 +117,7 @@ The colour button switches between **Auto**, **Original**, **Dark** and **Sepia*
 
 ### Large and protected files
 
-PDFs up to `localpilot.pdfViewer.rangeThresholdMB` (16 MB) load at once. Larger ones load page by page as you read, so a 500-page, 200 MB file opens quickly and memory stays bounded. Above `localpilot.pdfViewer.maxFileSizeMB` (1024 MB) the viewer asks first. For a password-protected PDF it asks for the password; the password stays in the viewer and is never stored. A damaged file shows **Not a valid PDF** with **Open with system viewer**. If part of a large file cannot be read (after one retry), the viewer says so and offers **Reload**. The viewer reloads when the file changes on disk.
+PDFs up to `localpilot.pdfViewer.rangeThresholdMB` (16 MB) load at once. Larger ones load page by page as you read, so a 500-page, 200 MB file opens quickly and memory stays bounded. Above `localpilot.pdfViewer.maxFileSizeMB` (1024 MB) the viewer asks first, with **Open anyway (page by page)**, **Open with system viewer** and **Change limit…**. For a password-protected PDF it asks for the password; the password stays in the viewer and is never stored. A damaged file shows **Not a valid PDF** with **Open with system viewer**. If part of a large file cannot be read (after one retry), the viewer says so and offers **Reload**. The viewer reloads when the file changes on disk.
 
 ### Using a PDF with the agent
 
@@ -128,6 +131,8 @@ PDFs up to `localpilot.pdfViewer.rangeThresholdMB` (16 MB) load at once. Larger 
 The viewer never runs JavaScript inside a PDF: pdf.js scripting is off and its sandbox is not shipped. XFA forms are off, form fields are drawn flat and embedded attachments are not exposed. Links open outside VS Code only for `http`, `https` and `mailto`; `file:`, `javascript:` and launch actions are dropped. The webview's content security policy allows only the viewer's own scripts and WebAssembly decoders, and reads nothing from disk except the PDF the host sends it.
 
 ### Settings
+
+Change these in **Settings → Markdown & PDF** (or **Viewer settings…** in the viewer's menu), or in `settings.json`. The same page holds the limits for PDFs the agent reads, `localpilot.pdf.maxReadSizeMB` and `localpilot.pdf.maxChars`. When you ask about a PDF larger than the agent may read, LocalPilot still attaches it and offers to attach the current page as an image or to raise the limit.
 
 | Setting | Default | Description |
 |---|---|---|
