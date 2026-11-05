@@ -4,6 +4,7 @@ import * as path from 'path';
 import { entropy, scanText } from '../../security/scan';
 import type { Failure, FailureCategory, MemoryEntry } from './types';
 import { FAILURE_CATEGORIES } from './types';
+import { renameWithRetry } from './fsRetry';
 
 /**
  * Recovery Memory (design §8): fixes that worked (and attempts that did not) keyed by failure signature, offered to
@@ -573,7 +574,7 @@ export class FailureMemory {
     const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
       await fsp.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-      await fsp.rename(tmp, file);
+      await renameWithRetry(tmp, file);
     } catch (e) {
       await fsp.rm(tmp, { force: true }).catch(() => undefined);
       throw e;

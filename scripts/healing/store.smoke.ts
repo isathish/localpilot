@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { LOCK_STALE_MS, RecoveryStore, rootSessionId } from '../../src/agent/healing/recoveryStore';
+import { LOCK_STALE_MS, RecoveryStore, renameWithRetry, rootSessionId } from '../../src/agent/healing/recoveryStore';
 import type { InterventionRecord, RecoveryState } from '../../src/agent/healing/types';
 
 type Check = (name: string, cond: boolean, detail?: unknown) => void;
@@ -195,6 +195,24 @@ export async function storeSmoke(check: Check): Promise<void> {
       rev: onDisk.rev,
     });
     check('no tmp left after concurrent load/save', tmpsOf(writer.statePath('sess-f')).length === 0);
+
+    // Windows: replacing a file another handle has open fails with EPERM/EBUSY for a moment; the rename is retried.
+    const busy = (code: string, times: number) => {
+      let n = 0;
+      return async () => {
+        if (n++ < times) {
+          throw Object.assign(new Error(code), { code });
+        }
+      };
+    };
+    const ok = await renameWithRetry('a', 'b', busy('EPERM', 3), 'win32').then(() => true, () => false);
+    check('Windows rename: a transient EPERM is retried until it succeeds', ok);
+    const ebusy = await renameWithRetry('a', 'b', busy('EBUSY', 99), 'win32').then(() => '', (e: NodeJS.ErrnoException) => e.code);
+    check('Windows rename: a lasting sharing violation still fails', ebusy === 'EBUSY', ebusy);
+    const posix = await renameWithRetry('a', 'b', busy('EPERM', 1), 'linux').then(() => '', (e: NodeJS.ErrnoException) => e.code);
+    check('rename on other platforms is not retried', posix === 'EPERM', posix);
+    const enoent = busy('ENOENT', 1);
+    check('Windows rename: other errors fail at once', (await renameWithRetry('a', 'b', enoent, 'win32').then(() => '', (e: NodeJS.ErrnoException) => e.code)) === 'ENOENT');
 
     // A failed write is reported, not swallowed.
     const roDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-recovery-ro-'));

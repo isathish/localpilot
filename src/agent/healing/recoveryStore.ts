@@ -3,6 +3,8 @@ import * as os from 'os';
 import * as path from 'path';
 import type { FailureCategory, InterventionRecord, RecoveryPhase, RecoveryState } from './types';
 import { isTerminalPhase } from './types';
+import { renameWithRetry } from './fsRetry';
+export { renameWithRetry };
 
 /**
  * Persistent per-session recovery state (design §7.1): one `<sid>.json` per root session, written atomically
@@ -433,7 +435,7 @@ export class RecoveryStore {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(tmp, body, 'utf8');
-      await fs.rename(tmp, file);
+      await renameWithRetry(tmp, file);
       return true;
     } catch (e) {
       this.log?.warn(`Recovery store: could not write ${path.basename(file)}: ${errMsg(e)}`);
@@ -521,7 +523,7 @@ export class RecoveryStore {
     let recovered: RecoveryState | undefined;
     if (best) {
       try {
-        await fs.rename(best.path, file);
+        await renameWithRetry(best.path, file);
         this.log?.info?.(`Recovery store: recovered ${path.basename(file)} rev ${best.state.rev} from an interrupted write`);
         recovered = best.state;
       } catch (e) {
@@ -620,7 +622,7 @@ export class RecoveryStore {
     const tmp = this.uniqueTmp(file);
     try {
       await fs.writeFile(tmp, this.lockBody(), 'utf8');
-      await fs.rename(tmp, file);
+      await renameWithRetry(tmp, file);
     } catch (e) {
       this.log?.warn(`Recovery store: could not write lock for ${key}: ${errMsg(e)}`);
       await fs.rm(tmp, { force: true }).catch(() => undefined);

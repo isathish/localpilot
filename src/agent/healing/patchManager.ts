@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { unifiedDiff } from '../../tools/lineDiff';
 import type { Failure, PatchRecord, Severity } from './types';
+import { renameWithRetry } from './fsRetry';
 
 /**
  * Per-attempt patch isolation (design §5.4): the first write to each file inside an attempt scope records its
@@ -154,7 +155,7 @@ async function writeAtomic(fsPath: string, data: string | Buffer): Promise<void>
   await fs.promises.mkdir(path.dirname(fsPath), { recursive: true });
   const tmp = `${fsPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await fs.promises.writeFile(tmp, data);
-  await fs.promises.rename(tmp, fsPath);
+  await renameWithRetry(tmp, fsPath);
 }
 
 export class PatchManager {
