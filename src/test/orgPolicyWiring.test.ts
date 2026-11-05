@@ -14,6 +14,7 @@ import { parseCommandFile } from '../agent/commands';
 import { collectInstructionFiles } from '../context/instructions';
 import { ProviderRegistry } from '../providers/registry';
 import type { OtlpSettings } from '../telemetry/otlp';
+import { removeTemp } from './removeTemp';
 
 const SRC = '/etc/localpilot/managed-settings.json';
 const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {}, append() {}, appendLine() {} } as unknown as vscode.LogOutputChannel;
@@ -149,8 +150,8 @@ suite('LocalPilot organization policy wiring (MCP layers, skills, registry, Sett
     } finally {
       mgr.dispose();
       await cfg.update('skills.disabled', prevDisabled, vscode.ConfigurationTarget.Global);
-      fs.rmSync(path.join(wsSkills, 'org-style'), { recursive: true, force: true });
-      fs.rmSync(path.join(wsSkills, 'ws-locked'), { recursive: true, force: true });
+      removeTemp(path.join(wsSkills, 'org-style'));
+      removeTemp(path.join(wsSkills, 'ws-locked'));
     }
   });
 
