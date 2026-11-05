@@ -568,6 +568,9 @@ export class McpManager implements vscode.Disposable {
     return JSON.stringify([layers.map((l) => [l.file ?? l.source, l.servers, l.problems]), p.allowedMcpServers ?? null, p.blockPersonalRemoteMcp, [...this.alwaysOn]]);
   }
 
+  /** The servers each configuration file had when it last read cleanly. */
+  private readonly lastGoodServers = new Map<string, McpLayer['servers']>();
+
   /** The organisation's servers that cannot be switched off. */
   private alwaysOn = new Set<string>();
 
@@ -576,7 +579,19 @@ export class McpManager implements vscode.Disposable {
     // off (unless it is always enabled) with `{ "enabled": false }` under its name in localpilot.mcpServers.
     const org = managedMcpServers(getManagedPolicy(this.log));
     this.alwaysOn = new Set(org.alwaysEnabled);
-    const files = await loadMcpFiles(this.projectFolders(), this.userFile());
+    // A file caught mid-save (empty) or with a syntax error keeps the servers it last had: dropping them would stop
+    // every server of the file and start them again a moment later, when the save completes or the typo is fixed.
+    const files = (await loadMcpFiles(this.projectFolders(), this.userFile())).map((l) => {
+      if (!l.file) {
+        return l;
+      }
+      if (!l.unreadable) {
+        this.lastGoodServers.set(l.file, l.servers);
+        return l;
+      }
+      const kept = this.lastGoodServers.get(l.file);
+      return kept ? { ...l, servers: kept } : l;
+    });
     return [
       ...policyAndSettingsLayers(org, getConfig().mcpServers ?? {}),
       ...files,

@@ -64,3 +64,6 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          # Pages sometimes stays in "updating_pages" for over 10 minutes (the default); wait up to 20.
+          timeout: 1200000

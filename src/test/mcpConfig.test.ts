@@ -173,6 +173,15 @@ suite('LocalPilot MCP configuration files', () => {
         await fresh.reloadIfChanged();
         assert.ok(!fc().has('beta') && !tools.get('mcp_beta__echo'), 'a removed server is stopped and its tools withdrawn');
         assert.strictEqual(fc().get('alpha'), alpha);
+        // Caught mid-save (empty) or with a typo, the file keeps its servers running instead of stopping them.
+        await fs.writeFile(file, '');
+        await fresh.reloadIfChanged();
+        await fs.writeFile(file, '{ "mcpServers": { "alpha": ');
+        await fresh.reloadIfChanged();
+        assert.strictEqual(fc().get('alpha'), alpha, 'an empty or broken .mcp.json does not restart its servers');
+        await fs.writeFile(file, JSON.stringify({ mcpServers: { alpha: { ...server('a'), timeout: 30 } } }));
+        await fresh.reloadIfChanged();
+        assert.strictEqual(fc().get('alpha'), alpha, 'the same configuration saved again leaves it running');
       } finally {
         fresh.dispose();
       }

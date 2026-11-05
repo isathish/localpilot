@@ -21,6 +21,8 @@ export interface McpLayer {
   servers: Record<string, McpServerConfig>;
   /** Field errors, one line each (`"name": …`); the servers they name are left out. */
   problems: string[];
+  /** The file exists but could not be read as JSON right now (empty while being saved, or a syntax error). */
+  unreadable?: boolean;
 }
 
 const TYPES = new Set(['stdio', 'http', 'sse', 'streamableHttp', 'streamable-http']);
@@ -200,13 +202,13 @@ export async function readMcpFile(file: string, source: McpSource): Promise<McpL
     return { source, file, servers: {}, problems: [] };
   }
   if (!text.trim()) {
-    return { source, file, servers: {}, problems: [] };
+    return { source, file, servers: {}, problems: [], unreadable: true };
   }
   let raw: unknown;
   try {
     raw = parseJsonc(text);
   } catch (e) {
-    return { source, file, servers: {}, problems: [`not valid JSON: ${e instanceof Error ? e.message : String(e)}`] };
+    return { source, file, servers: {}, problems: [`not valid JSON: ${e instanceof Error ? e.message : String(e)}`], unreadable: true };
   }
   const { servers, problems } = normalizeMcpServers(raw, { root: path.dirname(file) });
   return { source, file, servers, problems };
