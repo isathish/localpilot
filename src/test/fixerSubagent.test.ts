@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import { builtinAgents, resolveAgentName, routeSubagent } from '../agent/builtinAgents';
 import { ChildWrites, HealingSyntheticContext, childEventOrigin, childMutated, childRecovery, verificationLine } from '../agent/childEvents';
 import { createAgentTools } from '../agent/subagents';
@@ -94,7 +95,8 @@ suite('Fixer subagent and healing child events', () => {
       return 'Root cause: x\nFiles: src/a.ts\nDone';
     });
     const r = await tool.execute({ tasks: [{ agent: 'coder', prompt: 'edit it' }] }, ctx({ workspaceRoot: '/ws' }));
-    const expected = ['/ws/src/a.ts', '/ws/src/old.ts', '/ws/src/nested.ts'];
+    // A path known only from the start args is resolved against the root (D:\\ws\\src\\old.ts on Windows); paths the tools report are kept as given.
+    const expected = ['/ws/src/a.ts', path.resolve('/ws', 'src/old.ts'), '/ws/src/nested.ts'];
     assert.deepStrictEqual((events.find((e) => e.type === 'subagent_end')!.payload as { writtenFiles?: string[] }).writtenFiles, expected);
     assert.deepStrictEqual((r.data as { writtenFiles?: string[] }).writtenFiles, expected);
   });
