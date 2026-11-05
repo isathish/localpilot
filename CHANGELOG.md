@@ -25,6 +25,7 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **A one-shot CLI run stopped by the system now saves its chat.** When a one-shot `localpilot` run is stopped by SIGTERM or SIGHUP (for example, a closed terminal or a cancelled CI job), it now saves the chat before it exits.
 - **Correct exit codes for runs stopped by a signal.** A one-shot run stopped by SIGTERM now exits with `143` and one stopped by SIGHUP with `129`, instead of `130`.
 - **A fix that only swaps one failure for another no longer counts as fixed.** If a fix attempt replaces a failure with a new one of the same kind, from the same check and in the same file (for example, the same unit test failing with a different message), the attempt is now recorded as not fixed. The retry budget now runs out as it should, and the dashboard no longer counts the task as recovered.
+- **Ollama stopping in the middle of a run is now retried.** When Ollama stopped during a run, the "No local models found" error was treated as an unknown, fatal failure. It is now treated as the model being unavailable, so recovery waits, retries (starting a stopped local server when it can) and offers **Start server** if it is still down.
 
 ## 1.5.5 — 2026-11-05
 

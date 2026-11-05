@@ -1092,6 +1092,8 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
   test('errors sent inside the stream are classified for retry', async () => {
     assert.strictEqual(classifyModelError(new Error('error parsing tool call: raw=\'{"path":"src",}\', err=network aborted')), 'toolcall');
     assert.strictEqual(classifyModelError(new Error('Overloaded')), 'server');
+    // The registry found no local model (Ollama stopped mid-run): a transient outage the engine retries and offers Start server for.
+    assert.strictEqual(classifyModelError(new Error('No local models found. Run "LocalPilot: Set up models automatically", start Ollama (`ollama serve`)…')), 'network');
     assert.strictEqual(classifyModelError(new Error('Rate limit reached, try again later')), 'ratelimit');
     assert.strictEqual(classifyModelError(new Error('Insufficient credits on this account')), 'quota');
     assert.strictEqual(classifyModelError(new HttpError(529, '{"type":"overloaded_error","message":"Overloaded"}', 'http://x')), 'server');

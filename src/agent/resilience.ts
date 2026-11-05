@@ -15,7 +15,7 @@ const UNROUTABLE = /no (eligible|available|healthy|matching|valid) (route|provid
 const QUOTA = /insufficient_quota|exceeded your current quota|quota exceeded|credit balance is too low|billing|payment required|out of credits|no credits|insufficient (credits|balance|funds)/i;
 /** The server ran out of memory loading or running the model (Ollama, llama.cpp, vLLM): retrying unchanged rarely helps. */
 const OVERLOAD = /out of memory|\bOOM\b|CUDA error|failed to allocate|requires more system memory|insufficient memory|llama runner process has terminated/i;
-const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
+const NETWORK = /No local models found|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|terminated|aborted|other side closed|UND_ERR/i;
 
 export function classifyModelError(e: unknown): ModelFailure {
   if (e instanceof ModelStallError) {

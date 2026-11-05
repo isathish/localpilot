@@ -155,7 +155,7 @@ export class ColibriLauncher implements vscode.Disposable {
   private async install(port: number): Promise<void> {
     const pre = checkPrereqs();
     if (pre.missing.length) {
-      const pick = await vscode.window.showErrorMessage(`Installing colibri needs ${pre.missing.join(' and ')}. Install ${pre.missing.length > 1 ? 'them' : 'it'}, then run Start colibri again.${pre.hint ? `\n\n${pre.hint}` : ''}`, { modal: true }, 'Copy install command', 'Open colibri on GitHub');
+      const pick = await vscode.window.showErrorMessage(`Installing colibri needs ${pre.missing.join(' and ')}. Install ${pre.missing.length > 1 ? 'them' : 'it'}, then run Start colibri again.${pre.hint ? `\n\n${pre.hint}` : ''}`, { modal: true }, ...(pre.hint ? ['Copy install command'] : []), 'Open colibri on GitHub');
       if (pick === 'Copy install command' && pre.hint) {
         await vscode.env.clipboard.writeText(pre.hint);
       } else if (pick === 'Open colibri on GitHub') {
