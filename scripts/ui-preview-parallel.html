@@ -32,6 +32,7 @@ body{margin:0}
   <div id="progress" class="progress hidden"></div>
   <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist"></nav><button id="btnNewTab" class="ib"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0"><svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
   <div id="bgruns" class="bgruns hidden"></div>
+  <div id="offline" class="offline hidden" role="status" aria-live="polite"></div>
   <main id="messages"></main>
   <footer id="composer">
     <div id="approvals"></div>
@@ -39,16 +40,17 @@ body{margin:0}
     <div id="changes" class="panel hidden"><div class="panel-head"><button id="changesToggle" class="panel-toggle" aria-expanded="false"><span class="chev"><svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg></span><span id="changesLabel">0 files changed</span></button><span id="changesMeter" class="meter hidden" role="progressbar" aria-label="Files reviewed" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><i></i></span><span class="spacer"></span><button class="btn ghost" data-a="reviewAll" title="Open every change of this chat in one multi-file diff" aria-label="Open all changes in one diff"><svg viewBox="0 0 16 16"><path d="M6 4.5v-2h5.5l2 2V11h-2"/><path d="M2.5 4.5h6l2 2v7h-8z"/><path d="M4.5 9.5h4M4.5 11.5h2.5"/></svg></button><button class="btn ghost" data-a="undoAll" title="Reject all changes"><svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg><span class="long">Reject all</span></button><button class="btn ghost" data-a="keepAll" title="Accept all changes"><svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg><span class="long">Accept all</span></button><button class="btn primary" data-a="review" title="Review file by file: opens the first file not reviewed yet in a side-by-side diff"><svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3M8 6.5v3M6.5 8h3M6.5 11.5h3"/></svg><span class="long">Review</span></button></div><ul id="changesList" class="panel-body hidden" aria-label="Changed files: j and k move, a accepts, r rejects, Enter opens the diff"></ul></div>
     <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
     <div id="box" class="box">
-      <div class="ctx-row"><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
+      <div class="ctx-row"><button id="folderBtn" class="ctxbtn folder hidden" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg><span class="lbl"></span><span class="chev"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></span></button><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
       <textarea id="input" rows="1" placeholder="Ask anything, or describe a task…"></textarea>
-      <div id="hints" class="hints hidden" role="group" aria-label="Message box shortcuts"><button type="button" data-h="@" title="Add a file, folder or other context"><b>@</b> file</button><span aria-hidden="true">·</span><button type="button" data-h="#" title="Attach the project file tree (@workspace)"><b>#</b> codebase</button><span aria-hidden="true">·</span><button type="button" data-h="/" title="Commands, modes and skills"><b>/</b> command</button></div>
+      <div id="hints" class="hints hidden" role="group" aria-label="Message box shortcuts"><button type="button" data-h="@" title="Add a file, folder or other context"><b>@</b> file</button><span aria-hidden="true">·</span><button type="button" data-h="#" title="Attach #codebase: the project structure, import graph and files related to your message"><b>#</b> codebase</button><span aria-hidden="true">·</span><button type="button" data-h="/" title="Commands, modes and skills"><b>/</b> command</button></div>
+      <div id="runHint" class="hints runhint hidden" role="group" aria-label="Sending while the agent runs"></div>
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/></svg></span><span id="thinkLabel" class="lbl">Think</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
-        <button id="btnComposerMore" class="ib narrow-only" aria-label="More composer actions" title="More composer actions" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
+        <button id="btnComposerMore" class="ib" aria-label="More composer actions: prompt library" title="Prompt library and more" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
         <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
         <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
@@ -58,7 +60,8 @@ body{margin:0}
     </div>
     <p id="disclaimer" class="disclaimer hidden">AI can make mistakes. Review generated changes before applying.</p>
   </footer>
-<div id="popover" class="popover hidden"></div><div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
+<div id="popover" class="popover hidden"></div>
+  <div id="trace" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Run trace"></div><div id="promptLib" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Prompt library"></div><div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 <script>
 // ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
 (() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');

@@ -1,6 +1,7 @@
 /** Pure sorting, filtering and paging of the chat history list (no `vscode` import, so smoke tests can load it). */
 import { SessionSummary } from '../types';
 import { fuzzyMatch } from '../context/mentionSearch';
+import { specialistFor } from '../agent/builtinAgents';
 
 export type HistorySort = 'newest' | 'oldest' | 'tokens' | 'cost' | 'size' | 'relevance';
 export const HISTORY_SORTS: readonly HistorySort[] = ['newest', 'oldest', 'tokens', 'cost', 'size', 'relevance'];
@@ -16,6 +17,12 @@ export interface HistoryQuery {
   sort?: HistorySort;
   query?: string;
   pinnedOnly?: boolean;
+  /** Only chats in this mode: a core mode (`agent`, `ask`…) or a specialist (`review`, `test`…), as `historyModeKey` names it. */
+  mode?: string;
+  /** Only chats that work in this workspace folder (absolute path; multi-root). */
+  folder?: string;
+  /** The folder of a chat that never picked one (the first workspace folder), so `folder` matches it too. */
+  defaultFolder?: string;
   /** Chats listed even when empty (the open one, running ones). */
   keep?: readonly string[];
   /** Chats sorted first under Newest (running ones). */
@@ -40,6 +47,8 @@ export interface HistoryPage {
   sort: HistorySort;
   query: string;
   pinnedOnly: boolean;
+  mode: string;
+  folder: string;
   /** Ids of every match in order (Select all), with the bytes each takes on disk. */
   ids: string[];
   bytes: number;
@@ -118,6 +127,23 @@ const tokensOf = (s: SessionSummary): number => {
   return u ? u.promptTokens + u.completionTokens + u.cacheReadTokens + u.cacheWriteTokens : 0;
 };
 
+/** The mode a chat is filed under in the history: its specialist while that applies, else its core mode. */
+export function historyModeKey(s: Pick<SessionSummary, 'mode' | 'specialist'>): string {
+  return specialistFor(s.specialist, s.mode) ? (s.specialist as string) : s.mode;
+}
+
+const samePath = (a: string, b: string): boolean => {
+  const norm = (p: string) => p.replace(/[\\/]+$/, '');
+  // Windows paths compare case-insensitively (drive letters and folders alike).
+  return /^[a-z]:[\\/]/i.test(a) ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+};
+
+/** Whether a chat works in `folder`: its own folder, or the default (first) one when it never picked. */
+export function inHistoryFolder(s: Pick<SessionSummary, 'folder'>, folder: string, defaultFolder?: string): boolean {
+  const f = s.folder ?? defaultFolder;
+  return !!f && samePath(f, folder);
+}
+
 /** Whether the history lists a chat: untouched empty ones are noise, unless open or running. */
 function listed(s: SessionSummary, keep: ReadonlySet<string>): boolean {
   return s.messageCount > 0 || !!s.pinned || !!s.plan || keep.has(s.id);
@@ -133,9 +159,11 @@ export function queryHistory(all: readonly SessionSummary[], q: HistoryQuery = {
   const keep = new Set(q.keep ?? []);
   const first = new Set(q.first ?? []);
   const hitBy = new Map(hits.map((h) => [h.id, h]));
+  const mode = (q.mode ?? '').trim();
+  const folder = (q.folder ?? '').trim();
   const rows: HistoryRow[] = [];
   for (const s of all) {
-    if (!listed(s, keep) || (q.pinnedOnly && !s.pinned)) {
+    if (!listed(s, keep) || (q.pinnedOnly && !s.pinned) || (mode && historyModeKey(s) !== mode) || (folder && !inHistoryFolder(s, folder, q.defaultFolder))) {
       continue;
     }
     if (!query) {
@@ -170,6 +198,8 @@ export function queryHistory(all: readonly SessionSummary[], q: HistoryQuery = {
     sort,
     query,
     pinnedOnly: !!q.pinnedOnly,
+    mode,
+    folder,
     ids: rows.map((r) => r.id),
     bytes: rows.reduce((n, r) => n + (r.bytes ?? 0), 0),
   };

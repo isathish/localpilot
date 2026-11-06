@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ChangeTracker, REDO_WINDOW_MS } from '../agent/changeTracker';
+import { AGENT_WRITE_MS, ChangeTracker, REDO_WINDOW_MS } from '../agent/changeTracker';
 
 suite('change tracker (restore checkpoint)', () => {
   let tracker: ChangeTracker;
@@ -183,5 +183,68 @@ suite('change tracker (restore checkpoint)', () => {
     await fs.writeFile(f, 'a\nB\nc\nd\n');
     const [c] = tracker.forSession(sid);
     assert.deepStrictEqual(await tracker.lineStats(c), { added: 2, removed: 1 });
+  });
+  test('a user edit after the agent wrote a file marks it "edited by you" until the decision, and the decision keeps the mark', async () => {
+    const g = path.join(dir, 'g.txt');
+    const h = path.join(dir, 'h.txt');
+    await fs.writeFile(g, 'G0');
+    await fs.writeFile(h, 'H0');
+    let clock = 1_000_000;
+    tracker.now = () => clock;
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(g, sid);
+    await fs.writeFile(g, 'G1');
+    await tracker.beforeChange(h, sid);
+    await fs.writeFile(h, 'H1');
+    // Right after the agent's write the document change is the agent's own.
+    assert.strictEqual(tracker.markUserEdited(g), false);
+    assert.ok(!tracker.forSession(sid).find((c) => c.fsPath === g)!.userEdited);
+    clock += AGENT_WRITE_MS + 1;
+    assert.strictEqual(tracker.markUserEdited(g), true);
+    assert.strictEqual(tracker.markUserEdited(g), false, 'already marked');
+    assert.ok(tracker.forSession(sid).find((c) => c.fsPath === g)!.userEdited);
+    assert.ok(!tracker.forSession(sid).find((c) => c.fsPath === h)!.userEdited, 'other files are untouched');
+    assert.strictEqual(tracker.markUserEdited(path.join(dir, 'untracked.txt')), false, 'a file the agent did not change is not marked');
+    tracker.keep(sid, g);
+    await tracker.reject(sid, h);
+    const rows = tracker.reviewedFor(sid);
+    assert.deepStrictEqual(rows.map((r) => [path.basename(r.fsPath), r.state, !!r.userEdited]), [
+      ['g.txt', 'accepted', true],
+      ['h.txt', 'rejected', false],
+    ]);
+  });
+
+  test('typing in the file in an editor (the review diff\'s right side) marks it "edited by you"', async () => {
+    const m = path.join(dir, 'm.txt');
+    await fs.writeFile(m, 'M0\n');
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(m, sid);
+    await fs.writeFile(m, 'M1\n');
+    const ed = await vscode.window.showTextDocument(vscode.Uri.file(m));
+    tracker.now = () => Date.now() + AGENT_WRITE_MS + 1_000; // the agent's write is long past
+    await ed.edit((b) => b.insert(new vscode.Position(0, 0), 'mine '));
+    for (let i = 0; i < 20 && !tracker.forSession(sid)[0].userEdited; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(tracker.forSession(sid)[0].userEdited);
+    await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  });
+
+  test('a reject restoring the file is not taken for a user edit', async () => {
+    const k = path.join(dir, 'k.txt');
+    await fs.writeFile(k, 'K0');
+    let clock = 2_000_000;
+    tracker.now = () => clock;
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(k, sid);
+    await fs.writeFile(k, 'K1');
+    clock += AGENT_WRITE_MS + 1;
+    const { token } = await tracker.reject(sid, k);
+    assert.strictEqual(await tracker.redo(token!), 1);
+    // The redo just announced its own write: the change event it causes is ignored.
+    assert.strictEqual(tracker.markUserEdited(k), false);
+    assert.ok(!tracker.forSession(sid).find((c) => c.fsPath === k)!.userEdited);
+    clock += AGENT_WRITE_MS + 1;
+    assert.strictEqual(tracker.markUserEdited(k), true, 'a later edit by the user counts');
   });
 });

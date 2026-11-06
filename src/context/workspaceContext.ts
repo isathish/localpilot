@@ -13,6 +13,9 @@ import { isCommitRef, isUrlRef } from './mentionRefs';
 import { MAX_ATTACHMENT_BYTES, readCommit, readFolderContent, readUrl } from './mentionResolvers';
 import { formatRootsOverview } from '../tools/rootPaths';
 import { excludedBy } from '../agent/ignoreFile';
+import { buildRepoGraph, RepoGraph } from './repoGraph';
+import { answerRepoGraph } from '../tools/repoGraph';
+import { formatCodebase, queryTerms, relatedFiles } from './codebaseContext';
 
 async function readHead(fsPath: string, n = 8192): Promise<Uint8Array> {
   const fh = await nodeFs.promises.open(fsPath, 'r');
@@ -98,10 +101,17 @@ const appliedKey = (files: InstructionFile[], contextPaths: readonly string[]) =
     .map((f) => f.file)
     .join('\n');
 
+/** How an attachment is read: `query` is the message it goes with (#codebase matches files to it); `folder` marks `root` as
+ *  a multi-root chat's workspace folder (refs fall back to the other folders) rather than an isolated worktree copy. */
+export interface AttachmentOptions {
+  query?: string;
+  folder?: boolean;
+}
+
 /** Lightweight workspace context: file tree snapshot, open editors, selections, diagnostics summary. */
 export class WorkspaceContext implements vscode.Disposable {
   private treeCache?: { text: string; max: number; at: number };
-  private mapCache?: { text: string; at: number };
+  private mapCache?: { text: string; at: number; root: string };
   private namesCache?: { files: Set<string>; stems: Set<string>; at: number };
   private rulesCache?: { text: string; max: number; at: number; files: InstructionFile[]; applied: string; paths: readonly string[] };
   private readonly watcher: vscode.FileSystemWatcher;
@@ -289,17 +299,20 @@ export class WorkspaceContext implements vscode.Disposable {
    * their immediate subfolders, root files, and the stack markers found. Cheap enough to include on every turn so
    * the model knows where things live before its first tool call.
    */
-  async projectMap(maxFiles = 3000): Promise<string> {
-    const root = this.root;
+  async projectMap(maxFiles = 3000, folder?: string): Promise<string> {
+    // Another workspace folder (a multi-root chat's folder) maps that folder; anything else (a worktree) the primary.
+    const wsFolders = vscode.workspace.workspaceFolders ?? [];
+    const own = folder && wsFolders.length > 1 ? wsFolders.find((f) => f.uri.fsPath === folder) : undefined;
+    const root = own ? own.uri.fsPath : this.root;
     if (!root) {
       return '';
     }
-    if (this.mapCache && Date.now() - this.mapCache.at < 5 * 60_000) {
+    if (this.mapCache && this.mapCache.root === root && Date.now() - this.mapCache.at < 5 * 60_000) {
       return this.mapCache.text;
     }
     let text = '';
     try {
-      const files = await vscode.workspace.findFiles('**/*', TREE_EXCLUDE, maxFiles);
+      const files = await vscode.workspace.findFiles(wsFolders.length > 1 ? new vscode.RelativePattern(vscode.Uri.file(root), '**/*') : '**/*', TREE_EXCLUDE, maxFiles);
       const dirs = new Map<string, { count: number; sub: Set<string> }>();
       const rootFiles: string[] = [];
       for (const f of files) {
@@ -348,8 +361,31 @@ export class WorkspaceContext implements vscode.Disposable {
     } catch (e) {
       this.log.warn(`projectMap failed: ${String(e)}`);
     }
-    this.mapCache = { text, at: Date.now() };
+    this.mapCache = { text, at: Date.now(), root };
     return text;
+  }
+
+  /**
+   * The `#codebase` attachment for `root` (default: the primary folder): folders, project map, import-graph summary,
+   * a capped file list and the files named like the words in `query`.
+   */
+  async codebaseContext(root = this.root, query = ''): Promise<string> {
+    if (!root) {
+      return '<codebase>No folder is open, so there is no codebase to describe. Open a folder to use #codebase.</codebase>';
+    }
+    let graph = '';
+    let g: RepoGraph | undefined;
+    try {
+      // A first build reads every source file; on a huge repository do not hold the message for more than ~8 s.
+      g = await Promise.race([buildRepoGraph(root), new Promise<undefined>((r) => setTimeout(() => r(undefined), 8000))]);
+      graph = g ? answerRepoGraph(g, 'overview').content : 'Still building the import graph (large repository); ask again in a moment, or use the repo_graph tool.';
+    } catch (e) {
+      graph = `Import graph unavailable: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    const [roots, map, tree] = await Promise.all([this.rootsOverview(), this.projectMap(3000, root), this.fileTree(300, root === this.root ? undefined : root)]);
+    const terms = queryTerms(query);
+    const files = g ? g.files : tree.split('\n').map((l) => l.replace(/ 🔒$/, '').split(path.sep).join('/'));
+    return formatCodebase({ root, roots, map, graph, tree, related: terms.length ? relatedFiles(query, files, g?.symbols) : undefined, terms });
   }
 
   /**
@@ -476,6 +512,20 @@ export class WorkspaceContext implements vscode.Disposable {
     return candidates[0];
   }
 
+  /** A ref in a multi-root chat's folder: relative to it when the file exists there, else as in any other chat. */
+  private async inFolder(p: string, folder: string): Promise<vscode.Uri> {
+    if (!path.isAbsolute(p)) {
+      const uri = vscode.Uri.file(path.join(folder, p));
+      try {
+        await vscode.workspace.fs.stat(uri);
+        return uri;
+      } catch {
+        /* not in this folder: try the others */
+      }
+    }
+    return this.resolveRef(p);
+  }
+
   /** A path inside `root`: relative refs resolve against it and absolute main-checkout paths are remapped into it. */
   private inRoot(p: string, root: string): string {
     if (!path.isAbsolute(p)) {
@@ -521,18 +571,20 @@ export class WorkspaceContext implements vscode.Disposable {
    * Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. `root` (an
    * isolated chat's worktree folder) replaces the main checkout for relative paths, @git and @workspace.
    */
-  async readAttachment(ref: string, root?: string): Promise<string> {
-    const out = await this.readAttachmentBody(ref, root);
+  async readAttachment(ref: string, root?: string, opts: AttachmentOptions = {}): Promise<string> {
+    const out = await this.readAttachmentBody(ref, root, opts);
     // An explicit mention overrides the agent ignore file; the note keeps the model from reaching for the file itself.
     const shown = /^<attachment path="([^"]+)"(?![^>]*\berror=)/.exec(out)?.[1]?.replace(/&quot;/g, '"');
     const source = shown && (root && !path.isAbsolute(shown) ? excludedBy(path.join(root, shown), [root]) : this.excludedFile(shown));
     return source ? `(Note: ${shown} is excluded by ${source}; it is attached because the user mentioned it, but the file tools will not read or change it.)\n${out}` : out;
   }
 
-  private async readAttachmentBody(ref: string, root?: string): Promise<string> {
+  private async readAttachmentBody(ref: string, root?: string, opts: AttachmentOptions = {}): Promise<string> {
     recordTelemetry({ type: 'mention', kind: mentionKind(ref) });
-    const special = ref.replace(/^@/, '');
+    const special = ref.replace(/^[@#]/, '');
     switch (special) {
+      case 'codebase':
+        return this.codebaseContext(root ?? this.root, opts.query);
       case 'terminal':
         return this.terminalContext?.() ?? '<terminal_output>Terminal context is only available inside VS Code.</terminal_output>';
       case 'workspace':
@@ -575,7 +627,8 @@ export class WorkspaceContext implements vscode.Disposable {
     if (!root && !vscode.workspace.workspaceFolders?.length && !path.isAbsolute(p)) {
       return '';
     }
-    const uri = root ? vscode.Uri.file(this.inRoot(p, root)) : await this.resolveRef(p);
+    // A multi-root chat's folder: its own files first, then the other folders (`name/…` refs, files only there).
+    const uri = root && opts.folder ? await this.inFolder(p, root) : root ? vscode.Uri.file(this.inRoot(p, root)) : await this.resolveRef(p);
     const label = (u: vscode.Uri) => {
       const r = root ? path.relative(root, u.fsPath) : undefined;
       return r !== undefined && r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : vscode.workspace.asRelativePath(u);

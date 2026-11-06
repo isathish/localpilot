@@ -40,4 +40,7 @@ export function historySmoke(check: Check): void {
   const p2 = queryHistory(many, { offset: 50, limit: 50 });
   check('queryHistory pages a long history by 50', p1.rows.length === 50 && p1.total === 230 && p2.rows[0].id === 's179', { n: p1.rows.length, first: p2.rows[0]?.id });
   check('queryHistory returns a short history whole', queryHistory(many.slice(0, 120)).rows.length === 120);
+  const modes = [row('m1', { mode: 'ask', specialist: 'review' }), row('m2', { mode: 'agent', specialist: 'review' }), row('m3', { mode: 'debug', folder: '/w/b' })];
+  check('queryHistory filters by specialist only while it applies', queryHistory(modes, { mode: 'review' }).rows.map((r) => r.id).join() === 'm1');
+  check('queryHistory filters by folder (no folder = the first one)', queryHistory(modes, { folder: '/w/a', defaultFolder: '/w/a' }).rows.map((r) => r.id).sort().join() === 'm1,m2' && queryHistory(modes, { folder: '/w/b', defaultFolder: '/w/a' }).total === 1);
 }

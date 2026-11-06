@@ -19,6 +19,8 @@ All settings are also in **Settings → Extensions → LocalPilot** and in `sett
 
 ![LocalPilot Settings: Providers page with providers grouped under Local and Cloud, each card showing where it runs, its API and its status (models and latency, unreachable, or a missing key)]({{ '/assets/screenshots/settings-providers.png' | relative_url }})
 
+Each card carries a health badge: *reachable* (with the latency), *slow* (a local server that took longer than 1.5 s to answer, a cloud API longer than 4 s), *down* or *no key* (no usable key, or the key was rejected). The badge comes from the page's own check when it opens and from the checks LocalPilot runs whenever it lists models, so no extra requests are made for it; the tooltip says how long the check took and when it ran. The chat's model picker shows the same tag next to each provider.
+
 Expand a provider to edit it and press **Test connection**. LocalPilot checks the server, measures latency and lists every model it exposes:
 
 ![Provider editor with a successful connection test against a running Ollama, listing its models]({{ '/assets/screenshots/settings-provider-test.png' | relative_url }})
@@ -83,6 +85,8 @@ In the Settings screen: **Web search → Browser**.
 | `localpilot.routing.fast` | `""` (auto) | `provider/model` for read-only subagents (`explore`, `clarifier`, `researcher`). Empty = the smallest tool-capable model that fits; `session` = keep the session model |
 | `localpilot.routing.coding` | `""` (keep session model) | `provider/model` for implementing subagents (`coder`, `tester`, `debugger`, `docs`) |
 | `localpilot.routing.parallelModels` | `true` | Spread simultaneous runs across models. When workers or Auto chats would land on a model that is already serving as many runs as it can, the extra ones go to a comparable idle model that fits in memory alongside. Models you chose explicitly are never swapped. See [Several models at once]({{ '/docs/parallel-agents/#several-models-at-once' | relative_url }}) |
+| `localpilot.routing.fallbackModels` | `[]` | Models to use, in this order, when the chosen model is unavailable (server down, model removed, offline and it is a cloud model), as `provider/model` ids. The first available one answers the turn and the chat says *next in your fallback order*; with none available (or an empty list) the best available model is used. A cloud model in this list is the only way a local model falls back to the cloud. User settings only. Edit it in **Settings → Models → Routing → Fallback order** |
+| `localpilot.firstTokenTimeoutSeconds` | `180` | Seconds a request may wait for the model's first token (loading into memory, reading a long prompt) before it counts as stalled and is retried; `0` = no limit. A provider's `timeoutMs` is a floor, and a request queued behind others gets their time too. While it waits, the chat offers **Keep waiting** (another full wait), **Switch model** and, with a fallback order, the first fallback model |
 
 See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 
@@ -142,9 +146,13 @@ See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
 | `localpilot.approvals.dangerousAlwaysAsk` | `true` |
 | `localpilot.notifications` | `whenHidden` |
 
+All approval settings are User settings only, so a repository cannot approve its own actions. **Always allow in this workspace…** on an approval card is kept by LocalPilot for that workspace instead (the auto-approve bar marks it *workspace*; pick another value there, or press **Ask again** in Settings → Agent & approvals → Command rules, to end it).
+
+**Command rules.** Settings → Agent & approvals → **Command rules** lists the commands you always allow, always ask about or block, as `Bash(<pattern>)` permission rules: `npm test` matches exactly, `npm run test:*` by prefix, `git log *` with wildcards. Block wins over Ask, Ask over Allow. Rules for this workspace are saved in `.localpilot/settings.local.json` (added to `.git/info/exclude`), rules for all workspaces in `~/.localpilot/settings.json`; rules in other settings files (`.claude/settings.json`, a committed `.localpilot/settings.json`) are listed read-only. The arrow next to **All in chat** on an approval card offers *Always allow "…"* and *Always block "…"* for a single command. An Allow rule skips the prompt even for a command that looks destructive, so keep Allow rules narrow.
+
 Values: `always`, `ask`, `never`. `approvals.terminal` also takes `safe`: read-only commands and routine test, lint and build commands (`npm test`, `tsc`, `pytest`, `cargo test`, `go vet`, `make test`) run without asking, everything else asks. With `approvals.dangerousAlwaysAsk` on, a destructive-looking command (`sudo`, `rm -rf /…`, `git push --force`, `git reset --hard`) asks even under `always`. The model can mark a command `requires_approval` so it asks under `always` or `safe` too. The **Auto-approve** bar above the chat input changes these settings for all chats, and the change also applies to a run in progress.
 
-`localpilot.notifications` (`whenHidden`, `always`, `off`): a native notification when a chat finishes, or when an auto-approved command is still running after 30 seconds. With `whenHidden` this happens only while the chat view is hidden or the window is not focused. The terminal CLI rings the bell after runs longer than 10 seconds unless this is `off`.
+`localpilot.notifications` (`whenHidden`, `always`, `off`): a native notification with **Open chat** when a chat finishes, when it waits for your approval or answer, or when an auto-approved command is still running after 30 seconds. With `whenHidden` this happens only while the chat view is hidden or the window is not focused, and a run that finished normally is announced only when it took longer than 20 seconds (errors and runs that need you always are). The terminal CLI rings the bell after runs longer than 10 seconds unless this is `off`.
 
 **Auto mode** (`localpilot.autoMode.enabled`, default `false`; toggle with **LocalPilot: Turn Auto Mode On/Off**): every approval set to `ask` is first reviewed by a small local model (`localpilot.autoMode.model`, empty = the fastest suitable one). It approves actions that clearly serve your request and stay inside the project. Pushes, `sudo`, recursive deletes, piping downloads into a shell, publishing and writes to secrets or `.git` always ask. The reviewer can only approve, never deny, and any reviewer error falls back to asking.
 
@@ -324,6 +332,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.mcp.watchServerFiles` | `true` | Restart a local MCP server 500 ms after its workspace script changes (a `.js`, `.mjs`, `.cjs` or `.py` file in its command or arguments, or a file under `build/` or `dist/`) |
+| `localpilot.mcp.toolApprovals` | `{}` | Approval per MCP tool, `{ "server": { "tool": "always" \| "ask" \| "never" } }`. `ask` shows an approval card every time (even when the server's `autoApprove` lists the tool or `approvals.mcp` is `always`), `never` refuses every call without asking. Unlisted tools follow `approvals.mcp` and the server's `autoApprove` list; an organization floor still applies. User settings only. Set it per tool in **Settings → MCP servers** (open a connected server, **Tools** tab) |
 
 ## Example
 

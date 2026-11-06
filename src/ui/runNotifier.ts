@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { AgentEvent, Session } from '../types';
-import { LONG_COMMAND_MS, shouldNotify } from './notifyPolicy';
+import { LONG_COMMAND_MS, shouldNotify, shouldNotifyFinish } from './notifyPolicy';
 
 interface RunningCommand {
   sessionId: string;
@@ -19,13 +19,18 @@ export interface RunNotifierActions {
 }
 
 /**
- * Native notifications (`localpilot.notifications`): a chat run or a batch of agents finishing, and an auto-approved command that is still
- * running after 30 s (a status-bar item plus one message per command). By default only while the chat view is hidden
- * or the window has no focus.
+ * Native notifications (`localpilot.notifications`): a chat run or a batch of agents finishing (by default only runs
+ * longer than 20 s, or ones that failed or need you), a run waiting on an approval or a question, and an auto-approved
+ * command that is still running after 30 s (a status-bar item plus one message per command). By default only while
+ * the chat view is hidden or the window has no focus.
  */
 export class RunNotifier implements vscode.Disposable {
   private commands = new Map<string, RunningCommand>();
   private status?: vscode.StatusBarItem;
+  /** When each chat's current run started, for the long-run threshold of the finish notice. */
+  private readonly startedAt = new Map<string, number>();
+  /** Chats that already got a "needs your approval" notice in this run: one per run, not one per prompt. */
+  private readonly waitNoticed = new Set<string>();
 
   constructor(
     private readonly chatVisible: () => boolean,
@@ -51,6 +56,30 @@ export class RunNotifier implements vscode.Disposable {
     }
   }
 
+  /** A chat run started: the finish notice measures from here. */
+  started(sessionId: string, at = Date.now()): void {
+    this.startedAt.set(sessionId, at);
+    this.waitNoticed.delete(sessionId);
+  }
+
+  /**
+   * The run waits on the user (an approval card or a question in the chat) while nobody is looking: one notice per
+   * run with Open chat, so a long run does not sit blocked until someone happens to come back.
+   */
+  waiting(sessionId: string, title: string, what: string): void {
+    if (this.waitNoticed.has(sessionId) || !this.due()) {
+      return;
+    }
+    this.waitNoticed.add(sessionId);
+    const name = title || 'chat';
+    const short = what.length > 120 ? `${what.slice(0, 117)}…` : what;
+    void vscode.window.showWarningMessage(`LocalPilot is waiting for you in “${name}”: ${short}`, 'Open chat').then((pick) => {
+      if (pick) {
+        void vscode.commands.executeCommand('localpilot.openSession', sessionId);
+      }
+    });
+  }
+
   /** An approval prompt was shown in this session: commands waiting on it are not auto-approved. */
   asked(sessionId: string): void {
     for (const c of this.commands.values()) {
@@ -71,14 +100,19 @@ export class RunNotifier implements vscode.Disposable {
         this.clear(id);
       }
     }
-    if (silent || !this.due()) {
+    const started = this.startedAt.get(sessionId);
+    this.startedAt.delete(sessionId);
+    this.waitNoticed.delete(sessionId);
+    const ms = started === undefined ? Number.POSITIVE_INFINITY : Date.now() - started;
+    if (silent || !shouldNotifyFinish(getConfig().notifications, this.chatVisible(), vscode.window.state?.focused ?? true, ms, outcome)) {
       return;
     }
     const name = title || 'chat';
+    const took = Number.isFinite(ms) ? ` after ${formatDuration(ms)}` : '';
     const open = () => vscode.commands.executeCommand('localpilot.openSession', sessionId);
     if (outcome === 'error') {
-      void vscode.window.showWarningMessage(`LocalPilot stopped with an error: ${name}`, 'Open', ...(this.actions ? ['Retry'] : [])).then((pick) => {
-        if (pick === 'Open') {
+      void vscode.window.showWarningMessage(`LocalPilot stopped with an error${took}: ${name}`, 'Open chat', ...(this.actions ? ['Retry'] : [])).then((pick) => {
+        if (pick === 'Open chat') {
           void open();
         } else if (pick === 'Retry') {
           void open();
@@ -89,7 +123,7 @@ export class RunNotifier implements vscode.Disposable {
     }
     if (outcome === 'attention') {
       const why = detail?.split('\n').find((l) => l.trim())?.trim().slice(0, 200);
-      void vscode.window.showWarningMessage(`LocalPilot needs your attention: ${name}${why ? ` — ${why}` : ''}`, 'Open').then((pick) => {
+      void vscode.window.showWarningMessage(`LocalPilot needs your attention: ${name}${why ? ` — ${why}` : ''}`, 'Open chat').then((pick) => {
         if (pick) {
           void open();
         }
@@ -98,7 +132,7 @@ export class RunNotifier implements vscode.Disposable {
     }
     if (changedFiles > 0) {
       const files = `${changedFiles} file${changedFiles === 1 ? '' : 's'} changed`;
-      void vscode.window.showInformationMessage(`LocalPilot finished: ${name}. ${files}`, 'Review', ...(this.actions ? ['Keep All'] : [])).then((pick) => {
+      void vscode.window.showInformationMessage(`LocalPilot finished${took}: ${name}. ${files}`, 'Review', ...(this.actions ? ['Keep All'] : [])).then((pick) => {
         if (pick === 'Review') {
           void open();
         } else if (pick === 'Keep All') {
@@ -107,7 +141,7 @@ export class RunNotifier implements vscode.Disposable {
       });
       return;
     }
-    void vscode.window.showInformationMessage(`LocalPilot finished: ${name}`, 'Open').then((pick) => {
+    void vscode.window.showInformationMessage(`LocalPilot finished${took}: ${name}`, 'Open chat').then((pick) => {
       if (pick) {
         void open();
       }
@@ -143,7 +177,7 @@ export class RunNotifier implements vscode.Disposable {
     this.status.tooltip = `Still running after ${LONG_COMMAND_MS / 1000} s: ${c.command}`;
     this.status.command = { title: 'Open chat', command: 'localpilot.openSession', arguments: [c.sessionId] };
     this.status.show();
-    void vscode.window.showInformationMessage(`LocalPilot: "${short}" is still running after ${LONG_COMMAND_MS / 1000} s.`, 'Open').then((pick) => {
+    void vscode.window.showInformationMessage(`LocalPilot: "${short}" is still running after ${LONG_COMMAND_MS / 1000} s.`, 'Open chat').then((pick) => {
       if (pick) {
         void vscode.commands.executeCommand('localpilot.openSession', c.sessionId);
       }
@@ -169,4 +203,14 @@ export class RunNotifier implements vscode.Disposable {
     this.commands.clear();
     this.status?.dispose();
   }
+}
+
+/** "45 s", "3 min", "1 h 5 min": the run length in a notification. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) {
+    return `${s} s`;
+  }
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
 }

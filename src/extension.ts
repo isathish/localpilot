@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { createIndexStatusBar, REBUILD_INDEX_COMMAND } from './ui/indexStatusBar';
 import { AgentRunner } from './agent/agentLoop';
 import { ChangeTracker } from './agent/changeTracker';
 import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs } from './agent/checkpoints';
@@ -18,6 +19,7 @@ import { repoGraphTool } from './tools/repoGraph';
 import { SkillManager } from './agent/skills';
 import { createAgentTools } from './agent/subagents';
 import { ProjectSettingsManager } from './agent/settings';
+import { setWorkspaceApprovalStore } from './agent/workspaceApprovals';
 import { HookRunner } from './agent/hooks';
 import { PluginManager } from './agent/plugins';
 import { CommandManager } from './agent/commands';
@@ -31,6 +33,7 @@ import { AutoSetupResult, findOllamaBinary, ModelManager, ollamaModelsOnDisk, ol
 import { ServiceSupervisor } from './providers/supervisor';
 import { onLmModelsChanged } from './providers/vscodeLm';
 import { ProviderRegistry } from './providers/registry';
+import { ConnectivityMonitor, proxyConfigured } from './providers/connectivity';
 import { isCloudProvider, resolveApiKey, secretEnvName, secretRefs } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
 import { ColibriLauncher } from './ui/colibriCommand';
@@ -90,7 +93,8 @@ import { AutoReviewer } from './agent/autoReviewer';
 import { reposTool } from './tools/repos';
 import { securityScanTool } from './tools/security';
 import { selectTerminalProfile } from './terminal/profileSetting';
-import { describePlugin, installPlugin, loadMarketplace, Marketplace, pluginsDir, searchPlugins, setPluginEnabled } from './agent/pluginInstaller';
+import { describePlugin, loadMarketplace, Marketplace, searchPlugins, setPluginEnabled } from './agent/pluginInstaller';
+import { installMarketplacePlugin } from './ui/pluginInstallFlow';
 import { McpOAuth } from './mcp/oauth';
 import { editMcpConfiguration } from './ui/mcpConfigEditor';
 
@@ -99,6 +103,8 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
 let shutdown: (() => Promise<void>) | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<LocalPilotApi> {
+  // "Always allow in this workspace" grants live in this workspace's extension state; getConfig() reads them.
+  setWorkspaceApprovalStore(context.workspaceState);
   const channel = vscode.window.createOutputChannel('LocalPilot', { log: true });
   context.subscriptions.push(channel);
   // Local-only metrics and a readable copy of the log for the dashboard; shared with the CLI under ~/.localpilot.
@@ -234,6 +240,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   const commands = new CommandManager(log, plugins);
   skills.plugins = plugins;
   runner.projectSettings = () => projectSettings.current;
+  controller.reloadPermissionRules = () => projectSettings.reload();
   // A hook that prints on every tool call would bury the chat in toasts: repeats within 30 s and bursts are log-only.
   const hookToasts = new Map<string, number>();
   let lastHookToast = 0;
@@ -557,6 +564,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(tuner);
   settingsPanel.tuner = tuner;
   settingsPanel.catalog = catalog;
+  settingsPanel.plugins = plugins;
   const recovery = new RecoveryCommands({
     controller,
     queue: taskQueue,
@@ -610,6 +618,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     .catch((e) => log.warn(`Self-healing: ${e instanceof Error ? e.message : String(e)}`));
   // Settings pushes state on every change; the git walk behind the checkpoint size is cached for a minute.
   let checkpointSize: { at: number; bytes: Promise<number> } | undefined;
+  settingsPanel.reloadPermissionRules = () => projectSettings.reload();
   settingsPanel.checkpointBytes = () => {
     if (!checkpointSize || Date.now() - checkpointSize.at > 60_000) {
       checkpointSize = { at: Date.now(), bytes: checkpoints.diskUsage({ snapshotDir: tracker.persistDir }).then((u) => u.total) };
@@ -657,6 +666,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   );
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider({ pattern: '**' }, new LocalPilotCodeActions(), { providedCodeActionKinds: LocalPilotCodeActions.kinds }));
 
+  // The @ file index: scan progress, and how much of a large repository the @ menu lists. Click rescans.
+  context.subscriptions.push(createIndexStatusBar(controller));
   const status = vscode.window.createStatusBarItem('localpilot.status', vscode.StatusBarAlignment.Right, 90);
   status.name = 'LocalPilot';
   status.command = 'localpilot.statusMenu';
@@ -691,6 +702,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       : !models.length
         ? 'LocalPilot: no model server found. Click to set one up.'
         : `LocalPilot · ${plural(models.length, 'local model')} from ${plural(providers.all.length, 'provider')}${routed?.reason ? `\n${routed.reason}` : ''}${cfg.inlineCompletion.enabled ? ' · inline completions on' : ''}${cfg.autoMode.enabled ? '\nAuto mode on: a local reviewer approves safe actions' : ''}\nClick for chat, models, layout and settings`;
+    if (connectivity.current.offline) {
+      status.tooltip = `Offline: cloud models are skipped while a local model exists\n${status.tooltip}`;
+    }
     const waiting = controller.pendingCount();
     if (waiting) {
       status.text += ` $(bell-dot) ${waiting}`;
@@ -698,6 +712,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     }
     status.show();
   };
+  // Offline: a status-bar indicator, the chat's banner and the router's local-only fallback follow the network.
+  const connectivity = new ConnectivityMonitor({ providers: () => getConfig().providers, proxy: () => proxyConfigured(vscode.workspace.getConfiguration('http').get<string>('proxy')) });
+  const offlineItem = vscode.window.createStatusBarItem('localpilot.offline', vscode.StatusBarAlignment.Right, 91);
+  offlineItem.name = 'LocalPilot offline';
+  offlineItem.text = '$(debug-disconnect) Offline';
+  offlineItem.command = 'localpilot.checkConnection';
+  const syncConnectivity = (checking = false) => {
+    const st = connectivity.current;
+    const local = providers.cachedModels().some((m) => !m.remote);
+    providers.offline = st.offline;
+    offlineItem.tooltip = new vscode.MarkdownString(
+      `**LocalPilot: offline** since ${new Date(st.since).toLocaleTimeString()}\n\n${local ? 'Using local models only: chats on a cloud model switch to a local one until the network is back.' : 'No local model to fall back on: cloud models need the network.'} Web search and fetch are unavailable.\n\nClick to check again.`
+    );
+    if (st.offline) {
+      offlineItem.show();
+    } else {
+      offlineItem.hide();
+    }
+    controller.setConnectivity({ offline: st.offline, since: st.since, local, checking });
+  };
+  context.subscriptions.push(
+    offlineItem,
+    { dispose: () => connectivity.dispose() },
+    connectivity.onChange((st) => {
+      syncConnectivity();
+      log.info(st.offline ? 'Network: offline — cloud models are skipped while a local model exists' : 'Network: back online');
+      void refreshStatus();
+    }),
+    providers.onDidChange(() => syncConnectivity()),
+    vscode.commands.registerCommand('localpilot.checkConnection', async () => {
+      syncConnectivity(true);
+      const st = await connectivity.check();
+      syncConnectivity();
+      void vscode.window.setStatusBarMessage(st.offline ? '$(debug-disconnect) LocalPilot: still offline' : '$(check) LocalPilot: online', 4000);
+    })
+  );
+  controller.connectivityHooks = { hint: (online) => connectivity.hint(online), check: () => void vscode.commands.executeCommand('localpilot.checkConnection') };
+  connectivity.start();
   void refreshStatus();
   context.subscriptions.push(providers.onDidChange(() => void refreshStatus()), onConfigChange(() => void refreshStatus()), modelManager.onDidChange(() => void refreshStatus()), controller.onDidChangeRuns(() => void refreshStatus()));
   // Models pulled or removed in a terminal (`ollama pull/rm`) show up when the user comes back to the window.
@@ -868,6 +920,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Commands ----------------------------------------------------------------------------
   const cmd = (id: string, fn: (...a: unknown[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
+  cmd(REBUILD_INDEX_COMMAND, async () => {
+    if (!vscode.workspace.workspaceFolders?.length) {
+      void vscode.window.showInformationMessage('LocalPilot: open a folder first; there are no files to index.');
+      return;
+    }
+    await controller.rebuildFileIndex();
+    const st = controller.indexStatus;
+    if (st) {
+      void vscode.window.setStatusBarMessage(`LocalPilot: ${st.files > st.listed ? `listed ${st.listed.toLocaleString()} of ${st.files.toLocaleString()}${st.capped ? '+' : ''} files for @ mentions` : `indexed ${st.files.toLocaleString()} files`}`, 4000);
+    }
+  });
   // A second argument `{ key?, expand? }` deep-links to one setting (scrolled to and highlighted) or opens a provider card.
   cmd('localpilot.openSettings', (section?: unknown, focus?: unknown) => {
     const f = focus && typeof focus === 'object' ? (focus as { key?: unknown; expand?: unknown }) : {};
@@ -1978,18 +2041,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     if (!pick) {
       return;
     }
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const scope = root ? await vscode.window.showQuickPick([{ label: 'For me', description: '~/.localpilot/plugins — every workspace', id: 'user' as const }, { label: 'For this workspace', description: '.localpilot/plugins — commit it to share with the team', id: 'project' as const }], { title: `Install ${pick.entry.name}` }) : { id: 'user' as const };
-    if (!scope) {
-      return;
-    }
     try {
-      const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing ${pick.entry.name}…` }, () =>
-        installPlugin(pick.entry, pick.market, pluginsDir(scope.id, root), {
-          // Hooks and MCP servers run commands on this machine: show them and ask before anything is installed.
-          confirm: async (_p, d) => !d.runs.length || (await vscode.window.showWarningMessage(`${d.summary}\n\nThis plugin runs commands on your machine:\n${d.runs.slice(0, 12).join('\n')}`, { modal: true }, 'Install')) === 'Install',
-        })
-      );
+      const r = await installMarketplacePlugin(pick.entry, pick.market);
       if (!r) {
         return;
       }

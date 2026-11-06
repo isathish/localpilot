@@ -4,7 +4,7 @@ description: LocalPilot's default keybindings for macOS, Windows and Linux, keys
 permalink: /docs/shortcuts/
 ---
 
-To change a binding, open **Preferences → Keyboard Shortcuts** in VS Code and search for "LocalPilot".
+**Settings → Keyboard shortcuts** lists every key below, with **Change…** next to each VS Code binding: it opens VS Code's Keyboard Shortcuts editor filtered to that command. You can also open **Preferences → Keyboard Shortcuts** and search for "LocalPilot". Type `/keys` in the chat to print the list there. The keys inside the chat are handled by the chat view and cannot be rebound.
 
 ## Global shortcuts
 
@@ -31,7 +31,8 @@ These keys work in the chat view. On Windows and Linux, read <kbd>⌘</kbd> as <
 | <kbd>Enter</kbd> | Send |
 | <kbd>⇧Enter</kbd> | New line |
 | <kbd>⌘⇧Enter</kbd> | Send in a new tab (another agent, running in parallel) |
-| <kbd>Enter</kbd> while the agent runs | Choose **Add to this agent** (queued for its next step), **Send after this turn** or **Send in a new tab**. If the agent is paused, the message goes to it directly |
+| <kbd>Enter</kbd> while the agent runs | Add the message to this run: the agent reads it at its next step (when it resumes, if paused) |
+| <kbd>⌥Enter</kbd> while the agent runs | **Send after this turn**: the message starts a new turn when the run ends. **More…** in the hint under the message box also offers a new tab or stopping first |
 | <kbd>↑</kbd> / <kbd>↓</kbd> in an empty input | Previous / next prompt from history |
 | <kbd>⇧Tab</kbd> | Rotate the mode: Ask → Agent → Plan → Debug → Multitask (not while the agent runs) |
 | <kbd>⌘Enter</kbd> in an empty input | **Build** the prepared plan shown in the chat |

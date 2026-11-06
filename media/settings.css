@@ -1077,6 +1077,13 @@ body.vscode-light svg[viewBox="0 0 16 16"], html.light body svg[viewBox="0 0 16 
 .mcp-item .desc { margin-top: 2px; }
 .mcp-params { display: inline-flex; flex-wrap: wrap; gap: 4px; } .mcp-params span { font-family: var(--mono); font-size: 11px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
 .mcp-params b { color: var(--error-text); font-weight: 600; } .mcp-params i { font-style: normal; opacity: .75; }
+.mcp-appr-head { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.mcp-appr-head .inline-link { font-size: inherit; }
+.mcp-item.mcp-tool { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
+.mcp-item.mcp-tool > .mcp-tool-main { display: block; flex: 1 1 180px; min-width: 0; }
+.mcp-tool-main > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.mcp-tool .mcp-appr { flex: none; width: auto; min-width: 0; max-width: 100%; }
+.mcp-tool.appr-never code { text-decoration: line-through; color: var(--muted); }
 /* Organisation policy: a lock next to whatever managed-settings.json decides. */
 .lock { display: inline-flex; align-items: center; margin-left: 6px; color: var(--muted); vertical-align: middle; cursor: help; }
 .lock svg { width: 12px; height: 12px; }
@@ -1345,3 +1352,69 @@ code.rec-key.bad { color: var(--error-text); background: color-mix(in srgb, var(
   .rec-tbl tr.rec-diff-row td:first-child { font-weight: 400; font-size: 11.5px; }
   .rec-patches td.mono { max-width: none; white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* Agent & approvals → Command rules: one line per saved Bash(...) rule, then the add / edit form. */
+.rules-card { display: flex; flex-direction: column; gap: 8px; }
+.rules-card .rules-lead { margin: 0; }
+.rule-grant { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 6px; font-size: 12.5px; }
+.rule-grant .rg-t { min-width: 0; }
+.rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rules > li.empty { padding: 4px 0; }
+.rule { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; background: var(--input-bg); min-width: 0; }
+.rule .rk { min-width: 42px; text-align: center; }
+.rule .rmain { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; min-width: 0; }
+.rule .rp { flex: 1 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; padding: 0; }
+.rule .rp i { font-family: var(--vscode-font-family); color: var(--muted); }
+.rule .rs { flex: none; max-width: 100%; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule .ra { display: inline-flex; align-items: center; gap: 2px; }
+.rule.ro { background: transparent; border-style: dashed; }
+.rule-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; list-style: none; }
+.rule-form input { flex: 1 1 180px; min-width: 0; }
+.rule-form select { flex: 0 1 auto; width: auto; min-width: 0; }
+.rule-form .rule-hint, .rule-form .rule-where { flex-basis: 100%; }
+li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 6px; }
+
+/* Models → Routing → Fallback order */
+.fb-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 6px; padding: 4px 4px 4px 8px; }
+.fb-list .fb-sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fb-list .fb-sub code { flex: 0 1 auto; min-width: 0; }
+.fb-list .fb-sub .badge { flex: none; }
+.fb-list .fb-n { flex: none; width: 16px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fb-list .fb-name { display: flex; flex-direction: column; min-width: 0; }
+.fb-list .fb-name b, .fb-list .fb-name code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-list .fb-name code { font-size: 11px; color: var(--muted); }
+.fb-list .fb-acts { display: inline-flex; gap: 2px; }
+.fb-list .fb-acts [data-a="up"] svg { transform: rotate(-90deg); }
+.fb-list .fb-acts [data-a="down"] svg { transform: rotate(90deg); }
+.fb-list .fb-acts button:disabled { opacity: .35; cursor: default; }
+.fallback-ed .list-add select { flex: 1 1 auto; min-width: 0; width: auto; max-width: 100%; }
+.fb-empty { margin-bottom: 6px; }
+
+/* Keyboard shortcuts */
+.sc-card { padding: 4px 12px; }
+.sc-list { list-style: none; margin: 0; padding: 0; }
+.sc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.sc-row:last-child { border-bottom: none; }
+.sc-act { display: flex; flex-direction: column; min-width: 0; grid-row: span 2; }
+.sc-key { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 3px; min-width: 0; }
+.sc-key kbd { font-family: var(--mono); font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--border); border-bottom-width: 2px; background: var(--card-2); color: var(--fg); white-space: nowrap; }
+.sc-change { justify-self: end; height: 22px; padding: 0 6px; }
+.sc-row:not(:has(.sc-change)) .sc-act { grid-row: auto; }
+.rule, .rule-grant, .sc-row { border-color: var(--border-soft); }
+
+/* ---- Marketplace: kind chips + a Show filter, then one group per kind (heading, source line, refresh / manage). */
+.mk-kinds { margin-bottom: 4px; }
+.mk-kinds .chip i { font-style: normal; opacity: .75; margin-left: 2px; font-variant-numeric: tabular-nums; }
+#mk-show { height: 24px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--input-bg); color: var(--input-fg); font: inherit; font-size: 12px; margin-bottom: 6px; max-width: 100%; }
+.mk-group + .mk-group { margin-top: 6px; }
+.mk-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 22px 0 8px; min-width: 0; }
+.mk-head h2.sub { margin: 0; }
+.mk-head .mk-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.mk-head .spacer { flex: 1 1 auto; }
+.mk-head .btn svg { width: 12px; height: 12px; }
+.mk-group > .muted.small { margin: 6px 2px 0; }
+.mk-row .tags .badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-more { cursor: pointer; }
+.mk-more:hover { text-decoration: underline; }
+@media (max-width: 480px) { .mk-head .mk-where { flex-basis: 100%; order: 5; } .mk-head .btn span { display: none; } }
+.desc .warn-text svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }

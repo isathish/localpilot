@@ -65,7 +65,7 @@ export type RecoveryCategory =
   | 'tool' | 'permission' | 'check_timeout' | 'loop' | 'unknown';
 export type RecoverySeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type ChoiceSource = 'picker' | 'slash' | 'plan' | 'cli';
-export type MentionKind = 'file' | 'range' | 'folder' | 'url' | 'terminal' | 'workspace' | 'problems' | 'git' | 'selection' | 'editors' | 'other';
+export type MentionKind = 'file' | 'range' | 'folder' | 'url' | 'terminal' | 'workspace' | 'problems' | 'git' | 'selection' | 'editors' | 'codebase' | 'other';
 export type HookRunOutcome = 'ok' | 'blocked' | 'failed' | 'timeout';
 
 /** An event as callers record it: the timestamp is optional (defaults to now). Distributes over the union. */

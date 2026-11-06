@@ -52,7 +52,7 @@ function loadReview(): Review {
   const icon = '<svg></svg>';
   const sandbox: Record<string, unknown> = {
     document: Object.assign(doc, { activeElement: null }),
-    I: { undo: icon, check: icon, restore: icon, diff: icon, x: icon, git: icon, open: icon },
+    I: { undo: icon, check: icon, restore: icon, diff: icon, x: icon, git: icon, open: icon, edit: icon },
     state,
     els,
     post: (m: Record<string, unknown>) => posted.push(JSON.parse(JSON.stringify(m))),
@@ -186,6 +186,69 @@ suite('Chat review queue', () => {
     assert.strictEqual(row.dataset.state, 'conflict');
     click(row.querySelector('[data-a="merge"]')!);
     assert.deepStrictEqual(r.posted, [{ type: 'recoveryAction', sessionId: 's1', action: 'openMergeEditor', file: '/w/README.md' }]);
+  });
+
+  test('an isolated copy: each row applies or discards its own file, opening shows the copy\'s diff, and a running agent blocks both', () => {
+    const r = loadReview();
+    r.state.changes.set('s1', [
+      { path: 'src/a.py', fsPath: '/wt/src/a.py', kind: 'modify', added: 1, removed: 1 },
+      { path: 'b.py', fsPath: '/wt/b.py', kind: 'create', added: 3, removed: 0 },
+    ]);
+    r.state.worktree.set('s1', { path: '/wt', applied: false });
+    r.renderChanges();
+    assert.strictEqual(head(r, 'applyWorktree')!.textContent.trim(), 'Apply all');
+    assert.strictEqual(head(r, 'discardWorktree')!.textContent.trim(), 'Discard all');
+    const [b, a] = rows(r);
+    click(a.querySelector('[data-a="keep"]')!);
+    click(b.querySelector('[data-a="undo"]')!);
+    click(a.querySelector('button.name')!);
+    dispatch(b, 'keydown', { key: 'a' });
+    assert.deepStrictEqual(r.posted, [
+      { type: 'applyWorktree', sessionId: 's1', files: ['src/a.py'] },
+      { type: 'discardWorktree', sessionId: 's1', files: ['b.py'] },
+      { type: 'showDiff', sessionId: 's1', fsPath: '/wt/src/a.py' },
+      { type: 'applyWorktree', sessionId: 's1', files: ['b.py'] },
+    ]);
+    r.posted.length = 0;
+    r.state.running.add('s1');
+    r.renderChanges();
+    const keep = rows(r)[0].querySelector('[data-a="keep"]')!;
+    assert.strictEqual(keep.getAttribute('aria-disabled'), 'true');
+    click(keep);
+    dispatch(rows(r)[0], 'keydown', { key: 'r' });
+    assert.deepStrictEqual(r.posted, [], 'nothing is applied or discarded while the agent still edits the copy');
+    assert.deepStrictEqual(r.toasts, ['Pause or stop the agent first', 'Pause or stop the agent first']);
+  });
+
+  test('an isolated copy with a conflict from an earlier per-file apply lists the C row first and says so in the short label', () => {
+    const r = loadReview();
+    r.state.changes.set('s1', [{ path: 'b.py', fsPath: '/wt/b.py', kind: 'modify' }]);
+    r.state.worktree.set('s1', { path: '/wt', applied: true, conflicts: ['src/app.py'] });
+    r.state.conflicts.set('s1', [{ path: 'src/app.py', fsPath: '/w/src/app.py' }]);
+    r.renderChanges();
+    assert.deepStrictEqual(rows(r).map((li) => li.dataset.state), ['conflict', 'pending']);
+    assert.match(r.els.changesLabel.textContent, /1 file changed in isolated copy · 1 conflict to resolve/);
+    assert.match(r.els.changesLabel.querySelector('.short')!.textContent, /^1 file · 1 conflict$/);
+  });
+
+  test('a file the user edited before deciding is tagged "edited by you" in the queue and on its edit card', () => {
+    const r = loadReview();
+    r.state.changes.set('s1', [{ path: 'b.py', fsPath: '/w/b.py', kind: 'modify', added: 1, removed: 0, userEdited: true }]);
+    r.state.reviewed.set('s1', [{ path: 'a.py', fsPath: '/w/a.py', kind: 'modify', state: 'accepted', userEdited: true }]);
+    r.renderChanges();
+    const [a, b] = rows(r);
+    assert.ok(a.querySelector('.tag.byyou') && b.querySelector('.tag.byyou'));
+    assert.match(b.getAttribute('aria-label')!, /edited by you, not reviewed/);
+    const card = r.doc.createElement('div');
+    card.innerHTML = '<div class="card-head"><span class="rtag hidden"></span></div>';
+    card.dataset.path = 'a.py';
+    r.syncEditTag(card, [{ path: 'a.py', fsPath: '/w/a.py', state: 'accepted', userEdited: true }]);
+    const tag = card.querySelector('.rtag')!;
+    assert.strictEqual(tag.textContent, 'Accepted · edited by you');
+    assert.ok(tag.classList.contains('byyou') && tag.classList.contains('accepted'));
+    r.syncEditTag(card, [{ path: 'a.py', fsPath: '/w/a.py', state: 'pending', userEdited: true }]);
+    assert.strictEqual(tag.textContent, 'Edited by you', 'a pending file the user changed is tagged before the decision');
+    assert.strictEqual(tag.getAttribute('aria-label'), 'Edited by you');
   });
 
   test('an edit card shows the review decision on its file', () => {

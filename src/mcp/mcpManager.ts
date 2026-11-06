@@ -71,6 +71,8 @@ export interface McpServerStatus {
   resources?: McpResourceInfo[];
   resourceTemplates?: McpResourceTemplateInfo[];
   prompts?: McpPromptInfo[];
+  /** The server's own `autoApprove` list (Settings shows those tools as "Allow" by default). */
+  autoApprove?: string[];
 }
 
 /** `${env:NAME}` from the environment; `${secret:NAME}` the same way provider API keys are. */
@@ -1005,9 +1007,14 @@ export class McpManager implements vscode.Disposable {
           return { content: 'This MCP tool may change files or remote state, which Plan/Ask mode does not allow. Switch to Agent mode to use it.', isError: true };
         }
         const cfg = live();
+        // Settings → MCP servers: the user's per-tool choice wins over the server's autoApprove list.
+        const toolMode = getConfig().mcpToolApprovals[client.name]?.[t.name];
+        if (toolMode === 'never') {
+          return { content: `Not run: ${client.name}/${t.name} is set to Block in Settings → MCP servers. Do not call this tool again; use another approach or ask the user to allow it.`, isError: true };
+        }
         // A server's autoApprove list is only a hint: the approval gate honours it unless a rule, hook or the organisation asks.
-        const autoApprove = !!cfg?.autoApprove?.includes(t.name);
-        if (!(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'mcp', autoApprove ? { autoApprove } : undefined))) {
+        const autoApprove = !toolMode && !!cfg?.autoApprove?.includes(t.name);
+        if (!(await ctx.requestApproval(`Call MCP tool ${client.name}/${t.name}`, JSON.stringify(args ?? {}).slice(0, 2000), 'mcp', autoApprove || toolMode ? { ...(autoApprove ? { autoApprove } : {}), ...(toolMode ? { toolMode } : {}) } : undefined))) {
           return { content: 'User declined the MCP tool call.', isError: true };
         }
         const started = Date.now();
@@ -1071,6 +1078,7 @@ export class McpManager implements vscode.Disposable {
         resources: c.resources,
         resourceTemplates: c.resourceTemplates,
         prompts: c.prompts,
+        ...(this.servers[c.name]?.autoApprove?.length ? { autoApprove: [...this.servers[c.name].autoApprove!] } : {}),
       });
     }
     for (const name of this.connecting) {

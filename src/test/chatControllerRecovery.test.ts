@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { TraceStore } from '../telemetry/traceStore';
 import { ChatController, RESUME_PROMPT } from '../ui/chatController';
 import { forgetRecovery } from '../ui/healingAccess';
 
@@ -17,6 +18,8 @@ suite('Chat controller: self-healing wiring', () => {
       replays: new Map(),
       offers: new Map(),
       outcomes: new Map(),
+      traceRecorders: new Map(),
+      traces: new TraceStore(undefined),
       stoppedByUser: new Set(),
       runStatus: new Map(),
       shuttingDown: false,
@@ -299,7 +302,7 @@ suite('Chat controller: self-healing wiring', () => {
       lastCheckpoint: 0,
       activeSessionId: undefined,
       removedWhileRunning: new Map(),
-      notifier: { event() {}, finished() {}, groupFinished() {} },
+      notifier: { event() {}, finished() {}, groupFinished() {}, started() {} },
       handleSlash: never('slash parsing'),
       inlineCommand: never('inline commands'),
       correctNames: never('name correction'),
@@ -321,6 +324,52 @@ suite('Chat controller: self-healing wiring', () => {
     assert.strictEqual(captured.content, '/compact');
     assert.strictEqual(captured.meta.hidden, true);
     assert.ok(!t.c.outcomes.has('s1'), 'a subagent turn_end does not set the chat outcome');
+  });
+
+  test('a run records its trace and links it from the answer; Trace and an unknown id answer the view', async () => {
+    const t = make();
+    const notices: string[] = [];
+    Object.assign(t.c, {
+      afterTurn: { list: () => [] },
+      tracker: { beginTurn() {}, forSession: () => [] },
+      lastCheckpoint: 0,
+      activeSessionId: undefined,
+      removedWhileRunning: new Map(),
+      notifier: { event() {}, finished: (_s: string, _t: string, _silent: boolean, outcome: string) => notices.push(outcome), groupFinished() {}, started: () => notices.push('started') },
+      ensureWorktree: async () => undefined,
+      readAttachments: async () => [],
+      correctNames: async (_s: string, text: string) => ({ text, fixes: [] }),
+      deliverLeftovers() {},
+      onControlChange() {},
+      sessionRoot: () => '/repo',
+      runner: {
+        run: async (o: any) => {
+          o.session.messages.push(o.userMessage);
+          o.emit({ sessionId: 's1', type: 'model_request', payload: { model: 'fake/m', name: 'm' } });
+          o.emit({ sessionId: 's1', type: 'tool_start', payload: { id: 'c1', name: 'read_file', args: { path: 'a.ts' } } });
+          o.emit({ sessionId: 's1', type: 'tool_end', payload: { id: 'c1', name: 'read_file', isError: false } });
+          o.session.messages.push({ role: 'assistant', content: 'Done', meta: {} });
+          o.emit({ sessionId: 's1', type: 'turn_end', payload: { text: 'Done', model: 'fake/m' } });
+          return 'Done';
+        },
+      },
+    });
+    const session = t.sessions.get('s1');
+    await t.c.startRun(session, 's1', 'Read a.ts', [], undefined, {});
+    const answer = session.messages[session.messages.length - 1];
+    assert.ok(answer.meta.traceId, 'the answer links its trace');
+    assert.deepStrictEqual(notices, ['started', 'ok']);
+    const trace = await t.c.traces.get('s1', answer.meta.traceId);
+    assert.deepStrictEqual(trace.entries.map((e: any) => `${e.kind}:${e.name}`), ['model:m', 'tool:read_file']);
+    assert.strictEqual(trace.title, 'Read a.ts');
+    assert.strictEqual(t.c.traceRecorders.size, 0, 'the recorder is dropped when the run ends');
+    const replies: any[] = [];
+    const sink = { post: (m: any) => replies.push(m) };
+    await t.c.handle({ type: 'openTrace', sessionId: 's1', traceId: answer.meta.traceId }, sink);
+    await t.c.handle({ type: 'openTrace', sessionId: 's1', traceId: 'nope' }, sink);
+    assert.strictEqual(replies[0].trace.id, answer.meta.traceId);
+    assert.strictEqual(replies[0].totals.toolCalls, 1);
+    assert.strictEqual(replies[1].trace, null);
   });
 
   test('replay keeps only the latest recovery event per id and child id', () => {

@@ -23,7 +23,7 @@ Useful chat commands:
 |---|---|
 | `/permissions` | The merged permission rules and which files they came from |
 | `/hooks` | Configured hooks per event |
-| `/commands` | Custom slash commands |
+| `/commands` | Custom slash commands (`/prompts` opens them as the prompt library) |
 | `/memory` | Instruction files in force, in prompt order (chat only) |
 
 The [CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) supports `/permissions`, `/hooks` and `/commands` too.

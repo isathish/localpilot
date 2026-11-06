@@ -29,6 +29,7 @@ import { createAgentTools } from '../agent/subagents';
 import { loadProjectSettings, ProjectSettings } from '../agent/settings';
 import { HookRunner } from '../agent/hooks';
 import { discoverPlugins, PluginInfo, pluginSource } from '../agent/plugins';
+import { promptDirs, promptItems, searchPrompts } from '../agent/promptLibrary';
 import { agentTaskPrompt, CustomCommand, deepPlanningPrompt, discoverCommands, expandCommand, parseTaskArgs, resolveSlashMessage, skillTaskPrompt } from '../agent/commands';
 import { saveImplementationPlan } from '../agent/deepPlanning';
 import { normalizeCommandName, spliceSlashToken } from '../agent/slashNames';
@@ -211,7 +212,7 @@ ${bold('In a session')}
   ${RECOVERY_USAGE}   self-healing state of this session: re-run the checks and continue, undo fix attempts, past attempts
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /undo [N [f|c|b]]   go back to an earlier turn: restore its files, the chat or both (Esc Esc at an empty prompt)   /undo all   revert every pending change
-  /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins) and MCP prompts   /permissions   /hooks   settings.json rules
+  /commands  custom slash commands (.claude/commands, .localpilot/commands, plugins) and MCP prompts   /prompts [words]   saved prompts (search)   /permissions   /hooks   settings.json rules
   /mcp:<server>:<prompt> args…   run an MCP server's prompt (arguments by position or key=value)
   /skill <name> <task>   run a task with a skill preloaded   /agent <name> <task>   hand a task to a subagent (also as -p "/skill …")
   /<skill-name> <task>   same as /skill   /deep-planning <task>   plan in Plan mode, saved to implementation_plan.md   /newrule   write a project rule
@@ -1108,7 +1109,7 @@ async function askQuestionsNow(questions: UserQuestion[], rl: readline.Interface
 async function runTurn(core: Core, session: Session, text: string, files: string[], r: Renderer, rl: readline.Interface | undefined, control: RunControl, opts: { modelRef?: string; permissionAllow?: string[]; display?: string; images?: string[]; toolFilter?: string[]; roleOverride?: string; resume?: boolean } = {}): Promise<string> {
   let content = text;
   const root = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
-  const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f, root)));
+  const blocks = await Promise.all(files.map((f) => core.workspace.readAttachment(f, root, { query: text })));
   if (blocks.some(Boolean)) {
     content = `${blocks.filter(Boolean).join('\n\n')}\n\n${text}`;
   }
@@ -2619,7 +2620,7 @@ async function main(): Promise<void> {
   const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
   /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
   let shiftTab = false;
-  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/recovery', '/skill', '/agent', '/commands', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/recovery', '/skill', '/agent', '/commands', '/prompts', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
   const completer = createCompleter({
     commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
     root: () => runRoot(),
@@ -2887,6 +2888,14 @@ async function main(): Promise<void> {
           process.stdout.write('\n');
           rl!.setPrompt(promptText());
         }
+        return true;
+      }
+      case 'prompts': {
+        // Saved prompts are the custom commands in .localpilot/commands (this folder) and ~/.localpilot/commands.
+        const items = promptItems(core.commands, promptDirs(args.cwd, os.homedir()), [args.cwd]);
+        const q = arg.trim();
+        const shown = q ? searchPrompts(items, q) : items;
+        console.log(shown.length ? shown.map((i) => `  ${bold(i.invoke)}${i.argumentHint ? ` ${dim(i.argumentHint)}` : ''}  ${i.description || i.body.split('\n')[0].slice(0, 80)}  ${dim(i.scope === 'workspace' ? 'workspace' : i.scope === 'user' ? 'you' : i.origin)}`).join('\n') : dim(q ? `no saved prompt matches “${q}”` : 'no saved prompts — add markdown files under .localpilot/commands (this folder) or ~/.localpilot/commands (you); save them from the VS Code chat with ⋯ → Save as prompt…'));
         return true;
       }
       case 'commands': {

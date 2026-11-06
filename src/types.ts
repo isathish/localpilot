@@ -32,6 +32,8 @@ export interface ChatMessage {
     tokens?: number;
     /** Marks a compaction summary message. */
     summary?: boolean;
+    /** On a compaction summary: what the compaction kept verbatim and what it folded into the summary. */
+    compaction?: CompactionDetails;
     /** Marks that the tool output was truncated / pruned. */
     pruned?: boolean;
     /** Internal steering message (e.g. the completion nudge); sent to the model but not shown in the transcript. */
@@ -54,6 +56,8 @@ export interface ChatMessage {
     tests?: import('./agent/healing/parsers/testSummary').TestSummary;
     /** On the last assistant message of a turn: the model that answered (provider-qualified id). */
     model?: string;
+    /** On the last assistant message of a turn: the id of its run trace (the answer footer's Trace view). */
+    traceId?: string;
     /** On the last assistant message of a turn: tokens generated and the time spent generating them, for the speed shown under the answer. */
     outputTokens?: number;
     genMs?: number;
@@ -278,6 +282,8 @@ export interface ApprovalOptions {
   mandatory?: boolean;
   /** An MCP server's autoApprove list covers this tool. */
   autoApprove?: boolean;
+  /** MCP: the user's per-tool approval (`localpilot.mcp.toolApprovals`), used in place of `approvals.mcp`; policy floors still apply. */
+  toolMode?: 'always' | 'ask' | 'never';
   /** run_command: the command is read-only or a known test/build command (`approvals.terminal = safe` runs it). */
   safeCommand?: boolean;
   /** run_command: the command looks destructive; it asks even under `always` (`approvals.dangerousAlwaysAsk`). */
@@ -461,6 +467,19 @@ export function isWriteMode(mode: string): boolean {
   return WRITE_MODES.has(mode);
 }
 
+/** What one compaction kept and dropped, shown on the compaction note. */
+export interface CompactionDetails {
+  /** Estimated tokens of the history before and after. */
+  before: number;
+  after: number;
+  /** `model`: the model wrote the summary; `digest`: a deterministic digest (basic strategy, or the model failed). */
+  method: 'model' | 'digest';
+  /** Messages folded into the summary: requests, replies, tool calls and tool outputs among them. */
+  dropped: { messages: number; requests: number; replies: number; toolCalls: number; toolOutputs: number; files: string[]; moreFiles: number };
+  /** Kept verbatim after the summary: the latest messages, and the running turn's request when the split fell inside it. */
+  kept: { messages: number; request: boolean; priorSummaries: number };
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -502,6 +521,11 @@ export interface SessionSummary {
   parentTitle?: string;
   /** How hard the model thinks in this chat; unset follows `localpilot.thinking`. */
   think?: ThinkingLevel;
+  /**
+   * Multi-root workspaces: the workspace folder (absolute path) this chat works in. It drives @-mentions, the tools'
+   * root, git and checks; picked on the welcome screen and fixed once the chat has messages. Unset: the first folder.
+   */
+  folder?: string;
 }
 
 /** Running totals for a chat. `promptTokens` is the uncached input only; cached input is counted in the cache fields. */
@@ -526,6 +550,8 @@ export interface Session extends SessionSummary {
   contextTokens: number;
   /** Number of compactions performed. */
   compactions: number;
+  /** What filled the context on the last request (system, rules, tools, history, files…), for the context ring's card. */
+  contextBreakdown?: import('./context/contextBreakdown').ContextBreakdown;
   /** Attached context items (file URIs, selections). */
   attachments: string[];
   /** Agent-maintained plan / checklist for the current task. */
@@ -613,7 +639,8 @@ export interface AgentEvent {
     | 'recovery'
     /**
      * Still waiting for the model's first token (a weight load, prompt prefill or a queue), sent about once a second.
-     * Payload: { phase: 'load' | 'prefill' | 'queue', model, seconds, limitSec }; `{ done: true }` once output starts.
+     * Payload: { phase: 'load' | 'prefill' | 'queue', model, seconds, limitSec (0 = no limit), fallback?: { id, name } (the first
+     * fallback model that is up), extended? (Keep waiting was pressed) }; `{ done: true }` once output starts.
      */
     | 'waiting'
     /**

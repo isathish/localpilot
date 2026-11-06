@@ -18,6 +18,8 @@ LocalPilot has five modes. Agent, Multitask and Debug can change files and run c
 
 Switch modes with the picker under the composer, <kbd>Shift+Tab</kbd> or <kbd>Ctrl+.</kbd> (<kbd>Cmd+.</kbd> on macOS), which cycle Ask → Agent → Plan → Debug → Multitask, or `/mode ask|agent|plan|debug|multitask`. The picker tags each mode **read-only** or **edits files**. In the CLI use `--agent`, `--multitask`, `--debug`, `--plan` or `--ask`. Editor actions pick a mode for you: Explain uses Ask; Fix, Refactor, Generate Tests and Add Documentation use Agent.
 
+**Without a folder.** When VS Code has no folder open, the welcome screen says *No folder open · chat only* with **Open folder…**, new chats start in Ask, and the picker marks Agent, Debug, Multitask and the specialists that run in them *Needs a folder*: picking one says why instead of switching. A chat that is still in a mode that edits files answers that turn read-only. Plan and Ask work as usual, on the files you attach.
+
 ## Agent
 
 Agent is the default. The agent works until the task is done:
@@ -52,7 +54,7 @@ In the chat the fan-out appears as a **Working** card with one row per worker: i
 
 Small models sometimes say they delegated without starting anything. LocalPilot marks that sentence as **retracted**, asks the model to act, and shows the real answer in a new block.
 
-With isolated worktrees on (the default in a git repository), all workers share the session's worktree. You apply the result with **Apply to workspace**.
+With isolated worktrees on (the default in a git repository), all workers share the session's worktree. You apply the result with **Apply all**, or file by file from the Changes list.
 
 ## Debug
 
@@ -65,6 +67,8 @@ Debug is Agent mode with a fixed method:
 5. Add a regression test and remove temporary logging.
 
 Paste an error or describe what goes wrong.
+
+A Debug answer ends with a **Debug report** card: *Symptom*, *Root cause*, *Fix* and *Verified*, with a green *Verified* or an amber *Not verified* when the agent could not re-run the reproduction (it says why). Stack traces in answers and in command output become links: click a frame such as `src/dice.py:22` or `/Users/me/app/x.js:12:5` to open the file at that line. Python, Node and browser JavaScript, Java and Kotlin, .NET, Go, Rust and Ruby frames are recognised. A pasted trace in an answer is shown as a *stack trace* block without **Apply**, and a frame whose file does not exist on this machine (for example `node:internal` or a path from another computer) stays plain text.
 
 ## Plan
 
@@ -163,7 +167,7 @@ To tell the agent what to do instead, deny with a reason. Type it in the message
 
 ### Edit a command, allow it everywhere, and see why it asked
 
-A command prompt shows the command with shell highlighting. Click **Edit** to change it before it runs: **Allow edited** runs your version (in Ask and Plan mode it must still be read-only), and the agent is told what actually ran. The arrow next to the *Allow all … in this chat* button also offers **Always allow in this workspace…**, which asks you to confirm and then sets `localpilot.approvals.<kind>` to `always` in the workspace settings (destructive commands still ask). It is not offered for prompts that always ask. A line at the bottom of the prompt says why it asked, for example *Asked because Terminal commands = Ask*, with **Change in Settings**. The step the prompt belongs to reads *Needs approval · Review* in the transcript.
+A command prompt shows the command with shell highlighting. Click **Edit** to change it before it runs: **Allow edited** runs your version (in Ask and Plan mode it must still be read-only), and the agent is told what actually ran. The arrow next to the *Allow all … in this chat* button also offers **Always allow in this workspace…**, which asks you to confirm and then stops asking for that kind of action in this workspace (destructive commands still ask). LocalPilot keeps that choice for the workspace itself, not in its settings files, so a repository cannot grant it; the auto-approve bar marks it *workspace*. For a single command the same menu offers **Always allow "npm test"** and **Always block "npm test"**, which save a [command rule]({{ '/docs/configuration/#approvals' | relative_url }}) for this workspace and answer the prompt. A prompt that always asks (a destructive command) offers only **Always block**. A line at the bottom of the prompt says why it asked, for example *Asked because Terminal commands = Ask*, with **Change in Settings**. The step the prompt belongs to reads *Needs approval · Review* in the transcript.
 
 ### Failed steps, stops and slow models
 
@@ -177,7 +181,26 @@ The line above the message box reads **Auto-approve:** followed by the categorie
 
 ### Notifications
 
-When a chat finishes while the chat view is hidden or VS Code is not focused, LocalPilot shows a notification with **Open**. A command that was approved automatically and is still running after 30 seconds adds a status-bar item and a notification, once per command. Set `localpilot.notifications` to `always` to be notified even while you watch the chat, or to `off`. The terminal CLI rings the terminal bell when a run that took more than 10 seconds finishes.
+While the chat view is hidden or VS Code is not focused, LocalPilot shows a notification with **Open chat** when:
+
+- a run that took longer than 20 seconds finishes (the notice says how long it took; with changed files it offers **Review** and **Keep All**);
+- a run of any length ends with an error (**Retry**) or needs your attention;
+- a run waits for your approval or for an answer to its question (once per run);
+- a command that was approved automatically is still running after 30 seconds (also a status-bar item, once per command).
+
+Set `localpilot.notifications` to `always` to be notified of every run even while you watch the chat, or to `off`. The terminal CLI rings the terminal bell when a run that took more than 10 seconds finishes.
+
+### Run trace
+
+The **Trace** button under an answer (the stacked-bars icon) opens what that run did, in order: every model call (with the time to its first token), tool call, retry, model fallback, approval wait, hook, compaction and message you added while it ran, each with its start time, duration and a bar on the run's timeline. Subagent work is indented under its lane. The summary line counts model calls, tool calls and failures, retries and fallbacks, and splits the time between the model and the tools. **Problems** shows only failures, denials, retries and fallbacks. **Export JSON** saves the trace with absolute timestamps, durations and totals, for a bug report or your own tooling. Esc closes it.
+
+Traces are built from the run's own events on this machine and nothing is sent anywhere. They do not need OpenTelemetry (see [Dashboard]({{ '/docs/dashboard/' | relative_url }}) for exporting spans to a collector). Each chat keeps the traces of its last 20 runs, next to its sessions, and they are deleted with the chat.
+
+### Offline
+
+When the network goes away, a slim banner under the tabs reads **Offline: using local models only**, and a **Offline** item appears in the status bar. While offline, a chat set to a cloud model uses the best local model for each turn instead (the turn shows the usual model-fallback note), and Auto picks only local models. Web search and fetch are unavailable. If no local model is installed, the banner says so and offers **Models**. **Check again** in the banner, a click on the status-bar item or **LocalPilot: Check Network Connection** checks at once; otherwise LocalPilot checks every 30 seconds (every 5 seconds while offline) and shows *Back online* when the network returns.
+
+LocalPilot decides it is offline when no network interface other than loopback is up, or when the host names of your configured cloud providers cannot be resolved twice in a row. It never contacts anything you have not configured, and behind a proxy only the network interfaces count. A local model is never switched to a cloud one.
 
 <p><img src="{{ '/assets/screenshots/approval.png' | relative_url }}" alt="Approval card: Run command python -m pytest -q, with Deny (N), Allow for session (A) and Allow once (Y), above the Tasks and changed-files panels" width="420"></p>
 

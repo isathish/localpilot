@@ -119,6 +119,10 @@ export function withStdin(prompt: string, input: string): string {
 export function atRefs(text: string, root: string, exists: (p: string) => boolean = fs.existsSync): { files: string[]; images: string[] } {
   const files: string[] = [];
   const images: string[] = [];
+  // `#codebase` (or `@codebase` when no such file exists): the whole-project overview, as in the chat.
+  if (/(?:^|\s)[#@]codebase(?![\w./-])/.test(text) && !exists(path.resolve(root, 'codebase'))) {
+    files.push('codebase');
+  }
   for (const m of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
     const ref = m[1].replace(/[.,;:!?)\]]+$/, '');
     const bare = ref.replace(/#L?\d+(?:-L?\d+)?$/i, '');

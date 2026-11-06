@@ -12,6 +12,7 @@ import { OllamaProvider } from './ollama';
 import { OpenAICompatProvider } from './openaiCompat';
 import { VscodeLmProvider, vscodeLmAvailable } from './vscodeLm';
 import { expandProviderRef } from './providerOptions';
+import { classifyProviderHealth, HealthRecord, ProviderHealth } from './health';
 import { getSystemProfile, parameterSizeB, SystemProfile } from './system';
 
 export interface RouteRequest {
@@ -69,6 +70,20 @@ export interface Route {
   spread?: boolean;
 }
 
+/**
+ * The first model of the user's fallback order that is listed now and is not the one that failed (`provider/model`
+ * ids, or a bare model id). An image turn skips entries that cannot see.
+ */
+export function pickFallback(order: string[], models: ModelInfo[], failed: string | undefined, needsVision?: boolean): ModelInfo | undefined {
+  for (const ref of order) {
+    const m = models.find((x) => x.id === ref || x.modelId === ref);
+    if (m && m.id !== failed && m.modelId !== failed && (!needsVision || m.supportsVision)) {
+      return m;
+    }
+  }
+  return undefined;
+}
+
 /** Builds providers from settings, discovers models, resolves `provider/model` ids and routes work to the best fitting model. */
 export class ProviderRegistry implements vscode.Disposable {
   private providers = new Map<string, LLMProvider>();
@@ -79,6 +94,17 @@ export class ProviderRegistry implements vscode.Disposable {
   private readonly providerOfModel = new Map<string, string>();
   /** Providers whose health check passed in the last discovery. */
   private reachable = new Set<string>();
+  /** The last discovery result per provider (duration, error), for the health badges. */
+  private readonly healthRecords = new Map<string, HealthRecord>();
+  private healthSig = '';
+  private readonly _onDidChangeHealth = new vscode.EventEmitter<void>();
+  /** A provider's badge state changed (up, down, slow, key) without the model list changing. */
+  readonly onDidChangeHealth = this._onDidChangeHealth.event;
+  /**
+   * No network (the extension's connectivity monitor): cloud models are left out of routing while a local model
+   * exists, so a chat on a cloud model falls back to a local one for the turn instead of failing.
+   */
+  offline = false;
   /** Local-only provider health metrics for the dashboard. */
   telemetry?: Pick<Telemetry, 'record'>;
   /** Learned per-model adjustments from local usage, applied to automatic picks (never to explicit choices). */
@@ -232,6 +258,21 @@ export class ProviderRegistry implements vscode.Disposable {
     return this.modelCache.filter((m) => !disabled.has(m.id));
   }
 
+  /**
+   * Badge state per configured provider id from the last discovery (no extra requests): ok, slow, down, no key, or off.
+   * A provider not checked yet is left out.
+   */
+  providerHealth(): Record<string, ProviderHealth> {
+    const out: Record<string, ProviderHealth> = {};
+    for (const p of getConfig().providers) {
+      const h = classifyProviderHealth(p, this.healthRecords.get(p.id));
+      if (h) {
+        out[p.id] = h;
+      }
+    }
+    return out;
+  }
+
   /** Lists enabled models from all reachable providers (cached for 30s). */
   async listModels(force = false): Promise<ModelInfo[]> {
     const all = await this.listAllModels(force);
@@ -274,6 +315,7 @@ export class ProviderRegistry implements vscode.Disposable {
     const generation = this.generation;
     const reachable = new Set<string>();
     const listed = new Map<string, ModelInfo[]>();
+    const health = new Map<string, HealthRecord>();
     const probed = this.all;
     const results = await Promise.allSettled(
       probed.map(async (p) => {
@@ -282,6 +324,7 @@ export class ProviderRegistry implements vscode.Disposable {
         const remote = isRemoteUrl(p.baseUrl);
         if (!remote && !(await p.healthCheck())) {
           this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: 'unreachable' });
+          health.set(p.id, { ok: false, ms: Date.now() - started, at: Date.now(), error: 'unreachable' });
           return [];
         }
         if (!remote) {
@@ -292,9 +335,11 @@ export class ProviderRegistry implements vscode.Disposable {
           reachable.add(p.id);
           listed.set(p.id, list);
           this.telemetry?.record({ type: 'health', provider: p.id, ok: true, durationMs: Date.now() - started, models: list.length });
+          health.set(p.id, { ok: true, ms: Date.now() - started, at: Date.now(), models: list.length });
           return list;
         } catch (e) {
           this.telemetry?.record({ type: 'health', provider: p.id, ok: false, durationMs: Date.now() - started, error: e instanceof Error ? e.message : String(e) });
+          health.set(p.id, { ok: false, ms: Date.now() - started, at: Date.now(), error: e instanceof Error ? e.message : String(e) });
           throw e;
         }
       })
@@ -320,7 +365,16 @@ export class ProviderRegistry implements vscode.Disposable {
       this.providerOfModel.set(m.modelId, m.providerId);
     }
     this.reachable = reachable;
+    this.healthRecords.clear();
+    for (const [id, r] of health) {
+      this.healthRecords.set(id, r);
+    }
     this.lastRefresh = Date.now();
+    const hsig = JSON.stringify(Object.entries(this.providerHealth()).map(([id, h]) => [id, h.state]));
+    if (hsig !== this.healthSig) {
+      this.healthSig = hsig;
+      this._onDidChangeHealth.fire();
+    }
     if (changed) {
       this.noted.clear();
       this.residentAt = 0;
@@ -560,6 +614,10 @@ export class ProviderRegistry implements vscode.Disposable {
     const cfg = getConfig();
     const role = req.role ?? 'agent';
     let models = await this.listModels(req.fresh && (await this.installedChanged()));
+    const offlineFallback = this.offline && models.some((m) => !m.remote) && models.some((m) => m.remote);
+    if (offlineFallback) {
+      models = models.filter((m) => !m.remote);
+    }
     const roleOverride =
       role === 'completion' ? cfg.inlineCompletion.model : role === 'vision' ? cfg.routing.vision : role === 'reasoning' ? cfg.routing.reasoning : role === 'fast' && cfg.routing.fast !== 'session' ? cfg.routing.fast : undefined;
     // A bare provider id (`-m openrouter`) means that provider's own default model.
@@ -590,17 +648,21 @@ export class ProviderRegistry implements vscode.Disposable {
       // referenced model; one that lists models but not this one, or that did not answer, does not — fall back below.
       const providerId = wanted.slice(0, wanted.indexOf('/'));
       const listsModels = models.some((m) => m.providerId === providerId);
-      const unlisted = listsModels || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow > 0 ? cfg.contextWindow : 32768, cfg.maxOutputTokens);
+      const offlineCloud = offlineFallback && isCloudProvider(cfg.providers.find((p) => p.id === providerId) ?? { baseUrl: '' });
+      const unlisted = listsModels || offlineCloud || !this.reachable.has(providerId) ? undefined : this.unlisted(wanted, cfg.contextWindow > 0 ? cfg.contextWindow : 32768, cfg.maxOutputTokens);
       if (unlisted && !cfg.disabledModels.includes(unlisted.id) && modelAllowed(getManagedPolicy(this.log), unlisted.id)) {
         model = unlisted;
       }
     }
     if (!model && wanted && models.length) {
       const pc = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
-      unavailable = !!pc && pc.enabled !== false && !this.reachable.has(pc.id);
+      const offlineCloud = offlineFallback && !!pc && isCloudProvider(pc);
+      unavailable = offlineCloud || (!!pc && pc.enabled !== false && !this.reachable.has(pc.id));
       reason = wanted.includes('/') && !modelAllowed(getManagedPolicy(this.log), wanted)
         ? `${wanted.split('/').pop()} is not on your organization's model allowlist — using the best model that is`
-        : unavailable && pc
+        : offlineCloud
+          ? `No network — ${wanted.split('/').pop()} needs the internet, using a local model for this turn`
+          : unavailable && pc
           ? `${pc.displayName ?? pc.id} is not answering — using the best model that is for this turn`
           : `${wanted.split('/').pop()} is not available — using the best model that is`;
       fallback = true;
@@ -639,6 +701,16 @@ export class ProviderRegistry implements vscode.Disposable {
       const small = pickForRole(healthy, 'fast', profile, false, bonus);
       model = small && preferResident(small, healthy, 'fast', resident, profile, bonus, this.residentGb);
     }
+    // The user's fallback order (routing.fallbackModels) comes before the automatic best fit. An entry the user listed
+    // is their choice, so a cloud entry may stand in for a local model here (the guard below exempts it).
+    let listedFallback: ModelInfo | undefined;
+    if (!model && fallback && role !== 'completion') {
+      listedFallback = pickFallback(cfg.routing.fallbackModels ?? [], healthy, wanted, req.needsVision);
+      if (listedFallback) {
+        model = listedFallback;
+        reason = `${reason ? reason.replace(/(,| —) using (the best model that is|a local model).*$/, '') : `${wanted} is not available`} — using ${listedFallback.name}, next in your fallback order`;
+      }
+    }
     if (!model) {
       model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(models, 'agent', profile, false, bonus);
     }
@@ -650,7 +722,7 @@ export class ProviderRegistry implements vscode.Disposable {
     // A model on this machine was asked for: when its server is down, falling back to a cloud model would send the
     // code off the machine without the user choosing that. Say what is wrong instead.
     const wantedCfg = wantedPid ? cfg.providers.find((p) => p.id === wantedPid) : undefined;
-    if (fallback && model.remote && wantedCfg && !isCloudProvider(wantedCfg)) {
+    if (fallback && model.remote && wantedCfg && !isCloudProvider(wantedCfg) && model !== listedFallback) {
       const failed = this.startFailedAt.has(wantedCfg.id);
       throw new Error(
         `${wanted.startsWith(`${wantedCfg.id}/`) ? wanted.slice(wantedCfg.id.length + 1) : wanted} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
@@ -705,6 +777,7 @@ export class ProviderRegistry implements vscode.Disposable {
     this.disposables.forEach((d) => d.dispose());
     this._onDidChange.dispose();
     this._onDidRemoveModels.dispose();
+    this._onDidChangeHealth.dispose();
   }
 }
 

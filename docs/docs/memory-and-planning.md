@@ -42,6 +42,8 @@ Open the history with **All chats** in the tab bar (or **+N** when there are mor
 - Chats are grouped by Running, Pinned, Today, Yesterday, Previous 7 / 30 days and Older.
 - Each row also shows the model, the tokens in and out, the cost when it is known, and the chat's size on disk.
 - **Sort** by Newest, Oldest, Most tokens, Most expensive, Largest or Relevance. **Pinned** shows pinned chats only.
+- **Filter by mode:** chips above the list show the modes your chats use (Agent, Ask, Plan, Debug, Multitask and specialists such as Review or Test), each with its count; click one to show only those chats, **All** to show every chat. A Review chat counts as Review while it runs in Ask; moved to another mode it counts there.
+- **Filter by folder:** in a workspace with several folders, the folder menu shows only the chats that work in one folder. A chat that never picked a folder belongs to the first one. The mode and folder filters stay set the next time you open the history.
 - Search matches titles and message text. Title matching is fuzzy and tolerates a typo or two. Typing switches the sort to Relevance; clearing the search restores the previous sort.
 - A history of more than 200 chats loads 50 at a time as you scroll.
 - Each row has pin, rename, delete (with confirmation) and **more…** (open, fork, export as Markdown, clear messages).

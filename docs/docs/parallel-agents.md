@@ -82,8 +82,11 @@ In a git repository each agent chat works in its own copy of the repository by d
 While an agent works, the changes bar reads *N files changed in isolated copy*. From there:
 
 - Click a file for a before/after diff.
-- **Apply to workspace** brings the changes into your folder as ordinary uncommitted edits. If you changed the same lines meanwhile, they are 3-way merged; conflicts are marked in the files and listed.
-- **Discard** deletes the copy and its changes.
+- **Apply** on a file (or *a* on the selected row) brings that one file into your folder as an uncommitted edit; the other files stay in the copy. **Discard** on a file (or *r*) throws away the agent's changes to it, after you confirm.
+- **Apply all** brings every change into your folder as ordinary uncommitted edits. If you changed the same lines meanwhile, they are 3-way merged.
+- A file that conflicts is listed as **C** with **Resolve**, which opens it in the merge editor. The row goes away once the file is saved without conflict markers.
+- **Discard all** deletes the copy and its changes.
+- Apply and Discard wait while the agent is still editing the copy: pause or stop it first.
 
 The **Agents** panel has the same actions, plus *Open Agent's Worktree in New Window*.
 
@@ -117,7 +120,7 @@ A running agent has two buttons next to the composer:
 **Steering.** You can type while an agent is paused or running:
 
 - While paused, a message you send appears as a *queued* row. It is added to the conversation when the agent resumes. Use it to correct course, for example "use the existing helper instead".
-- While running, pressing <kbd>Enter</kbd> offers *Add to this agent* (read at its next step), *Send after this turn*, *Send in a new tab* or *Stop this agent first*.
+- While running, <kbd>Enter</kbd> adds the message to this run (the agent reads it at its next step) and <kbd>⌥Enter</kbd> (<kbd>Alt+Enter</kbd>) sends it after this turn instead. A hint under the message box says so while the agent works; its **More…** also offers *Send in a new tab* and *Stop this agent first*.
 - *Send after this turn* keeps the message in the chat's queue. When the run ends, even after **Stop**, it starts a new turn. Several queued messages run one turn each, in order.
 - A banner above the input lists what is waiting, for example *2 queued · 1 steering*. On each row, ✕ cancels the message and ✎ moves its text, files and images back into the composer, in front of anything you have already typed. Deleting the chat drops its queue. A cancelled steer is never sent to the model.
 - <kbd>⌘⇧Enter</kbd> (<kbd>Ctrl+Shift+Enter</kbd>) sends the draft in a new tab.
@@ -184,7 +187,8 @@ The **Agents** view sits below the chat view (collapsed by default). It stays in
 Before an agent changes a file, LocalPilot stores the original content. Then:
 
 - The changes bar appears above the composer. Click a file for a diff.
-- Without a worktree, accept or reject per file, or use **Accept all** / **Reject all**. With a worktree, use **Apply to workspace** / **Discard**.
+- Without a worktree, accept or reject per file, or use **Accept all** / **Reject all**. With a worktree, apply or discard per file, or use **Apply all** / **Discard all**.
+- A file you edited in the review diff before accepting it is marked *edited by you*.
 - Changed lines are highlighted in open editors.
 - Rejecting restores the exact original content. New files are moved to the trash.
 - Accepting drops the snapshot. Your normal git workflow takes over.

@@ -50,19 +50,21 @@
     pause: '<svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg>',
     copy: '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>',
     eye: '<svg viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>',
+    edit: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M9 4.5l2.5 2.5"/></svg>',
+    keyboard: '<svg viewBox="0 0 16 16"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4.5 9.5h7"/></svg>',
     eyeOff: '<svg viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg>',
   };
   const SECTIONS = [
-    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['advanced', 'Advanced', I.wrench],
+    ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['marketplace', 'Marketplace', I.download], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
+    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
   ];
   /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
   const NAV_HOME = ['dashboard'];
   const NAV_GROUPS = [
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
-    { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'customize', 'completions'] },
+    { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'marketplace', 'customize', 'completions'] },
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web', 'documents'] },
-    { id: 'data', label: 'Data & system', items: ['memory', 'telemetry', 'advanced'] },
+    { id: 'data', label: 'Data & system', items: ['memory', 'telemetry', 'shortcuts', 'advanced'] },
   ];
   /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
    *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
@@ -71,6 +73,7 @@
     models: 'installed download pull routing context temperature thinking memory budget default model',
     gallery: 'catalog library hugging face docker hub download pull install gguf',
     skills: 'skill playbook subagent registry install',
+    marketplace: 'marketplace browse install skills mcp servers plugins subagents agents catalog registry extensions add-ons',
     customize: 'rules commands hooks skills plugins agents.md claude.md cursorrules clinerules slash disable enable conditional paths globs hook scripts pretooluse taskstart taskcancel taskerror marketplace browse plugins',
     agent: 'approval permission terminal command edit delete network hooks worktree parallel instructions system prompt clarify diff preview patch checkpoint restore snapshot diagnostics errors compaction summarise trim shell zsh bash powershell profile detach background language english spanish chinese japanese translate locale tips conversation repos repositories monorepo multi-root self-healing recovery retry checks tests regression',
     completions: 'ghost text fim autocomplete tab suggestion',
@@ -81,6 +84,7 @@
     dashboard: 'telemetry metrics usage logs redis stats throughput self-healing recovery failures root cause patches regression intervention',
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
+    shortcuts: 'keyboard shortcuts keys keybindings hotkeys bindings change customize',
   };
   /** publisher.name from package.json, for the "@ext:" filter of VS Code's Settings editor. */
   const EXT_ID = 'localpilot.localpilot-agent';
@@ -89,7 +93,7 @@
     ['models', 'models.autoSetup', 'Offer automatic setup'], ['models', 'routing.enabled', 'Route automatically'], ['models', 'models.autoTune', 'Learn from usage'],
     ['models', 'defaultModel', 'Default model for agent & chat'], ['models', 'inlineCompletion.model', 'Inline completions model'], ['models', 'routing.vision', 'Images model'],
     ['models', 'routing.reasoning', 'Plan mode model'], ['models', 'routing.fast', 'Read-only subagents model'], ['models', 'routing.coding', 'Implementing subagents model'],
-    ['models', 'routing.parallelModels', 'Spread parallel work across models'], ['models', 'contextWindow', 'Context window'], ['models', 'maxOutputTokens', 'Max output tokens'],
+    ['models', 'routing.parallelModels', 'Spread parallel work across models'], ['models', 'routing.fallbackModels', 'Fallback order'], ['models', 'firstTokenTimeoutSeconds', 'First-token wait limit'], ['mcp', 'mcp.toolApprovals', 'MCP tool approvals (per tool)'], ['models', 'contextWindow', 'Context window'], ['models', 'maxOutputTokens', 'Max output tokens'],
     ['models', 'temperature', 'Temperature'], ['models', 'thinking', 'Extended thinking'], ['models', 'keepAlive', 'Keep model loaded'], ['models', 'prewarm', 'Pre-load the model while you type'],
     ['models', 'ollama.flashAttention', 'Ollama flash attention'], ['models', 'ollama.kvCacheType', 'Ollama KV cache'],
     ['providers', 'providers', 'Providers'], ['mcp', 'mcpServers', 'MCP servers'], ['mcp', 'mcp.watchServerFiles', 'Restart MCP servers on file change'], ['providers', 'gateways.litellmConfig', 'LiteLLM config file'], ['models', 'models.disabled', 'Hidden models'],
@@ -467,7 +471,7 @@
   }
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   /** Mirrors isUserOnlySetting in src/config.ts (keep the two in step): written to User settings whatever scope is selected. */
-  const USER_ONLY = (k) => k === 'hooks.enabled' || k === 'healing.dependencyInstall' || k === 'healing.securityCheck' || k.startsWith('approvals.') || k.startsWith('autoMode.') || k.startsWith('telemetry.otlp.');
+  const USER_ONLY = (k) => k === 'routing.fallbackModels' || k === 'mcp.toolApprovals' || k === 'hooks.enabled' || k === 'healing.dependencyInstall' || k === 'healing.securityCheck' || k.startsWith('approvals.') || k.startsWith('autoMode.') || k.startsWith('telemetry.otlp.');
   const userOnlyBadge = (key) => (USER_ONLY(key) ? '<span class="badge useronly" title="Applies to every workspace for safety; the Workspace switch does not change it">User only</span>' : '');
   const scopeBadge = (key) => { const s = S(key).scope; return userOnlyBadge(key) + (s === 'default' ? '' : `<span class="badge ${s}" title="Set in ${s} settings">${s}</span>`); };
   const resetBtn = (key) => {
@@ -762,6 +766,45 @@
     return build();
   }
   const enabledModels = () => (state.data.models || []).filter((m) => !m.disabled);
+  const FIRST_TOKEN_OPTIONS = [[60, '1 min'], [120, '2 min'], [180, '3 min (default)'], [300, '5 min'], [600, '10 min'], [900, '15 min'], [1800, '30 min'], [0, 'No limit']];
+  /** Settings → Models → Routing: the ordered fallback list (routing.fallbackModels, User only). Up/down reorder, × removes,
+   *  the select adds an installed model; an entry that is not available now stays listed with a badge (it is skipped). */
+  function fallbackEditor() {
+    const key = 'routing.fallbackModels';
+    const build = () => {
+      const list = Array.isArray(val(key)) ? val(key).filter((x) => typeof x === 'string') : [];
+      const models = enabledModels();
+      const nameOf = (id) => { const m = models.find((x) => x.id === id); return m ? m.name : shortId(id); };
+      const f = el('div', 'field wide fallback-ed');
+      f.innerHTML = `<div><div class="lbl">Fallback order${scopeBadge(key)}${resetBtn(key)}</div><div class="desc">When the chosen model is unavailable (server down, model removed, offline), the first available model in this list answers the turn, and the chat says so. Without a list, the best available model is used. A cloud model listed here is the only way a local model ever falls back to the cloud.</div></div>`;
+      const ctl = el('div', 'ctl');
+      const ol = el('ol', 'list fb-list'); ol.setAttribute('aria-label', 'Fallback models, first is tried first');
+      const write = (next) => set(key, next);
+      list.forEach((id, i) => {
+        const m = models.find((x) => x.id === id);
+        const li = el('li', '', `<span class="fb-n" aria-hidden="true">${i + 1}</span><span class="fb-name"><b title="${esc(id)}">${esc(nameOf(id))}</b><span class="fb-sub"><code title="${esc(id)}">${esc(id)}</code>${m ? (m.remote ? '<span class="badge" title="Prompts and code sent to this model leave this machine">cloud</span>' : '') : '<span class="badge warn" title="Not listed by any provider right now: skipped until it is">not available</span>'}</span></span><span class="fb-acts"><button class="reset" data-a="up" title="Move up" aria-label="${esc(`Move ${nameOf(id)} up`)}" ${i ? '' : 'disabled'}>${I.chev}</button><button class="reset" data-a="down" title="Move down" aria-label="${esc(`Move ${nameOf(id)} down`)}" ${i < list.length - 1 ? '' : 'disabled'}>${I.chev}</button><button class="reset x" data-a="rm" title="Remove" aria-label="${esc(`Remove ${nameOf(id)}`)}">${I.x}</button></span>`);
+        li.querySelector('.fb-acts').onclick = (e) => {
+          const b = e.target.closest('button[data-a]'); if (!b || b.disabled) { return; }
+          const next = list.slice();
+          if (b.dataset.a === 'rm') { next.splice(i, 1); } else { const j = b.dataset.a === 'up' ? i - 1 : i + 1; [next[i], next[j]] = [next[j], next[i]]; }
+          write(next);
+        };
+        ol.appendChild(li);
+      });
+      if (list.length) { ctl.appendChild(ol); } else { ctl.appendChild(el('div', 'muted small fb-empty', 'No fallback order: the best available model is used.')); }
+      const free = models.filter((m) => !list.includes(m.id));
+      const row = el('div', 'row list-add');
+      const sel = el('select'); sel.setAttribute('aria-label', 'Model to add to the fallback order'); sel.dataset.fk = `${key}:add`;
+      sel.innerHTML = `<option value="">${free.length ? 'Add a model…' : models.length ? 'Every model is listed' : 'No models available'}</option>` + free.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} — ${esc(m.providerId)}${m.remote ? ' · cloud' : ''}</option>`).join('');
+      sel.disabled = !free.length;
+      sel.onchange = () => { if (sel.value) { write([...list, sel.value]); } };
+      row.appendChild(sel);
+      ctl.appendChild(row);
+      f.appendChild(ctl);
+      return component(f, [key], build);
+    };
+    return build();
+  }
   const modelOptions = (filter) => enabledModels().filter(filter || (() => true)).map((m) => [m.id, m.name, `${m.providerId} · ${Math.round(m.contextWindow / 1024)}k${m.supportsTools ? ' · tools' : ''}${m.supportsVision ? ' · vision' : ''}${m.supportsFim ? ' · FIM' : ''}`]);
   const shortId = (id) => String(id || '').split('/').pop();
 
@@ -985,7 +1028,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -995,6 +1038,8 @@
     root.querySelectorAll('[data-cmd]').forEach((b) => (b.onclick = () => { let args; try { args = b.dataset.args ? JSON.parse(b.dataset.args) : undefined; } catch { args = undefined; } post({ type: 'command', id: b.dataset.cmd, args }); if (b.classList.contains('btn')) { b.classList.add('busy'); setTimeout(() => b.classList.remove('busy'), 1200); } }));
     root.querySelectorAll('[data-url]').forEach((b) => (b.onclick = () => post({ type: 'openExternal', url: b.dataset.url })));
     root.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); reset(b.dataset.reset); }));
+    // An inline link to another section ("MCP servers" in a description); sections may wire their own the same way.
+    root.querySelectorAll('button.inline-link[data-sec]').forEach((b) => { if (!b.onclick) { b.onclick = () => { state.section = b.dataset.sec; render(); }; } });
   }
   // An organisation policy (managed-settings.json) is shown in full where it bites (approvals, providers), and as one line elsewhere.
   const policyNote = (full) => { const m = state.data && state.data.managed; if (!m) { return ''; } return `<div class="policy" role="note">${I.shield}<div><b>Managed by your organization</b>${m.message ? ` <span class="pm">${esc(m.message)}</span>` : ''}${full && m.lines.length ? `<ul>${m.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ' Some settings here may have no effect.'}<small>${esc(m.source)}</small></div></div>`; };
@@ -1011,6 +1056,12 @@
       s[state.scope === 'workspace' ? 'workspaceValue' : 'userValue'] = copy();
       if (state.scope === 'workspace' || s.workspaceValue === undefined) { s.value = copy(); }
     }
+  }
+  /** " 312 GB free on that disk." under Models folder (a warning when even the smallest model would not fit); Start colibri checks again before it downloads. */
+  function colibriDiskText() {
+    const d = state.data && state.data.colibriDisk; if (!d || d.freeGb === undefined) { return ''; }
+    const low = d.freeGb < d.smallestGb;
+    return ` <span class="${low ? 'warn-text' : ''}" title="${esc(d.dir)}">${low ? I.warn : ''}${Number(d.freeGb).toLocaleString()} GB free on that disk${low ? `: less than the smallest model needs (${d.smallestGb} GB). Pick a folder on a bigger disk.` : '.'}</span>`;
   }
   function secProviders(sec) {
     head(sec, 'Providers', 'Local servers keep your code on this machine; cloud providers receive what you send them. Automatic picks prefer local models.');
@@ -1138,7 +1189,7 @@
       el('div', 'field wide', '<div><div class="desc"><a data-url="https://github.com/JustVugg/colibri">colibri</a> runs very large mixture-of-experts models (GLM-5.2, DeepSeek V4 Flash, Qwen3-Coder-30B…) by keeping the dense part in RAM and streaming experts from disk.</div></div>'),
       field('colibri.path', 'colibri folder', 'A checkout (with <code>c/coli</code>) or an unpacked release. Empty = <code>coli</code> on PATH, then <code>~/colibri</code>; Start colibri offers to install it.', 'text', { placeholder: '~/colibri', wide: true }),
       field('colibri.model', 'Model', 'A catalog id (<code>qwen3-coder-30b</code>, <code>glm-5.2</code>) or a model folder. Empty = colibri recommends one for this machine.', 'text', { placeholder: 'recommended' }),
-      field('colibri.modelsDir', 'Models folder', 'Where models are downloaded (19 GB to 1.6 TB each). Empty = <code>~/colibri-models</code>.', 'text', { placeholder: '~/colibri-models', wide: true }),
+      field('colibri.modelsDir', 'Models folder', `Where models are downloaded (19 GB to 1.6 TB each). Empty = <code>~/colibri-models</code>.${colibriDiskText()}`, 'text', { placeholder: '~/colibri-models', wide: true }),
       field('colibri.backend', 'GPU backend', 'The engine colibri builds or downloads at setup. Apple Silicon uses Metal automatically.', 'select', { options: [['auto', 'Automatic (CUDA, then Vulkan, then CPU)'], ['cuda', 'CUDA (NVIDIA)'], ['vulkan', 'Vulkan'], ['cpu', 'CPU only']] }),
       field('colibri.port', 'Port', 'Where <code>coli serve</code> listens; auto-detect probes it too.', 'number', { min: 1, max: 65535 }),
       field('colibri.kvSlots', 'Parallel conversations', 'KV slots, so parallel agents keep their own cached context. A few hundred MB each; capped by <a data-sec="agent">max concurrent tools / subagents</a>.', 'number', { min: 1, max: 16 }),
@@ -1292,15 +1343,34 @@
     return box;
   }
   /** One of the organisation's providers: name, endpoint and API shown locked; the API key is the only field, saved in the user's own list. */
+  /** Mirrors classifyProviderHealth in src/providers/health.ts for a probe result from this page (keep the thresholds in step). */
+  function probeHealth(r, p) {
+    const base = { ms: r.latencyMs, models: (r.models || []).length, checkedAt: state.probedAt || Date.now() };
+    if (!r.ok) { return /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[^.]{0,20}(api[ _-]?)?key|api[ _-]?key[^.]{0,30}(missing|required|invalid|not set)|authentication/i.test(r.error || '') ? { ...base, state: 'nokey', detail: 'key rejected' } : { ...base, state: 'down', detail: r.error ? String(r.error).slice(0, 80) : 'not answering' }; }
+    return { ...base, state: r.latencyMs > (isRemoteUrl(p.baseUrl) ? 4000 : 1500) ? 'slow' : 'ok' };
+  }
+  /** reachable / slow / down / no key, with the details (latency, models, when) in the tooltip. */
+  function healthBadge(h) {
+    const ms = typeof h.ms === 'number' ? (h.ms >= 1000 ? `${(h.ms / 1000).toFixed(1)} s` : `${Math.round(h.ms)} ms`) : '';
+    const ago = h.checkedAt ? Math.max(0, Math.round((Date.now() - h.checkedAt) / 60000)) : -1;
+    const when = ago < 0 ? '' : ago ? `checked ${ago} min ago` : 'checked just now';
+    const v = { ok: ['', ms ? `reachable · ${ms}` : 'reachable', 'Reachable'], slow: ['warn', `slow · ${ms}`, 'Slow to answer'], down: ['err', 'down', 'Down'], nokey: ['err', 'no key', 'No usable API key'] }[h.state];
+    if (!v) { return ''; }
+    const live = h.state === 'ok' || h.state === 'slow';
+    const tip = [v[2], h.detail, live && h.models !== undefined ? plural(h.models, 'model') : '', live && ms ? `answered in ${ms}` : '', when].filter(Boolean).join(' · ');
+    return `<span class="badge ${v[0]} health" title="${esc(tip)}">${esc(v[1])}</span>`;
+  }
   function orgProviderCard(p) {
     const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
     const open = state.expanded === p.id;
     const ks = keyState(p);
-    const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
+    // One vocabulary (reachable / slow / down / no key) for the page's own check and the extension's background checks.
+    const h = p.enabled === false ? undefined : probe ? probeHealth(probe, p) : ((state.data && state.data.health) || {})[p.id];
+    const status = h ? ({ ok: 'ok', slow: 'warn', down: 'err', nokey: 'err' })[h.state] || '' : state.busy ? 'busy' : '';
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'}` : probe ? 'unreachable' : '';
     const c = el('div', 'prov managed');
     c.dataset.prov = p.id;
-    const badges = `${ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : n ? `<span class="badge ${status}">${esc(n)}</span>` : ''}${lockIcon('Endpoint, headers and API version are set by your organization')}`;
+    const badges = `${ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : h ? healthBadge(h) : n ? `<span class="badge">${esc(n)}</span>` : ''}${lockIcon('Endpoint, headers and API version are set by your organization')}`;
     c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(hostOfUrl(p.baseUrl) || p.baseUrl)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
@@ -1344,7 +1414,10 @@
     const open = state.expanded === p.id;
     const c = el('div', `prov ${p.enabled === false ? 'off' : ''}`);
     c.dataset.prov = p.id;
-    const status = probe ? (probe.ok ? 'ok' : 'err') : state.busy ? 'busy' : '';
+    // One vocabulary (reachable / slow / down / no key) for the page's own check and the extension's background checks.
+    const h = p.enabled === false ? undefined : probe ? probeHealth(probe, p) : ((state.data && state.data.health) || {})[p.id];
+    const status = h ? ({ ok: 'ok', slow: 'warn', down: 'err', nokey: 'err' })[h.state] || '' : state.busy ? 'busy' : '';
+
     const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
     // Header: name, then "where · which API"; badges only for what needs attention or tells the models apart.
     const ks = keyState(p);
@@ -1354,7 +1427,7 @@
     const grouped = all.some(isCloud) && all.some((x) => !isCloud(x));
     const badges = [
       isCloud(p) && !grouped ? '<span class="badge" title="Prompts and code sent to these models leave this machine">cloud</span>' : '',
-      ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : n ? `<span class="badge ${status}">${esc(n)}</span>` : '',
+      ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : h ? healthBadge(h) : n ? `<span class="badge">${esc(n)}</span>` : '',
       p.enabled === false ? '<span class="badge">disabled</span>' : '',
       providerPolicyBlock(p) ? `<span class="badge err" title="${esc(providerPolicyBlock(p))}">blocked by policy</span>${lockIcon(providerPolicyBlock(p))}` : '',
     ].join('');
@@ -1612,7 +1685,9 @@
       field('routing.reasoning', 'Plan mode', 'Optional reasoning model for planning (qwen3, deepseek-r1, gpt-oss — pair with Extended thinking below). Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] }),
       field('routing.fast', 'Read-only subagents', `<code>explore</code>, <code>clarifier</code>, <code>researcher</code> run many short tool calls, often several in parallel — a small tool-capable model keeps them snappy. ${esc(autoFor('fast'))}.`, 'select', { options: [['', 'Auto (smallest tool-capable model that fits)', ''], ['session', 'Keep the session model', ''], ...opts] }),
       field('routing.coding', 'Implementing subagents', '<code>coder</code>, <code>tester</code>, <code>debugger</code>, <code>docs</code>. Pick a stronger coding model here while chatting with a lighter one. Empty keeps the session model.', 'select', { options: [['', 'Keep the session model', ''], ...opts] }),
-      field('routing.parallelModels', 'Spread parallel work across models', 'When several workers (or Auto chats) need a model that is already serving as many requests as it can — one, on a server that answers one request per model at a time — the extra ones run on a comparable idle model that fits in memory alongside, instead of queuing. A model you picked explicitly for a chat is never swapped.', 'toggle')
+      field('routing.parallelModels', 'Spread parallel work across models', 'When several workers (or Auto chats) need a model that is already serving as many requests as it can — one, on a server that answers one request per model at a time — the extra ones run on a comparable idle model that fits in memory alongside, instead of queuing. A model you picked explicitly for a chat is never swapped.', 'toggle'),
+      fallbackEditor(),
+      field('firstTokenTimeoutSeconds', 'First-token wait limit', 'How long a request may wait for the model\'s first token (loading into memory, reading a long prompt) before it counts as stalled and is retried. Raise it for slow machines or very large local models. While it waits, the chat shows <b>Keep waiting</b> and <b>Switch model</b>.', 'select', { options: [...FIRST_TOKEN_OPTIONS, ...(FIRST_TOKEN_OPTIONS.some(([v]) => v === Number(val('firstTokenTimeoutSeconds'))) || typeof val('firstTokenTimeoutSeconds') !== 'number' ? [] : [[val('firstTokenTimeoutSeconds'), `${val('firstTokenTimeoutSeconds')} s`]])].map(([v, l]) => [v, l, '']), cast: Number })
     ));
 
     // --- generation
@@ -1996,6 +2071,113 @@
     wireGlobal(box);
   }
 
+  // ------------------------------------------------------------------ keyboard shortcuts
+  /** Built from the host's one list (src/ui/shortcuts.ts): VS Code keybindings from package.json, then the chat's own keys.
+   *  "Change…" opens VS Code's Keyboard Shortcuts editor filtered to that command; the chat's keys are fixed. */
+  function secShortcuts(sec) {
+    head(sec, 'Keyboard shortcuts', 'Every LocalPilot key. The VS Code ones can be changed in VS Code\'s Keyboard Shortcuts editor; the keys inside the chat are fixed. <code>/keys</code> in the chat prints the same list.');
+    const groups = (state.data && state.data.shortcuts) || [];
+    if (state.keysOs === undefined) { state.keysOs = state.data && state.data.isMac ? 'mac' : 'win'; }
+    const bar = el('div', 'btnrow');
+    const seg = el('div', 'seg'); seg.setAttribute('aria-label', 'Show keys for');
+    seg.innerHTML = [['mac', 'macOS'], ['win', 'Windows / Linux']].map(([k, l]) => `<button class="${state.keysOs === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('');
+    seg.onclick = (e) => { const b = e.target.closest('button[data-k]'); if (b && b.dataset.k !== state.keysOs) { state.keysOs = b.dataset.k; render(); } };
+    radioGroup(seg);
+    const all = el('button', 'btn sm', `${I.external}Open Keyboard Shortcuts`); all.title = 'VS Code\'s Keyboard Shortcuts editor, filtered to LocalPilot'; all.onclick = () => post({ type: 'openKeybindings', query: 'localpilot.' });
+    bar.append(seg, el('span', 'spacer'), all);
+    sec.appendChild(bar);
+    const kbd = (k) => String(k).split(/ \/ /).map((part) => part.split(' · ').map((x) => `<kbd>${esc(x)}</kbd>`).join(' · ')).join(' <span class="muted">/</span> ');
+    for (const g of groups) {
+      sec.appendChild(el('h2', 'sub', `${esc(g.title)}${g.customizable ? '' : ' <span class="badge" title="Handled by the chat view itself">fixed</span>'}`));
+      const c = el('div', 'card sc-card');
+      const ul = el('ul', 'sc-list'); ul.setAttribute('aria-label', g.title);
+      for (const r of g.rows || []) {
+        const li = el('li', 'sc-row', `<span class="sc-act"><span>${esc(r.action)}</span>${r.when ? `<span class="muted small">${esc(r.when)}</span>` : ''}</span><span class="sc-key">${kbd(state.keysOs === 'mac' ? r.mac : r.win)}</span>`);
+        if (g.customizable && r.command) {
+          const b = el('button', 'btn sm ghost sc-change', 'Change…'); b.title = `Change the key for “${r.action}” in VS Code's Keyboard Shortcuts editor`; b.setAttribute('aria-label', `Change the key for ${r.action}`);
+          b.onclick = () => post({ type: 'openKeybindings', query: r.command });
+          li.appendChild(b);
+        }
+        ul.appendChild(li);
+      }
+      c.appendChild(ul);
+      sec.appendChild(c);
+    }
+    if (!groups.length) { sec.appendChild(el('div', 'empty', 'No shortcuts found.')); }
+  }
+
+  // ------------------------------------------------------------------ command rules
+  const RULE_KIND = { allow: ['Allow', 'ok'], ask: ['Ask', ''], block: ['Block', 'err'] };
+  const GRANT_NAME = { terminal: 'Terminal commands', write: 'File edits', delete: 'Deleting files', network: 'Network', mcp: 'MCP tools' };
+  /** Settings → Agent & approvals → Command rules: Bash(...) permission rules from the settings files (User:
+   *  ~/.localpilot/settings.json, Workspace: .localpilot/settings.local.json), the "always allow in this workspace"
+   *  grants, and a form to add or edit a rule. Rules in other files are listed read-only with Open file. */
+  function commandRulesCard() {
+    const build = () => {
+      const v = (state.data && state.data.commandRules) || { rules: [], files: {}, fileLabels: {}, grants: [] };
+      const box = el('div', 'card rules-card');
+      box.appendChild(el('div', 'desc rules-lead', 'Commands you always allow, always ask about, or block, saved from approval cards (<b>Always allow “npm test”</b>) or added here. Block wins over Ask, Ask over Allow; destructive commands you allow still run without asking, so keep Allow rules narrow. <code>npm test</code> matches exactly, <code>npm run test:*</code> by prefix, <code>git log *</code> with wildcards.'));
+      for (const k of v.grants || []) {
+        const g = el('div', 'rule-grant', `<span class="badge ok">Always</span><span class="rg-t">${esc(GRANT_NAME[k] || k)} in this workspace</span><button class="btn sm ghost">Ask again</button>`);
+        g.querySelector('button').title = `Stop allowing ${(GRANT_NAME[k] || k).toLowerCase()} without asking in this workspace`;
+        g.querySelector('button').onclick = () => post({ type: 'revokeWorkspaceGrant', kind: k });
+        box.appendChild(g);
+      }
+      const list = el('ul', 'rules');
+      list.setAttribute('aria-label', 'Command rules');
+      const edit = state.ruleEdit;
+      (v.rules || []).forEach((r, i) => {
+        const id = `${r.file}|${r.kind}|${r.raw}`;
+        if (edit && edit.id === id) { list.appendChild(ruleForm(v, r)); return; }
+        const li = el('li', `rule${r.editable ? '' : ' ro'}`);
+        const scope = r.scope === 'workspace' ? 'Workspace' : 'User';
+        li.innerHTML = `<span class="badge ${RULE_KIND[r.kind][1]} rk">${RULE_KIND[r.kind][0]}</span><span class="rmain"><code class="rp" title="${esc(r.raw)}">${r.pattern ? esc(r.pattern) : '<i>every command</i>'}</code><span class="rs" title="${esc(r.where)}">${scope}${r.editable ? '' : ` · ${esc(r.where)}`}</span></span><span class="ra"></span>`;
+        const acts = li.querySelector('.ra');
+        if (r.editable) {
+          const e = el('button', 'reset', I.edit); e.title = 'Edit'; e.setAttribute('aria-label', `Edit rule ${r.pattern || 'every command'}`);
+          e.onclick = () => { state.ruleEdit = { id }; refreshComponents(['@commandRules']); const n = app.querySelector('.rule-form input'); if (n) { n.focus(); } };
+          const d = el('button', 'reset x', I.x); d.title = 'Delete'; d.setAttribute('aria-label', `Delete rule ${r.pattern || 'every command'}`);
+          d.onclick = () => post({ type: 'commandRuleDelete', file: r.file, raw: r.raw, kind: r.kind });
+          acts.append(e, d);
+        } else {
+          const o = el('button', 'btn sm ghost', `${I.external}Open`); o.title = `Edit it in ${r.where}`; o.onclick = () => post({ type: 'openRuleFile', file: r.file });
+          acts.appendChild(o);
+        }
+        list.appendChild(li);
+      });
+      if (!(v.rules || []).length) { list.appendChild(el('li', 'empty', 'No command rules yet.')); }
+      box.appendChild(list);
+      box.appendChild(edit && edit.id === 'new' || !edit ? ruleForm(v) : el('div'));
+      return component(box, ['@commandRules'], build);
+    };
+    return build();
+  }
+  /** Add (no rule) or edit (rule) form: pattern, kind and scope. */
+  function ruleForm(v, r) {
+    const f = el(r ? 'li' : 'div', 'rule-form');
+    const hasWs = !!(v.files && v.files.workspace);
+    f.innerHTML = `<input type="text" placeholder="npm test, npm run test:*, git log *" aria-label="Command or pattern" maxlength="300"><select aria-label="Rule">${['allow', 'ask', 'block'].map((k) => `<option value="${k}">${RULE_KIND[k][0]}</option>`).join('')}</select><select aria-label="Where it applies"><option value="workspace"${hasWs ? '' : ' disabled'}>This workspace</option><option value="user">All workspaces</option></select><button class="btn sm primary">${r ? 'Save' : `${I.plus}Add`}</button>${r ? '<button class="btn sm ghost" data-cancel>Cancel</button>' : ''}<div class="rule-hint err-text" role="alert" hidden></div><div class="rule-where muted small"></div>`;
+    const [input] = f.querySelectorAll('input'); const [kind, scope] = f.querySelectorAll('select'); const hint = f.querySelector('.rule-hint'); const where = f.querySelector('.rule-where');
+    input.value = r ? r.pattern : ''; kind.value = r ? r.kind : 'allow'; scope.value = r ? r.scope : hasWs ? 'workspace' : 'user';
+    const sync = () => { where.textContent = `Saved in ${scope.value === 'workspace' ? (v.fileLabels.workspace || '.localpilot/settings.local.json') + ' (kept out of git)' : v.fileLabels.user || '~/.localpilot/settings.json'}`; };
+    scope.onchange = sync; sync();
+    const bad = (msg) => { hint.textContent = msg; hint.hidden = false; input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true'); input.focus(); };
+    const submit = () => {
+      const p = input.value.trim().replace(/\s+/g, ' ');
+      if (!p) { bad('Type a command or pattern first'); return; }
+      if (/[\r\n]/.test(p)) { bad('One command per rule'); return; }
+      const dup = (v.rules || []).find((x) => x.editable && x.pattern === p && x.scope === scope.value && x !== r && (!r || x.raw !== r.raw || x.file !== r.file));
+      if (dup && dup.kind === kind.value) { bad('That rule is already saved'); return; }
+      post({ type: 'commandRuleSave', pattern: p, kind: kind.value, scope: scope.value, ...(r ? { replace: { file: r.file, raw: r.raw, kind: r.kind } } : {}) });
+      state.ruleEdit = null; input.value = '';
+    };
+    f.querySelector('.btn.primary').onclick = submit;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape' && r) { e.preventDefault(); state.ruleEdit = null; refreshComponents(['@commandRules']); } };
+    input.oninput = () => { hint.hidden = true; input.classList.remove('invalid'); input.removeAttribute('aria-invalid'); };
+    const c = f.querySelector('[data-cancel]'); if (c) { c.onclick = () => { state.ruleEdit = null; refreshComponents(['@commandRules']); }; }
+    return f;
+  }
+
   // ------------------------------------------------------------------ agent & approvals
   function secAgent(sec) {
     head(sec, 'Agent & approvals', 'What the agent may do without asking: Ask shows an approval card in the chat, Allow proceeds, Block refuses.');
@@ -2019,8 +2201,10 @@
       field('approvals.write', 'File edits', '<code>edit_file</code>, <code>write_file</code>, <code>create_directory</code>. Every edit is tracked and can be undone from the Changes panel either way.', 'seg', { options: APPROVAL }),
       field('approvals.delete', 'Deleting files', '<code>delete_path</code> — moves to the OS trash when possible.', 'seg', { options: APPROVAL }),
       field('approvals.network', 'Network', '<code>web_search</code>, <code>web_fetch</code> and the browser tools.', 'seg', { options: APPROVAL }),
-      field('approvals.mcp', 'MCP tools', 'Tools from MCP servers. A server\'s <code>autoApprove</code> list runs those tools without asking even when this is Ask.', 'seg', { options: APPROVAL })
+      field('approvals.mcp', 'MCP tools', 'Tools from MCP servers. A server\'s <code>autoApprove</code> list runs those tools without asking even when this is Ask. Set single tools to Allow, Ask or Block on the <button class="inline-link" data-sec="mcp">MCP servers</button> page.', 'seg', { options: APPROVAL })
     ));
+    sec.appendChild(el('h2', 'sub', 'Command rules'));
+    sec.appendChild(commandRulesCard());
     sec.appendChild(el('h2', 'sub', 'Tools'));
     // Each switch edits localpilot.disabledTools by exact name; a tool switched off by a glob or alias stays locked here.
     const toolsEl = () => {
@@ -2729,6 +2913,168 @@
     if (rows.length > 60) { list.appendChild(el('div', 'cat-more', `${rows.length - 60} more — narrow the search`)); }
     box.appendChild(list);
   }
+  // ------------------------------------------------------------------ marketplace (skills, MCP servers, plugins, subagents)
+  // One screen to find and install what extends the agent. It reuses the skill registry search (skillSearch), the MCP
+  // catalog (mcpCatalog / installMcpCatalog) and loads the plugin marketplaces (pluginCatalog / installPlugin); subagents
+  // come installed (built-in, yours, the workspace's) or with plugins, whose rows say how many they add.
+  const MK_KINDS = [['all', 'All'], ['skill', 'Skills'], ['mcp', 'MCP servers'], ['plugin', 'Plugins'], ['agent', 'Subagents']];
+  const MK_ALL_ROWS = 5;
+  function mkState() { return state.market || (state.market = { kind: 'all', q: '', show: 'all', plugins: null, pluginErrors: [], configured: 0, loading: false, jobs: {} }); }
+  const mkWords = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
+  const mkMatch = (words, hay) => words.every((w) => hay.toLowerCase().includes(w));
+  const mkShow = (installed) => { const s = mkState().show; return s === 'all' || (s === 'installed' ? installed : !installed); };
+  /** Rows of each kind for the current search and filter. */
+  function mkRows() {
+    const mk = mkState(); const words = mkWords(mk.q);
+    const reg = state.skillReg; const cat = mcpCatState();
+    const haveMcp = new Set([...Object.keys(val('mcpServers') || {}), ...(state.data.mcp || []).map((s) => s.name)]);
+    const skills = (reg.entries || []).filter((e) => mkShow(!!e.installed));
+    const mcp = (cat.entries || []).filter((e) => mkShow(haveMcp.has(e.id)) && mkMatch(words, `${e.id} ${e.name} ${e.tagline || ''} ${(e.tags || []).join(' ')}`)).map((e) => ({ ...e, installed: haveMcp.has(e.id) }));
+    const plugins = (mk.plugins || []).filter((p) => mkShow(!!p.installed) && mkMatch(words, `${p.name} ${p.description} ${p.category || ''} ${p.market}`));
+    const agents = (state.data.agents || []).filter((a) => mkShow(true) && mkMatch(words, `${a.name} ${a.description}`)).map((a) => ({ ...a, kind: 'agent' }))
+      .concat((mk.plugins || []).filter((p) => p.contains && p.contains.agents > 0 && !p.installed && mkShow(false) && mkMatch(words, `${p.name} ${p.description}`)).map((p) => ({ ...p, kind: 'plugin' })));
+    return { skill: skills, mcp, plugin: plugins, agent: agents };
+  }
+  function secMarketplace(sec) {
+    const mk = mkState(); const reg = state.skillReg; const cat = mcpCatState();
+    head(sec, 'Marketplace', 'Find and install skills, MCP servers, plugins and subagents in one place. Each row says where it comes from and whether it is installed.');
+    // First visit: the skill registry (cached for a day), the bundled MCP catalog and the plugin marketplaces (cached checkouts).
+    if (!reg.loaded) { reg.loaded = true; skillSearch(mk.q); }
+    if (!cat.loaded) { cat.loaded = true; cat.loading = true; post({ type: 'mcpCatalog' }); }
+    if (!mk.plugins && !mk.loading) { mk.loading = true; post({ type: 'pluginCatalog' }); }
+    const tools = el('div', 'gal-tools');
+    const search = el('div', 'gal-search', I.search);
+    const q = el('input'); q.type = 'search'; q.id = 'mk-q'; q.placeholder = 'Search the marketplace…'; q.value = mk.q; q.setAttribute('aria-label', 'Search the marketplace');
+    if (document.activeElement && document.activeElement.id === 'mk-q') { requestAnimationFrame(() => { const n = app.querySelector('#mk-q'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }
+    // The skill registry is searched on the host; the other kinds filter here.
+    const skillQ = debounce(() => { if (reg.q !== mk.q) { skillSearch(mk.q); renderMarket(); } }, 300);
+    q.oninput = () => { mk.q = q.value.trim(); renderMarket(); skillQ(); };
+    search.appendChild(q); tools.appendChild(search);
+    const chips = el('div', 'chips mk-kinds'); chips.setAttribute('role', 'tablist'); chips.setAttribute('aria-label', 'Kind');
+    chips.id = 'mk-kinds';
+    tools.appendChild(chips);
+    const show = el('select'); show.setAttribute('aria-label', 'Show'); show.id = 'mk-show';
+    for (const [k, l] of [['all', 'Installed and not'], ['new', 'Not installed'], ['installed', 'Installed']]) { const o = el('option'); o.value = k; o.textContent = l; o.selected = mk.show === k; show.appendChild(o); }
+    show.onchange = () => { mk.show = show.value; renderMarket(); };
+    chips.after(show);
+    sec.appendChild(tools);
+    const results = el('div', 'mk-results'); results.id = 'mk-results';
+    sec.appendChild(results);
+    renderMarket(results);
+  }
+  function renderMarketKinds(rows) {
+    const box = app.querySelector('#mk-kinds'); if (!box) { return; }
+    const mk = mkState();
+    box.innerHTML = MK_KINDS.map(([k, l]) => { const n = k === 'all' ? '' : ` <i>${rows[k].length}</i>`; return `<button class="chip ${mk.kind === k ? 'on' : ''}" role="tab" aria-selected="${mk.kind === k}" data-k="${k}">${esc(l)}${n}</button>`; }).join('');
+    box.onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) { return; } mk.kind = b.dataset.k; renderMarket(); };
+  }
+  /** Rebuilds only the result groups, so typing in the search box is never interrupted. */
+  function renderMarket(container) {
+    const box = container || app.querySelector('#mk-results'); if (!box) { return; }
+    const mk = mkState(); const rows = mkRows();
+    renderMarketKinds(rows);
+    box.innerHTML = '';
+    const kinds = mk.kind === 'all' ? ['skill', 'mcp', 'plugin', 'agent'] : [mk.kind];
+    for (const k of kinds) { box.appendChild(mkGroup(k, rows[k], mk.kind === 'all')); }
+  }
+  function mkGroup(kind, rows, capped) {
+    const mk = mkState(); const reg = state.skillReg; const cat = mcpCatState();
+    const g = el('section', 'mk-group'); g.dataset.kind = kind;
+    const title = { skill: 'Skills', mcp: 'MCP servers', plugin: 'Plugins', agent: 'Subagents' }[kind];
+    const where = { skill: 'From the skill repositories in Skills & subagents', mcp: `The bundled catalog${cat.registry ? ' and the MCP registry' : ''}`, plugin: mk.configured ? `From ${mk.configured} plugin marketplace${mk.configured === 1 ? '' : 's'}` : 'No marketplace set up', agent: 'Installed subagents, and plugins that add some' }[kind];
+    const manage = { skill: ['skills', 'Manage skills'], mcp: ['mcp', 'Manage servers'], plugin: ['customize', 'Manage plugins'], agent: ['skills', 'Manage subagents'] }[kind];
+    const h = el('div', 'mk-head', `<h2 class="sub">${esc(title)}<span class="count">${rows.length}</span></h2><span class="muted small mk-where">${esc(where)}</span><span class="spacer"></span>`);
+    if (kind === 'plugin' || kind === 'mcp') {
+      const busy = kind === 'plugin' ? mk.loading : cat.loading;
+      const r = el('button', 'btn sm ghost', `${busy ? '<span class="spinner"></span>' : I.refresh}<span>Refresh</span>`); r.disabled = busy;
+      r.title = kind === 'plugin' ? 'Fetch the plugin marketplaces again (git)' : 'Fetch the server list from registry.modelcontextprotocol.io (only when you click)'; r.setAttribute('aria-label', `Refresh ${title}`);
+      r.onclick = () => { if (kind === 'plugin') { mk.loading = true; post({ type: 'pluginCatalog', refresh: true }); } else { cat.loading = true; post({ type: 'mcpCatalog', refresh: true }); } renderMarket(); };
+      h.appendChild(r);
+    }
+    const m = el('button', 'btn sm ghost', `${I.gear}<span>${esc(manage[1])}</span>`); m.title = `${manage[1]} (Settings → ${{ skills: 'Skills & subagents', mcp: 'MCP servers', customize: 'Customize → Plugins' }[manage[0]]})`; m.setAttribute('aria-label', manage[1]);
+    m.onclick = () => { if (manage[0] === 'customize') { state.custom = { ...(state.custom || { data: null, loading: 0, scope: '' }), tab: 'plugin' }; } if (manage[0] === 'mcp') { mcpCatState().view = 'installed'; } state.section = manage[0]; render(); };
+    h.appendChild(m);
+    g.appendChild(h);
+    const loading = kind === 'skill' ? reg.loading && !rows.length : kind === 'mcp' ? cat.loading && !rows.length : kind === 'plugin' ? mk.loading && !rows.length : false;
+    if (loading) { g.appendChild(skeleton(kind === 'skill' ? 'Searching the skill registry…' : kind === 'mcp' ? 'Loading the MCP catalog…' : 'Loading the plugin marketplaces…', 2)); return g; }
+    if (kind === 'plugin' && mk.pluginErrors.length) { g.appendChild(el('div', 'prov-result err mcp-err', `<span>${I.x} ${mk.pluginErrors.map((e) => `${esc(e.spec)}: ${esc(e.error)}`).join('<br>')}</span>`)); }
+    if (!rows.length) {
+      const words = mk.q ? ` for “${esc(mk.q)}”` : '';
+      const none = { skill: reg.entries.length || mk.q ? `No skill${words}.` : 'The skill registry is empty: add a repository in Skills & subagents.', mcp: `No MCP server${words}.`, plugin: !mk.configured ? 'No plugin marketplace is set up. Add one (owner/repo on GitHub, a git URL or a folder) under <button class="inline-link" data-mk-plugins>Customize → Plugins</button>.' : `No plugin${words}.`, agent: `No subagent${words}.` }[kind];
+      const empty = el('div', 'empty', mk.show !== 'all' && !mk.q ? `Nothing ${mk.show === 'installed' ? 'installed' : 'left to install'} here.` : none);
+      const link = empty.querySelector('[data-mk-plugins]'); if (link) { link.onclick = () => m.onclick(); }
+      g.appendChild(empty);
+      return g;
+    }
+    const list = el('div', 'card');
+    const shown = capped ? rows.slice(0, MK_ALL_ROWS) : rows.slice(0, 80);
+    for (const r of shown) { list.appendChild(mkRow(kind, r)); }
+    if (capped && rows.length > MK_ALL_ROWS) { const more = el('button', 'cat-more mk-more', `Show all ${rows.length} ${esc(title.toLowerCase())}`); more.onclick = () => { mk.kind = kind; renderMarket(); app.querySelector('#mk-results').scrollIntoView({ block: 'start' }); }; list.appendChild(more); }
+    else if (!capped && rows.length > 80) { list.appendChild(el('div', 'cat-more', `${rows.length - 80} more: narrow the search`)); }
+    g.appendChild(list);
+    if (kind === 'agent') { g.appendChild(el('p', 'muted small', 'Subagents come with plugins, or write your own: <code>/agent new &lt;job&gt;</code> in the chat, or a file in <code>.localpilot/agents/</code>.')); }
+    return g;
+  }
+  const mkScopeLabel = (s) => (s === 'workspace' ? 'this workspace' : 'for me');
+  function mkRow(kind, e) {
+    const mk = mkState();
+    const installed = kind === 'agent' ? e.kind === 'agent' : !!e.installed;
+    const row = el('div', `mrow sk mk-row ${installed ? 'have' : ''}`);
+    const icon = kind === 'skill' ? I.book : kind === 'mcp' ? I.plug : kind === 'agent' && e.kind === 'agent' ? I.chip : I.gallery;
+    row.appendChild(el('span', 'ic brand-mark sk-ic', icon));
+    const desc = kind === 'mcp' ? e.tagline || '' : e.description || '';
+    row.appendChild(el('div', 't', `<b>${esc(e.name)}</b><span>${esc(desc)}</span>`));
+    const right = el('div', 'mrow-right'); const tags = []; const acts = el('div', 'acts');
+    if (kind === 'skill') {
+      tags.push(`<span class="badge" title="${esc(e.repo)}/${esc(e.dir || '')}">${esc(e.repo.split('/').slice(0, 2).join('/'))}</span>`);
+      if (e.installed) { tags.push(`<span class="badge ok">${I.check} installed${e.installedSource ? ` · ${esc(SOURCE_LABEL[e.installedSource] || e.installedSource)}` : ''}</span>`); }
+      const job = state.skillReg.jobs[e.name];
+      if (job && job.status === 'running') { acts.appendChild(el('span', 'note', `<span class="spinner"></span> ${esc(job.detail || 'Installing…')}`)); }
+      else {
+        const scope = state.skillReg.scope || val('skills.autoInstallScope') || 'user';
+        const b = el('button', `btn sm ${e.installed ? '' : 'primary'}`, `${I.download}${e.installed ? 'Reinstall' : 'Install'}`);
+        b.title = `Install “${e.name}” from ${e.repo} into ${scope === 'workspace' ? '.localpilot/skills' : '~/.localpilot/skills'}`; b.setAttribute('aria-label', `${e.installed ? 'Reinstall' : 'Install'} skill ${e.name}`);
+        b.onclick = () => { state.skillReg.jobs[e.name] = { status: 'running', detail: 'Installing…' }; renderMarket(); post({ type: 'installRegistrySkill', name: e.name, repo: e.repo, scope }); };
+        acts.appendChild(b);
+        if (job && job.status === 'error') { acts.appendChild(el('span', 'note err', esc(job.detail || 'failed'))); }
+      }
+    } else if (kind === 'mcp') {
+      tags.push(`<span class="badge" title="Where it comes from">${e.origin === 'registry' ? 'MCP registry' : 'bundled catalog'}</span>`, `<span class="badge" title="How it runs">${esc([e.install ? 'local' : '', e.remote ? 'remote' : ''].filter(Boolean).join(' · '))}</span>`);
+      if (e.installed) { tags.push(`<span class="badge ok">${I.check} added</span>`); }
+      const cat = mcpCatState();
+      if (cat.jobs[e.id] === 'running') { acts.appendChild(el('span', 'note', '<span class="spinner"></span> Installing…')); }
+      else {
+        const b = el('button', `btn sm ${e.installed ? '' : 'primary'}`, `${I.download}${e.installed ? 'Add again' : 'Install'}`);
+        b.title = `Add “${e.name}” to ~/.localpilot/mcp.json`; b.setAttribute('aria-label', `${e.installed ? 'Add again' : 'Install'} MCP server ${e.name}`);
+        b.onclick = () => { cat.jobs[e.id] = 'running'; renderMarket(); post({ type: 'installMcpCatalog', id: e.id }); setTimeout(() => { if (cat.jobs[e.id] === 'running') { delete cat.jobs[e.id]; renderMarket(); } }, 120000); };
+        acts.appendChild(b);
+      }
+    } else if (kind === 'agent' && e.kind === 'agent') {
+      tags.push(`<span class="badge">${esc(SOURCE_LABEL[e.source] || e.source)}</span>`);
+      for (const u of e.usedBy || []) { tags.push(`<span class="badge" title="The ${esc(u)} mode follows this subagent's playbook">used by ${esc(u)}</span>`); }
+      tags.push(`<span class="badge ok">${I.check} installed</span>`);
+    } else {
+      // A plugin (also on the Subagents tab when it adds some).
+      tags.push(`<span class="badge" title="${esc(e.marketSpec)}">${esc(e.market)}</span>`);
+      if (e.category) { tags.push(`<span class="badge">${esc(e.category)}</span>`); }
+      const c = e.contains; const adds = c ? [c.commands && `${c.commands} command${c.commands === 1 ? '' : 's'}`, c.agents && `${c.agents} subagent${c.agents === 1 ? '' : 's'}`, c.skills && `${c.skills} skill${c.skills === 1 ? '' : 's'}`, c.mcpServers && `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}`, c.hooks && `${c.hooks} hook${c.hooks === 1 ? '' : 's'}`].filter(Boolean).join(', ') : '';
+      if (adds) { tags.push(`<span class="badge" title="What it adds">${esc(adds)}</span>`); }
+      if (e.installed) { tags.push(`<span class="badge ok">${I.check} installed · ${esc(mkScopeLabel(e.installed.scope))}${e.installed.enabled ? '' : ' (off)'}</span>`); }
+      if (mk.jobs[e.name] === 'running') { acts.appendChild(el('span', 'note', '<span class="spinner"></span> Installing…')); }
+      else if (e.installed) {
+        const b = el('button', 'btn sm', `${I.gear}Manage…`); b.title = 'Update, switch off or uninstall installed plugins'; b.onclick = () => post({ type: 'command', id: 'localpilot.managePlugins' }); acts.appendChild(b);
+      } else {
+        const b = el('button', 'btn sm primary', `${I.download}Install`); b.title = `Install “${e.name}” from ${e.market}: you choose for you or this workspace, and see what it runs before anything is written`; b.setAttribute('aria-label', `Install plugin ${e.name}`);
+        b.onclick = () => { mk.jobs[e.name] = 'running'; renderMarket(); post({ type: 'installPlugin', marketSpec: e.marketSpec, name: e.name }); };
+        acts.appendChild(b);
+      }
+      if (e.homepage) { const r = el('button', 'btn ghost sm', I.external); r.title = `Open ${e.homepage}`; r.setAttribute('aria-label', `Open ${e.name} homepage`); r.onclick = () => post({ type: 'openExternal', url: e.homepage }); acts.prepend(r); }
+    }
+    if (kind === 'mcp' && e.repo) { const r = el('button', 'btn ghost sm', I.external); r.title = `Open ${e.repo}`; r.setAttribute('aria-label', `Open ${e.name} repository`); r.onclick = () => post({ type: 'openExternal', url: e.repo }); acts.prepend(r); }
+    right.appendChild(el('div', 'tags', tags.join('')));
+    right.appendChild(acts); row.appendChild(right);
+    return row;
+  }
   // ------------------------------------------------------------------ mcp
   const splitArgs = (raw) => (raw.match(/(?:[^\s"]+|"[^"]*")+/g) || []).map((a) => a.replace(/"/g, ''));
   /** Inverse of splitArgs: an argument with whitespace is quoted so editing it round-trips. */
@@ -2897,14 +3243,43 @@
     const body = el('div', 'mcp-list');
     const row = (title, sub, extra) => `<div class="mcp-item"><div><code>${esc(title)}</code>${extra || ''}</div>${sub ? `<div class="desc">${esc(sub)}</div>` : ''}</div>`;
     if (cur === 'tools') {
-      body.innerHTML = (st.toolList || []).map((t) => row(t.name, t.description, t.params.length ? `<span class="mcp-params">${t.params.map((p) => `<span title="${esc(p.description || '')}">${esc(p.name)}${p.required ? '<b>*</b>' : ''}${p.type ? `<i>: ${esc(p.type)}</i>` : ''}</span>`).join('')}</span>` : '')).join('') || '<div class="empty">This server offers no tools.</div>';
+      // Per-tool approval (localpilot.mcp.toolApprovals, User only): Default follows MCP tools in Agent & approvals, or the
+      // server's autoApprove list; Allow / Ask / Block override both for this tool. The organization's floor still applies.
+      const all = val('mcp.toolApprovals') && typeof val('mcp.toolApprovals') === 'object' ? val('mcp.toolApprovals') : {};
+      const mine = all[name] || {};
+      const CAT = { always: 'Allow', ask: 'Ask', never: 'Block' };
+      const cat = CAT[effVal('approvals.mcp')] || 'Allow';
+      const floor = policyRefuses('approvals.mcp', 'always');
+      const tools = st.toolList || [];
+      if (tools.length) {
+        const set_ = Object.keys(mine).filter((k) => tools.some((t) => t.name === k)).length;
+        const hd = body.appendChild(el('div', 'mcp-appr-head muted small', `Approval per tool. <b>Default</b> follows <button class="inline-link" data-sec="agent">MCP tools = ${esc(cat)}</button>${(st.autoApprove || []).length ? ' or this server\'s <code>autoApprove</code> list' : ''}.${set_ ? ` ${set_} set here.` : ''}${floor ? ` ${esc(floor)}.` : ''}`));
+        hd.querySelector('[data-sec]').onclick = () => { state.section = 'agent'; render(); };
+      }
+      for (const t of tools) {
+        const item = el('div', 'mcp-item mcp-tool', `<div class="mcp-tool-main"><div><code>${esc(t.name)}</code>${t.params.length ? `<span class="mcp-params">${t.params.map((p) => `<span title="${esc(p.description || '')}">${esc(p.name)}${p.required ? '<b>*</b>' : ''}${p.type ? `<i>: ${esc(p.type)}</i>` : ''}</span>`).join('')}</span>` : ''}</div>${t.description ? `<div class="desc">${esc(t.description)}</div>` : ''}</div>`);
+        const def = (st.autoApprove || []).includes(t.name) ? 'Allow (server list)' : cat;
+        const sel = el('select', 'mcp-appr'); sel.setAttribute('aria-label', `Approval for ${name}/${t.name}`); sel.dataset.fk = `mcp.toolApprovals:${name}:${t.name}`;
+        sel.innerHTML = [['', `Default · ${def}`], ['always', 'Allow'], ['ask', 'Ask'], ['never', 'Block']].map(([v, l]) => `<option value="${v}"${(mine[t.name] || '') === v ? ' selected' : ''}${v === 'always' && floor ? ' disabled' : ''}>${esc(l)}</option>`).join('');
+        if (mine[t.name]) { item.classList.add('set', `appr-${mine[t.name]}`); }
+        sel.onchange = () => {
+          const next = { ...all, [name]: { ...mine } };
+          if (sel.value) { next[name][t.name] = sel.value; } else { delete next[name][t.name]; }
+          if (!Object.keys(next[name]).length) { delete next[name]; }
+          set('mcp.toolApprovals', next);
+        };
+        item.appendChild(sel);
+        body.appendChild(item);
+      }
+      if (!tools.length) { body.innerHTML = '<div class="empty">This server offers no tools.</div>'; }
     } else if (cur === 'resources') {
       body.innerHTML = [...(st.resources || []).map((r) => row(r.uri, [r.name !== r.uri ? r.name : '', r.description].filter(Boolean).join(' — '), r.mimeType ? `<span class="badge">${esc(r.mimeType)}</span>` : '')), ...(st.resourceTemplates || []).map((r) => row(r.uriTemplate, [r.name, r.description].filter(Boolean).join(' — '), '<span class="badge">template</span>'))].join('') || '<div class="empty">This server offers no resources.</div>';
     } else {
       body.innerHTML = (st.prompts || []).map((p) => row(`/mcp:${name}:${p.name}`, p.description, (p.arguments || []).length ? `<span class="mcp-params">${p.arguments.map((a) => `<span title="${esc(a.description || '')}">${esc(a.name)}${a.required ? '<b>*</b>' : ''}</span>`).join('')}</span>` : '')).join('') || '<div class="empty">This server offers no prompts.</div>';
     }
     box.append(seg, body);
-    return box;
+    // Rebuilt in place when the approvals change, from the newest status of this server.
+    return component(box, ['mcp.toolApprovals', 'approvals.mcp'], () => { const fresh = ((state.data && state.data.mcp) || []).find((x) => x.name === name); return fresh && fresh.state === 'connected' ? mcpInspect(name, fresh) : el('div'); });
   }
   function mcpForm(name, s, servers, own) {
     const body = el('div', 'prov-body');
@@ -4412,9 +4787,13 @@
         const changed = [...keys].filter((k) => JSON.stringify((prev.settings || {})[k]) !== JSON.stringify((m.settings || {})[k]));
         // The resolved OTLP target (environment variables included) feeds the privacy wording and the Telemetry rows.
         if (JSON.stringify(prev.otlp) !== JSON.stringify(m.otlp)) { changed.push(...PRIVACY_DEPS, 'telemetry.otlp.enabled', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval'); }
-        const SECTION_DATA = { agent: ['terminalProfiles', 'autoRepos'], providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], customize: ['skills'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], advanced: ['models', 'sessions', 'version'] };
+        const SECTION_DATA = { agent: ['terminalProfiles', 'autoRepos'], providers: ['models'], models: ['models'], gallery: ['models'], skills: ['skills', 'agents', 'learning'], customize: ['skills'], completions: ['models'], memory: ['memory', 'sessions'], mcp: ['mcp'], shortcuts: ['shortcuts', 'isMac'], advanced: ['models', 'sessions', 'version'] };
         const otherChanged = ['hasWorkspace', ...(SECTION_DATA[state.section] || [])].some((k) => JSON.stringify(prev[k]) !== JSON.stringify(m[k]));
+        // Provider health: only a changed state redraws the cards (latency and "checked" times change every round).
+        const hsig = (d) => JSON.stringify(Object.entries(d.health || {}).map(([k, v]) => [k, v && v.state]));
+        if (state.section === 'providers' && hsig(prev) !== hsig(m)) { render(); break; }
         if (otherChanged || changed.some((k) => STRUCTURAL_KEYS.has(k))) { render(); break; }
+        if (JSON.stringify(prev.commandRules) !== JSON.stringify(m.commandRules)) { changed.push('@commandRules'); }
         if (changed.length) { refreshComponents(changed); }
         break;
       }
@@ -4477,6 +4856,7 @@
         if (m.q !== reg.q) { break; }
         reg.loading = false; reg.entries = m.entries || []; reg.status = m.status || []; reg.refreshing = !!m.refreshing;
         if (state.section === 'skills') { renderSkillRegistry(); renderSkillRepoStatus(); }
+        if (state.section === 'marketplace') { renderMarket(); }
         break;
       }
       case 'mcpCatalog': {
@@ -4485,12 +4865,21 @@
         if (!m.loading) { cat.jobs = {}; }
         if (m.installed) { cat.view = 'installed'; state.expanded = `mcp:${m.installed}`; }
         if (state.section === 'mcp') { render(); }
+        if (state.section === 'marketplace') { renderMarket(); }
+        break;
+      }
+      case 'pluginCatalog': {
+        const mk = mkState();
+        mk.loading = !!m.loading; mk.configured = m.configured || 0; mk.pluginErrors = m.errors || [];
+        if (!m.loading) { mk.plugins = m.entries || []; mk.jobs = {}; }
+        if (state.section === 'marketplace') { renderMarket(); }
         break;
       }
       case 'skillJob':
         state.skillReg.jobs[m.name] = { status: m.status, detail: m.detail };
         if (m.status === 'done') { setTimeout(() => { delete state.skillReg.jobs[m.name]; if (state.section === 'skills') { renderSkillRegistry(); } }, 1500); }
         if (state.section === 'skills') { renderSkillRegistry(); }
+        if (state.section === 'marketplace') { renderMarket(); }
         break;
       case 'busy':
         state.busy = m.busy;

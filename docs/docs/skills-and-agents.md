@@ -202,6 +202,18 @@ LocalPilot records the kind of each request (main verb plus key nouns, for examp
 
 The data is a small JSON file, `skill-learning.json`, in the extension's global storage (`~/.localpilot/` for the CLI). Entries expire after 60 days.
 
+## Marketplace
+
+**Settings → Marketplace** is one place to find and install what extends the agent. Open it from the Settings sidebar or with ⋯ → **Marketplace…** under the chat's message box.
+
+- **Search** covers every kind at once; the chips narrow it to **Skills**, **MCP servers**, **Plugins** or **Subagents**, each with its count, and **Show** picks installed, not installed or both. With **All**, each kind shows its first five results and **Show all** opens the rest.
+- **Skills** come from the [skill registry](#the-skill-registry) (the repositories in `localpilot.skills.repositories`). **Install** puts the skill in `~/.localpilot/skills` (or the workspace's `.localpilot/skills`, following `localpilot.skills.autoInstallScope`).
+- **MCP servers** come from the bundled catalog, and from the MCP registry after you press **Refresh** (it is only contacted then). **Install** adds the server to `~/.localpilot/mcp.json` and asks for any API keys it needs, which go to your OS keychain.
+- **Plugins** come from the marketplaces in `localpilot.plugins.marketplaces` (fetched with git and cached; **Refresh** fetches them again). When a plugin's files are inside the marketplace's repository, its row says what it adds, such as *1 command, 3 subagents*. **Install** asks whether it is for you or this workspace and shows the hooks and MCP servers it would run before anything is written. Installed plugins get **Manage…** (update, switch off, uninstall). A marketplace that cannot be loaded is named with the reason.
+- **Subagents** lists the installed ones with their source and, for the built-in ones the specialist modes follow, a *used by Review* (or Test, Explain…) badge, then the plugins that add subagents. Subagents have no on/off switch yet; write your own with `/agent new <job>` or a file in `.localpilot/agents/`.
+
+Every row says where the item comes from and whether it is installed, and for whom (*installed · user*, *installed · for me*, *added*). **Manage** on each group opens the page that manages that kind.
+
 ## Customize: rules, commands, hooks, skills and plugins
 
 **Settings → Customize** lists what shapes the agent, in five tabs. Open it from the scale button in the chat composer, or with *LocalPilot: Open Settings*. Each tab shows the **Workspace** items first and then the **Global** ones (your home folder).

@@ -16,6 +16,8 @@ export interface TrackedChange {
   /** Content before the agent's first modification in this session (undefined = file did not exist). */
   original?: string;
   changedAt: number;
+  /** The user changed the file (typically in the review diff's editable side) after the agent wrote it, before deciding. */
+  userEdited?: boolean;
 }
 
 /** A file the user accepted or rejected, listed in the review queue (until the next turn or Clear reviewed). */
@@ -29,6 +31,8 @@ export interface ReviewedFile {
   token?: number;
   /** The tracked change itself, so an Undo of the review can put it back. */
   change: TrackedChange;
+  /** The user edited the agent's version before this decision ("edited by you"). */
+  userEdited?: boolean;
 }
 
 /** A review row as the chat lists it: `redoUntil` is when Restore edits stops working (absent once it has). */
@@ -37,6 +41,8 @@ export interface ReviewedRow {
   state: 'accepted' | 'rejected';
   kind: 'create' | 'modify' | 'delete';
   redoUntil?: number;
+  /** The user edited the agent's version before accepting or rejecting it. */
+  userEdited?: boolean;
 }
 
 const SCHEME = 'localpilot-original';
@@ -46,6 +52,8 @@ const MAX_REVIEWED = 200;
 const MAX_STAT_CHARS = 1024 * 1024;
 /** Before-contents larger than this stay in memory only (same limit as untracked files in git checkpoints). */
 const MAX_PERSISTED_CHARS = 20 * 1024 * 1024;
+/** Document changes this soon after an agent write was announced (beforeChange) are the agent's, not the user's. */
+export const AGENT_WRITE_MS = 3_000;
 /** How long the agent's version of rejected files is kept so the toast's Undo can put it back. */
 export const REDO_WINDOW_MS = 5 * 60_000;
 
@@ -81,6 +89,8 @@ export class ChangeTracker implements vscode.Disposable {
   private statCache = new Map<string, { sig: string; added: number; removed: number }>();
   /** Clock for the redo window; tests replace it. */
   now: () => number = () => Date.now();
+  /** By file: when the agent (or this tracker restoring a file) last announced a write, so its own edits are not taken for the user's. */
+  private agentWrites = new Map<string, number>();
 
   constructor(private readonly log: vscode.LogOutputChannel) {
     this.addedDeco = vscode.window.createTextEditorDecorationType({
@@ -110,6 +120,10 @@ export class ChangeTracker implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (vscode.window.visibleTextEditors.some((ed) => ed.document === e.document)) {
           this.decorateVisible();
+        }
+        // Typing in the file (the review diff's right side is the file itself) while its change waits for a decision.
+        if (e.contentChanges.length && e.document.uri.scheme === 'file' && vscode.window.activeTextEditor?.document === e.document) {
+          this.markUserEdited(e.document.uri.fsPath);
         }
       })
     );
@@ -155,6 +169,7 @@ export class ChangeTracker implements vscode.Disposable {
 
   /** Snapshot a file before the agent modifies it (no-op if already tracked for this session). */
   async beforeChange(fsPath: string, sessionId: string): Promise<void> {
+    this.expectWrite(fsPath);
     const sid = ChangeTracker.rootSession(sessionId);
     this.loadPersisted(sid);
     const key = `${sid}|${fsPath}`;
@@ -197,6 +212,41 @@ export class ChangeTracker implements vscode.Disposable {
       this._onDidChange.fire();
       setTimeout(() => this.decorateVisible(), 300);
     }
+  }
+
+  /** The next document change to `fsPath` (within {@link AGENT_WRITE_MS}) is a programmatic write, not the user typing. */
+  private expectWrite(fsPath: string): void {
+    this.agentWrites.set(fsPath, this.now());
+    if (this.agentWrites.size > 500) {
+      const cut = this.now() - AGENT_WRITE_MS;
+      for (const [p, t] of this.agentWrites) {
+        if (t < cut) {
+          this.agentWrites.delete(p);
+        }
+      }
+    }
+  }
+
+  /**
+   * The user changed `fsPath` by hand: every change to it still waiting for review is marked "edited by you". Ignored
+   * right after an agent write to the same file. Returns whether a change was newly marked.
+   */
+  markUserEdited(fsPath: string): boolean {
+    const t = [...this.agentWrites].find(([p]) => samePath(p, fsPath))?.[1];
+    if (t !== undefined && this.now() - t < AGENT_WRITE_MS) {
+      return false;
+    }
+    let hit = false;
+    for (const c of this.changes.values()) {
+      if (!c.userEdited && samePath(c.fsPath, fsPath)) {
+        c.userEdited = true;
+        hit = true;
+      }
+    }
+    if (hit) {
+      this._onDidChange.fire();
+    }
+    return hit;
   }
 
   /** Mark the start of a user turn (index of the user message) so edits can be rolled back to it. */
@@ -440,6 +490,7 @@ export class ChangeTracker implements vscode.Disposable {
         continue;
       }
       try {
+        this.expectWrite(fsPath);
         await restoreFile(vscode.Uri.file(fsPath), content);
         n++;
         const tracked = this.changes.get(`${sid}|${fsPath}`);
@@ -496,7 +547,7 @@ export class ChangeTracker implements vscode.Disposable {
     }
     if (record) {
       void recordEditDecision('accepted', this.withLiveText(kept));
-      this.noteReviewed(kept.map((c) => ({ fsPath: c.fsPath, state: 'accepted', kind: kindOf(c), at: this.now(), change: c })));
+      this.noteReviewed(kept.map((c) => ({ fsPath: c.fsPath, state: 'accepted', kind: kindOf(c), at: this.now(), change: c, ...(c.userEdited ? { userEdited: true } : {}) })));
     }
     this._onDidChange.fire();
     this.decorateVisible();
@@ -519,6 +570,7 @@ export class ChangeTracker implements vscode.Disposable {
       try {
         kinds.set(c, kindOf(c));
         const content = await currentText(c.fsPath);
+        this.expectWrite(c.fsPath);
         await restoreFile(vscode.Uri.file(c.fsPath), c.original);
         n++;
         this.changes.delete(`${c.sessionId}|${c.fsPath}`);
@@ -528,7 +580,7 @@ export class ChangeTracker implements vscode.Disposable {
       }
     }
     const token = redo.length ? this.setRedo(redo) : undefined;
-    this.noteReviewed(redo.map(({ change }) => ({ fsPath: change.fsPath, state: 'rejected', kind: kinds.get(change) ?? 'modify', at: this.now(), token, change })));
+    this.noteReviewed(redo.map(({ change }) => ({ fsPath: change.fsPath, state: 'rejected', kind: kinds.get(change) ?? 'modify', at: this.now(), token, change, ...(change.userEdited ? { userEdited: true } : {}) })));
     this._onDidChange.fire();
     this.decorateVisible();
     return { count: n, token };
@@ -571,6 +623,7 @@ export class ChangeTracker implements vscode.Disposable {
     let n = 0;
     for (const { change, content } of take) {
       try {
+        this.expectWrite(change.fsPath);
         await restoreFile(vscode.Uri.file(change.fsPath), content);
         n++;
         const key = `${change.sessionId}|${change.fsPath}`;
@@ -610,7 +663,7 @@ export class ChangeTracker implements vscode.Disposable {
     return (this.reviewed.get(ChangeTracker.rootSession(sessionId)) ?? []).map((r) => {
       const b = r.token !== undefined ? this.redoBuf.get(r.token) : undefined;
       const restorable = !!b && b.until > this.now() && b.entries.some((e) => e.change === r.change);
-      return { fsPath: r.fsPath, state: r.state, kind: r.kind, ...(restorable ? { redoUntil: b.until } : {}) };
+      return { fsPath: r.fsPath, state: r.state, kind: r.kind, ...(restorable ? { redoUntil: b.until } : {}), ...(r.userEdited ? { userEdited: true } : {}) };
     });
   }
 

@@ -106,7 +106,7 @@ You can rerun the wizard with *LocalPilot: Open Setup*. To switch models later, 
 
 The changes bar above the composer lists every file the agent changed. Click a file to see a diff.
 
-- **In a git repository** the agent works in an isolated copy of your project (a git worktree) by default. The bar reads *N files changed in isolated copy*. Click **Apply to workspace** to bring the changes into your folder as uncommitted edits, or **Discard**.
+- **In a git repository** the agent works in an isolated copy of your project (a git worktree) by default. The bar reads *N files changed in isolated copy*. Click **Apply all** to bring the changes into your folder as uncommitted edits, or **Discard all**. Each file also has its own **Apply** and **Discard**.
 - **Outside git**, or with `localpilot.worktrees.mode` set to `off`, the agent edits your files directly. Use **Accept all** / **Reject all**, or accept and reject per file.
 
 Rejecting restores the exact content from before the agent's edit.

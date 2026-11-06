@@ -290,6 +290,72 @@ export function modelChoices(ramGb: number, freeDiskGb: number | undefined): Mod
     .sort((a, b) => order[a.fit] - order[b.fit] || Number(b.enoughDisk) - Number(a.enoughDisk) || a.spec.diskGb - b.spec.diskGb);
 }
 
+/** Free space kept on top of a download (colibri writes temporary files while it converts and verifies). */
+export const DISK_HEADROOM_GB = 2;
+
+export interface DiskPreflight {
+  /** True when the download fits, nothing is downloaded (a model folder, a model already there) or the space is unknown. */
+  ok: boolean;
+  /** The free space could not be read (the check was skipped). */
+  unknown?: boolean;
+  dir: string;
+  freeGb?: number;
+  /** Download plus headroom; 0 when nothing is downloaded. */
+  needGb: number;
+  shortGb: number;
+  /** The catalog model the check is for (for `recommended`, the smallest one colibri could pick on this machine). */
+  spec?: ColibriSpec;
+  /** Catalog models that fit both this machine's RAM and the free space, best first. */
+  smaller: ColibriSpec[];
+  /** One plain sentence: what is short and by how much. Empty when ok. */
+  message: string;
+}
+
+/**
+ * Before `coli setup` downloads a model into `dir`: does it fit on that disk? `model` is a catalog id, `recommended`
+ * (colibri picks; the smallest model that fits this machine is the least it can need), or a folder (nothing to
+ * download). `present`: the model is already in `dir`, so setup only starts it.
+ */
+export function diskPreflight(o: { model?: string; dir: string; freeGb: number | undefined; ramGb: number; present?: boolean; exists?: (p: string) => boolean }): DiskPreflight {
+  const choices = modelChoices(o.ramGb, o.freeGb).filter((c) => c.fit !== 'too-big');
+  const smaller = choices.filter((c) => c.enoughDisk).map((c) => c.spec);
+  const base = { dir: o.dir, ...(o.freeGb !== undefined ? { freeGb: o.freeGb } : {}), smaller };
+  const recommended = !o.model || o.model === 'recommended';
+  if (!recommended && isModelFolder(o.model!, o.exists)) {
+    return { ...base, ok: true, needGb: 0, shortGb: 0, message: '' };
+  }
+  const spec = recommended ? [...choices].sort((a, b) => a.spec.diskGb - b.spec.diskGb)[0]?.spec : COLIBRI_MODELS.find((m) => m.name === o.model);
+  if (!spec || o.present) {
+    return { ...base, ok: true, needGb: 0, shortGb: 0, ...(spec ? { spec } : {}), message: '' };
+  }
+  const needGb = spec.diskGb + DISK_HEADROOM_GB;
+  if (o.freeGb === undefined) {
+    return { ...base, ok: true, unknown: true, needGb, shortGb: 0, spec, message: '' };
+  }
+  const shortGb = Math.max(0, Math.ceil(needGb - o.freeGb));
+  if (!shortGb) {
+    return { ...base, ok: true, needGb, shortGb: 0, spec, message: '' };
+  }
+  const free = Math.floor(o.freeGb);
+  const what = recommended ? `Even the smallest model colibri can pick for this machine (${spec.name}) needs about ${needGb} GB` : `${spec.name} needs about ${needGb} GB (a ${spec.diskGb} GB download plus ${DISK_HEADROOM_GB} GB to work in)`;
+  return { ...base, ok: false, needGb, shortGb, spec, message: `${what}, but the disk that holds ${o.dir} has ${free} GB free: ${shortGb} GB short.` };
+}
+
+/**
+ * Whether `spec` already seems to be downloaded into `dir`: a non-empty entry whose name matches the model. colibri
+ * resumes an interrupted download, so a partial folder counts too (setup will only fetch the rest).
+ */
+export function modelPresent(dir: string, spec: ColibriSpec | undefined): boolean {
+  if (!spec) {
+    return false;
+  }
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).some((e) => spec.match.test(e.name) && (!e.isDirectory() || fs.readdirSync(path.join(dir, e.name)).length > 0));
+  } catch {
+    return false;
+  }
+}
+
 /** Free space in GB on the volume that holds `dir` (or its nearest existing parent). */
 export function freeDiskGb(dir: string): number | undefined {
   let d = path.resolve(dir);

@@ -15,9 +15,9 @@ export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>)
 
 /** The list row of a session: everything but the transcript and other per-turn state. */
 function summaryOf(s: Session, bytes?: number): SessionSummary {
-  const { id, title, createdAt, updatedAt, model, mode, specialist, plan, pinned, worktree, isolated, group, skills, origin, parentId, parentTitle } = s;
+  const { id, title, createdAt, updatedAt, model, mode, specialist, plan, pinned, worktree, isolated, group, skills, origin, parentId, parentTitle, folder } = s;
   const usage = s.usage ? { ...s.usage, subagentTokens: s.usage.subagentTokens && { ...s.usage.subagentTokens } } : undefined;
-  return { id, title, createdAt, updatedAt, model, mode, ...(specialist ? { specialist } : {}), plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes, origin, parentId, parentTitle };
+  return { id, title, createdAt, updatedAt, model, mode, ...(specialist ? { specialist } : {}), plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes, origin, parentId, parentTitle, ...(folder ? { folder } : {}) };
 }
 
 const escHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -104,6 +104,11 @@ export class SessionStore implements vscode.Disposable {
   constructor(ctx: vscode.ExtensionContext, private readonly log: vscode.LogOutputChannel) {
     const base = ctx.storageUri ?? ctx.globalStorageUri;
     this.dir = vscode.Uri.joinPath(base, 'sessions');
+  }
+
+  /** Folder for the chats' run traces (`traces/` next to `sessions/`); undefined outside a file system. */
+  get tracesDir(): string | undefined {
+    return this.dir.scheme === 'file' ? path.join(path.dirname(this.dir.fsPath), 'traces') : undefined;
   }
 
   /** True once `load()` read the sessions folder; worktree pruning must not run against a store that failed to load. */
@@ -439,6 +444,7 @@ export class SessionStore implements vscode.Disposable {
     s.messages = structuredClone(uptoIndex === undefined ? src.messages : src.messages.slice(0, uptoIndex + 1));
     s.attachments = [...src.attachments];
     s.think = src.think;
+    s.folder = src.folder;
     this.forkArchive(src.id, s);
     this.save(s, true);
     return s;

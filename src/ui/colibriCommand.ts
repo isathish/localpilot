@@ -11,6 +11,7 @@ import {
   dashboardUrl,
   DEFAULT_CHECKOUT,
   DEFAULT_MODELS_DIR,
+  diskPreflight,
   expandHome,
   findColibri,
   freeDiskGb,
@@ -18,12 +19,14 @@ import {
   installCommand,
   launcherIn,
   modelChoices,
+  modelPresent,
   probePort,
   runColi,
   setupArgs,
   statusProgress,
 } from '../providers/colibriSetup';
 import { terminalShell } from '../providers/gatewaySetup';
+import { COLIBRI_MODELS } from '../providers/colibri';
 
 const TERMINAL = 'LocalPilot · colibri';
 
@@ -141,14 +144,25 @@ export class ColibriLauncher implements vscode.Disposable {
       if (!model) {
         return;
       }
+    }
+    // 5. Does the download fit on the disk it goes to? (A model already there, or a folder, downloads nothing.)
+    // An installed colibri left to pick its own model has set one up already: only a named or newly picked model is checked.
+    const fit = !opts.reconfigure && !model ? { model: 'recommended', modelsDir: cfg.modelsDir } : await this.preflight(model || 'recommended', cfg.modelsDir, { checkPresent: !opts.reconfigure });
+    if (!fit) {
+      return;
+    }
+    // A smaller model picked in the preflight is remembered like a switch.
+    const switched = fit.model !== (model || 'recommended');
+    model = fit.model;
+    if (opts.reconfigure || switched) {
       await this.settings.update('colibri.model', model === 'recommended' ? undefined : model, vscode.ConfigurationTarget.Global);
       if (state === 'colibri') {
         await this.stop(true);
       }
     }
-    const args = setupArgs({ port, model: model === 'recommended' ? undefined : model, modelsDir: cfg.modelsDir, backend: cfg.backend, reconfigure: opts.reconfigure });
+    const args = setupArgs({ port, model: model === 'recommended' ? undefined : model, modelsDir: fit.modelsDir, backend: cfg.backend, reconfigure: opts.reconfigure || switched });
     const found = launcher;
-    await this.run(coliCommand(launcher, args), launcher.folder, port, opts.reconfigure ? 'install' : 'start', () => found);
+    await this.run(coliCommand(launcher, args), launcher.folder, port, opts.reconfigure || switched ? 'install' : 'start', () => found);
   }
 
   /** Clone colibri and run its setup, after checking prerequisites, the folder, the model and free disk space. */
@@ -194,15 +208,20 @@ export class ColibriLauncher implements vscode.Disposable {
       }
     }
     const cfg = getConfig().colibri;
-    const model = cfg.model || (await this.pickModel(cfg.modelsDir));
-    if (!model) {
+    const picked = cfg.model || (await this.pickModel(cfg.modelsDir));
+    if (!picked) {
       return;
     }
+    const fit = await this.preflight(picked, cfg.modelsDir, { checkPresent: true });
+    if (!fit) {
+      return;
+    }
+    const model = fit.model;
     await this.settings.update('colibri.path', folder, vscode.ConfigurationTarget.Global);
     if (model !== 'recommended') {
       await this.settings.update('colibri.model', model, vscode.ConfigurationTarget.Global);
     }
-    const args = setupArgs({ port, model: model === 'recommended' ? undefined : model, modelsDir: cfg.modelsDir, backend: cfg.backend });
+    const args = setupArgs({ port, model: model === 'recommended' ? undefined : model, modelsDir: fit.modelsDir, backend: cfg.backend });
     const command = existing ? coliCommand(existing, args) : installCommand(folder, args);
     this.host.log.info(`colibri: installing into ${folder}${model !== 'recommended' ? ` with ${model}` : ''}`);
     // The launcher exists only once the clone finished: look it up on each status check.
@@ -231,14 +250,65 @@ export class ColibriLauncher implements vscode.Disposable {
       const uri = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, title: 'colibri model folder (a converted snapshot)' });
       return uri?.[0]?.fsPath;
     }
-    const chosen = choices.find((c) => c.spec.name === pick.id);
-    if (chosen && !chosen.enoughDisk) {
-      const go = await vscode.window.showWarningMessage(`${chosen.spec.name} is a ${chosen.spec.diskGb} GB download but only ${Math.floor(free ?? 0)} GB is free in ${dir}. Set localpilot.colibri.modelsDir to a bigger disk, or pick a smaller model.`, { modal: true }, 'Download anyway');
-      if (!go) {
+    // A pick that does not fit is checked (with ways out) by preflight before anything downloads.
+    return pick.id;
+  }
+
+  /**
+   * Disk-space preflight before `coli setup` downloads a model: when the download does not fit on the disk of the
+   * models folder, say how much is missing and offer another folder (saved as localpilot.colibri.modelsDir), a smaller
+   * model that fits, or downloading anyway. Resolves the model and folder to use, or undefined when cancelled.
+   * `checkPresent`: a model already in the folder downloads nothing (a start, not a switch).
+   */
+  async preflight(model: string, modelsDir: string | undefined, opts: { checkPresent?: boolean } = {}): Promise<{ model: string; modelsDir?: string } | undefined> {
+    const ram = (await getSystemProfile().catch(() => undefined))?.ramGb ?? 16;
+    let dirSetting = modelsDir;
+    for (let round = 0; round < 8; round++) {
+      const dir = expandHome(dirSetting || DEFAULT_MODELS_DIR());
+      const spec = COLIBRI_MODELS.find((m) => m.name === model);
+      // colibri's own pick (`recommended`) is already set up when any catalog model is in the folder.
+      const present = !!opts.checkPresent && (spec ? modelPresent(dir, spec) : model === 'recommended' && COLIBRI_MODELS.some((m) => modelPresent(dir, m)));
+      const check = diskPreflight({ model, dir, freeGb: freeDiskGb(dir), ramGb: ram, present });
+      if (check.ok) {
+        if (check.unknown) {
+          this.host.log.warn(`colibri: could not read the free space of ${dir}; downloading ${model} without a disk check`);
+        }
+        return { model, modelsDir: dirSetting };
+      }
+      this.host.log.warn(`colibri: ${check.message}`);
+      const alt = check.smaller.find((m) => m.name !== check.spec?.name);
+      const buttons = ['Choose another folder…', ...(alt ? [`Use ${alt.name} (${alt.diskGb} GB)`] : []), ...(check.smaller.length > 1 ? ['Pick another model…'] : []), 'Download anyway'];
+      const pick = await vscode.window.showWarningMessage(
+        'Not enough disk space for the colibri model',
+        { modal: true, detail: `${check.message}\n\nChoose a folder on a disk with more room (it becomes the colibri models folder), ${alt ? 'use a smaller model that fits, ' : ''}or free up space. "Download anyway" starts it; it stops when the disk is full and resumes later.` },
+        ...buttons
+      );
+      if (!pick) {
         return undefined;
       }
+      if (pick === 'Download anyway') {
+        return { model, modelsDir: dirSetting };
+      }
+      if (pick === 'Choose another folder…') {
+        const uri = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, title: 'Folder for colibri models (on a disk with more free space)', openLabel: 'Use this folder' });
+        if (!uri?.[0]) {
+          continue;
+        }
+        dirSetting = uri[0].fsPath;
+        await this.settings.update('colibri.modelsDir', dirSetting, vscode.ConfigurationTarget.Global);
+        continue;
+      }
+      if (alt && pick.startsWith('Use ')) {
+        model = alt.name;
+        continue;
+      }
+      const other = await this.pickModel(dirSetting);
+      if (!other) {
+        return undefined;
+      }
+      model = other;
     }
-    return pick.id;
+    return undefined;
   }
 
   private async chooseFolder(): Promise<ColiLauncher | undefined> {

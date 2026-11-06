@@ -14,16 +14,19 @@ import { SkillManager } from '../agent/skills';
 import { configTarget, getConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { currentEditor, EditorState, WorkspaceContext } from '../context/workspaceContext';
-import { FileIndex } from '../context/fileIndex';
+import { FileIndex, FileIndexStatus } from '../context/fileIndex';
+import { formatBreakdown, historyBreakdown } from '../context/contextBreakdown';
 import { MentionHit } from '../context/mentionSearch';
 import { MAX_ATTACHMENT_BYTES, searchCommits } from '../context/mentionResolvers';
 import { formatSize } from '../context/extractors';
 import { ProviderRegistry } from '../providers/registry';
+import type { ProviderHealth } from '../providers/health';
+import { shortcutGroups, shortcutsMarkdown } from './shortcuts';
 import { isEmptySession, SessionStore } from '../sessions/sessionStore';
 import { HistoryPage, HistoryQuery } from '../sessions/historyQuery';
 import { archiveCompaction } from '../sessions/transcriptArchive';
 import { contextReport, memoryReport } from '../agent/reports';
-import { AgentEvent, ALL_MODES, ChatMessage, isSpecialistId, ModelInfo, Session, SPECIALIST_IDS, UserAnswer, UserQuestion } from '../types';
+import { AgentEvent, ALL_MODES, ChatMessage, isSpecialistId, isWriteMode, ModelInfo, Session, SPECIALIST_IDS, UserAnswer, UserQuestion } from '../types';
 import { SPECIALISTS } from '../agent/builtinAgents';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
@@ -31,9 +34,10 @@ import { MAX_ATTACHMENTS } from './imageSize';
 import { captureScreenshot, IMAGE_EXT, ImageAttachment, pickImages, readImage, ScreenshotMode } from './images';
 import { RunControl } from '../agent/runControl';
 import { MessageQueue, QueueRow, queueLabel } from '../agent/messageQueue';
-import { WorktreeChange, WorktreeManager } from '../agent/worktrees';
+import { pathsOf, WorktreeChange, WorktreeManager } from '../agent/worktrees';
 import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPrompt, TaskSuggestion } from '../agent/taskSuggestions';
 import { quickPrompt } from './inlineEdit';
+import { applyCodeBlock } from './codeBlockApply';
 import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { userText } from '../agent/clarify';
 import { findRipgrep, runProcess } from '../tools/search';
@@ -44,6 +48,7 @@ import { findSlashToken, normalizeCommandName, pickSlashTarget, SlashToken, spli
 import { PlanTurnOutcome, saveImplementationPlan } from '../agent/deepPlanning';
 import { BASIC_KEEP_ASSISTANT, basicSummary } from '../context/basicCompaction';
 import * as path from 'path';
+import * as os from 'os';
 import { describePolicy, getManagedPolicy } from '../agent/managedPolicy';
 import { formatBoard, TeamBoard } from '../agent/teamBoard';
 import { isPdfPath, openPdf } from './pdf/open';
@@ -52,15 +57,21 @@ import type { McpManager } from '../mcp/mcpManager';
 import { parseMcpSlash, withoutMcpPromptImages } from '../mcp/prompts';
 import { handleMcpChatAction, McpChatMessage, mcpChatStatus } from './mcpChat';
 import { RunNotifier } from './runNotifier';
+import { RunTrace, RunTraceRecorder, traceExport, traceTotals, TraceTotals } from '../telemetry/runTrace';
+import { TraceStore } from '../telemetry/traceStore';
 import { addManualModel, favoriteModels, manualModelProviders, toggleFavoriteModel } from './modelPicker';
 import { parseThinkChoice } from '../agent/thinking';
 import { affectsAutoApprove, AutoApproveMsg, autoApproveState, allowInWorkspace, approvalReason, setAutoApprove } from './autoApproveBar';
 import { affectsUiPrefs, checkPathsExist, PathsExistMsg, uiPrefsMsg, UiPrefsMsg } from './chatUiExtras';
 import type { WhatsNew } from './whatsNew';
 import { toDecision } from '../agent/approvalLevel';
+import { commandRuleFiles, commandRuleText, suggestedCommandPattern, writeCommandRule } from '../agent/commandRules';
+import { onDidChangeWorkspaceGrants } from '../agent/workspaceApprovals';
+import { matchCommandRule } from '../agent/permissions';
 import type { ApprovalDecision } from '../types';
 import type { AttemptRecord, HealingService, RecoveryState, ResumeInfo, TaskOutcome } from '../agent/healing';
 import { forgetRecovery, openInterventionCount, phaseBeforeInterrupt, recoveryStateOf } from './healingAccess';
+import { deletePrompt, PromptItem, promptDirs, promptItems, promptsMarkdown, PromptScope, savePrompt } from '../agent/promptLibrary';
 
 /** Custom slash commands as listed for the composer's autocomplete. */
 export type CommandListItem = { invoke: string; description: string; argumentHint?: string; source: string };
@@ -86,6 +97,10 @@ export interface WorkspaceInfo {
   errors?: number;
   /** Self-healing interventions waiting for the user. */
   interventions?: number;
+  /** Multi-root workspaces: every folder, with its branch and error count (a chat picks one; see Session.folder). */
+  roots?: { name: string; path: string; branch?: string; errors: number }[];
+  /** The `@` file index: scan progress, then how many files it lists of how many there are. */
+  index?: FileIndexStatus;
 }
 
 export type ToWebview =
@@ -96,6 +111,13 @@ export type ToWebview =
   | McpChatMessage
   | UiPrefsMsg
   | PathsExistMsg
+  /** One run's trace for the Trace view (`trace: null` when it is gone, e.g. the chat was imported). */
+  | { type: 'trace'; sessionId: string; traceId: string; trace: RunTrace | null; totals?: TraceTotals }
+  /**
+   * Network state for the offline banner and the welcome strip. `local`: a local model can take over from cloud ones;
+   * `checking`: a manual check is running.
+   */
+  | { type: 'connectivity'; offline: boolean; since?: number; local: boolean; checking?: boolean }
   /**
    * `liveFrom` is set while the session is running: messages from that index on belong to the turn in flight and are
    * drawn from the live event stream (see `replay`), not from the transcript — otherwise a tab switch or reopen
@@ -110,7 +132,7 @@ export type ToWebview =
   | { type: 'replay'; sessionId: string; items: ToWebview[]; startedAt: number; status?: string; truncated: boolean }
   /** `contextWindow` is the `localpilot.contextWindow` setting (0 = model maximum) so the meter shows the window a model is actually given. */
   /** `autoModel`: the id the router would answer an Auto chat with right now (the default model if set and reachable, else the best fit). */
-  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string>; visionRouting?: boolean; favorites?: string[]; manualProviders?: string[]; thinking?: string }
+  | { type: 'models'; models: ModelInfo[]; defaultModel: string; autoModel?: string; contextWindow: number; providerNames?: Record<string, string>; visionRouting?: boolean; favorites?: string[]; manualProviders?: string[]; thinking?: string; providerHealth?: Record<string, ProviderHealth> }
   | { type: 'skills'; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off' }
   | { type: 'event'; event: AgentEvent }
   /** Result of an Install click on a registry skill offer, so the chip can settle or offer a retry. */
@@ -119,7 +141,7 @@ export type ToWebview =
    * `mandatory`: asked every time (no "Allow for session"), because the command is dangerous or the organization's
    * policy requires it. `waitingSameKind`: other prompts of this chat (parallel workers) an "allow all" would answer too.
    */
-  | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string; mandatory: boolean; mandatoryReason?: 'dangerous' | 'policy'; waitingSameKind: number; askedBecause?: string; editable?: boolean }
+  | { type: 'approval'; id: string; sessionId: string; title: string; detail: string; kind: string; mandatory: boolean; mandatoryReason?: 'dangerous' | 'policy'; waitingSameKind: number; askedBecause?: string; editable?: boolean; rule?: { pattern: string; scope: 'workspace' | 'user'; blockOnly?: boolean }; settingsSection?: 'agent' | 'mcp' }
   /** The kinds a chat answered "Allow all … in this chat" for, shown as removable chips by the auto-approve bar. */
   | { type: 'sessionGrants'; sessionId: string; kinds: string[] }
   /** The agent asks the user questions (ask_user); answered with `answer`. */
@@ -143,7 +165,8 @@ export type ToWebview =
   | {
       type: 'changes';
       sessionId: string;
-      files: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete' | 'rename'; added?: number; removed?: number }[];
+      /** `userEdited`: the user changed the file after the agent wrote it, before accepting ("edited by you"). */
+      files: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete' | 'rename'; added?: number; removed?: number; userEdited?: boolean }[];
       /** Turns with file snapshots (a restore reverts every turn from the one picked on). */
       checkpoints: number[];
       /** Turns with a git checkpoint taken before them. */
@@ -156,7 +179,7 @@ export type ToWebview =
       /** Absolute paths of the workspace files a worktree apply left with conflict markers (review rows with Open in merge editor). */
       conflicts?: { path: string; fsPath: string }[];
       /** Files accepted or rejected since the latest message (the review queue keeps them listed); `redoUntil` = Restore edits works until then. */
-      reviewed?: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete'; state: 'accepted' | 'rejected'; redoUntil?: number }[];
+      reviewed?: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete'; state: 'accepted' | 'rejected'; redoUntil?: number; userEdited?: boolean }[];
     }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'insertMention'; ref: string }
@@ -187,7 +210,11 @@ export type ToWebview =
   /** A run was cut off by a reload or a closed window (no recovery was running): the Run interrupted card; null removes it. */
   | { type: 'runInterrupted'; sessionId: string; state: RunInterruptedState | null }
   /** Files still in conflict (`git diff --diff-filter=U`) for the git-conflict card; empty once all are resolved. */
-  | { type: 'conflicts'; sessionId: string; files: string[] };
+  | { type: 'conflicts'; sessionId: string; files: string[] }
+  /** The prompt library (answer to `promptLibrary`, and again after a save or delete). `workspace`: a folder is open. */
+  | { type: 'prompts'; items: PromptItem[]; workspace: boolean; dirs: { workspace?: string; user: string } }
+  /** Answer to `savePrompt`: `exists` = the name is taken in that scope (the sheet offers Replace). */
+  | { type: 'promptSaved'; ok: boolean; error?: string; exists?: boolean; invoke?: string; file?: string };
 
 /** What the Run interrupted card shows about the run that did not finish. */
 export interface RunInterruptedState {
@@ -226,7 +253,9 @@ export type FromWebview =
   /** Rewrite the composer draft into a precise request (or cancel the rewrite in progress when `cancel`). */
   | { type: 'improvePrompt'; sessionId: string; text: string; cancel?: boolean }
   | { type: 'booted' }
-  | { type: 'newSession'; mode?: Session['mode']; specialist?: string; text?: string; attachments?: string[]; images?: string[] }
+  | { type: 'newSession'; mode?: Session['mode']; specialist?: string; text?: string; attachments?: string[]; images?: string[]; folder?: string }
+  /** Multi-root: the workspace folder an empty chat works in (refused once the chat has messages). */
+  | { type: 'setFolder'; sessionId: string; folder: string }
   | { type: 'runParallel'; tasks: string[]; mode?: Session['mode'] }
   | { type: 'selectSession'; id: string }
   | { type: 'deleteSession'; id: string }
@@ -252,8 +281,8 @@ export type FromWebview =
   /** Withdraw a queued steer or after-turn message; `edit` puts its text back into the composer. */
   | { type: 'cancelQueued'; sessionId: string; id: string; edit?: boolean }
   | { type: 'stopChild'; sessionId: string; childId: string }
-  | { type: 'applyWorktree'; sessionId: string }
-  | { type: 'discardWorktree'; sessionId: string }
+  | { type: 'applyWorktree'; sessionId: string; files?: string[] }
+  | { type: 'discardWorktree'; sessionId: string; files?: string[] }
   | { type: 'openWorktree'; sessionId: string }
   | { type: 'runBestOfN'; prompt: string; models: string[]; mode?: Session['mode'] }
   | { type: 'compareGroup'; groupId: string }
@@ -263,14 +292,16 @@ export type FromWebview =
   | { type: 'pauseChild'; sessionId: string; childId: string }
   | { type: 'resumeChild'; sessionId: string; childId: string }
   /** `feedback`: the reason given with a denial; the agent reads it instead of a bare refusal. */
-  /** `editedArgs`: the command the user edited before allowing; `scope: 'workspace'`: always allow this kind in the workspace (asks to confirm). */
-  | { type: 'approval'; id: string; approved: boolean; remember?: boolean; feedback?: string; editedArgs?: string; scope?: 'workspace' }
+  /** `editedArgs`: the command the user edited before allowing; `scope: 'workspace'`: always allow this kind in the workspace (asks to confirm); `saveRule`: also save the command as an always-allow (approved) or block (denied) rule. */
+  | { type: 'approval'; id: string; approved: boolean; remember?: boolean; feedback?: string; editedArgs?: string; scope?: 'workspace'; saveRule?: boolean }
   /** A failed step's bar (Retry / Edit & retry / Skip / Stop run) or a command row's Rerun / Re-run failed / Fix failures. */
   | { type: 'toolFailureAction'; sessionId: string; action: ToolFailureAction | 'stop'; tool: string; args?: string; error?: string; tests?: string[] }
   /** Puts a command into a terminal at its working directory without running it. */
   | { type: 'openInTerminal'; sessionId?: string; command: string; cwd?: string }
   /** Stops the turn (when running), switches the chat to `model` and sends the last message again. */
   | { type: 'switchModelAndRetry'; sessionId: string; model: string }
+  /** The wait row's Keep waiting: another full first-token limit for the request in flight. */
+  | { type: 'keepWaiting'; sessionId: string }
   /** Stopped / interrupted run card: continue it, restore the last checkpoint, open its changes, or forget it. */
   | { type: 'runAction'; sessionId: string; action: 'continue' | 'restore' | 'review' | 'dismiss' }
   /** The git-conflict card asks which files are still in conflict (answered with `conflicts`). */
@@ -301,7 +332,8 @@ export type FromWebview =
   | { type: 'detectModels' }
   | { type: 'openFile'; path: string; line?: number; sessionId?: string }
   | { type: 'insertCode'; code: string }
-  | { type: 'applyCodeToFile'; code: string; path?: string }
+  /** A code block's Apply / Create: `create` = the chat found no file at `path`. */
+  | { type: 'applyCodeToFile'; code: string; path?: string; sessionId?: string; create?: boolean; lang?: string }
   | { type: 'attachActive' }
   | { type: 'attachRef'; ref: string }
   | { type: 'pickAttachment' }
@@ -309,7 +341,7 @@ export type FromWebview =
   | { type: 'compactNow'; sessionId: string; retry?: boolean }
   | { type: 'clearSession'; sessionId: string }
   /** Welcome screen context strip: open a folder (chat-only window) or the queue of tasks that need the user. */
-  | { type: 'workspaceAction'; action: 'openFolder' | 'interventions' }
+  | { type: 'workspaceAction'; action: 'openFolder' | 'interventions' | 'addFolder' | 'rebuildIndex' }
   /** `key`: a setting to scroll to and highlight; `expand`: a provider card to open (Set API key). */
   | { type: 'openSettings'; section?: string; key?: string; expand?: string }
   | { type: 'setTipsEnabled'; enabled: boolean }
@@ -323,7 +355,7 @@ export type FromWebview =
   | { type: 'inspectUrl'; url?: string; mobile?: boolean }
   | { type: 'openBrowser'; url?: string }
   | { type: 'requestOpenFiles' }
-  | { type: 'mentionSearch'; query: string }
+  | { type: 'mentionSearch'; query: string; sessionId?: string }
   | { type: 'openMention'; ref: string }
   /** The webview's script hit an error (uncaught exception, rejected promise or a handler that threw): logged host-side so a dead UI is never silent. */
   | { type: 'clientError'; where: string; message: string; stack?: string }
@@ -359,6 +391,19 @@ export type FromWebview =
   | { type: 'installCatalogSkill'; name: string; repo: string; sessionId?: string }
   | { type: 'dismissCatalogSkill'; name: string; sessionId?: string }
   | { type: 'openMarkdown'; text: string; title?: string }
+  /** The Trace view of one run (answer footer): the host replies with `trace`. */
+  | { type: 'openTrace'; sessionId: string; traceId: string }
+  /** Save one run's trace as JSON (save dialog). */
+  | { type: 'exportTrace'; sessionId: string; traceId: string }
+  /** Prompt library: list (answered with `prompts`), save (new or edited; `file`/`fileScope` = the prompt being edited), delete (asks first), open the file. */
+  | { type: 'promptLibrary'; sessionId?: string }
+  | { type: 'savePrompt'; name: string; description: string; body: string; scope: PromptScope; file?: string; fileScope?: PromptScope; overwrite?: boolean; sessionId?: string }
+  | { type: 'deletePrompt'; file: string; sessionId?: string }
+  | { type: 'openPromptFile'; file: string }
+  /** The webview saw the network go away or come back (navigator online/offline): check now. */
+  | { type: 'netHint'; online: boolean }
+  /** Offline banner's "Check again". */
+  | { type: 'checkConnection' }
   /** Path links in an answer, batch-checked so links to files that do not exist render as plain code. */
   | { type: 'pathsExist'; seq: number; paths: string[]; sessionId?: string }
   | { type: 'dismissWhatsNew' }
@@ -482,6 +527,14 @@ export class ChatController implements vscode.Disposable {
   healing?: HealingService;
   /** Set once the window is closing: runs are stopped with reason `shutdown`, so their recovery state stays resumable. */
   private shuttingDown = false;
+  /** Set by the extension: the connectivity monitor behind the offline banner (`netHint`, Check again). */
+  connectivityHooks?: { hint(online: boolean): void; check(): void };
+  /** The trace being recorded for each running chat (the Trace view under the answer). */
+  private readonly traceRecorders = new Map<string, RunTraceRecorder>();
+  /** Finished run traces, kept per chat next to the sessions folder. */
+  readonly traces: TraceStore;
+  /** Network state from the extension's connectivity monitor (offline banner); unknown until the first check. */
+  private connectivity: Extract<ToWebview, { type: 'connectivity' }> = { type: 'connectivity', offline: false, local: false };
   /** Self-healing outcome of each chat's last top-level turn that reported one. */
   private readonly outcomes = new Map<string, { outcome: TaskOutcome; interventionId?: string; report?: string }>();
   private _commands?: CommandManager;
@@ -507,6 +560,35 @@ export class ChatController implements vscode.Disposable {
     this.commandsSub = m?.onDidChange(() => this.broadcast(this.skillsMsg()));
   }
 
+  /** The home folder whose `.localpilot/commands` holds "Just me" prompts (tests point it elsewhere). */
+  promptHome?: string;
+
+  /** Where the prompt library saves: the chat's folder (multi-root) or the first one, and the home folder. */
+  private promptPlaces(sessionId?: string): { dirs: ReturnType<typeof promptDirs>; roots: string[] } {
+    const s = sessionId ? this.store.get(sessionId) : undefined;
+    const root = this.chatFolder(s);
+    return { dirs: promptDirs(root, this.promptHome ?? os.homedir()), roots: [...new Set([...(root ? [root] : []), ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)])] };
+  }
+
+  private promptList(sessionId?: string): PromptItem[] {
+    const { dirs, roots } = this.promptPlaces(sessionId);
+    return promptItems(this._commands?.all ?? [], dirs, roots);
+  }
+
+  private promptsMsg(sessionId?: string): ToWebview {
+    const { dirs } = this.promptPlaces(sessionId);
+    return { type: 'prompts', items: this.promptList(sessionId), workspace: !!dirs.workspace, dirs };
+  }
+
+  /** The first listing waits for the command scan the extension starts at activation (a no-op once it ran). */
+  private commandsScanned = false;
+  private async commandsReady(): Promise<void> {
+    if (!this.commandsScanned && this._commands && !this._commands.all.length) {
+      await this._commands.refresh().catch(() => undefined);
+    }
+    this.commandsScanned = true;
+  }
+
   private commandList(): CommandListItem[] {
     return (this._commands?.all ?? []).map((c) => ({ invoke: c.invoke, description: c.description, argumentHint: c.argumentHint, source: c.plugin ? `plugin:${c.plugin}` : c.source }));
   }
@@ -527,22 +609,26 @@ export class ChatController implements vscode.Disposable {
   ) {
     // Running chats and the one on screen keep their transcript in memory; the rest can be read back on demand.
     store.inUse = (id) => this.runs.has(id) || id === this.activeSessionId;
+    this.traces = new TraceStore(store.tracesDir);
     const offCommands = onCommandRunChange((r) => this.broadcast({ type: 'commandState', sessionId: r.sessionId, id: r.id, state: r.state, logPath: r.logPath }));
     this.disposables.push(
       new vscode.Disposable(offCommands),
       // The composer's auto-approve bar follows the settings, also when they change in the Settings UI or another window.
       vscode.workspace.onDidChangeConfiguration((e) => affectsAutoApprove(e) && this.broadcast(autoApproveState(this.log))),
+      onDidChangeWorkspaceGrants(() => this.broadcast(autoApproveState(this.log))),
       vscode.workspace.onDidChangeConfiguration((e) => affectsUiPrefs(e) && this.broadcast(uiPrefsMsg(this.whatsNew?.pending))),
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       // Retention pruning and history clearing drop chats in the store: release their snapshots too.
       store.onDidDelete((id) => {
         tracker.forget(id);
+        void this.traces.forget(id);
         this.outcomes.delete(id);
         if (this.healing) {
           forgetRecovery(this.healing, id).catch((e) => this.log.warn(`Self-healing: could not forget the recovery state of ${id}: ${e instanceof Error ? e.message : String(e)}`));
         }
       }),
       providers.onDidChange(() => void this.pushModels()),
+      providers.onDidChangeHealth(() => void this.pushModels()),
       providers.onDidRemoveModels((ids) => this.dropRemovedModels(ids)),
       // New/installed/removed skills and subagents show up in `/skill`, `/agent` and the suggestion chips right away.
       skills.onDidChange(() => this.broadcast(this.skillsMsg())),
@@ -616,7 +702,27 @@ export class ChatController implements vscode.Disposable {
       errors += list.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
     }
     const interventions = this.healing ? await openInterventionCount(this.healing) : 0;
-    return { name: folders.length ? name : '', folders: folders.length, ...(branch ? { branch } : {}), errors, interventions };
+    // Several folders: each one's branch and errors, for the folder picker and the chat's own folder in the strip.
+    const roots = folders.length > 1
+      ? await Promise.all(folders.map(async (f) => {
+          let b: string | undefined;
+          try {
+            const out = f.uri.fsPath === root && branch ? branch : (await runProcess('git', ['rev-parse', '--abbrev-ref', 'HEAD'], f.uri.fsPath, undefined, 3000, [0])).trim();
+            b = out && out !== 'HEAD' ? out : undefined;
+          } catch {
+            b = undefined;
+          }
+          let e = 0;
+          for (const [uri, list] of vscode.languages.getDiagnostics()) {
+            if (vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath === f.uri.fsPath) {
+              e += list.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+            }
+          }
+          return { name: f.name, path: f.uri.fsPath, ...(b ? { branch: b } : {}), errors: e };
+        }))
+      : undefined;
+    const index = this.fileIndex && this.fileIndex.status.state !== 'idle' ? this.fileIndex.status : undefined;
+    return { name: folders.length ? name : '', folders: folders.length, ...(branch ? { branch } : {}), errors, interventions, ...(roots ? { roots } : {}), ...(index ? { index } : {}) };
   }
   /** Branch switches (checkout, rebase) rewrite .git/HEAD; a watcher on that one file keeps the strip's branch current. */
   private watchGitHead(): vscode.Disposable {
@@ -633,9 +739,41 @@ export class ChatController implements vscode.Disposable {
   }
   private openFilesTimer: ReturnType<typeof setTimeout> | undefined;
   private fileIndex?: FileIndex;
-  /** The workspace file index behind the `@` menu, built on the first search. */
+  /** The workspace file index behind the `@` menu, built on the first search (or when the chat first opens). */
   private get mentionIndex(): FileIndex {
-    return (this.fileIndex ??= new FileIndex());
+    if (!this.fileIndex) {
+      this.fileIndex = new FileIndex();
+      this.disposables.push(this.fileIndex, this.fileIndex.onDidChangeStatus((st) => this.indexChanged(st)));
+    }
+    return this.fileIndex;
+  }
+  /** The file index's status as the status bar and the ctx strip show it. */
+  get indexStatus(): FileIndexStatus | undefined {
+    return this.fileIndex?.status;
+  }
+  private readonly _onDidChangeIndex = new vscode.EventEmitter<FileIndexStatus>();
+  /** Fires as the `@` file index scans (progress) and when it is done (status bar item). */
+  readonly onDidChangeIndex = this._onDidChangeIndex.event;
+  private indexTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Scan progress reaches the chat at most every 250 ms; the final state goes out at once. */
+  private indexChanged(st: FileIndexStatus): void {
+    this._onDidChangeIndex.fire(st);
+    const push = () => {
+      this.indexTimer = undefined;
+      const cur = this.fileIndex?.status;
+      this.wsInfo = { ...this.wsInfo, index: cur };
+      this.broadcast({ type: 'workspaceInfo', workspace: this.wsInfo });
+    };
+    if (st.state !== 'indexing') {
+      clearTimeout(this.indexTimer);
+      push();
+    } else if (!this.indexTimer) {
+      this.indexTimer = setTimeout(push, 250);
+    }
+  }
+  /** Rescans the workspace for the `@` menu (status bar item, ctx strip). */
+  rebuildFileIndex(): Promise<unknown> {
+    return this.mentionIndex.rebuild();
   }
   private pushOpenFiles(): void {
     clearTimeout(this.openFilesTimer);
@@ -941,7 +1079,7 @@ export class ChatController implements vscode.Disposable {
     const offers = this.offers.get(session.id);
     const r = this.replays.get(session.id);
     // The folder the chat works in, for the task header's badge.
-    const cwd = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.workspace?.root;
+    const cwd = session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.workspace ? this.chatFolder(session) : undefined;
     if (!r) {
       return { type: 'session', session, offers, cwd };
     }
@@ -1053,7 +1191,7 @@ export class ChatController implements vscode.Disposable {
   private async pushChangesAsync(sessionId: string): Promise<void> {
     const session = this.store.get(sessionId);
     const tracked = await Promise.all(
-      this.tracker.forSession(sessionId).map(async (c) => ({ path: vscode.workspace.asRelativePath(c.fsPath), fsPath: c.fsPath, kind: kindOf(c), ...((await this.tracker.lineStats(c).catch(() => undefined)) ?? {}) }))
+      this.tracker.forSession(sessionId).map(async (c) => ({ path: vscode.workspace.asRelativePath(c.fsPath), fsPath: c.fsPath, kind: kindOf(c), ...((await this.tracker.lineStats(c).catch(() => undefined)) ?? {}), ...(c.userEdited ? { userEdited: true } : {}) }))
     );
     const reviewed = this.tracker.reviewedFor(sessionId).map((r) => ({ path: vscode.workspace.asRelativePath(r.fsPath), ...r }));
     if (session?.worktree && this.worktrees) {
@@ -1254,18 +1392,19 @@ export class ChatController implements vscode.Disposable {
   /** Whether this session's agent should work in an isolated worktree, per `localpilot.worktrees.mode`. */
   private shouldIsolate(session: Session): boolean {
     const mode = getConfig().worktrees.mode;
-    return !!this.worktrees && !!this.workspace.root && !session.direct && (mode === 'always' || (mode === 'parallel' && !!session.isolated));
+    return !!this.worktrees && !!this.chatFolder(session) && !session.direct && (mode === 'always' || (mode === 'parallel' && !!session.isolated));
   }
 
   /** Create the session's worktree if it needs one and does not have it yet. Quietly falls back to the workspace outside git. */
   private async ensureWorktree(session: Session, status: (text: string) => void, signal?: AbortSignal): Promise<void> {
-    if (!this.worktrees || !this.workspace.root || !this.shouldIsolate(session)) {
+    const folder = this.chatFolder(session);
+    if (!this.worktrees || !folder || !this.shouldIsolate(session)) {
       return;
     }
     if (session.worktree && (await import('fs')).existsSync(session.worktree.path)) {
       return;
     }
-    const repo = await this.worktrees.repoRoot(this.workspace.root);
+    const repo = await this.worktrees.repoRoot(folder);
     if (!repo) {
       if (!this.warnedNoGit) {
         this.warnedNoGit = true;
@@ -1276,7 +1415,7 @@ export class ChatController implements vscode.Disposable {
     try {
       const started = Date.now();
       // In a subfolder of the repository the agent works in the same subfolder of the copy.
-      const subdir = path.relative(repo, this.workspace.root);
+      const subdir = path.relative(repo, folder);
       // Unsaved editor buffers are what the model sees in context, so the copy starts from them too.
       const overlay: Record<string, string> = {};
       for (const d of vscode.workspace.textDocuments) {
@@ -1310,8 +1449,11 @@ export class ChatController implements vscode.Disposable {
   }
   private warnedNoGit = false;
 
-  /** Bring the session's worktree changes onto the workspace as uncommitted edits; the chat can keep going afterwards. */
-  async applyWorktree(sessionId: string): Promise<{ files: number; conflicts: string[] } | undefined> {
+  /**
+   * Bring the session's worktree changes onto the workspace as uncommitted edits; the chat can keep going afterwards.
+   * `files` (repository-relative paths) applies only those, file by file from the review queue; the rest stay pending.
+   */
+  async applyWorktree(sessionId: string, files?: string[]): Promise<{ files: number; conflicts: string[] } | undefined> {
     const session = this.store.get(sessionId);
     if (!session?.worktree || !this.worktrees) {
       return undefined;
@@ -1323,32 +1465,79 @@ export class ChatController implements vscode.Disposable {
     }
     const wt = session.worktree;
     try {
-      const res = await this.worktrees.apply(wt, (fsPath) => this.tracker.beforeChange(fsPath, sessionId));
-      this.applyConflicts.set(sessionId, res.conflicts);
+      const res = await this.worktrees.apply(wt, (fsPath) => this.tracker.beforeChange(fsPath, sessionId), files);
+      if (files && !res.files.length) {
+        this.broadcast({ type: 'toast', level: 'info', text: `Nothing to apply: ${files.join(', ')} has no pending change in the isolated copy` });
+        this.pushChanges(sessionId);
+        return { files: 0, conflicts: [] };
+      }
+      // A per-file apply adds to the conflicts still open from earlier ones; a full apply starts the list over.
+      const earlier = files ? (this.applyConflicts.get(sessionId) ?? []).filter((c) => !res.conflicts.includes(c)) : [];
+      this.applyConflicts.set(sessionId, [...earlier, ...res.conflicts]);
       this.telemetry?.record({ type: 'worktree', action: 'apply', files: res.files.length, conflicts: res.conflicts.length });
       // Further work in the worktree is measured from here, so applying again never re-applies these changes.
       let rebaseError: string | undefined;
       try {
-        await this.worktrees.rebase(wt);
+        await this.worktrees.rebase(wt, files ? pathsOf(res.files) : undefined);
       } catch (e) {
         rebaseError = e instanceof Error ? e.message : String(e);
       }
       this.store.save(session);
-      this.tracker.keep(sessionId); // applied = the user's decision; the workspace diff is now visible in git itself
+      // Applied = the user's decision; the workspace diff is now visible in git itself.
+      if (files) {
+        for (const f of pathsOf(res.files)) {
+          this.tracker.keep(sessionId, path.join(wt.repo, ...f.split('/')));
+        }
+      } else {
+        this.tracker.keep(sessionId);
+      }
       this.pushChanges(sessionId);
       if (rebaseError) {
         this.broadcast({ type: 'toast', level: 'error', text: `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'}, but the new base could not be recorded: ${rebaseError}` });
         return { files: res.files.length, conflicts: res.conflicts };
       }
+      const what = files && res.files.length === 1 ? res.files[0].path : `${res.files.length} file${res.files.length === 1 ? '' : 's'}`;
       this.broadcast({
         type: 'toast',
         level: res.conflicts.length ? 'error' : 'info',
-        text: res.conflicts.length ? `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'}; ${res.conflicts.length} with conflict markers: ${res.conflicts.join(', ')}` : `Applied ${res.files.length} file${res.files.length === 1 ? '' : 's'} to the workspace`,
+        text: res.conflicts.length
+          ? files && res.files.length === 1
+            ? `Applied ${what} with conflict markers: resolve it from the Changes list`
+            : `Applied ${what}; ${res.conflicts.length} with conflict markers: ${res.conflicts.join(', ')}`
+          : `Applied ${what} to the workspace`,
       });
       return { files: res.files.length, conflicts: res.conflicts };
     } catch (e) {
       this.broadcast({ type: 'toast', level: 'error', text: `Could not apply the changes: ${e instanceof Error ? e.message : String(e)}` });
       return undefined;
+    }
+  }
+
+  /** Throw away the agent's changes to some files of the isolated copy (repository-relative paths); the rest stay pending. */
+  async discardWorktreeFiles(sessionId: string, files: string[], opts: { confirm?: boolean } = {}): Promise<number> {
+    const session = this.store.get(sessionId);
+    if (!session?.worktree || !this.worktrees || !files.length) {
+      return 0;
+    }
+    // Nothing keeps a copy of what is thrown away here (unlike a review Reject), so it asks first.
+    const label = files.length === 1 ? files[0] : `${files.length} files`;
+    if (opts.confirm && (await vscode.window.showWarningMessage(`Discard the agent's changes to ${label}? They are not applied to your workspace and cannot be restored.`, { modal: true }, 'Discard')) !== 'Discard') {
+      return 0;
+    }
+    const run = this.runs.get(sessionId);
+    if ((run && !run.holding) || (!run && this.starting.has(sessionId))) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Pause or stop the agent before discarding its changes.' });
+      return 0;
+    }
+    try {
+      const done = await this.worktrees.discardFiles(session.worktree, files);
+      this.telemetry?.record({ type: 'worktree', action: 'discard' });
+      this.broadcast({ type: 'toast', level: 'info', text: done.length ? `Discarded the agent's changes to ${done.length === 1 ? done[0] : `${done.length} files`}` : 'Nothing to discard' });
+      this.pushChanges(sessionId);
+      return done.length;
+    } catch (e) {
+      this.broadcast({ type: 'toast', level: 'error', text: `Could not discard the changes: ${e instanceof Error ? e.message : String(e)}` });
+      return 0;
     }
   }
 
@@ -1622,10 +1811,44 @@ export class ChatController implements vscode.Disposable {
     }
   }
 
-  /** Folder hooks run in for a session: its worktree while isolated, otherwise the workspace. */
+  /** Folder hooks run in for a session: its worktree while isolated, otherwise its workspace folder. */
   private sessionRoot(sessionId: string): string | undefined {
-    const wt = this.store.get(sessionId)?.worktree;
-    return wt ? path.join(wt.path, wt.subdir ?? '') : this.workspace.root;
+    const s = this.store.get(sessionId);
+    const wt = s?.worktree;
+    return wt ? path.join(wt.path, wt.subdir ?? '') : this.chatFolder(s);
+  }
+
+  /**
+   * The workspace folder a chat works in: the one it picked in a multi-root workspace (while that folder is still
+   * open), otherwise the first folder. Drives the tools' root, @-mentions, git and checks for the chat.
+   */
+  private chatFolder(s?: Pick<Session, 'folder'>): string | undefined {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    return (s?.folder && folders.length > 1 ? folders.find((f) => f.uri.fsPath === s.folder)?.uri.fsPath : undefined) ?? this.workspace.root;
+  }
+
+  /** The chat's folder when it is not the first one (only then does a run need it passed as its root). */
+  private folderOverride(s: Session): string | undefined {
+    const f = this.chatFolder(s);
+    return f && f !== this.workspace.root ? f : undefined;
+  }
+
+  /** Multi-root: points an empty chat at another workspace folder; a chat with messages keeps the folder it started in. */
+  private setFolder(sessionId: string, folder: string): void {
+    const s = this.store.get(sessionId);
+    const target = (vscode.workspace.workspaceFolders ?? []).find((f) => f.uri.fsPath === folder);
+    if (!s || !target) {
+      return;
+    }
+    if (s.messages.length || this.runs.has(s.id) || this.starting.has(s.id)) {
+      const cur = (vscode.workspace.workspaceFolders ?? []).find((f) => f.uri.fsPath === this.chatFolder(s))?.name ?? 'its folder';
+      this.broadcast({ type: 'toast', level: 'info', text: `This chat works in ${cur}. Start a new chat to work in ${target.name}.` });
+      this.broadcast(this.sessionMsg(s));
+      return;
+    }
+    s.folder = target.uri.fsPath === this.workspace.root ? undefined : target.uri.fsPath;
+    this.store.save(s, true);
+    this.broadcast(this.sessionMsg(s));
   }
 
   /** Delete worktrees left behind by sessions that no longer exist (e.g. after a crash). */
@@ -1689,6 +1912,9 @@ export class ChatController implements vscode.Disposable {
         // "New chat" in the history every time the button is pressed.
         const cur = !text && this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
         if (cur && isEmptySession(cur) && !this.runs.has(cur.id)) {
+          if (msg.folder) {
+            this.setFolder(cur.id, msg.folder);
+          }
           const spec = msg.mode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === msg.mode ? msg.specialist : undefined;
           if ((msg.mode && cur.mode !== msg.mode) || (msg.mode && cur.specialist !== spec)) {
             cur.mode = msg.mode!;
@@ -1701,6 +1927,10 @@ export class ChatController implements vscode.Disposable {
           return;
         }
         const s = this.createSession(msg.mode ?? 'agent');
+        if (msg.folder && (vscode.workspace.workspaceFolders ?? []).some((f) => f.uri.fsPath === msg.folder)) {
+          s.folder = msg.folder === this.workspace.root ? undefined : msg.folder;
+          this.store.save(s, true);
+        }
         if (msg.mode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === msg.mode) {
           s.specialist = msg.specialist;
           this.store.save(s, true);
@@ -1761,7 +1991,8 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'listSessions': {
         const { type: _type, seq, ...q } = msg;
-        this.replyTo(reply, { type: 'sessionPage', seq, page: this.store.listSessions(q) });
+        // A chat that never picked a folder works in the first one: the folder filter counts it there.
+        this.replyTo(reply, { type: 'sessionPage', seq, page: this.store.listSessions({ ...q, defaultFolder: this.chatFolder() }) });
         return;
       }
       case 'renameSession':
@@ -1872,6 +2103,86 @@ export class ChatController implements vscode.Disposable {
         }
         return;
       }
+      case 'openTrace': {
+        const trace = (await this.traces.get(msg.sessionId, msg.traceId)) ?? null;
+        (reply ?? { post: (m: ToWebview) => this.broadcast(m) }).post({ type: 'trace', sessionId: msg.sessionId, traceId: msg.traceId, trace, ...(trace ? { totals: traceTotals(trace) } : {}) });
+        return;
+      }
+      case 'promptLibrary':
+        await this.commandsReady();
+        this.replyTo(reply, this.promptsMsg(msg.sessionId));
+        return;
+      case 'savePrompt': {
+        const { dirs } = this.promptPlaces(msg.sessionId);
+        const editable = new Set(this.promptList(msg.sessionId).filter((i) => i.editable).map((i) => path.resolve(i.file)));
+        let r: Awaited<ReturnType<typeof savePrompt>>;
+        try {
+          r = await savePrompt(msg, dirs, editable);
+        } catch (e) {
+          r = { ok: false, error: `Could not save: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        if (r.ok) {
+          await this._commands?.refresh();
+        }
+        this.replyTo(reply, r.ok ? { type: 'promptSaved', ok: true, invoke: r.invoke, file: r.file } : { type: 'promptSaved', ok: false, error: r.error, exists: !!r.exists });
+        if (r.ok) {
+          this.replyTo(reply, this.promptsMsg(msg.sessionId));
+        }
+        return;
+      }
+      case 'deletePrompt': {
+        const item = this.promptList(msg.sessionId).find((i) => path.resolve(i.file) === path.resolve(msg.file));
+        if (!item?.editable) {
+          this.replyTo(reply, { type: 'toast', level: 'error', text: 'That prompt is read-only here' });
+          return;
+        }
+        const where = item.scope === 'workspace' ? 'this workspace' : 'your prompts';
+        if ((await vscode.window.showWarningMessage(`Delete the prompt ${item.invoke} from ${where}?`, { modal: true, detail: `${item.file}\n\nThe file is deleted, and ${item.invoke} stops working as a command.` }, 'Delete')) !== 'Delete') {
+          return;
+        }
+        try {
+          await deletePrompt(item.file, new Set([path.resolve(item.file)]));
+          await this._commands?.refresh();
+          this.replyTo(reply, { type: 'toast', level: 'info', text: `Deleted ${item.invoke}` });
+        } catch (e) {
+          this.replyTo(reply, { type: 'toast', level: 'error', text: `Could not delete ${item.invoke}: ${e instanceof Error ? e.message : String(e)}` });
+        }
+        this.replyTo(reply, this.promptsMsg(msg.sessionId));
+        return;
+      }
+      case 'openPromptFile': {
+        if (!this.promptList().some((i) => path.resolve(i.file) === path.resolve(msg.file))) {
+          return;
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(msg.file), { preview: false });
+        return;
+      }
+      case 'exportTrace': {
+        const trace = await this.traces.get(msg.sessionId, msg.traceId);
+        if (!trace) {
+          this.broadcast({ type: 'toast', level: 'error', text: 'This trace is no longer stored' });
+          return;
+        }
+        const stamp = new Date(trace.startedAt).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const base = vscode.workspace.workspaceFolders?.[0]?.uri;
+        const target = await vscode.window.showSaveDialog({ title: 'Export run trace', saveLabel: 'Export', filters: { JSON: ['json'] }, ...(base ? { defaultUri: vscode.Uri.joinPath(base, `localpilot-trace-${stamp}.json`) } : {}) });
+        if (!target) {
+          return;
+        }
+        try {
+          await vscode.workspace.fs.writeFile(target, Buffer.from(traceExport(trace), 'utf8'));
+          this.broadcast({ type: 'toast', level: 'info', text: `Trace saved to ${vscode.workspace.asRelativePath(target)}` });
+        } catch (e) {
+          this.broadcast({ type: 'toast', level: 'error', text: `Could not save the trace: ${e instanceof Error ? e.message : String(e)}` });
+        }
+        return;
+      }
+      case 'netHint':
+        this.connectivityHooks?.hint(!!msg.online);
+        return;
+      case 'checkConnection':
+        this.connectivityHooks?.check();
+        return;
       case 'pathsExist': {
         const wt = msg.sessionId ? this.store.peek(msg.sessionId)?.worktree : undefined;
         const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, fsPath: f.uri.fsPath }));
@@ -1919,6 +2230,10 @@ export class ChatController implements vscode.Disposable {
         return void this.childControl(msg.sessionId, msg.childId)?.resume();
       case 'approval': {
         const pending = this.approvals.get(msg.id);
+        if (pending && msg.saveRule) {
+          await this.saveCommandRuleFromApproval(msg.id, pending, msg.approved);
+          return;
+        }
         if (pending && msg.approved && msg.scope === 'workspace' && !pending.mandatory) {
           await this.allowKindInWorkspace(msg.id, pending);
           return;
@@ -1999,6 +2314,12 @@ export class ChatController implements vscode.Disposable {
       }
       case 'setMode': {
         const s = this.store.get(msg.sessionId);
+        if (s && !vscode.workspace.workspaceFolders?.length && isWriteMode(msg.mode)) {
+          // Agent, Debug and Multitask edit files: without a folder the chat stays in its read-only mode.
+          this.broadcast({ type: 'toast', level: 'info', text: `${msg.mode[0].toUpperCase()}${msg.mode.slice(1)} mode needs a folder: open one to edit files and run commands.` });
+          this.broadcast(this.sessionMsg(s));
+          return;
+        }
         if (s) {
           if (s.mode !== msg.mode) {
             this.telemetry?.record({ type: 'mode_switch', sid: s.id, from: s.mode, to: msg.mode, source: 'picker' });
@@ -2090,26 +2411,34 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'applyCodeToFile': {
-        let ed: vscode.TextEditor | undefined;
-        if (msg.path) {
-          const root = this.workspace.root;
-          const uri = path.isAbsolute(msg.path) ? vscode.Uri.file(msg.path) : root ? vscode.Uri.joinPath(vscode.Uri.file(root), msg.path) : undefined;
-          try {
-            ed = uri && (await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri), { preserveFocus: true }));
-          } catch {
-            this.broadcast({ type: 'toast', level: 'error', text: `Cannot open ${msg.path}` });
-            return;
+        // Through the change tracker (review queue, checkpoint) and a proposed-edit diff; never a raw write.
+        const sid = msg.sessionId ?? this.activeSessionId;
+        const s = sid ? this.store.get(sid) : undefined;
+        await applyCodeBlock(
+          { sessionId: s?.id, code: String(msg.code ?? ''), path: typeof msg.path === 'string' && msg.path ? msg.path : undefined, create: !!msg.create, lang: typeof msg.lang === 'string' ? msg.lang : undefined },
+          {
+            tracker: this.tracker,
+            root: this.chatFolder(s),
+            activeDocument: currentEditor()?.document,
+            canAskAgent: !!s && isWriteMode(s.mode) && !!vscode.workspace.workspaceFolders?.length,
+            askAgent: async (text) => {
+              if (!s) {
+                return;
+              }
+              if (this.runs.has(s.id)) {
+                await this.steer(s.id, text);
+              } else {
+                await this.send(s.id, text);
+              }
+            },
+            toast: (level, text, action) => {
+              this.broadcast({ type: 'toast', level, text, ...(action && s ? { action: { label: action.label, msg: { type: 'review', sessionId: s.id, scope: 'session', fsPath: action.fsPath } } } : {}) });
+              if (s) {
+                this.pushChanges(s.id);
+              }
+            },
           }
-        } else {
-          const st = currentEditor();
-          ed = st && (await this.editorFor(st));
-        }
-        if (!ed) {
-          this.broadcast({ type: 'toast', level: 'error', text: 'Open the target file first' });
-          return;
-        }
-        const full = new vscode.Range(0, 0, ed.document.lineCount, 0);
-        await ed.edit((b) => b.replace(full, msg.code));
+        );
         return;
       }
       case 'attachRef':
@@ -2151,6 +2480,10 @@ export class ChatController implements vscode.Disposable {
             s.compactions++;
             // contextTokens includes the system prompt and tools, which compaction leaves alone: subtract what was saved.
             s.contextTokens = Math.max(0, s.contextTokens - (res.before - res.after));
+            // The history's share of the breakdown follows the new messages; system, rules and tools are unchanged.
+            if (s.contextBreakdown) {
+              s.contextBreakdown = { ...s.contextBreakdown, ...historyBreakdown(s.messages, tokenCalibration.scale(model.id)) };
+            }
             this.store.save(s);
             if (s.id === this.activeSessionId) {
               this.broadcast(this.sessionMsg(s));
@@ -2197,6 +2530,11 @@ export class ChatController implements vscode.Disposable {
         return this.toolFailureAction(msg);
       case 'openInTerminal':
         return this.openInTerminal(msg.command, msg.cwd, msg.sessionId);
+      case 'keepWaiting':
+        if (!this.runner.keepWaiting(msg.sessionId)) {
+          this.broadcast({ type: 'toast', level: 'info', text: 'The model already answered' });
+        }
+        return;
       case 'switchModelAndRetry':
         return this.switchModelAndRetry(msg.sessionId, msg.model);
       case 'runAction':
@@ -2207,6 +2545,14 @@ export class ChatController implements vscode.Disposable {
         await vscode.commands.executeCommand('localpilot.recovery.open', msg.sessionId);
         return;
       case 'workspaceAction':
+        if (msg.action === 'addFolder') {
+          await vscode.commands.executeCommand('workbench.action.addRootFolder');
+          return;
+        }
+        if (msg.action === 'rebuildIndex') {
+          void this.rebuildFileIndex();
+          return;
+        }
         if (msg.action === 'openFolder') {
           await vscode.commands.executeCommand('workbench.action.files.openFolder');
         } else if (msg.action === 'interventions') {
@@ -2293,15 +2639,21 @@ export class ChatController implements vscode.Disposable {
       case 'requestOpenFiles':
         this.broadcast(this.openFilesMsg());
         return;
+      case 'setFolder':
+        this.setFolder(msg.sessionId, msg.folder);
+        return;
       case 'mentionSearch': {
         // Commits too, once the text could be a message word or a hash (not a path).
         const q = msg.query.trim();
-        const [items, commits] = await Promise.all([this.mentionIndex.search(msg.query, this.workspace.openEditors()), q.length >= 3 && !/[/"]/.test(q) ? searchCommits(q, this.workspace.root, 10).catch(() => []) : []]);
+        const chat = msg.sessionId ? this.store.get(msg.sessionId) : undefined;
+        const folder = chat ? this.chatFolder(chat) : this.workspace.root;
+        const folderName = (vscode.workspace.workspaceFolders ?? []).find((f) => f.uri.fsPath === folder)?.name;
+        const [items, commits] = await Promise.all([this.mentionIndex.search(msg.query, this.workspace.openEditors(), 20, folderName), q.length >= 3 && !/[/"]/.test(q) ? searchCommits(q, folder, 10).catch(() => []) : []]);
         this.broadcast({ type: 'mentionResults', query: msg.query, items, commits });
         return;
       }
       case 'openMention': {
-        const command = ({ problems: 'workbench.actions.view.problems', terminal: 'workbench.action.terminal.focus', git: 'workbench.view.scm', workspace: 'workbench.view.explorer', editors: 'workbench.action.showAllEditors' } as Record<string, string>)[msg.ref.replace(/^@/, '')];
+        const command = ({ problems: 'workbench.actions.view.problems', terminal: 'workbench.action.terminal.focus', git: 'workbench.view.scm', workspace: 'workbench.view.explorer', codebase: 'workbench.view.explorer', editors: 'workbench.action.showAllEditors' } as Record<string, string>)[msg.ref.replace(/^@/, '')];
         if (command) {
           await vscode.commands.executeCommand(command);
         }
@@ -2361,9 +2713,13 @@ export class ChatController implements vscode.Disposable {
         return;
       }
       case 'applyWorktree':
-        await this.applyWorktree(msg.sessionId);
+        await this.applyWorktree(msg.sessionId, Array.isArray(msg.files) ? msg.files.filter((f): f is string => typeof f === 'string') : undefined);
         return;
       case 'discardWorktree':
+        if (Array.isArray(msg.files)) {
+          await this.discardWorktreeFiles(msg.sessionId, msg.files.filter((f): f is string => typeof f === 'string'), { confirm: true });
+          return;
+        }
         await this.discardWorktree(msg.sessionId, { confirm: true });
         return;
       case 'openWorktree': {
@@ -2719,7 +3075,12 @@ export class ChatController implements vscode.Disposable {
     });
     post(init(this.providers.cachedModels()));
     this.refreshWorkspaceInfo(0);
+    // The @ index is scanned once the chat is open (not at activation), so its progress shows in the strip.
+    if (!this.fileIndex && vscode.workspace.workspaceFolders?.length) {
+      setTimeout(() => void this.mentionIndex.list(), 1500);
+    }
     post(uiPrefsMsg(this.whatsNew?.pending));
+    post(this.connectivity);
     // Commands that outlive a run (detached dev servers) keep their Stop control on rows this webview draws later.
     for (const r of runningCommands()) {
       post({ type: 'commandState', sessionId: r.sessionId, id: r.id, state: r.state, logPath: r.logPath });
@@ -2795,7 +3156,8 @@ export class ChatController implements vscode.Disposable {
     const autoModel = models.length ? await this.providers.route({ role: 'agent', start: false }).then((r) => r.model.id, () => undefined) : undefined;
     // Group headings in the picker use the provider's name ("LM Studio", "colibri"), not its settings id.
     const providerNames = Object.fromEntries(this.providers.all.map((p) => [p.id, p.displayName]));
-    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames, visionRouting: getConfig().routing.enabled, favorites: favoriteModels(this.modelPrefs), manualProviders: manualModelProviders(getConfig().providers), thinking: getConfig().thinking };
+    // Health badges per provider (reachable / slow / down / no key) from the registry's last discovery round.
+    return { type: 'models', models, defaultModel: getConfig().defaultModel, autoModel, contextWindow: getConfig().contextWindow, providerNames, visionRouting: getConfig().routing.enabled, favorites: favoriteModels(this.modelPrefs), manualProviders: manualModelProviders(getConfig().providers), thinking: getConfig().thinking, providerHealth: this.providers.providerHealth() };
   }
 
   /** Entry point used by webviews and commands. Runs are per-session, so several sessions can stream at once. */
@@ -2966,6 +3328,11 @@ export class ChatController implements vscode.Disposable {
   }
 
   private async startRun(session: Session, sessionId: string, text: string, attachments: string[], images: string[] | undefined, opts: SendOptions): Promise<string> {
+    // No folder open: nothing to edit and nowhere safe to run commands, so a chat left in a write mode answers read-only.
+    if (!vscode.workspace.workspaceFolders?.length && isWriteMode(opts.mode ?? session.mode)) {
+      opts = { ...opts, mode: 'ask' };
+      this.broadcast({ type: 'toast', level: 'info', text: `No folder open: this turn runs in Ask (read-only). Open a folder to let LocalPilot edit files and run commands.` });
+    }
     // A resume turn is LocalPilot's own hidden steer, never a slash command or a prompt to correct.
     const mcpSlash = opts.display || opts.resume ? undefined : parseMcpSlash(text);
     let mcpPromptImages = 0;
@@ -3094,7 +3461,7 @@ export class ChatController implements vscode.Disposable {
     const corrected = opts.display || opts.resume ? { text, fixes: [] } : await this.correctNames(sessionId, text);
     text = corrected.text;
     let content = text;
-    const attachedBlocks = await this.readAttachments(attachments, session);
+    const attachedBlocks = await this.readAttachments(attachments, session, text);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }
@@ -3120,6 +3487,10 @@ export class ChatController implements vscode.Disposable {
     }
     // Saved with the session: a run cut off by a reload or a closed window shows up as "Run interrupted" next time.
     session.runningSince = Date.now();
+    // The Trace view under the answer: this run's model calls, tools, retries, fallbacks and approvals, in order.
+    const recorder = new RunTraceRecorder({ id: `t_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, sessionId, title: opts.display ?? text, mode: session.specialist ?? session.mode });
+    this.traceRecorders.set(sessionId, recorder);
+    this.notifier.started(sessionId);
     try {
       const result = await this.runner.run({
         session,
@@ -3140,11 +3511,13 @@ export class ChatController implements vscode.Disposable {
         permissionAllow: opts.permissionAllow,
         signal: control.signal,
         control,
-        workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined,
+        // An isolated chat works in its worktree; a multi-root chat in the folder it picked.
+        workspaceRoot: session.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : this.folderOverride(session),
         isolatedFrom: session.worktree ? path.join(session.worktree.repo, session.worktree.subdir ?? '') : undefined,
         emit: (e) => {
           this.broadcast({ type: 'event', event: e });
           this.notifier.event(e);
+          recorder.event(e);
           if (e.type === 'skill_suggestions') {
             const p = e.payload as SkillOffer | undefined;
             if (p?.available || p?.create) {
@@ -3171,6 +3544,10 @@ export class ChatController implements vscode.Disposable {
           }
           if (e.type === 'error' && !(e.payload as { childId?: string } | undefined)?.childId) {
             turnErrored = true;
+            // A model the chat could not reach may mean the network is gone: the offline banner checks now.
+            if ((e.payload as { kind?: string } | undefined)?.kind === 'connection') {
+              this.connectivityHooks?.hint(false);
+            }
           }
           if (e.type === 'turn_end' && !(e.payload as { childId?: string } | undefined)?.childId) {
             const p = e.payload as { outcome?: TaskOutcome; interventionId?: string; recovery?: { interventionId?: string; report?: string } } | undefined;
@@ -3226,6 +3603,7 @@ export class ChatController implements vscode.Disposable {
           session.model = '';
         }
       }
+      this.finishTrace(session, recorder, userMessage, control.aborted ? 'stopped' : turnErrored ? 'error' : 'ok');
       this.store.save(session);
       this.broadcast({ type: 'running', sessionId, running: false });
       if (removed && !session.model && sessionId === this.activeSessionId) {
@@ -3246,6 +3624,38 @@ export class ChatController implements vscode.Disposable {
       const attention = healed?.outcome === 'incomplete' || healed?.outcome === 'blocked';
       this.notifier.finished(sessionId, session.title, silent, turnErrored ? 'error' : attention ? 'attention' : 'ok', this.tracker.forSession(sessionId).length, attention ? healed?.report : undefined);
     }
+  }
+
+  /** The connectivity monitor's state changed (or a check started): the offline banner follows it in every chat view. */
+  setConnectivity(state: Omit<Extract<ToWebview, { type: 'connectivity' }>, 'type'>): void {
+    this.connectivity = { type: 'connectivity', ...state };
+    this.broadcast(this.connectivity);
+  }
+
+  /**
+   * Closes the run's trace, links it from the turn's last assistant message (`meta.traceId`, the answer footer's Trace
+   * button) and stores it. A run that never got an answer keeps its trace in the store only.
+   */
+  private finishTrace(session: Session, recorder: RunTraceRecorder, userMessage: ChatMessage, outcome: 'ok' | 'error' | 'stopped'): void {
+    if (this.traceRecorders.get(session.id) === recorder) {
+      this.traceRecorders.delete(session.id);
+    }
+    const trace = recorder.finish(outcome);
+    if (!trace.entries.length) {
+      return;
+    }
+    const from = session.messages.indexOf(userMessage);
+    for (let i = session.messages.length - 1; i > from; i--) {
+      const m = session.messages[i];
+      if (m.role === 'assistant' && !m.meta?.hidden) {
+        m.meta = { ...m.meta, traceId: trace.id };
+        break;
+      }
+      if (m.role === 'user' && !m.meta?.hidden && !m.meta?.steer && !m.meta?.toolResults && !m.meta?.toolImages) {
+        break;
+      }
+    }
+    void this.traces.add(trace).catch((e: unknown) => this.log.warn(`Could not save the run trace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   /** Replays the last user turn after a failure: drops the failed exchange and sends the same message again. */
@@ -3493,7 +3903,7 @@ export class ChatController implements vscode.Disposable {
     const name = ({ terminal: 'terminal commands', write: 'file edits', delete: 'file deletions', network: 'network access', mcp: 'MCP tool calls' } as Record<string, string>)[pending.kind] ?? pending.kind;
     const pick = await vscode.window.showWarningMessage(
       `Always allow ${name} in this workspace?`,
-      { modal: true, detail: `LocalPilot will stop asking before ${name} in every chat of this workspace (localpilot.approvals.${pending.kind} = always in the workspace settings).${pending.kind === 'terminal' ? ' Commands that look destructive still ask.' : ''} You can change it in Settings → Agent.` },
+      { modal: true, detail: `LocalPilot will stop asking before ${name} in every chat of this workspace. The choice is kept for this workspace only (not in its settings files, so a repository cannot set it).${pending.kind === 'terminal' ? ' Commands that look destructive still ask.' : ''} Turn it off in the composer's auto-approve bar or in Settings → Agent & approvals → Command rules.` },
       'Always allow'
     );
     if (pick !== 'Always allow' || !this.approvals.has(id)) {
@@ -3511,6 +3921,49 @@ export class ChatController implements vscode.Disposable {
       }
     }
     this.broadcast(autoApproveState(this.log));
+  }
+
+  /** Reloads the settings files after a command rule was saved, so the gate sees it at once (set by the extension). */
+  reloadPermissionRules?: () => Promise<unknown>;
+
+  /** The command rule an approval card offers: the command when it is one simple command, saved for the chat's folder (else for the user). */
+  private approvalRule(sessionId: string, kind: string, detail: string, mandatory: boolean): { pattern: string; scope: 'workspace' | 'user'; blockOnly?: boolean } | undefined {
+    const cmd = kind === 'terminal' ? /^\$ (.+)$/m.exec(detail)?.[1] : undefined;
+    const pattern = cmd ? suggestedCommandPattern(cmd) : undefined;
+    // "Always allow" must not turn a destructive command (asked every time) into a silent one; Block is offered for it too.
+    return pattern ? { pattern, scope: this.chatFolder(this.store.peek(sessionId)) ? 'workspace' : 'user', ...(mandatory ? { blockOnly: true } : {}) } : undefined;
+  }
+
+  /** "Always allow `npm test`" / "Always block `npm publish`" on an approval card: saves a Bash(...) permission rule, then answers this prompt and any other one the rule covers. */
+  private async saveCommandRuleFromApproval(id: string, pending: PendingApproval, allow: boolean): Promise<void> {
+    const rule = this.approvalRule(pending.sessionId, pending.kind, pending.detail, !!pending.mandatory);
+    if (!rule || (allow && rule.blockOnly)) {
+      this.broadcast({ type: 'toast', level: 'error', text: allow ? 'This command cannot be saved as always allowed' : 'This command cannot be saved as a rule' });
+      return;
+    }
+    // The chat's workspace folder, never its isolated worktree copy: the gate reads rules from the workspace folders.
+    const files = commandRuleFiles(this.chatFolder(this.store.peek(pending.sessionId)));
+    const file = rule.scope === 'workspace' && files.workspace ? files.workspace : files.user;
+    const raw = commandRuleText(rule.pattern);
+    try {
+      await writeCommandRule(file, { add: { kind: allow ? 'allow' : 'block', raw } });
+      await this.reloadPermissionRules?.();
+    } catch (e) {
+      this.broadcast({ type: 'toast', level: 'error', text: `Could not save the rule: ${e instanceof Error ? e.message : String(e)}` });
+      return;
+    }
+    this.log.info(`command rule: ${allow ? 'allow' : 'block'} ${raw} saved to ${file}`);
+    const where = file === files.user ? 'for every workspace' : 'in this workspace';
+    this.broadcast({ type: 'toast', level: 'info', text: `${allow ? 'Always allowed' : 'Blocked'} ${where}: ${rule.pattern} · Settings → Agent & approvals → Command rules` });
+    const feedback = allow ? undefined : `The user blocked \`${rule.pattern}\` permanently (${raw}). Do not run it again; use another approach.`;
+    this.settleApproval(id, allow, feedback);
+    // Parallel workers waiting on a command the new rule covers get the same answer.
+    for (const [other, p] of [...this.approvals]) {
+      const cmd = p.kind === 'terminal' ? /^\$ (.+)$/m.exec(p.detail)?.[1] : undefined;
+      if (cmd && matchCommandRule(rule.pattern, cmd) && (!allow || !p.mandatory)) {
+        this.settleApproval(other, allow, feedback);
+      }
+    }
   }
 
   /** A button on a failed step or a command row: a steer while the run lasts, else a new turn with the same request. */
@@ -3735,7 +4188,14 @@ export class ChatController implements vscode.Disposable {
   /** Creates a chat and applies the retention limit so history cannot grow without bound. */
   private createSession(mode: Session['mode']): Session {
     const cfg = getConfig();
-    const s = this.store.create(cfg.defaultModel, mode);
+    // A window without a folder starts chats in Ask: the write modes need files to work on.
+    const s = this.store.create(cfg.defaultModel, !vscode.workspace.workspaceFolders?.length && isWriteMode(mode) ? 'ask' : mode);
+    // Multi-root: a new chat starts in the folder the current one works in.
+    const cur = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
+    if (cur?.folder && this.chatFolder(cur) === cur.folder) {
+      s.folder = cur.folder;
+      this.store.save(s, true);
+    }
     void this.store.prune(cfg.sessionRetention, [...this.runs.keys(), s.id, ...(this.activeSessionId ? [this.activeSessionId] : [])]).then((n) => {
       if (n) {
         this.log.info(`Session retention: removed ${n} old chat(s) (limit ${cfg.sessionRetention})`);
@@ -3823,14 +4283,17 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Reads the attachments of a message; any that could not be read are reported in one toast instead of being dropped silently. */
-  private async readAttachments(attachments: string[], session?: Session): Promise<string[]> {
+  private async readAttachments(attachments: string[], session?: Session, text = ''): Promise<string[]> {
     if (attachments.length > MAX_ATTACHMENTS) {
       this.broadcast({ type: 'toast', level: 'warn', text: `Only the first ${MAX_ATTACHMENTS} of ${attachments.length} attachments were read` });
       attachments = attachments.slice(0, MAX_ATTACHMENTS);
     }
-    const root = session?.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
-    const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a, root)));
-    if (!root) {
+    const worktree = session?.worktree ? path.join(session.worktree.path, session.worktree.subdir ?? '') : undefined;
+    const folder = !worktree && session ? this.folderOverride(session) : undefined;
+    const root = worktree ?? folder;
+    // #codebase matches files to the message it goes with.
+    const blocks = await Promise.all(attachments.map((a) => this.workspace.readAttachment(a, root, { query: text, folder: !!folder })));
+    if (!worktree) {
       this.mentionIndex.noteAttached(attachments);
     }
     const failed = attachments.filter((_, i) => !blocks[i] || /^<attachment [^>]*error="not found"/.test(blocks[i]));
@@ -3872,7 +4335,7 @@ export class ChatController implements vscode.Disposable {
     text = corrected.text;
     const fixes = corrected.fixes;
     let content = text;
-    const attachedBlocks = await this.readAttachments(attachments, this.store.get(sessionId));
+    const attachedBlocks = await this.readAttachments(attachments, this.store.get(sessionId), text);
     if (attachedBlocks.some(Boolean)) {
       content = `${attachedBlocks.filter(Boolean).join('\n\n')}\n\n${text}`;
     }
@@ -4032,6 +4495,7 @@ export class ChatController implements vscode.Disposable {
     }
     this.notifier.asked(sessionId);
     const id = `${sessionId}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    this.traceRecorders.get(sessionId)?.approvalAsked(id, title, kind);
     return new Promise<ApprovalDecision>((resolve) => {
       this.approvals.set(id, { sessionId, title, detail, kind, mandatory, mandatoryReason, resolve, mirrored: false });
       if (this.promptsNative(sessionId)) {
@@ -4050,10 +4514,15 @@ export class ChatController implements vscode.Disposable {
       // Recorded in the replay buffer too, so a chat that is closed and reopened while the agent waits shows the prompt again.
       const waitingSameKind = mandatory ? 0 : [...this.approvals].filter(([other, p]) => other !== id && p.sessionId === sessionId && p.kind === kind && !p.mandatory).length;
       // The footer says why it asked; a command can be edited before it is allowed (the edit is what runs).
-      const askedBecause = approvalReason(kind, mandatoryReason, (getConfig().approvals as Record<string, string | undefined>)[kind]);
+      // An MCP tool set to Ask in Settings → MCP servers says so, and its footer link opens that page.
+      const mcpTool = kind === 'mcp' && !mandatoryReason ? /^Call MCP tool (.+?)\/([^/]+)$/.exec(title) : null;
+      const toolAsk = !!mcpTool && getConfig().mcpToolApprovals[mcpTool[1]]?.[mcpTool[2]] === 'ask';
+      const askedBecause = toolAsk ? `${mcpTool![1]}/${mcpTool![2]} is set to Ask in Settings → MCP servers` : approvalReason(kind, mandatoryReason, (getConfig().approvals as Record<string, string | undefined>)[kind]);
       const editable = kind === 'terminal' && /^\$ /.test(detail);
-      this.broadcast({ type: 'approval', id, sessionId, title, detail, kind, mandatory, mandatoryReason, waitingSameKind, askedBecause, editable });
+      const rule = this.approvalRule(sessionId, kind, detail, mandatory);
+      this.broadcast({ type: 'approval', id, sessionId, title, detail, kind, mandatory, mandatoryReason, waitingSameKind, askedBecause, editable, ...(rule ? { rule } : {}), ...(toolAsk ? { settingsSection: 'mcp' as const } : {}) });
       this.markWaiting(sessionId, `Waiting for your approval: ${title}`);
+      this.notifier.waiting(sessionId, this.store.peek(sessionId)?.title ?? '', `approve ${title}`);
       this.mirrorPendingApprovals();
     });
   }
@@ -4066,6 +4535,7 @@ export class ChatController implements vscode.Disposable {
     }
     this.approvals.delete(id);
     this.forgetApproval(id);
+    this.traceRecorders.get(pending.sessionId)?.approvalAnswered(id, ok);
     pending.resolve(toDecision({ ok, feedback, ...(ok && edited && pending.kind === 'terminal' ? { edited } : {}) }));
     this.broadcast({ type: 'approvalResolved', id });
     this.clearWaiting(pending.sessionId);
@@ -4119,6 +4589,7 @@ export class ChatController implements vscode.Disposable {
     return new Promise((resolve) => {
       this.questions.set(id, { sessionId, questions, resolve, mirrored: false });
       this.broadcast({ type: 'question', id, sessionId, questions });
+      this.notifier.waiting(sessionId, this.store.peek(sessionId)?.title ?? '', questions.length === 1 ? `answer “${String(questions[0]?.question ?? '').slice(0, 80)}”` : `answer ${questions.length} questions`);
       this.markWaiting(sessionId, 'Waiting for your answer');
       this.mirrorPendingApprovals();
     });
@@ -4226,12 +4697,12 @@ export class ChatController implements vscode.Disposable {
             '- `/compact` (or `/smol`) — summarise older messages to free context · `/newtask [note]` — continue in a new chat that starts from a summary of this one',
             '- `/deep-planning <task>` — investigate, ask, then write an implementation plan (Plan mode for that turn) · `/team <task>` — split the task for background workers and the shared board (Multitask mode) · `/newrule [topic]` (or `/init`) — write a project rule file',
             '- `/clear` — clear this session',
-            '- `/skills` — list skills · `/agents` — list subagents · `/commands` — list custom commands',
+            '- `/skills` — list skills · `/agents` — list subagents · `/commands` — list custom commands · `/prompts` — the prompt library (save, search, insert, edit, delete)',
             '- `/skill <name> <task>` — run a task with a skill preloaded · `/skill install <owner/repo|url|folder>` — install a skill · `/skill browse [words]` — search the skill registry',
             '- `/skill mode auto|ask|off` — how this chat uses skills · `/skill pin <name>` / `unpin` — load a skill into every request of this chat',
             '- `/agent <name> <task>` — delegate directly to a subagent · `/agent new <job>` — create a custom subagent',
             '- `/memory` — instruction files in force (CLAUDE.md, AGENTS.md…) and saved memory notes · `/permissions` — permission rules · `/hooks` — configured hooks',
-            '- `/context` — show context usage · `/board` — the shared task board (`.localpilot/board`)',
+            '- `/context` — show context usage · `/board` — the shared task board (`.localpilot/board`) · `/keys` — keyboard shortcuts',
             ...(custom.length ? ['', '**Custom commands** (`.claude/commands`, `.localpilot/commands`, Cline workflows, plugins)', ...custom.map((c) => `- \`${c.invoke}${c.argumentHint ? ` ${c.argumentHint}` : ''}\` — ${c.description || c.file}`)] : []),
           ].join('\n')
         );
@@ -4248,6 +4719,14 @@ export class ChatController implements vscode.Disposable {
         // Both kinds of standing context: the instruction files you write, and the notes the agent saved itself.
         void Promise.all([this.workspace.instructionFiles(), this.runner.memory?.list().catch(() => []) ?? []]).then(([files, notes]) => say(memoryReport(files, notes, getConfig().memoryEnabled)));
         return '';
+      }
+      case 'prompts':
+        return say(promptsMarkdown(this.promptList(session.id)));
+      case 'keys':
+      case 'shortcuts': {
+        const ext = vscode.extensions.getExtension('localpilot.localpilot-agent');
+        const groups = shortcutGroups((ext?.packageJSON ?? {}) as Parameters<typeof shortcutGroups>[0]);
+        return say(`${shortcutsMarkdown(groups, process.platform === 'darwin')}\n\nTo change a VS Code binding, open **Settings → Keyboard shortcuts** and press **Change…** next to it, or run **Preferences: Open Keyboard Shortcuts** and search for "LocalPilot".`);
       }
       case 'permissions': {
         const p = this.runner.projectSettings?.();
@@ -4286,7 +4765,9 @@ export class ChatController implements vscode.Disposable {
         return say(this.skills.allAgents.map((a) => `- **${a.name}** (${a.source}): ${a.description}`).join('\n'));
       case 'context': {
         const win = this.providers.cachedModels().find((m) => m.id === (session.model || getConfig().defaultModel));
-        return say(contextReport(session, win, win ? effectiveContextWindow(win, getConfig().contextWindow) : undefined));
+        const window = win ? effectiveContextWindow(win, getConfig().contextWindow) : undefined;
+        const parts = session.contextBreakdown ? formatBreakdown(session.contextBreakdown, window) : '';
+        return say(`${contextReport(session, win, window)}${parts ? `\n\nWhat fills it (last request):\n${parts}` : '\n\nThe breakdown by part (system, rules, tools, history, files) appears after the next request.'}`);
       }
       case 'clear':
         void this.handle({ type: 'clearSession', sessionId: session.id });

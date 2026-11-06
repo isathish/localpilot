@@ -1,4 +1,4 @@
-import { ChatMessage, LLMProvider, ModelInfo, ToolDefinition } from '../types';
+import { ChatMessage, CompactionDetails, LLMProvider, ModelInfo, ToolDefinition } from '../types';
 import { BASIC_KEEP_ASSISTANT, basicSummary } from './basicCompaction';
 import { estimateMessagesTokens, estimateMessageTokens, estimateTokens, estimateToolsTokens } from './tokenizer';
 import { toolResultCache, ToolResultCache } from './toolResultCache';
@@ -22,6 +22,58 @@ export interface CompactionResult {
   removed: number;
   before: number;
   after: number;
+  /** What was kept verbatim and what went into the summary (absent when nothing was removed). */
+  details?: CompactionDetails;
+}
+
+const MAX_DETAIL_FILES = 12;
+
+/** Files a stretch of history touched: tool-call `path`/`files[].path` arguments and attached files. */
+function filesIn(messages: readonly ChatMessage[]): string[] {
+  const out = new Set<string>();
+  const add = (p: unknown) => {
+    if (typeof p === 'string' && p && p.length < 300 && !p.startsWith('lp-cache://')) {
+      out.add(p.replace(/\\/g, '/').replace(/^\.\//, ''));
+    }
+  };
+  for (const m of messages) {
+    for (const c of m.toolCalls ?? []) {
+      try {
+        const a = JSON.parse(c.arguments) as { path?: unknown; files?: { path?: unknown }[] };
+        add(a?.path);
+        (Array.isArray(a?.files) ? a.files : []).forEach((f) => add(f?.path));
+      } catch {
+        /* arguments that are not JSON name no file */
+      }
+    }
+    if (m.role === 'user') {
+      for (const x of m.content.matchAll(/<attachment path="([^"]+)"/g)) {
+        add(x[1].replace(/&quot;/g, '"'));
+      }
+    }
+  }
+  return [...out];
+}
+
+/** Counts for the compaction note: what `older` (minus the kept `request`) held, and what stays verbatim. */
+export function compactionDetails(older: readonly ChatMessage[], request: ChatMessage | undefined, recent: readonly ChatMessage[], before: number, after: number, method: CompactionDetails['method']): CompactionDetails {
+  const gone = older.filter((m) => !m.meta?.summary && m !== request);
+  const files = filesIn(gone);
+  return {
+    before,
+    after,
+    method,
+    dropped: {
+      messages: gone.length,
+      requests: gone.filter((m) => m.role === 'user' && !m.meta?.hidden && !m.meta?.toolResults && !m.meta?.toolImages).length,
+      replies: gone.filter((m) => m.role === 'assistant' && !!m.content.trim()).length,
+      toolCalls: gone.reduce((n, m) => n + (m.toolCalls?.length ?? 0), 0),
+      toolOutputs: gone.filter((m) => m.role === 'tool' || !!m.meta?.toolResults).length,
+      files: files.slice(0, MAX_DETAIL_FILES),
+      moreFiles: Math.max(0, files.length - MAX_DETAIL_FILES),
+    },
+    kept: { messages: recent.length + (request ? 1 : 0), request: !!request, priorSummaries: older.filter((m) => m.meta?.summary).length },
+  };
 }
 
 export interface FitResult {
@@ -327,6 +379,7 @@ export class ContextManager {
       .join('\n\n');
 
     let summary: string;
+    let method: CompactionDetails['method'] = 'model';
     // The digest is the last resort, so it must fit: at most ~40% of the window, measured in the model's tokens.
     const digest = () => {
       const budget = Math.floor(model.contextWindow * 0.4);
@@ -342,6 +395,7 @@ export class ContextManager {
     const tooLarge = this.tokens(estimateTokens(transcript) + estimateTokens(priorSummaries.join('\n'))) + 2000 > model.contextWindow;
     if (this.strategy === 'basic' || (tooLarge && truncateOnFailure)) {
       summary = digest();
+      method = 'digest';
     } else {
       try {
         summary = await this.summarise(provider, model, priorSummaries, transcript, signal);
@@ -351,6 +405,7 @@ export class ContextManager {
         }
         // Strategy 4 fallback: the deterministic digest instead of losing the older messages.
         summary = digest();
+        method = 'digest';
       }
     }
     const summaryMsg: ChatMessage = {
@@ -359,7 +414,10 @@ export class ContextManager {
       meta: { summary: true, timestamp: Date.now() },
     };
     const messages = request ? [summaryMsg, request, ...recent] : [summaryMsg, ...recent];
-    return { messages, summary, removed: older.length - (request ? 1 : 0), before, after: this.tokens(estimateMessagesTokens(messages)) };
+    const after = this.tokens(estimateMessagesTokens(messages));
+    const details = compactionDetails(older, request, recent, before, after, method);
+    summaryMsg.meta = { ...summaryMsg.meta, compaction: details };
+    return { messages, summary, removed: older.length - (request ? 1 : 0), before, after, details };
   }
 
   private async summarise(

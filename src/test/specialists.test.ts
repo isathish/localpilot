@@ -153,7 +153,7 @@ suite('Welcome screen: context strip', () => {
       I: new Proxy({}, { get: () => '<svg></svg>' }),
       esc: (t: string) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     };
-    vm.runInNewContext(`${lift('ctxStatus', 'function')}\n${lift('renderCtxStrip', 'function')}\nrenderCtxStrip(target);`, { ...sandbox, target: el });
+    vm.runInNewContext(`${['chatRoots', 'chatFolder', 'indexNote', 'ctxStatus', 'renderCtxStrip'].map((f) => lift(f, 'function')).join('\n')}\nrenderCtxStrip(target);`, { ...sandbox, target: el });
     return el;
   }
 
@@ -171,6 +171,25 @@ suite('Welcome screen: context strip', () => {
     assert.strictEqual(strip({ workspace: { name: 'd', folders: 1, interventions: 2 } }).querySelector('[data-a="interventions"]')?.textContent, '2 tasks need you · Review');
     assert.strictEqual(strip({ workspace: { name: 'd', folders: 1, interventions: 1 } }).querySelector('[data-a="interventions"]')?.textContent, '1 task needs you · Review');
     assert.strictEqual(strip({ offline: true, models: [{ id: 'a' }], workspace: { name: 'd', folders: 1 } }).querySelector('.status .t')?.textContent, 'Offline · local models only');
+  });
+
+  test('several folders: the chat folder is a picker and its own branch shows', () => {
+    const roots = [{ name: 'web', path: '/w/web', branch: 'main', errors: 0 }, { name: 'api', path: '/w/api', branch: 'feature/x', errors: 1 }];
+    const el = strip({ workspace: { name: 'shop', folders: 2, branch: 'main', roots }, session: { id: 's', folder: '/w/api', messages: [] } });
+    assert.strictEqual(el.querySelector('.folder [data-a="folder"] .t')?.textContent, 'api');
+    assert.strictEqual(el.querySelector('.branch .t')?.textContent, 'feature/x');
+    // No folder picked yet: the first one.
+    assert.strictEqual(strip({ workspace: { name: 'shop', folders: 2, roots }, session: { id: 's', messages: [] } }).querySelector('.folder .t')?.textContent, 'web');
+  });
+
+  test('index status: progress while scanning, the large-repo note after', () => {
+    const scanning = strip({ workspace: { name: 'd', folders: 1, index: { state: 'indexing', files: 1240, listed: 0, pct: 38 } } });
+    assert.ok(scanning.querySelector('.status.busy .spinner'));
+    assert.strictEqual(scanning.querySelector('.status .t')?.textContent, `Indexing ${(1240).toLocaleString()} files… 38%`);
+    const big = strip({ workspace: { name: 'd', folders: 1, index: { state: 'ready', files: 12400, listed: 5000, pct: 100 } } });
+    assert.strictEqual(big.querySelector('.status .t')?.textContent, 'Ready');
+    assert.strictEqual(big.querySelector('.index [data-a="rebuildIndex"]')?.textContent, `Large repo: ${(5000).toLocaleString()} of ${(12400).toLocaleString()} files listed`);
+    assert.strictEqual(strip({ workspace: { name: 'd', folders: 1, index: { state: 'ready', files: 40, listed: 40, pct: 100 } } }).querySelector('.index'), null);
   });
 
   test('no folder: chat only, with Open folder', () => {

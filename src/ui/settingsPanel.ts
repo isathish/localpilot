@@ -7,7 +7,11 @@ import { CatalogEntry, SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
 import { SkillCreateSuggestion, SkillLearner } from '../agent/skillRecommender';
 import { SkillManager } from '../agent/skills';
-import { editableProviders, getConfig, isUserOnlySetting, McpServerConfig, setModelEnabled, setSkillEnabled } from '../config';
+import { editableProviders, getConfig, isUserOnlySetting, McpServerConfig, parseMcpToolApprovals, setModelEnabled, setSkillEnabled } from '../config';
+import { CommandRule, CommandRuleKind, commandRuleFiles, commandRuleText, isCommandRuleKind, listCommandRules, validateCommandPattern, writeCommandRule } from '../agent/commandRules';
+import { GRANT_KINDS, GrantKind, onDidChangeWorkspaceGrants, setWorkspaceGrant, workspaceGrants } from '../agent/workspaceApprovals';
+import type { ProviderHealth } from '../providers/health';
+import { ShortcutGroup, shortcutGroups } from './shortcuts';
 import { McpManager, McpServerStatus } from '../mcp/mcpManager';
 import type { McpCatalogEntry } from '../mcp/catalog';
 import { installCatalogServer, installedMessage, McpCatalogService } from './mcpCatalogInstall';
@@ -39,12 +43,19 @@ import { ensureChecksJson, HealingView, healingView as buildHealingView } from '
 import type { RecoveryDashboard } from '../agent/healing/dashboardData';
 import type { RecoveryActionKind } from '../agent/healing/types';
 import { handleMemoryReuse, handleOpenRecoveryDiff, handleRecoveryAction, loadRecovery, RecoveryHooks } from './recoveryDashboardBridge';
+import { loadPluginCatalog, PluginCatalogEntry, contentsText, pluginContents } from '../agent/pluginCatalog';
+import type { Marketplace } from '../agent/pluginInstaller';
+import type { PluginInfo } from '../agent/plugins';
+import { installMarketplacePlugin } from './pluginInstallFlow';
+import { SPECIALISTS } from '../agent/builtinAgents';
+import { DEFAULT_MODELS_DIR, DISK_HEADROOM_GB, expandHome, freeDiskGb } from '../providers/colibriSetup';
+import { COLIBRI_MODELS } from '../providers/colibri';
 
 export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -99,6 +110,16 @@ export interface SettingsSkill {
   removable: boolean;
 }
 
+/** Settings → Agent & approvals → Command rules. */
+export interface CommandRulesView {
+  rules: (CommandRule & { where: string })[];
+  /** The files Settings writes (User, and Workspace with a folder open). */
+  files: { user: string; workspace?: string };
+  fileLabels: { user: string; workspace?: string };
+  /** Kinds "always allowed in this workspace" from an approval card. */
+  grants: string[];
+}
+
 /** Registry (catalog) skill as shown in the gallery. */
 export interface RegistrySkill extends CatalogEntry {
   installed: boolean;
@@ -116,7 +137,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; focusKey?: string; expand?: string; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; focusKey?: string; expand?: string; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string; usedBy?: string[] }[]; plugins: { name: string; scope: 'user' | 'workspace'; enabled: boolean; version?: string }[]; colibriDisk?: { dir: string; freeGb?: number; smallestGb: number }; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView; commandRules?: CommandRulesView; health: Record<string, ProviderHealth>; shortcuts: ShortcutGroup[]; isMac: boolean }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -157,7 +178,9 @@ type ToSettings =
   | { type: 'customize'; data: CustomizeData }
   | { type: 'otlpTest'; ok: boolean; status?: number; url: string; error?: string }
   | { type: 'redisTest'; ok: boolean; info?: RedisPingInfo; error?: string }
-  | { type: 'mcpCatalog'; entries: McpCatalogEntry[]; registry: boolean; loading?: boolean; error?: string; installed?: string };
+  | { type: 'mcpCatalog'; entries: McpCatalogEntry[]; registry: boolean; loading?: boolean; error?: string; installed?: string }
+  /** Settings → Marketplace: the plugins the configured marketplaces list (`configured` = how many are set up). */
+  | { type: 'pluginCatalog'; entries: PluginCatalogEntry[]; errors: { spec: string; error: string }[]; configured: number; loading?: boolean; installed?: string };
 
 type FromSettings =
   | { type: 'ready' }
@@ -195,6 +218,8 @@ type FromSettings =
   | { type: 'authMcp'; name: string }
   | { type: 'mcpCatalog'; refresh?: boolean }
   | { type: 'installMcpCatalog'; id: string }
+  | { type: 'pluginCatalog'; refresh?: boolean }
+  | { type: 'installPlugin'; marketSpec: string; name: string }
   /** includeDisabled counts providers that are disabled or no longer configured; providers narrows to those ids. */
   | { type: 'dashboard'; days?: number; includeDisabled?: boolean; providers?: string[] }
   | { type: 'applyTune'; role: string; model: string }
@@ -206,6 +231,11 @@ type FromSettings =
   | { type: 'clearTelemetry' }
   | { type: 'openLogFile' }
   | { type: 'openTelemetryFolder' }
+  | { type: 'commandRuleSave'; pattern: string; kind: string; scope: 'user' | 'workspace'; replace?: { file: string; raw: string; kind: string } }
+  | { type: 'commandRuleDelete'; file: string; raw: string; kind: string }
+  | { type: 'openRuleFile'; file: string }
+  | { type: 'revokeWorkspaceGrant'; kind: string }
+  | { type: 'openKeybindings'; query: string }
   /** Opens `.localpilot/checks.json`, created from a template when missing. */
   | { type: 'openChecksJson' }
   /** Re-reads the detected checks for the Agent → Self-healing block. */
@@ -233,7 +263,7 @@ const SETTING_KEYS = [
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
   'terminal.profile', 'terminal.shellIntegrationTimeout', 'terminal.autoDetachSeconds', 'memory.autoSave', 'history.includeCli', 'preferredLanguage', 'showTips', 'plugins.marketplaces', 'repos', 'mcp.watchServerFiles',
-  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'colibri.modelsDir', 'colibri.backend', 'telemetry.enabled', 'telemetry.retentionDays',
+  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'routing.fallbackModels', 'firstTokenTimeoutSeconds', 'mcp.toolApprovals', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'colibri.modelsDir', 'colibri.backend', 'telemetry.enabled', 'telemetry.retentionDays',
   'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
   'telemetry.otlp.enabled', 'telemetry.otlp.endpoint', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval', 'telemetry.otlp.exporters', 'telemetry.otlp.traceSamplePercent', 'telemetry.otlp.recordContent',
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
@@ -286,6 +316,13 @@ const GALLERY_SITE: Record<GallerySource, string> = { ollama: 'ollama.com', dock
  * Settings, provider manager and first-run setup — one webview panel with two pages.
  * The webview never touches configuration directly; every change is validated here and written with the VS Code API.
  */
+/** Free space where colibri downloads models, and the smallest catalog download, for the line under Models folder. */
+function colibriDiskLine(modelsDir: string | undefined): { dir: string; freeGb?: number; smallestGb: number } {
+  const dir = expandHome(modelsDir || DEFAULT_MODELS_DIR());
+  const free = freeDiskGb(dir);
+  return { dir, ...(free !== undefined ? { freeGb: Math.floor(free) } : {}), smallestGb: Math.min(...COLIBRI_MODELS.filter((m) => m.tools).map((m) => m.diskGb)) + DISK_HEADROOM_GB };
+}
+
 export class SettingsPanel implements vscode.Disposable {
   /** Skill usage / recurring-request tracker (set by the extension host). */
   learner?: SkillLearner;
@@ -297,6 +334,8 @@ export class SettingsPanel implements vscode.Disposable {
   onCustomized?: () => void;
   /** Bytes held by chat checkpoints (file snapshots and git objects only checkpoint refs keep), for Memory & history. */
   checkpointBytes?: () => Promise<number>;
+  /** Re-reads the settings files after a command rule was saved, so the approval gate sees it at once. */
+  reloadPermissionRules?: () => Promise<unknown>;
   /** Self-healing & recovery dashboard for the last `days` days (store states joined with telemetry). */
   recoveryDashboard?: (days: number) => Promise<RecoveryDashboard>;
   /** Runs a Human Intervention Queue action and audits it like the chat card does; `acceptRisk` arrives only after the
@@ -310,6 +349,10 @@ export class SettingsPanel implements vscode.Disposable {
   loadChecks?: () => Promise<HealingView>;
   /** Opens `.localpilot/checks.json`; defaults to creating it from a template in the first workspace folder. */
   openChecks?: () => Promise<void>;
+  /** Installed plugins (set by the extension host): the Marketplace's installed state, refreshed after an install. */
+  plugins?: { readonly all: PluginInfo[]; refresh(): Promise<unknown> };
+  /** Marketplaces loaded for the Marketplace's plugin rows, kept for Install. */
+  private pluginMarkets: Marketplace[] = [];
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
@@ -376,6 +419,8 @@ export class SettingsPanel implements vscode.Disposable {
         }
       }),
       providers.onDidChange(() => this.panel && void this.pushState()),
+      providers.onDidChangeHealth(() => this.panel && void this.pushState()),
+      onDidChangeWorkspaceGrants(() => this.panel && void this.pushState()),
       mcp.onDidChange(() => this.panel && void this.pushState()),
       skills.onDidChange(() => this.panel && void this.pushState()),
       models.onDidChange(() => {
@@ -644,6 +689,31 @@ export class SettingsPanel implements vscode.Disposable {
         this.post({ type: 'mcpCatalog', ...(await this.mcpCatalog.entries()) });
         return;
       }
+      case 'pluginCatalog':
+        return this.pushPluginCatalog(!!m.refresh);
+      case 'installPlugin': {
+        const market = this.pluginMarkets.find((x) => x.spec === m.marketSpec);
+        const entry = market?.plugins.find((p) => p.name === m.name);
+        if (!market || !entry) {
+          throw new Error(`“${m.name}” is no longer listed: refresh the marketplace`);
+        }
+        let installed: string | undefined;
+        try {
+          const r = await installMarketplacePlugin(entry, market);
+          if (r) {
+            installed = r.name;
+            await this.plugins?.refresh();
+            await vscode.commands.executeCommand('localpilot.reloadSkills');
+            this.post({ type: 'toast', level: 'info', text: `Installed ${r.plugin.name}: ${contentsText(await pluginContents(r.plugin))}` });
+          }
+        } catch (e) {
+          this.post({ type: 'toast', level: 'error', text: `Could not install ${m.name}: ${e instanceof Error ? e.message : String(e)}` });
+        } finally {
+          // Also after a cancel or an error: the row stops showing "Installing…".
+          await this.pushPluginCatalog(false, installed);
+        }
+        return;
+      }
       case 'installMcpCatalog': {
         const entry = await this.mcpCatalog.find(m.id);
         if (!entry) {
@@ -792,6 +862,28 @@ export class SettingsPanel implements vscode.Disposable {
         return handleMemoryReuse(m, this.recoveryHooks(), (t) => this.post(t), () => this.pushDashboard());
       case 'openRecoveryDiff':
         return handleOpenRecoveryDiff(m, this.recoveryHooks(), (t) => this.post(t));
+      case 'commandRuleSave':
+      case 'commandRuleDelete':
+        return this.commandRule(m);
+      case 'openRuleFile': {
+        const known = await this.commandRulesView();
+        if (!known.rules.some((r) => r.file === m.file) && m.file !== known.files.user && m.file !== known.files.workspace) {
+          return;
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(m.file), { preview: true }).then(undefined, () => this.post({ type: 'toast', level: 'error', text: `Cannot open ${m.file}` }));
+        return;
+      }
+      case 'revokeWorkspaceGrant':
+        if ((GRANT_KINDS as readonly string[]).includes(m.kind)) {
+          await setWorkspaceGrant(m.kind as GrantKind, false);
+          this.post({ type: 'toast', level: 'info', text: 'LocalPilot asks again in this workspace' });
+          return this.pushState();
+        }
+        return;
+      case 'openKeybindings':
+        // The Keyboard Shortcuts editor, filtered to one command (or to every LocalPilot binding).
+        await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings', /^[\w.@ -]{1,80}$/.test(m.query) ? m.query : 'localpilot.');
+        return;
       case 'openTelemetryFolder':
         if (this.telemetry) {
           await fs.mkdir(this.telemetry.dir, { recursive: true });
@@ -818,6 +910,58 @@ export class SettingsPanel implements vscode.Disposable {
     }
     const i = vscode.workspace.getConfiguration('localpilot').inspect<unknown>('healing.checks');
     return buildHealingView(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, { user: i?.globalValue, workspace: i?.workspaceValue ?? i?.workspaceFolderValue }, vscode.workspace.isTrusted);
+  }
+
+  /** Command rules from every settings file that applies, the two files Settings writes, and this workspace's kind grants. */
+  private async commandRulesView(): Promise<CommandRulesView> {
+    const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const files = commandRuleFiles(roots[0]);
+    const rules = await listCommandRules(roots);
+    const home = os.homedir();
+    const show = (f: string) => (f.startsWith(home + path.sep) ? `~${f.slice(home.length)}` : vscode.workspace.asRelativePath(f, roots.length > 1));
+    return { rules: rules.map((r) => ({ ...r, where: show(r.file) })), files: { user: files.user, ...(files.workspace ? { workspace: files.workspace } : {}) }, fileLabels: { user: show(files.user), ...(files.workspace ? { workspace: show(files.workspace) } : {}) }, grants: workspaceGrants() };
+  }
+
+  private async commandRule(m: Extract<FromSettings, { type: 'commandRuleSave' | 'commandRuleDelete' }>): Promise<void> {
+    const view = await this.commandRulesView();
+    const editable = new Set([view.files.user, view.files.workspace].filter((f): f is string => !!f));
+    try {
+      if (m.type === 'commandRuleDelete') {
+        if (!editable.has(m.file) || !isCommandRuleKind(m.kind)) {
+          throw new Error('This rule is not in a file Settings edits; open the file to change it');
+        }
+        await writeCommandRule(m.file, { remove: { kind: m.kind, raw: m.raw } });
+      } else {
+        const why = validateCommandPattern(m.pattern);
+        if (why) {
+          throw new Error(why);
+        }
+        if (!isCommandRuleKind(m.kind)) {
+          throw new Error(`Unknown rule kind ${m.kind}`);
+        }
+        const file = m.scope === 'workspace' ? view.files.workspace : view.files.user;
+        if (!file) {
+          throw new Error('Open a folder to save a rule for this workspace');
+        }
+        const raw = commandRuleText(m.pattern);
+        // An edit that keeps the file replaces in place; one that moves the rule to the other scope removes it from the old file.
+        if (m.replace && (!editable.has(m.replace.file) || !isCommandRuleKind(m.replace.kind))) {
+          throw new Error('This rule is not in a file Settings edits; open the file to change it');
+        }
+        const replace = m.replace as { file: string; raw: string; kind: CommandRuleKind } | undefined;
+        if (replace && replace.file !== file) {
+          await writeCommandRule(file, { add: { kind: m.kind, raw } });
+          await writeCommandRule(replace.file, { remove: { kind: replace.kind, raw: replace.raw } });
+        } else {
+          await writeCommandRule(file, { ...(replace ? { remove: { kind: replace.kind, raw: replace.raw } } : {}), add: { kind: m.kind, raw } });
+        }
+      }
+      await this.reloadPermissionRules?.();
+      this.log.info(`settings: command rule ${m.type === 'commandRuleDelete' ? `removed (${m.raw})` : `saved (${m.kind} ${m.pattern}, ${m.scope})`}`);
+    } catch (e) {
+      this.post({ type: 'toast', level: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+    return this.pushState();
   }
 
   private async pushChecks(): Promise<void> {
@@ -994,6 +1138,12 @@ export class SettingsPanel implements vscode.Disposable {
       throw new Error(`Managed by your organization: ${lockedWhy}`);
     }
     let clean = key === 'providers' && Array.isArray(value) ? value.map((p) => sanitizeProvider(p as ProviderConfig)) : key === 'mcpServers' && value !== undefined ? sanitizeMcpServers(value) : value;
+    if (key === 'mcp.toolApprovals' && clean !== undefined) {
+      clean = parseMcpToolApprovals(clean);
+    }
+    if (key === 'routing.fallbackModels' && clean !== undefined) {
+      clean = Array.isArray(clean) ? [...new Set(clean.filter((m): m is string => typeof m === 'string' && /^[^\s/]+\/\S+$/.test(m.trim())).map((m) => m.trim()))] : [];
+    }
     if (key === 'providers' && Array.isArray(clean) && this.secrets) {
       // A pasted key goes to the OS keychain; settings.json keeps a `${secret:<id>}` reference.
       clean = await this.secrets.protect(clean as ProviderConfig[], scope);
@@ -1070,6 +1220,20 @@ export class SettingsPanel implements vscode.Disposable {
         .then(() => (this.skillQuery === q ? this.pushSkillRegistry(q) : undefined))
         .catch((e) => this.log.warn(`skill registry: ${String(e)}`));
     }
+  }
+
+  /** Loads the configured plugin marketplaces (cached checkouts; `refresh` pulls them) and sends the rows. */
+  private async pushPluginCatalog(refresh: boolean, installed?: string): Promise<void> {
+    const specs = getConfig().pluginMarketplaces;
+    if (refresh) {
+      this.post({ type: 'pluginCatalog', entries: [], errors: [], configured: specs.length, loading: true });
+    }
+    const cat = await loadPluginCatalog(specs, this.plugins?.all ?? [], { refresh });
+    for (const err of cat.errors) {
+      this.log.warn(`plugins: marketplace ${err.spec}: ${err.error}`);
+    }
+    this.pluginMarkets = cat.markets;
+    this.post({ type: 'pluginCatalog', entries: cat.entries, errors: cat.errors, configured: specs.length, ...(installed ? { installed } : {}) });
   }
 
   private async installRegistrySkill(name: string, repo: string, scope?: 'user' | 'workspace'): Promise<void> {
@@ -1332,6 +1496,7 @@ export class SettingsPanel implements vscode.Disposable {
     const checkpointBytes = this.page === 'settings' ? await this.checkpointBytes?.().catch(() => undefined) : undefined;
     const missingPaths = this.page === 'settings' ? await missingFolders().catch(() => []) : [];
     const healing = this.page === 'settings' ? await this.healingView().catch((e) => { this.log.warn(`self-healing checks: ${e instanceof Error ? e.message : String(e)}`); return undefined; }) : undefined;
+    const commandRules = this.page === 'settings' ? await this.commandRulesView().catch((e) => { this.log.warn(`command rules: ${e instanceof Error ? e.message : String(e)}`); return undefined; }) : undefined;
     // A newer push started while this one awaited: only the newest snapshot may reach the webview.
     if (seq !== this.pushSeq) {
       return;
@@ -1358,7 +1523,10 @@ export class SettingsPanel implements vscode.Disposable {
       keys: Object.fromEntries(mergeManagedProviders(cfg.get<ProviderConfig[]>('providers', []) ?? [], getManagedPolicy(this.log)).map((p) => [p.id, keyStatus(p)])),
       skills: this.skills.allSkills.map((s) => ({ name: s.name, description: s.description, source: s.source, used: learning?.skillUse[s.name]?.count, disabled: s.disabled, alwaysEnabled: s.alwaysEnabled, dir: s.dir, removable: s.source !== 'builtin' && s.source !== 'managed' })),
       learning: { recurring: learning?.recurring ?? [] },
-      agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
+      // "Used by" names the specialist modes whose playbook is this agent (a workspace agent of the same name replaces it).
+      agents: this.skills.allAgents.map((a) => ({ name: a.name, description: a.description, source: a.source, usedBy: Object.values(SPECIALISTS).filter((sp) => sp.agent === a.name).map((sp) => sp.label) })),
+      plugins: (this.plugins?.all ?? []).map((p) => ({ name: p.name, scope: p.source, enabled: p.enabled, ...(p.version ? { version: p.version } : {}) })),
+      colibriDisk: colibriDiskLine(getConfig().colibri.modelsDir),
       tools: (() => {
         const off = getConfig().disabledTools;
         return this.toolCatalog().filter((t) => !t.name.startsWith('mcp_')).sort((a, b) => a.name.localeCompare(b.name)).map((t) => ({ ...t, off: toolDisabled(t.name, off) }));
@@ -1379,6 +1547,11 @@ export class SettingsPanel implements vscode.Disposable {
           return [];
         }
       })(),
+      commandRules,
+      // Reachable / slow / down / no key per provider, from the registry's last discovery round (no extra requests).
+      health: this.providers.providerHealth(),
+      shortcuts: shortcutGroups(this.ctx.extension.packageJSON as Parameters<typeof shortcutGroups>[0]),
+      isMac: process.platform === 'darwin',
       settingsMeta: { missingPaths },
       healing,
     });

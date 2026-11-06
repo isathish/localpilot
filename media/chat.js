@@ -10,7 +10,7 @@
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'), changesMeter: $('changesMeter'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
     popover: $('popover'), newTab: $('btnNewTab'), btnComposerMore: $('btnComposerMore'), history: $('btnHistory'), bgruns: $('bgruns'),
-    hints: $('hints'), disclaimer: $('disclaimer'),
+    hints: $('hints'), disclaimer: $('disclaimer'), folderBtn: $('folderBtn'), offline: $('offline'), runHint: $('runHint'), trace: $('trace'), promptLib: $('promptLib'),
   };
   // Webview state survives the view being hidden/restored: which chats are open as tabs.
   const persisted = (typeof vscode.getState === 'function' && vscode.getState()) || {};
@@ -18,7 +18,9 @@
 
   const I = {
     check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
+    bookmark: '<svg viewBox="0 0 16 16"><path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/></svg>',
     plus: '<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>',
+    chevDown: '<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>',
     x: '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
     spin: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.2 3"/></svg>',
     refresh: '<svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.5h-2.5"/></svg>',
@@ -68,6 +70,8 @@
     windows: '<svg viewBox="0 0 16 16"><rect x="1.5" y="4.5" width="9" height="8" rx="1.2"/><path d="M5 4.5v-1A1.2 1.2 0 0 1 6.2 2.3h7.1a1.2 1.2 0 0 1 1.2 1.2v5.6a1.2 1.2 0 0 1-1.2 1.2h-2.8M1.5 7h9"/></svg>',
     screen: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5.5 14h5M8 11.5V14"/></svg>',
     timer: '<svg viewBox="0 0 16 16"><circle cx="8" cy="9" r="5"/><path d="M8 6.5V9l1.8 1.3M6.5 2h3M12 4l1-1"/></svg>',
+    trace: '<svg viewBox="0 0 16 16"><path d="M2.5 3.5h5M4.5 6.5h6M6.5 9.5h4M9 12.5h4.5"/></svg>',
+    offline: '<svg viewBox="0 0 16 16"><path d="M5.2 12.5H4.5a2.5 2.5 0 0 1-.4-5A4 4 0 0 1 10.7 5M12.4 7.2a2.7 2.7 0 0 1-.9 5.3H8.3M2.5 2.5l11 11"/></svg>',
     cursor: '<svg viewBox="0 0 16 16"><path d="M3 2l10 6-4.5 1L6 13z"/></svg>',
     memory: '<svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>',
     plan: '<svg viewBox="0 0 16 16"><path d="M4 3h8v10H4z"/><path d="M6 6h4M6 8.5h4M6 11h2"/></svg>',
@@ -112,10 +116,11 @@
     ['/mode ask', 'Ask mode', 'Chat'], ['/mode agent', 'Agent mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
     ['/mode architect', 'Architect: design the change first (Plan)', 'More modes'], ['/mode review', 'Review: findings by severity (Ask)', 'More modes'], ['/mode test', 'Test: write and run tests (Agent)', 'More modes'], ['/mode refactor', 'Refactor: same behaviour, better structure (Agent)', 'More modes'], ['/mode explain', 'Explain: walk through code (Ask)', 'More modes'], ['/mode terminal', 'Terminal: shell tasks, commands shown first (Agent)', 'More modes'], ['/mode project', 'Project: overview, build and test (Ask)', 'More modes'],
     ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md', 'Plan & delegate'], ['/team ', 'Split a task for background workers and the shared board', 'Plan & delegate'], ['/agent ', 'Delegate to a subagent', 'Plan & delegate'], ['/agent new ', 'Create a custom subagent', 'Plan & delegate'],
-    ['/help', 'Show commands', 'Info'], ['/memory', 'Instruction files and saved memory notes', 'Info'], ['/permissions', 'Permission rules from settings.json', 'Info'], ['/hooks', 'Configured hooks', 'Info'], ['/board', 'Shared task board', 'Info'], ['/agents', 'List subagents', 'Info'], ['/commands', 'List custom slash commands', 'Info'],
+    ['/help', 'Show commands', 'Info'], ['/memory', 'Instruction files and saved memory notes', 'Info'], ['/permissions', 'Permission rules from settings.json', 'Info'], ['/hooks', 'Configured hooks', 'Info'], ['/keys', 'Keyboard shortcuts', 'Info'], ['/board', 'Shared task board', 'Info'], ['/agents', 'List subagents', 'Info'], ['/commands', 'List custom slash commands', 'Info'], ['/prompts', 'Prompt library: search, insert, save and edit prompts', 'Info'],
     ['/skills', 'List skills', 'Skills'], ['/skill ', 'Run a task with a skill', 'Skills'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder', 'Skills'], ['/skill browse ', 'Search and install from the skill catalog', 'Skills'],
   ];
-  const MENTIONS = [['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
+  // `codebase` is the # trigger's main entry (#codebase); every entry works after @ and after #.
+  const MENTIONS = [['codebase', 'Whole project: structure, imports, related files', I.search], ['workspace', 'Project file tree', I.folder], ['selection', 'Current selection / active file', I.cursor], ['problems', 'Errors & warnings', I.bug], ['git', 'git status + diff', I.git], ['editors', 'Open editors', I.list], ['terminal', 'Last terminal command & output', I.term]];
 
   const state = {
     session: null, sessions: [], models: [], defaultModel: '', contextWindow: 0, running: new Set(), attachments: [], images: [], skills: [], agents: [], commands: [], openFiles: [],
@@ -278,15 +283,54 @@
     }
     return out.join('');
   }
-  /** Fenced block with header actions. `info` is the fence info string: `ts`, `ts path/to/file.ts`, `json title="x"`. */
-  function codeBlock(code, info, closed = true) {
+  /** A file path standing alone on the line before a fence (`src/a.ts`, **src/a.ts**, ### src/a.ts, File: src/a.ts) or closing it ("Add this to `src/a.ts`:"). */
+  const PATH_RE = '((?:[\\w.@-]+\\/)*[\\w.@-]*[\\w-]\\.[A-Za-z][\\w]{0,9})';
+  const HINT_LINE = new RegExp(`^(?:#{1,6}\\s+)?(?:[-*]\\s+)?(?:\\*\\*|__)?(?:(?:file|path|filename)\\s*:\\s*)?(?:\\*\\*|__)?\`?${PATH_RE}\`?(?:\\*\\*|__)?\\s*:?$`, 'i');
+  const HINT_TAIL = new RegExp(`\`${PATH_RE}\`(?:\\*\\*|__)?\\s*:$`);
+  /** A first code line that is only a comment naming the file (`// src/a.ts`, `# file: app.py`, `<!-- index.html -->`). */
+  const HINT_COMMENT = new RegExp(`^\\s*(?:\\/\\/|#|--|<!--|\\/\\*)\\s*(?:file(?:name)?\\s*:\\s*)?${PATH_RE}\\s*(?:-->|\\*\\/)?\\s*$`, 'i');
+  /** The file a code block is for: the fence info wins, then a path line just before the fence, then a path comment on its first line. */
+  function codePath(info, prevLine, firstLine) {
+    const parts = String(info || '').trim().split(/\s+/);
+    const titleM = /(?:title|file|path)=("?)([^"\s]+)\1/.exec(info || '');
+    const fromInfo = titleM ? titleM[2] : parts.find((p) => /[\w-]+\.[a-z0-9]+$/i.test(p) && !p.includes('=')) || '';
+    if (fromInfo) { return fromInfo; }
+    const prev = String(prevLine || '').trim(); const m = prev && (HINT_LINE.exec(prev) || HINT_TAIL.exec(prev));
+    if (m && !/^\d/.test(m[1])) { return m[1]; }
+    const c = HINT_COMMENT.exec(String(firstLine || ''));
+    return c && (c[1].includes('/') || /^\S+\.\w+$/.test(c[1])) ? c[1] : '';
+  }
+  /** Fenced block with header actions. `info` is the fence info string: `ts`, `ts path/to/file.ts`, `json title="x"`; `prevLine` the line before the fence. */
+  /** One frame of a stack trace (JS/TS, Python, Java/Kotlin, .NET, Go, Rust, Ruby, PHP): file and line on one line. */
+  const FRAME_LINE = /^\s*(?:at\s+\S.*?(?:\(|\s)\S+:\d+(?::\d+)?\)?\s*$|at\s+[\w$.<>]+\([\w$.-]+:\d+\)|File "[^"]+", line \d+|.*\bin\s+\S+:line\s+\d+|(?:\d+:\s+)?\S+\.(?:go|rs|c|cc|cpp|h|hpp|swift|rb|php|ex|exs|dart|zig)(?::\d+){1,2}\b|from\s+\S+:\d+:in\b|#\d+\s+\S+\(\d+\))/;
+  /** A fenced block that is a stack trace rather than code: frames make up a fair share of its lines. */
+  function isStackTrace(code, lang) {
+    const lines = String(code).split('\n').filter((l) => l.trim()); if (!lines.length || lines.length > 400) { return false; }
+    const frames = lines.filter((l) => FRAME_LINE.test(l)).length;
+    const plain = !lang || /^(text|txt|plain|plaintext|console|log|logs|output|stderr|stdout|stacktrace|traceback|trace|pytb|shell|sh|bash|zsh|powershell|ps1)$/i.test(lang);
+    return plain ? frames >= 2 || (frames >= 1 && /(?:Error|Exception|Traceback|panic|Caused by)\b/.test(code)) : frames >= 3 && frames / lines.length >= 0.4;
+  }
+  function codeBlock(code, info, closed = true, prevLine = '') {
     const parts = String(info || '').trim().split(/\s+/);
     const lang = parts[0] && !/[./]/.test(parts[0]) ? parts[0] : '';
-    const titleM = /(?:title|file|path)=("?)([^"\s]+)\1/.exec(info || '');
-    const file = titleM ? titleM[2] : parts.find((p) => /[\w-]+\.[a-z0-9]+$/i.test(p) && !p.includes('=')) || '';
+    // A pasted or quoted stack trace: frames become file:line links (checked like any path in the answer); no Apply.
+    if (closed && isStackTrace(code, lang)) {
+      return `<div class="code stack" data-lang="text"><div class="code-head"><span class="lang">stack trace</span><span class="meta">${code.split('\n').length} lines</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button></div><pre><code>${linkify(code)}</code></pre></div>`;
+    }
+    const file = codePath(info, prevLine, code.split('\n', 1)[0]);
     const lines = code.split('\n').length;
     const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${esc(file)}</span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
-    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor" aria-label="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file" aria-label="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file), closed)}</code></pre></div>`;
+    // Apply names its target; once the host says the file does not exist, the same button turns into Create (codeApplyButton).
+    const base = file ? file.split('/').pop() : '';
+    const apply = file ? `<button data-code="apply" data-target="${esc(file)}" title="Apply to ${esc(file)}: preview the change in a diff, then it waits for review" aria-label="Apply to ${esc(base)}">${I.apply}<span>Apply</span></button>` : `<button data-code="apply" title="Apply to the active file: preview the change in a diff, then it waits for review" aria-label="Apply to the active file">${I.apply}<span>Apply</span></button>`;
+    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor" aria-label="Insert at cursor">${I.insert}</button>${apply}</div><pre><code>${highlight(code, lang || langForPath(file), closed)}</code></pre></div>`;
+  }
+  /** The block's file does not exist (yet): Apply becomes "Create <path>", which confirms the path and records an added file. */
+  function codeApplyButton(block, exists) {
+    const b = block && block.querySelector('.code-head [data-code="apply"][data-target], .code-head [data-code="create"]'); if (!b) { return; }
+    const p = b.dataset.target;
+    if (exists) { b.dataset.code = 'apply'; b.title = `Apply to ${p}: preview the change in a diff, then it waits for review`; b.setAttribute('aria-label', `Apply to ${p.split('/').pop()}`); b.innerHTML = `${I.apply}<span>Apply</span>`; return; }
+    b.dataset.code = 'create'; b.title = `Create ${p} from this block (you confirm the path first); it shows as added in the Changes list`; b.setAttribute('aria-label', `Create ${p}`); b.innerHTML = `${I.plus || I.apply}<span>Create</span>`;
   }
   /** `NNN | text` lines from read_file → numbered, highlighted listing. */
   function numberedListing(text, lang) {
@@ -296,12 +340,21 @@
     const body = highlight(rows.map((r) => r[1]).join('\n'), lang).split('\n');
     return `<pre class="numbered"><code>${rows.map((r, i) => `<span class="l"><span class="n">${r[0]}</span><span class="t">${body[i] ?? ''}</span></span>`).join('')}</code></pre>`;
   }
-  /** Escapes text and turns `path/to/file.ext:12` and URLs into links. */
+  // Stack-trace frames whose path may be absolute: Node/JS "at f (/abs/x.js:12:5)", Python 'File "x.py", line 12',
+  // .NET "in C:\src\X.cs:line 42", Go/Rust/C "/abs/x.go:12". The answer's path check (pathsExist) turns frames of files
+  // that do not exist back into plain text, so node:internal frames or another machine's paths never become dead links.
+  /** Escapes text and turns `path/to/file.ext:12`, stack-trace frames and URLs into links. */
   function linkify(text) {
     let s = esc(text);
-    s = s.replace(/(https?:\/\/[^\s<>"')\]]+)/g, (u) => `<a href="${u}">${u}</a>`);
+    const keep = [];
+    const hold = (html) => `\u0001${keep.push(html) - 1}\u0002`;
+    const link = (p, line, label) => hold(`<span class="path-link" data-path="${p}" data-line="${line || ''}">${label}</span>`);
+    s = s.replace(/(https?:\/\/[^\s<>"')\]]+)/g, (u) => hold(`<a href="${u}">${u}</a>`));
+    s = s.replace(/(File &quot;)([^&\n]+?\.[A-Za-z0-9]{1,8})(&quot;, line )(\d+)/g, (m, a, p, b, line) => `${a}${link(p, line, p)}${b}${line}`);
+    s = s.replace(/(\bin )((?:[A-Za-z]:\\|\/)?[^\s:<>&]+\.[A-Za-z0-9]{1,8})(:line )(\d+)/g, (m, a, p, b, line) => `${a}${link(p, line, p)}${b}${line}`);
+    s = s.replace(/(^|[\s(\[]|file:\/\/\/?)((?:[A-Za-z]:[\\/]|\/)[^\s:()<>&"'\u0001\u0002]+\.[A-Za-z0-9]{1,8}):(\d+)(?::(\d+))?/gm, (m, pre, p, line, col) => `${pre}${link(p, line, `${p}:${line}${col ? `:${col}` : ''}`)}`);
     s = s.replace(/(^|[\s(\[])((?:[\w.@-]+\/)*[\w.@-]+\.[a-zA-Z]{1,8})(?::(\d+)(?::\d+)?)?(?=[\s).,;:\]]|$)/gm, (m, pre, p, line) => (/^(https?|www)\b/.test(p) || (/\.(com|org|net|io|dev|ai)$/.test(p) && !p.includes('/')) ? m : `${pre}<span class="path-link" data-path="${p}" data-line="${line || ''}">${p}${line ? ':' + line : ''}</span>`));
-    return s;
+    return s.replace(/\u0001(\d+)\u0002/g, (m, n) => keep[Number(n)]);
   }
   /** ANSI SGR colours/bold/dim/underline → spans; every other escape sequence is dropped. */
   function ansiToHtml(text) {
@@ -349,6 +402,32 @@
     s = s.replace(/^\[([ xX])\]\s/, (_, c) => `<span class="task ${c.trim() ? 'done' : ''}">${c.trim() ? I.check : ''}</span>`);
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]);
   }
+  // Debug mode ends its answer with a "## Debug report" section (src/agent/prompts.ts): Symptom, Root cause, Fix,
+  // Verified. It is drawn as one compact card; a heading without at least two of those rows stays ordinary Markdown.
+  const DEBUG_ROWS = [['symptom', 'Symptom', /^symptoms?$/], ['cause', 'Root cause', /^(root cause|cause)$/], ['fix', 'Fix', /^(fix|fixed|change|changes)$/], ['verified', 'Verified', /^(verified|verification|verify)$/]];
+  /** The report card for the heading at lines[start] and the index of the line after it, or null. */
+  function debugReport(lines, start, inlineFn) {
+    const head = /^(#{2,4})\s+(?:\*\*)?debug report(?:\*\*)?:?\s*$/i.exec(lines[start] || ''); if (!head) { return null; }
+    const rows = new Map(); let last = null; let i = start + 1;
+    for (; i < lines.length; i++) {
+      const l = lines[i];
+      const h = /^(#{1,6})\s/.exec(l); if (h && h[1].length <= head[1].length) { break; }
+      if (/^\s*(`{3,}|~{3,})/.test(l)) { break; }
+      const m = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?([A-Za-z][A-Za-z ]{1,20}?)(?::\s*(?:\*\*|__)|(?:\*\*|__)\s*:|:)\s*(.*)$/.exec(l);
+      const key = m && DEBUG_ROWS.find((r) => r[2].test(m[1].trim().toLowerCase()));
+      if (key) { last = key[0]; rows.set(last, ((rows.get(last) || '') + ' ' + m[2]).trim()); continue; }
+      if (!l.trim()) { continue; }
+      if (last && /^\s+\S/.test(l)) { rows.set(last, `${rows.get(last)}\n${l.trim()}`); continue; }
+      break;
+    }
+    if (rows.size < 2) { return null; }
+    const v = rows.get('verified');
+    const unverified = v !== undefined && /^(?:\W*)(not\b|no\b|unverified|couldn'?t|could not|cannot|can't|unable|untested|pending|partially)/i.test(v);
+    const badge = v === undefined ? '' : `<span class="dr-v ${unverified ? 'warn' : 'ok'}">${unverified ? 'Not verified' : 'Verified'}</span>`;
+    const body = DEBUG_ROWS.filter((r) => rows.has(r[0])).map((r) => `<div class="dr-row"><dt>${r[1]}</dt><dd>${inlineFn(rows.get(r[0])).replace(/\n/g, '<br>')}</dd></div>`).join('');
+    return { html: `<section class="dbgrep" aria-label="Debug report"><div class="dr-h">${I.bug}<span>Debug report</span>${badge}</div><dl>${body}</dl></section>`, end: i };
+  }
+  // end of debugReport
   function renderMarkdown(md) {
     const lines = String(md || '').replace(/\r/g, '').split('\n');
     const out = []; let i = 0; let para = [];
@@ -364,12 +443,16 @@
       const line = lines[i];
       const fence = /^\s*(`{3,}|~{3,})\s*(.*)$/.exec(line);
       if (fence) {
+        // The path line just before the fence (one blank line allowed) names the block's file when the fence does not.
+        const prevText = i > 0 && (lines[i - 1] || '').trim() ? lines[i - 1] : i > 1 ? lines[i - 2] : '';
         flush(); const info = fence[2] || ''; const buf = []; const close = new RegExp(`^\\s*\\${fence[1][0]}{${fence[1].length},}\\s*$`); i++;
         while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; }
         const closed = i < lines.length; i++;
-        out.push(codeBlock(buf.join('\n'), info, closed));
+        out.push(codeBlock(buf.join('\n'), info, closed, prevText));
         continue;
       }
+      const rep = /^#{2,4}\s+/.test(line) ? debugReport(lines, i, inline) : null;
+      if (rep) { flush(); out.push(rep.html); i = rep.end; continue; }
       const h = /^(#{1,6})\s+(.*)$/.exec(line);
       if (h) { flush(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
       if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
@@ -551,6 +634,26 @@
   }
   // ------------------------------------------------------------------ step timeline (VS Code-style agent transcript)
   // One concise row per step: <verb> <detail>, past tense once done, present tense while running. Rows expand for details.
+  /**
+   * A compaction, folded: "Context compacted · 12.4k → 3.1k tokens". Open, it says what stayed verbatim, what went into
+   * the summary (requests, replies, tool calls, the files they touched) and how the summary was made, then the summary.
+   */
+  function compactionEl(d, summary) {
+    const n = (v, one, many) => `${Number(v).toLocaleString()} ${v === 1 ? one : many || `${one}s`}`;
+    const det = stepEl('ok compaction', 'Context compacted', undefined, `${fmtTok(d.before)} → ${fmtTok(d.after)}`);
+    det.querySelector('summary').title = `${Number(d.before).toLocaleString()} → ${Number(d.after).toLocaleString()} tokens: ${n(d.dropped.messages, 'message')} summarised, ${n(d.kept.messages, 'message')} kept as they were`;
+    const dr = d.dropped || {}; const kp = d.kept || {};
+    const gone = [dr.requests && n(dr.requests, 'request'), dr.replies && n(dr.replies, 'reply', 'replies'), dr.toolCalls && n(dr.toolCalls, 'tool call'), dr.toolOutputs && n(dr.toolOutputs, 'tool output')].filter(Boolean).join(', ') || n(dr.messages, 'message');
+    const kept = [kp.messages ? `the latest ${n(kp.messages, 'message')}` : '', kp.request ? 'including the request in progress' : ''].filter(Boolean).join(', ') || 'nothing but the summary';
+    const files = (dr.files || []).map((f) => fchip(f)).join(' ') + (dr.moreFiles ? ` <span class="more">+${dr.moreFiles} more</span>` : '');
+    const row = (k, v) => `<div class="cmp-r"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+    const c = det.querySelector('.content');
+    lazyFill(det, () => {
+      c.innerHTML = `<div class="cmp">${row('Kept as is', esc(kept))}${row('Summarised', esc(gone) + (kp.priorSummaries ? esc(`, and ${n(kp.priorSummaries, 'earlier summary', 'earlier summaries')} merged in`) : ''))}${files ? row('Files involved', `${files}<span class="sub">Their contents left the context; the agent reads them again when it needs them.</span>`) : ''}${row('Made by', d.method === 'digest' ? 'A digest of the messages (the model did not write it)' : 'The model, from the summarised messages')}</div>${summary ? `<div class="cmp-h">Summary</div><div class="cmp-sum"></div>` : ''}`;
+      const sum = c.querySelector('.cmp-sum'); if (sum) { sum.textContent = summary; }
+    });
+    return det;
+  }
   function stepEl(cls, label, content, meta) {
     const d = el('details', `step ${cls}`);
     d.innerHTML = `<summary><span class="ico"></span><span class="label">${label}</span><span class="meta">${meta || ''}</span><span class="chev">${I.chev}</span></summary><div class="content"></div>`;
@@ -739,24 +842,35 @@
     // The diff body is parsed into the DOM only when the card is expanded (most edits in a long transcript never are).
     card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="rtag hidden"></span><span class="acts"><button data-showdiff title="Review ${esc(a.path || 'the file')} in a side-by-side diff (accept or reject it there)" aria-label="Diff of ${esc(a.path || 'the file')}">${I.diff}</button><button data-open="${esc(a.path || '')}" title="Open file" aria-label="Open ${esc(a.path || 'file')}">${I.open}</button></span></div><div class="diff collapsed"></div>`;
     card.__diff = d.html; card.__args = a;
-    if (result && !result.isError && state.session) { syncEditTag(card, state.reviewed.get(state.session.id)); }
+    if (result && !result.isError && state.session) { syncEditTag(card, editTagRows(state.session.id)); }
     card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-showdiff]')) { if (state.session && a.path) { post({ type: 'showDiff', sessionId: state.session.id, fsPath: a.path }); } return; } if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open, sessionId: state.session && state.session.id }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
   }
   /** The review decision on an edit card's file (from the review queue): "Accepted" / "Rejected" after its stat. */
+  // "Edited by you" joins the decision when the user changed the file in the diff before deciding (pending rows count too).
   function syncEditTag(card, rows) {
     const t = card.querySelector('.card-head .rtag'); if (!t) { return; }
     const p = (card.dataset.path || '').replace(/^\.\//, '').replace(/\\/g, '/');
     const r = p && (rows || []).find((x) => x.path === p || x.fsPath === p || x.fsPath.replace(/\\/g, '/').endsWith(`/${p}`));
-    const word = r ? (r.state === 'accepted' ? 'Accepted' : 'Rejected') : '';
-    t.classList.toggle('hidden', !word); t.textContent = word; t.className = `rtag ${r ? r.state : ''}${word ? '' : ' hidden'}`;
-    t.title = r ? (r.state === 'accepted' ? 'You accepted this file\'s changes' : 'You rejected this file\'s changes: the edits were removed from disk') : '';
+    const dec = r && r.state !== 'pending' ? (r.state === 'accepted' ? 'Accepted' : 'Rejected') : '';
+    const mine = !!(r && r.userEdited);
+    const word = dec && mine ? `${dec} · edited by you` : dec || (mine ? 'Edited by you' : '');
+    // Two parts, so a narrow card keeps only the glyphs (✓ ✎) and its file name keeps the room.
+    t.innerHTML = dec ? `<span class="w">${dec}</span>${mine ? '<span class="by"> · edited by you</span>' : ''}` : mine ? '<span class="by">Edited by you</span>' : '';
+    if (word) { t.setAttribute('aria-label', word); } else { t.removeAttribute('aria-label'); } t.className = `rtag ${r ? r.state : ''}${mine ? ' byyou' : ''}${word ? '' : ' hidden'}`;
+    const why = r ? (r.state === 'accepted' ? 'You accepted this file\'s changes' : r.state === 'rejected' ? 'You rejected this file\'s changes: the edits were removed from disk' : '') : '';
+    t.title = [why, mine ? 'You edited the file after the agent wrote it' : ''].filter(Boolean).join('. ');
   }
   function syncEditTags(sid) {
     if (!state.session || state.session.id !== sid) { return; }
-    const rows = state.reviewed.get(sid) || [];
+    const rows = editTagRows(sid);
     els.messages.querySelectorAll('.card.edit.ok').forEach((c) => syncEditTag(c, rows));
+  }
+  /** Reviewed rows plus pending files the user edited: what an edit card's tag can say about its file. */
+  function editTagRows(sid) {
+    const done = state.reviewed.get(sid) || []; const decided = new Set(done.map((x) => x.fsPath));
+    return done.concat((state.changes.get(sid) || []).filter((f) => f.userEdited && !decided.has(f.fsPath)).map((f) => ({ ...f, state: 'pending' })));
   }
   function editGroup(container, create) {
     let g = container.lastElementChild;
@@ -1191,15 +1305,16 @@
     const atts = [];
     const text = (m.meta && m.meta.display ? m.meta.display : m.content)
       .replace(/<attachment[^>]*path="([^"]+)"(?:\s+kind="pdf"\s+pages="(\d+(?:-\d+)?) of (\d+)")?(?:\s+lines="(\d+)[^"]*")?[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p, pg, n, ln) => { atts.push(pg && pg !== `1-${n}` && !(n === '1' && pg === '1') ? `${p}#page=${pg}` : ln ? `${p}#L${ln}` : p); return ''; })
-      .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
+      .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output|codebase)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
-    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}`);
+    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}${index !== undefined && text.trim() && !/^\/\S/.test(text.trim()) ? `<button data-act="savePrompt" title="Save as prompt: reuse this message from the prompt library or as a /command" aria-label="Save as prompt">${I.bookmark}</button>` : ''}`);
     if (m.meta && m.meta.checkpoint !== undefined) { d.dataset.checkpoint = m.meta.checkpoint; }
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
       if (b.dataset.act === 'copy') { copyTo(b, text); }
       if (b.dataset.act === 'edit') { inlineEdit(d, m, index, text); }
       if (b.dataset.act === 'restore') { restoreMenu(b, index); }
+      if (b.dataset.act === 'savePrompt') { openPromptLib({ edit: { body: text.trim() }, opener: b }); }
     };
     d.appendChild(act);
     syncRestoreButton(d, state.session && state.session.id);
@@ -1303,9 +1418,11 @@
     if (mt.model) { info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}">${esc(modelName(mt.model))}</span>`); }
     const out = mt.healing && reportOutcome(mt.healing.report); if (BADGE[out]) { info.unshift(outcomeBadge(out, mt.healing.report)); }
     if (mt.outputTokens && mt.genMs > 250) { info.push(`<span title="${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
-    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}</span>`);
+    const trace = mt.traceId ? `<button data-act="trace" title="Trace: this run's model calls, tool calls, retries, fallbacks and approvals in order, with durations" aria-label="Show run trace">${I.trace}</button>` : '';
+    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}${trace}</span>`);
     f.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
+      if (b.dataset.act === 'trace') { if (state.session) { openTrace(state.session.id, mt.traceId, b); } return; }
       if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); }
       else if (b.dataset.act === 'copy') { copyTo(b, m.content); }
       else if (b.dataset.act === 'regen' && state.session && !state.running.has(state.session.id)) { b.disabled = true; post({ type: 'retry', sessionId: state.session.id }); }
@@ -1424,7 +1541,7 @@
         return;
       }
       if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.toolResults || m.meta.hidden))) { return; }
-      if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const handoff = /\nThis is a new task continuing the chat /.test(m.content); const det = stepEl('ok', handoff ? 'New task: started from a summary of the previous chat' : 'Conversation compacted to free context', m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').replace(/This is a new task continuing the chat .*$/s, '').trim()); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
+      if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const handoff = /\nThis is a new task continuing the chat /.test(m.content); const text = m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').replace(/This is a new task continuing the chat .*$/s, '').trim(); const det = !handoff && m.meta.compaction ? compactionEl(m.meta.compaction, text) : stepEl('ok', handoff ? 'New task: started from a summary of the previous chat' : 'Conversation compacted to free context', text); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
       if (m.role === 'user' && m.meta && m.meta.steer) {
         const prev = els.messages.lastElementChild;
         const row = steerRow(m.content, m.images, m.meta.steerId, false, m.meta.corrections);
@@ -1552,14 +1669,50 @@
     };
     return d;
   }
+  /** Multi-root: the workspace folders (with branch and errors) when there are several, else null. */
+  function chatRoots() { const r = (state.workspace && state.workspace.roots) || []; return state.workspace && state.workspace.folders > 1 && r.length > 1 ? r : null; }
+  /** The folder the open chat works in: the one it picked, or the first (the host's default). */
+  function chatFolder() { const r = chatRoots(); if (!r) { return null; } const s = state.session; return (s && s.folder && r.find((x) => x.path === s.folder)) || r[0]; }
+  /** A chat keeps its folder once it has messages (or is running): its files, checkpoints and tools are there. */
+  function folderLocked() { const s = state.session; return !!s && (s.messages.length > 0 || state.running.has(s.id) || state.pendingSend.has(s.id)); }
+  /** The folder picker: in an empty chat it sets the chat's folder; in a chat with messages it starts a new chat there. */
+  function openFolderMenu(anchor) {
+    const r = chatRoots(); if (!r || !state.session) { return; }
+    const cur = chatFolder(); const locked = folderLocked();
+    const items = r.map((f) => ({ group: locked ? 'New chat in' : 'Work in', label: f.name, desc: f.branch ? `⎇ ${f.branch}` : f.path, title: f.path, icon: I.folder, tags: f.errors ? [{ text: `${f.errors.toLocaleString()} error${f.errors === 1 ? '' : 's'}`, cls: 'rw', title: 'Errors in the Problems panel for this folder' }] : [], selected: !locked && f.path === cur.path, onPick: () => pickFolder(f.path) }))
+      .concat([{ hr: true }, { label: 'Add folder to workspace…', desc: 'VS Code: File › Add Folder to Workspace', icon: I.plus, onPick: () => post({ type: 'workspaceAction', action: 'addFolder' }) }]);
+    openMenu(anchor, items, { label: 'Folder', foot: `<span>${locked ? `This chat stays in ${esc(cur.name)}; a pick starts a new chat` : '@ files, tools, git and checks use this folder'}</span>` });
+  }
+  function pickFolder(p) {
+    const s = state.session; const r = chatRoots(); if (!s || !r) { return; }
+    if (folderLocked()) { post({ type: 'newSession', mode: s.mode, folder: p }); return; }
+    s.folder = p === r[0].path ? undefined : p; mentionHits.asked = null; mentionHits.query = null;
+    post({ type: 'setFolder', sessionId: s.id, folder: p });
+    syncFolderChip(); if (els.messages.querySelector(':scope > .empty')) { renderSession(); }
+  }
+  /** The composer's folder chip (multi-root only): which folder this chat works in; locked once it has messages. */
+  function syncFolderChip() {
+    const b = els.folderBtn; if (!b) { return; }
+    const f = chatFolder(); b.classList.toggle('hidden', !f); if (!f) { return; }
+    const locked = folderLocked();
+    b.querySelector('.lbl').textContent = f.name; b.classList.toggle('locked', locked);
+    b.title = locked ? `This chat works in ${f.name} (${f.path}). Click to start a new chat in another folder` : `This chat works in ${f.name}: @ files, tools, git and checks. Click to pick another folder`;
+    b.setAttribute('aria-label', `Folder: ${f.name}${locked ? ' (fixed for this chat)' : ''}`);
+  }
+  /** The file index's large-repo note: "5,000 of 12,400 files listed" (null while it covers everything). */
+  function indexNote() {
+    const x = state.workspace && state.workspace.index; if (!x || x.state !== 'ready' || !(x.files > x.listed)) { return null; }
+    const total = `${Number(x.files).toLocaleString()}${x.capped ? '+' : ''}`;
+    return { text: `Large repo: ${Number(x.listed).toLocaleString()} of ${total} files listed`, title: `The @ menu lists ${Number(x.listed).toLocaleString()} of ${total} files; the agent's search tools still cover every file. No semantic index: search is by text, name, symbols and imports.` };
+  }
   /** The context strip's status: the first thing that needs attention, else Ready. */
   function ctxStatus() {
     const ws = state.workspace || {}; const n = ws.interventions || 0;
     if (!state.models.length && state.modelsLoading) { return { cls: 'busy', spin: true, text: 'Finding models…' }; }
     if (!state.models.length) { return { cls: 'warn', text: 'No model, set one up', action: 'setup', title: 'Set up a local model, look for model servers, or add a cloud provider' }; }
     if (n) { return { cls: 'warn', text: `${n} task${n === 1 ? ' needs' : 's need'} you · Review`, action: 'interventions', title: 'Self-healing stopped and is waiting for you: open the queue' }; }
-    if (ws.indexing) { return { cls: 'busy', spin: true, text: `Indexing ${Number(ws.indexing).toLocaleString()} files…` }; }
-    if (state.offline) { return { cls: 'muted', text: state.models.some((x) => !x.remote) ? 'Offline · local models only' : 'Offline', title: 'No network: cloud models and web tools are unavailable' }; }
+    if (ws.index && ws.index.state === 'indexing') { return { cls: 'busy', spin: true, text: `Indexing ${Number(ws.index.files).toLocaleString()} files… ${ws.index.pct}%`, title: 'Listing the workspace files for @ mentions' }; }
+    if (state.offline) { return { cls: 'muted', text: state.net && state.net.local === false ? 'Offline · no local model' : 'Offline · local models only', title: 'No network: cloud models and web tools are unavailable; chats on a cloud model use a local one until it is back' }; }
     return { cls: 'ok', text: 'Ready', title: 'A model is available' };
   }
   /** Folder · branch · status under the welcome heading; redrawn in place when any of them changes. */
@@ -1568,12 +1721,20 @@
     const ws = state.workspace || {}; const st = ctxStatus(); const parts = [];
     // No folder (the window has none): a chat that cannot touch files; Open folder is the way out.
     if (ws.folders === 0) { parts.push(`<span class="seg folder">${I.folder}<span class="t">No folder open · chat only</span></span><button class="link" data-a="openFolder">Open folder…</button>`); }
-    else {
-      if (ws.name) { parts.push(`<span class="seg folder" title="${esc(`Workspace: ${ws.name}${ws.folders > 1 ? ` (${ws.folders} folders)` : ''}`)}">${I.folder}<span class="t">${esc(ws.name)}</span></span>`); }
+    else if (chatRoots()) {
+      // Several folders: the chat works in one of them; the segment picks it (its branch follows).
+      const f = chatFolder();
+      parts.push(`<span class="seg folder pickable"><button class="fpick" data-a="folder" aria-haspopup="listbox" title="${esc(`This chat works in ${f.name} (${f.path}): @ files, tools, git and checks. Click to pick another of the ${ws.roots.length} folders`)}">${I.folder}<span class="t">${esc(f.name)}</span><span class="chev" aria-hidden="true">${I.chevDown}</span></button></span>`);
+      if (f.branch) { parts.push(`<span class="seg branch" title="${esc(`Git branch of ${f.name}: ${f.branch}`)}">${I.git}<span class="t">${esc(f.branch)}</span></span>`); }
+    } else {
+      if (ws.name) { parts.push(`<span class="seg folder" title="${esc(`Workspace: ${ws.name}`)}">${I.folder}<span class="t">${esc(ws.name)}</span></span>`); }
       if (ws.branch) { parts.push(`<span class="seg branch" title="${esc(`Git branch: ${ws.branch}`)}">${I.git}<span class="t">${esc(ws.branch)}</span></span>`); }
     }
     const lead = st.spin ? '<span class="spinner" aria-hidden="true"></span>' : '<i class="dot" aria-hidden="true"></i>';
     parts.push(`<span class="seg status ${st.cls}"${st.title ? ` title="${esc(st.title)}"` : ''}>${lead}${st.action ? `<button class="link" data-a="${st.action}">${esc(st.text)}</button>` : `<span class="t">${esc(st.text)}</span>`}</span>`);
+    // A large repository: how much of it the @ menu lists (the agent's search tools still see every file).
+    const big = indexNote();
+    if (big && !(ws.index && ws.index.state === 'indexing')) { parts.push(`<span class="seg index" title="${esc(big.title)}">${I.list}<button class="link" data-a="rebuildIndex" title="${esc(`${big.title} Click to rescan.`)}">${esc(big.text)}</button></span>`); }
     const html = parts.join('');
     if (strip.dataset.sig !== html) { strip.dataset.sig = html; strip.innerHTML = html; }
   }
@@ -1589,6 +1750,8 @@
     strip.onclick = (e) => {
       const a = e.target.closest('[data-a]'); if (!a) { return; }
       if (a.dataset.a === 'openFolder') { post({ type: 'workspaceAction', action: 'openFolder' }); }
+      else if (a.dataset.a === 'folder') { openFolderMenu(a); }
+      else if (a.dataset.a === 'rebuildIndex') { post({ type: 'workspaceAction', action: 'rebuildIndex' }); toast('Rescanning the workspace files…'); }
       else if (a.dataset.a === 'interventions') { post({ type: 'workspaceAction', action: 'interventions' }); }
       else if (a.dataset.a === 'setup') { openModelMenu(''); }
     };
@@ -1621,7 +1784,7 @@
       return b;
     };
     const group = (title, cls, rows) => { const g = el('div', `sgroup ${cls}`); g.appendChild(el('div', 'recent-h', esc(title))); const list = el('div', 'suggestions'); rows.forEach((r) => list.appendChild(r)); g.appendChild(list); wrap.appendChild(g); };
-    const errs = ws.errors || 0;
+    const errs = chatRoots() ? chatFolder().errors || 0 : ws.errors || 0;
     const OVERVIEW = 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.';
     group('Start', 'starters', noFolder ? [
       row(I.ask, 'Ask a coding question', 'Ask', { mode: 'ask', title: 'Switches to Ask and puts the cursor in the message box' }),
@@ -1643,6 +1806,16 @@
         row(I.bug, `Fix problems in ${file}`, 'Agent', { mode: 'agent', send: `Run get_diagnostics for ${state.activeFile} and fix every error.` }),
         row(I.beaker, state.hasSelection ? 'Write tests for my selection' : `Write tests for ${file}`, 'Agent', { mode: 'agent', send: state.hasSelection ? "Write unit tests for the selected code using the project's existing test framework." : `Write unit tests for ${state.activeFile} using the project's existing test framework.` }),
       ]);
+    }
+    // Saved prompts (the workspace's and yours): the first few, each fills the message box with its /command.
+    const saved = (state.commands || []).filter((c) => c.source === 'project' || c.source === 'user');
+    if (saved.length) {
+      const g = el('div', 'sgroup prompts');
+      g.appendChild(el('div', 'recent-h', `Saved prompts<button data-a="lib" title="Search, insert, edit or delete your saved prompts">Prompt library</button>`));
+      const list = el('div', 'suggestions');
+      for (const c of saved.slice(0, 3)) { list.appendChild(row(I.bookmark, c.invoke, c.source === 'project' ? 'Workspace' : 'You', { fill: `${c.invoke} `, title: `${c.description ? `${c.description}. ` : ''}Puts ${c.invoke} in the message box: add details after it and send` })); }
+      g.querySelector('[data-a="lib"]').onclick = (e) => openPromptLib({ opener: e.currentTarget });
+      g.appendChild(list); wrap.appendChild(g);
     }
     // Pick up where you left off: the latest chats with something in them (five on tall panels, three on short ones).
     const recent = state.sessions.filter((x) => x.messageCount > 0 && x.id !== (state.session && state.session.id)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
@@ -1868,11 +2041,14 @@
     let row = live.waitRow && live.waitRow.isConnected ? live.waitRow : null;
     if (!row) {
       rotateBody(live);
-      row = el('div', 'note wait', `<span class="ico">${I.spin}</span><span class="t"></span><span class="lim"></span><span class="acts hidden"><button class="btn sm ghost" data-w="switch" title="Stop this request and send the message again with another model">${I.layers}<span>Switch model</span></button><button class="btn sm ghost" data-w="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop</span></button></span>`);
+      // Keep waiting (another full limit), the first fallback model when one is set and up, another model, or Stop.
+      row = el('div', 'note wait', `<span class="ico">${I.spin}</span><span class="t"></span><span class="lim"></span><span class="acts hidden"><button class="btn sm ghost" data-w="keep" title="Give the model another full wait before it counts as stalled">${I.timer}<span>Keep waiting</span></button><button class="btn sm ghost hidden" data-w="fallback">${I.layers}<span class="fb"></span></button><button class="btn sm ghost" data-w="switch" title="Stop this request and send the message again with another model">${I.layers}<span>Switch model</span></button><button class="btn sm ghost" data-w="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop</span></button></span>`);
       row.setAttribute('role', 'status');
       row.onclick = (e) => {
         const b = e.target.closest('button[data-w]'); if (!b) { return; }
         if (b.dataset.w === 'stop') { post({ type: 'stop', sessionId: sid }); b.disabled = true; return; }
+        if (b.dataset.w === 'keep') { post({ type: 'keepWaiting', sessionId: sid }); return; }
+        if (b.dataset.w === 'fallback') { const f = (row.__p || {}).fallback; if (f && f.id) { post({ type: 'switchModelAndRetry', sessionId: sid, model: f.id }); b.disabled = true; } return; }
         modelPickThen = (id) => { if (id && id !== live.waitRow?.__p?.model) { post({ type: 'switchModelAndRetry', sessionId: sid, model: id }); return true; } return false; };
         openModelMenu();
       };
@@ -1890,6 +2066,11 @@
     row.querySelector('.lim').textContent = lim ? `times out at ${fmtClock(lim)}` : '';
     row.querySelector('.acts').classList.toggle('hidden', secs < 20);
     row.classList.toggle('long', lim > 0 && secs > lim * 0.75);
+    // No limit (firstTokenTimeoutSeconds = 0): nothing to extend.
+    row.querySelector('[data-w="keep"]').classList.toggle('hidden', !lim);
+    const fb = row.querySelector('[data-w="fallback"]'); const f = p.fallback;
+    fb.classList.toggle('hidden', !(f && f.id));
+    if (f && f.id) { fb.querySelector('.fb').textContent = `Use ${f.name || f.id}`; fb.title = `Stop this request and send the message again with ${f.name || f.id}, first in your fallback order`; }
   }
   /** Between the host's once-a-second updates (or if they pause) the counter keeps moving. */
   function tickWait(live, now) { const row = live.waitRow; if (!row || !row.isConnected || !row.__at) { return; } paintWait(row, row.__secs + Math.floor((now - row.__at) / 1000)); }
@@ -2562,10 +2743,10 @@
         break;
       }
       // The meter follows the run: an estimate before each request, the server's real count after it.
-      case 'context': if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
+      case 'context': if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; if (e.payload.breakdown) { state.session.contextBreakdown = e.payload.breakdown; } updateCtx(); } break;
       // Facts the finished run taught, saved to project memory after the answer.
       case 'memory': if (visible && e.payload && e.payload.saved && e.payload.saved.length) { toast(`Saved to memory: ${e.payload.saved.join(', ')}`, 'info'); } break;
-      case 'compaction': rotateBody(live); live.root.insertBefore(el('div', 'note', `Context compacted: ${e.payload.before.toLocaleString()} → ${e.payload.after.toLocaleString()} tokens (${e.payload.removed} messages summarised)`), live.body); break;
+      case 'compaction': { rotateBody(live); const p = e.payload || {}; const d = p.details ? compactionEl(p.details, p.summary || '') : el('div', 'note', `Context compacted: ${Number(p.before).toLocaleString()} → ${Number(p.after).toLocaleString()} tokens (${p.removed} messages summarised)`); if (p.details) { d.querySelector('.ico').innerHTML = I.list; } live.root.insertBefore(d, live.body); break; }
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'hook': {
@@ -2656,7 +2837,7 @@
 
   // ------------------------------------------------------------------ composer state
   function setStatus(text) { els.statusText.textContent = text || ''; els.status.classList.toggle('hidden', !text); }
-  function setRunning(running) { fitModelChip(); els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
+  function setRunning(running) { renderRunHint(); fitModelChip(); syncFolderChip(); els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
   function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; syncEmptyChrome(); }
   /** Pause button, progress bar and placeholder follow the active session's pause state. */
   function syncPause() {
@@ -2666,7 +2847,7 @@
     els.pause.title = p.paused ? (p.holding ? `Resume (${kb('Alt+Esc')})` : 'Pausing after the current step… click to cancel') : `Pause after the current step (${kb('Alt+Esc')})`;
     els.progress.classList.toggle('paused', p.paused);
     document.body.classList.toggle('paused', !!(sid && state.running.has(sid) && p.paused));
-    syncPlaceholder();
+    syncPlaceholder(); renderRunHint();
   }
   function togglePause() { if (!state.session || !state.running.has(state.session.id)) { return; } const p = state.paused.get(state.session.id); post({ type: p && p.paused ? 'resume' : 'pause', sessionId: state.session.id }); }
   function updateCtx() {
@@ -2720,7 +2901,7 @@
   function ctxCapped(m) { return m.contextWindow > effectiveWindow(m); }
   function ctxLabel(m) { const w = effectiveWindow(m); return ctxCapped(m) ? `${fmtTok(w)} used of ${fmtTok(m.contextWindow)}` : `${fmtTok(w)} ctx`; }
   function syncMode() {
-    syncPlaceholder(); const v = modeView(state.session);
+    syncPlaceholder(); syncFolderChip(); const v = modeView(state.session);
     if (els.modeBtn.dataset.view !== v.label) { els.modeBtn.dataset.view = v.label; els.modeLabel.textContent = v.label; els.modeIcon.innerHTML = v.icon; }
     // A specialist names the mode it runs in, since that decides whether files change ("Review · runs in Ask (read-only)").
     els.modeBtn.title = `${v.baseLabel ? `${v.label} · runs in ${v.baseLabel} (${v.tag})` : `Mode: ${v.label} (${v.tag})`} · ${kb('Mod+.')} to switch`;
@@ -2737,7 +2918,7 @@
   /** Keyboard mode switch (Shift+Tab with a draft, Ctrl/Cmd+.). The toast sits in the polite #toasts live region, so it is
    *  also what a screen reader hears: "Mode: Plan — investigate and prepare a plan…". */
   // Cycles the core modes only; from a specialist the next one is the mode after its base.
-  function rotateMode() { const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; const m = MODES[next]; setMode(next); toast(`Mode: ${m.label} — ${m.desc.charAt(0).toLowerCase()}${m.desc.slice(1)}`); }
+  function rotateMode() { const keys = Object.keys(MODES).filter((k) => !needsFolder(k)); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; const m = MODES[next]; setMode(next); toast(`Mode: ${m.label} — ${m.desc.charAt(0).toLowerCase()}${m.desc.slice(1)}`); }
   /** Switches the chat's mode; `specialist` picks a "More modes" entry that runs in `mode`, and anything else clears it. */
   function setMode(mode, specialist) {
     const s = state.session; if (!s || !MODES[mode]) { return; }
@@ -2747,10 +2928,14 @@
     post({ type: 'setMode', sessionId: s.id, mode, ...(sp ? { specialist: sp } : {}) });
   }
   /** The mode picker: the five core modes, the specialists under "More modes", then Manage modes. */
+  /** No folder open: the modes that edit files cannot work (the host refuses them too). */
+  function needsFolder(mode) { return !!state.workspace && state.workspace.folders === 0 && MODES[mode] && MODES[mode].tag === 'edits files'; }
+  const NEEDS_FOLDER = { text: 'Needs a folder', cls: 'nf', title: 'Open a folder so LocalPilot can edit files and run commands' };
   function openModeMenu() {
     const s = state.session; const cur = s ? s.mode : 'agent'; const sp = specOf(s);
-    const items = Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: m.desc, icon: m.icon, tags: [{ text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: () => setMode(k) }))
-      .concat(Object.entries(SPECIALISTS).map(([k, x]) => { const b = MODES[x.base]; return { group: 'More modes', label: x.label, desc: x.hint, title: `${x.desc}. Runs in ${b.label} mode.`, icon: x.icon, tags: [{ text: b.tag, cls: b.tag === 'read-only' ? 'ro' : 'rw', title: `Runs in ${b.label} mode` }], selected: sp === k, onPick: () => setMode(x.base, k) }; }))
+    const refuse = (label) => () => toast(`${label} needs a folder: open one to edit files and run commands`);
+    const items = Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: needsFolder(k) ? `${m.desc}. Needs a folder.` : m.desc, icon: m.icon, disabled: needsFolder(k), tags: [needsFolder(k) ? NEEDS_FOLDER : { text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: needsFolder(k) ? refuse(m.label) : () => setMode(k) }))
+      .concat(Object.entries(SPECIALISTS).map(([k, x]) => { const b = MODES[x.base]; const nf = needsFolder(x.base); return { group: 'More modes', label: x.label, desc: x.hint, title: `${x.desc}. Runs in ${b.label} mode${nf ? ', which needs a folder' : ''}.`, icon: x.icon, disabled: nf, tags: [nf ? NEEDS_FOLDER : { text: b.tag, cls: b.tag === 'read-only' ? 'ro' : 'rw', title: `Runs in ${b.label} mode` }], selected: sp === k, onPick: nf ? refuse(x.label) : () => setMode(x.base, k) }; }))
       .concat([{ hr: true }, { label: 'Manage modes…', desc: 'Skills and subagents in Settings', icon: I.gear, onPick: () => post({ type: 'openSettings', section: 'skills' }) }]);
     openMenu(els.modeBtn, items, { label: 'Mode', cls: 'modes', foot: `<span><kbd>${esc(kb('Mod+.'))}</kbd> to switch</span>` });
   }
@@ -3053,11 +3238,18 @@
   // are managed here without opening them first. Untouched empty chats are hidden; they are noise, not history.
   // The extension sorts, filters and pages the list (`listSessions`); until its page arrives the rows come from the
   // summaries already here. A long history (over 200 chats) loads 50 more each time the list is scrolled to the end.
-  const hist = { open: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, timer: 0, sig: '', sort: 'newest', userSort: 'newest', pinnedOnly: false, page: null, seq: 0, offset: 0, refreshTimer: 0, selecting: false, picked: new Set() };
+  const hist = { open: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, timer: 0, sig: '', sort: 'newest', userSort: 'newest', pinnedOnly: false, mode: '', folder: '', page: null, seq: 0, offset: 0, refreshTimer: 0, selecting: false, picked: new Set() };
   const HIST_GROUPS = ['Running', 'Pinned', 'Today', 'Yesterday', 'Previous 7 days', 'Previous 30 days', 'Older'];
   const HIST_SORTS = [['newest', 'Newest'], ['oldest', 'Oldest'], ['tokens', 'Most tokens'], ['cost', 'Most expensive'], ['size', 'Largest'], ['relevance', 'Relevance']];
   const HIST_ALL_UP_TO = 200; const HIST_PAGE = 50;
-  const histKey = () => `${hist.sort}|${hist.pinnedOnly ? 1 : 0}|${hist.q.trim()}`;
+  const histKey = () => `${hist.sort}|${hist.pinnedOnly ? 1 : 0}|${hist.mode}|${hist.folder}|${hist.q.trim()}`;
+  /** The mode a chat is filed under (its specialist while that applies), as the host's historyModeKey. */
+  function histModeKey(s) { return specOf(s) || s.mode || 'agent'; }
+  /** Multi-root: the folder a chat works in (the first one when it never picked). */
+  function histFolderOf(s) { const r = chatRoots(); return r ? s.folder || r[0].path : ''; }
+  /** Chats the history lists before any filter: untouched empty ones only when open or running. */
+  function histListed(s) { return s.messageCount > 0 || s.pinned || s.plan || s.id === activeId() || state.running.has(s.id); }
+  function histFiltered(s, skip) { return (skip === 'mode' || !hist.mode || histModeKey(s) === hist.mode) && (skip === 'folder' || !hist.folder || histFolderOf(s) === hist.folder); }
   /** Asks for the list again: `more` appends the next page; otherwise the rows loaded so far are refreshed. */
   function histRequest(more) {
     const page = hist.page && hist.page.key === histKey() ? hist.page : null;
@@ -3065,13 +3257,13 @@
     const limit = more ? HIST_PAGE : page && page.total > HIST_ALL_UP_TO ? Math.max(HIST_PAGE, page.rows.length) : undefined;
     hist.seq++; hist.pending = true; hist.more = !!more; hist.offset = more ? page.rows.length : 0;
     const active = activeId();
-    post({ type: 'listSessions', seq: hist.seq, offset: hist.offset, limit, sort: hist.sort, query: hist.q.trim(), pinnedOnly: hist.pinnedOnly, keep: [...(active ? [active] : []), ...state.running], first: [...state.running] });
+    post({ type: 'listSessions', seq: hist.seq, offset: hist.offset, limit, sort: hist.sort, query: hist.q.trim(), pinnedOnly: hist.pinnedOnly, ...(hist.mode ? { mode: hist.mode } : {}), ...(hist.folder && chatRoots() ? { folder: hist.folder } : {}), keep: [...(active ? [active] : []), ...state.running], first: [...state.running] });
   }
   /** The store changed (a chat saved, renamed, deleted): show it now, then re-read the page, coalesced while agents stream. */
   function histRefresh() { renderHistory(); clearTimeout(hist.refreshTimer); hist.refreshTimer = setTimeout(() => { if (hist.open) { histRequest(false); } }, 250); }
   function histPage(m) {
     if (!hist.open || m.seq !== hist.seq || m.page.offset !== Math.min(hist.offset, m.page.total)) { return; }
-    const key = `${m.page.sort}|${m.page.pinnedOnly ? 1 : 0}|${m.page.query}`;
+    const key = `${m.page.sort}|${m.page.pinnedOnly ? 1 : 0}|${m.page.mode || ''}|${m.page.folder || ''}|${m.page.query}`;
     const rows = hist.more && hist.page && hist.page.key === key ? hist.page.rows.concat(m.page.rows.filter((r) => !hist.page.rows.some((x) => x.id === r.id))) : m.page.rows;
     hist.page = { ...m.page, key, rows }; hist.pending = false; hist.more = false;
     renderHistory();
@@ -3098,7 +3290,7 @@
     let list = page
       ? page.rows.filter((r) => byId.has(r.id)).map((r) => ({ s: byId.get(r.id), hit: r.snippet ? { snippet: r.snippet, role: r.role } : undefined }))
       : state.sessions
-        .filter((s) => s.messageCount > 0 || s.pinned || s.plan || s.id === active || state.running.has(s.id))
+        .filter((s) => histListed(s) && histFiltered(s))
         .filter((s) => (!hist.pinnedOnly || s.pinned) && (!q || (s.title || 'New chat').toLowerCase().includes(q)))
         .map((s) => ({ s }));
     if (!page) {
@@ -3123,12 +3315,15 @@
     menuState = { items: [], sel: 0 };
     // Sort and the pinned filter carry over between openings; the query and a selection do not.
     Object.assign(hist, { open: true, hold: false, stale: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, sig: '', sort: hist.userSort, page: null, selecting: false, picked: new Set() });
+    // A folder filter outlives a folder that left the workspace only as long as the folder is there.
+    if (hist.folder && !(chatRoots() || []).some((r) => r.path === hist.folder)) { hist.folder = ''; }
     const box = el('div', 'hist');
     const search = el('input', 'search'); search.placeholder = 'Search chats and messages…'; search.setAttribute('aria-label', 'Search chats');
     const bar = el('div', 'hist-bar');
+    const filt = el('div', 'hist-filter'); filt.setAttribute('role', 'group'); filt.setAttribute('aria-label', 'Filter chats');
     const list = el('div', 'hist-list'); list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', 'Chats');
     const foot = el('div', 'hist-foot');
-    box.append(search, bar, list, foot); p.appendChild(box);
+    box.append(search, bar, filt, list, foot); p.appendChild(box);
     search.oninput = () => {
       const was = hist.q.trim(); hist.q = search.value; hist.sel = 0; hist.confirm = null;
       const q = hist.q.trim();
@@ -3156,20 +3351,21 @@
   /** Open a chat from the panel; picking the one already open just closes the panel. */
   function historyOpen(id) { if (id === activeId()) { closeMenu(); els.input.focus(); } else { selectTab(id); } }
   function renderHistory() {
-    const p = els.popover; const list = p.querySelector('.hist-list'); const foot = p.querySelector('.hist-foot'); const bar = p.querySelector('.hist-bar');
+    const p = els.popover; const list = p.querySelector('.hist-list'); const foot = p.querySelector('.hist-foot'); const bar = p.querySelector('.hist-bar'); const filt = p.querySelector('.hist-filter');
     if (!hist.open || !list || hist.renaming) { return; }
     if (hist.hold) { hist.stale = true; return; }
     const rows = historyRows(); const active = activeId(); const q = hist.q.trim();
     for (const id of [...hist.picked]) { if (!state.sessions.some((s) => s.id === id)) { hist.picked.delete(id); } }
     hist.sel = Math.max(0, Math.min(hist.sel, rows.length - 1));
     const page = hist.page && hist.page.key === histKey() ? hist.page : null;
-    const sig = [q, hist.pending ? 1 : 0, hist.sel, hist.confirm || '', active || '', state.running.size, hist.sort, hist.pinnedOnly ? 1 : 0, hist.selecting ? [...hist.picked].join(',') : '-', page ? page.total : '', ...rows.map(({ s, g, hit }) => `${s.id}:${g}:${s.title}:${s.pinned ? 1 : 0}:${s.messageCount}:${state.unread.has(s.id) ? 1 : 0}:${state.status.get(s.id) || ''}:${hit ? hit.snippet : ''}:${s.bytes || 0}:${chatTokens(s)}`)].join('|');
+    const sig = [q, hist.pending ? 1 : 0, hist.sel, hist.confirm || '', active || '', state.running.size, hist.sort, hist.pinnedOnly ? 1 : 0, hist.mode, hist.folder, histFilterSig(), hist.selecting ? [...hist.picked].join(',') : '-', page ? page.total : '', ...rows.map(({ s, g, hit }) => `${s.id}:${g}:${s.title}:${s.pinned ? 1 : 0}:${s.messageCount}:${state.unread.has(s.id) ? 1 : 0}:${state.status.get(s.id) || ''}:${hit ? hit.snippet : ''}:${s.bytes || 0}:${chatTokens(s)}`)].join('|');
     if (sig === hist.sig) { return; }
     hist.sig = sig;
     // Re-rendering replaces the buttons: a keyboard user's focus goes back to the same action (or the search box).
     const fa = document.activeElement; const fb = fa && fa.dataset && fa.dataset.a && p.contains(fa) ? fa : null;
     const refocus = fb ? { a: fb.dataset.a, row: (fb.closest('.hist-row') || { dataset: {} }).dataset.id, zone: fb.closest('.hist-foot') ? '.hist-foot' : fb.closest('.hist-bar') ? '.hist-bar' : '' } : null;
     renderHistoryBar(bar, rows, page);
+    renderHistoryFilter(filt);
     const y = list.scrollTop;
     list.innerHTML = '';
     let lastGroup = null;
@@ -3197,7 +3393,8 @@
       row.oncontextmenu = (e) => { e.preventDefault(); hist.sel = i; historyAction('more', s, row); };
       list.appendChild(row);
     });
-    if (!rows.length) { list.appendChild(q && hist.pending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching messages…') : el('div', 'empty-i', q ? `No chats match “${esc(q)}”` : hist.pinnedOnly ? 'No pinned chats' : 'No chats yet — start one below')); }
+    const filtered = histFilterLabel();
+    if (!rows.length) { list.appendChild(q && hist.pending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching messages…') : el('div', 'empty-i', q ? `No ${filtered ? `${esc(filtered)} ` : ''}chats match “${esc(q)}”` : filtered ? `No ${esc(filtered)} chats${hist.pinnedOnly ? ' are pinned' : ''}. Pick <b>All</b> above to see every chat.` : hist.pinnedOnly ? 'No pinned chats' : 'No chats yet — start one below')); }
     if (page && page.rows.length < page.total) { list.appendChild(el('div', 'empty-i more', hist.pending ? '<span class="spinner"></span>Loading more…' : `${page.total - page.rows.length} more — scroll to load`)); }
     // Title matches can show while message hits are still on their way: a thin shimmer says more may arrive.
     list.classList.toggle('pending', !!(q && hist.pending && rows.length));
@@ -3249,6 +3446,38 @@
     hist.selecting = false; hist.picked = new Set(); hist.confirm = null;
     tabSig = ''; renderTabs(); hist.sig = ''; renderHistory();
     toast(`Deleted ${ids.length} chat${ids.length === 1 ? '' : 's'}`);
+  }
+  /** The mode and folder the list is narrowed to, in words ("Review", "Debug in api"); empty without a filter. */
+  function histFilterLabel() {
+    const m = hist.mode ? (SPECIALISTS[hist.mode] || MODES[hist.mode] || { label: hist.mode }).label : '';
+    const f = hist.folder ? ((chatRoots() || []).find((r) => r.path === hist.folder) || { name: base(hist.folder) }).name : '';
+    return m && f ? `${m} in ${f}` : m || (f ? `${f}` : '');
+  }
+  /** Modes (and folders) the history holds, with counts: what the filter row offers. */
+  function histFilterCounts() {
+    const listed = state.sessions.filter(histListed);
+    const modes = new Map(); for (const s of listed.filter((x) => histFiltered(x, 'mode'))) { const k = histModeKey(s); modes.set(k, (modes.get(k) || 0) + 1); }
+    const folders = new Map(); for (const s of listed.filter((x) => histFiltered(x, 'folder'))) { const k = histFolderOf(s); if (k) { folders.set(k, (folders.get(k) || 0) + 1); } }
+    return { modes, folders, total: listed.filter((x) => histFiltered(x, 'mode')).length };
+  }
+  function histFilterSig() { const c = histFilterCounts(); return `${[...c.modes].join(',')}/${[...c.folders].join(',')}/${c.total}/${chatRoots() ? chatRoots().length : 0}`; }
+  /** Mode chips (only modes that have chats, and only once there are two) and, in a multi-root workspace, a folder picker. */
+  function renderHistoryFilter(box) {
+    if (!box) { return; }
+    const c = histFilterCounts(); const roots = chatRoots();
+    const order = [...Object.keys(MODES), ...Object.keys(SPECIALISTS)];
+    const modes = [...c.modes.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    if (hist.mode && !modes.includes(hist.mode)) { modes.push(hist.mode); }
+    const showModes = modes.length > 1 || !!hist.mode;
+    if (!showModes && !roots) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const chip = (k, label, n, icon) => `<button class="fchipb${hist.mode === k ? ' on' : ''}" data-mode="${esc(k)}" aria-pressed="${hist.mode === k}" title="${k ? `Only ${esc(label)} chats` : 'Chats in every mode'}">${icon || ''}<span>${esc(label)}</span><i>${n}</i></button>`;
+    const chips = showModes ? chip('', 'All', c.total) + modes.map((k) => { const v = SPECIALISTS[k] || MODES[k] || { label: k }; return chip(k, v.label, c.modes.get(k) || 0, v.icon); }).join('') : '';
+    const folder = roots ? `<select class="fsel" aria-label="Filter by workspace folder" title="Only chats that work in this folder"><option value="">All folders</option>${roots.map((r) => `<option value="${esc(r.path)}"${hist.folder === r.path ? ' selected' : ''}>${esc(r.name)} (${c.folders.get(r.path) || 0})</option>`).join('')}</select>` : '';
+    box.innerHTML = `${folder}${chips}`;
+    box.onmousedown = (e) => { if (e.target.closest('[data-mode]')) { e.preventDefault(); holdHistory(); } };
+    box.onclick = (e) => { const b = e.target.closest('[data-mode]'); if (!b) { return; } hist.mode = hist.mode === b.dataset.mode ? '' : b.dataset.mode; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); };
+    box.onchange = (e) => { if (e.target.classList.contains('fsel')) { hist.folder = e.target.value; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); const search = els.popover.querySelector('.hist > .search'); if (search) { search.focus(); } } };
   }
   /** Sort, Pinned only and Select above the list; in selection mode, Select all / none and Delete N selected (size). */
   function renderHistoryBar(bar, rows, page) {
@@ -3503,7 +3732,7 @@
     const wide = els.box.clientWidth >= 380;
     // Revise on a plan card: the next message is feedback on the plan, until it is sent.
     if (sid && state.revising === sid && !state.running.has(sid)) { els.input.placeholder = 'What should change in the plan?'; return; }
-    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? `Type to steer this agent (used at its next step), ${kb('Mod+Shift+Enter')} for a new tab…` : 'Steer this agent…') : mode && (state.session.mode !== 'agent' || specOf(state.session)) && els.box.clientWidth >= 300 ? modeView(state.session).placeholder : basePlaceholder();
+    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? 'Type to steer this agent (read at its next step)…' : 'Steer this agent…') : mode && (state.session.mode !== 'agent' || specOf(state.session)) && els.box.clientWidth >= 300 ? modeView(state.session).placeholder : basePlaceholder();
   }
   let tasksSig = '';
   /** Per-session open/closed choice for the Tasks panel, once the user has toggled it. */
@@ -3600,7 +3829,8 @@
     const conf = nConf ? `${nConf} conflict${nConf === 1 ? '' : 's'} to resolve` : '';
     const label = !n ? conf : `${wt ? `${nf} changed in isolated copy${added || removed ? ` · +${added} −${removed}` : ''}` : reviewed ? `${nf} changed · ${reviewed} reviewed` : `${nf} changed`}${conf ? ` · ${conf}` : ''}`;
     // Narrow panels read "2/5 reviewed" (the .short form); the full label stays as the tooltip.
-    const shortLabel = !wt && reviewed ? `${reviewed}/${n} reviewed` : '';
+    // An isolated copy keeps its conflict count in the short form: it is the part that needs the user.
+    const shortLabel = wt ? (n && nConf ? `${nf} · ${nConf} conflict${nConf === 1 ? '' : 's'}` : n ? `${nf} in copy` : '') : reviewed ? `${reviewed}/${n} reviewed` : '';
     const html = shortLabel ? `<span class="long">${esc(label)}</span><span class="short">${esc(shortLabel)}</span>` : esc(label);
     if (els.changesLabel.innerHTML !== html) { els.changesLabel.innerHTML = html; els.changesToggle.title = label; }
     els.changesMeter.classList.toggle('hidden', !!wt || !reviewed);
@@ -3618,15 +3848,16 @@
     if (wt) {
       if (review) { review.classList.add('hidden'); }
       if (keepAll) { keepAll.classList.toggle('hidden', !files.length); }
-      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
-      if (keepAll) { keepAll.classList.add('primary'); keepAll.classList.remove('ghost'); keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
+      // "Apply all" / "Discard all": each row has its own Apply and Discard, so the head acts on every file at once.
+      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = 'Discard the isolated copy and all its changes'; undoAll.setAttribute('aria-label', 'Discard all changes in the isolated copy'); undoAll.querySelector('.long').textContent = 'Discard all'; undoAll.dataset.a = 'discardWorktree'; }
+      if (keepAll) { keepAll.classList.add('primary'); keepAll.classList.remove('ghost'); keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : `Apply all ${files.length} file${files.length === 1 ? '' : 's'} to your workspace as uncommitted edits (3-way merge on conflict)`; keepAll.setAttribute('aria-label', 'Apply all files to the workspace'); keepAll.querySelector('.long').textContent = 'Apply all'; keepAll.dataset.a = 'applyWorktree'; }
       // Applying while the agent still edits would fold its in-flight edits into the new base; wait for a pause or the end.
       const p = state.paused.get(s.id); const busy = state.running.has(s.id) && !(p && p.holding);
       if (keepAll) { keepAll.setAttribute('aria-disabled', String(busy)); if (busy) { keepAll.title = 'Pause or stop the agent before applying its changes'; } }
     } else {
       // Review (primary) opens the first file not reviewed yet; once every file is decided it becomes Clear reviewed.
-      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = `Reject all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.dataset.a = 'undoAll'; }
-      if (keepAll) { keepAll.classList.toggle('hidden', !files.length); keepAll.classList.remove('primary'); keepAll.classList.add('ghost'); keepAll.title = `Accept all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; keepAll.removeAttribute('aria-disabled'); }
+      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = `Reject all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.removeAttribute('aria-label'); undoAll.dataset.a = 'undoAll'; }
+      if (keepAll) { keepAll.classList.toggle('hidden', !files.length); keepAll.classList.remove('primary'); keepAll.classList.add('ghost'); keepAll.title = `Accept all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.removeAttribute('aria-label'); keepAll.dataset.a = 'keepAll'; keepAll.removeAttribute('aria-disabled'); }
       if (review) {
         review.classList.toggle('hidden', !files.length && !reviewed);
         if (files.length) { review.dataset.a = 'review'; review.className = 'btn primary'; review.title = `Review file by file: opens ${files.length === n ? 'the first file' : 'the next file not reviewed yet'} in a side-by-side diff, where Accept and Reject move on to the next`; review.innerHTML = `${I.diff}<span class="long">Review</span>`; }
@@ -3635,7 +3866,7 @@
       }
     }
     const now = Date.now();
-    const sig = `${s.id}|${wt ? 'wt' : ''}|${rows.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}:${f.state}:${f.redoUntil > now ? 1 : 0}`).join('|')}`;
+    const sig = `${s.id}|${wt ? `wt${state.running.has(s.id) && !((state.paused.get(s.id) || {}).holding) ? ':busy' : ''}` : ''}|${rows.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}:${f.state}:${f.redoUntil > now ? 1 : 0}:${f.userEdited ? 1 : 0}`).join('|')}`;
     // Restore edits expires with the host's redo window: redraw the row then so its button turns into the explanation.
     clearTimeout(redoTimer); const nextExpiry = Math.min(...rows.filter((f) => f.redoUntil > now).map((f) => f.redoUntil));
     if (Number.isFinite(nextExpiry)) { redoTimer = setTimeout(renderChanges, Math.min(nextExpiry - now + 50, 2 ** 31 - 1)); }
@@ -3655,7 +3886,11 @@
       const p = esc(f.path); const del = f.kind === 'delete';
       let acts = '';
       if (f.state === 'conflict') { acts = `<span class="acts keep"><button data-a="merge" class="txt" title="Resolve the conflict markers in ${p} in the merge editor" aria-label="Open ${p} in the merge editor">${I.git || I.open}<span class="long">Resolve</span></button></span>`; }
-      else if (wt) { acts = ''; }
+      else if (wt) {
+        // Isolated copy: each file can be applied to the workspace (3-way merge; a conflict comes back as a C row) or thrown away on its own.
+        const busy = state.running.has(s.id) && !((state.paused.get(s.id) || {}).holding); const dis = busy ? ' aria-disabled="true"' : '';
+        acts = `<span class="acts"><button data-a="undo"${dis} title="${busy ? 'Pause or stop the agent first' : `Discard the agent's changes to ${p} (r)`}" aria-label="Discard changes to ${p}">${I.x}<span class="long">Discard</span></button><button data-a="keep"${dis} title="${busy ? 'Pause or stop the agent first' : `Apply ${p} to your workspace (a)`}" aria-label="Apply ${p} to the workspace">${I.check}<span class="long">Apply</span></button></span>`;
+      }
       else if (f.state === 'pending') { acts = `<span class="acts"><button data-a="undo" title="Reject: put ${p} back as it was (r)" aria-label="Reject ${p}">${I.undo}<span class="long">Reject</span></button><button data-a="keep" title="Accept: keep the agent's ${del ? 'deletion' : 'edits'} (a)" aria-label="Accept ${p}">${I.check}<span class="long">Accept</span></button></span>`; }
       else if (f.state === 'accepted') { acts = `<span class="tag ok">${I.check}<span>Accepted</span></span>`; }
       else {
@@ -3664,9 +3899,11 @@
       }
       const what = f.state === 'conflict' ? 'open in the merge editor' : f.state === 'pending' ? (del ? 'open the deleted file\'s original' : 'open the diff') : f.state === 'accepted' ? 'accepted, open the file' : del || f.kind === 'create' ? 'rejected' : 'rejected, open the file';
       // The name opens the diff (or the file once reviewed); the row itself carries the keyboard focus (j/k/a/r/Enter).
-      const li = el('li', `change ${f.state}`, `<span class="kind ${f.kind}" title="${KIND_WORD[f.kind] || 'modified'}">${KIND[f.kind] || 'M'}</span><button class="name" tabindex="-1" title="${p} — ${what}"${f.state === 'rejected' && (del || f.kind === 'create') ? ' aria-disabled="true"' : ''}>${p}</button>${stat}${acts}`);
+      // Edited in the diff (or the editor) before the decision: what gets accepted is partly the user's own text.
+      const mine = f.userEdited ? `<span class="tag byyou" title="You edited ${p} after the agent wrote it${f.state === 'pending' ? ': Accept keeps your version' : ''}">${I.edit}<span>edited by you</span></span>` : '';
+      const li = el('li', `change ${f.state}`, `<span class="kind ${f.kind}" title="${KIND_WORD[f.kind] || 'modified'}">${KIND[f.kind] || 'M'}</span><button class="name" tabindex="-1" title="${p} — ${what}"${f.state === 'rejected' && (del || f.kind === 'create') ? ' aria-disabled="true"' : ''}>${p}</button>${stat}${mine}${acts}`);
       li.dataset.file = f.fsPath; li.dataset.state = f.state; li.setAttribute('tabindex', f.fsPath === changesFocus ? '0' : '-1');
-      li.setAttribute('aria-label', `${f.path}, ${KIND_WORD[f.kind] || 'modified'}${f.added || f.removed ? `, ${f.added || 0} added, ${f.removed || 0} removed lines` : ''}, ${f.state === 'pending' ? 'not reviewed' : f.state === 'conflict' ? 'resolve in the merge editor' : f.state}`);
+      li.setAttribute('aria-label', `${f.path}, ${KIND_WORD[f.kind] || 'modified'}${f.added || f.removed ? `, ${f.added || 0} added, ${f.removed || 0} removed lines` : ''}${f.userEdited ? ', edited by you' : ''}, ${f.state === 'pending' ? (wt ? 'not applied yet' : 'not reviewed') : f.state === 'conflict' ? 'resolve in the merge editor' : f.state}`);
       li.onclick = (e) => { changesKeyNav = false; changesFocus = f.fsPath; changeAction(f, (e.target.closest('[data-a]') || {}).dataset?.a || 'open', e.target.closest('[data-a]')); };
       els.changesList.appendChild(li);
     }
@@ -3676,7 +3913,12 @@
   }
   /** One row action: open (diff while pending, the file once reviewed), keep / undo, or restore a rejected file's edits. */
   function changeAction(f, act, btn) {
-    const s = state.session; if (!s || (btn && btn.getAttribute('aria-disabled') === 'true')) { if (btn && act === 'restore') { toast('No longer kept: use Restore checkpoint on the message'); } return; }
+    const s = state.session; if (!s || (btn && btn.getAttribute('aria-disabled') === 'true')) { if (btn && act === 'restore') { toast('No longer kept: use Restore checkpoint on the message'); } else if (btn && (act === 'keep' || act === 'undo')) { toast('Pause or stop the agent first'); } return; }
+    // Isolated copy: a (Apply) and r (Discard) act on the one file; opening shows the agent's copy against where it started.
+    if (state.worktree.get(s.id) && f.state === 'pending') {
+      if (act === 'keep' || act === 'undo') { if (state.running.has(s.id) && !((state.paused.get(s.id) || {}).holding)) { toast('Pause or stop the agent first'); return; } post({ type: act === 'keep' ? 'applyWorktree' : 'discardWorktree', sessionId: s.id, files: [f.path] }); return; }
+      if (act === 'open') { post({ type: 'showDiff', sessionId: s.id, fsPath: f.fsPath }); return; }
+    }
     if (act === 'keep' || act === 'undo') { if (f.state === 'pending') { post({ type: act === 'undo' ? 'undoChanges' : 'keepChanges', sessionId: s.id, fsPath: f.fsPath }); } return; }
     if (act === 'restore') { if (f.state === 'rejected') { post({ type: 'restoreEdits', sessionId: s.id, fsPath: f.fsPath }); } return; }
     if (f.state === 'conflict') { post({ type: 'recoveryAction', sessionId: s.id, action: 'openMergeEditor', file: f.fsPath }); return; }
@@ -3773,10 +4015,12 @@
         // A status line (searching, nothing found): shown, never highlighted or picked.
         if (it.note) { const n = el('div', `empty-i note${it.spin ? ' searching' : ''}`, `${it.spin ? '<span class="mspin" aria-hidden="true"></span>' : ''}<span>${esc(it.label)}</span>`); n.setAttribute('role', 'status'); list.appendChild(n); notes++; continue; }
         if (!opts.fuzzy && ql && !(`${it.label} ${it.desc || ''} ${it.group || ''}`.toLowerCase().includes(ql))) { continue; }
-        if (it.group && it.group !== lastGroup && !ql) { list.appendChild(el('div', 'grp', `${it.groupIcon ? `<span class="gico" aria-hidden="true">${it.groupIcon}</span>` : ''}${esc(it.group)}`)); lastGroup = it.group; }
+        if (it.group && it.group !== lastGroup && !ql) { const gt = it.groupTag; list.appendChild(el('div', 'grp', `${it.groupIcon ? `<span class="gico" aria-hidden="true">${it.groupIcon}</span>` : ''}<span class="gname">${esc(it.group)}</span>${gt ? `<span class="htag ${esc(gt.cls || '')}" title="${esc(gt.title || '')}">${esc(gt.text)}</span>` : ''}`)); lastGroup = it.group; }
         const star = it.onStar ? `<button class="star${it.starred ? ' on' : ''}" title="${it.starred ? 'Unstar' : 'Star: pin to the top'}" aria-label="${it.starred ? 'Unstar' : 'Star'} ${esc(it.label)}" aria-pressed="${it.starred ? 'true' : 'false'}">${STAR_ICON}</button>` : '';
         const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${it.labelHtml || esc(it.label)}</span>${it.desc ? `<span class="desc">${it.descHtml || esc(it.desc)}</span>` : ''}</span>${(it.tags || [it.tag && { text: it.tag }]).filter(Boolean).map((t) => `<span class="tag${t.cls ? ` ${t.cls}` : ''}"${t.title ? ` title="${esc(t.title)}"` : ''}>${esc(t.text)}</span>`).join('')}${star}<span class="check">${it.selected ? I.check : ''}</span>`);
         if (it.title || it.desc) { row.title = it.title || it.desc; }
+        // Unavailable here (a write mode with no folder open): shown, dimmed, and picking it says why.
+        if (it.disabled) { row.classList.add('disabled'); row.setAttribute('aria-disabled', 'true'); }
         row.onmousedown = (e) => { e.preventDefault(); pick(it); };
         // Mouse down only keeps focus and the menu; the toggle runs on click so Enter / Space on a focused star work too.
         if (it.onStar) { const st = row.querySelector('.star'); st.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); }; st.onclick = (e) => { e.preventDefault(); e.stopPropagation(); star(it); }; }
@@ -3846,9 +4090,18 @@
     const items = [{ label: 'Auto', desc: autoName ? `${state.defaultModel ? 'Default' : 'Best fit right now'}: ${autoName} · spreads parallel work to idle models` : 'Best available tool-capable model', icon: I.sparkle, selected: !cur, onPick: () => chooseModel('') }];
     const favs = new Set(state.favorites || []);
     const provName = (pid) => (state.providerNames && state.providerNames[pid]) || pid;
-    const row = (m, group) => ({ group, label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)}${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tags: [m.remote && { text: 'cloud', title: 'Cloud model: prompts leave this machine' }, ctxCapped(m) && { text: 'capped', cls: 'capped', title: 'Limited by Settings → Models → Context window' }], icon: I.bot, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
+    // Provider health from the host's last check: a tag on each provider heading, and a row for a provider that lists nothing now.
+    const health = state.providerHealth || {};
+    const HEALTH = { ok: ['reachable', 'ok'], slow: ['slow', 'warn'], down: ['down', 'err'], nokey: ['no key', 'err'] };
+    const gtag = (pid) => { const h = health[pid]; const v = h && HEALTH[h.state]; return v ? { text: v[0], cls: v[1], title: healthTitle(h) } : undefined; };
+    const row = (m, group) => ({ group, groupTag: group === 'Starred' ? undefined : gtag(m.providerId), label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)}${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tags: [m.remote && { text: 'cloud', title: 'Cloud model: prompts leave this machine' }, ctxCapped(m) && { text: 'capped', cls: 'capped', title: 'Limited by Settings → Models → Context window' }], icon: I.bot, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
     for (const m of state.models) { if (favs.has(m.id)) { items.push(row(m, 'Starred')); } }
     for (const m of state.models) { if (!favs.has(m.id)) { items.push(row(m, provName(m.providerId))); } }
+    const listed = new Set(state.models.map((m) => m.providerId));
+    for (const [pid, h] of Object.entries(health)) {
+      if (listed.has(pid) || (h.state !== 'down' && h.state !== 'nokey')) { continue; }
+      items.push({ group: provName(pid), groupTag: gtag(pid), label: h.state === 'nokey' ? 'Add an API key to use its models' : 'Not answering right now', desc: `${healthTitle(h)} · open Settings → Providers`, icon: h.state === 'nokey' ? I.key : I.warn, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers', expand: pid }) });
+    }
     items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, noSearch: true, onPick: () => { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     // Text that matches no model: use it as a model id with a provider that serves ids it does not list.
     const onNoMatch = (q) => {
@@ -3862,6 +4115,13 @@
       });
     };
     openMenu(els.modelBtn, items, { search: 'Search models or type a model id…', fuzzy: true, onNoMatch, query });
+  }
+  /** "Down · not answering · checked 2 min ago" for a provider health tag. */
+  function healthTitle(h) {
+    const ms = typeof h.ms === 'number' ? (h.ms >= 1000 ? `${(h.ms / 1000).toFixed(1)} s` : `${Math.round(h.ms)} ms`) : '';
+    const ago = h.checkedAt ? Math.max(0, Math.round((Date.now() - h.checkedAt) / 60000)) : -1;
+    const lead = { ok: 'Reachable', slow: 'Slow to answer', down: 'Down', nokey: 'No API key' }[h.state] || h.state;
+    return [lead, h.detail, h.state === 'ok' || h.state === 'slow' ? ms && `answered in ${ms}` : '', ago < 0 ? '' : ago ? `checked ${ago} min ago` : 'checked just now'].filter(Boolean).join(' · ');
   }
   function toggleFavoriteModel(id, q) {
     const favs = new Set(state.favorites || []);
@@ -4010,21 +4270,57 @@
       ...screenshotItems(),
     ];
     if (state.openFiles.length) { items.push({ hr: true }); for (const f of state.openFiles.slice(0, 12)) { items.push({ group: 'Open editors', label: f.split('/').pop(), desc: f, icon: I.file, onPick: () => addAttachment(f) }); } }
+    // Index status: a scan in progress, or how much of a large repository the @ search lists.
+    const idx = state.workspace && state.workspace.index; const big = indexNote();
+    if (idx && idx.state === 'indexing') { items.push({ note: true, spin: true, label: `Indexing ${Number(idx.files).toLocaleString()} files… ${idx.pct}%` }); }
+    else if (big) { items.push({ hr: true }, { label: big.text, desc: 'Rescan the workspace files', title: big.title, icon: I.list, onPick: () => { post({ type: 'workspaceAction', action: 'rebuildIndex' }); toast('Rescanning the workspace files…'); } }); }
     openMenu(els.addCtx, items, { search: 'Add files, folders, docs…' });
   }
   els.addCtx.onclick = openContextMenu;
+  // Multi-root: the chat's folder; an empty chat changes it, a chat with messages starts a new chat in the pick.
+  if (els.folderBtn) { els.folderBtn.onclick = () => openFolderMenu(els.folderBtn); }
   // The composer's hint row (empty chats only): @ opens the context menu, # attaches the project tree, / starts a command.
   if (els.hints) {
     els.hints.onclick = (e) => {
       const b = e.target.closest('[data-h]'); if (!b) { return; }
       if (b.dataset.h === '@') { openContextMenu(); }
-      else if (b.dataset.h === '#') { addAttachment('workspace'); toast('Attached the project file tree (@workspace)'); }
+      else if (b.dataset.h === '#') { addAttachment('codebase'); toast('Attached #codebase: the project structure, import graph and the files related to your message'); }
       else { els.input.value = '/'; els.input.focus(); els.input.selectionStart = els.input.selectionEnd = 1; els.input.dispatchEvent(new Event('input')); }
     };
   }
-  // The welcome strip says when the machine is offline: cloud models and web tools will fail, local models still work.
-  state.offline = navigator.onLine === false;
-  for (const ev of ['online', 'offline']) { window.addEventListener(ev, () => { state.offline = navigator.onLine === false; renderCtxStrip(); }); }
+  // Offline: the host's connectivity monitor decides (network interfaces, then the cloud providers' DNS) and the router
+  // skips cloud models while it says so. The webview's own online/offline events only ask it to check now. The banner
+  // at the top says what still works; the welcome strip says it too (state.offline).
+  state.net = { offline: false, local: true, since: 0, checking: false, back: false };
+  state.offline = false;
+  for (const ev of ['online', 'offline']) { window.addEventListener(ev, () => post({ type: 'netHint', online: ev === 'online' })); }
+  let netBackTimer = 0;
+  function renderOffline() {
+    const b = els.offline; if (!b) { return; }
+    const n = state.net;
+    b.classList.toggle('hidden', !n.offline && !n.back);
+    b.classList.toggle('back', !n.offline && n.back);
+    if (!n.offline && !n.back) { b.innerHTML = ''; return; }
+    if (!n.offline) { b.innerHTML = `<span class="ico">${I.check}</span><span class="msg"><b>Back online</b><span class="why"> · cloud models and web tools work again</span></span>`; return; }
+    const why = n.local ? 'Chats on a cloud model use a local model until the network is back. Web search and fetch are unavailable.' : 'No local model to fall back on: cloud models and web tools need the network.';
+    const since = n.since ? ` since ${new Date(n.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+    b.innerHTML = `<span class="ico">${I.offline}</span><span class="msg" title="${esc(`Offline${since}. ${why}`)}"><b>Offline</b><span class="what">: <span class="long">${n.local ? 'using local models only' : 'no local model available'}</span><span class="short">${n.local ? 'local models only' : 'no local model'}</span></span><span class="why"> · ${esc(why)}</span></span><span class="acts">${n.local ? '' : `<button class="btn sm ghost" data-n="models" title="Model settings: start a local model server or pick a local model" aria-label="Model settings">${I.gear}<span>Models</span></button>`}<button class="btn sm ghost" data-n="check" ${n.checking ? 'disabled aria-busy="true"' : ''} title="Check the network again" aria-label="Check the network again">${n.checking ? I.spin : I.refresh}<span>${n.checking ? 'Checking…' : 'Check again'}</span></button></span>`;
+  }
+  if (els.offline) {
+    els.offline.onclick = (e) => {
+      const b = e.target.closest('[data-n]'); if (!b) { return; }
+      if (b.dataset.n === 'check') { post({ type: 'checkConnection' }); } else { post({ type: 'openSettings', section: 'models' }); }
+    };
+  }
+  function applyConnectivity(m) {
+    const was = state.net.offline;
+    state.net = { offline: !!m.offline, local: m.local !== false, since: Number(m.since) || 0, checking: !!m.checking, back: was && !m.offline };
+    state.offline = state.net.offline;
+    clearTimeout(netBackTimer);
+    if (state.net.back) { netBackTimer = setTimeout(() => { state.net.back = false; renderOffline(); }, 5000); }
+    renderOffline();
+    if (was !== state.net.offline) { renderCtxStrip(); }
+  }
   // Screenshot capture options (like a native screenshot tool): area, this window, another window, full screen, timed.
   function shot(mode, delayMs, msg) { return () => { if (msg) { toast(msg); } post({ type: 'captureScreenshot', mode, delayMs }); }; }
   function screenshotItems() {
@@ -4076,14 +4372,23 @@
     autoGrow(); updateSendEnabled(); els.input.focus();
   }
   if (els.improve) { els.improve.onclick = improvePrompt; }
-  // Narrow composers (≤360 px) fold Skills, Rules and Improve prompt into one menu so the model name stays readable.
+  // The ⋯ menu: the prompt library at every width; narrow composers (≤360 px) also fold Skills, Rules and Improve prompt
+  // into it so the model name stays readable.
   if (els.btnComposerMore) {
     els.btnComposerMore.onclick = () => {
-      const ss = sessionSkills(); const pinned = (ss.pinned || []).length;
+      const ss = sessionSkills(); const pinned = (ss.pinned || []).length; const draft = els.input.value.trim();
+      // Wide composers show Skills, Rules and Improve prompt as their own buttons; the menu always has the prompt library.
+      const narrow = !!els.skillsBtn && getComputedStyle(els.skillsBtn).display === 'none';
       openMenu(els.btnComposerMore, [
-        { label: `Skills: ${pinned ? `${pinned} pinned` : SKILL_MODES[effectiveSkillsMode()].label}`, desc: 'Skill lookups and pinned skills for this chat', icon: I.book, onPick: () => openSkillsMenu(els.btnComposerMore) },
-        { label: 'Customize rules…', desc: 'Rules, commands, hooks and skills', icon: I.rules, onPick: () => post({ type: 'openSettings', section: 'customize' }) },
-        { label: improving ? 'Cancel improving' : `Improve prompt (${kb('Mod+I')})`, desc: 'Rewrites the draft into a precise request. Nothing is sent', icon: I.sparkle, onPick: improvePrompt },
+        { label: 'Prompt library…', desc: 'Search your saved prompts and insert one (/prompts)', icon: I.bookmark, onPick: () => openPromptLib({ opener: els.btnComposerMore }) },
+        { label: 'Save as prompt…', desc: draft ? 'Keep this message to reuse it, also as a /command' : 'Write the prompt in the message box first', icon: I.plus, disabled: !draft, onPick: () => (draft ? openPromptLib({ edit: { body: draft }, opener: els.btnComposerMore }) : toast('Write the prompt in the message box first')) },
+        { label: 'Marketplace…', desc: 'Install skills, MCP servers, plugins and subagents', icon: I.download, onPick: () => post({ type: 'openSettings', section: 'marketplace' }) },
+        ...(narrow ? [
+          { hr: true },
+          { label: `Skills: ${pinned ? `${pinned} pinned` : SKILL_MODES[effectiveSkillsMode()].label}`, desc: 'Skill lookups and pinned skills for this chat', icon: I.book, onPick: () => openSkillsMenu(els.btnComposerMore) },
+          { label: 'Customize rules…', desc: 'Rules, commands, hooks and skills', icon: I.rules, onPick: () => post({ type: 'openSettings', section: 'customize' }) },
+          { label: improving ? 'Cancel improving' : `Improve prompt (${kb('Mod+I')})`, desc: 'Rewrites the draft into a precise request. Nothing is sent', icon: I.sparkle, onPick: improvePrompt },
+        ] : []),
       ], { label: 'More composer actions' });
     };
   }
@@ -4095,8 +4400,16 @@
   els.ctx.onclick = () => openCtxConfirm();
 
   // inline '/' and '@' autocomplete reuse the popover
-  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
+  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } const hash = /(?:^|\s)#([\w-]*)$/.exec(v); if (hash) { return { kind: '#', tok: hash[1] }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
   function showInlineMenu(t) {
+    if (t.kind === '#') {
+      // #codebase and the other context variables; typing after # narrows them. Nothing matches: the menu steps aside.
+      const q = t.tok.toLowerCase();
+      const items = MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `#${n}`, desc: d, icon: ic, onPick: () => applyHash(n) }));
+      if (!items.length) { return closeMenu(); }
+      const note = indexNote(); if (note && q === '' ) { items.push({ note: true, label: note.text }); }
+      openMenu(els.box, items, { inline: true }); els.input.focus(); return;
+    }
     if (t.kind === '/') {
       const fill = (v) => { els.input.value = v; els.input.focus(); updateSendEnabled(); };
       const items = SLASH.filter(([c]) => c.startsWith(t.tok) || (c.endsWith(' ') && t.tok.startsWith(c.trim() + ' '))).map(([c, d, g]) => ({ group: g, label: c.trim(), desc: d, onPick: () => { fill(c); if (!c.endsWith(' ')) { sendCurrent(); } } }))
@@ -4116,7 +4429,7 @@
     } else {
       if (!state.openFiles.length) { post({ type: 'requestOpenFiles' }); }
       const q = t.tok.toLowerCase();
-      if (mentionHits.asked !== t.tok) { mentionHits.asked = t.tok; post({ type: 'mentionSearch', query: t.tok }); }
+      if (mentionHits.asked !== t.tok) { mentionHits.asked = t.tok; post({ type: 'mentionSearch', query: t.tok, ...(state.session ? { sessionId: state.session.id } : {}) }); }
       // Until the host answers this query, the previous answer narrowed by the new text stands in.
       const hits = mentionHits.query === t.tok ? mentionHits.items : mentionHits.items.filter((h) => subseq(q, h.desc));
       const files = hits.length ? hits.map((h) => ({ label: h.label, labelHtml: hlHtml(h.label, h.labelHl), desc: h.desc, descHtml: hlHtml(h.desc, h.hl), icon: h.kind === 'folder' ? I.folder : I.file, tag: h.open ? 'open' : h.recent ? 'recent' : '', onPick: () => applyMention(h.ref) }))
@@ -4125,11 +4438,14 @@
       const commits = mentionHits.query === t.tok && !t.quoted ? mentionHits.commits.map((c) => ({ label: `Commit ${c.sha}`, desc: c.subject, icon: I.git, onPick: () => applyMention(c.sha) })) : [];
       const items = (t.quoted ? [] : MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `@${n}`, desc: d, icon: ic, onPick: () => applyMention(n) }))).concat(files, commits);
       // The menu stays open while the host searches and when nothing matches, so the @ never just goes quiet.
-      if (mentionHits.query !== t.tok) { items.push({ note: true, spin: true, label: 'Searching files…' }); }
+      const idx = state.workspace && state.workspace.index;
+      if (mentionHits.query !== t.tok) { items.push({ note: true, spin: true, label: idx && idx.state === 'indexing' ? `Indexing ${Number(idx.files).toLocaleString()} files… ${idx.pct}%` : 'Searching files…' }); }
       else if (!files.length && !commits.length) {
         items.push({ note: true, label: t.tok ? `No files match “${t.tok}”` : 'No files in this workspace' },
           { label: 'Browse files…', desc: 'Pick files to attach', icon: I.folder, onPick: () => { dropMentionToken(); post({ type: 'pickAttachment' }); } });
       }
+      // A large repository: say the menu covers part of it, so a missing file is not a mystery.
+      const big = indexNote(); if (big && mentionHits.query === t.tok) { items.push({ note: true, label: `${big.text} · the agent's search covers all` }); }
       openMenu(els.box, items, { inline: true }); els.input.focus();
     }
   }
@@ -4171,11 +4487,15 @@
   }
   /** Removes the half-typed `@token` before the caret (its file is being picked another way). */
   function dropMentionToken() { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); els.input.value = before + els.input.value.slice(pos); els.input.selectionStart = els.input.selectionEnd = before.length; updateSendEnabled(); }
+  /** Replaces the half-typed `#token` before the caret with `#name `. */
+  function applyHash(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/#[\w-]*$/, ''); els.input.value = `${before}#${name} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + name.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
   /** Paths outside the plain `@path` alphabet (spaces, brackets …) are quoted: `@"docs/my file.md"`. */
   function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); const token = /^[\w./-]+$/.test(name) ? name : `"${name}"`; els.input.value = `${before}@${token} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + token.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
   /** `@path`, `@path#L3-L9`, `@"path with spaces"`, `@https://…` and `@<commit>` in a draft; also what the composer highlights. */
   const MENTION_RE = /(^|\s)(@(?:"([^"\n]+)"|(https?:\/\/[^\s"<>]*[^\s"<>.,;:!?)\]]|[\w./-]+(?:#L\d+(?:-L?\d+)?|#page=\d+(?:-\d+)?)?)))/g;
-  function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]); }
+  /** `#codebase`, `#git` …: context variables in a draft (the MENTIONS names after #). */
+  const HASH_RE = new RegExp(`(^|\\s)(#(${MENTIONS.map(([n]) => n).join('|')}))(?![\\w./-])`, 'g');
+  function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]).concat([...text.matchAll(HASH_RE)].map((m) => m[3])); }
   /** Opens what a sent message's context chip names: a file, the Problems panel, the terminal, a URL. */
   function openMentionRef(ref, line) {
     if (/^https?:\/\//i.test(ref)) { post({ type: 'openExternal', url: ref }); return; }
@@ -4203,7 +4523,8 @@
   const inwrap = el('div', 'inwrap'); els.input.parentNode.insertBefore(inwrap, els.input); inwrap.append(mirror, els.input);
   function syncMirror() {
     const v = els.input.value; let html = ''; let at = 0;
-    for (const m of v.matchAll(MENTION_RE)) { const s = m.index + m[1].length; html += `${esc(v.slice(at, s))}<mark>${esc(m[2])}</mark>`; at = s + m[2].length; }
+    const marks = [...v.matchAll(MENTION_RE), ...v.matchAll(HASH_RE)].sort((a, b) => a.index - b.index);
+    for (const m of marks) { const s = m.index + m[1].length; if (s < at) { continue; } html += `${esc(v.slice(at, s))}<mark>${esc(m[2])}</mark>`; at = s + m[2].length; }
     mirror.innerHTML = `${html}${esc(v.slice(at))}\n`;
     mirror.style.right = `${els.input.offsetWidth - els.input.clientWidth}px`;
     mirror.scrollTop = els.input.scrollTop;
@@ -4225,6 +4546,35 @@
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
     els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote();
     toast('Started in a new tab');
+  }
+  /** Every way to send while an agent works in this tab (the run hint's More…, or Enter before the run has started). */
+  function openSendChoices() {
+    if (!state.session) { return; }
+    const sid = state.session.id;
+    openMenu(els.box, [{ label: 'Add to this agent', desc: `Read at its next step — it keeps working (${kb('Enter')})`, icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: `Starts a new turn here when this one ends (${kb('Alt+Enter')})`, icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: `Starts another agent in parallel (${kb('Mod+Shift+Enter')})`, icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: sid }) }, { label: 'Cancel', icon: I.x }], { label: 'Ways to send' }); els.input.focus();
+  }
+  /**
+   * The row under the composer while the agent runs: what Enter and Alt+Enter do with the draft now (steer this run,
+   * or queue it for after) and More… for a new tab or stopping first. Each part is also a button for the same action.
+   */
+  function renderRunHint() {
+    const h = els.runHint; if (!h) { return; }
+    const s = state.session; const on = !!s && state.running.has(s.id);
+    h.classList.toggle('hidden', !on);
+    if (!on) { return; }
+    const p = state.paused.get(s.id); const paused = !!(p && p.paused);
+    const sig = `${paused}|${state.platform}`; if (h.dataset.sig === sig) { return; }
+    h.dataset.sig = sig;
+    h.innerHTML = `<button type="button" data-r="steer" title="${paused ? 'Send to this agent: it reads the message when it resumes' : 'Send to this agent: it reads the message at its next step and keeps working'}"><kbd>${kb('Enter')}</kbd><span class="long">${paused ? 'read when it resumes' : 'adds to this run'}</span><span class="short">${paused ? 'on resume' : 'steer'}</span></button><span aria-hidden="true">·</span><button type="button" data-r="queue" title="Keep the message and start a new turn with it when this run ends"><kbd>${kb('Alt+Enter')}</kbd><span class="long">sends after it</span><span class="short">after</span></button><span aria-hidden="true">·</span><button type="button" data-r="more" title="More ways to send: in a new tab, or stop this agent first" aria-haspopup="menu">More…</button>`;
+  }
+  if (els.runHint) {
+    els.runHint.onclick = (e) => {
+      const b = e.target.closest('[data-r]'); if (!b || !state.session) { return; }
+      const empty = !els.input.value.trim() && !state.images.length;
+      if (b.dataset.r === 'more') { openSendChoices(); return; }
+      if (empty) { els.input.focus(); toast(b.dataset.r === 'queue' ? 'Type the message to send after this run' : 'Type a message for the agent first'); return; }
+      if (b.dataset.r === 'queue') { queueCurrent(); } else { steerCurrent(); }
+    };
   }
   /** Queue the composer text for the running agent in this tab; the host echoes it back as a "queued" row. */
   function steerCurrent() {
@@ -4349,15 +4699,18 @@
   }
   /** `opts.modeOverride`: an empty-chat suggestion runs that one turn in Ask or Agent mode; `opts.confirmed` skips the /clear confirm. */
   function sendCurrent(fromSuggestion, opts = {}) {
+    // /prompts [words] opens the prompt library here (searching for the words) instead of going to the host.
+    const lp = /^\/prompts(?:\s+([\s\S]*))?$/i.exec(els.input.value.trim());
+    if (lp) { els.input.value = ''; autoGrow(); updateSendEnabled(); openPromptLib({ q: (lp[1] || '').trim() }); return; }
     if (/^\/clear\s*$/i.test(els.input.value.trim()) && !opts.confirmed && state.session && state.session.messages.length) { confirmClear(); return; }
     if (improving && state.session && improving.sid === state.session.id) { toast('Still improving the prompt — wait for it, or click the sparkle to cancel'); return; }
     const text = quoted(els.input.value.trim());
     if ((!text && !state.images.length) || !state.session) { return; }
     if (state.running.has(state.session.id) || state.pendingSend.has(state.session.id)) {
-      const p = state.paused.get(state.session.id);
-      // Paused: the message is plainly meant for this agent. Running: ask, since a new tab is just as likely.
-      if (p && p.paused) { steerCurrent(); return; }
-      openMenu(els.box, [{ label: 'Add to this agent', desc: 'Queued and read at its next step — it keeps working', icon: I.agent, onPick: steerCurrent }, { label: 'Send after this turn', desc: 'Starts a new turn here when this one ends', icon: I.list, onPick: queueCurrent }, { label: 'Send in a new tab', desc: `Starts another agent in parallel (${kb('Mod+Shift+Enter')})`, icon: I.sparkle, onPick: sendInNewTab }, { label: 'Stop this agent first', desc: 'Then send here', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: state.session.id }) }, { label: 'Cancel', icon: I.x }]); els.input.focus(); return;
+      // Running (or paused): Enter adds the message to this run, as the hint under the composer says; Alt+Enter queues
+      // it for after the run. Before the host has started the run there is nothing to steer yet, so it asks.
+      if (state.running.has(state.session.id)) { steerCurrent(); return; }
+      openSendChoices(); return;
     }
     const atRefs = mentionRefs(text);
     const attachments = [...new Set([...state.attachments, ...atRefs])];
@@ -4424,6 +4777,7 @@
     const modeKey = e.key === '.' && !e.shiftKey && !e.altKey && (state.platform === 'darwin' ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
     if ((modeKey || (e.key === 'Tab' && e.shiftKey && els.input.value.trim())) && !menuState && state.session && !state.running.has(state.session.id)) { e.preventDefault(); rotateMode(); return; }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !els.input.value.trim() && state.session && els.messages.querySelector('.plancard') && !state.running.has(state.session.id)) { e.preventDefault(); post({ type: 'buildPlan', sessionId: state.session.id }); return; }
+    if (e.key === 'Enter' && e.altKey && !e.shiftKey && !e.metaKey && !e.ctrlKey && state.session && (state.running.has(state.session.id) || state.pendingSend.has(state.session.id))) { e.preventDefault(); queueCurrent(); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); return; }
     if (e.defaultPrevented) { return; }
     if (e.key === 'Escape' && e.altKey && state.session && state.running.has(state.session.id)) { e.preventDefault(); togglePause(); return; }
@@ -4483,7 +4837,7 @@
   }
   els.messages.addEventListener('click', (e) => {
     const code = e.target.closest('[data-code]');
-    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply') { const pl = code.closest('.code').querySelector('.code-head [data-path]'); post({ type: 'applyCodeToFile', code: text, path: pl ? pl.dataset.path : undefined }); } return; }
+    if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply' || act === 'create') { const blk = code.closest('.code'); const lang = blk.dataset.lang && blk.dataset.lang !== 'text' ? blk.dataset.lang : undefined; post({ type: 'applyCodeToFile', code: text, path: code.dataset.target || undefined, create: act === 'create', lang, sessionId: state.session ? state.session.id : undefined }); } return; }
     const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined, sessionId: state.session && state.session.id }); return; }
     const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
     const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
@@ -4607,7 +4961,7 @@
       case 'mcpStatus': state.mcp = m.servers || []; syncMcp(); break;
       case 'autoApprove': renderAutoApprove(m); break;
       case 'sessionGrants': if (m.kinds && m.kinds.length) { grants.set(m.sessionId, m.kinds); } else { grants.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderGrants(); } break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); renderCtxStrip(); if (hadNone && m.models.length && asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } /* The empty chat's notice and suggestions depend on having a model: redraw when that flips, either way. */ if ((hadNone !== !m.models.length || (hadNone && wasLoading)) && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.providerHealth = m.providerHealth || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); renderCtxStrip(); if (hadNone && m.models.length && asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } /* The empty chat's notice and suggestions depend on having a model: redraw when that flips, either way. */ if ((hadNone !== !m.models.length || (hadNone && wasLoading)) && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'skillInstall': {
         // The session redraw replaces a settled offer; this settles chips still inside a live turn.
@@ -4686,7 +5040,9 @@
         const prev = state.workspace || {}; state.workspace = m.workspace || {};
         // Errors and folder changes alter the starters (the error count, chat-only rows); the rest redraws the strip in place.
         const welcome = els.messages.querySelector(':scope > .empty');
-        if (welcome && (prev.folders !== state.workspace.folders || (prev.errors || 0) !== (state.workspace.errors || 0))) { renderSession(); } else { renderCtxStrip(); }
+        const rootsSig = (w) => JSON.stringify((w.roots || []).map((x) => [x.path, x.errors]));
+        if (welcome && (prev.folders !== state.workspace.folders || (prev.errors || 0) !== (state.workspace.errors || 0) || rootsSig(prev) !== rootsSig(state.workspace))) { renderSession(); } else { renderCtxStrip(); }
+        syncFolderChip();
         break;
       }
       case 'openFiles': {
@@ -4726,7 +5082,7 @@
       // Roving tabindex: one tab stop per row, on the checked choice (or the first enabled one).
       const stop = it.values.includes(it.value) && !lock.values.includes(it.value) ? it.value : it.values.find((v) => !lock.values.includes(v));
       const seg = it.values.map((v) => { const off = lock.values.includes(v); return `<button data-k="${esc(it.key)}" data-v="${esc(v)}" role="radio" aria-checked="${v === it.value}" tabindex="${v === stop ? 0 : -1}" class="${v === it.value ? 'on' : ''}"${off ? ` disabled title="${esc(lock.reason)}"` : ''}>${esc(AA_NAMES[v] || v)}</button>`; }).join('');
-      const ws = it.overriddenBy === 'workspace' ? ' <i class="aa-ws" title="Set in this workspace\'s settings — changes here apply to the workspace">workspace</i>' : '';
+      const ws = it.overriddenBy === 'workspace' ? (it.workspaceGrant ? ' <i class="aa-ws" title="Always allowed in this workspace — choose another value to stop">workspace</i>' : ' <i class="aa-ws" title="Set in this workspace\'s settings — changes here apply to the workspace">workspace</i>') : '';
       return `<div class="aa-row${it.locked ? ' locked' : ''}"><span class="aa-name"${it.locked ? ` title="${esc(it.locked.reason)}"` : ''}>${esc(it.label)}${it.locked ? ' <i class="aa-lock">policy</i>' : ''}${ws}</span><span class="seg" role="radiogroup" aria-label="${esc(it.label)}${it.overriddenBy === 'workspace' ? ' (workspace setting)' : ''}">${seg}</span></div>`;
     }).join('');
   }
@@ -4813,7 +5169,8 @@
     const why = a.mandatory ? (a.mandatoryReason === 'policy' ? 'Always asks — required by your organization' : a.kind === 'terminal' ? 'Always asks — dangerous command' : 'Always asks for this action') : '';
     d.dataset.kind = a.kind; d.dataset.sid = a.sessionId; d.dataset.waiting = String(a.waitingSameKind || 0); if (a.mandatory) { d.dataset.mandatory = '1'; }
     // "Allow all … in this chat" with a split menu that also offers the workspace-wide grant (never for a mandatory prompt).
-    const all = a.mandatory ? '' : `<span class="split"><button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button><button class="btn split-more" data-a="more" title="More ways to allow" aria-label="More ways to allow" aria-haspopup="menu">${I.chev}</button></span>`;
+    // A destructive command (asked every time) can still be blocked for good: its own chevron offers only that.
+    const all = a.mandatory ? (a.rule ? `<button class="btn split-more solo" data-a="more" title="Block this command from now on" aria-label="More: block this command from now on" aria-haspopup="menu">${I.chev}</button>` : '') : `<span class="split"><button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button><button class="btn split-more" data-a="more" title="More ways to allow" aria-label="More ways to allow" aria-haspopup="menu">${I.chev}</button></span>`;
     const edit = a.editable ? `<button class="btn ghost" data-a="edit" title="Change the command before it runs; the edited command is what runs">${I.edit}<span class="long">Edit</span></button>` : '';
     // Why it asked, and where that is set: the policy, a destructive command, or the approval setting for this kind.
     const because = a.askedBecause ? `${a.mandatory ? 'Always asks' : 'Asked'} because ${a.askedBecause}` : why;
@@ -4848,11 +5205,19 @@
       const b = ev.target.closest('[data-a]'); if (!b) { return; } const act = b.dataset.a;
       if (act === 'open') { selectTab(a.sessionId); return; } if (act === 'reason') { openReason(); return; } if (act === 'denyReason') { answer('deny', reasonIn.value); return; } if (act === 'deny') { denyWithDraft(); return; }
       if (act === 'edit') { openEditor(); return; }
-      if (act === 'settings') { post({ type: 'openSettings', section: 'agent', key: `approvals.${a.kind}` }); return; }
+      if (act === 'settings') { post(a.settingsSection === 'mcp' ? { type: 'openSettings', section: 'mcp' } : { type: 'openSettings', section: 'agent', key: `approvals.${a.kind}` }); return; }
       if (act === 'more') {
+        // Command rules ("Always allow `npm test`") are saved for the chat's folder, or for every workspace without one.
+        const r = a.rule; const short = r ? (r.pattern.length > 36 ? `${r.pattern.slice(0, 35)}…` : r.pattern) : '';
+        const where = r && r.scope === 'workspace' ? 'this workspace' : 'every workspace';
+        const saveRule = (allow) => { post({ type: 'approval', id: a.id, approved: allow, saveRule: true }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
         openMenu(b, [
-          { label: GRANT_LABEL[a.kind] || 'Allow all of these in this chat', desc: 'Until this chat ends; removable from the auto-approve bar', icon: I.check, onPick: () => answer('session') },
-          { label: 'Always allow in this workspace…', desc: `Saves ${GRANT_CHIP[a.kind] || a.kind}: Always in this workspace's settings (asks to confirm)`, icon: I.folder, onPick: () => post({ type: 'approval', id: a.id, approved: true, scope: 'workspace' }) },
+          ...(a.mandatory ? [] : [
+            { label: GRANT_LABEL[a.kind] || 'Allow all of these in this chat', desc: 'Until this chat ends; removable from the auto-approve bar', icon: I.check, onPick: () => answer('session') },
+            { label: 'Always allow in this workspace…', desc: `${GRANT_CHIP[a.kind] || a.kind} run without asking in every chat here (asks to confirm)`, icon: I.folder, onPick: () => post({ type: 'approval', id: a.id, approved: true, scope: 'workspace' }) },
+          ]),
+          ...(r && !r.blockOnly && !a.mandatory ? [{ label: `Always allow “${short}”`, desc: `Runs without asking in ${where} · a command rule in Settings`, icon: I.check, onPick: () => saveRule(true) }] : []),
+          ...(r ? [{ label: `Always block “${short}”`, desc: `Denies it now and from now on in ${where}`, icon: I.x, onPick: () => saveRule(false) }] : []),
         ]);
         return;
       }
@@ -5041,7 +5406,7 @@
     const c = state.ctxInfo; if (!c) { return ''; }
     const u = chatUsage(); const n = (v) => Number(v || 0).toLocaleString();
     const row = (k, v, cls) => `<div class="r${cls ? ` ${cls}` : ''}"><span>${k}</span><b>${v}</b></div>`;
-    let h = `<div class="h">Context</div>${row('Used', `${n(c.used)} · ${c.pct}%`)}${row('Window', n(c.win))}${row('Remaining', n(Math.max(0, c.win - c.used)))}`;
+    let h = `<div class="h">Context</div>${row('Used', `${n(c.used)} · ${c.pct}%`)}${row('Window', n(c.win))}${row('Remaining', n(Math.max(0, c.win - c.used)))}${ctxBreakdownHtml(c)}`;
     if (u && u.requests) {
       h += `<div class="h">This chat</div>${row('Prompt tokens', n(u.promptTokens))}${row('Output tokens', n(u.completionTokens))}`;
       if (u.cacheReadTokens || u.cacheWriteTokens) { h += row('Cache read', n(u.cacheReadTokens)) + row('Cache write', n(u.cacheWriteTokens)); }
@@ -5051,6 +5416,19 @@
     if (c.compactions) { h += row('Compacted', `${c.compactions}×`); }
     if (c.native) { h += ctxRaiseNote(c); }
     return h;
+  }
+  // What fills the window (host `context` events, saved on the chat): label, the place to trim it, and its share.
+  const BREAKDOWN = { system: ['System prompt', '', 'LocalPilot\'s instructions: mode, environment, project map, skills'], rules: ['Rules', 'customize', 'Project rules and instruction files (AGENTS.md, CLAUDE.md, .localpilot/rules)'], memory: ['Memory', 'memory', 'Saved memory notes'], tools: ['Tools', '', 'Built-in tool definitions'], mcpTools: ['MCP tools', 'mcp', 'Tool definitions from MCP servers'], conversation: ['Conversation', '', 'Your requests and the replies'], files: ['Attached files', '', 'Files, folders, #codebase, @git and other context you attached'], toolResults: ['Tool output', 'compact', 'What the agent read, searched and ran'], summary: ['Compaction summary', '', 'Summaries standing in for older messages'] };
+  const FIX = { customize: 'Manage', memory: 'Manage', mcp: 'Manage', compact: 'Compact' };
+  function ctxBreakdownHtml(c) {
+    const b = state.session && state.session.contextBreakdown;
+    if (!b) { return `<div class="h">What fills it</div><div class="bd-empty">Shown after the next request</div>`; }
+    const keys = Object.keys(BREAKDOWN).filter((k) => Number(b[k]) > 0).sort((x, y) => b[y] - b[x]);
+    if (!keys.length) { return ''; }
+    const busy = state.running.has(state.session.id);
+    return `<div class="h">What fills it</div>${keys.map((k) => { const [label, fix, tip] = BREAKDOWN[k]; const pct = Math.max(1, Math.min(100, Math.round((b[k] / Math.max(1, c.win)) * 100)));
+      const act = fix && !(fix === 'compact' && busy) ? `<button class="link" data-c="fix" data-fix="${fix}" title="${fix === 'compact' ? 'Summarise older messages and tool output' : `Open Settings · ${esc(FIX[fix])} ${esc(label.toLowerCase())}`}">${FIX[fix]}</button>` : '';
+      return `<div class="r bd" title="${esc(tip)}"><span class="k">${esc(label)}${act ? ` · ${act}` : ''}</span><b>${fmtTok(b[k])}</b><i class="bar" style="--w:${pct}%" aria-hidden="true"></i></div>`; }).join('')}`;
   }
   /** The model can take more than the Context window setting gives it: say so, with the way to raise it. */
   function ctxRaiseNote(c) {
@@ -5092,6 +5470,7 @@
     const b = e.target.closest('[data-c]'); if (!b) { return; }
     if (b.dataset.c === 'compact' && state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); }
     if (b.dataset.c === 'raise') { hideCtxCard(); post({ type: 'openSettings', section: 'models' }); return; }
+    if (b.dataset.c === 'fix') { hideCtxCard(); if (b.dataset.fix === 'compact') { if (state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); } } else { post({ type: 'openSettings', section: b.dataset.fix }); } return; }
     hideCtxCard(); els.input.focus();
   });
   ctxCard.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxCard(); els.ctx.focus(); } });
@@ -5103,7 +5482,7 @@
     const mod = state.platform === 'darwin' ? '⌘' : 'Ctrl+'; const alt = state.platform === 'darwin' ? '⌥' : 'Alt+';
     return [
       'Type while the agent works to steer it: your message is read at its next step.',
-      'The send menu while busy has <b>Send after this turn</b>, which queues a message for when the run ends.',
+      `<kbd>${kb('Alt+Enter')}</kbd> while the agent works sends your message after this run instead of into it.`,
       '<b>@</b> adds files, folders, <code>@problems</code>, <code>@git</code> or the last terminal output as context.',
       '<code>/compact</code> summarises older messages when the context ring fills up.',
       'Hover the context ring for a token breakdown; click it to compact.',
@@ -5185,7 +5564,7 @@
   }
   function settlePathLink(link, exists) {
     if (exists) { link.dataset.ck = '1'; return; }
-    if (link.closest('.code-head')) { link.classList.remove('path-link'); link.dataset.ck = '0'; link.title = 'Not in the workspace yet'; return; }
+    if (link.closest('.code-head')) { link.classList.remove('path-link'); link.dataset.ck = '0'; link.title = 'Not in the workspace yet'; codeApplyButton(link.closest('.code'), false); return; }
     const c = document.createElement('code'); c.className = 'nopath'; c.textContent = link.textContent; c.title = 'No such file in the workspace';
     link.replaceWith(c);
   }
@@ -5305,6 +5684,251 @@
   // Collapsing a group (a finished thought, an explore group) must not leave a reader who was following the end behind.
   els.messages.addEventListener('toggle', (e) => { if (!e.target.open && stickToBottom) { requestAnimationFrame(() => scrollToBottom(false)); } }, true);
 
+  // ------------------------------------------------------------------ run trace
+  // "Trace" under an answer: the host's record of that run (src/telemetry/runTrace.ts) as one list in order, with a
+  // waterfall bar per row, a filter, and Export JSON. It is a sheet over the chat; Esc or × closes it.
+  const TRACE_KIND = { model: 'Model', tool: 'Tool', retry: 'Retry', fallback: 'Fallback', approval: 'Approval', steer: 'You', compaction: 'Context', subagent: 'Subagent', hook: 'Hook', nudge: 'Nudge', error: 'Error' };
+  const TRACE_FILTERS = [['all', 'All'], ['model', 'Model calls'], ['tool', 'Tools'], ['problems', 'Problems']];
+  /** 840 ms · 4.2 s · 1m 05s */
+  function fmtMs(ms) { ms = Math.max(0, Number(ms) || 0); if (ms < 1000) { return `${Math.round(ms)} ms`; } if (ms < 60000) { return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`; } const m = Math.floor(ms / 60000); return `${m}m ${String(Math.round((ms % 60000) / 1000)).padStart(2, '0')}s`; }
+  /** Offset from the start of the run: 0:04.2 */
+  function fmtAt(ms) { const t = Math.max(0, Number(ms) || 0) / 1000; const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(1).padStart(4, '0')}`; }
+  function traceProblem(e) { return e.kind === 'retry' || e.kind === 'fallback' || e.kind === 'error' || e.status === 'error' || e.status === 'denied'; }
+  /** The sheet's content for one trace (pure: tests render it with miniDom). */
+  function traceView(t, totals, filter) {
+    const total = Math.max(1, Number(t.durationMs) || Math.max(1, ...t.entries.map((e) => e.end || e.start)));
+    const tt = totals || {};
+    const out = { ok: 'Finished', error: 'Ended with an error', stopped: 'Stopped by you', running: 'Still running' }[t.outcome] || '';
+    const facts = [`<span class="tr-out ${esc(t.outcome)}">${out}</span>`, fmtMs(total)];
+    if (t.model) { facts.push(esc(String(t.model).split('/').pop())); }
+    const n = (k, one, many) => (k ? `${k} ${k === 1 ? one : many}` : '');
+    facts.push(n(tt.modelCalls, 'model call', 'model calls'), tt.toolCalls ? `${n(tt.toolCalls, 'tool call', 'tool calls')}${tt.failedTools ? ` (${tt.failedTools} failed)` : ''}` : '', n(tt.retries, 'retry', 'retries'), n(tt.fallbacks, 'fallback', 'fallbacks'), n(tt.approvals, 'approval', 'approvals'));
+    const tokens = t.promptTokens || t.completionTokens ? `${(t.promptTokens || 0).toLocaleString()} in · ${(t.completionTokens || 0).toLocaleString()} out tokens` : '';
+    const split = tt.modelMs || tt.toolMs ? `Model ${fmtMs(tt.modelMs)} · Tools ${fmtMs(tt.toolMs)}${tokens ? ` · ${tokens}` : ''}` : tokens;
+    const rows = t.entries.filter((e) => filter === 'model' ? e.kind === 'model' : filter === 'tool' ? e.kind === 'tool' : filter === 'problems' ? traceProblem(e) : true);
+    const row = (e) => {
+      const dur = e.end !== undefined ? e.end - e.start : null;
+      const left = Math.min(100, (e.start / total) * 100); const width = dur === null ? 0 : Math.max(0.6, Math.min(100 - left, (dur / total) * 100));
+      // Retries, fallbacks and errors say what they are by their kind; a status word is for work that ran (or was asked).
+      const point = e.kind === 'retry' || e.kind === 'fallback' || e.kind === 'error' || e.kind === 'steer' || e.kind === 'compaction' || e.kind === 'nudge';
+      const st = point ? (traceProblem(e) ? 'warn' : 'ok') : e.status || 'ok';
+      const stLabel = point ? '' : { error: 'failed', denied: 'denied', cancelled: 'cancelled', running: 'unfinished' }[st] || '';
+      const ttft = e.kind === 'model' && typeof e.firstTokenMs === 'number' ? `first token ${fmtMs(e.firstTokenMs)}` : '';
+      const det = [e.agent && e.depth ? esc(e.agent) : '', ttft, e.detail ? esc(e.detail) : ''].filter(Boolean).join(' · ');
+      return `<li class="tr-row k-${esc(e.kind)} st-${esc(st)}${e.depth ? ' sub' : ''}"><span class="at">${fmtAt(e.start)}</span><span class="main"><span class="top"><span class="kind">${TRACE_KIND[e.kind] || esc(e.kind)}</span><span class="name">${esc(e.name)}</span>${stLabel ? `<span class="stl">${stLabel}</span>` : ''}</span>${det ? `<span class="det" title="${det.replace(/"/g, '&quot;')}">${det}</span>` : ''}<span class="bar" aria-hidden="true"><i style="left:${left.toFixed(2)}%;width:${dur === null ? 0 : width.toFixed(2)}%"${dur === null ? ' class="pt"' : ''}></i></span></span><span class="dur">${dur === null ? '' : fmtMs(dur)}</span></li>`;
+    };
+    return `<div class="tr-head"><button class="ib" data-t="close" title="Close (Esc)" aria-label="Close trace">${I.x}</button><span class="tr-h">Run trace</span><span class="spacer"></span><button class="btn sm" data-t="export" title="Save this trace as JSON: every row with its start time and duration">${I.download}<span>Export JSON</span></button></div>`
+      + `<div class="tr-sum"><div class="tr-title" title="${esc(t.title || '')}">${esc(t.title || 'Run')}</div><div class="tr-facts">${facts.filter(Boolean).join('<i>·</i>')}</div>${split ? `<div class="tr-split">${split}</div>` : ''}</div>`
+      + `<div class="tr-filter" role="group" aria-label="Show">${TRACE_FILTERS.map(([k, label]) => `<button class="pick${k === filter ? ' on' : ''}" data-f="${k}" aria-pressed="${k === filter}">${label}${k === 'problems' ? ` <span class="n">${t.entries.filter(traceProblem).length}</span>` : ''}</button>`).join('')}</div>`
+      + (rows.length ? `<ol class="tr-rows" aria-label="Trace rows">${rows.map(row).join('')}</ol>` : `<p class="tr-empty">${filter === 'problems' ? 'No retries, fallbacks or failures in this run.' : 'Nothing of this kind in this run.'}</p>`)
+      + '<p class="tr-note">Recorded on this machine from the run\'s events; nothing is sent anywhere.</p>';
+  }
+  // end of traceView
+  let traceState = null;
+  function openTrace(sid, id, opener) {
+    traceState = { sid, id, opener, filter: 'all', data: null };
+    const t = els.trace; t.classList.remove('hidden');
+    t.innerHTML = `<div class="tr-head"><button class="ib" data-t="close" title="Close (Esc)" aria-label="Close trace">${I.x}</button><span class="tr-h">Run trace</span></div><p class="tr-empty">${I.spin} Loading…</p>`;
+    t.querySelector('[data-t="close"]').focus();
+    post({ type: 'openTrace', sessionId: sid, traceId: id });
+  }
+  function renderTrace() {
+    const st = traceState; if (!st || !st.data) { return; }
+    const t = els.trace; const y = (t.querySelector('.tr-rows') || {}).scrollTop || 0;
+    const focusKey = document.activeElement && t.contains(document.activeElement) ? (document.activeElement.dataset.f ? `[data-f="${document.activeElement.dataset.f}"]` : document.activeElement.dataset.t ? `[data-t="${document.activeElement.dataset.t}"]` : '') : '';
+    t.innerHTML = traceView(st.data.trace, st.data.totals, st.filter);
+    const rows = t.querySelector('.tr-rows'); if (rows) { rows.scrollTop = y; }
+    const f = (focusKey && t.querySelector(focusKey)) || t.querySelector('[data-t="close"]'); if (f) { f.focus(); }
+  }
+  function showTrace(m) {
+    const st = traceState; if (!st || st.sid !== m.sessionId || st.id !== m.traceId) { return; }
+    if (!m.trace) { els.trace.innerHTML = `<div class="tr-head"><button class="ib" data-t="close" title="Close (Esc)" aria-label="Close trace">${I.x}</button><span class="tr-h">Run trace</span></div><p class="tr-empty">This run's trace is no longer stored. Each chat keeps the traces of its last 20 runs.</p>`; els.trace.querySelector('[data-t="close"]').focus(); return; }
+    st.data = { trace: m.trace, totals: m.totals }; renderTrace();
+  }
+  function closeTrace() {
+    const st = traceState; traceState = null;
+    els.trace.classList.add('hidden'); els.trace.innerHTML = '';
+    if (st && st.opener && st.opener.isConnected) { st.opener.focus(); } else { els.input.focus(); }
+  }
+  if (els.trace) {
+    els.trace.onclick = (e) => {
+      const b = e.target.closest('[data-t], [data-f]'); if (!b || !traceState) { return; }
+      if (b.dataset.f) { traceState.filter = b.dataset.f; renderTrace(); return; }
+      if (b.dataset.t === 'close') { closeTrace(); } else if (b.dataset.t === 'export') { post({ type: 'exportTrace', sessionId: traceState.sid, traceId: traceState.id }); }
+    };
+    els.trace.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTrace(); return; }
+      // A modal sheet: Tab stays inside it.
+      if (e.key === 'Tab') { const f = [...els.trace.querySelectorAll('button:not([disabled])')]; if (!f.length) { return; } const i = f.indexOf(document.activeElement); if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); } }
+    });
+  }
+
+  // ------------------------------------------------------------------ prompt library
+  // Saved prompts are custom commands (.localpilot/commands in the workspace, ~/.localpilot/commands for you), so each
+  // also runs as /name. The sheet lists them (search, scope filter), inserts one into the composer, and edits, deletes
+  // or creates them; the host writes the files and answers with `prompts` / `promptSaved`. Opened from the composer's
+  // ⋯ menu, /prompts, a sent message's Save as prompt and the welcome screen.
+  const LIB_SCOPES = [['all', 'All'], ['workspace', 'Workspace'], ['user', 'You'], ['other', 'Plugins']];
+  const LIB_SCOPE_LABEL = { workspace: 'Workspace', user: 'You', plugin: 'Plugin', organization: 'Organization' };
+  const lib = { open: false, q: '', scope: 'all', items: null, ws: true, sel: 0, edit: null, editOnly: false, opener: null, err: '', exists: false, busy: false };
+  /** Same ranking as the host's searchPrompts: every word somewhere, name hits first. */
+  function libRows() {
+    const items = (lib.items || []).filter((it) => lib.scope === 'all' || (lib.scope === 'other' ? it.scope === 'plugin' || it.scope === 'organization' : it.scope === lib.scope));
+    const words = lib.q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) { return items; }
+    return items.map((it, i) => ({ it, i, hay: `${it.invoke} ${it.description} ${it.body}`.toLowerCase() }))
+      .filter((x) => words.every((w) => x.hay.includes(w)))
+      .map((x) => ({ ...x, score: words.reduce((s, w) => s + (x.it.invoke.toLowerCase().includes(w) ? 10 : x.it.description.toLowerCase().includes(w) ? 3 : 1), 0) }))
+      .sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.it);
+  }
+  /** A name from the text's first words (`Review this diff for security issues` → `review-diff-security-issues`); the host checks it again. */
+  function suggestPromptName(text) {
+    const stop = new Set(['a', 'an', 'the', 'this', 'that', 'these', 'to', 'for', 'of', 'in', 'on', 'and', 'or', 'with', 'please', 'me', 'my', 'it', 'is', 'be', 'can', 'you']);
+    const first = String(text || '').replace(/```[\s\S]*?(```|$)/g, ' ').split('\n').find((l) => l.trim()) || '';
+    return first.toLowerCase().replace(/[@#][\w./-]+/g, ' ').split(/[^a-z0-9]+/).filter((w) => w && !stop.has(w)).slice(0, 4).join('-').slice(0, 40) || 'prompt';
+  }
+  const libSlug = (s) => String(s || '').trim().replace(/^\//, '').toLowerCase().replace(/\.(md|markdown|txt)$/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_.-]/g, '').replace(/^[-.]+|[-.]+$/g, '');
+  /** opts: q (search), edit (open the editor: { body } for a new prompt or an item), opener (focus returns there). */
+  function openPromptLib(opts = {}) {
+    Object.assign(lib, { open: true, q: opts.q || '', sel: 0, err: '', exists: false, busy: false, opener: opts.opener || document.activeElement, edit: null, editOnly: !!opts.edit });
+    if (opts.edit) { libEdit(opts.edit); }
+    els.promptLib.classList.remove('hidden');
+    renderLib(true);
+    post({ type: 'promptLibrary', ...(state.session ? { sessionId: state.session.id } : {}) });
+  }
+  function closePromptLib() {
+    const opener = lib.opener; lib.open = false; lib.edit = null;
+    els.promptLib.classList.add('hidden'); els.promptLib.innerHTML = '';
+    if (opener && opener.isConnected && opener !== document.body) { opener.focus(); } else { els.input.focus(); }
+  }
+  /** The editor for `it` (a listed prompt) or a new prompt with `body`. */
+  function libEdit(it) {
+    const scope = it.file ? it.scope : lib.ws ? 'workspace' : 'user';
+    lib.edit = it.file ? { name: it.name, description: it.description || '', body: it.body, scope, file: it.file, fileScope: it.scope, invoke: it.invoke, extra: it.extra || [] } : { name: it.name || suggestPromptName(it.body), description: '', body: it.body || '', scope };
+    lib.err = ''; lib.exists = false; lib.busy = false;
+  }
+  function insertPrompt(it) {
+    const cur = els.input.value.replace(/\s+$/, '');
+    els.input.value = cur ? `${cur}\n\n${it.body}` : it.body;
+    closePromptLib();
+    autoGrow(); updateSendEnabled(); els.input.focus(); els.input.selectionStart = els.input.selectionEnd = els.input.value.length;
+  }
+  function savePromptNow(overwrite) {
+    const e = lib.edit; const f = els.promptLib.querySelector('.pl-form'); if (!e || !f) { return; }
+    e.name = f.querySelector('[name="name"]').value; e.description = f.querySelector('[name="desc"]').value; e.body = f.querySelector('[name="body"]').value;
+    if (!libSlug(e.name)) { lib.err = 'Give the prompt a name.'; lib.exists = false; renderLib(); els.promptLib.querySelector('[name="name"]').focus(); return; }
+    if (!e.body.trim()) { lib.err = 'The prompt text is empty.'; lib.exists = false; renderLib(); els.promptLib.querySelector('[name="body"]').focus(); return; }
+    lib.busy = true; lib.err = ''; renderLib();
+    post({ type: 'savePrompt', name: e.name, description: e.description, body: e.body, scope: e.scope, ...(e.file ? { file: e.file, fileScope: e.fileScope } : {}), ...(overwrite ? { overwrite: true } : {}), ...(state.session ? { sessionId: state.session.id } : {}) });
+  }
+  function libEditHtml() {
+    const e = lib.edit; const slug = libSlug(e.name);
+    const head = `<div class="tr-head"><button class="ib" data-l="${lib.editOnly ? 'close' : 'back'}" title="${lib.editOnly ? 'Close (Esc)' : 'Back to the library (Esc)'}" aria-label="${lib.editOnly ? 'Close' : 'Back to the library'}">${lib.editOnly ? I.x : I.reply}</button><span class="tr-h">${e.file ? `Edit ${esc(e.invoke)}` : 'Save as prompt'}</span></div>`;
+    const scopes = [['workspace', 'This workspace', lib.ws ? '.localpilot/commands, share it by committing it' : 'Open a folder first'], ['user', 'Just me', '~/.localpilot/commands, every workspace']];
+    return `${head}<form class="pl-form" novalidate>`
+      + `<label class="pl-f"><span class="k">Name</span><input name="name" type="text" maxlength="64" spellcheck="false" autocomplete="off" value="${esc(e.name)}" aria-describedby="pl-runs"><span id="pl-runs" class="pl-hint">${slug ? `Runs as <code>/${esc(slug)}</code>` : 'Letters, digits and "-"'}</span></label>`
+      + `<label class="pl-f"><span class="k">Description <i>optional</i></span><input name="desc" type="text" maxlength="200" autocomplete="off" value="${esc(e.description)}" placeholder="Shown in the library and the / menu"></label>`
+      + `<div class="pl-f"><span class="k" id="pl-scope-k">Save for</span><div class="pl-scope" role="radiogroup" aria-labelledby="pl-scope-k">${scopes.map(([k, l, d]) => `<button type="button" class="pick${e.scope === k ? ' on' : ''}" role="radio" aria-checked="${e.scope === k}" data-scope="${k}" title="${esc(d)}"${k === 'workspace' && !lib.ws ? ' disabled' : ''}>${l}</button>`).join('')}</div><span class="pl-hint">${esc((scopes.find(([k]) => k === e.scope) || scopes[1])[2])}</span></div>`
+      + `<label class="pl-f grow"><span class="k">Prompt</span><textarea name="body" rows="8" spellcheck="true">${esc(e.body)}</textarea><span class="pl-hint">Use <code>$ARGUMENTS</code> where the text typed after <code>/${esc(slug || 'name')}</code> should go.${e.extra && e.extra.length ? ` Kept as they are: ${e.extra.map(esc).join(', ')}.` : ''}</span></label>`
+      + (lib.err ? `<p class="pl-err" role="alert">${esc(lib.err)}${lib.exists ? ' <button type="button" class="btn sm" data-l="replace">Replace it</button>' : ''}</p>` : '')
+      + `<div class="pl-acts"><button type="button" class="btn" data-l="${lib.editOnly ? 'close' : 'back'}">Cancel</button><button type="submit" class="btn primary" ${lib.busy ? 'disabled aria-busy="true"' : ''}>${lib.busy ? I.spin : I.bookmark}<span>${e.file ? 'Save changes' : 'Save prompt'}</span></button></div></form>`;
+  }
+  function libListHtml() {
+    const items = lib.items || []; const count = (k) => items.filter((it) => k === 'all' || (k === 'other' ? it.scope === 'plugin' || it.scope === 'organization' : it.scope === k)).length;
+    const scopes = LIB_SCOPES.filter(([k]) => k === 'all' || k === lib.scope || count(k));
+    return `<div class="tr-head"><button class="ib" data-l="close" title="Close (Esc)" aria-label="Close prompt library">${I.x}</button><span class="tr-h">Prompt library</span><span class="spacer"></span><button class="btn sm" data-l="new" aria-label="New prompt" title="Save a new prompt${els.input.value.trim() ? ' (starts from the message box)' : ''}">${I.plus}<span>New prompt</span></button></div>`
+      + `<div class="pl-search"><input class="search" type="search" placeholder="Search prompts…" aria-label="Search prompts" aria-controls="pl-rows" value="${esc(lib.q)}" autocomplete="off" spellcheck="false"></div>`
+      + (items.length ? `<div class="tr-filter" role="group" aria-label="Show">${scopes.map(([k, l]) => `<button class="pick${lib.scope === k ? ' on' : ''}" data-scope-f="${k}" aria-pressed="${lib.scope === k}">${l} <span class="n">${count(k)}</span></button>`).join('')}</div>` : '')
+      + '<ul id="pl-rows" class="pl-rows" role="listbox" aria-label="Saved prompts"></ul>'
+      + '<p class="tr-note">Click a prompt to insert it into the message box. Each one also runs as <code>/name</code>.</p>';
+  }
+  function renderLibRows() {
+    const box = els.promptLib.querySelector('.pl-rows'); if (!box) { return; }
+    if (!lib.items) { box.innerHTML = `<li class="tr-empty">${I.spin} Loading prompts…</li>`; return; }
+    const rows = libRows(); lib.sel = Math.max(0, Math.min(lib.sel, rows.length - 1));
+    if (!rows.length) {
+      box.innerHTML = lib.items.length ? `<li class="pl-empty">No prompt matches “${esc(lib.q)}”.</li>` : `<li class="pl-empty"><b>No saved prompts yet.</b><span>Save a prompt you use often: write it in the message box, then ⋯ → <b>Save as prompt…</b>, or use <b>Save as prompt</b> on a message you sent.</span></li>`;
+      return;
+    }
+    box.innerHTML = rows.map((it, i) => {
+      const desc = it.description || it.body.split('\n').find((l) => l.trim()) || '';
+      const acts = `${it.editable ? `<button class="ib" data-l="edit" title="Edit" aria-label="Edit ${esc(it.invoke)}">${I.edit}</button><button class="ib danger" data-l="delete" title="Delete (asks first)" aria-label="Delete ${esc(it.invoke)}">${I.trash}</button>` : ''}<button class="ib" data-l="open" title="Open the file: ${esc(it.origin)}" aria-label="Open ${esc(it.invoke)} file">${I.open}</button>`;
+      return `<li class="pl-row${i === lib.sel ? ' sel' : ''}" role="option" aria-selected="${i === lib.sel}" data-i="${i}"><button class="pl-main" data-l="insert" title="Insert into the message box"><span class="nm">${esc(it.invoke)}</span><span class="tag" title="${esc(it.origin)}">${esc(LIB_SCOPE_LABEL[it.scope] || it.scope)}</span><span class="ds">${esc(desc)}</span></button><span class="acts">${acts}</span></li>`;
+    }).join('');
+    const s = box.querySelector('.pl-row.sel'); if (s && lib.reveal) { s.scrollIntoView({ block: 'nearest' }); } lib.reveal = false;
+  }
+  /** `full`: rebuild the sheet (view changed); otherwise only the rows, so typing in the search box is never interrupted. */
+  function renderLib(full) {
+    if (!lib.open) { return; }
+    const p = els.promptLib; const view = lib.edit ? 'edit' : 'list';
+    if (view === 'edit') {
+      // Keep what is typed: the form is rebuilt for errors and the busy state, with the values read back first.
+      const f = p.querySelector('.pl-form'); const e = lib.edit;
+      if (f) { e.name = f.querySelector('[name="name"]').value; e.description = f.querySelector('[name="desc"]').value; e.body = f.querySelector('[name="body"]').value; }
+      const focus = document.activeElement && p.contains(document.activeElement) ? (document.activeElement.name || '') : '';
+      p.dataset.view = 'edit'; p.innerHTML = libEditHtml();
+      const t = (focus && p.querySelector(`[name="${focus}"]`)) || (lib.err ? p.querySelector('[data-l="replace"]') || p.querySelector('[name="name"]') : null) || (full ? p.querySelector(e.file || e.name ? '[name="body"]' : '[name="name"]') : p.querySelector('[type="submit"]'));
+      if (t) { t.focus(); }
+      return;
+    }
+    if (full || p.dataset.view !== 'list' || !p.querySelector('.pl-rows')) {
+      p.dataset.view = 'list'; p.innerHTML = libListHtml();
+      p.querySelector('.search').focus();
+    } else {
+      // Counts on the filter chips follow the items.
+      const fl = p.querySelector('.tr-filter'); const tmp = el('div', '', libListHtml()); const nf = tmp.querySelector('.tr-filter');
+      if (fl && nf) { fl.innerHTML = nf.innerHTML; } else if (!fl && nf) { p.querySelector('.pl-search').after(nf); }
+    }
+    renderLibRows();
+  }
+  function libItemAt(node) { const r = node && node.closest('.pl-row'); return r ? libRows()[Number(r.dataset.i)] : null; }
+  if (els.promptLib) {
+    els.promptLib.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-l], [data-scope], [data-scope-f]'); if (!b || b.disabled) { return; }
+      if (b.dataset.scopeF) { lib.scope = b.dataset.scopeF; lib.sel = 0; renderLib(true); return; }
+      if (b.dataset.scope) { if (lib.edit) { lib.edit.scope = b.dataset.scope; renderLib(); const r = els.promptLib.querySelector(`[data-scope="${b.dataset.scope}"]`); if (r) { r.focus(); } } return; }
+      const a = b.dataset.l; const it = libItemAt(b);
+      if (a === 'close') { closePromptLib(); }
+      else if (a === 'back') { lib.edit = null; lib.err = ''; renderLib(true); }
+      else if (a === 'new') { libEdit({ body: els.input.value.trim() }); renderLib(true); }
+      else if (a === 'replace') { savePromptNow(true); }
+      else if (a === 'insert' && it) { insertPrompt(it); }
+      else if (a === 'edit' && it) { libEdit(it); renderLib(true); }
+      else if (a === 'delete' && it) { post({ type: 'deletePrompt', file: it.file, ...(state.session ? { sessionId: state.session.id } : {}) }); }
+      else if (a === 'open' && it) { post({ type: 'openPromptFile', file: it.file }); }
+    });
+    els.promptLib.addEventListener('submit', (e) => { e.preventDefault(); if (!lib.busy) { savePromptNow(false); } });
+    els.promptLib.addEventListener('input', (e) => {
+      if (e.target.classList.contains('search')) { lib.q = e.target.value; lib.sel = 0; renderLibRows(); return; }
+      if (e.target.name === 'name' && lib.edit) { const h = els.promptLib.querySelector('#pl-runs'); const slug = libSlug(e.target.value); if (h) { h.innerHTML = slug ? `Runs as <code>/${esc(slug)}</code>` : 'Letters, digits and "-"'; } if (lib.exists) { lib.exists = false; lib.err = ''; const er = els.promptLib.querySelector('.pl-err'); if (er) { er.remove(); } } }
+    });
+    els.promptLib.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (lib.edit && !lib.editOnly) { lib.edit = null; lib.err = ''; renderLib(true); } else { closePromptLib(); } return; }
+      // Mod+Enter saves from anywhere in the form (Enter in the text area is a new line).
+      if (lib.edit && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (!lib.busy) { savePromptNow(false); } return; }
+      if (!lib.edit && e.target.classList.contains('search')) {
+        const rows = libRows();
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (rows.length) { lib.sel = (lib.sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length; lib.reveal = true; renderLibRows(); } return; }
+        if (e.key === 'Enter') { e.preventDefault(); if (rows[lib.sel]) { insertPrompt(rows[lib.sel]); } return; }
+      }
+      // A modal sheet: Tab stays inside it.
+      if (e.key === 'Tab') { const f = [...els.promptLib.querySelectorAll('button:not([disabled]), input, textarea')]; if (!f.length) { return; } const i = f.indexOf(document.activeElement); if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); } }
+    });
+  }
+  function onPrompts(m) {
+    lib.items = m.items || []; lib.ws = !!m.workspace;
+    if (lib.edit && !lib.ws && lib.edit.scope === 'workspace' && !lib.edit.file) { lib.edit.scope = 'user'; renderLib(); return; }
+    if (lib.open && !lib.edit) { renderLib(); }
+  }
+  function onPromptSaved(m) {
+    if (!lib.open || !lib.edit) { return; }
+    lib.busy = false;
+    if (!m.ok) { lib.err = m.error || 'Could not save the prompt'; lib.exists = !!m.exists; renderLib(); return; }
+    toast(`Saved ${m.invoke}: insert it from the library, or type ${m.invoke}`);
+    if (lib.editOnly) { closePromptLib(); } else { lib.edit = null; lib.err = ''; renderLib(true); }
+  }
+  // end of prompt library
+
   // The extras above follow the same messages as the main handler (which runs first: it was registered earlier).
   window.addEventListener('message', (ev) => {
     const m = ev.data; if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
@@ -5318,6 +5942,10 @@
           break;
         }
         case 'pathsExistResult': applyPathChecks(m); break;
+        case 'connectivity': applyConnectivity(m); break;
+        case 'trace': showTrace(m); break;
+        case 'prompts': onPrompts(m); break;
+        case 'promptSaved': onPromptSaved(m); break;
         case 'session': if (m.session) { taskCwd.set(m.session.id, m.cwd || ''); } if (ctxMode === 'confirm') { hideCtxCard(); } renderTaskHead(); break;
         case 'sessions': renderTaskHead(); break;
         case 'running':

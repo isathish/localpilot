@@ -199,6 +199,66 @@ suite('WorktreeManager (isolated agent checkouts)', function () {
     }
   });
 
+  test('per-file apply brings only the chosen files over; rebase(only) leaves the rest pending', async () => {
+    const wt = await mgr.create(repo, 'session-perfile');
+    try {
+      await fs.writeFile(path.join(wt.path, 'src', 'app.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\nexport const d = 4;\n');
+      await fs.writeFile(path.join(wt.path, 'src', 'new.ts'), 'export const n = 1;\n');
+      await fs.rm(path.join(wt.path, 'README.md'));
+      const snapshots: string[] = [];
+      const res = await mgr.apply(wt, async (p) => {
+        snapshots.push(path.relative(repo, p).split(path.sep).join('/'));
+      }, ['src/new.ts']);
+      assert.deepStrictEqual(res.files.map((f) => f.path), ['src/new.ts']);
+      assert.deepStrictEqual(snapshots, ['src/new.ts'], 'only the applied file is snapshotted');
+      assert.strictEqual(await fs.readFile(path.join(repo, 'src', 'new.ts'), 'utf8'), 'export const n = 1;\n');
+      assert.doesNotMatch(await fs.readFile(path.join(repo, 'src', 'app.ts'), 'utf8'), /d = 4/, 'files not chosen stay as they were');
+      assert.ok(await fs.stat(path.join(repo, 'README.md')), 'a pending delete is not applied');
+      await mgr.rebase(wt, ['src/new.ts']);
+      assert.deepStrictEqual((await mgr.changes(wt)).map((c) => `${c.kind}:${c.path}`).sort(), ['delete:README.md', 'modify:src/app.ts'], 'the other files are still pending');
+      // Applying the rest later works from the new base and does not re-apply new.ts.
+      const rest = await mgr.apply(wt, undefined, ['src/app.ts', 'README.md']);
+      assert.deepStrictEqual(rest.files.map((f) => f.path).sort(), ['README.md', 'src/app.ts']);
+      assert.match(await fs.readFile(path.join(repo, 'src', 'app.ts'), 'utf8'), /d = 4/);
+      await assert.rejects(fs.stat(path.join(repo, 'README.md')), 'the delete is applied too');
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('a per-file apply that conflicts reports that file and leaves it out of the pending list', async () => {
+    const wt = await mgr.create(repo, 'session-perfile-conflict');
+    try {
+      await fs.writeFile(path.join(wt.path, 'src', 'app.ts'), 'export const a = 100;\nexport const b = 2;\nexport const c = 3;\n');
+      await fs.writeFile(path.join(wt.path, 'src', 'other.ts'), 'export const o = 1;\n');
+      await fs.writeFile(path.join(repo, 'src', 'app.ts'), 'export const a = 200;\nexport const b = 2;\nexport const c = 3;\n');
+      const res = await mgr.apply(wt, undefined, ['src/app.ts']);
+      assert.deepStrictEqual(res.conflicts, ['src/app.ts']);
+      assert.match(await fs.readFile(path.join(repo, 'src', 'app.ts'), 'utf8'), /<<<<<<< /);
+      await assert.rejects(fs.stat(path.join(repo, 'src', 'other.ts')), 'the other file was not applied');
+      await mgr.rebase(wt, ['src/app.ts']);
+      assert.deepStrictEqual((await mgr.changes(wt)).map((c) => c.path), ['src/other.ts']);
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
+  test('discardFiles resets chosen files to the base (created files are deleted) and keeps the rest', async () => {
+    const wt = await mgr.create(repo, 'session-discard-files');
+    try {
+      await fs.writeFile(path.join(wt.path, 'src', 'app.ts'), 'changed\n');
+      await fs.writeFile(path.join(wt.path, 'src', 'new.ts'), 'export const n = 1;\n');
+      await fs.writeFile(path.join(wt.path, 'src', 'keep.ts'), 'keep\n');
+      const done = await mgr.discardFiles(wt, ['src/app.ts', 'src/new.ts']);
+      assert.deepStrictEqual(done.sort(), ['src/app.ts', 'src/new.ts']);
+      assert.strictEqual(await fs.readFile(path.join(wt.path, 'src', 'app.ts'), 'utf8'), 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n');
+      await assert.rejects(fs.stat(path.join(wt.path, 'src', 'new.ts')));
+      assert.deepStrictEqual((await mgr.changes(wt)).map((c) => c.path), ['src/keep.ts']);
+    } finally {
+      await mgr.remove(wt);
+    }
+  });
+
   test('git_push refuses a branch that carries the worktree snapshot commit', async () => {
     const wt = await mgr.create(repo, 'session-push');
     try {

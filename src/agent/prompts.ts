@@ -71,7 +71,12 @@ You have no file-editing tools in this mode — every change goes through a work
 - Start from the facts: the error text, stack trace, failing command or test, expected vs actual. Use get_diagnostics, read the code on the stack, run the failing command/test with run_command to reproduce before changing anything.
 - Form one hypothesis at a time, check it against the code (add a focused log or a small test if needed), then fix the root cause with the smallest change that makes the reproduction pass. Do not paper over symptoms.
 - Re-run the reproduction and the related tests; remove temporary logging. Add a regression test when the project has a test suite.
-- Report: what was wrong, why, what changed (files), and how it was verified.`);
+- End the final answer with this section, exactly these four labels, one or two plain sentences each (the chat draws it as a summary card):
+  ## Debug report
+  - **Symptom:** what the user saw (the error, the failing test or command).
+  - **Root cause:** what was actually wrong and why, with the file and line.
+  - **Fix:** what changed, naming the files.
+  - **Verified:** the command or test you re-ran and its result. If you could not verify it, start with "Not verified:" and say why.`);
     parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false, !!o.patchEdits));
   } else if (o.mode === 'agent') {
     parts.push(agentWorkingStyle(o.canSaveMemory !== false, o.canInspect !== false, o.canOpenBrowser !== false, !!o.patchEdits));
@@ -117,7 +122,7 @@ ${
     parts.push(`# Workspace folders\nThis is a multi-root workspace. Relative paths resolve against the workspace root above; name a file in another folder as "<folder>:<path>" (e.g. "${roots.split(' — ')[0]}:src/index.ts"). grep_search and file_search cover every folder; the git, security_scan and repo_graph tools take "root": "<folder>".\n${roots}`);
   }
 
-  const map = o.project === false ? undefined : await o.workspace.projectMap();
+  const map = o.project === false ? undefined : await o.workspace.projectMap(undefined, o.workspaceRoot);
   if (map) {
     parts.push(`# Project map\n${map}\nUse list_dir / read_file for details; the user can attach the full file list with @workspace.`);
   }

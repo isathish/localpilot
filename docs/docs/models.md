@@ -144,7 +144,7 @@ With `localpilot.routing.enabled` on (the default), LocalPilot picks a model per
 | Plan mode | `localpilot.routing.reasoning` when set (for example `ollama/qwen3:8b`), else the session model |
 | Read-only subagents (`explore`, `clarifier`, `researcher`) | `localpilot.routing.fast` when set, else the **smallest** tool-capable instruct model that fits. These run many short tool calls, often in parallel. `session` pins the session model |
 | Implementing subagents (`coder`, `tester`, `debugger`, `docs`) | `localpilot.routing.coding` when set (for example a 32b coder while you chat with a 7b), else the session model |
-| Chosen model offline or disabled | The best available model. A status line explains the substitution, and the session switches to it |
+| Chosen model offline or disabled | The first available model of `localpilot.routing.fallbackModels` (**Settings → Models → Routing → Fallback order**), else the best available model. A note at the top of the turn explains the substitution. A local model never falls back to a cloud model unless that cloud model is in your fallback order |
 
 The ranking weighs capabilities (tools, FIM, vision), model family, parameter count and whether the model fits the machine's budget. A 32b model that spills out of memory loses to a 14b that fits. colibri models that stream from disk are ranked down for chat, agent and image turns and kept away from read-only subagents and inline completions; they get a small boost for Plan mode.
 
@@ -206,7 +206,16 @@ Run **LocalPilot: Start Colibri Server** (`localpilot.startColibri`):
 3. It waits up to 10 minutes for the server to answer while the model's resident part loads. Watch the terminal for progress.
 4. It refreshes the model list and tells you which models colibri is serving.
 
-The command never downloads models. Run colibri's own setup (`start-here`) once to pick and download a model for your machine.
+### Disk space before a download
+
+Before colibri's setup downloads a model (installing colibri, switching models, or starting with a model in `localpilot.colibri.model` that is not in the models folder yet), LocalPilot checks the free space on the disk that holds the models folder (`localpilot.colibri.modelsDir`, default `~/colibri-models`). A model needs its download size plus 2 GB to work in. When it does not fit, a dialog says by how much, for example *glm-5.2 needs about 431 GB (a 429 GB download plus 2 GB to work in), but the disk that holds ~/colibri-models has 120 GB free: 311 GB short*, and offers:
+
+- **Choose another folder…**: pick a folder on a bigger disk; it becomes `localpilot.colibri.modelsDir` and the check runs again.
+- **Use <model> (N GB)**: the best smaller model that fits this machine's memory and the free space.
+- **Pick another model…**: the full model list, ranked for this machine.
+- **Download anyway**: start the download as it is. colibri stops when the disk is full and resumes from there next time.
+
+With colibri left to pick its own model, the check uses the smallest model it could pick for this machine. A model folder (instead of a catalog name) downloads nothing and is not checked. **Settings → Providers → colibri** shows the free space under **Models folder**, in amber when even the smallest model would not fit.
 
 ### colibri settings
 

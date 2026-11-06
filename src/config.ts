@@ -9,6 +9,7 @@ import { VSCODE_LM_BASE_URL } from './providers/vscodeLmMessages';
 import type { OtlpSettings } from './telemetry/otlp';
 import { parseHealingConfig } from './healingSettings';
 import { getManagedPolicy, mergeManagedProviders, policyRedis, policyTelemetry } from './agent/managedPolicy';
+import { workspaceGrant } from './agent/workspaceApprovals';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -51,7 +52,12 @@ export interface RoutingConfig {
   coding?: string;
   /** Spread simultaneous runs over comparable idle models when the intended one is saturated (Auto picks and inherited worker models only). */
   parallelModels?: boolean;
+  /** Models tried in this order when the chosen one is unavailable, before the automatic best fit (User settings only). */
+  fallbackModels?: string[];
 }
+
+/** Per MCP server, per tool (as the server names it): always run, always ask, or refuse. Unlisted tools follow `approvals.mcp`. */
+export type McpToolApprovals = Record<string, Record<string, 'always' | 'ask' | 'never'>>;
 
 export type HealingCheckKind = 'build' | 'typecheck' | 'lint' | 'test' | 'security' | 'custom';
 
@@ -150,6 +156,10 @@ export interface LocalPilotConfig {
   mcpServers: Record<string, McpServerConfig>;
   /** Restart a stdio server when its workspace script (a .js/.py file, or a file under build/ or dist/) changes. */
   mcpWatchServerFiles: boolean;
+  /** Per-tool MCP approvals set in Settings → MCP servers (User settings only); they override the server's autoApprove list. */
+  mcpToolApprovals: McpToolApprovals;
+  /** Seconds to wait for a model's first token before the request counts as stalled (0 = no limit). */
+  firstTokenTimeoutSeconds: number;
   /** Extra repositories the agent can work across, name → path (besides the workspace folders and .localpilot/repos.json). */
   repos: Record<string, string>;
   skillsPaths: string[];
@@ -261,11 +271,12 @@ export function getConfig(): LocalPilotConfig {
     editTool: (['auto', 'edit_file', 'apply_patch'] as const).find((m) => m === c.get<string>('editTool', 'auto')) ?? 'auto',
     diffPreview: (['onApproval', 'always', 'off'] as const).find((m) => m === c.get<string>('diffPreview', 'onApproval')) ?? 'onApproval',
     approvals: {
-      terminal: (['always', 'safe', 'ask', 'never'] as const).find((m) => m === c.get<string>('approvals.terminal', 'ask')) ?? 'ask',
-      write: c.get<ApprovalMode>('approvals.write', 'always'),
-      delete: c.get<ApprovalMode>('approvals.delete', 'ask'),
-      network: c.get<ApprovalMode>('approvals.network', 'always'),
-      mcp: c.get<ApprovalMode>('approvals.mcp', 'always'),
+      // "Always allow in this workspace" (per-workspace extension state) wins over the User value.
+      terminal: workspaceGrant('terminal') ?? (['always', 'safe', 'ask', 'never'] as const).find((m) => m === c.get<string>('approvals.terminal', 'ask')) ?? 'ask',
+      write: workspaceGrant('write') ?? c.get<ApprovalMode>('approvals.write', 'always'),
+      delete: workspaceGrant('delete') ?? c.get<ApprovalMode>('approvals.delete', 'ask'),
+      network: workspaceGrant('network') ?? c.get<ApprovalMode>('approvals.network', 'always'),
+      mcp: workspaceGrant('mcp') ?? c.get<ApprovalMode>('approvals.mcp', 'always'),
     },
     dangerousAlwaysAsk: c.get<boolean>('approvals.dangerousAlwaysAsk', true) !== false,
     notifications: (['whenHidden', 'always', 'off'] as const).find((m) => m === c.get<string>('notifications', 'whenHidden')) ?? 'whenHidden',
@@ -318,6 +329,8 @@ export function getConfig(): LocalPilotConfig {
     },
     mcpServers: c.get<Record<string, McpServerConfig>>('mcpServers', {}),
     mcpWatchServerFiles: c.get<boolean>('mcp.watchServerFiles', true),
+    mcpToolApprovals: parseMcpToolApprovals(c.get<unknown>('mcp.toolApprovals', {})),
+    firstTokenTimeoutSeconds: (() => { const n = Number(c.get<number>('firstTokenTimeoutSeconds', 180)); return Number.isFinite(n) ? (n <= 0 ? 0 : Math.max(15, Math.min(3600, Math.floor(n)))) : 180; })(),
     repos: Object.fromEntries(Object.entries(c.get<Record<string, unknown>>('repos', {}) ?? {}).filter(([, v]) => typeof v === 'string')) as Record<string, string>,
     skillsPaths: c.get<string[]>('skillsPaths', []),
     pluginPaths: (c.get<string[]>('pluginPaths', []) ?? []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()),
@@ -375,6 +388,7 @@ export function getConfig(): LocalPilotConfig {
       fast: c.get<string>('routing.fast', '') || undefined,
       coding: c.get<string>('routing.coding', '') || undefined,
       parallelModels: c.get<boolean>('routing.parallelModels', true),
+      fallbackModels: [...new Set((c.get<unknown[]>('routing.fallbackModels', []) ?? []).filter((m): m is string => typeof m === 'string' && !!m.trim()).map((m) => m.trim()))],
     },
     pdf: {
       maxReadSizeMB: Math.max(1, Number(c.get<number>('pdf.maxReadSizeMB', 100)) || 100),
@@ -420,6 +434,29 @@ function normalizeThinking(v: unknown): ThinkingLevel {
   return 'auto';
 }
 
+/** `mcp.toolApprovals` with unknown modes and non-object entries dropped. */
+export function parseMcpToolApprovals(raw: unknown): McpToolApprovals {
+  const out: McpToolApprovals = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return out;
+  }
+  for (const [server, tools] of Object.entries(raw as Record<string, unknown>)) {
+    if (!tools || typeof tools !== 'object' || Array.isArray(tools)) {
+      continue;
+    }
+    const t: Record<string, 'always' | 'ask' | 'never'> = {};
+    for (const [tool, mode] of Object.entries(tools as Record<string, unknown>)) {
+      if (mode === 'always' || mode === 'ask' || mode === 'never') {
+        t[tool] = mode;
+      }
+    }
+    if (Object.keys(t).length) {
+      out[server] = t;
+    }
+  }
+  return out;
+}
+
 export function onConfigChange(cb: () => void): vscode.Disposable {
   return vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration(SECTION)) {
@@ -431,7 +468,7 @@ export function onConfigChange(cb: () => void): vscode.Disposable {
 /** Security settings a repository must not change: `scope: application` in package.json, so only User settings accept them.
  *  OTLP export is user-only too: several of its keys are application-scoped, and a workspace must not redirect telemetry.
  *  A repository cannot turn the self-healing security check off or allow dependency installs. */
-export const isUserOnlySetting = (key: string) => key === 'hooks.enabled' || key === 'healing.dependencyInstall' || key === 'healing.securityCheck' || key.startsWith('approvals.') || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
+export const isUserOnlySetting = (key: string) => key === 'routing.fallbackModels' || key === 'mcp.toolApprovals' || key === 'hooks.enabled' || key === 'healing.dependencyInstall' || key === 'healing.securityCheck' || key.startsWith('approvals.') || key.startsWith('autoMode.') || key.startsWith('telemetry.otlp.');
 
 /** The most specific scope that sets `key`, so a write there actually takes effect (User when nothing overrides it). */
 export function configTarget(key: string): vscode.ConfigurationTarget {

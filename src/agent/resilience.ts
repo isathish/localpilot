@@ -126,6 +126,8 @@ export function describeModelError(kind: ModelFailure, raw: string, modelName: s
 export interface WatchdogOptions {
   /** Max wait for the first event (local models can take a while to load and prefill). */
   firstTokenMs: number;
+  /** The first-token limit right now, measured from the request's start; read again when the timer fires, so "Keep waiting" can extend it. */
+  firstTokenLimit?: () => number;
   /** Max silence between events once streaming has started. */
   idleMs: number;
   /** Called every second while waiting for the first event, with the seconds elapsed. */
@@ -148,10 +150,18 @@ export async function* withWatchdog(stream: AsyncIterable<StreamEvent>, opts: Wa
       let timer: NodeJS.Timeout | undefined;
       let ticker: NodeJS.Timeout | undefined;
       const stalled = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
+        const fire = () => {
+          if (!seen && opts.firstTokenLimit) {
+            const left = opts.firstTokenLimit() - (Date.now() - started);
+            if (left > 0) {
+              timer = setTimeout(fire, Math.min(left, 2 ** 31 - 1));
+              return;
+            }
+          }
           opts.abort();
-          reject(new ModelStallError(seen ? 'mid-stream' : 'first-token', Math.round(limit / 1000)));
-        }, limit);
+          reject(new ModelStallError(seen ? 'mid-stream' : 'first-token', Math.round((seen ? limit : opts.firstTokenLimit?.() ?? limit) / 1000)));
+        };
+        timer = setTimeout(fire, Math.min(limit, 2 ** 31 - 1));
         if (!seen && opts.onWaiting) {
           ticker = setInterval(() => opts.onWaiting?.(Math.round((Date.now() - started) / 1000)), 1000);
         }

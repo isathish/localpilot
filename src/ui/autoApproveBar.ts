@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { getManagedPolicy, ManagedPolicy } from '../agent/managedPolicy';
+import { GrantKind, setWorkspaceGrant, workspaceGrant } from '../agent/workspaceApprovals';
 
 /** One toggle of the composer's auto-approve bar. `values` are the choices in order; `locked`: a policy floor forbids the rest. */
 export interface AutoApproveItem {
@@ -12,6 +13,8 @@ export interface AutoApproveItem {
   locked?: { values: string[]; reason: string };
   /** The value comes from the workspace (or folder) settings, so a change here is written there. */
   overriddenBy?: 'workspace';
+  /** "Always allow in this workspace" is on for this kind (kept in the extension's workspace state, not in settings). */
+  workspaceGrant?: boolean;
 }
 
 export interface AutoApproveMsg {
@@ -71,7 +74,8 @@ export function autoApproveState(log?: vscode.LogOutputChannel): AutoApproveMsg 
   ].map((i) => {
     const key = i.key as AutoApproveItem['key'];
     const locked = lockFor(policy, key);
-    return { ...i, ...(locked ? { locked } : {}), ...(workspaceScope(key) !== undefined ? { overriddenBy: 'workspace' } : {}) } as AutoApproveItem;
+    const granted = key !== 'autoMode' && !!workspaceGrant(key);
+    return { ...i, ...(locked ? { locked } : {}), ...((key === 'autoMode' && workspaceScope(key) !== undefined) || granted ? { overriddenBy: 'workspace' } : {}), ...(granted ? { workspaceGrant: true } : {}) } as AutoApproveItem;
   });
   return { type: 'autoApprove', items, summary: autoApproveSummary(items) };
 }
@@ -85,8 +89,16 @@ export async function setAutoApprove(key: string, value: string, log?: vscode.Lo
   if (item.locked?.values.includes(value)) {
     return item.locked.reason;
   }
-  // A user-scope write would be shadowed by the workspace value, so the click would appear to do nothing.
-  const target = workspaceScope(item.key) ?? vscode.ConfigurationTarget.Global;
+  if (item.workspaceGrant) {
+    // The workspace grant is what makes this "Always": choosing anything else ends it (Always keeps it).
+    if (value === 'always') {
+      return undefined;
+    }
+    await setWorkspaceGrant(item.key as GrantKind, false);
+  }
+  // Approval settings are User-only (`scope: application`): VS Code refuses a workspace write, so those always go to
+  // User settings; Auto Mode follows the scope it is set in.
+  const target = item.key === 'autoMode' ? workspaceScope(item.key) ?? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Global;
   await section().update(SETTING[item.key], key === 'autoMode' ? value === 'on' : value, target);
   return undefined;
 }
@@ -119,8 +131,9 @@ export function approvalReason(kind: string, mandatoryReason?: 'dangerous' | 'po
 }
 
 /**
- * "Always allow in this workspace": sets `localpilot.approvals.<kind>` to `always` in the workspace settings (the
- * folder scope when the value lives there). Returns an error text when the policy rules it out or there is no folder.
+ * "Always allow in this workspace": grants the kind in this workspace's extension state (see workspaceApprovals.ts),
+ * because the approval settings are User-only and VS Code refuses to write them to the workspace. Returns an error
+ * text when the policy rules it out or there is no folder.
  */
 export async function allowInWorkspace(kind: string, log?: vscode.LogOutputChannel): Promise<string | undefined> {
   const item = autoApproveState(log).items.find((i) => i.key === kind);
@@ -133,7 +146,5 @@ export async function allowInWorkspace(kind: string, log?: vscode.LogOutputChann
   if (!vscode.workspace.workspaceFolders?.length) {
     return 'Open a folder first: "always allow in this workspace" is saved in its settings';
   }
-  const target = section().inspect(SETTING[item.key])?.workspaceFolderValue !== undefined ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
-  await section().update(SETTING[item.key], 'always', target);
-  return undefined;
+  return (await setWorkspaceGrant(item.key as GrantKind, true)) ? undefined : 'This window has no workspace state to save the choice in';
 }

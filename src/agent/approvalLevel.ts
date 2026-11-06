@@ -25,6 +25,11 @@ export function isDenialText(text: string): boolean {
   return /^(The user denied this action|User declined|The user declined)\b/.test(text);
 }
 
+/** The configured mode for one request: an MCP tool's own Allow / Ask / Block (Settings → MCP servers) replaces the MCP category. */
+export function approvalModeFor(kind: string, mode: TerminalApprovalMode, opts?: Pick<ApprovalOptions, 'toolMode'>): TerminalApprovalMode {
+  return kind === 'mcp' && opts?.toolMode ? opts.toolMode : mode;
+}
+
 /**
  * The approval mode that applies to one request after the `safe` level, the destructive-command rule and the model's
  * `requires_approval`. `mustAsk`: the user answers this one prompt; no session memory or auto-mode review stands in.

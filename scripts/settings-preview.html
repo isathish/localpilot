@@ -76,7 +76,43 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'models.autoTune': 'auto', 'colibri.modelsDir': '', 'colibri.backend': 'auto', 'telemetry.otlp.enabled': false, 'telemetry.otlp.endpoint': 'http://localhost:4318', 'telemetry.otlp.headers': {},
   'telemetry.otlp.metricsInterval': 60, 'telemetry.otlp.exporters': ['otlp'], 'telemetry.otlp.traceSamplePercent': 100, 'telemetry.otlp.recordContent': false, maxConsecutiveMistakes: 6, disabledTools: [],
   'markdownViewer.scrollSync': true, 'markdownViewer.outlineDepth': 3, 'markdownViewer.frontMatter': 'collapsed', 'markdownViewer.mermaid': true, 'markdownViewer.exportTheme': 'light', 'pdfViewer.pageColors': 'auto',
-  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000 };
+  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000,
+  // ?fallback=1: a fallback order with a cloud model and one that is not available now.
+  'routing.fallbackModels': q.get('fallback') ? ['anthropic/claude-sonnet-4-6', 'ollama/gemma4:e4b', 'lmstudio/deepseek-coder-v2:16b'] : [], firstTokenTimeoutSeconds: 180,
+  'mcp.toolApprovals': { filesystem: { write_file: 'ask', move_file: 'never' } } };
+/** Fields added with command rules, provider health, MCP tool lists and the shortcut table (sent with every state). */
+const extra = () => ({
+  // Free space where colibri downloads models (?colidisk=low: less than the smallest model needs).
+  colibriDisk: { dir: "/Users/me/colibri-models", freeGb: q.get("colidisk") === "low" ? 14 : 312, smallestGb: 21 },
+  health: q.get('health') === '0' ? {} : { ollama: { state: 'ok', ms: 38, models: 3, checkedAt: Date.now() - 60e3 }, lmstudio: { state: 'down', ms: 5, detail: 'not answering', checkedAt: Date.now() - 60e3 }, docker: { state: 'slow', ms: 2400, models: 1, checkedAt: Date.now() - 120e3 }, anthropic: { state: 'ok', ms: 640, models: 1, checkedAt: Date.now() }, openai: { state: 'nokey', detail: 'key not found' }, omniroute: { state: 'ok', ms: 90, models: 12, checkedAt: Date.now() } },
+  commandRules: { files: { user: '/Users/me/.localpilot/settings.json', workspace: '/repo/.localpilot/settings.local.json' }, fileLabels: { user: '~/.localpilot/settings.json', workspace: '.localpilot/settings.local.json' }, grants: q.get('grant') ? ['terminal'] : [],
+    rules: q.get('rules') === '0' ? [] : [
+      { pattern: 'npm publish', kind: 'block', raw: 'Bash(npm publish)', file: '/repo/.localpilot/settings.local.json', scope: 'workspace', editable: true, where: '.localpilot/settings.local.json' },
+      { pattern: 'git push --force*', kind: 'ask', raw: 'Bash(git push --force*)', file: '/Users/me/.localpilot/settings.json', scope: 'user', editable: true, where: '~/.localpilot/settings.json' },
+      { pattern: 'npm test', kind: 'allow', raw: 'Bash(npm test)', file: '/repo/.localpilot/settings.local.json', scope: 'workspace', editable: true, where: '.localpilot/settings.local.json' },
+      { pattern: 'npm run test:*', kind: 'allow', raw: 'Bash(npm run test:*)', file: '/Users/me/.localpilot/settings.json', scope: 'user', editable: true, where: '~/.localpilot/settings.json' },
+      { pattern: 'pytest tests/very/long/path/to/some/module/test_with_a_really_long_name.py -k "slow and not flaky"', kind: 'allow', raw: 'Bash(pytest …)', file: '/repo/.claude/settings.json', scope: 'workspace', editable: false, where: '.claude/settings.json' },
+    ] },
+  shortcuts: SHORTCUTS, isMac: q.get('win') ? false : true,
+});
+const SHORTCUTS = [
+  { id: 'global', title: 'VS Code', customizable: true, rows: [
+    { action: 'Open Chat', mac: '⇧⌘L', win: 'Ctrl+Shift+L', when: 'outside the text editor', command: 'localpilot.openChat' },
+    { action: 'New Chat', mac: '⌥⇧⌘L', win: 'Ctrl+Shift+Alt+L', command: 'localpilot.newSession' },
+    { action: 'Run Tasks in Parallel…', mac: '⌥⇧⌘P', win: 'Ctrl+Shift+Alt+P', command: 'localpilot.runParallelTasks' },
+    { action: 'Edit with LocalPilot (inline)', mac: '⌥⌘K', win: 'Ctrl+Alt+K', when: 'editor focused', command: 'localpilot.inlineEdit' },
+    { action: 'Capture Screenshot to Chat (Area / Window / Screen)', mac: '⌥⇧⌘S', win: 'Ctrl+Alt+Shift+S', command: 'localpilot.captureScreenshot' },
+  ] },
+  { id: 'review', title: 'Review diff', customizable: true, rows: [{ action: 'Accept File', mac: '⌘↩', win: 'Ctrl+Enter', when: 'in a review diff', command: 'localpilot.review.acceptFile' }, { action: 'Next Changed File', mac: '⌥F5', win: 'Alt+F5', when: 'in a review diff', command: 'localpilot.review.nextFile' }] },
+  { id: 'run', title: 'Chat: running agent', customizable: false, rows: [{ action: 'Stop the agent (or close the open picker)', mac: 'Esc', win: 'Esc' }, { action: 'Approval: allow once / all in this chat / deny', mac: 'Y / A / N', win: 'Y / A / N' }, { action: 'Previous / next chat tab', mac: '⌥↑ / ⌥↓', win: 'Alt+Up / Alt+Down' }] },
+];
+// ?mcptools=1: filesystem is connected with tools (per-tool approvals); its server autoApprove covers read_file.
+const MCP = q.get('mcptools') ? [{ name: 'filesystem', state: 'connected', tools: 6, transport: 'stdio', source: 'settings', autoApprove: ['read_file'], toolList: [
+  { name: 'read_file', description: 'Read the complete contents of a file from the file system.', params: [{ name: 'path', type: 'string', required: true }] },
+  { name: 'write_file', description: 'Create a new file or completely overwrite an existing file with new content.', params: [{ name: 'path', type: 'string', required: true }, { name: 'content', type: 'string', required: true }] },
+  { name: 'move_file', description: 'Move or rename files and directories.', params: [{ name: 'source', type: 'string', required: true }, { name: 'destination', type: 'string', required: true }] },
+  { name: 'search_files_with_an_unusually_long_tool_name_for_wrapping', description: 'Recursively search for files and directories matching a pattern.', params: [{ name: 'pattern', type: 'string', required: true }] },
+], resources: [], prompts: [] }, { name: 'github', tools: 0, state: 'disabled' }] : [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }];
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
 if (q.get('web') === '0') settings['webSearch.enabled'] = { value: false, default: true, scope: 'user', userValue: false };
@@ -89,8 +125,9 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     send({ type: 'state', page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings, models, keys,
       skills: [{ name: 'release', description: 'Cut a release end to end: bump, changelog, tag, publish', source: 'workspace', used: 4, dir: '/repo/.localpilot/skills/release', removable: true }, { name: 'pr-review', description: 'Review a pull request with a checklist', source: 'user', dir: '/Users/me/.claude/skills/pr-review', removable: true }, { name: 'pdf', description: 'Read, create, merge and fill PDF files with pypdf and reportlab', source: 'user', used: 2, dir: '/Users/me/.localpilot/skills/pdf', removable: true }, { name: 'debug', description: 'Reproduce, localise and fix a bug with a regression test', source: 'builtin', used: 11, dir: '/ext/skills/debug', removable: false }, { name: 'deploy', description: 'Deploy to the configured target and verify health', source: 'builtin', disabled: true, dir: '/ext/skills/deploy', removable: false }],
       learning: { recurring: [{ topic: 'deploy|service|staging', slug: 'deploy-service-staging', count: 3, samples: ['deploy the api service to staging', 'deploy service to staging again'] }] },
-      agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'built-in' }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'built-in' }],
-      mcp: [{ name: 'filesystem', tools: 11 }, { name: 'github', tools: 0, error: 'disabled' }], memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true, managed: q.get('managed') ? { source: '/Library/Application Support/LocalPilot/managed-settings.json', message: 'Questions: it-security@example.com', lines: ['Always blocked: Bash(curl:*), Read(.env)', 'Approvals: terminal needs approval, delete refused', 'Bypass modes and Auto mode are off', 'Cloud providers are off', 'Tool calls are logged to /var/log/localpilot/audit.jsonl'] } : undefined });
+      agents: [{ name: 'explore', description: 'Fast read-only codebase exploration', source: 'builtin', usedBy: ['Explain', 'Project'] }, { name: 'reviewer', description: 'Reviews diffs for bugs and style', source: 'builtin', usedBy: ['Review'] }, { name: 'migrations', description: 'Writes and checks database migrations for this repo', source: 'workspace', usedBy: [] }],
+      ...extra(), ...(q.get('stateExpand') ? { expand: q.get('stateExpand') } : {}),
+      mcp: MCP, memory: { project: 3, global: 5, notes: [{ name: 'conventions', scope: 'project', summary: 'Use vitest; no default exports; run npm run check-types before commits', updatedAt: Date.now() - 3600e3, chars: 1340 }, { name: 'release-process', scope: 'project', summary: 'Tag on main after CI; scripts/release.js bumps CHANGELOG', updatedAt: Date.now() - 86400e3 * 2, chars: 820 }, { name: 'me', scope: 'global', summary: 'Prefers concise answers, TypeScript strict, macOS', updatedAt: Date.now() - 86400e3 * 9, chars: 410 }] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true, managed: q.get('managed') ? { source: '/Library/Application Support/LocalPilot/managed-settings.json', message: 'Questions: it-security@example.com', lines: ['Always blocked: Bash(curl:*), Read(.env)', 'Approvals: terminal needs approval, delete refused', 'Bypass modes and Auto mode are off', 'Cloud providers are off', 'Tool calls are logged to /var/log/localpilot/audit.jsonl'] } : undefined });
   }
   if ((m.type === 'set' || m.type === 'reset') && q.get('failSave')) {
     // ?failSave=1: the host refuses every write (as with no folder open), so nothing changes and the control flips back.
@@ -102,12 +139,12 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     setTimeout(() => send({ type: 'saved', id: m.id, key: m.key, ok: true }), 100);
     const cur = settings[m.key] || (settings[m.key] = { value: undefined, default: undefined, scope: 'default' });
     if (m.type === 'set') { cur.value = m.value; cur.scope = m.scope; if (m.scope === 'user') cur.userValue = m.value; else cur.workspaceValue = m.value; } else { cur.value = cur.default; cur.scope = 'default'; delete cur.userValue; delete cur.workspaceValue; }
-    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: [], memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
+    setTimeout(() => send({ type: 'state', navigate: false, page, section, version: q.get('version') || '0.2.5', hasWorkspace: true, settings: { ...settings }, models, keys, skills: [], agents: [], mcp: MCP, ...extra(), memory: { project: 0, global: 0, notes: [] }, sessions: { count: 12, bytes: 1536 * 1024, messages: 412, running: 1, pinned: 2, oldest: Date.now() - 86400e3 * 21 }, welcomed: true }), 120);
   }
   if (m.type === 'probe') setTimeout(() => send({ type: 'probe', dockerModelRunner: 'ready', results: [
     { id: 'ollama', displayName: 'Ollama', type: 'ollama', baseUrl: 'http://localhost:11434', configured: true, enabled: true, ok: true, latencyMs: 12, models: models.filter(m => m.providerId === 'ollama'), source: 'settings' },
     { id: 'lmstudio', displayName: 'LM Studio', type: 'openai', baseUrl: 'http://localhost:1234/v1', configured: true, enabled: true, ok: false, latencyMs: 3, error: 'No response — is the server running?', source: 'settings' },
-    { id: 'docker', displayName: 'Docker Model Runner', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', configured: true, enabled: true, ok: true, latencyMs: 40, models: models.filter(m => m.providerId === 'docker'), source: 'settings' },
+    { id: 'docker', displayName: 'Docker Model Runner', type: 'openai', baseUrl: 'http://localhost:12434/engines/v1', configured: true, enabled: true, ok: true, latencyMs: q.get('slow') ? 2400 : 40, models: models.filter(m => m.providerId === 'docker'), source: 'settings' },
     { id: 'docker-lp-ollama', displayName: 'Ollama (Docker · lp-ollama)', type: 'ollama', baseUrl: 'http://localhost:11435', configured: false, enabled: true, ok: true, latencyMs: 9, models: [models[1]], source: 'docker' },
     { id: 'anthropic', displayName: 'Anthropic (Claude)', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', configured: true, enabled: true, ok: true, latencyMs: 210, models: [{ id: 'anthropic/claude-opus-5-5', name: 'Claude Opus 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }, { id: 'anthropic/claude-sonnet-5-5', name: 'Claude Sonnet 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }], source: 'settings' },
     { id: 'openai', displayName: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com/v1', configured: true, enabled: true, ok: false, latencyMs: 0, models: [], error: 'Environment variable OPENAI_API_KEY is not set in VS Code\'s environment', source: 'settings' },
@@ -154,6 +191,22 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     send({ type: 'jobs', jobs: [job] });
     setTimeout(() => { const i = models.findIndex((x) => x.providerId === m.providerId && x.modelId === m.model); if (i >= 0) models.splice(i, 1); send({ type: 'jobs', jobs: [{ ...job, status: 'done', progress: 1, detail: 'Done', finishedAt: Date.now() }] }); sendModels(); }, 700);
   }
+  // Settings → Marketplace: the MCP catalog, the plugin marketplaces (?plugerr=1: one fails, ?nomarket=1: none set up) and installs.
+  if (m.type === 'mcpCatalog') setTimeout(() => send({ type: 'mcpCatalog', registry: false, entries: [
+    { id: 'github', name: 'GitHub', tagline: 'Issues, pull requests, code search and Actions', tags: ['git', 'code'], repo: 'https://github.com/github/github-mcp-server', remote: { url: 'https://api.githubcopilot.com/mcp/' }, origin: 'bundled' },
+    { id: 'postgres', name: 'PostgreSQL', tagline: 'Read-only SQL queries and schema inspection', tags: ['database'], install: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'] }, origin: 'bundled' },
+    { id: 'playwright', name: 'Playwright', tagline: 'Drive a real browser: navigate, click, fill forms, screenshot', tags: ['browser', 'testing'], install: { command: 'npx', args: ['@playwright/mcp@latest'] }, origin: 'bundled' },
+    { id: 'sentry', name: 'Sentry', tagline: 'Errors, issues and releases from your Sentry projects', tags: ['monitoring'], remote: { url: 'https://mcp.sentry.dev/mcp' }, origin: 'bundled' },
+  ] }), 250);
+  if (m.type === 'installMcpCatalog') setTimeout(() => send({ type: 'mcpCatalog', registry: false, entries: [], installed: m.id }), 900);
+  if (m.type === 'pluginCatalog') { const ent = q.get('nomarket') ? [] : [
+      { name: 'commit-commands', description: 'Commit, push and open a PR with one command', version: '1.2.0', category: 'git', market: 'claude-plugins-official', marketSpec: 'anthropics/claude-plugins-official', contains: { commands: 3, agents: 0, skills: 0, mcpServers: 0, hooks: 0 }, installed: { scope: 'user', version: '1.2.0', enabled: true } },
+      { name: 'feature-dev', description: 'Explore, design and build a feature with specialised subagents', version: '0.4.1', category: 'development', market: 'claude-plugins-official', marketSpec: 'anthropics/claude-plugins-official', contains: { commands: 1, agents: 3, skills: 0, mcpServers: 0, hooks: 0 } },
+      { name: 'security-guidance', description: 'Warns about risky patterns while the agent edits files', category: 'security', market: 'claude-plugins-official', marketSpec: 'anthropics/claude-plugins-official', contains: { commands: 0, agents: 0, skills: 0, mcpServers: 0, hooks: 1 } },
+      { name: 'linear', description: 'Linear issues and projects over MCP', category: 'productivity', market: 'claude-plugins-official', marketSpec: 'anthropics/claude-plugins-official', homepage: 'https://linear.app' },
+    ];
+    setTimeout(() => send({ type: 'pluginCatalog', entries: ent, configured: q.get('nomarket') ? 0 : q.get('plugerr') ? 2 : 1, errors: q.get('plugerr') ? [{ spec: 'acme/internal-plugins', error: 'git fetch failed: Repository not found.' }] : [] }), 400); }
+  if (m.type === 'installPlugin') setTimeout(() => send({ type: 'toast', level: 'info', text: `Installed ${m.name}: 1 command, 3 subagents` }), 600);
   if (m.type === 'skillSearch') setTimeout(() => {
     const reg = [
       ['pdf', 'Read, create, merge and fill PDF files with pypdf and reportlab', 'anthropics/skills/skills', 'pdf', true, 'user'],
@@ -298,5 +351,7 @@ if (q.get('expand')) setTimeout(() => document.querySelector(`.prov[data-prov="$
 if (q.get('scope') === 'workspace') setTimeout(() => document.querySelector('.top .scope [data-s="workspace"]')?.click(), 300);
 if (q.get('find')) setTimeout(() => { const i = document.querySelector('.top .find input'); if (i) { document.querySelector('.top').classList.add('finding'); i.focus(); i.value = q.get('find'); i.dispatchEvent(new Event('input')); } }, 400);
 if (q.get('click')) setTimeout(() => document.querySelector(q.get('click'))?.click(), 500);
+// ?scrollTo=<selector>: bring a part of a long page into view (e.g. .rules-card, .fallback-ed, .mcp-inspect).
+if (q.get('scrollTo')) setTimeout(() => document.querySelector(q.get('scrollTo'))?.scrollIntoView({ block: 'start' }), 700);
 </script>
 </body></html>

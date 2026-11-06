@@ -109,6 +109,9 @@ export const getDiagnosticsTool: Tool = {
       if (root && !vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === root)) {
         entries = entries.filter(([uri]) => isInside(uri.fsPath, root));
         scopedOut = !entries.some(([, d]) => d.length);
+      } else if (root && (vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
+        // A multi-root chat's own folder first: with the 200-line cap, its problems are the ones that must not be cut.
+        entries = [...entries.filter(([uri]) => isInside(uri.fsPath, root)), ...entries.filter(([uri]) => !isInside(uri.fsPath, root))];
       }
     }
     const lines: string[] = [];

@@ -1,16 +1,17 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ContextManager, effectiveContextWindow, FitResult, MIN_CONTEXT_WINDOW, tokenCalibration } from '../context/contextManager';
+import { contextBreakdown } from '../context/contextBreakdown';
 import { toolResultCache } from '../context/toolResultCache';
 import { WorkspaceContext } from '../context/workspaceContext';
-import { ProviderRegistry, ModelLoad } from '../providers/registry';
+import { ProviderRegistry, ModelLoad, pickFallback } from '../providers/registry';
 import { ModelRole } from '../providers/catalog';
 import { isCloudProvider } from '../providers/cloud';
 import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
-import { deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
+import { approvalModeFor, deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
 import type { TestSummary } from './healing/parsers/testSummary';
 import { isReadOnlyOrSafe } from './commandGuard';
 import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, HealingRawOutcome, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolCallDecision, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
@@ -183,8 +184,10 @@ export function errorKind(k: ModelFailure): TurnErrorKind {
   return k === 'network' || k === 'unroutable' ? 'connection' : k === 'auth' || k === 'quota' ? 'auth' : k === 'overflow' ? 'context' : k === 'ratelimit' || k === 'stall' || k === 'server' ? k : k === 'overload' ? 'server' : 'other';
 }
 
-/** Local models may need to load weights and prefill a long prompt before the first token. */
+/** Local models may need to load weights and prefill a long prompt before the first token (`localpilot.firstTokenTimeoutSeconds`, default 180). */
 const FIRST_TOKEN_TIMEOUT_MS = 180_000;
+/** `firstTokenTimeoutSeconds: 0`: wait without a limit (a day stands for "never" in the watchdog). */
+const NO_FIRST_TOKEN_LIMIT_MS = 24 * 3600_000;
 /** Once streaming, this much silence means the server hung (a slow token is seconds, not a minute). */
 const IDLE_TIMEOUT_MS = 90_000;
 /** The same tool with the same arguments this many times in one turn is a loop, not progress. */
@@ -216,6 +219,8 @@ const MAX_STOP_HOOK_CONTINUES = 5;
 export class AgentRunner {
   /** Sessions currently streaming from each model id — lets a waiting chat say *why* it is waiting (local servers serve one request per model at a time). */
   private readonly inflight = new Map<string, Set<string>>();
+  /** "Keep waiting" on the chat's wait row: extends the first-token limit of the session's request in flight. */
+  private readonly waitExtenders = new Map<string, () => void>();
   /**
    * Sessions assigned to each model id for the whole run (not only while a request streams): what the router
    * spreads parallel work against, so four workers started in the same tick do not all land on one model.
@@ -466,6 +471,8 @@ export class AgentRunner {
 
     // Conditional rules (`paths:` / `globs:` front matter) follow the files in context this turn.
     const contextPaths = o.scratch ? [] : this.workspace.contextPaths(o.userMessage.content, session.workingSet);
+    // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
+    const memorySection = cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined;
     const system = await buildSystemPrompt({
       contextPaths,
       mode: turnMode,
@@ -489,8 +496,7 @@ export class AgentRunner {
       patchEdits: toolDefs.some((t) => t.name === 'apply_patch') && !toolDefs.some((t) => t.name === 'edit_file'),
       preferredLanguage: cfg.preferredLanguage,
       project: !o.scratch,
-      // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
-      memory: cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined,
+      memory: memorySection,
     });
     const conditional = depth === 0 && !o.scratch ? this.workspace.conditionalRulesFor(contextPaths) : [];
     if (conditional.length) {
@@ -502,6 +508,16 @@ export class AgentRunner {
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
       : system;
     const systemWithTextTools = !nativeTools && toolDefs.length ? `${systemIsolated}\n\n# Tools\n${toolDefs.map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.parameters)}`).join('\n')}` : systemIsolated;
+    // What fills the window, for the context ring's card and /context (rules are cached by the prompt build above).
+    const rulesText = o.scratch || depth > 0 ? '' : await this.workspace.loadInstructions(undefined, contextPaths);
+    const breakdownOf = (history: readonly ChatMessage[], total?: number) =>
+      contextBreakdown({ system: turnContext ? `${systemWithTextTools}\n\n${turnContext}` : systemWithTextTools, rules: rulesText, memory: memorySection, tools: toolDefs, toolsInSystem: !nativeTools, messages: history, scale: tokenCalibration.scale(model.id), total });
+    const emitContext = (total?: number) => {
+      if (depth === 0) {
+        session.contextBreakdown = breakdownOf(session.messages, total);
+      }
+      emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow, ...(depth === 0 ? { breakdown: session.contextBreakdown } : {}) } });
+    };
 
     const wasEmpty = session.messages.length === 0;
     // A chat with earlier messages that this runner has not run yet was reopened (history, `--resume`): SessionStart `resume`.
@@ -1079,11 +1095,11 @@ export class AgentRunner {
         budget = fit.budget;
         for (const result of fit.compactions) {
           session.compactions++;
-          emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
+          emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary, details: result.details } });
         }
       }
       session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
-      emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
+      emitContext();
 
       // --- Model call -----------------------------------------------------------------------
       // Back on the model after tools ran: hold the slot again (it was handed to workers during tool execution).
@@ -1157,23 +1173,42 @@ export class AgentRunner {
           // Ollama sends nothing while it buffers a tool call: a measured-slow model gets time for a max-length one.
           const measured = stats.genMs && stats.genTokens ? (cfg.maxOutputTokens / (stats.genTokens / (stats.genMs / 1000))) * 1.5 * 1000 : 0;
           // The provider's own timeout is a floor: a slow gateway or cold start is not called a stall before it.
-          const firstTokenMs = Math.max(
+          // localpilot.firstTokenTimeoutSeconds (0 = no limit); a router-chosen side model keeps its own shorter limit.
+          const sideLimit = onSide ? o.firstTokenTimeoutMs : undefined;
+          const unlimited = sideLimit === undefined && cfg.firstTokenTimeoutSeconds === 0;
+          const baseFirst = sideLimit ?? (cfg.firstTokenTimeoutSeconds ? cfg.firstTokenTimeoutSeconds * 1000 : FIRST_TOKEN_TIMEOUT_MS);
+          const firstTokenMs = unlimited ? NO_FIRST_TOKEN_LIMIT_MS : Math.max(
             firstTokenFloor(cfg.providers.find((p) => p.id === model.providerId)),
-            Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first)
+            Math.min(baseFirst * patience.first * (1 + others), Math.max(FIRST_TOKEN_TIMEOUT_MAX_MS, baseFirst) * patience.first)
           );
+          const waitLimit = { ms: firstTokenMs };
+          // The first model of the fallback order that is up now, offered on the wait row as a one-click switch.
+          const fallbackTo = depth === 0 ? pickFallback(cfg.routing.fallbackModels ?? [], this.providers.cachedModels(), model.id) : undefined;
+          const waitPayload = (s: number) => ({ phase: waitPhase, model: model.id, name: model.name, seconds: s, limitSec: unlimited ? 0 : Math.round(waitLimit.ms / 1000), ...(fallbackTo ? { fallback: { id: fallbackTo.id, name: fallbackTo.name } } : {}) });
+          let waitedSec = 0;
+          if (depth === 0 && !unlimited) {
+            this.waitExtenders.set(session.id, () => {
+              // Another full limit from now, at least a minute.
+              waitLimit.ms = Date.now() - requestedAt + Math.max(60_000, baseFirst * patience.first);
+              emit({ sessionId: session.id, type: 'waiting', payload: { ...waitPayload(waitedSec), extended: true } });
+            });
+          }
           const guarded = withWatchdog(stream, {
             firstTokenMs,
+            firstTokenLimit: () => waitLimit.ms,
             idleMs: Math.max(IDLE_TIMEOUT_MS * patience.idle, measured),
             abort: () => ac.abort(),
             onWaiting: (s) => {
+              waitedSec = s;
               status(`${waitingFor} · ${s}s…`);
-              emit({ sessionId: session.id, type: 'waiting', payload: { phase: waitPhase, model: model.id, name: model.name, seconds: s, limitSec: Math.round(firstTokenMs / 1000) } });
+              emit({ sessionId: session.id, type: 'waiting', payload: waitPayload(s) });
             },
           });
           for await (const ev of guarded) {
             if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
               first = false;
               firstAt = Date.now();
+              this.waitExtenders.delete(session.id);
               // The chat's "Loading … into memory" row goes once output starts (it only appears after a few seconds).
               if (firstAt - requestedAt > 1500) {
                 emit({ sessionId: session.id, type: 'waiting', payload: { done: true } });
@@ -1211,7 +1246,7 @@ export class AgentRunner {
                       this.log.info(`context: ${model.id} prompt was ${ev.promptTokens.toLocaleString()} tokens (estimated ${budget.rawPromptTokens.toLocaleString()}); estimates for it are now scaled ×${tokenCalibration.scale(model.id).toFixed(2)}`);
                     }
                     session.contextTokens = ev.promptTokens + (ev.completionTokens ?? 0);
-                    emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
+                    emitContext(session.contextTokens);
                   }
                   stats.promptTokens += ev.promptTokens;
                   stats.completionTokens += ev.completionTokens ?? 0;
@@ -1221,6 +1256,9 @@ export class AgentRunner {
           }
         } catch (e) {
           o.signal.removeEventListener('abort', onAbort);
+          if (depth === 0) {
+            this.waitExtenders.delete(session.id);
+          }
           if (o.signal.aborted) {
             modelEvent('aborted');
             aborted = true;
@@ -1290,12 +1328,12 @@ export class AgentRunner {
             if (result.removed > 0) {
               session.messages = result.messages;
               session.compactions++;
-              emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary } });
+              emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary, details: result.details } });
             }
             // Re-measure, so the retry's real count calibrates against the prompt actually sent.
             budget = budgetOf(session.messages);
             session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
-            emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow } });
+            emitContext();
             continue;
           }
           if (retryable && healed) {
@@ -1342,6 +1380,9 @@ export class AgentRunner {
           throw err;
         }
         o.signal.removeEventListener('abort', onAbort);
+        if (depth === 0) {
+          this.waitExtenders.delete(session.id);
+        }
         // A completion with neither text nor a tool call is a server hiccup far more often than an answer.
         const emptyHealer = !text.trim() && !calls.length && !o.signal.aborted ? healModel() : undefined;
         const emptyVerdict = emptyHealer ? await emptyHealer.onModelFailure('empty', new Error('empty completion'), attempt + 1, { streamed: false, modelName: model.name, target: model.id }) : undefined;
@@ -1938,6 +1979,13 @@ export class AgentRunner {
     return this.serialWarned;
   }
 
+  /** "Keep waiting" on the chat's wait row: the request in flight gets another full first-token limit. False when nothing is waiting. */
+  keepWaiting(sessionId: string): boolean {
+    const extend = this.waitExtenders.get(sessionId);
+    extend?.();
+    return !!extend;
+  }
+
   /** A routed model stalled on a subagent: keep automatic picks away from it for a while. */
   markModelUnresponsive(modelId: string): void {
     this.providers.markUnresponsive(modelId);
@@ -2346,7 +2394,9 @@ export class AgentRunner {
     const heal = info?.heal;
     // `safe` resolves per command; a destructive command or the model's requires_approval makes this one prompt mandatory.
     // While a self-healing recovery is active a destructive command always asks, whatever dangerousAlwaysAsk says.
-    const level = effectiveApproval(mode, info, getConfig().dangerousAlwaysAsk || (!!info?.dangerous && !!heal?.inRecovery()));
+    // Settings → MCP servers: a per-tool Allow / Ask / Block replaces the MCP category for that tool (floors still apply below).
+    const chosen = approvalModeFor(kind, mode, info);
+    const level = effectiveApproval(chosen, info, getConfig().dangerousAlwaysAsk || (!!info?.dangerous && !!heal?.inRecovery()));
     const strict = !!info?.mandatory || level.mustAsk;
     const base = flooredApproval(managed, kind, level.mode);
     const floored = autoApprovedMode(managed, kind, strict && base === 'always' ? 'ask' : base, { autoApprove: info?.autoApprove, mandatory: strict });

@@ -311,9 +311,9 @@ export class WorktreeManager {
   }
 
   /** The worktree's changes as a binary-safe patch against its base. */
-  async patch(wt: WorktreeInfo): Promise<Buffer> {
+  async patch(wt: WorktreeInfo, only?: string[]): Promise<Buffer> {
     await git(['add', '-A', '--intent-to-add'], wt.path).catch(() => undefined);
-    return gitBuffer(['diff', '--binary', '-M', wt.base], wt.path);
+    return gitBuffer(['diff', '--binary', '-M', wt.base, ...(only ? ['--', ...only] : [])], wt.path);
   }
 
   /** Content of `rel` as it was at the worktree's base (empty for files the agent created). */
@@ -329,9 +329,10 @@ export class WorktreeManager {
    * Bring the worktree's changes onto the main checkout as uncommitted changes. Clean hunks apply directly; the rest
    * fall back to a 3-way merge, leaving conflict markers (reported in `conflicts`) instead of giving up.
    * `beforeWrite` is called with each affected main-checkout path before it is touched (for undo snapshots).
+   * `only` (repository-relative paths) limits the apply to those files; a rename needs only its new path.
    */
-  async apply(wt: WorktreeInfo, beforeWrite?: (fsPath: string) => Promise<void>): Promise<ApplyResult> {
-    const files = await this.changes(wt);
+  async apply(wt: WorktreeInfo, beforeWrite?: (fsPath: string) => Promise<void>, only?: string[]): Promise<ApplyResult> {
+    const files = selectChanges(await this.changes(wt), only);
     if (!files.length) {
       return { files, conflicts: [] };
     }
@@ -341,7 +342,7 @@ export class WorktreeManager {
         await beforeWrite?.(path.join(wt.repo, f.from));
       }
     }
-    const patch = await this.patch(wt);
+    const patch = await this.patch(wt, only ? pathsOf(files) : undefined);
     const file = path.join(os.tmpdir(), `localpilot-apply-${process.pid}-${Date.now()}.patch`);
     await fs.promises.writeFile(file, patch);
     const conflicts: string[] = [];
@@ -352,7 +353,7 @@ export class WorktreeManager {
         // 3-way merges through the index, which must match the working tree: stage the affected files as they are
         // now (the user's current content becomes "ours"), merge, then put the user's own index entries back —
         // except for conflicted files: a conflicted index lets VS Code offer its merge editor.
-        const touched = [...new Set(files.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])))];
+        const touched = pathsOf(files);
         const existing = touched.filter((p) => fs.existsSync(path.join(wt.repo, p)));
         const saved = await indexEntries(wt.repo, touched);
         try {
@@ -384,10 +385,22 @@ export class WorktreeManager {
     return { files, conflicts: [...new Set(conflicts)] };
   }
 
-  /** Make the worktree's current state its new base (after applying), so later diffs show only new work. */
-  async rebase(wt: WorktreeInfo): Promise<void> {
-    await git(['add', '-A'], wt.path);
-    await git([...(await snapshotConfig()), 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace'], wt.path);
+  /**
+   * Make the worktree's current state its new base (after applying), so later diffs show only new work. With `only`
+   * (repository-relative paths, both sides of a rename), just those files move into the base: the rest stay pending.
+   */
+  async rebase(wt: WorktreeInfo, only?: string[]): Promise<void> {
+    if (only && !only.length) {
+      return;
+    }
+    if (only) {
+      // Untracked new files must be known to the index for a path-limited commit to pick them up.
+      await git(['add', '-A', '--intent-to-add'], wt.path).catch(() => undefined);
+      await git([...(await snapshotConfig()), 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace (some files)', '--', ...only], wt.path);
+    } else {
+      await git(['add', '-A'], wt.path);
+      await git([...(await snapshotConfig()), 'commit', '-q', '--allow-empty', '--no-verify', '--no-gpg-sign', '-m', 'LocalPilot: applied to workspace'], wt.path);
+    }
     wt.base = (await git(['rev-parse', 'HEAD'], wt.path)).trim();
     const meta = `${wt.path}.json`;
     try {
@@ -396,6 +409,27 @@ export class WorktreeManager {
     } catch {
       /* bookkeeping only */
     }
+  }
+
+  /**
+   * Throw away the agent's changes to some files of the worktree (repository-relative paths; a rename's new path
+   * takes its old one with it): each goes back to its content at the base, and files the agent created are deleted.
+   * Returns the paths that were reset.
+   */
+  async discardFiles(wt: WorktreeInfo, only: string[]): Promise<string[]> {
+    const files = selectChanges(await this.changes(wt), only);
+    const touched = pathsOf(files);
+    for (const p of touched) {
+      const inBase = await git(['cat-file', '-e', `${wt.base}:${p}`], wt.path).then(() => true, () => false);
+      if (inBase) {
+        await git(['checkout', wt.base, '--', p], wt.path);
+      } else {
+        await git(['rm', '--cached', '-q', '--ignore-unmatch', '--', p], wt.path).catch(() => undefined);
+        await fs.promises.rm(path.join(wt.path, p), { force: true });
+      }
+    }
+    this.log.info(`worktree ${path.basename(wt.path)}: discarded ${touched.length} file(s)`);
+    return touched;
   }
 
   /** Delete the worktree and its branch bookkeeping. Safe to call twice. */
@@ -452,6 +486,20 @@ export class WorktreeManager {
     }
     return n;
   }
+}
+
+/** The changes named in `only` (by new or old path; all of them when `only` is absent). */
+export function selectChanges(changes: WorktreeChange[], only?: string[]): WorktreeChange[] {
+  if (!only) {
+    return changes;
+  }
+  const want = new Set(only.map((p) => p.split(path.sep).join('/')));
+  return changes.filter((c) => want.has(c.path) || (c.from !== undefined && want.has(c.from)));
+}
+
+/** Every repository-relative path the changes touch (both sides of a rename). */
+export function pathsOf(changes: WorktreeChange[]): string[] {
+  return [...new Set(changes.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])))];
 }
 
 /** `-c` options for LocalPilot's internal snapshot commits: a fixed identity, no signing and no user hooks. */

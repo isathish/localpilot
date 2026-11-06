@@ -214,6 +214,12 @@
         "icon": "$(localpilot-logo)"
       },
       {
+        "command": "localpilot.checkConnection",
+        "title": "Check Network Connection",
+        "category": "LocalPilot",
+        "icon": "$(debug-disconnect)"
+      },
+      {
         "command": "localpilot.newSession",
         "title": "New Chat",
         "category": "LocalPilot",
@@ -600,6 +606,12 @@
         "title": "Settings",
         "category": "LocalPilot",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "localpilot.rebuildFileIndex",
+        "title": "Rebuild File Index",
+        "category": "LocalPilot",
+        "icon": "$(refresh)"
       },
       {
         "command": "localpilot.manageProviders",
@@ -1890,6 +1902,13 @@
           "default": "30m",
           "description": "How long Ollama keeps the model loaded after a request (e.g. 5m, 30m, -1 for forever). Avoids reload latency between turns."
         },
+        "localpilot.firstTokenTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 0,
+          "maximum": 3600,
+          "markdownDescription": "How long to wait for a model's first token before the request counts as stalled and is retried, in seconds. Local models may need minutes to load into memory and read a long prompt; raise this for slow machines or very large models. `0` waits without a limit. While a request waits, the chat shows the time left with **Keep waiting**, **Switch model** and (with `#localpilot.routing.fallbackModels#` set) the first fallback model. A provider's own `timeoutMs` is a floor, and a request queued behind others gets their time too."
+        },
         "localpilot.prewarm": {
           "type": "boolean",
           "default": true,
@@ -3040,12 +3059,12 @@
             "off"
           ],
           "enumDescriptions": [
-            "Notify only while the chat view is hidden or the VS Code window is not focused.",
+            "Notify only while the chat view is hidden or the VS Code window is not focused; a run that finished normally only after 20 seconds.",
             "Always notify.",
             "Never notify."
           ],
           "default": "whenHidden",
-          "markdownDescription": "Native notifications: a chat run finished, or an auto-approved command is still running after 30 seconds (also shown in the status bar). The terminal CLI rings the terminal bell when a run longer than 10 seconds finishes, unless this is `off`."
+          "markdownDescription": "Native notifications: a chat run finished (by default only runs longer than 20 seconds, or ones that failed or need you), a run is waiting for your approval or answer, or an auto-approved command is still running after 30 seconds (also shown in the status bar). Each notice has **Open chat**. The terminal CLI rings the terminal bell when a run longer than 10 seconds finishes, unless this is `off`."
         },
         "localpilot.parallel.maxConcurrency": {
           "type": "number",
@@ -3369,6 +3388,23 @@
           "default": true,
           "markdownDescription": "Restart a local (stdio) MCP server 500 ms after its script changes: a workspace `.js`, `.mjs`, `.cjs` or `.py` file named in its command or arguments, or a file under `build/` or `dist/`. Handy while you develop a server."
         },
+        "localpilot.mcp.toolApprovals": {
+          "type": "object",
+          "default": {},
+          "scope": "application",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "always",
+                "ask",
+                "never"
+              ]
+            }
+          },
+          "markdownDescription": "Approval per MCP tool: `{ \"server\": { \"tool\": \"always\" | \"ask\" | \"never\" } }`. `always` runs the tool without asking, `ask` shows an approval card every time (even when the server's `autoApprove` lists it or `#localpilot.approvals.mcp#` is Allow), `never` refuses every call. Tools not listed follow `#localpilot.approvals.mcp#` and the server's `autoApprove` list. Your organization's approval floor still applies. Set it per tool in Settings → MCP servers. User settings only."
+        },
         "localpilot.repos": {
           "type": "object",
           "default": {},
@@ -3610,6 +3646,15 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Run parallel work on several models at once. When workers (or Auto chats) all land on a model that is already serving as many requests as it can — one, on a server that answers one request per model at a time — the extra ones go to a comparable idle model that fits in memory alongside (same capabilities, similar quality score), instead of queuing. A model you picked explicitly for a chat is never swapped; each worker's lane shows the model that answered it."
+        },
+        "localpilot.routing.fallbackModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Models to use, in this order, when the chosen model is unavailable (its server is down, the model was removed, or you are offline and it is a cloud model), as `provider/model` ids. The first one that is available answers the turn and the chat says so; when none is, LocalPilot picks the best available model as before. Listing a cloud model here is how you allow a local model to fall back to the cloud: without it LocalPilot never switches a local model to a cloud one. User settings only, so a repository cannot send your code to another model."
         },
         "localpilot.terminal.runInIntegratedTerminal": {
           "type": "boolean",

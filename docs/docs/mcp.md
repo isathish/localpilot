@@ -126,6 +126,8 @@ In the read-only Ask and Plan modes, for read-only subagents and for the Multita
 
 MCP tool calls have their own approval setting, `localpilot.approvals.mcp` (default `always`), shown as **MCP tools** under **Settings → Agent & approvals**, apart from **Network** (web and browser tools). Set it to `ask` to confirm each call; the tools in a server's `autoApprove` list still run without asking, unless a `permissions.ask` rule (yours or your organization's) or a PreToolUse hook asks for them. `never` blocks every MCP tool. An organization policy that sets a `network` approval floor and no `mcp` floor applies it to MCP tools too. In a `settings.json` file you can also allow, prompt for or deny specific servers and tools with `mcp__server` or `mcp__server__tool` [permission rules]({{ '/docs/claude-code-compatibility/' | relative_url }}#permission-rules).
 
+**Per tool.** Open a connected server in **Settings → MCP servers**; on its **Tools** tab each tool has an approval: *Default* (follows **MCP tools** above, or the server's `autoApprove` list, which the default shows as *Allow (server list)*), **Allow**, **Ask** or **Block**. Ask shows an approval card every time, even for a tool in the server's `autoApprove` list, and the card says the tool is set to Ask. Block refuses every call without asking and tells the agent not to try again. The choices are saved in `localpilot.mcp.toolApprovals` in your User settings (`{ "github": { "delete_repository": "never" } }`), so a workspace cannot change them; your organization's MCP approval floor still applies.
+
 An MCP server is a program you choose to run, and it can contact any service it is built for. See [Privacy]({{ '/privacy/' | relative_url }}).
 
 ## Troubleshooting

@@ -19,11 +19,11 @@ export function recordTelemetry(e: TelemetryInput): void {
   }
 }
 
-const SPECIAL_MENTIONS = new Set<MentionKind>(['terminal', 'workspace', 'problems', 'git', 'selection', 'editors']);
+const SPECIAL_MENTIONS = new Set<MentionKind>(['terminal', 'workspace', 'problems', 'git', 'selection', 'editors', 'codebase']);
 
 /** What kind of context an attachment reference is, without keeping the reference itself. */
 export function mentionKind(ref: string): MentionKind {
-  const r = ref.trim().replace(/^@/, '');
+  const r = ref.trim().replace(/^[@#]/, '');
   if (!r) {
     return 'other';
   }
