@@ -1188,6 +1188,8 @@ button.copied, button.copied:hover { color: var(--ok-text) !important; }
 
 /* Empty chat: two small lists — where to start, and recent chats — left-aligned under one heading style. */
 .empty { text-align: left; margin: auto 0 0; padding: 16px 12px 8px; max-width: 460px; }
+/* Near the message box on a normal panel; centred on a tall one, so the screen is not two thirds empty space. */
+@media (min-height: 860px) { .empty { margin-block: auto; } }
 .empty .suggestions { gap: 0; }
 .suggestion { gap: 10px; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; }
 .suggestion:hover { background: var(--tint); }

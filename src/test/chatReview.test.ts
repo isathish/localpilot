@@ -80,7 +80,7 @@ suite('Chat review queue', () => {
   ];
   const reviewed = [
     { path: 'a.py', fsPath: '/w/a.py', kind: 'modify', state: 'accepted' },
-    { path: 'c.py', fsPath: '/w/c.py', kind: 'modify', state: 'rejected', redoUntil: Date.now() + 60_000 },
+    { path: 'c.py', fsPath: '/w/c.py', kind: 'modify', state: 'rejected', redoUntil: Date.now() + 7 * 86_400_000 }, // computed when the suite loads, which can be many minutes before it runs
   ];
 
   test('pending and reviewed files share one list in path order, with progress in the head', () => {

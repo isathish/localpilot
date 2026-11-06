@@ -4,6 +4,11 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **"Open all changes in one diff" has a clear icon.** The button under an answer and in the Changes panel showed an unclear "+−" glyph. It now shows a stack of files.
+- **The welcome screen no longer sits under a large empty area on tall panels.** It stays next to the message box on a normal-height panel and is centred when the panel is tall.
+- **The review-queue test no longer fails in long test runs.** It set a "Restore edits" deadline 60 seconds after the test file loaded, which had already passed by the time a full run reached it.
+
 ## 1.5.9 — 2026-11-06
 ### Added
 - Implement file-by-file review functionality in the chat controller
