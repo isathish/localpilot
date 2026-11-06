@@ -7,7 +7,7 @@
     messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
     modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), skillsBtn: $('skillsBtn'), skillsLabel: $('skillsLabel'), ctx: $('ctxMeter'), usage: $('usagePill'),
     approvals: $('approvals'), chips: $('chips'), toasts: $('toasts'), box: $('box'), addCtx: $('btnAddCtx'), image: $('btnImage'), improve: $('btnImprove'),
-    changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
+    changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'), changesMeter: $('changesMeter'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
     popover: $('popover'), newTab: $('btnNewTab'), btnComposerMore: $('btnComposerMore'), history: $('btnHistory'), bgruns: $('bgruns'),
     hints: $('hints'), disclaimer: $('disclaimer'),
@@ -56,6 +56,7 @@
     trash: '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>',
     export: '<svg viewBox="0 0 16 16"><path d="M8 10V3M5 6l3-3 3 3M3 10v2.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10"/></svg>',
     rename: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M3 14h10"/></svg>',
+    multidiff: '<svg viewBox="0 0 16 16"><path d="M5 2.5v6M2 5.5h6M8.5 12h5.5"/></svg>',
     layers: '<svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3z"/><path d="M2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg>',
     brain: '<svg viewBox="0 0 16 16"><path d="M6 3a2.5 2.5 0 0 0-2.4 3.2A2.5 2.5 0 0 0 4 11a2.5 2.5 0 0 0 4 1.5A2.5 2.5 0 0 0 12 11a2.5 2.5 0 0 0 .4-4.8A2.5 2.5 0 0 0 10 3a2.5 2.5 0 0 0-2 1 2.5 2.5 0 0 0-2-1z"/></svg>',
     git: '<svg viewBox="0 0 16 16"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="6" r="1.5"/><path d="M5 5.5v5M11 7.5A3 3 0 0 1 8 10.5H6.5"/></svg>',
@@ -137,6 +138,10 @@
     recovery: new Map(), interrupted: new Map(),
     /** sid → the Run interrupted card's facts (a run cut off by a reload); sid → a model fallback this turn ({ wanted, used, … }). */
     runInt: new Map(), rerouted: new Map(),
+    /** sid → files accepted or rejected since the latest message ({ path, fsPath, kind, state, redoUntil }), kept in the review queue. */
+    reviewed: new Map(),
+    /** sid → files ({ path, fsPath }) a worktree apply left with conflict markers (listed first in the review queue). */
+    conflicts: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
@@ -732,11 +737,26 @@
     const d = renderDiff(oldT, newT);
     card.dataset.path = a.path || ''; card.dataset.add = String(d.add); card.dataset.del = String(d.del); card.dataset.write = isWrite ? '1' : '0';
     // The diff body is parsed into the DOM only when the card is expanded (most edits in a long transcript never are).
-    card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed"></div>`;
+    card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="rtag hidden"></span><span class="acts"><button data-showdiff title="Review ${esc(a.path || 'the file')} in a side-by-side diff (accept or reject it there)" aria-label="Diff of ${esc(a.path || 'the file')}">${I.diff}</button><button data-open="${esc(a.path || '')}" title="Open file" aria-label="Open ${esc(a.path || 'file')}">${I.open}</button></span></div><div class="diff collapsed"></div>`;
     card.__diff = d.html; card.__args = a;
-    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open, sessionId: state.session && state.session.id }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
+    if (result && !result.isError && state.session) { syncEditTag(card, state.reviewed.get(state.session.id)); }
+    card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-showdiff]')) { if (state.session && a.path) { post({ type: 'showDiff', sessionId: state.session.id, fsPath: a.path }); } return; } if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open, sessionId: state.session && state.session.id }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
+  }
+  /** The review decision on an edit card's file (from the review queue): "Accepted" / "Rejected" after its stat. */
+  function syncEditTag(card, rows) {
+    const t = card.querySelector('.card-head .rtag'); if (!t) { return; }
+    const p = (card.dataset.path || '').replace(/^\.\//, '').replace(/\\/g, '/');
+    const r = p && (rows || []).find((x) => x.path === p || x.fsPath === p || x.fsPath.replace(/\\/g, '/').endsWith(`/${p}`));
+    const word = r ? (r.state === 'accepted' ? 'Accepted' : 'Rejected') : '';
+    t.classList.toggle('hidden', !word); t.textContent = word; t.className = `rtag ${r ? r.state : ''}${word ? '' : ' hidden'}`;
+    t.title = r ? (r.state === 'accepted' ? 'You accepted this file\'s changes' : 'You rejected this file\'s changes: the edits were removed from disk') : '';
+  }
+  function syncEditTags(sid) {
+    if (!state.session || state.session.id !== sid) { return; }
+    const rows = state.reviewed.get(sid) || [];
+    els.messages.querySelectorAll('.card.edit.ok').forEach((c) => syncEditTag(c, rows));
   }
   function editGroup(container, create) {
     let g = container.lastElementChild;
@@ -1289,7 +1309,8 @@
       if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); }
       else if (b.dataset.act === 'copy') { copyTo(b, m.content); }
       else if (b.dataset.act === 'regen' && state.session && !state.running.has(state.session.id)) { b.disabled = true; post({ type: 'retry', sessionId: state.session.id }); }
-      else if (b.dataset.act === 'viewChanges' && state.session) { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'turn' }); }
+      else if (b.dataset.act === 'viewChanges' && state.session) { post({ type: 'review', sessionId: state.session.id, scope: 'turn' }); }
+      else if (b.dataset.act === 'viewChangesDiff' && state.session) { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'turn' }); }
     };
     return f;
   }
@@ -1590,6 +1611,9 @@
         if (act.run) { act.run(); return; }
         if (act.send) { els.input.value = act.send; sendCurrent(true, { modeOverride: act.mode }); return; }
         if (act.mode) { setMode(act.mode); }
+        // A starter's context (Fix a bug's @problems) goes when another starter is picked instead.
+        for (const ref of state.starterRefs || []) { const i = state.attachments.indexOf(ref); if (i >= 0) { state.attachments.splice(i, 1); } }
+        state.starterRefs = (act.attach || []).filter((ref) => !state.attachments.includes(ref)); renderChips();
         for (const ref of act.attach || []) { addAttachment(ref); }
         els.input.value = act.fill || ''; autoGrow(); updateSendEnabled(); syncEmptyChrome();
         els.input.focus(); els.input.selectionStart = els.input.selectionEnd = els.input.value.length;
@@ -1730,7 +1754,7 @@
     // Stopped by the user is not a failure: muted stop icon and its own wording (Continue / Discard come with the latest turn).
     work.className = `work done${stopped ? ' stopped' : failed ? ' failed' : ''}`;
     work.querySelector('.ico').innerHTML = stopped ? I.stop : failed ? I.x : I.check;
-    work.querySelector('.phase').textContent = stopped ? (ms ? `Stopped by you after ${fmtDur(ms)}` : 'Stopped by you') : ms ? `${failed ? 'Stopped after' : 'Worked for'} ${fmtDur(ms)}` : 'Work done';
+    work.querySelector('.phase').textContent = stopped ? (ms ? `Stopped by you after ${fmtDur(ms)}` : 'Stopped by you') : ms ? `${failed ? 'Stopped after' : 'Worked for'} ${fmtDur(ms)}` : failed ? 'Stopped' : 'Work done';
     const res = work.querySelector('.work-resume'); if (res) { res.remove(); }
     // The checklist's failed items belong to the latest turn only (the todos are the chat's current plan).
     const ft = root.classList.contains('live') || !root.nextElementSibling ? failedTodos().length : 0;
@@ -2799,7 +2823,7 @@
   }
   function tabTitle(s) {
     const running = state.running.has(s.id); const st = state.status.get(s.id);
-    const lines = [s.title || 'New chat', `${MODES[s.mode] ? MODES[s.mode].label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${tabModel(s)}`];
+    const lines = [s.title || 'New chat', `${MODES[s.mode] ? modeView(s).label : s.mode} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${tabModel(s)}`];
     if (running) { lines.push(state.paused.get(s.id) && state.paused.get(s.id).paused ? `Paused${st ? ` — ${st}` : ''}` : `Running${st ? ` — ${st}` : '…'}`); }
     if (state.selected.size > 1 && state.selected.has(s.id)) { lines.push(`${state.selected.size} tabs selected — ✕ or Delete closes them all`); }
     if (state.attention.has(s.id)) { lines.push('Waiting for your approval'); }
@@ -2815,7 +2839,7 @@
     if (state.attention.has(s.id)) { return I.warn; }
     if (state.unread.has(s.id)) { return '<span class="dot" aria-label="Finished"></span>'; }
     if (s.pinned) { return I.pin; }
-    return (MODES[s.mode] || MODES.agent).icon;
+    return modeView(s).icon;
   }
   let tabSig = '';
   function renderTabs() {
@@ -3154,7 +3178,7 @@
       const running = state.running.has(s.id); const isActive = s.id === active; const sel = i === hist.sel; const picked = hist.picked.has(s.id);
       const row = el('div', `hist-row${isActive ? ' current' : ''}${sel ? ' sel' : ''}${hist.confirm === s.id ? ' confirm' : ''}${hist.selecting ? ' picking' : ''}${picked ? ' picked' : ''}`);
       row.dataset.id = s.id; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(hist.selecting ? picked : sel));
-      const mode = MODES[s.mode] || MODES.agent;
+      const mode = modeView(s);
       const parent = s.parentId ? (state.sessions.find((x) => x.id === s.parentId) || {}).title || s.parentTitle || 'a deleted chat' : '';
       const desc = running ? esc(state.status.get(s.id) || 'Working…') : hit && hit.snippet ? `${hit.role === 'user' ? '<b>You:</b> ' : ''}${highlightMatch(hit.snippet, q)}` : esc(`${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${timeAgo(s.updatedAt)}${parent ? ` · forked from ${short(parent, 28)}` : ''}`);
       const tag = (s.origin === 'cli' ? '<span class="tag" title="Started in the localpilot terminal CLI">CLI</span>' : s.origin === 'claude-code' ? '<span class="tag" title="Imported from Claude Code">Claude Code</span>' : s.origin === 'codex' ? '<span class="tag" title="Imported from Codex">Codex</span>' : '') + (state.unread.has(s.id) ? '<span class="tag">new</span>' : isActive ? '<span class="tag">open</span>' : '');
@@ -3531,61 +3555,150 @@
     if (!state.session || state.session.id !== sid) { return; }
     const last = els.messages.lastElementChild;
     const foot = last && last.classList.contains('assistant') && !state.running.has(sid) ? last.querySelector(':scope > .afoot .acts') : null;
-    els.messages.querySelectorAll('.afoot [data-act="viewChanges"]').forEach((b) => { if (!foot || b.parentElement !== foot) { if (b.nextElementSibling && b.nextElementSibling.classList.contains('sep')) { b.nextElementSibling.remove(); } b.remove(); } });
+    // The chip, its "one diff" companion and the separator after them come and go together.
+    const drop = (b) => { const all = b.nextElementSibling && b.nextElementSibling.dataset.act === 'viewChangesDiff' ? b.nextElementSibling : null; const after = all || b; if (after.nextElementSibling && after.nextElementSibling.classList.contains('sep')) { after.nextElementSibling.remove(); } if (all) { all.remove(); } b.remove(); };
+    els.messages.querySelectorAll('.afoot [data-act="viewChanges"]').forEach((b) => { if (!foot || b.parentElement !== foot) { drop(b); } });
     const lt = state.lastTurn.get(sid); const n = lt ? lt.files : 0;
     let b = foot && foot.querySelector('[data-act="viewChanges"]');
-    if (!foot || !n) { if (b) { if (b.nextElementSibling && b.nextElementSibling.classList.contains('sep')) { b.nextElementSibling.remove(); } b.remove(); } return; }
-    // A labelled chip, not a bare glyph: what it opens (the changed files) is the point, so it says how many.
-    if (!b) { foot.insertAdjacentHTML('afterbegin', `<button class="chg" data-act="viewChanges">${I.diff}<span></span></button><i class="sep" aria-hidden="true"></i>`); b = foot.firstElementChild; }
+    if (!foot || !n) { if (b) { drop(b); } return; }
+    // A labelled chip, not a bare glyph: what it opens (the changed files) is the point, so it says how many. It starts the
+    // file-by-file review of that turn; the one-tab multi-file diff is the quieter icon next to it.
+    if (!b) { foot.insertAdjacentHTML('afterbegin', `<button class="chg" data-act="viewChanges">${I.diff}<span></span></button><button data-act="viewChangesDiff">${I.multidiff}</button><i class="sep" aria-hidden="true"></i>`); b = foot.firstElementChild; }
     const label = `${n} file${n === 1 ? '' : 's'}`;
     if (b.lastElementChild.textContent !== label) { b.lastElementChild.textContent = label; }
-    b.title = `View changes: ${label} changed since your last message, in one diff`; b.setAttribute('aria-label', b.title);
+    b.title = `Review changes: ${label} changed since your last message, one by one in a side-by-side diff`; b.setAttribute('aria-label', `Review ${label} changed since your last message`);
+    const all = b.nextElementSibling; all.title = `Open all ${label} changed since your last message in one diff`; all.setAttribute('aria-label', all.title);
   }
   let changesSig = '';
   /** The inline "Reject N files?" row while it is open. */
   let rejectConfirm = null;
+  /** fsPath of the review-queue row that holds the roving tab stop; `changesKeyNav`: the last move came from the keyboard. */
+  let changesFocus = ''; let changesKeyNav = false; let redoTimer = 0;
+  const KIND = { create: 'A', modify: 'M', delete: 'D', rename: 'R', conflict: 'C' };
+  const KIND_WORD = { create: 'added', modify: 'modified', delete: 'deleted', rename: 'renamed', conflict: 'has conflicts' };
+  /** Pending and reviewed files in one list, sorted by path (the order the host walks the queue in, ChangeTracker.forSession) so a row keeps its place when it is accepted or rejected. */
+  function reviewRows(sid) {
+    const files = state.changes.get(sid) || []; const done = state.worktree.get(sid) ? [] : state.reviewed.get(sid) || [];
+    const pend = new Set(files.map((f) => f.fsPath));
+    // Conflicts from applying an isolated copy come first: they block the work until resolved in the merge editor.
+    const conflicts = (state.conflicts.get(sid) || []).map((c) => ({ fsPath: c.fsPath, path: c.path, kind: 'conflict', state: 'conflict' }));
+    return [...conflicts, ...[...files.map((f) => ({ ...f, state: 'pending' })), ...done.filter((r) => !pend.has(r.fsPath))].sort((a, b) => a.fsPath.localeCompare(b.fsPath))];
+  }
   function renderChanges() {
     const s = state.session; const files = s ? state.changes.get(s.id) || [] : [];
     const wt = s ? state.worktree.get(s.id) : null;
-    els.changes.classList.toggle('hidden', !files.length);
+    const all = s ? reviewRows(s.id) : []; const nConf = all.filter((r) => r.state === 'conflict').length;
+    const rows = all; const reviewed = all.length - files.length - nConf;
+    els.changes.classList.toggle('hidden', !rows.length);
     // The confirm row belongs to one chat and one count: switching chats, a worktree or an emptied list drops it.
     if (rejectConfirm && (!files.length || wt || rejectConfirm.dataset.sid !== s.id)) { closeRejectConfirm(false); }
     if (rejectConfirm) { rejectConfirm.querySelector('.q').firstChild.textContent = `Reject ${files.length} file${files.length === 1 ? '' : 's'}? `; }
-    if (!files.length) { changesSig = ''; return; }
+    if (!rows.length) { changesSig = ''; return; }
     const added = files.reduce((n, f) => n + (f.added || 0), 0); const removed = files.reduce((n, f) => n + (f.removed || 0), 0);
-    els.changesLabel.textContent = `${files.length} file${files.length === 1 ? '' : 's'} changed${wt ? ` in isolated copy${added || removed ? ` · +${added} −${removed}` : ''}` : ''}`;
+    const n = rows.length - nConf; const nf = `${n} file${n === 1 ? '' : 's'}`;
+    // "5 files changed · 2 reviewed" with a meter; the short form drops "changed" for narrow panels.
+    const conf = nConf ? `${nConf} conflict${nConf === 1 ? '' : 's'} to resolve` : '';
+    const label = !n ? conf : `${wt ? `${nf} changed in isolated copy${added || removed ? ` · +${added} −${removed}` : ''}` : reviewed ? `${nf} changed · ${reviewed} reviewed` : `${nf} changed`}${conf ? ` · ${conf}` : ''}`;
+    // Narrow panels read "2/5 reviewed" (the .short form); the full label stays as the tooltip.
+    const shortLabel = !wt && reviewed ? `${reviewed}/${n} reviewed` : '';
+    const html = shortLabel ? `<span class="long">${esc(label)}</span><span class="short">${esc(shortLabel)}</span>` : esc(label);
+    if (els.changesLabel.innerHTML !== html) { els.changesLabel.innerHTML = html; els.changesToggle.title = label; }
+    els.changesMeter.classList.toggle('hidden', !!wt || !reviewed);
+    els.changesMeter.firstElementChild.style.width = `${n ? Math.round((reviewed / n) * 100) : 0}%`;
+    els.changesMeter.setAttribute('aria-valuemax', String(n)); els.changesMeter.setAttribute('aria-valuenow', String(reviewed)); els.changesMeter.setAttribute('aria-valuetext', `${reviewed} of ${n} reviewed`);
+    els.changesMeter.title = `${reviewed} of ${n} reviewed`;
     // Isolated worktree: the agent's edits are not in the workspace yet — Apply brings them over, Discard throws the copy away.
     els.changes.classList.toggle('isolated', !!wt);
+    els.changes.classList.toggle('done', !wt && !files.length);
     const head = els.changes.querySelector('.panel-head');
     // The two buttons are relabelled in place as the session moves between a worktree and the workspace; look them up by either name.
     const undoAll = head.querySelector('[data-a="undoAll"], [data-a="discardWorktree"]'); const keepAll = head.querySelector('[data-a="keepAll"], [data-a="applyWorktree"]');
-    const review = head.querySelector('[data-a="reviewAll"]'); if (review) { review.classList.toggle('hidden', !!wt); }
+    const multi = head.querySelector('[data-a="reviewAll"]'); if (multi) { multi.classList.toggle('hidden', !!wt || !files.length); }
+    const review = head.querySelector('[data-a="review"], [data-a="clearReviewed"]');
     if (wt) {
-      if (undoAll) { undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
-      if (keepAll) { keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
+      if (review) { review.classList.add('hidden'); }
+      if (keepAll) { keepAll.classList.toggle('hidden', !files.length); }
+      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = 'Discard the isolated copy and its changes'; undoAll.querySelector('.long').textContent = 'Discard'; undoAll.dataset.a = 'discardWorktree'; }
+      if (keepAll) { keepAll.classList.add('primary'); keepAll.classList.remove('ghost'); keepAll.title = wt.conflicts && wt.conflicts.length ? `Last apply left conflict markers in: ${wt.conflicts.join(', ')}` : 'Apply these changes to your workspace as uncommitted edits (3-way merge on conflict)'; keepAll.querySelector('.long').textContent = 'Apply to workspace'; keepAll.dataset.a = 'applyWorktree'; }
       // Applying while the agent still edits would fold its in-flight edits into the new base; wait for a pause or the end.
       const p = state.paused.get(s.id); const busy = state.running.has(s.id) && !(p && p.holding);
       if (keepAll) { keepAll.setAttribute('aria-disabled', String(busy)); if (busy) { keepAll.title = 'Pause or stop the agent before applying its changes'; } }
     } else {
-      if (undoAll) { undoAll.title = 'Reject all changes'; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.dataset.a = 'undoAll'; }
-      if (keepAll) { keepAll.title = 'Accept all changes'; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; keepAll.removeAttribute('aria-disabled'); }
+      // Review (primary) opens the first file not reviewed yet; once every file is decided it becomes Clear reviewed.
+      if (undoAll) { undoAll.classList.toggle('hidden', !files.length); undoAll.title = `Reject all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; undoAll.querySelector('.long').textContent = 'Reject all'; undoAll.dataset.a = 'undoAll'; }
+      if (keepAll) { keepAll.classList.toggle('hidden', !files.length); keepAll.classList.remove('primary'); keepAll.classList.add('ghost'); keepAll.title = `Accept all ${files.length} file${files.length === 1 ? '' : 's'} waiting for review`; keepAll.querySelector('.long').textContent = 'Accept all'; keepAll.dataset.a = 'keepAll'; keepAll.removeAttribute('aria-disabled'); }
+      if (review) {
+        review.classList.toggle('hidden', !files.length && !reviewed);
+        if (files.length) { review.dataset.a = 'review'; review.className = 'btn primary'; review.title = `Review file by file: opens ${files.length === n ? 'the first file' : 'the next file not reviewed yet'} in a side-by-side diff, where Accept and Reject move on to the next`; review.innerHTML = `${I.diff}<span class="long">Review</span>`; }
+        else { review.dataset.a = 'clearReviewed'; review.className = 'btn ghost'; review.title = 'Remove the reviewed files from this list (your decisions stay)'; review.innerHTML = `${I.x}<span class="long">Clear reviewed</span>`; }
+        review.setAttribute('aria-label', review.dataset.a === 'review' ? 'Review file by file' : 'Clear reviewed');
+      }
     }
-    const sig = `${s.id}|${wt ? 'wt' : ''}|${files.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}`).join('|')}`;
+    const now = Date.now();
+    const sig = `${s.id}|${wt ? 'wt' : ''}|${rows.map((f) => `${f.fsPath}:${f.kind}:${f.added || 0}:${f.removed || 0}:${f.state}:${f.redoUntil > now ? 1 : 0}`).join('|')}`;
+    // Restore edits expires with the host's redo window: redraw the row then so its button turns into the explanation.
+    clearTimeout(redoTimer); const nextExpiry = Math.min(...rows.filter((f) => f.redoUntil > now).map((f) => f.redoUntil));
+    if (Number.isFinite(nextExpiry)) { redoTimer = setTimeout(renderChanges, Math.min(nextExpiry - now + 50, 2 ** 31 - 1)); }
     if (sig === changesSig) { return; }
     changesSig = sig;
+    const hadFocus = els.changesList.contains(document.activeElement);
     const y = els.changesList.scrollTop;
     els.changesList.innerHTML = '';
-    const KIND = { create: 'A', modify: 'M', delete: 'D', rename: 'R' };
-    for (const f of files) {
+    // The roving tab stop stays on its file; a file that just left the pending set hands it to the next pending one.
+    const pendingAfter = (fp) => rows.find((r) => r.state === 'pending' && r.fsPath.localeCompare(fp) > 0) || rows.find((r) => r.state === 'pending');
+    let focusRow = rows.find((r) => r.fsPath === changesFocus);
+    if (focusRow && focusRow.state !== 'pending' && changesKeyNav) { focusRow = pendingAfter(focusRow.fsPath) || focusRow; }
+    if (!focusRow) { focusRow = rows.find((r) => r.state === 'pending') || rows[0]; }
+    changesFocus = focusRow.fsPath;
+    for (const f of rows) {
       const stat = f.added || f.removed ? `<span class="stat"><i class="add">+${f.added || 0}</i><i class="del">−${f.removed || 0}</i></span>` : '';
-      const acts = wt ? '' : `<span class="acts"><button data-a="undo" title="Reject">${I.undo}</button><button data-a="keep" title="Accept">${I.check}</button></span>`;
-      // The name is a button so the diff opens from the keyboard (Enter / Space); Accept and Reject follow it in tab order.
-      const li = el('li', 'change', `<span class="kind ${f.kind}">${KIND[f.kind] || 'M'}</span><button class="name" title="${esc(f.path)}${f.kind === 'delete' ? '' : ' — open the diff'}" aria-label="${esc(f.path)}${f.kind === 'delete' ? ' (deleted)' : ', open the diff'}"${f.kind === 'delete' ? ' aria-disabled="true"' : ''}>${esc(f.path)}</button>${stat}${acts.replace('title="Reject"', `title="Reject" aria-label="Reject ${esc(f.path)}"`).replace('title="Accept"', `title="Accept" aria-label="Accept ${esc(f.path)}"`)}`);
-      li.onclick = (e) => { const a = e.target.closest('[data-a]'); if (a) { post({ type: a.dataset.a === 'undo' ? 'undoChanges' : 'keepChanges', sessionId: s.id, fsPath: f.fsPath }); return; } if (f.kind !== 'delete') { post({ type: 'showDiff', sessionId: s.id, fsPath: f.fsPath }); } };
+      const p = esc(f.path); const del = f.kind === 'delete';
+      let acts = '';
+      if (f.state === 'conflict') { acts = `<span class="acts keep"><button data-a="merge" class="txt" title="Resolve the conflict markers in ${p} in the merge editor" aria-label="Open ${p} in the merge editor">${I.git || I.open}<span class="long">Resolve</span></button></span>`; }
+      else if (wt) { acts = ''; }
+      else if (f.state === 'pending') { acts = `<span class="acts"><button data-a="undo" title="Reject: put ${p} back as it was (r)" aria-label="Reject ${p}">${I.undo}<span class="long">Reject</span></button><button data-a="keep" title="Accept: keep the agent's ${del ? 'deletion' : 'edits'} (a)" aria-label="Accept ${p}">${I.check}<span class="long">Accept</span></button></span>`; }
+      else if (f.state === 'accepted') { acts = `<span class="tag ok">${I.check}<span>Accepted</span></span>`; }
+      else {
+        const live = f.redoUntil > now;
+        acts = `<span class="tag">${I.undo}<span>Rejected</span></span><span class="acts keep"><button data-a="restore" class="txt"${live ? ` title="Put the agent's edits to ${p} back"` : ' aria-disabled="true" title="No longer kept: use Restore checkpoint on the message"'} aria-label="Restore edits to ${p}">${I.restore}<span class="long">Restore edits</span></button></span>`;
+      }
+      const what = f.state === 'conflict' ? 'open in the merge editor' : f.state === 'pending' ? (del ? 'open the deleted file\'s original' : 'open the diff') : f.state === 'accepted' ? 'accepted, open the file' : del || f.kind === 'create' ? 'rejected' : 'rejected, open the file';
+      // The name opens the diff (or the file once reviewed); the row itself carries the keyboard focus (j/k/a/r/Enter).
+      const li = el('li', `change ${f.state}`, `<span class="kind ${f.kind}" title="${KIND_WORD[f.kind] || 'modified'}">${KIND[f.kind] || 'M'}</span><button class="name" tabindex="-1" title="${p} — ${what}"${f.state === 'rejected' && (del || f.kind === 'create') ? ' aria-disabled="true"' : ''}>${p}</button>${stat}${acts}`);
+      li.dataset.file = f.fsPath; li.dataset.state = f.state; li.setAttribute('tabindex', f.fsPath === changesFocus ? '0' : '-1');
+      li.setAttribute('aria-label', `${f.path}, ${KIND_WORD[f.kind] || 'modified'}${f.added || f.removed ? `, ${f.added || 0} added, ${f.removed || 0} removed lines` : ''}, ${f.state === 'pending' ? 'not reviewed' : f.state === 'conflict' ? 'resolve in the merge editor' : f.state}`);
+      li.onclick = (e) => { changesKeyNav = false; changesFocus = f.fsPath; changeAction(f, (e.target.closest('[data-a]') || {}).dataset?.a || 'open', e.target.closest('[data-a]')); };
       els.changesList.appendChild(li);
     }
+    if (reviewed && files.length) { els.changesList.appendChild(el('li', 'change-foot', `<button class="txt" data-a="clearReviewed" tabindex="-1" title="Remove the reviewed files from this list (your decisions stay)">Clear reviewed</button>`)); els.changesList.lastElementChild.onclick = () => s && post({ type: 'clearReviewed', sessionId: s.id }); }
     els.changesList.scrollTop = y;
+    if (hadFocus) { const r = els.changesList.querySelector('li[tabindex="0"]'); if (r) { r.focus({ preventScroll: true }); r.scrollIntoView({ block: 'nearest' }); } }
   }
+  /** One row action: open (diff while pending, the file once reviewed), keep / undo, or restore a rejected file's edits. */
+  function changeAction(f, act, btn) {
+    const s = state.session; if (!s || (btn && btn.getAttribute('aria-disabled') === 'true')) { if (btn && act === 'restore') { toast('No longer kept: use Restore checkpoint on the message'); } return; }
+    if (act === 'keep' || act === 'undo') { if (f.state === 'pending') { post({ type: act === 'undo' ? 'undoChanges' : 'keepChanges', sessionId: s.id, fsPath: f.fsPath }); } return; }
+    if (act === 'restore') { if (f.state === 'rejected') { post({ type: 'restoreEdits', sessionId: s.id, fsPath: f.fsPath }); } return; }
+    if (f.state === 'conflict') { post({ type: 'recoveryAction', sessionId: s.id, action: 'openMergeEditor', file: f.fsPath }); return; }
+    if (f.state === 'pending') { post({ type: 'review', sessionId: s.id, scope: 'session', fsPath: f.fsPath }); }
+    else if (!(f.state === 'rejected' && (f.kind === 'delete' || f.kind === 'create'))) { post({ type: 'openFile', path: f.fsPath, sessionId: s.id }); }
+  }
+  // Review queue keys on the focused row: j/k (or arrows) move, a accepts, r rejects, Enter / Space opens.
+  els.changesList.addEventListener('keydown', (e) => {
+    const li = e.target.closest && e.target.closest('li.change'); if (!li || e.metaKey || e.ctrlKey || e.altKey) { return; }
+    const items = [...els.changesList.querySelectorAll('li.change')]; const i = items.indexOf(li);
+    const move = (j) => { const t = items[Math.max(0, Math.min(items.length - 1, j))]; if (!t) { return; } items.forEach((x) => x.setAttribute('tabindex', x === t ? '0' : '-1')); changesFocus = t.dataset.file; t.focus(); t.scrollIntoView({ block: 'nearest' }); };
+    const k = e.key;
+    if (k === 'j' || k === 'ArrowDown') { e.preventDefault(); move(i + 1); return; }
+    if (k === 'k' || k === 'ArrowUp') { e.preventDefault(); move(i - 1); return; }
+    if (k === 'Home') { e.preventDefault(); move(0); return; }
+    if (k === 'End') { e.preventDefault(); move(items.length - 1); return; }
+    if (e.target !== li) { return; } // keys typed on a row's own buttons keep their meaning
+    const f = reviewRows(state.session ? state.session.id : '').find((r) => r.fsPath === li.dataset.file); if (!f) { return; }
+    const act = k === 'a' ? 'keep' : k === 'r' ? 'undo' : k === 'Enter' || k === ' ' ? 'open' : '';
+    if (!act) { return; }
+    e.preventDefault(); changesKeyNav = true; changeAction(f, act, null);
+  });
   function renderChips() {
     els.chips.innerHTML = '';
     state.attachments.forEach((a, i) => { const c = el('span', 'chip', `${a.startsWith('@') || MENTIONS.some(([n]) => n === a) ? I.list : I.file}<span title="${esc(a)}">${esc(a.replace(/^@/, ''))}</span><button title="Remove">${I.x}</button>`); c.querySelector('button').onclick = () => { state.attachments.splice(i, 1); renderChips(); }; els.chips.appendChild(c); });
@@ -4110,7 +4223,7 @@
     const images = state.images.map((i) => i.data);
     post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', text, attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
-    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote();
+    els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote();
     toast('Started in a new tab');
   }
   /** Queue the composer text for the running agent in this tab; the host echoes it back as a "queued" row. */
@@ -4124,7 +4237,7 @@
     post({ type: 'steer', sessionId: state.session.id, text: text || 'Consider the attached image(s).', attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
     state.drafts.delete(state.session.id);
-    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); els.input.focus();
+    els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); els.input.focus();
   }
   /** A message typed while the agent was busy: a compact row inside the assistant's turn, "queued" until the loop takes it. */
   function steerRow(content, images, id, queued, fixes) {
@@ -4147,7 +4260,7 @@
     post({ type: 'queueAfterTurn', sessionId: state.session.id, text: text || 'Describe what you see in the attached image(s).', attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
     state.drafts.delete(state.session.id);
-    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); els.input.focus();
+    els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); els.input.focus();
   }
   // Queue banner above the input: pending steers of the running turn and messages waiting for it to end (sessionId → { items, label }).
   const queues = new Map();
@@ -4266,7 +4379,7 @@
       armSendWatchdog(sid, 10000);
     }
     state.drafts.delete(state.session.id);
-    els.input.value = ''; state.attachments = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); scrollToBottom(true);
+    els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); scrollToBottom(true);
     if (!fromSuggestion) { els.input.focus(); }
   }
   els.input.addEventListener('input', () => { const cr = document.querySelector('.confirm-row'); if (cr) { cr.remove(); } autoGrow(); updateSendEnabled(); warmModel(); const t = tokenAt(); if (t) { showInlineMenu(t); } else if (menuState && !els.popover.querySelector('.search')) { closeMenu(); } });
@@ -4324,7 +4437,7 @@
   els.pause.onclick = togglePause;
   els.tasksToggle.onclick = () => { if (state.session) { tasksUserOpen.set(state.session.id, !els.tasks.classList.contains('open')); } renderTasks(); };
   els.tasks.classList.add('open');
-  els.changesToggle.onclick = () => { els.changes.classList.toggle('open'); els.changesList.classList.toggle('hidden'); };
+  els.changesToggle.onclick = () => { const open = els.changes.classList.toggle('open'); els.changesList.classList.toggle('hidden', !open); els.changesToggle.setAttribute('aria-expanded', String(open)); };
   // Reject all rewrites files on disk, so it asks first in place of the panel head (like "Delete n chats?" in history).
   function closeRejectConfirm(refocus) {
     if (!rejectConfirm) { return; }
@@ -4347,6 +4460,8 @@
     const act = a.dataset.a;
     if (act === 'applyWorktree' || act === 'discardWorktree') { post({ type: act, sessionId: state.session.id }); return; }
     if (act === 'reviewAll') { post({ type: 'viewChanges', sessionId: state.session.id, scope: 'session' }); return; }
+    if (act === 'review') { post({ type: 'review', sessionId: state.session.id, scope: 'session' }); return; }
+    if (act === 'clearReviewed') { post({ type: 'clearReviewed', sessionId: state.session.id }); return; }
     if (act === 'undoAll') { openRejectConfirm(); return; }
     post({ type: 'keepChanges', sessionId: state.session.id });
   };
@@ -4487,7 +4602,7 @@
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
         break;
       }
-      case 'changes': state.changes.set(m.sessionId, m.files); if (state.session && state.session.id === m.sessionId && els.messages.querySelector(':scope > .rec-int')) { requestAnimationFrame(renderInterrupted); } state.checkpoints.set(m.sessionId, m.checkpoints || []); state.gitCheckpoints.set(m.sessionId, m.gitCheckpoints || []); if (m.checkpointsEnabled !== undefined) { state.checkpointsOn = m.checkpointsEnabled; } if (m.lastTurn) { state.lastTurn.set(m.sessionId, m.lastTurn); } else { state.lastTurn.delete(m.sessionId); } if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); syncViewChanges(m.sessionId); } break;
+      case 'changes': state.changes.set(m.sessionId, m.files); state.reviewed.set(m.sessionId, m.reviewed || []); state.conflicts.set(m.sessionId, m.conflicts || []); if (state.session && state.session.id === m.sessionId && els.messages.querySelector(':scope > .rec-int')) { requestAnimationFrame(renderInterrupted); } state.checkpoints.set(m.sessionId, m.checkpoints || []); state.gitCheckpoints.set(m.sessionId, m.gitCheckpoints || []); if (m.checkpointsEnabled !== undefined) { state.checkpointsOn = m.checkpointsEnabled; } if (m.lastTurn) { state.lastTurn.set(m.sessionId, m.lastTurn); } else { state.lastTurn.delete(m.sessionId); } if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); syncViewChanges(m.sessionId); syncEditTags(m.sessionId); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'mcpStatus': state.mcp = m.servers || []; syncMcp(); break;
       case 'autoApprove': renderAutoApprove(m); break;

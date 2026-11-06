@@ -147,6 +147,12 @@ export class RelativePattern {
 export class TabInputText {
   constructor(readonly uri: Uri) {}
 }
+export class TabInputTextDiff {
+  constructor(
+    readonly original: Uri,
+    readonly modified: Uri
+  ) {}
+}
 export enum FileType {
   Unknown = 0,
   File = 1,
@@ -857,7 +863,7 @@ export const window = {
   visibleTextEditors: [] as never[],
   activeTerminal: undefined,
   terminals: [] as never[],
-  tabGroups: { all: [] as never[] },
+  tabGroups: { all: [] as never[], activeTabGroup: { activeTab: undefined }, onDidChangeTabs: () => new Disposable() },
   createOutputChannel(name: string, _opts?: { log: true }): LogOutputChannel {
     return {
       trace: (m) => writeLog(0, name, m),

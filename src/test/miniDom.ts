@@ -97,6 +97,7 @@ export class MiniElement {
 
   get children(): MiniElement[] { return this.childNodes.filter((c): c is MiniElement => c instanceof MiniElement); }
   get firstChild(): Child | null { return this.childNodes[0] || null; }
+  get firstElementChild(): MiniElement | null { return this.children[0] || null; }
   get lastElementChild(): MiniElement | null { const c = this.children; return c[c.length - 1] || null; }
   get nextSibling(): Child | null { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
   get nextElementSibling(): MiniElement | null { const p = this.parentNode; if (!p) { return null; } const c = p.children; return c[c.indexOf(this) + 1] || null; }
@@ -148,6 +149,13 @@ export class MiniElement {
   querySelector(sel: string): MiniElement | null { return this.querySelectorAll(sel)[0] || null; }
   closest(sel: string): MiniElement | null { for (let e: MiniElement | null = this; e; e = e.parentNode) { if (e.tagName !== '#ROOT' && e.matches(sel)) { return e; } } return null; }
   focus(): void { /* no focus in a sandbox */ }
+  scrollIntoView(): void { /* no layout in a sandbox */ }
+  /** Inline styles as a plain object (enough for `el.style.width = …`). */
+  style: Record<string, string> = {};
+  contains(n: Child | null): boolean { for (let e: Child | MiniElement | null = n; e; e = e.parentNode) { if (e === this) { return true; } } return false; }
+  /** Listeners added with addEventListener, by event type; {@link dispatch} calls them. */
+  listeners = new Map<string, ((ev: unknown) => void)[]>();
+  addEventListener(type: string, fn: (ev: unknown) => void): void { this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]); }
 }
 
 function parseHtml(html: string): Child[] {
@@ -181,4 +189,12 @@ export function click(target: MiniElement): void {
 /** Submits a form: calls its `onsubmit`. */
 export function submit(form: MiniElement): void {
   const h = form.onsubmit; if (typeof h === 'function') { h.call(form, { target: form, preventDefault: () => undefined }); }
+}
+
+/** Dispatches an event that bubbles from `target` through the listeners added with addEventListener. */
+export function dispatch(target: MiniElement, type: string, init: Record<string, unknown> = {}): { defaultPrevented: boolean } {
+  const res = { defaultPrevented: false };
+  const ev = { type, target, ...init, preventDefault: () => { res.defaultPrevented = true; }, stopPropagation: () => undefined };
+  for (let e: MiniElement | null = target; e; e = e.parentNode) { for (const fn of e.listeners.get(type) ?? []) { fn.call(e, ev); } }
+  return res;
 }

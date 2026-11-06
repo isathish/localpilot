@@ -24,6 +24,7 @@ module.exports = {
     }),
     onDidChangeConfiguration: () => new Disposable(),
     onDidChangeWorkspaceFolders: () => new Disposable(),
+    onDidSaveTextDocument: () => new Disposable(),
     createFileSystemWatcher: () => ({ onDidChange() {}, onDidCreate() {}, onDidDelete() {}, dispose() {} }),
     asRelativePath: (u) => (typeof u === 'string' ? u : u.fsPath),
     // Real files, so SkillManager can load skills from a temp folder in the smoke tests.
@@ -38,7 +39,7 @@ module.exports = {
   },
   window: {
     activeTextEditor: undefined,
-    tabGroups: { all: [] },
+    tabGroups: { all: [], activeTabGroup: { activeTab: undefined }, onDidChangeTabs: () => ({ dispose() {} }) },
     onDidChangeActiveTextEditor: () => ({ dispose() {} }),
     onDidChangeTextEditorSelection: () => ({ dispose() {} }),
     onDidChangeWindowState: () => ({ dispose() {} }),

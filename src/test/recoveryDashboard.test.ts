@@ -14,7 +14,6 @@ class El extends MiniElement {
   get lastChild(): MiniElement | null { const c = this.childNodes[this.childNodes.length - 1]; return c instanceof MiniElement ? c : null; }
   append(...nodes: MiniElement[]): void { for (const n of nodes) { this.appendChild(n); } }
   replaceChildren(...nodes: MiniElement[]): void { for (const c of [...this.childNodes]) { this.removeChild(c); } this.append(...nodes); }
-  contains(n: unknown): boolean { for (let e = n as MiniElement | null; e; e = e.parentNode) { if (e === this) { return true; } } return false; }
   override focus(): void { focusTarget.activeElement = this; }
 }
 /** The sandbox's `document.activeElement`, moved by El.focus. */

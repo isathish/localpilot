@@ -109,4 +109,79 @@ suite('change tracker (restore checkpoint)', () => {
     assert.strictEqual(await tracker.redo(rb.token!), 1, "the later reject's undo still works");
     assert.strictEqual(await read(b), 'B1');
   });
+  test('accepts and rejects are listed for review until the next turn; Restore edits brings back one file of a reject', async () => {
+    const a = path.join(dir, 'qa.txt');
+    const b = path.join(dir, 'qb.txt');
+    const c = path.join(dir, 'qc.txt');
+    for (const [f, t] of [[a, 'A0'], [b, 'B0'], [c, 'C0']]) {
+      await fs.writeFile(f, t);
+    }
+    tracker.beginTurn(sid, 1);
+    for (const [f, t] of [[a, 'A1'], [b, 'B1'], [c, 'C1']]) {
+      await tracker.beforeChange(f, sid);
+      await fs.writeFile(f, t);
+    }
+    tracker.keep(sid, a);
+    await tracker.reject(sid); // b and c in one reject
+    const rows = tracker.reviewedFor(sid);
+    assert.deepStrictEqual(rows.map((r) => `${path.basename(r.fsPath)}:${r.state}:${r.kind}`), ['qa.txt:accepted:modify', 'qb.txt:rejected:modify', 'qc.txt:rejected:modify']);
+    assert.ok(rows[1].redoUntil && rows[1].redoUntil > Date.now(), 'a fresh reject can be restored');
+    assert.strictEqual(rows[0].redoUntil, undefined);
+    assert.strictEqual(await tracker.restoreRejected(sid, c), 1);
+    assert.strictEqual(await read(c), 'C1');
+    assert.strictEqual(await read(b), 'B0', 'the other file of the same reject stays rejected');
+    assert.deepStrictEqual(tracker.forSession(sid).map((x) => path.basename(x.fsPath)), ['qc.txt']);
+    assert.deepStrictEqual(tracker.reviewedFor(sid).map((r) => path.basename(r.fsPath)), ['qa.txt', 'qb.txt']);
+    assert.strictEqual(await tracker.restoreRejected(sid, b), 1, 'the rest of the reject is still restorable');
+    tracker.beginTurn(sid, 2);
+    assert.deepStrictEqual(tracker.reviewedFor(sid), [], 'a new message starts a fresh review list');
+  });
+
+  test('undoing a review puts accepted files back in the queue and restores rejected ones', async () => {
+    const a = path.join(dir, 'ua.txt');
+    const b = path.join(dir, 'ub.txt');
+    await fs.writeFile(a, 'A0');
+    await fs.writeFile(b, 'B0');
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(a, sid);
+    await fs.writeFile(a, 'A1');
+    await tracker.beforeChange(b, sid);
+    await fs.writeFile(b, 'B1');
+    tracker.keep(sid, a);
+    await tracker.reject(sid, b);
+    assert.strictEqual(tracker.forSession(sid).length, 0);
+    const r = await tracker.undoReview(sid);
+    assert.deepStrictEqual(r, { accepted: 1, rejected: 1, expired: 0 });
+    assert.deepStrictEqual(tracker.forSession(sid).map((x) => path.basename(x.fsPath)), ['ua.txt', 'ub.txt']);
+    assert.strictEqual(await read(b), 'B1');
+    assert.strictEqual(tracker.forSession(sid)[0].original, 'A0', 'the accepted file keeps its original for the diff');
+    assert.deepStrictEqual(tracker.reviewedFor(sid), []);
+    tracker.keep(sid);
+    tracker.clearReviewed(sid);
+    assert.deepStrictEqual(tracker.reviewedFor(sid), []);
+  });
+
+  test('a deleted file is listed as deleted, counts its removed lines and opens in a diff', async () => {
+    const d = path.join(dir, 'gone.txt');
+    await fs.writeFile(d, 'one\ntwo\nthree');
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(d, sid);
+    await fs.rm(d);
+    const [c] = tracker.forSession(sid);
+    assert.deepStrictEqual(await tracker.lineStats(c), { added: 0, removed: 3 });
+    assert.strictEqual(await tracker.showDiff(sid, d), true);
+    tracker.keep(sid, d);
+    assert.strictEqual(tracker.reviewedFor(sid)[0].kind, 'delete');
+    assert.strictEqual(await tracker.showDiff(sid, d), false, 'nothing to show once it is no longer tracked');
+  });
+
+  test('line stats count added and removed lines against the original', async () => {
+    const f = path.join(dir, 'stat.txt');
+    await fs.writeFile(f, 'a\nb\nc\n');
+    tracker.beginTurn(sid, 1);
+    await tracker.beforeChange(f, sid);
+    await fs.writeFile(f, 'a\nB\nc\nd\n');
+    const [c] = tracker.forSession(sid);
+    assert.deepStrictEqual(await tracker.lineStats(c), { added: 2, removed: 1 });
+  });
 });

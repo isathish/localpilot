@@ -15,13 +15,22 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Recovery cards go deeper.** On a self-healing card, a failed check expands to show what failed, each patched file opens its diff, and **Details** opens the chat's recovery in the dashboard. A git conflict lists every conflicted file with its own **Open in merge editor** button, shows the next step, and keeps **Resume after resolving** off until git reports no conflicts left.
 - **Checklist items link to their steps.** Clicking (or pressing Enter on) a task in the Tasks panel scrolls to the first step that worked on it. Failed items are marked in the error colour and say why on hover, skipped items say why they were skipped, and the run's summary line adds *· 1 task failed*.
 - **Retry a failed worker.** A failed worker lane in Multitask has **Retry**, and the Workers card counts failed workers while they run.
+- **Review changes file by file.** The Changes panel is now a review queue: its head reads *5 files changed · 2 reviewed* with a progress bar, each file shows its added and removed lines, and **Review** opens the first file you have not decided on in a side-by-side diff. In that diff, **Accept File** (⌘Enter / Ctrl+Enter) and **Reject File** in the title bar decide and open the next file, and **Next / Previous Changed File** (Alt+F5 / Shift+Alt+F5) step through the queue. When the last file is decided, a summary such as *All 5 files reviewed: 4 accepted, 1 rejected* offers **Undo**. In the panel, J / K move between files, A accepts, R rejects and Enter opens the diff.
+- **Reviewed files stay listed.** Accepted and rejected files stay in the panel, dimmed and marked, until your next message or **Clear reviewed**. A rejected file has **Restore edits** for 5 minutes; after that its tooltip points to Restore checkpoint on the message.
+- **The "N files" chip under an answer starts the review of that turn.** The icon next to it still opens all of the turn's changes in one diff.
+- **Edit cards have a Diff button** and show *Accepted* or *Rejected* once you have decided on the file.
+- **Conflicts left by applying an isolated copy are listed in the Changes panel** with **Resolve**, which opens the file in the merge editor. A file leaves the list once it is saved without conflict markers.
 
 ### Changed
 - **Stopping a run is no longer shown as a failure.** A turn you stop reads *Stopped by you after 1m 02s* with **Continue** and **Discard changes**, and the steps it cut short read *Cancelled* in neutral colours. This also holds after a reload.
 - **Pausing shows in the run's summary line.** A paused run reads *Paused after step N* with the timer stopped and a **Resume** button next to it. The elapsed time no longer counts pauses.
 - **Running steps show how long they take.** A step running for more than a few seconds shows its elapsed time, and one running longer than 30 seconds turns amber with the hint that Esc stops the run.
 - **Clearer error boxes.** A failed turn's box starts with what went wrong (*Cannot reach the model server*, *API key rejected*, *Out of credits*, *Rate limited*, *Model stopped responding*, *Prompt too large*) and has a **Copy error** button. **Set API key…** now opens the chat's provider with its key field ready, a prompt that is too large also offers **Raise context window**, and an out-of-credits error offers the provider's settings instead of the key. When LocalPilot stops after repeated errors, the box offers **Continue with guidance**, **Restore checkpoint** and **Show log**.
+- **Consistent reject wording.** Rejecting files now says *Rejected 2 files* (it said *Reverted*), and the review diff is titled *dice.py: original ↔ LocalPilot (editable)*, since you can edit the right side before accepting. Rejected edits can now be brought back for 5 minutes instead of 30 seconds.
 - **One retry line per turn.** Automatic retries of a model request update a single line ("Retrying 2/3 in 4s: the connection dropped") that turns into "Recovered on attempt 2" once the model answers, instead of adding a new line for each attempt.
+
+### Fixed
+- **Deleted files can be reviewed.** A file the agent deleted shows as **D** in the Changes panel and opens as its original next to an empty side, instead of doing nothing.
 
 ## 1.5.7 — 2026-11-06
 

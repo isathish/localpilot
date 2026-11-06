@@ -1417,9 +1417,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const sid = n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;
     if (sid) {
       const count = await tracker.undo(sid, n?.fsPath);
-      vscode.window.setStatusBarMessage(`LocalPilot: reverted ${plural(count, 'file')}`, 2500);
+      vscode.window.setStatusBarMessage(`LocalPilot: rejected ${plural(count, 'file')}`, 2500);
     }
   });
+  // File-by-file review in the diff editor (title bar actions while localpilot.reviewing): decide, then move on.
+  cmd('localpilot.review.acceptFile', () => controller.reviewInEditor('accept'));
+  cmd('localpilot.review.rejectFile', () => controller.reviewInEditor('reject'));
+  cmd('localpilot.review.nextFile', () => controller.reviewInEditor('next'));
+  cmd('localpilot.review.prevFile', () => controller.reviewInEditor('prev'));
   cmd('localpilot.keepAllChanges', () => tracker.all().forEach((c) => tracker.keep(c.sessionId)));
   cmd('localpilot.undoAllChanges', async () => {
     const ok = await vscode.window.showWarningMessage(`Revert ${tracker.count === 1 ? 'the file' : `all ${tracker.count} files`} changed by agents?`, { modal: true }, 'Revert');

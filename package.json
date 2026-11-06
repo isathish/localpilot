@@ -382,6 +382,30 @@
         "icon": "$(discard)"
       },
       {
+        "command": "localpilot.review.acceptFile",
+        "title": "Accept File",
+        "category": "LocalPilot",
+        "icon": "$(check)"
+      },
+      {
+        "command": "localpilot.review.rejectFile",
+        "title": "Reject File",
+        "category": "LocalPilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "localpilot.review.prevFile",
+        "title": "Previous Changed File",
+        "category": "LocalPilot",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "localpilot.review.nextFile",
+        "title": "Next Changed File",
+        "category": "LocalPilot",
+        "icon": "$(arrow-down)"
+      },
+      {
         "command": "localpilot.keepAllChanges",
         "title": "Keep All Agent Changes",
         "category": "LocalPilot",
@@ -1400,9 +1424,45 @@
         {
           "command": "localpilot.compareResults",
           "when": "localpilot.hasBatches"
+        },
+        {
+          "command": "localpilot.review.acceptFile",
+          "when": "localpilot.reviewing"
+        },
+        {
+          "command": "localpilot.review.rejectFile",
+          "when": "localpilot.reviewing"
+        },
+        {
+          "command": "localpilot.review.nextFile",
+          "when": "localpilot.reviewing"
+        },
+        {
+          "command": "localpilot.review.prevFile",
+          "when": "localpilot.reviewing"
         }
       ],
       "editor/title": [
+        {
+          "command": "localpilot.review.prevFile",
+          "when": "localpilot.reviewing",
+          "group": "navigation@-14"
+        },
+        {
+          "command": "localpilot.review.nextFile",
+          "when": "localpilot.reviewing",
+          "group": "navigation@-13"
+        },
+        {
+          "command": "localpilot.review.rejectFile",
+          "when": "localpilot.reviewing",
+          "group": "navigation@-12"
+        },
+        {
+          "command": "localpilot.review.acceptFile",
+          "when": "localpilot.reviewing",
+          "group": "navigation@-11"
+        },
         {
           "command": "localpilot.openChat",
           "when": "activeWebviewPanelId != localpilot.chatPanel && activeWebviewPanelId != localpilot.settings",
@@ -1605,6 +1665,22 @@
         "key": "ctrl+'",
         "mac": "cmd+'",
         "when": "activeCustomEditorId == localpilot.pdfViewer || activeCustomEditorId == localpilot.markdownEditor || activeWebviewPanelId == localpilot.markdown"
+      },
+      {
+        "command": "localpilot.review.acceptFile",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "localpilot.reviewing && editorFocus && !suggestWidgetVisible && !inlineSuggestionVisible"
+      },
+      {
+        "command": "localpilot.review.nextFile",
+        "key": "alt+f5",
+        "when": "localpilot.reviewing && editorFocus"
+      },
+      {
+        "command": "localpilot.review.prevFile",
+        "key": "shift+alt+f5",
+        "when": "localpilot.reviewing && editorFocus"
       }
     ],
     "configuration": {

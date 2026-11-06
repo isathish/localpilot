@@ -18,11 +18,36 @@ export interface TrackedChange {
   changedAt: number;
 }
 
+/** A file the user accepted or rejected, listed in the review queue (until the next turn or Clear reviewed). */
+export interface ReviewedFile {
+  fsPath: string;
+  state: 'accepted' | 'rejected';
+  /** What the change was when it was reviewed: created, edited or deleted by the agent. */
+  kind: 'create' | 'modify' | 'delete';
+  at: number;
+  /** The reject's redo token (rejected files only). */
+  token?: number;
+  /** The tracked change itself, so an Undo of the review can put it back. */
+  change: TrackedChange;
+}
+
+/** A review row as the chat lists it: `redoUntil` is when Restore edits stops working (absent once it has). */
+export interface ReviewedRow {
+  fsPath: string;
+  state: 'accepted' | 'rejected';
+  kind: 'create' | 'modify' | 'delete';
+  redoUntil?: number;
+}
+
 const SCHEME = 'localpilot-original';
+/** Reviewed rows kept per chat; the oldest drop off first. */
+const MAX_REVIEWED = 200;
+/** Files above this size get no +/− line counts (the diff would cost more than the number is worth). */
+const MAX_STAT_CHARS = 1024 * 1024;
 /** Before-contents larger than this stay in memory only (same limit as untracked files in git checkpoints). */
 const MAX_PERSISTED_CHARS = 20 * 1024 * 1024;
 /** How long the agent's version of rejected files is kept so the toast's Undo can put it back. */
-export const REDO_WINDOW_MS = 30_000;
+export const REDO_WINDOW_MS = 5 * 60_000;
 
 /**
  * Records the pre-edit snapshot of every file an agent touches so the user can review (diff),
@@ -50,6 +75,10 @@ export class ChangeTracker implements vscode.Disposable {
   /** Per reject (keyed by the token {@link reject} returns): the files it reverted, with the content they had just before it. */
   private redoBuf = new Map<number, { entries: { change: TrackedChange; content: string | undefined }[]; until: number; timer: ReturnType<typeof setTimeout> }>();
   private redoSeq = 0;
+  /** Per session: files accepted or rejected since the session's current turn began. */
+  private reviewed = new Map<string, ReviewedFile[]>();
+  /** +/− line counts by file, valid while the file's size and mtime and the original's length stay the same. */
+  private statCache = new Map<string, { sig: string; added: number; removed: number }>();
   /** Clock for the redo window; tests replace it. */
   now: () => number = () => Date.now();
 
@@ -72,7 +101,12 @@ export class ChangeTracker implements vscode.Disposable {
       }),
       // Both sides of the diff an edit tool opens before its approval (localpilot.diffPreview).
       registerProposedContent(),
-      vscode.window.onDidChangeActiveTextEditor(() => this.decorateVisible()),
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this.decorateVisible();
+        this.syncReviewContext();
+      }),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.syncReviewContext()),
+      this._onDidChange.event(() => this.syncReviewContext()),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (vscode.window.visibleTextEditors.some((ed) => ed.document === e.document)) {
           this.decorateVisible();
@@ -94,6 +128,9 @@ export class ChangeTracker implements vscode.Disposable {
     const root = q.get('root');
     if (ref && root) {
       return checkpointFile(root, ref, (q.get('kind') as CheckpointKind | null) ?? 'commit', uri.fsPath).catch(() => '');
+    }
+    if (q.get('empty') === '1') {
+      return ''; // the right side of a deleted file's diff
     }
     const sid = q.get('sid') ?? '';
     const turn = q.get('turn');
@@ -164,7 +201,12 @@ export class ChangeTracker implements vscode.Disposable {
 
   /** Mark the start of a user turn (index of the user message) so edits can be rolled back to it. */
   beginTurn(sessionId: string, turn: number): void {
-    this.currentTurn.set(ChangeTracker.rootSession(sessionId), turn);
+    const sid = ChangeTracker.rootSession(sessionId);
+    this.currentTurn.set(sid, turn);
+    // The review queue lists what the user decided since the last message; a new message starts a fresh list.
+    if (this.reviewed.delete(sid)) {
+      this._onDidChange.fire();
+    }
   }
 
   /** Release everything held for a session (it was deleted): pending changes stay on disk as they are, snapshots go. */
@@ -178,6 +220,7 @@ export class ChangeTracker implements vscode.Disposable {
     this.turns.delete(sid);
     this.currentTurn.delete(sid);
     this.loadedTurns.delete(sid);
+    this.reviewed.delete(sid);
     const dir = this.turnDir(sid);
     if (dir) {
       this.queue(sid, () => fs.promises.rm(dir, { recursive: true, force: true }));
@@ -453,6 +496,7 @@ export class ChangeTracker implements vscode.Disposable {
     }
     if (record) {
       void recordEditDecision('accepted', this.withLiveText(kept));
+      this.noteReviewed(kept.map((c) => ({ fsPath: c.fsPath, state: 'accepted', kind: kindOf(c), at: this.now(), change: c })));
     }
     this._onDidChange.fire();
     this.decorateVisible();
@@ -470,8 +514,10 @@ export class ChangeTracker implements vscode.Disposable {
     // Measured before the files are rewritten.
     await recordEditDecision('rejected', this.withLiveText(undone));
     const redo: { change: TrackedChange; content: string | undefined }[] = [];
+    const kinds = new Map<TrackedChange, ReviewedFile['kind']>();
     for (const c of undone) {
       try {
+        kinds.set(c, kindOf(c));
         const content = await currentText(c.fsPath);
         await restoreFile(vscode.Uri.file(c.fsPath), c.original);
         n++;
@@ -482,6 +528,7 @@ export class ChangeTracker implements vscode.Disposable {
       }
     }
     const token = redo.length ? this.setRedo(redo) : undefined;
+    this.noteReviewed(redo.map(({ change }) => ({ fsPath: change.fsPath, state: 'rejected', kind: kinds.get(change) ?? 'modify', at: this.now(), token, change })));
     this._onDidChange.fire();
     this.decorateVisible();
     return { count: n, token };
@@ -503,15 +550,26 @@ export class ChangeTracker implements vscode.Disposable {
     }
   }
 
-  /** Undo one reject (by its token) within {@link REDO_WINDOW_MS}: the agent's content goes back and the files are tracked again. */
-  async redo(token: number): Promise<number> {
+  /**
+   * Undo one reject (by its token) within {@link REDO_WINDOW_MS}: the agent's content goes back and the files are tracked
+   * again. With `fsPath`, only that file comes back; the reject's other files stay restorable.
+   */
+  async redo(token: number, fsPath?: string): Promise<number> {
     const b = this.redoBuf.get(token);
-    this.clearRedo(token);
     if (!b || this.now() > b.until) {
+      this.clearRedo(token);
       return 0;
     }
+    const take = fsPath ? b.entries.filter((e) => samePath(e.change.fsPath, fsPath)) : b.entries;
+    if (!take.length) {
+      return 0;
+    }
+    b.entries = b.entries.filter((e) => !take.includes(e));
+    if (!b.entries.length) {
+      this.clearRedo(token);
+    }
     let n = 0;
-    for (const { change, content } of b.entries) {
+    for (const { change, content } of take) {
       try {
         await restoreFile(vscode.Uri.file(change.fsPath), content);
         n++;
@@ -519,6 +577,7 @@ export class ChangeTracker implements vscode.Disposable {
         if (!this.changes.has(key)) {
           this.changes.set(key, change);
         }
+        this.unreview(change.sessionId, change.fsPath);
       } catch (e) {
         this.log.error(`redo failed for ${change.fsPath}: ${String(e)}`);
       }
@@ -528,15 +587,148 @@ export class ChangeTracker implements vscode.Disposable {
     return n;
   }
 
-  /** Open a side-by-side diff of original vs current. */
-  async showDiff(sessionId: string, fsPath: string): Promise<void> {
-    const c = this.changes.get(`${ChangeTracker.rootSession(sessionId)}|${fsPath}`);
-    if (!c) {
-      return;
+  /** Records review decisions; a file reviewed again replaces its earlier row. */
+  private noteReviewed(rows: ReviewedFile[]): void {
+    for (const r of rows) {
+      const sid = r.change.sessionId;
+      const list = (this.reviewed.get(sid) ?? []).filter((x) => !samePath(x.fsPath, r.fsPath));
+      list.push(r);
+      this.reviewed.set(sid, list.slice(-MAX_REVIEWED));
     }
-    const left = ChangeTracker.originalUri(c.sessionId, fsPath);
-    const title = `${path.basename(fsPath)} (original ↔ LocalPilot)`;
-    await vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(fsPath), title, { preview: true });
+  }
+
+  private unreview(sessionId: string, fsPath: string): void {
+    const sid = ChangeTracker.rootSession(sessionId);
+    const list = this.reviewed.get(sid);
+    if (list) {
+      this.reviewed.set(sid, list.filter((x) => !samePath(x.fsPath, fsPath)));
+    }
+  }
+
+  /** The files accepted or rejected in a session since its current turn began, in the order they were reviewed. */
+  reviewedFor(sessionId: string): ReviewedRow[] {
+    return (this.reviewed.get(ChangeTracker.rootSession(sessionId)) ?? []).map((r) => {
+      const b = r.token !== undefined ? this.redoBuf.get(r.token) : undefined;
+      const restorable = !!b && b.until > this.now() && b.entries.some((e) => e.change === r.change);
+      return { fsPath: r.fsPath, state: r.state, kind: r.kind, ...(restorable ? { redoUntil: b.until } : {}) };
+    });
+  }
+
+  /** Restore edits on a rejected row: the agent's version of that one file comes back while the redo window holds it. */
+  async restoreRejected(sessionId: string, fsPath: string): Promise<number> {
+    const r = (this.reviewed.get(ChangeTracker.rootSession(sessionId)) ?? []).find((x) => x.state === 'rejected' && samePath(x.fsPath, fsPath));
+    return r?.token !== undefined ? this.redo(r.token, r.fsPath) : 0;
+  }
+
+  /** Drops the reviewed rows of a session (Clear reviewed); the decisions themselves stand. */
+  clearReviewed(sessionId: string): void {
+    if (this.reviewed.delete(ChangeTracker.rootSession(sessionId))) {
+      this._onDidChange.fire();
+    }
+  }
+
+  /**
+   * Takes back the review decisions of a session: accepted files are tracked again (their diff and Accept / Reject come
+   * back), rejected files get the agent's edits back while the redo window holds them. `expired` counts those it could not.
+   */
+  async undoReview(sessionId: string): Promise<{ accepted: number; rejected: number; expired: number }> {
+    const sid = ChangeTracker.rootSession(sessionId);
+    const rows = [...(this.reviewed.get(sid) ?? [])];
+    let accepted = 0;
+    let rejected = 0;
+    let expired = 0;
+    for (const r of rows) {
+      if (r.state === 'accepted') {
+        const key = `${sid}|${r.change.fsPath}`;
+        if (!this.changes.has(key)) {
+          this.changes.set(key, r.change);
+          accepted++;
+        }
+        this.unreview(sid, r.fsPath);
+      } else if (r.token !== undefined && (await this.redo(r.token, r.fsPath))) {
+        rejected++;
+      } else {
+        expired++;
+      }
+    }
+    this._onDidChange.fire();
+    this.decorateVisible();
+    return { accepted, rejected, expired };
+  }
+
+  /** +/− line counts of a tracked change against the file now (cached by size and mtime; undefined for huge or unreadable files). */
+  async lineStats(c: TrackedChange): Promise<{ added: number; removed: number } | undefined> {
+    const st = await fs.promises.stat(c.fsPath).catch(() => undefined);
+    if (!st) {
+      return c.original === undefined ? undefined : { added: 0, removed: c.original === '' ? 0 : c.original.split('\n').length };
+    }
+    if (st.size > MAX_STAT_CHARS || (c.original?.length ?? 0) > MAX_STAT_CHARS) {
+      return undefined;
+    }
+    const key = `${c.sessionId}|${c.fsPath}`;
+    const sig = `${st.size}:${st.mtimeMs}:${c.original?.length ?? -1}`;
+    const hit = this.statCache.get(key);
+    if (hit && hit.sig === sig) {
+      return { added: hit.added, removed: hit.removed };
+    }
+    const now = await fs.promises.readFile(c.fsPath, 'utf8').catch(() => undefined);
+    if (now === undefined) {
+      return undefined;
+    }
+    const a = c.original === undefined || c.original === '' ? [] : c.original.split('\n');
+    const b = now === '' ? [] : now.replace(/^\uFEFF/, '').split('\n');
+    const d = diffLines(a, b);
+    const added = d.added.length + d.modified.length;
+    const removed = Math.max(0, a.length - (b.length - added));
+    if (this.statCache.size > 500) {
+      this.statCache.clear();
+    }
+    this.statCache.set(key, { sig, added, removed });
+    return { added, removed };
+  }
+
+  /** The tracked change shown in the active editor tab, when it is one of our review diffs. */
+  activeReview(): { sessionId: string; fsPath: string } | undefined {
+    const input = vscode.window.tabGroups.activeTabGroup?.activeTab?.input as unknown;
+    if (!input || !(input instanceof vscode.TabInputTextDiff) || input.original.scheme !== SCHEME) {
+      return undefined;
+    }
+    const q = input.original.query.includes('=') ? new URLSearchParams(input.original.query) : undefined;
+    if (q && (q.has('ref') || q.has('turn'))) {
+      return undefined; // a checkpoint or turn diff, not the review of a pending change
+    }
+    const sid = q ? (q.get('sid') ?? '') : decodeURIComponent(input.original.query);
+    const fsPath = input.modified.scheme === 'file' ? input.modified.fsPath : input.original.path;
+    const c = this.forSession(sid).find((x) => samePath(x.fsPath, fsPath) || samePath(x.fsPath, input.original.path));
+    return c ? { sessionId: c.sessionId, fsPath: c.fsPath } : undefined;
+  }
+
+  private reviewing: boolean | undefined;
+  /** `localpilot.reviewing`: the active tab is the diff of a change still waiting for Accept / Reject (drives the title-bar actions). */
+  private syncReviewContext(): void {
+    const on = !!this.activeReview();
+    if (on !== this.reviewing) {
+      this.reviewing = on;
+      void vscode.commands.executeCommand('setContext', 'localpilot.reviewing', on);
+    }
+  }
+
+  /**
+   * Open a side-by-side diff of original vs current; the right side is the file itself, so it can be edited before
+   * accepting. A deleted file shows its original against an empty, read-only side.
+   */
+  async showDiff(sessionId: string, fsPath: string): Promise<boolean> {
+    const c = this.changes.get(`${ChangeTracker.rootSession(sessionId)}|${fsPath}`) ?? this.forSession(sessionId).find((x) => samePath(x.fsPath, fsPath));
+    if (!c) {
+      return false;
+    }
+    const left = ChangeTracker.originalUri(c.sessionId, c.fsPath);
+    const deleted = c.original !== undefined && !fs.existsSync(c.fsPath);
+    const right = deleted ? vscode.Uri.from({ scheme: SCHEME, path: c.fsPath, query: new URLSearchParams({ sid: c.sessionId, empty: '1' }).toString() }) : vscode.Uri.file(c.fsPath);
+    const title = `${path.basename(c.fsPath)}: original ↔ LocalPilot ${deleted ? '(deleted)' : '(editable)'}`;
+    await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
+    this.syncReviewContext();
+    return true;
   }
 
   /** Highlight lines that differ from the snapshot in all visible editors. */
@@ -561,6 +753,11 @@ export class ChangeTracker implements vscode.Disposable {
     this.modifiedDeco.dispose();
     this._onDidChange.dispose();
   }
+}
+
+/** What a tracked change is right now: a file the agent created, edited, or deleted. */
+export function kindOf(c: TrackedChange): 'create' | 'modify' | 'delete' {
+  return c.original === undefined ? 'create' : fs.existsSync(c.fsPath) ? 'modify' : 'delete';
 }
 
 /** A file's text as the user sees it (unsaved editor text over the disk copy), or undefined when it does not exist. */

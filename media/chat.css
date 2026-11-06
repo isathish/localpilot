@@ -407,6 +407,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .card-head .acts button { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); }
 .card-head .acts button:hover { background: var(--tint-2); color: var(--fg); }
 .card-head .acts svg { width: 13px; height: 13px; }
+/* The review decision on an edited file, after its +/− stat: quiet text, a check-coloured word only when accepted. */
+.card-head .rtag { flex: none; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+.card-head .rtag.accepted::before { content: "✓ "; color: var(--ok-text); }
+.card-head .rtag.rejected::before { content: "↺ "; }
 .card.running .card-head .ico svg { animation: spin 1s linear infinite; }
 .card.error .card-head { color: var(--error-text); }
 .card .diff { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; overflow: auto; max-height: 360px; }
@@ -608,6 +612,41 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .change button.name { display: block; padding: 0; border-radius: 3px; color: inherit; } .change button.name[aria-disabled="true"] { cursor: default; }
 .change .acts button { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted); }
 .change .acts button:hover { background: var(--tint-2); color: var(--fg); } .change .acts svg { width: 12px; height: 12px; }
+/* Review queue: every row keeps its place; reviewed rows go quiet (muted name, a state tag) until the next message or
+   Clear reviewed. The row itself is the roving tab stop (j/k/a/r/Enter), so its focus ring is the keyboard cursor. */
+.change:focus { outline: none; } .change:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.change .acts button { width: auto; min-width: 18px; padding: 0 3px; gap: 3px; display: inline-flex; align-items: center; justify-content: center; font: inherit; font-size: var(--fs-xs); }
+.change .acts button .long { padding-right: 2px; }
+.change:is(.accepted, .rejected) .name { color: var(--muted); }
+.change:is(.accepted, .rejected) .stat { opacity: .7; }
+.change .tag { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+.change .tag svg { width: 11px; height: 11px; }
+.change .acts.keep { display: inline-flex; }
+.change .acts button[aria-disabled="true"] { opacity: .55; cursor: default; }
+.change .acts button[aria-disabled="true"]:hover { background: none; color: var(--muted); }
+.change-foot { display: flex; justify-content: flex-end; padding: 2px 4px 0; }
+.change-foot button { padding: 1px 4px; border-radius: 3px; font: inherit; font-size: var(--fs-xs); color: var(--muted); }
+.change-foot button:hover { color: var(--fg); background: var(--tint); }
+#changesMeter { margin: 0 2px 0 0; width: 48px; }
+#changesLabel .short { display: none; }
+/* The count is what the head is for: it keeps room before the buttons give up their labels. */
+#changesToggle { min-width: min(10.5em, 45%); }
+/* Clear reviewed keeps its word: it is alone in the head by then, and a bare ✕ would read as "close the panel". */
+@container (max-width: 520px) { #changes .panel-head .btn:not(.primary):not([data-a="clearReviewed"]) .long { display: none; } #changes .panel-head .btn:not(.primary):not([data-a="clearReviewed"]) { padding: 0 7px; } }
+#changes .panel-head [data-a="clearReviewed"] .long { display: inline; }
+@container (max-width: 300px) { #changes .panel-head [data-a="reviewAll"] { display: none; } }
+/* Narrow: the per-row Accept / Reject keep only their icons (labelled for screen readers), and the meter moves under the
+   head at full width instead of squeezing the label. */
+@container (max-width: 340px) {
+  .change .acts button .long { display: none; }
+  .change .acts button { width: 20px; padding: 0; }
+  .change .tag span { display: none; }
+  #changesLabel:has(.short) .long { display: none; } #changesLabel .short { display: inline; }
+  #changes .panel-head:has(#changesMeter:not(.hidden)) { flex-wrap: wrap; row-gap: 2px; }
+  #changes .panel-head:has(#changesMeter:not(.hidden)) .panel-toggle { flex: 1 1 0; }
+  #changesToggle { min-width: 8.6em; }
+  #changesMeter { order: 9; flex: 1 0 calc(100% - 28px); width: auto; margin: 0 6px 2px 22px; height: 3px; }
+}
 .status { display: flex; align-items: flex-start; gap: 8px; min-height: 18px; padding: 0 4px; font-size: var(--fs-sm); line-height: 18px; color: var(--muted); overflow: hidden; }
 /* Two lines, then an ellipsis: "gemma4:12b is reading the prompt (~7,300 tokens)" stays readable in a narrow sidebar. */
 .status .text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }

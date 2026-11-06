@@ -70,6 +70,29 @@ With a tab focused:
 | <kbd>Esc</kbd> | Clear the selection |
 | <kbd>⌘</kbd>-click / <kbd>⇧</kbd>-click | Select several tabs, then close them with ✕ or <kbd>Delete</kbd> |
 
+### Reviewing changes
+
+The **Changes** panel above the input is a review queue. **Review** opens the first file not reviewed yet in a side-by-side diff, and the **N files** chip under an answer opens the files of that turn.
+
+With a file row focused in the panel:
+
+| Key | Action |
+|---|---|
+| <kbd>J</kbd> / <kbd>K</kbd> (or <kbd>↓</kbd> / <kbd>↑</kbd>) | Next / previous file |
+| <kbd>A</kbd> | Accept the file |
+| <kbd>R</kbd> | Reject the file (its edits are removed from disk; **Restore edits** on the row brings them back for 5 minutes) |
+| <kbd>Enter</kbd> | Open the diff (the file itself once it is reviewed) |
+
+In the review diff (the title bar shows the same actions):
+
+| Key | Action |
+|---|---|
+| <kbd>⌘Enter</kbd> / <kbd>Ctrl+Enter</kbd> | Accept the file and open the next one |
+| <kbd>⌥F5</kbd> / <kbd>Alt+F5</kbd> | Next changed file |
+| <kbd>⇧⌥F5</kbd> / <kbd>Shift+Alt+F5</kbd> | Previous changed file |
+
+**Reject File** is in the diff's title bar. The right side of the diff is the file itself, so you can edit it before accepting. When the last file is decided, a summary ("All 5 files reviewed: 4 accepted, 1 rejected") offers **Undo**.
+
 ## Commands
 
 Open the Command Palette and type "LocalPilot" to see these.
@@ -79,7 +102,7 @@ Open the Command Palette and type "LocalPilot" to see these.
 | Chat | Open Chat · Open Chat in Editor · Move Chat To… · Show Quick Menu… · New Chat · Show Chats… · Chat Actions… · Open in Markdown Reader · Open Markdown Reader to the Side · Ask LocalPilot About This Document · Export Markdown as HTML · Export Markdown as PDF |
 | Agents | Run Tasks in Parallel… · Stop All Agents · Pause or Resume Agent · Pause All Agents · Resume All Agents |
 | Best-of-N and worktrees | Best of N: Run One Task on Several Models… · Compare Best-of-N Results… · Apply Agent's Changes to Workspace · Discard Agent's Isolated Changes |
-| Changes | Keep All Agent Changes · Undo All Agent Changes |
+| Changes | Keep All Agent Changes · Undo All Agent Changes · Accept File · Reject File · Next Changed File · Previous Changed File (in a review diff) |
 | Models | Select Default Model… · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start Colibri Server · Stop Colibri Server |
 | Skills | Install Skill… · Browse Skill Registry… · Manage Skills · Reload Skills, Subagents & MCP Servers |
 | Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… · Add File/Folder to Chat |

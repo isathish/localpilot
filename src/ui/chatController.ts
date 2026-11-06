@@ -6,7 +6,8 @@ import { CONTINUE_PROMPT, toolFailurePrompt, type ToolFailureAction } from '../a
 import { SkillLearner } from '../agent/skillRecommender';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
-import { ChangeTracker } from '../agent/changeTracker';
+import { ChangeTracker, kindOf } from '../agent/changeTracker';
+import { nextInQueue, queueFiles, reviewSummary } from '../agent/reviewQueue';
 import { ChangedFile, gitCheckpoint, relativeIn, RestoreType } from '../agent/checkpoints';
 import { rewindAttachments } from './rewindDraft';
 import { SkillManager } from '../agent/skills';
@@ -152,6 +153,10 @@ export type ToWebview =
       lastTurn?: { key: number; files: number };
       /** Present when the files come from the session's isolated worktree rather than the workspace. */
       worktree?: { path: string; applied: boolean; conflicts?: string[] };
+      /** Absolute paths of the workspace files a worktree apply left with conflict markers (review rows with Open in merge editor). */
+      conflicts?: { path: string; fsPath: string }[];
+      /** Files accepted or rejected since the latest message (the review queue keeps them listed); `redoUntil` = Restore edits works until then. */
+      reviewed?: { path: string; fsPath: string; kind: 'create' | 'modify' | 'delete'; state: 'accepted' | 'rejected'; redoUntil?: number }[];
     }
   | { type: 'image'; image: ImageAttachment }
   | { type: 'insertMention'; ref: string }
@@ -327,6 +332,17 @@ export type FromWebview =
   /** Undo of the last reject, within the tracker's redo window. */
   | { type: 'redoChanges'; sessionId: string; token: number }
   | { type: 'showDiff'; sessionId: string; fsPath: string }
+  /**
+   * Start the file-by-file review: opens `fsPath` (or the first file waiting for review) in the diff editor, where Accept /
+   * Reject move on to the next one. `turn` limits the queue to the files changed since the latest message.
+   */
+  | { type: 'review'; sessionId: string; scope?: 'turn' | 'session'; fsPath?: string }
+  /** Restore edits on a rejected row of the review queue (while the redo window holds them). */
+  | { type: 'restoreEdits'; sessionId: string; fsPath: string }
+  /** Clear reviewed: drop the accepted / rejected rows from the review queue. */
+  | { type: 'clearReviewed'; sessionId: string }
+  /** Undo on the review summary: take back every accept and reject listed in the queue. */
+  | { type: 'undoReview'; sessionId: string }
   /** `restoreType`: files only (`workspace`), conversation only (`task`) or both (the default). */
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number; restoreType?: RestoreType }
   /** Multi-file diff of what changed since the latest user message (`turn`) or in the whole chat (`session`). */
@@ -532,7 +548,16 @@ export class ChatController implements vscode.Disposable {
       skills.onDidChange(() => this.broadcast(this.skillsMsg())),
       tracker.onDidChange(() => {
         for (const id of new Set([...this.store.list().map((s) => s.id)])) {
-          if (this.tracker.forSession(id).length || id === this.activeSessionId) {
+          if (this.tracker.forSession(id).length || id === this.activeSessionId || this.tracker.reviewedFor(id).length) {
+            this.pushChanges(id);
+          }
+        }
+      }),
+      // A conflict resolved in the merge editor leaves the review queue once its file is saved without markers.
+      vscode.workspace.onDidSaveTextDocument((doc) => {
+        for (const [id, files] of this.applyConflicts) {
+          const repo = this.store.get(id)?.worktree?.repo;
+          if (repo && files.some((f) => path.join(repo, ...f.split('/')) === doc.uri.fsPath)) {
             this.pushChanges(id);
           }
         }
@@ -1027,7 +1052,10 @@ export class ChatController implements vscode.Disposable {
 
   private async pushChangesAsync(sessionId: string): Promise<void> {
     const session = this.store.get(sessionId);
-    const tracked = this.tracker.forSession(sessionId).map((c) => ({ path: vscode.workspace.asRelativePath(c.fsPath), fsPath: c.fsPath, kind: c.original === undefined ? ('create' as const) : ('modify' as const) }));
+    const tracked = await Promise.all(
+      this.tracker.forSession(sessionId).map(async (c) => ({ path: vscode.workspace.asRelativePath(c.fsPath), fsPath: c.fsPath, kind: kindOf(c), ...((await this.tracker.lineStats(c).catch(() => undefined)) ?? {}) }))
+    );
+    const reviewed = this.tracker.reviewedFor(sessionId).map((r) => ({ path: vscode.workspace.asRelativePath(r.fsPath), ...r }));
     if (session?.worktree && this.worktrees) {
       // Pending work in the isolated copy; files already applied to the workspace are tracked like any other edit.
       const pending = await this.worktrees.changes(session.worktree).catch(() => [] as WorktreeChange[]);
@@ -1038,6 +1066,7 @@ export class ChatController implements vscode.Disposable {
           files: pending.map((f) => ({ path: f.path, fsPath: path.join(session.worktree!.path, f.path), kind: f.kind, added: f.added, removed: f.removed })),
           checkpoints: [],
           worktree: { path: session.worktree.path, applied: !!session.worktree.appliedAt, conflicts: this.applyConflicts.get(sessionId) },
+          ...(await this.openConflicts(sessionId)),
         });
         return;
       }
@@ -1050,7 +1079,142 @@ export class ChatController implements vscode.Disposable {
       gitCheckpoints: (session?.checkpoints?.history ?? []).filter((e) => gitCheckpoint(session?.checkpoints, e.run)).map((e) => e.run),
       checkpointsEnabled: getConfig().checkpointsEnabled,
       lastTurn: await this.lastTurnChanges(session),
+      ...(reviewed.length ? { reviewed } : {}),
+      ...(await this.openConflicts(sessionId)),
     });
+  }
+
+  /** The files a worktree apply left conflicted that still hold conflict markers (absolute, in the user's checkout). */
+  private async openConflicts(sessionId: string): Promise<{ conflicts?: { path: string; fsPath: string }[] }> {
+    const rel = this.applyConflicts.get(sessionId);
+    const repo = this.store.get(sessionId)?.worktree?.repo;
+    if (!rel?.length || !repo) {
+      return {};
+    }
+    const open: { path: string; fsPath: string }[] = [];
+    for (const r of rel) {
+      const abs = path.join(repo, ...r.split('/'));
+      const text = await Promise.resolve(vscode.workspace.fs.readFile(vscode.Uri.file(abs))).then((b) => Buffer.from(b).toString('utf8'), () => '');
+      if (/^<{7}( |$)/m.test(text) && /^>{7}( |$)/m.test(text)) {
+        open.push({ path: vscode.workspace.asRelativePath(abs), fsPath: abs });
+      }
+    }
+    return open.length ? { conflicts: open } : {};
+  }
+
+  /** Per chat: the files a review started from an answer's "N files" chip is limited to (that turn's files). */
+  private readonly reviewScope = new Map<string, Set<string>>();
+
+  /** The files the review queue of a chat walks, in list order. */
+  private reviewQueue(sessionId: string): string[] {
+    const scope = this.reviewScope.get(sessionId);
+    const pending = this.tracker.forSession(sessionId).map((c) => c.fsPath);
+    return queueFiles(pending, scope);
+  }
+
+  /** Opens the first file to review (or `fsPath`) in the diff editor; `turn` scopes the queue to the latest message's files. */
+  private async startReview(sessionId: string, scope: 'turn' | 'session', fsPath?: string): Promise<void> {
+    const s = this.store.get(sessionId);
+    if (!s) {
+      return;
+    }
+    if (scope === 'turn') {
+      const key = lastTurnKey(s);
+      const files = new Set(key !== undefined ? this.tracker.turnOriginals(s.id, key).keys() : []);
+      const pending = this.tracker.forSession(s.id).filter((c) => files.has(c.fsPath));
+      if (!pending.length) {
+        // Nothing of that turn waits for a decision (already reviewed, or changed by commands): show what changed instead.
+        await this.viewChanges(sessionId, 'turn');
+        return;
+      }
+      this.reviewScope.set(s.id, files);
+    } else {
+      this.reviewScope.delete(s.id);
+    }
+    const target = fsPath ?? this.reviewQueue(s.id)[0];
+    if (!target || !(await this.tracker.showDiff(s.id, target))) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'Nothing left to review in this chat' });
+    }
+  }
+
+  /**
+   * After a per-file Accept or Reject: once the chat's queue is empty and it held more than one file, the summary
+   * ("All 5 files reviewed: 4 accepted, 1 rejected") with Undo. Returns whether it was shown.
+   */
+  private reviewDone(sessionId: string, native: boolean): boolean {
+    if (this.reviewQueue(sessionId).length) {
+      return false;
+    }
+    this.reviewScope.delete(sessionId);
+    const rows = this.tracker.reviewedFor(sessionId);
+    if (rows.length < 2) {
+      return false;
+    }
+    const text = reviewSummary(rows);
+    if (native) {
+      void vscode.window.showInformationMessage(`LocalPilot: ${text}`, 'Undo').then((pick) => {
+        if (pick === 'Undo') {
+          void this.undoReview(sessionId);
+        }
+      });
+    } else {
+      this.broadcast({ type: 'toast', level: 'info', text, action: { label: 'Undo', msg: { type: 'undoReview', sessionId } } });
+    }
+    return true;
+  }
+
+  private async undoReview(sessionId: string): Promise<void> {
+    const r = await this.tracker.undoReview(sessionId);
+    const back = r.accepted + r.rejected;
+    const text = `${back ? `${back} file${back === 1 ? '' : 's'} back in review` : 'Nothing to undo'}${r.expired ? `; ${r.expired} rejected file${r.expired === 1 ? ' is' : 's are'} no longer kept: use Restore checkpoint on the message` : ''}`;
+    this.broadcast({ type: 'toast', level: r.expired ? 'warn' : 'info', text });
+    this.pushChanges(sessionId);
+  }
+
+  /**
+   * The diff editor's review actions (title bar and keys): Accept / Reject the file shown and move on to the next one,
+   * or step to the next / previous file waiting for review. The last decision closes the diff and shows the summary.
+   */
+  async reviewInEditor(action: 'accept' | 'reject' | 'next' | 'prev'): Promise<void> {
+    const cur = this.tracker.activeReview();
+    if (!cur) {
+      vscode.window.setStatusBarMessage('LocalPilot: this editor is not a change waiting for review', 2500);
+      return;
+    }
+    const sid = cur.sessionId;
+    const order = this.tracker.forSession(sid).map((c) => c.fsPath);
+    const scope = this.reviewScope.get(sid);
+    // A file opened from outside the scoped turn widens the queue to the whole chat.
+    if (scope && !scope.has(cur.fsPath)) {
+      this.reviewScope.delete(sid);
+    }
+    if (action === 'accept') {
+      this.tracker.keep(sid, cur.fsPath);
+    } else if (action === 'reject') {
+      await this.tracker.reject(sid, cur.fsPath);
+    }
+    this.pushChanges(sid);
+    const queue = this.reviewQueue(sid);
+    const next = nextInQueue(queue, cur.fsPath, action === 'prev' ? -1 : 1, order);
+    if (next) {
+      await this.tracker.showDiff(sid, next);
+      return;
+    }
+    if (action === 'next' || action === 'prev') {
+      vscode.window.setStatusBarMessage('LocalPilot: no other file waiting for review', 2500);
+      return;
+    }
+    // Queue done: the diff of the file just decided is closed (accepted: the file stays open in its own tab if it was).
+    for (const g of vscode.window.tabGroups.all) {
+      for (const t of g.tabs) {
+        if (t.input instanceof vscode.TabInputTextDiff && t.input.original.scheme === 'localpilot-original' && (t.input.modified.fsPath === cur.fsPath || t.input.original.path === cur.fsPath)) {
+          await vscode.window.tabGroups.close(t).then(undefined, () => undefined);
+        }
+      }
+    }
+    if (!this.reviewDone(sid, true)) {
+      vscode.window.setStatusBarMessage(`LocalPilot: ${action === 'accept' ? 'accepted' : 'rejected'} ${path.basename(cur.fsPath)}`, 2500);
+    }
   }
 
   /** How many files changed since the active chat's latest message (git when it has a checkpoint, else the turn's snapshots). */
@@ -2148,12 +2312,34 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'keepChanges':
         this.tracker.keep(msg.sessionId, msg.fsPath);
+        if (msg.fsPath) {
+          this.reviewDone(msg.sessionId, false);
+        }
         return;
       case 'undoChanges': {
         const { count: n, token } = await this.tracker.reject(msg.sessionId, msg.fsPath);
-        this.broadcast({ type: 'toast', level: 'info', text: `Reverted ${n} file${n === 1 ? '' : 's'}`, ...(token !== undefined ? { action: { label: 'Undo', msg: { type: 'redoChanges', sessionId: msg.sessionId, token } } } : {}) });
+        if (msg.fsPath && n && this.reviewDone(msg.sessionId, false)) {
+          return;
+        }
+        this.broadcast({ type: 'toast', level: 'info', text: `Rejected ${n} file${n === 1 ? '' : 's'}`, ...(token !== undefined ? { action: { label: 'Undo', msg: { type: 'redoChanges', sessionId: msg.sessionId, token } } } : {}) });
         return;
       }
+      case 'review':
+        await this.startReview(msg.sessionId, msg.scope === 'turn' ? 'turn' : 'session', typeof msg.fsPath === 'string' ? msg.fsPath : undefined);
+        return;
+      case 'restoreEdits': {
+        const n = await this.tracker.restoreRejected(msg.sessionId, msg.fsPath);
+        this.broadcast({ type: 'toast', level: n ? 'info' : 'warn', text: n ? `Restored the agent's edits to ${path.basename(msg.fsPath)}` : 'No longer kept: use Restore checkpoint on the message' });
+        this.pushChanges(msg.sessionId);
+        return;
+      }
+      case 'clearReviewed':
+        this.tracker.clearReviewed(msg.sessionId);
+        this.pushChanges(msg.sessionId);
+        return;
+      case 'undoReview':
+        await this.undoReview(msg.sessionId);
+        return;
       case 'redoChanges': {
         const n = typeof msg.token === 'number' ? await this.tracker.redo(msg.token) : 0;
         this.broadcast({ type: 'toast', level: n ? 'info' : 'warn', text: n ? `Restored the agent's edits to ${n} file${n === 1 ? '' : 's'}` : 'Too late to undo: the rejected edits are no longer kept' });
@@ -2166,8 +2352,8 @@ export class ChatController implements vscode.Disposable {
         const fsPath = !path.isAbsolute(msg.fsPath) && root ? path.join(root, msg.fsPath) : msg.fsPath;
         if (s?.worktree && fsPath.startsWith(s.worktree.path)) {
           await this.showWorktreeDiff(s, path.relative(s.worktree.path, fsPath));
-        } else if (this.tracker.forSession(msg.sessionId).some((c) => c.fsPath === fsPath) || path.isAbsolute(msg.fsPath)) {
-          await this.tracker.showDiff(msg.sessionId, fsPath);
+        } else if (await this.tracker.showDiff(msg.sessionId, fsPath)) {
+          // A change waiting for review: its side-by-side diff, with Accept / Reject in the title bar.
         } else {
           // A fix the chat no longer tracks (kept or reverted since): open the file itself rather than doing nothing.
           await vscode.window.showTextDocument(vscode.Uri.file(fsPath), { preview: true }).then(undefined, () => this.broadcast({ type: 'toast', level: 'error', text: `Cannot open ${msg.fsPath}` }));
@@ -3379,7 +3565,8 @@ export class ChatController implements vscode.Disposable {
       return;
     }
     if (action === 'review') {
-      await this.viewChanges(sessionId, 'session');
+      // Files still waiting for a decision open in the file-by-file review; otherwise the one-tab diff of the chat.
+      await (this.tracker.forSession(sessionId).length ? this.startReview(sessionId, 'session') : this.viewChanges(sessionId, 'session'));
       return;
     }
     if (this.runs.has(sessionId)) {
