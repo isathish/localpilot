@@ -276,6 +276,7 @@ function loadChat() {
       line('function el('),
       line('function fmtTok('),
       line('function setState('),
+      line('function newChatMode('),
       cut('  function lazyFill(', '  /** Settled rows keep'),
       cut('  /**\n   * A compaction, folded', '  /**\n   * Defers building'),
       cut('  // What fills the window (host `context` events', '  /** The model can take more than'),

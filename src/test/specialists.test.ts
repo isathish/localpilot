@@ -22,7 +22,7 @@ function lift(name: string, kind: 'const' | 'function'): string {
   const start = CHAT_JS.indexOf(kind === 'const' ? `  const ${name} = {` : `  function ${name}(`);
   assert.ok(start > 0, `${name} not found in media/chat.js`);
   const line = CHAT_JS.slice(start, CHAT_JS.indexOf('\n', start));
-  if (kind === 'function' && line.trimEnd().endsWith('}')) {
+  if ((kind === 'function' && line.trimEnd().endsWith('}')) || (kind === 'const' && line.trimEnd().endsWith('};'))) {
     return line;
   }
   const end = CHAT_JS.indexOf(kind === 'const' ? '\n  };\n' : '\n  }\n', start);
@@ -33,7 +33,7 @@ function lift(name: string, kind: 'const' | 'function'): string {
 /** The webview's MODES / SPECIALISTS tables and the helpers that read them, with icons stubbed. */
 function webviewModes() {
   const sandbox: Record<string, unknown> = { I: new Proxy({}, { get: (_t, k) => `<svg data-i="${String(k)}"></svg>` }) };
-  vm.runInNewContext([lift('MODES', 'const'), lift('SPECIALISTS', 'const'), lift('specOf', 'function'), lift('modeView', 'function'), 'this.MODES = MODES; this.SPECIALISTS = SPECIALISTS; this.specOf = specOf; this.modeView = modeView;'].join('\n'), sandbox);
+  vm.runInNewContext([lift('MODES', 'const'), lift('SPECIALISTS', 'const'), lift('AUTO', 'const'), lift('specOf', 'function'), lift('modeView', 'function'), 'this.MODES = MODES; this.SPECIALISTS = SPECIALISTS; this.specOf = specOf; this.modeView = modeView;'].join('\n'), sandbox);
   return sandbox as { MODES: Record<string, { label: string; tag: string }>; SPECIALISTS: Record<string, { label: string; base: string; placeholder: string; icon: string }>; specOf: (s: unknown) => string; modeView: (s: unknown) => { label: string; baseLabel: string; tag: string; placeholder: string } };
 }
 
@@ -59,6 +59,19 @@ suite('Mode picker: core modes and specialists', () => {
     assert.strictEqual(SPECIALISTS.review.base, 'ask');
     assert.strictEqual(SPECIALISTS.architect.base, 'plan');
     assert.strictEqual(SPECIALISTS.test.base, 'agent');
+  });
+
+  test('Auto mode: the chip says Auto (with the last pick once a message ran) and the picker lists it first', () => {
+    const { modeView } = webviewModes();
+    const fresh = modeView({ mode: 'agent', autoMode: true, messages: [] }) as { label: string; pick?: string };
+    assert.deepStrictEqual([fresh.label, fresh.pick], ['Auto', '']);
+    const ran = modeView({ mode: 'ask', specialist: 'review', autoMode: true, messages: [{ role: 'user', content: 'review my diff' }] }) as { label: string; pick?: string };
+    assert.deepStrictEqual([ran.label, ran.pick], ['Auto', 'Review']);
+    assert.strictEqual((modeView({ mode: 'debug', autoMode: false }) as { label: string }).label, 'Debug', 'picking a mode turns Auto off');
+    const menu = CHAT_JS.slice(CHAT_JS.indexOf('  function openModeMenu('), CHAT_JS.indexOf('  /** What the router resolves Auto to'));
+    assert.match(menu, /const items = \[\{ group: 'Modes', label: AUTO\.label[^\n]*selected: auto, onPick: setAuto \}\]/, 'Auto is the first entry and turns Auto on');
+    assert.match(CHAT_JS, /function autoPickNote\(r\)/, 'a sent message shows what Auto picked');
+    assert.match(CHAT_JS, /post\(\{ type: 'setMode', sessionId: s\.id, mode: 'auto' \}\)/);
   });
 
   test('the chip shows a specialist only while the chat is in its base mode', () => {

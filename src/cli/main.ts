@@ -17,6 +17,7 @@ import { RunControl } from '../agent/runControl';
 import { parseRunLine } from '../agent/messageQueue';
 import { WorktreeInfo, WorktreeManager } from '../agent/worktrees';
 import { ChangeTracker } from '../agent/changeTracker';
+import { autoLabel, classifyTask, TaskRoute } from '../agent/taskRouter';
 import { CheckpointService, isOrphanCheckpoint, pruneSnapshotDirs, snapshotFolder } from '../agent/checkpoints';
 import { nextTurnKey, undoPicker } from './undoPicker';
 import { createGatherContextTool } from '../agent/clarify';
@@ -172,6 +173,7 @@ ${bold('Usage')}
   localpilot --ide [options] "task"       open the task in VS Code instead
 
 ${bold('Options')}
+  --auto                       each message picks its mode (Ask, Plan, Agent, Debug, a specialist…) from what it asks
   --ask | --plan | --agent     mode (default: agent); --multitask coordinates background workers, --debug fixes bugs
   -c, --continue               continue the most recent session in this folder (sessions are saved after every turn)
   -r, --resume [id]            resume a saved session by id or list number; without one, pick from a numbered list
@@ -234,6 +236,8 @@ Log: ${dim(LOG_FILE)}`;
 interface Args {
   prompt: string;
   mode: Session['mode'];
+  /** --auto: each message picks its own mode from what it asks. */
+  auto?: boolean;
   model?: string;
   files: string[];
   yes: boolean;
@@ -309,7 +313,8 @@ function parseArgs(argv: string[]): Args {
       words.push(...argv.slice(i + 1));
       break;
     }
-    if (x === '--ask') {a.mode = 'ask';}
+    if (x === '--auto') {a.auto = true;}
+    else if (x === '--ask') {a.mode = 'ask';}
     else if (x === '--plan') {a.mode = 'plan';}
     else if (x === '--multitask') {a.mode = 'multitask';}
     else if (x === '--debug') {a.mode = 'debug';}
@@ -1116,6 +1121,15 @@ async function runTurn(core: Core, session: Session, text: string, files: string
   // Increasing turn keys, recorded on the message, so /undo can find a turn's checkpoint after compaction or a resume.
   const checkpoint = (lastTurnKey = nextTurnKey(session, lastTurnKey));
   const userMessage: ChatMessage = { role: 'user', content, ...(opts.images?.length ? { images: opts.images } : {}), meta: { checkpoint, ...(opts.display ? { display: opts.display } : {}) } };
+  // Auto mode (--auto, /mode auto): this message picks its mode, specialist and, with an Auto model, its model role.
+  let auto: TaskRoute | undefined;
+  if (session.autoMode && !opts.resume && !opts.display && !opts.roleOverride) {
+    auto = classifyTask({ text, images: opts.images?.length ?? 0, attachments: files.length, hasFolder: true });
+    session.mode = auto.mode;
+    session.specialist = auto.specialist;
+    userMessage.meta = { ...userMessage.meta, autoRoute: { mode: auto.mode, ...(auto.specialist ? { specialist: auto.specialist } : {}), kind: auto.kind, reason: auto.reason } };
+    r.note(`Auto → ${autoLabel(auto)} · ${auto.reason}`);
+  }
   core.tracker.beginTurn(session.id, checkpoint);
   activeSignal = control.signal;
   const usageBefore = session.usage && { ...session.usage };
@@ -1153,6 +1167,7 @@ async function runTurn(core: Core, session: Session, text: string, files: string
       // Nobody can answer a prompt (piped or -p without --yes): installs are not attempted and the task is reported blocked.
       unattended: (!process.stdin.isTTY || printMode) && !yesMode,
       modelRef: opts.modelRef,
+      ...(auto ? { mode: auto.mode, specialist: auto.specialist, taskRole: auto.role } : {}),
       permissionAllow: opts.permissionAllow,
       toolFilter: opts.toolFilter,
       roleOverride: opts.roleOverride,
@@ -1634,6 +1649,9 @@ async function cmdWork(core: Core, args: Args, renderer: Renderer): Promise<numb
   console.log(`${BRAND} working on the shared board in ${args.cwd}${args.workOpts.once ? ' (one task)' : ''} — Ctrl+C to stop\n`);
   while (!ctl.signal.aborted && (args.workOpts.max === undefined || done < args.workOpts.max)) {
     const session = newSession(args.mode, getConfig().defaultModel);
+    if (args.auto) {
+      session.autoMode = true;
+    }
     core.sessions.set(session.id, session);
     const owner = boardOwner(session.id);
     const task = await board.claim(owner);
@@ -2363,6 +2381,10 @@ async function main(): Promise<void> {
     }
   }
   let session: Session = resumed ?? store.create(modelInfo.id, args.mode);
+  // --auto: every message picks its mode; a resumed chat keeps its own Auto setting unless --auto asks for it.
+  if (args.auto) {
+    session.autoMode = true;
+  }
   session.think = sessionThinking(args.thinking, session.think, savedThinking());
   if (args.thinking) {
     await rememberThinking(args.thinking);
@@ -2778,10 +2800,11 @@ async function main(): Promise<void> {
       case 'help': console.log(HELP); return true;
       case 'exit': case 'quit': case 'q': rl!.close(); return true;
       case 'mode':
-        if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; session.specialist = undefined; console.log(dim(`mode → ${arg}`)); }
+        if (arg === 'auto') { if (!session.autoMode) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: 'auto', source: 'cli' }); } session.autoMode = true; console.log(dim('mode → auto (each message picks its mode)')); }
+        else if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; session.specialist = undefined; session.autoMode = undefined; console.log(dim(`mode → ${arg}`)); }
         // Specialists (review, test, …) run in their base mode with a built-in agent's playbook, as in the VS Code chat.
-        else if (isSpecialistId(arg)) { const base = SPECIALISTS[arg].base; core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: `${base}:${arg}`, source: 'cli' }); session.mode = base; session.specialist = arg; console.log(dim(`mode → ${arg} (runs in ${base})`)); }
-        else { console.log(dim(`mode is ${session.specialist && SPECIALISTS[session.specialist]?.base === session.mode ? `${session.specialist} (${session.mode})` : session.mode}; use /mode ask|agent|plan|debug|multitask or ${SPECIALIST_IDS.join('|')}`)); }
+        else if (isSpecialistId(arg)) { const base = SPECIALISTS[arg].base; core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: `${base}:${arg}`, source: 'cli' }); session.mode = base; session.specialist = arg; session.autoMode = undefined; console.log(dim(`mode → ${arg} (runs in ${base})`)); }
+        else { console.log(dim(`mode is ${session.specialist && SPECIALISTS[session.specialist]?.base === session.mode ? `${session.specialist} (${session.mode})` : session.mode}; use /mode auto|ask|agent|plan|debug|multitask or ${SPECIALIST_IDS.join('|')}`)); }
         return true;
       case 'team': {
         // `/team <task>`: a coordinator brief in Multitask mode (the session stays in it, as with /mode).

@@ -120,6 +120,13 @@ export interface AgentRunOptions {
   modelRef?: string;
   /** Runs this turn in another mode (an empty-chat suggestion) without changing the chat's own mode. */
   mode?: Session['mode'];
+  /** Auto mode: the specialist this turn runs as (with `mode` as its base), instead of the chat's own. */
+  specialist?: Session['specialist'];
+  /**
+   * Auto mode's model role for this task (`reasoning` for plans and reviews, `fast` for a quick question). Used only
+   * when the chat's model is Auto: an explicit model is never second-guessed.
+   */
+  taskRole?: ModelRole;
   /** Routing role for this run (subagents pass `fast` for read-only work). Defaults to agent / reasoning in Plan mode. */
   role?: ModelRole;
   /** Restrict tool set (subagents). */
@@ -369,7 +376,8 @@ export class AgentRunner {
     let route: Awaited<ReturnType<ProviderRegistry['route']>>;
     const routeOnce = () =>
       this.providers.route({
-        role: o.role ?? (turnMode === 'plan' ? 'reasoning' : 'agent'),
+        role: o.role ?? (!requested && o.taskRole ? o.taskRole : turnMode === 'plan' ? 'reasoning' : 'agent'),
+        byTask: !requested && !!o.taskRole && depth === 0,
         modelRef: requested,
         fresh: true,
         needsVision: !!o.userMessage.images?.length || session.messages.some((m) => m.role === 'user' && !!m.images?.length && Date.now() - (m.meta?.timestamp ?? 0) < 10 * 60_000),
@@ -477,7 +485,7 @@ export class AgentRunner {
       contextPaths,
       mode: turnMode,
       // Only the chat's own turns: a one-off mode (an empty-chat suggestion) or a subagent run is not the specialist.
-      specialist: depth === 0 && !o.roleOverride && turnMode === session.mode ? session.specialist : undefined,
+      specialist: depth === 0 && !o.roleOverride ? (o.specialist ?? (turnMode === session.mode ? session.specialist : undefined)) : undefined,
       workspaceRoot: o.workspaceRoot,
       model,
       toolsEnabled,

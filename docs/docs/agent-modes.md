@@ -6,7 +6,7 @@ permalink: /docs/agent-modes/
 
 <p><img src="{{ '/assets/screenshots/mode-picker.png' | relative_url }}" alt="Mode picker: Agent, Multitask, Debug, Plan and Ask" width="370"></p>
 
-LocalPilot has five modes. Agent, Multitask and Debug can change files and run commands. Plan and Ask are read-only.
+LocalPilot has five modes, plus [Auto](#auto), which picks one for each message. Agent, Multitask and Debug can change files and run commands. Plan and Ask are read-only.
 
 | Mode | Edits files | Use it to |
 |---|---|---|
@@ -17,6 +17,29 @@ LocalPilot has five modes. Agent, Multitask and Debug can change files and run c
 | Multitask | Through workers only | Split a larger request across background workers |
 
 Switch modes with the picker under the composer, <kbd>Shift+Tab</kbd> or <kbd>Ctrl+.</kbd> (<kbd>Cmd+.</kbd> on macOS), which cycle Ask → Agent → Plan → Debug → Multitask, or `/mode ask|agent|plan|debug|multitask`. The picker tags each mode **read-only** or **edits files**. In the CLI use `--agent`, `--multitask`, `--debug`, `--plan` or `--ask`. Editor actions pick a mode for you: Explain uses Ask; Fix, Refactor, Generate Tests and Add Documentation use Agent.
+
+## Auto
+
+Pick **Auto** at the top of the mode picker (`/mode auto`, or `--auto` in the CLI) and each message chooses its own mode from what it asks. New chats start in Auto until you pick a mode yourself, and a new chat keeps the choice of the chat you were in. The choice shows under your message, for example *✦ Auto → Debug · describes an error*; **change** opens the picker, and picking any mode turns Auto off.
+
+| The message… | Runs in |
+|---|---|
+| asks a question (*Is this function pure?*) | Ask (a short question with nothing attached goes to a small, fast model) |
+| asks for an explanation (*How does the router work?*) | Explain |
+| is about the whole project (*Give me an overview of this repo*) | Project |
+| asks for a plan (*How should we add OAuth?*) | Plan |
+| asks for a design (*Design the architecture for plugins*) | Architect |
+| asks for a review (*Review my changes*) | Review |
+| describes an error (*TypeError in checkout.ts*, *the login page is broken*) | Debug |
+| asks for tests (*Write tests for the parser*) | Test |
+| asks to restructure code (*Refactor the payment module*) | Refactor |
+| asks to run commands (*Run npm install and start the server*) | Terminal |
+| lists three or more independent tasks, or says *in parallel* | Multitask |
+| asks for any other change (*Add a dark mode toggle*) | Agent |
+
+The choice is made on your machine from the message, its attachments and the errors in the Problems panel, with no model call. Slash commands, `/deep-planning` and resumed runs keep their own mode. Without a folder, choices that would edit files run in Ask.
+
+When the chat's model is also **Auto**, the task picks the model too: plans, designs and reviews go to the best reasoning model, and quick questions to a small fast model, as long as that model is already in memory or fits next to what is (see [Automatic routing](models.md#automatic-routing)). A model you chose for the chat is always used as is.
 
 **Without a folder.** When VS Code has no folder open, the welcome screen says *No folder open · chat only* with **Open folder…**, new chats start in Ask, and the picker marks Agent, Debug, Multitask and the specialists that run in them *Needs a folder*: picking one says why instead of switching. A chat that is still in a mode that edits files answers that turn read-only. Plan and Ask work as usual, on the files you attach.
 

@@ -28,6 +28,8 @@ export interface ChatMessage {
   thinking?: string;
   /** Internal metadata: not sent to the model. */
   meta?: {
+    /** Auto mode's pick for this message: the mode and specialist it ran in, and why (shown on the message). */
+    autoRoute?: { mode: string; specialist?: string; kind: string; reason: string };
     timestamp?: number;
     tokens?: number;
     /** Marks a compaction summary message. */
@@ -496,6 +498,11 @@ export interface SessionSummary {
    * the matching built-in agent's playbook added to the system prompt. Ignored when `mode` is not its base mode.
    */
   specialist?: SpecialistId;
+  /**
+   * Auto mode: each message picks its own mode (and specialist) from what it asks; `mode`/`specialist` then hold the
+   * last pick. Picking a mode in the picker turns it off.
+   */
+  autoMode?: boolean;
   /** Plan mode output saved to `.localpilot/plans/<slug>.plan.md`, shown as the "Prepared plan" card. */
   plan?: { file: string; title: string; summary: string };
   messageCount: number;

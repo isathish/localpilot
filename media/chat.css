@@ -1851,3 +1851,12 @@ body.vscode-high-contrast .pl-row.sel, body.vscode-high-contrast-light .pl-row.s
 body.vscode-high-contrast .pl-scope .pick.on, body.vscode-high-contrast-light .pl-scope .pick.on { border-color: var(--vscode-contrastActiveBorder, var(--focus)); }
 /* Saved prompts on the welcome screen: the first one only on short panels. */
 @media (max-height: 640px) { .empty .prompts .suggestion:nth-child(n+2) { display: none; } }
+
+/* Auto mode's pick under a sent message: quiet, one line, the mode name in the foreground colour. */
+.turn.user .autopick { display: flex; align-items: center; gap: 5px; margin: 4px 2px 0; font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.turn.user .autopick svg { width: 11px; height: 11px; flex: none; color: var(--brand-text, var(--accent)); }
+.turn.user .autopick .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn.user .autopick b { font-weight: 600; color: var(--fg); }
+.turn.user .autopick .lnk { flex: none; padding: 0 2px; color: var(--link); font-size: inherit; opacity: 0; }
+.turn.user:hover .autopick .lnk, .turn.user .autopick .lnk:focus-visible { opacity: 1; }
+@media (hover: none) { .turn.user .autopick .lnk { opacity: 1; } }

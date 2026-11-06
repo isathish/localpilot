@@ -64,7 +64,7 @@ export type RecoveryCategory =
   | 'database' | 'data_corruption' | 'mcp' | 'git_conflict' | 'security'
   | 'tool' | 'permission' | 'check_timeout' | 'loop' | 'unknown';
 export type RecoverySeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
-export type ChoiceSource = 'picker' | 'slash' | 'plan' | 'cli';
+export type ChoiceSource = 'picker' | 'slash' | 'plan' | 'cli' | 'auto';
 export type MentionKind = 'file' | 'range' | 'folder' | 'url' | 'terminal' | 'workspace' | 'problems' | 'git' | 'selection' | 'editors' | 'codebase' | 'other';
 export type HookRunOutcome = 'ok' | 'blocked' | 'failed' | 'timeout';
 

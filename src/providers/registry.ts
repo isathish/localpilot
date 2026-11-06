@@ -25,6 +25,11 @@ export interface RouteRequest {
   /** The turn carries images: route to a vision model when the chosen one cannot see. */
   needsVision?: boolean;
   /**
+   * Auto picked `role` from the task (a plan, a review, a quick question): the default model is a preference, not a
+   * pin, and a model better suited to the role answers when it is in memory or fits alongside what is.
+   */
+  byTask?: boolean;
+  /**
    * Current load, for spreading parallel work across models: how many runs are assigned to each model id right
    * now, and which model ids are known to answer one request at a time (see AgentRunner).
    */
@@ -683,8 +688,17 @@ export class ProviderRegistry implements vscode.Disposable {
       } else if (role === 'reasoning' && cfg.routing.reasoning) {
         const r = find(cfg.routing.reasoning);
         if (r && r.id !== model.id) {
-          reason = `Plan mode — using ${r.name} for reasoning`;
+          reason = `${req.byTask ? 'Auto: planning or review task' : 'Plan mode'} — using ${r.name} for reasoning`;
           model = r;
+        }
+      } else if (role === 'reasoning' && req.byTask && !req.modelRef) {
+        // No reasoning model set: Auto takes the best one for the job when it beats the default by a clear margin and
+        // does not mean swapping models out of memory (a weight load costs more than the better model saves).
+        const best = pickForRole(healthy, 'reasoning', profile, req.needsVision, bonus);
+        const pick = best && preferResident(best, healthy, 'reasoning', resident, profile, bonus, this.residentGb);
+        if (pick && pick.id !== model.id && scoreForRole(pick, 'reasoning', profile, bonus) >= scoreForRole(model, 'reasoning', profile, bonus) + 2) {
+          reason = `Auto: planning or review task — using ${pick.name}`;
+          model = pick;
         }
       } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
         // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model —
@@ -692,7 +706,8 @@ export class ProviderRegistry implements vscode.Disposable {
         const small = pickForRole(healthy, 'fast', profile, false, bonus);
         const fast = small && preferResident(small, healthy, 'fast', resident, profile, bonus, this.residentGb);
         if (fast && fast.id !== model.id && fast.supportsTools) {
-          reason = fast === small ? `Read-only subagent — using ${fast.name}` : `Read-only subagent — using ${fast.name}, already in memory (${small.name} would not fit alongside)`;
+          const who = req.byTask ? 'Auto: quick question' : 'Read-only subagent';
+          reason = fast === small ? `${who} — using ${fast.name}` : `${who} — using ${fast.name}, already in memory (${small.name} would not fit alongside)`;
           model = fast;
         }
       }

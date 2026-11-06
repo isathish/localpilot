@@ -105,7 +105,14 @@
   /** The chat's specialist id, only while the chat is still in that specialist's base mode. */
   function specOf(s) { const k = s && s.specialist; return k && SPECIALISTS[k] && SPECIALISTS[k].base === s.mode ? k : ''; }
   /** Label, icon, description and placeholder the chat's mode shows: the specialist's when one is active. */
-  function modeView(s) { const k = specOf(s); const m = MODES[(s && s.mode) || 'agent'] || MODES.agent; return k ? { ...SPECIALISTS[k], tag: m.tag, baseLabel: m.label } : { ...m, baseLabel: '' }; }
+  /** Auto mode: the picker entry, and what the chip shows ("Auto", with the last pick in its tooltip). */
+  const AUTO = { label: 'Auto', hint: 'Picks the mode for each message', desc: 'Picks Ask, Plan, Agent, Debug, Multitask or a specialist for each message from what it asks, and says why', placeholder: 'Ask anything, or describe a task…' };
+  /** A new chat starts the way the current one runs: Auto, or the mode the user picked (Auto when there is none). */
+  function newChatMode() { const s = state.session; return !s || s.autoMode ? 'auto' : s.mode || 'auto'; }
+  function modeView(s) {
+    if (s && s.autoMode) { const pick = modeView({ ...s, autoMode: false }); return { ...AUTO, icon: I.sparkle, tag: pick.tag, baseLabel: '', pick: s.messages && s.messages.some((m) => m.role === 'user') ? pick.label : '' }; }
+    const k = specOf(s); const m = MODES[(s && s.mode) || 'agent'] || MODES.agent; return k ? { ...SPECIALISTS[k], tag: m.tag, baseLabel: m.label } : { ...m, baseLabel: '' };
+  }
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   /** Consecutive calls to these fold into one "Explored" row in the transcript (see foldExplore). */
   const EXPLORE_TOOLS = new Set([...READ_TOOLS, 'gather_context', 'read_pdf', 'repo_graph', 'analyze_workspace', 'mcp_read_resource', 'git_status', 'ci_status']);
@@ -113,7 +120,7 @@
   // the rest run as soon as they are picked. /smol (same as /compact) still works when typed.
   const SLASH = [
     ['/clear', 'Clear this chat', 'Chat'], ['/compact', 'Summarise older messages', 'Chat'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one', 'Chat'], ['/context', 'Context usage', 'Chat'],
-    ['/mode ask', 'Ask mode', 'Chat'], ['/mode agent', 'Agent mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
+    ['/mode auto', 'Auto: each message picks its mode', 'Chat'], ['/mode ask', 'Ask mode', 'Chat'], ['/mode agent', 'Agent mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
     ['/mode architect', 'Architect: design the change first (Plan)', 'More modes'], ['/mode review', 'Review: findings by severity (Ask)', 'More modes'], ['/mode test', 'Test: write and run tests (Agent)', 'More modes'], ['/mode refactor', 'Refactor: same behaviour, better structure (Agent)', 'More modes'], ['/mode explain', 'Explain: walk through code (Ask)', 'More modes'], ['/mode terminal', 'Terminal: shell tasks, commands shown first (Agent)', 'More modes'], ['/mode project', 'Project: overview, build and test (Ask)', 'More modes'],
     ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md', 'Plan & delegate'], ['/team ', 'Split a task for background workers and the shared board', 'Plan & delegate'], ['/agent ', 'Delegate to a subagent', 'Plan & delegate'], ['/agent new ', 'Create a custom subagent', 'Plan & delegate'],
     ['/help', 'Show commands', 'Info'], ['/memory', 'Instruction files and saved memory notes', 'Info'], ['/permissions', 'Permission rules from settings.json', 'Info'], ['/hooks', 'Configured hooks', 'Info'], ['/keys', 'Keyboard shortcuts', 'Info'], ['/board', 'Shared task board', 'Info'], ['/agents', 'List subagents', 'Info'], ['/commands', 'List custom slash commands', 'Info'], ['/prompts', 'Prompt library: search, insert, save and edit prompts', 'Info'],
@@ -1324,7 +1331,15 @@
     // Clicking the text of a sent message edits it (links, paths and a text selection keep their own meaning).
     if (index !== undefined) { ut.classList.add('editable'); ut.onclick = (e) => { if (e.target.closest('a, .path-link, code') || String(window.getSelection() || '')) { return; } inlineEdit(d, m, index, text); }; }
     if (m.meta && m.meta.corrections && m.meta.corrections.length) { d.appendChild(correctionNote(m.meta.corrections)); }
+    if (m.meta && m.meta.autoRoute) { d.appendChild(autoPickNote(m.meta.autoRoute)); }
     return d;
+  }
+  /** Auto mode's pick for this message: "Auto → Debug · describes an error", with a way to take over the choice. */
+  function autoPickNote(r) {
+    const name = (r.specialist && SPECIALISTS[r.specialist] ? SPECIALISTS[r.specialist].label : MODES[r.mode] ? MODES[r.mode].label : r.mode);
+    const n = el('div', 'autopick', `${I.sparkle}<span class="t">Auto → <b>${esc(name)}</b>${r.reason ? ` · ${esc(r.reason)}` : ''}</span><button class="lnk" title="Pick a mode yourself for the next messages (turns Auto off)">change</button>`);
+    n.querySelector('button').onclick = (e) => { e.stopPropagation(); openModeMenu(); };
+    return n;
   }
   /** Answers to `checkpointExists`, keyed `<session>:<index>`, for the inline editors waiting on them. */
   const editChecks = new Map();
@@ -1685,7 +1700,7 @@
   }
   function pickFolder(p) {
     const s = state.session; const r = chatRoots(); if (!s || !r) { return; }
-    if (folderLocked()) { post({ type: 'newSession', mode: s.mode, folder: p }); return; }
+    if (folderLocked()) { post({ type: 'newSession', mode: newChatMode(), folder: p }); return; }
     s.folder = p === r[0].path ? undefined : p; mentionHits.asked = null; mentionHits.query = null;
     post({ type: 'setFolder', sessionId: s.id, folder: p });
     syncFolderChip(); if (els.messages.querySelector(':scope > .empty')) { renderSession(); }
@@ -2904,8 +2919,8 @@
     syncPlaceholder(); syncFolderChip(); const v = modeView(state.session);
     if (els.modeBtn.dataset.view !== v.label) { els.modeBtn.dataset.view = v.label; els.modeLabel.textContent = v.label; els.modeIcon.innerHTML = v.icon; }
     // A specialist names the mode it runs in, since that decides whether files change ("Review · runs in Ask (read-only)").
-    els.modeBtn.title = `${v.baseLabel ? `${v.label} · runs in ${v.baseLabel} (${v.tag})` : `Mode: ${v.label} (${v.tag})`} · ${kb('Mod+.')} to switch`;
-    els.modeBtn.setAttribute('aria-label', `Mode: ${v.label}${v.baseLabel ? `, runs in ${v.baseLabel}` : ''}. Change mode`);
+    els.modeBtn.title = v === undefined ? '' : v.label === 'Auto' ? `Mode: Auto — each message picks its mode${v.pick ? `; the last one ran in ${v.pick}` : ''} · ${kb('Mod+.')} to switch` : `${v.baseLabel ? `${v.label} · runs in ${v.baseLabel} (${v.tag})` : `Mode: ${v.label} (${v.tag})`} · ${kb('Mod+.')} to switch`;
+    els.modeBtn.setAttribute('aria-label', `Mode: ${v.label}${v.baseLabel ? `, runs in ${v.baseLabel}` : ''}${v.pick ? `, last message ran in ${v.pick}` : ''}. Change mode`);
     syncModeLine();
   }
   /** The welcome screen's "Agent mode: edits files… · change" line follows the picker. */
@@ -2913,18 +2928,24 @@
     const line = els.messages.querySelector(':scope > .empty .modeline .txt'); if (!line) { return; }
     const v = modeView(state.session);
     const what = v.baseLabel ? v.hint : v.desc;
-    line.textContent = `${v.label} mode${v.baseLabel ? ` (runs in ${v.baseLabel})` : ''}: ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+    line.textContent = v.label === 'Auto' ? 'Auto mode: each message picks Ask, Plan, Agent, Debug or a specialist from what it asks' : `${v.label} mode${v.baseLabel ? ` (runs in ${v.baseLabel})` : ''}: ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
   }
   /** Keyboard mode switch (Shift+Tab with a draft, Ctrl/Cmd+.). The toast sits in the polite #toasts live region, so it is
    *  also what a screen reader hears: "Mode: Plan — investigate and prepare a plan…". */
   // Cycles the core modes only; from a specialist the next one is the mode after its base.
   function rotateMode() { const keys = Object.keys(MODES).filter((k) => !needsFolder(k)); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; const m = MODES[next]; setMode(next); toast(`Mode: ${m.label} — ${m.desc.charAt(0).toLowerCase()}${m.desc.slice(1)}`); }
   /** Switches the chat's mode; `specialist` picks a "More modes" entry that runs in `mode`, and anything else clears it. */
+  /** Auto: each message picks its mode (the host classifies it on send); picking any other mode turns it off. */
+  function setAuto() {
+    const s = state.session; if (!s || s.autoMode) { return; }
+    s.autoMode = true; syncMode();
+    post({ type: 'setMode', sessionId: s.id, mode: 'auto' });
+  }
   function setMode(mode, specialist) {
     const s = state.session; if (!s || !MODES[mode]) { return; }
     const sp = specialist && SPECIALISTS[specialist] && SPECIALISTS[specialist].base === mode ? specialist : undefined;
-    if (s.mode === mode && (specOf(s) || undefined) === sp) { return; }
-    s.mode = mode; s.specialist = sp; syncMode();
+    if (!s.autoMode && s.mode === mode && (specOf(s) || undefined) === sp) { return; }
+    s.mode = mode; s.specialist = sp; s.autoMode = false; syncMode();
     post({ type: 'setMode', sessionId: s.id, mode, ...(sp ? { specialist: sp } : {}) });
   }
   /** The mode picker: the five core modes, the specialists under "More modes", then Manage modes. */
@@ -2932,9 +2953,9 @@
   function needsFolder(mode) { return !!state.workspace && state.workspace.folders === 0 && MODES[mode] && MODES[mode].tag === 'edits files'; }
   const NEEDS_FOLDER = { text: 'Needs a folder', cls: 'nf', title: 'Open a folder so LocalPilot can edit files and run commands' };
   function openModeMenu() {
-    const s = state.session; const cur = s ? s.mode : 'agent'; const sp = specOf(s);
+    const s = state.session; const auto = !!(s && s.autoMode); const cur = s && !auto ? s.mode : ''; const sp = auto ? undefined : specOf(s);
     const refuse = (label) => () => toast(`${label} needs a folder: open one to edit files and run commands`);
-    const items = Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: needsFolder(k) ? `${m.desc}. Needs a folder.` : m.desc, icon: m.icon, disabled: needsFolder(k), tags: [needsFolder(k) ? NEEDS_FOLDER : { text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: needsFolder(k) ? refuse(m.label) : () => setMode(k) }))
+    const items = [{ group: 'Modes', label: AUTO.label, desc: AUTO.hint, title: AUTO.desc, icon: I.sparkle, tags: [{ text: 'per message', cls: 'ro', title: 'Read-only or editing, depending on what the message asks' }], selected: auto, onPick: setAuto }].concat(Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: needsFolder(k) ? `${m.desc}. Needs a folder.` : m.desc, icon: m.icon, disabled: needsFolder(k), tags: [needsFolder(k) ? NEEDS_FOLDER : { text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: needsFolder(k) ? refuse(m.label) : () => setMode(k) })))
       .concat(Object.entries(SPECIALISTS).map(([k, x]) => { const b = MODES[x.base]; const nf = needsFolder(x.base); return { group: 'More modes', label: x.label, desc: x.hint, title: `${x.desc}. Runs in ${b.label} mode${nf ? ', which needs a folder' : ''}.`, icon: x.icon, disabled: nf, tags: [nf ? NEEDS_FOLDER : { text: b.tag, cls: b.tag === 'read-only' ? 'ro' : 'rw', title: `Runs in ${b.label} mode` }], selected: sp === k, onPick: nf ? refuse(x.label) : () => setMode(x.base, k) }; }))
       .concat([{ hr: true }, { label: 'Manage modes…', desc: 'Skills and subagents in Settings', icon: I.gear, onPick: () => post({ type: 'openSettings', section: 'skills' }) }]);
     openMenu(els.modeBtn, items, { label: 'Mode', cls: 'modes', foot: `<span><kbd>${esc(kb('Mod+.'))}</kbd> to switch</span>` });
@@ -3132,7 +3153,7 @@
     if (closing.has(active)) {
       const remaining = list.filter((s) => !closing.has(s.id)); const idx = list.findIndex((s) => s.id === active);
       const next = list.slice(idx + 1).find((s) => !closing.has(s.id)) || list.slice(0, idx).reverse().find((s) => !closing.has(s.id)) || remaining[0];
-      if (next) { selectTab(next.id); } else { post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); }
+      if (next) { selectTab(next.id); } else { post({ type: 'newSession', mode: newChatMode() }); }
     }
     tabSig = ''; renderTabs();
     if (ids.length > 1) { toast(`Closed ${closing.size} tab${closing.size === 1 ? '' : 's'}${skipped ? ` · kept ${skipped} running/pinned` : ''}`); }
@@ -3408,7 +3429,7 @@
     foot.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
       const a = b.dataset.a;
-      if (a === 'new') { closeMenu(); post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' }); }
+      if (a === 'new') { closeMenu(); post({ type: 'newSession', mode: newChatMode() }); }
       else if (a === 'multi') { openParallelComposer(); }
       else if (a === 'stopall') { for (const id of state.running) { post({ type: 'stop', sessionId: id }); } }
       else if (a === 'closeothers') { closeOtherTabs(); hist.sig = ''; renderHistory(); }
@@ -3717,7 +3738,7 @@
     const score = (t) => { const l = t.toLowerCase(); if (l === q) { return -1; } if (l.startsWith(q)) { return 100; } const tokens = l.split(/[^a-z0-9]+/).filter(Boolean); if (!whole.every((w) => tokens.includes(w)) || !tokens.some((tk) => tk.startsWith(last))) { return 0; } return 60 - Math.min(30, Math.max(0, l.length - q.length) / 4); };
     return [...new Set([...pool.map((s) => s.title), ...recent])].map((t) => ({ t, s: score(t) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 6).map((x) => x.t);
   }
-  els.newTab.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', ...(specOf(state.session) ? { specialist: specOf(state.session) } : {}) });
+  els.newTab.onclick = () => post({ type: 'newSession', mode: newChatMode(), ...(specOf(state.session) ? { specialist: specOf(state.session) } : {}) });
   els.history.onclick = openHistory;
   // Placeholder adapts to the composer width.
   const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask anything, or describe a task…']];
@@ -4542,7 +4563,7 @@
     const attachments = [...new Set([...state.attachments, ...atRefs])];
     if (tooManyAttachments(attachments)) { return; }
     const images = state.images.map((i) => i.data);
-    post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', text, attachments, images: images.length ? images : undefined });
+    post({ type: 'newSession', mode: newChatMode(), text, attachments, images: images.length ? images : undefined });
     state.history.unshift(text); state.history = state.history.slice(0, 50); state.histIdx = -1;
     els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote();
     toast('Started in a new tab');

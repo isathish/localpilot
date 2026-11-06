@@ -477,6 +477,50 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     }
   });
 
+  test('Auto by task: a plan or review gets the better reasoning model, a quick question a small one; the default and an explicit model stand otherwise', async function () {
+    this.timeout(30_000);
+    const srv = await fakeOllama();
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, def: cfg.inspect('defaultModel')?.globalValue, reasoning: cfg.inspect('routing.reasoning')?.globalValue };
+    const reg = new ProviderRegistry(log);
+    overrideSystemProfile(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 12, ramGb: 64, vramGb: 0 }));
+    try {
+      await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
+      await cfg.update('routing.reasoning', '', vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
+      await (await fetch(`${srv.url}/api/pull`, { method: 'POST', body: JSON.stringify({ model: 'gemma4:12b' }) })).text();
+      await new Promise((r) => setTimeout(r, 100));
+      await reg.listModels(true);
+
+      const code = await reg.route({ role: 'agent', byTask: true });
+      assert.strictEqual(code.model.modelId, 'qwen2.5-coder:14b', 'a coding task keeps the default model');
+      const plan = await reg.route({ role: 'reasoning', byTask: true });
+      assert.strictEqual(plan.model.modelId, 'gemma4:12b', 'a plan or review takes the clearly better reasoning model');
+      assert.match(plan.reason ?? '', /^Auto: planning or review task — using gemma4:12b/);
+      assert.strictEqual((await reg.route({ role: 'reasoning' })).model.modelId, 'qwen2.5-coder:14b', 'without Auto-by-task, Plan mode keeps the default');
+      assert.strictEqual((await reg.route({ role: 'reasoning', byTask: true, modelRef: 'fake/qwen2.5-coder:14b' })).model.modelId, 'qwen2.5-coder:14b', 'an explicit model is never second-guessed');
+      const quick = await reg.route({ role: 'fast', byTask: true });
+      assert.ok(quick.model.supportsTools, quick.model.id);
+      if (quick.model.modelId !== 'qwen2.5-coder:14b') {
+        assert.match(quick.reason ?? '', /^Auto: quick question — using /);
+      }
+      // Not when it means swapping: the better model does not fit next to what is loaded.
+      overrideSystemProfile(buildProfile({ platform: 'darwin', arch: 'arm64', cpuCores: 8, ramGb: 16, vramGb: 0 }));
+      srv.loaded.push('qwen2.5-coder:14b');
+      await reg.listModels(true);
+      await reg.residentModels(0); // what is in memory is cached for 5 s; read it again now
+      const tight = await reg.route({ role: 'reasoning', byTask: true });
+      assert.strictEqual(tight.model.modelId, 'qwen2.5-coder:14b', `a reasoning pick that would not fit alongside the loaded model is skipped: ${tight.reason}`);
+    } finally {
+      reg.dispose();
+      srv.close();
+      overrideSystemProfile(undefined);
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('defaultModel', prev.def, vscode.ConfigurationTarget.Global);
+      await cfg.update('routing.reasoning', prev.reasoning, vscode.ConfigurationTarget.Global);
+    }
+  });
+
   test('a completion model nobody serves does not fall back to a cloud model', async function () {
     this.timeout(30_000);
     const cfg = vscode.workspace.getConfiguration('localpilot');

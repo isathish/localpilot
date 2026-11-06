@@ -28,6 +28,8 @@ import { archiveCompaction } from '../sessions/transcriptArchive';
 import { contextReport, memoryReport } from '../agent/reports';
 import { AgentEvent, ALL_MODES, ChatMessage, isSpecialistId, isWriteMode, ModelInfo, Session, SPECIALIST_IDS, UserAnswer, UserQuestion } from '../types';
 import { SPECIALISTS } from '../agent/builtinAgents';
+import { classifyTask } from '../agent/taskRouter';
+import type { ModelRole } from '../providers/catalog';
 import { captureUrl, inspectUrl, openInBrowser } from '../tools/browser';
 import { formatReport } from '../tools/cdp';
 import { MAX_ATTACHMENTS } from './imageSize';
@@ -253,7 +255,7 @@ export type FromWebview =
   /** Rewrite the composer draft into a precise request (or cancel the rewrite in progress when `cancel`). */
   | { type: 'improvePrompt'; sessionId: string; text: string; cancel?: boolean }
   | { type: 'booted' }
-  | { type: 'newSession'; mode?: Session['mode']; specialist?: string; text?: string; attachments?: string[]; images?: string[]; folder?: string }
+  | { type: 'newSession'; mode?: Session['mode'] | 'auto'; specialist?: string; text?: string; attachments?: string[]; images?: string[]; folder?: string }
   /** Multi-root: the workspace folder an empty chat works in (refused once the chat has messages). */
   | { type: 'setFolder'; sessionId: string; folder: string }
   | { type: 'runParallel'; tasks: string[]; mode?: Session['mode'] }
@@ -326,7 +328,7 @@ export type FromWebview =
   /** The user is about to send (composer focused / typing): load the session's model so the first token comes sooner. */
   | { type: 'warm'; sessionId: string }
   /** `specialist`: a "More modes" pick (Review, Test, …) running in `mode`; absent clears it. */
-  | { type: 'setMode'; sessionId: string; mode: Session['mode']; specialist?: string }
+  | { type: 'setMode'; sessionId: string; mode: Session['mode'] | 'auto'; specialist?: string }
   | { type: 'setSkills'; sessionId: string; mode?: string | null; pinned?: string[] }
   | { type: 'refreshModels' }
   | { type: 'detectModels' }
@@ -1908,6 +1910,9 @@ export class ChatController implements vscode.Disposable {
         return;
       case 'newSession': {
         const text = msg.text?.trim();
+        // "Auto" is not a mode of its own: the chat starts in Agent (Ask without a folder) and each message picks.
+        const auto = msg.mode === 'auto';
+        const baseMode: Session['mode'] | undefined = auto ? (vscode.workspace.workspaceFolders?.length ? 'agent' : 'ask') : (msg.mode as Session['mode'] | undefined);
         // "New chat" on a chat nobody has used yet just re-arms it (mode may change) instead of leaving another empty
         // "New chat" in the history every time the button is pressed.
         const cur = !text && this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
@@ -1915,10 +1920,11 @@ export class ChatController implements vscode.Disposable {
           if (msg.folder) {
             this.setFolder(cur.id, msg.folder);
           }
-          const spec = msg.mode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === msg.mode ? msg.specialist : undefined;
-          if ((msg.mode && cur.mode !== msg.mode) || (msg.mode && cur.specialist !== spec)) {
-            cur.mode = msg.mode!;
+          const spec = !auto && baseMode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === baseMode ? msg.specialist : undefined;
+          if (baseMode && (cur.mode !== baseMode || cur.specialist !== spec || !!cur.autoMode !== auto)) {
+            cur.mode = baseMode;
             cur.specialist = spec;
+            cur.autoMode = auto || undefined;
             this.store.save(cur, true);
             this.broadcast(this.sessionMsg(cur));
           }
@@ -1926,12 +1932,16 @@ export class ChatController implements vscode.Disposable {
           this.broadcast({ type: 'focusInput' });
           return;
         }
-        const s = this.createSession(msg.mode ?? 'agent');
+        const s = this.createSession(baseMode ?? 'agent');
+        if (auto) {
+          s.autoMode = true;
+          this.store.save(s, true);
+        }
         if (msg.folder && (vscode.workspace.workspaceFolders ?? []).some((f) => f.uri.fsPath === msg.folder)) {
           s.folder = msg.folder === this.workspace.root ? undefined : msg.folder;
           this.store.save(s, true);
         }
-        if (msg.mode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === msg.mode) {
+        if (!auto && baseMode && isSpecialistId(msg.specialist) && SPECIALISTS[msg.specialist].base === baseMode) {
           s.specialist = msg.specialist;
           this.store.save(s, true);
         }
@@ -2314,6 +2324,18 @@ export class ChatController implements vscode.Disposable {
       }
       case 'setMode': {
         const s = this.store.get(msg.sessionId);
+        if (msg.mode === 'auto') {
+          if (s && !s.autoMode) {
+            s.autoMode = true;
+            this.telemetry?.record({ type: 'mode_switch', sid: s.id, from: s.mode, to: 'auto', source: 'picker' });
+            this.store.save(s);
+            this.broadcast(this.sessionMsg(s));
+          }
+          return;
+        }
+        if (s) {
+          s.autoMode = undefined;
+        }
         if (s && !vscode.workspace.workspaceFolders?.length && isWriteMode(msg.mode)) {
           // Agent, Debug and Multitask edit files: without a folder the chat stays in its read-only mode.
           this.broadcast({ type: 'toast', level: 'info', text: `${msg.mode[0].toUpperCase()}${msg.mode.slice(1)} mode needs a folder: open one to edit files and run commands.` });
@@ -3044,7 +3066,8 @@ export class ChatController implements vscode.Disposable {
     await this.loaded.catch(() => undefined);
     // The active chat may have been removed behind our back (retention, Settings → clear); never point at a ghost.
     if (!this.activeSessionId || !this.store.get(this.activeSessionId)) {
-      this.activeSessionId = this.store.list()[0]?.id ?? this.store.create(getConfig().defaultModel).id;
+      // The very first chat starts in Auto: each message picks its mode until the user picks one.
+      this.activeSessionId = this.store.list()[0]?.id ?? this.firstChat().id;
     }
     const post = (m: ToWebview) => {
       if (!sink) {
@@ -3470,6 +3493,27 @@ export class ChatController implements vscode.Disposable {
     }
     const meta: ChatMessage['meta'] = { checkpoint, ...(opts.resume ? { hidden: true } : {}), ...(opts.display ? { display: opts.display } : {}), ...(mcpPromptImages ? { mcpPromptImages } : {}), ...(corrected.fixes.length ? { corrections: corrected.fixes } : {}) };
     const userMessage: ChatMessage = { role: 'user', content, images, meta };
+    // Auto mode: this message picks its own mode, specialist and (with an Auto model) model role from what it asks.
+    // Slash commands, resumes and one-turn overrides keep theirs.
+    let autoSpecialist: Session['specialist'];
+    let autoRole: ModelRole | undefined;
+    if (session.autoMode && !opts.mode && !opts.resume && !opts.display && !planTurn) {
+      let errors = 0;
+      for (const [, list] of vscode.languages.getDiagnostics()) {
+        errors += list.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+      }
+      const pick = classifyTask({ text, images: images?.length ?? 0, attachments: attachments.length, diagnostics: errors, hasFolder: !!vscode.workspace.workspaceFolders?.length });
+      if (pick.mode !== session.mode || pick.specialist !== session.specialist) {
+        this.telemetry?.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: pick.specialist ? `${pick.mode}:${pick.specialist}` : pick.mode, source: 'auto' });
+      }
+      opts = { ...opts, mode: pick.mode };
+      autoSpecialist = pick.specialist;
+      autoRole = pick.role;
+      meta.autoRoute = { mode: pick.mode, ...(pick.specialist ? { specialist: pick.specialist } : {}), kind: pick.kind, reason: pick.reason };
+      // The mode chip shows the last pick ("Auto · Debug"); the chat stays in Auto.
+      session.mode = pick.mode;
+      session.specialist = pick.specialist;
+    }
     // `/deep-planning`: this turn runs in Plan mode, then the chat returns to the mode it was in.
     const modeBefore = planTurn && session.mode !== 'plan' ? session.mode : undefined;
     if (modeBefore) {
@@ -3508,6 +3552,7 @@ export class ChatController implements vscode.Disposable {
         },
         modelRef: opts.modelRef,
         mode: planTurn ? undefined : opts.mode,
+        ...(autoRole ? { specialist: autoSpecialist, taskRole: autoRole } : {}),
         permissionAllow: opts.permissionAllow,
         signal: control.signal,
         control,
@@ -4186,6 +4231,14 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Creates a chat and applies the retention limit so history cannot grow without bound. */
+  /** A chat with nothing to inherit a mode from (first start, last chat deleted): Auto. */
+  private firstChat(): Session {
+    const s = this.createSession(vscode.workspace.workspaceFolders?.length ? 'agent' : 'ask');
+    s.autoMode = true;
+    this.store.save(s, true);
+    return s;
+  }
+
   private createSession(mode: Session['mode']): Session {
     const cfg = getConfig();
     // A window without a folder starts chats in Ask: the write modes need files to work on.
@@ -4234,7 +4287,7 @@ export class ChatController implements vscode.Disposable {
     const current = this.activeSessionId ? this.store.get(this.activeSessionId) : undefined;
     if (!current) {
       const next = this.store.list()[0];
-      this.setActive(next ? this.store.get(next.id)! : this.createSession('agent'));
+      this.setActive(next ? this.store.get(next.id)! : this.firstChat());
     }
     this.broadcast({ type: 'historyCleared', removed: n });
     this.broadcast({ type: 'toast', level: 'info', text: n ? `Cleared ${n} chat${n === 1 ? '' : 's'}${kept ? ` · kept ${kept} running/pinned` : ''}` : 'Nothing to clear' });
@@ -4693,7 +4746,7 @@ export class ChatController implements vscode.Disposable {
           [
             '**Slash commands**',
             '- `/model <provider/model>` — switch model for this session',
-            `- \`/mode ask|agent|plan|debug|multitask\` — switch mode · \`/mode ${SPECIALIST_IDS.join('|')}\` — a specialist (runs in Ask, Agent or Plan with a built-in agent's playbook)`,
+            `- \`/mode auto|ask|agent|plan|debug|multitask\` — switch mode (auto: each message picks) · \`/mode ${SPECIALIST_IDS.join('|')}\` — a specialist (runs in Ask, Agent or Plan with a built-in agent's playbook)`,
             '- `/compact` (or `/smol`) — summarise older messages to free context · `/newtask [note]` — continue in a new chat that starts from a summary of this one',
             '- `/deep-planning <task>` — investigate, ask, then write an implementation plan (Plan mode for that turn) · `/team <task>` — split the task for background workers and the shared board (Multitask mode) · `/newrule [topic]` (or `/init`) — write a project rule file',
             '- `/clear` — clear this session',
@@ -4799,6 +4852,15 @@ export class ChatController implements vscode.Disposable {
         return { rewrite: teamPrompt(rest) };
       case 'mode': {
         const want = rest.trim().toLowerCase();
+        if (want === 'auto') {
+          if (!session.autoMode) {
+            this.telemetry?.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: 'auto', source: 'slash' });
+          }
+          session.autoMode = true;
+          this.store.save(session);
+          this.broadcast(this.sessionMsg(session));
+          return '';
+        }
         if ((ALL_MODES as readonly string[]).includes(want) || isSpecialistId(want)) {
           // `/mode review` and the other specialists run in their base mode with the specialist set.
           const mode = isSpecialistId(want) ? SPECIALISTS[want].base : (want as Session['mode']);
@@ -4808,11 +4870,12 @@ export class ChatController implements vscode.Disposable {
           }
           session.mode = mode;
           session.specialist = specialist;
+          session.autoMode = undefined;
           this.store.save(session);
           this.broadcast(this.sessionMsg(session));
           return '';
         }
-        return say(`Usage: \`/mode ask|agent|plan|debug|multitask\`, or a specialist: \`/mode ${SPECIALIST_IDS.join('|')}\``);
+        return say(`Usage: \`/mode auto|ask|agent|plan|debug|multitask\`, or a specialist: \`/mode ${SPECIALIST_IDS.join('|')}\``);
       }
       case 'model':
         if (rest.trim()) {
