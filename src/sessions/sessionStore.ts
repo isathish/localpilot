@@ -15,9 +15,9 @@ export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>)
 
 /** The list row of a session: everything but the transcript and other per-turn state. */
 function summaryOf(s: Session, bytes?: number): SessionSummary {
-  const { id, title, createdAt, updatedAt, model, mode, plan, pinned, worktree, isolated, group, skills, origin, parentId, parentTitle } = s;
+  const { id, title, createdAt, updatedAt, model, mode, specialist, plan, pinned, worktree, isolated, group, skills, origin, parentId, parentTitle } = s;
   const usage = s.usage ? { ...s.usage, subagentTokens: s.usage.subagentTokens && { ...s.usage.subagentTokens } } : undefined;
-  return { id, title, createdAt, updatedAt, model, mode, plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes, origin, parentId, parentTitle };
+  return { id, title, createdAt, updatedAt, model, mode, ...(specialist ? { specialist } : {}), plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes, origin, parentId, parentTitle };
 }
 
 const escHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

@@ -185,6 +185,12 @@ export type WorkerVerdict = { healthy: boolean; failures: Failure[] };
 
 // ---- Helpers ----
 
+/** The first failure's evidence (else the end of the output) of a failed check, at most 600 characters. */
+function checkExcerpt(r: CheckResult): string {
+  const text = (r.failures[0]?.evidence || r.output.split('\n').slice(-12).join('\n')).trim();
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
+}
+
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e ?? ''));
 const slash = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -509,7 +515,8 @@ export class HealingEngine {
       title: titleOf(f),
       ...(this.fix ? { attempt: this.fix.attempt, max: this.fix.max } : {}),
       ...(f ? { category: f.category, severity: f.severity, signature: humanKey(f) } : {}),
-      checks: [...this.results.values()].map((r) => ({ id: r.checkId, status: r.status, ms: r.durationMs })),
+      // A failed check carries the start of its first failure, so the card's chip can expand to show it.
+      checks: [...this.results.values()].map((r) => ({ id: r.checkId, status: r.status, ms: r.durationMs, ...(r.status === 'failed' || r.status === 'timeout' ? { excerpt: checkExcerpt(r) } : {}) })),
       patches: this.state.attempts.flatMap((a) => a.patches.map((p) => ({ file: p.file, added: p.added, removed: p.removed, result: p.result }))),
       ...(this.kind === 'worker' ? { childId: this.sessionId } : {}),
       ...extra,
@@ -899,7 +906,9 @@ export class HealingEngine {
       this.state.active = [fatal, ...this.state.active.filter((x) => x.signature !== fatal.signature)];
       this.state.recoveryStartedAt ??= this.now();
       const reason: EscalationReason = fatal.category === 'data_corruption' ? 'data_corruption' : 'git_conflict';
-      const message = await this.escalate(reason, { failure: fatal, files: fatal.file ? [fatal.file] : undefined });
+      // Every conflicted file the check found, so the card can offer each one in the merge editor.
+      const files = [...new Set(found.filter((f) => f.category === fatal.category && f.file).map((f) => f.file!))];
+      const message = await this.escalate(reason, { failure: fatal, files: files.length ? files : undefined });
       out.stop = { reason, message };
     }
     return out;
@@ -1481,7 +1490,8 @@ export class HealingEngine {
       this.state.phase = outcome;
       return text;
     }
-    await this.transition(outcome, { outcome, contract, intervention: { id: intervention.id, reason, nextActions: intervention.nextActions }, decision: `needs you: ${reason.replace(/_/g, ' ')}` }, () =>
+    const next = ctx.next ?? (intervention as { next?: string }).next;
+    await this.transition(outcome, { outcome, contract, intervention: { id: intervention.id, reason, nextActions: intervention.nextActions, ...(ctx.files?.length ? { files: ctx.files.slice(0, 50) } : {}), ...(next ? { next } : {}) }, decision: `needs you: ${reason.replace(/_/g, ' ')}` }, () =>
       this.tele(action, f ?? { category: intervention.category ?? 'unknown' }, { attempt: this.state.attempts.length || undefined, outcome }),
     );
     if (!(await this.store.addIntervention(intervention))) {

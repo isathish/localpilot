@@ -51,3 +51,13 @@ export function phaseBeforeInterrupt(s: RecoveryState): string | undefined {
   }
   return undefined;
 }
+
+/** How many interventions wait for the user (the welcome screen's "N tasks need you"); 0 when the store cannot say. */
+export async function openInterventionCount(healing: HealingService): Promise<number> {
+  const store = (healing as unknown as { opts?: { store?: Partial<Pick<RecoveryStore, 'listInterventions'>> } }).opts?.store;
+  try {
+    return typeof store?.listInterventions === 'function' ? (await store.listInterventions()).length : 0;
+  } catch {
+    return 0;
+  }
+}

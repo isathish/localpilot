@@ -8,7 +8,8 @@ import type { ApprovalDecision, ApprovalMode, ApprovalOptions, TerminalApprovalM
 export function toDecision(v: boolean | ApprovalDecision | undefined): ApprovalDecision {
   if (typeof v === 'object' && v) {
     const feedback = v.feedback?.trim();
-    return feedback && !v.ok ? { ok: false, feedback } : { ok: !!v.ok };
+    const edited = v.edited?.trim();
+    return feedback && !v.ok ? { ok: false, feedback } : v.ok && edited ? { ok: true, edited } : { ok: !!v.ok };
   }
   return { ok: !!v };
 }

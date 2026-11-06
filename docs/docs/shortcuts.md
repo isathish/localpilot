@@ -33,7 +33,7 @@ These keys work in the chat view. On Windows and Linux, read <kbd>⌘</kbd> as <
 | <kbd>⌘⇧Enter</kbd> | Send in a new tab (another agent, running in parallel) |
 | <kbd>Enter</kbd> while the agent runs | Choose **Add to this agent** (queued for its next step), **Send after this turn** or **Send in a new tab**. If the agent is paused, the message goes to it directly |
 | <kbd>↑</kbd> / <kbd>↓</kbd> in an empty input | Previous / next prompt from history |
-| <kbd>⇧Tab</kbd> | Rotate the mode: Agent → Multitask → Debug → Plan → Ask (not while the agent runs) |
+| <kbd>⇧Tab</kbd> | Rotate the mode: Ask → Agent → Plan → Debug → Multitask (not while the agent runs) |
 | <kbd>⌘Enter</kbd> in an empty input | **Build** the prepared plan shown in the chat |
 | <kbd>⌘L</kbd> | Focus the input |
 | <kbd>⌘I</kbd> in the input | **Improve prompt**: rewrite the draft in place (nothing is sent) |

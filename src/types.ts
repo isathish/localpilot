@@ -48,6 +48,10 @@ export interface ChatMessage {
     steerId?: string;
     /** On the last assistant message of a turn: wall-clock time of the whole turn, for the "Worked for …" summary. */
     durationMs?: number;
+    /** On the last assistant message of a turn the user stopped: the chat shows "Stopped by you" instead of "Worked for". */
+    stopped?: boolean;
+    /** On a run_command result that was a test run: counts and the failing tests, for the row's "6 passed · 1 failed" badge. */
+    tests?: import('./agent/healing/parsers/testSummary').TestSummary;
     /** On the last assistant message of a turn: the model that answered (provider-qualified id). */
     model?: string;
     /** On the last assistant message of a turn: tokens generated and the time spent generating them, for the speed shown under the answer. */
@@ -264,6 +268,8 @@ export interface ApprovalDecision {
   feedback?: string;
   /** Set by the agent loop when a person answered the prompt (not a setting, policy, stop or non-interactive refusal). */
   byUser?: boolean;
+  /** run_command: the command line the user edited in the prompt before allowing it (runs instead of the model's). */
+  edited?: string;
 }
 
 /** Extra facts a tool passes with an approval request. */
@@ -340,6 +346,8 @@ export interface ToolContext {
   progress(text: string): void;
   /** Id of the tool call being executed (set per call by the agent loop). */
   callId?: string;
+  /** The command the user edited in this call's approval prompt, once allowed (run_command runs it instead). */
+  approvalEdit?(): string | undefined;
   /** Live output of the running call (run_command), shown under its row as a `tool_progress` event. */
   output?(chunk: string): void;
   /** Snapshot a file before modifying it so the user can review/undo the agent's changes. */
@@ -443,6 +451,12 @@ export interface SubagentDefinition {
 /** Modes whose agent may change files and run commands. */
 export const WRITE_MODES: ReadonlySet<string> = new Set(['agent', 'multitask', 'debug']);
 export const ALL_MODES = ['agent', 'multitask', 'debug', 'plan', 'ask'] as const;
+/** The "More modes" specialists; each maps to a core mode and a built-in agent (see SPECIALISTS in agent/builtinAgents). */
+export const SPECIALIST_IDS = ['architect', 'review', 'test', 'refactor', 'explain', 'terminal', 'project'] as const;
+export type SpecialistId = (typeof SPECIALIST_IDS)[number];
+export function isSpecialistId(v: unknown): v is SpecialistId {
+  return typeof v === 'string' && (SPECIALIST_IDS as readonly string[]).includes(v);
+}
 export function isWriteMode(mode: string): boolean {
   return WRITE_MODES.has(mode);
 }
@@ -458,6 +472,11 @@ export interface SessionSummary {
    * · plan: read-only, produces an executable checklist · ask: read-only Q&A.
    */
   mode: 'agent' | 'multitask' | 'debug' | 'ask' | 'plan';
+  /**
+   * A specialist picked from "More modes" (Review, Test, …): runs in its base `mode` (which decides permissions) with
+   * the matching built-in agent's playbook added to the system prompt. Ignored when `mode` is not its base mode.
+   */
+  specialist?: SpecialistId;
   /** Plan mode output saved to `.localpilot/plans/<slug>.plan.md`, shown as the "Prepared plan" card. */
   plan?: { file: string; title: string; summary: string };
   messageCount: number;
@@ -517,6 +536,11 @@ export interface Session extends SessionSummary {
   checkpoints?: import('./agent/checkpoints').SessionCheckpoints;
   /** Self-healing summary of the last turn that ran recovery or verification. */
   recovery?: import('./agent/healing/types').RecoverySummary;
+  /**
+   * Set while a run is in flight and saved with the session, so a run cut off by a reload or a closed window is
+   * shown as "Run interrupted" with Resume / Restore checkpoint / Dismiss. Cleared when the run ends or is dismissed.
+   */
+  runningSince?: number;
 }
 
 export interface TodoItem {
@@ -587,6 +611,16 @@ export interface AgentEvent {
      * in place by `payload.id`. Payload: RecoveryEventPayload (src/agent/healing/types.ts).
      */
     | 'recovery'
+    /**
+     * Still waiting for the model's first token (a weight load, prompt prefill or a queue), sent about once a second.
+     * Payload: { phase: 'load' | 'prefill' | 'queue', model, seconds, limitSec }; `{ done: true }` once output starts.
+     */
+    | 'waiting'
+    /**
+     * The turn is answered by another model than the one asked for (unavailable, not allowed, cannot see images).
+     * Payload: { wanted, used, usedName, reason, fallback, cloud }.
+     */
+    | 'route'
     | 'turn_end';
   payload?: unknown;
 }

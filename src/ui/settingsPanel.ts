@@ -116,7 +116,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; focusKey?: string; expand?: string; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string }[]; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -313,6 +313,8 @@ export class SettingsPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
   private page: SettingsPage = 'settings';
   private section?: SettingsSection;
+  /** A deep link from the chat: the setting to scroll to (`key`) or the provider card to open (`expand`); sent once. */
+  private focus?: { key?: string; expand?: string };
   private navigate = false;
   private pushSeq = 0;
   private modelsLoaded = false;
@@ -400,9 +402,10 @@ export class SettingsPanel implements vscode.Disposable {
     return !!this.panel;
   }
 
-  show(page: SettingsPage = 'settings', section?: SettingsSection): void {
+  show(page: SettingsPage = 'settings', section?: SettingsSection, focus?: { key?: string; expand?: string }): void {
     this.page = page;
     this.section = section;
+    this.focus = focus?.key || focus?.expand ? focus : undefined;
     this.navigate = true;
     if (this.panel) {
       this.panel.title = this.title();
@@ -1344,6 +1347,7 @@ export class SettingsPanel implements vscode.Disposable {
       type: 'state',
       page: this.page,
       section: this.section,
+      ...(this.focus ? { focusKey: this.focus.key, expand: this.focus.expand } : {}),
       // Only an explicit show()/ready moves the webview; refreshes after a settings change leave the user where they are.
       navigate: this.navigate,
       version: String((this.ctx.extension.packageJSON as { version?: string }).version ?? ''),
@@ -1379,6 +1383,7 @@ export class SettingsPanel implements vscode.Disposable {
       healing,
     });
     this.section = undefined;
+    this.focus = undefined;
     this.navigate = false;
   }
 

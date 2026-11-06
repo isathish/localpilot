@@ -2,9 +2,12 @@ import * as os from 'os';
 import { ModelInfo, Session, TodoItem, isWriteMode } from '../types';
 import { SkillManager } from './skills';
 import { WorkspaceContext } from '../context/workspaceContext';
+import { builtinAgents, specialistFor, specialistSection } from './builtinAgents';
 
 export interface PromptOptions {
   mode: Session['mode'];
+  /** The chat's "More modes" specialist (Review, Test, …); applied only when `mode` is its base mode. */
+  specialist?: Session['specialist'];
   /** Folder the tools operate in when it is not the workspace root (an isolated worktree). */
   workspaceRoot?: string;
   model: ModelInfo;
@@ -79,6 +82,13 @@ The checklist must be directly executable: one item per implementation step, eac
   } else {
     parts.push(`# Ask mode
 Answer the user's question directly. You may read files, search the workspace and run read-only commands (git log, ls, tests) for context, but do not modify anything — commands that write are refused.`);
+  }
+
+  // A specialist sharpens the mode it runs in: its brief and its built-in agent's playbook follow the mode's section.
+  const spec = o.roleOverride ? undefined : specialistFor(o.specialist, o.mode);
+  if (spec) {
+    const own = spec.agent && typeof o.skills.getAgent === 'function' ? o.skills.getAgent(spec.agent) : undefined;
+    parts.push(specialistSection(spec, own ?? (spec.agent ? builtinAgents().find((a) => a.name === spec.agent) : undefined)));
   }
 
   if (o.toolsEnabled) {

@@ -455,13 +455,15 @@ export interface RecoveryEventPayload {
   /** 'TypeScript TS2345 in src/api/user.ts:42'. */
   title: string;
   rootCause?: string;
-  checks?: { id: string; status: string; ms?: number }[];
+  /** `excerpt`: the start of a failed check's first failure (the chip expands to show it). */
+  checks?: { id: string; status: string; ms?: number; excerpt?: string }[];
   patches?: { file: string; added: number; removed: number; result?: string }[];
   /** 'retry in 2s', 'fixing', 'rolled back'. */
   decision?: string;
   outcome?: TaskOutcome;
   contract?: CompletionContract;
-  intervention?: { id: string; reason: EscalationReason; nextActions: NextAction[] };
+  /** `files`: conflicted (or user-edited) files; `next`: the plain-language next step. */
+  intervention?: { id: string; reason: EscalationReason; nextActions: NextAction[]; files?: string[]; next?: string };
   childId?: string;
 }
 

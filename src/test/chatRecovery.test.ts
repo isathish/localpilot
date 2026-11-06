@@ -244,3 +244,40 @@ suite('Chat self-healing card (DOM)', () => {
     assert.ok(!rec.state.recovery.has('s1'), 'the stale cache is dropped');
   });
 });
+
+suite('Chat self-healing card: run-card details', () => {
+  test('a failed check with an excerpt expands; patch rows open their diff; Details opens the dashboard', () => {
+    const rec = loadRecovery(); const live = liveTurn(rec);
+    rec.fns.onRecovery(live, 's1', { id: 'r1', phase: 'validating', checks: [{ id: 'test', status: 'failed', ms: 300, excerpt: 'AssertionError: 1 !== 2' }, { id: 'lint', status: 'passed' }], patches: [{ file: 'src/a.ts', added: 1, removed: 0 }] }, true);
+    const card = live.root.querySelector('.rec')!;
+    assert.strictEqual(card.querySelectorAll('[data-ex]').length, 1, 'only the failed check expands');
+    click(card.querySelector('[data-ex="test"]')!);
+    assert.strictEqual(card.querySelector('.rec-ex')!.textContent, 'AssertionError: 1 !== 2');
+    click(card.querySelector('[data-ex="test"]')!);
+    assert.strictEqual(card.querySelectorAll('.rec-ex').length, 0, 'a second click folds it');
+    click(card.querySelector('.rec-patches li[data-file] .f')!);
+    assert.deepStrictEqual(rec.posted.pop(), { type: 'showDiff', sessionId: 's1', fsPath: 'src/a.ts' });
+    click(card.querySelector('.rec-details')!);
+    assert.deepStrictEqual(rec.posted.pop(), { type: 'openRecovery', sessionId: 's1' });
+  });
+
+  test('a git conflict lists its files with a merge editor each and keeps Resume off until resolved', () => {
+    const rec = loadRecovery(); const live = liveTurn(rec);
+    rec.fns.onRecovery(live, 's1', { id: 'g1', phase: 'blocked', outcome: 'blocked', category: 'git_conflict', title: 'Git conflict', intervention: { id: 'i1', reason: 'git_conflict', files: ['src/a.ts', 'README.md'], next: 'Resolve, then Resume.', nextActions: [{ action: 'openMergeEditor', label: 'Open merge editor' }, { action: 'resume', label: 'Resume after resolving' }, { action: 'dismiss', label: 'Dismiss' }] } }, true);
+    const card = live.root.querySelector('.rec')!;
+    assert.deepStrictEqual(card.querySelectorAll('.rec-conflicts li').map((li) => li.dataset.file), ['src/a.ts', 'README.md']);
+    assert.match(card.querySelector('.rec-next')!.textContent, /Resolve, then Resume/);
+    assert.deepStrictEqual(card.querySelectorAll('.rec-final button[data-ra]').map((b) => `${b.dataset.ra}${b.disabled ? ':off' : ''}`), ['resume:off', 'dismiss'], 'the per-file buttons replace the generic one');
+    assert.ok(rec.posted.some((m) => m.type === 'checkConflicts' && m.sessionId === 's1'), 'asks the host which files are still unmerged');
+    click(card.querySelector('button[data-merge="README.md"]')!);
+    const sent = rec.posted.pop()!;
+    assert.strictEqual(sent.action, 'openMergeEditor'); assert.strictEqual(sent.file, 'README.md'); assert.strictEqual(sent.recoveryId, 'g1');
+  });
+
+  test('without a recovery to resume the interrupted card falls through to the run card', () => {
+    const rec = loadRecovery();
+    rec.state.session = { id: 's1', messages: [] };
+    rec.fns.renderInterrupted();
+    assert.strictEqual(rec.els.messages.querySelectorAll('.rec-int').length, 0, 'nothing to show, and no ReferenceError outside the section');
+  });
+});

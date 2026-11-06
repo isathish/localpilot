@@ -10,13 +10,13 @@ LocalPilot has five modes. Agent, Multitask and Debug can change files and run c
 
 | Mode | Edits files | Use it to |
 |---|---|---|
-| Agent | Yes | Make a change end to end |
-| Multitask | Through workers only | Split a larger request across background workers |
-| Debug | Yes | Find and fix a bug, starting from a reproduction |
-| Plan | No | Get a plan you can review, then build |
 | Ask | No | Get explanations and reviews |
+| Agent | Yes | Make a change end to end |
+| Plan | No | Get a plan you can review, then build |
+| Debug | Yes | Find and fix a bug, starting from a reproduction |
+| Multitask | Through workers only | Split a larger request across background workers |
 
-Switch modes with the picker under the composer, <kbd>Shift+Tab</kbd> (cycles Agent → Multitask → Debug → Plan → Ask), or `/mode agent|multitask|debug|plan|ask`. In the CLI use `--agent`, `--multitask`, `--debug`, `--plan` or `--ask`. Editor actions pick a mode for you: Explain uses Ask; Fix, Refactor, Generate Tests and Add Documentation use Agent.
+Switch modes with the picker under the composer, <kbd>Shift+Tab</kbd> or <kbd>Ctrl+.</kbd> (<kbd>Cmd+.</kbd> on macOS), which cycle Ask → Agent → Plan → Debug → Multitask, or `/mode ask|agent|plan|debug|multitask`. The picker tags each mode **read-only** or **edits files**. In the CLI use `--agent`, `--multitask`, `--debug`, `--plan` or `--ask`. Editor actions pick a mode for you: Explain uses Ask; Fix, Refactor, Generate Tests and Add Documentation use Agent.
 
 ## Agent
 
@@ -92,6 +92,22 @@ The card has:
 
 **Build** switches the chat to Agent mode and runs the checklist, with independent steps in parallel. You can also switch to Agent and say *implement the plan*. See [Plans that execute themselves]({{ '/docs/parallel-agents/#plans-that-execute-themselves' | relative_url }}).
 
+## More modes (specialists)
+
+The picker's **More modes** section has seven specialists. Each one runs in one of the core modes, which decides what it may change, and adds the instructions of a [built-in subagent]({{ '/docs/skills-and-agents/' | relative_url }}) to the chat's system prompt. If a workspace or user agent file has the same name as that subagent, its instructions are used instead.
+
+| Specialist | Runs in | Built-in agent | What it does |
+|---|---|---|---|
+| Architect | Plan | planner | Designs the change: modules, interfaces, risks and ordered steps |
+| Review | Ask | reviewer | Reviews your uncommitted changes, or a file you name, and reports findings by severity |
+| Test | Agent | tester | Writes and runs tests, then fixes failures |
+| Refactor | Agent | coder | Restructures code without changing what it does, and checks this with the project's tests |
+| Explain | Ask | explore | Walks through code, data flow and concepts |
+| Terminal | Agent | (none) | Shell tasks; each command is shown with a one-line explanation before it runs |
+| Project | Ask | explore | Gives a project overview: structure, entry points, and how to build, run and test it |
+
+Pick one in the picker or type `/mode review` (or another specialist's name). The mode chip shows the specialist's name, and its tooltip names the mode it runs in, for example "Review · runs in Ask (read-only)". Switching to a core mode turns the specialist off. **Manage modes…** at the bottom of the picker opens Settings → Skills & subagents.
+
 ## Ask
 
 Ask is read-only. The model can read and search the workspace, use web search and fetch, and run [read-only commands](#read-only-commands-in-plan-and-ask), but cannot edit or delete anything. MCP tools run in Ask only when their server marks them read-only (`readOnlyHint`). Use it for explanations, architecture questions and code review.
@@ -144,6 +160,16 @@ A prompt waits until you answer. If the chat is hidden, closed or moved while an
 ### Deny with a reason
 
 To tell the agent what to do instead, deny with a reason. Type it in the message box and click **Deny**, or click **Deny with reason…** (or press Shift+N), type it in the box that opens and press Enter. The agent gets "The user denied this action: *your reason*" in place of a plain refusal, and the step shows as *Denied* rather than as a failure. In the terminal CLI, answer `n` followed by the reason, for example `n edit src/b.ts instead`.
+
+### Edit a command, allow it everywhere, and see why it asked
+
+A command prompt shows the command with shell highlighting. Click **Edit** to change it before it runs: **Allow edited** runs your version (in Ask and Plan mode it must still be read-only), and the agent is told what actually ran. The arrow next to the *Allow all … in this chat* button also offers **Always allow in this workspace…**, which asks you to confirm and then sets `localpilot.approvals.<kind>` to `always` in the workspace settings (destructive commands still ask). It is not offered for prompts that always ask. A line at the bottom of the prompt says why it asked, for example *Asked because Terminal commands = Ask*, with **Change in Settings**. The step the prompt belongs to reads *Needs approval · Review* in the transcript.
+
+### Failed steps, stops and slow models
+
+A failed step gets a row of actions under it: **Retry**, **Edit & retry** (change the command or arguments first), and while the run lasts **Skip** and **Stop run**. LocalPilot sends your choice to the agent as a message, so it runs through the same tools and approval rules. A command row has **Rerun** and **Open in terminal** (puts the command in a terminal at the same folder without running it), shows the folder when it is not the workspace root, and a test run shows its result, for example *6 passed · 1 failed*, with the failing tests listed first and **Re-run failed** and **Fix failures**.
+
+A run you stop reads *Stopped by you after 1m 02s* with **Continue** and **Discard changes**, not as a failure. A paused run reads *Paused after step N* with its timer stopped and **Resume**. A step running longer than 30 seconds turns amber with its elapsed time (Esc stops the run). While a local model loads or reads a long prompt, a row such as *Loading gemma4:12b into memory · 24s · times out at 3:00* shows in the transcript, with **Switch model** and **Stop** after 20 seconds. When another model answers because the chosen one is unavailable, a note at the top of the turn says so, with **Use for this chat** and **Retry with** the original model. If VS Code closes or reloads during a run, the chat shows **Run interrupted** next time, with **Resume**, **Restore checkpoint** and **Dismiss**.
 
 ### Auto-approve bar
 

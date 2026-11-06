@@ -60,7 +60,8 @@ import { defaultTelemetryDir, Telemetry } from '../telemetry/telemetry';
 import { setTelemetryRecorder } from '../telemetry/catalog';
 import { attachOtlp } from '../telemetry/otlpSetup';
 import { RedisTelemetry } from '../storage/redisTelemetry';
-import { AgentEvent, ALL_MODES, ApprovalDecision, ChatMessage, ModelInfo, Session, TodoItem, UserAnswer, UserQuestion } from '../types';
+import { AgentEvent, ALL_MODES, ApprovalDecision, ChatMessage, isSpecialistId, ModelInfo, Session, SPECIALIST_IDS, TodoItem, UserAnswer, UserQuestion } from '../types';
+import { SPECIALISTS } from '../agent/builtinAgents';
 import { parseApprovalAnswer, toDecision } from '../agent/approvalLevel';
 import { shouldRingBell } from '../ui/notifyPolicy';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
@@ -204,7 +205,7 @@ ${REQUIRE_VERIFIED_HELP}
 
 ${bold('In a session')}
   /team <task>   split the task for background workers and the shared board (multitask mode)
-  /mode agent|multitask|debug|plan|ask   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
+  /mode ask|agent|plan|debug|multitask (or review, test, …)   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
   /thinking auto|off|low|medium|high|max   how hard the model thinks in this session (remembered)
   /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
   ${RECOVERY_USAGE}   self-healing state of this session: re-run the checks and continue, undo fix attempts, past attempts
@@ -2774,7 +2775,10 @@ async function main(): Promise<void> {
       case 'help': console.log(HELP); return true;
       case 'exit': case 'quit': case 'q': rl!.close(); return true;
       case 'mode':
-        if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; console.log(dim(`mode → ${arg}`)); } else { console.log(dim(`mode is ${session.mode}; use /mode agent|multitask|debug|plan|ask`)); }
+        if ((ALL_MODES as readonly string[]).includes(arg)) { if (session.mode !== arg) { core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: arg, source: 'cli' }); } session.mode = arg as Session['mode']; session.specialist = undefined; console.log(dim(`mode → ${arg}`)); }
+        // Specialists (review, test, …) run in their base mode with a built-in agent's playbook, as in the VS Code chat.
+        else if (isSpecialistId(arg)) { const base = SPECIALISTS[arg].base; core.telemetry.record({ type: 'mode_switch', sid: session.id, from: session.mode, to: `${base}:${arg}`, source: 'cli' }); session.mode = base; session.specialist = arg; console.log(dim(`mode → ${arg} (runs in ${base})`)); }
+        else { console.log(dim(`mode is ${session.specialist && SPECIALISTS[session.specialist]?.base === session.mode ? `${session.specialist} (${session.mode})` : session.mode}; use /mode ask|agent|plan|debug|multitask or ${SPECIALIST_IDS.join('|')}`)); }
         return true;
       case 'team': {
         // `/team <task>`: a coordinator brief in Multitask mode (the session stays in it, as with /mode).

@@ -93,3 +93,47 @@ export async function setAutoApprove(key: string, value: string, log?: vscode.Lo
 
 /** Settings whose change redraws the bar. */
 export const affectsAutoApprove = (e: vscode.ConfigurationChangeEvent) => e.affectsConfiguration('localpilot.approvals') || e.affectsConfiguration('localpilot.autoMode.enabled');
+
+const MODE_NAMES: Record<string, string> = { ask: 'Ask', safe: 'Safe only', always: 'Always', never: 'Never' };
+const KIND_NAMES: Record<string, string> = { write: 'File edits', delete: 'Deleting files', terminal: 'Terminal commands', network: 'Network', mcp: 'MCP tools' };
+
+/**
+ * Why an approval prompt was shown, for its footer ("Asked because Terminal commands = Ask"): the organization's
+ * policy, a destructive command, or the approval setting that applies to this kind of action.
+ */
+export function approvalReason(kind: string, mandatoryReason?: 'dangerous' | 'policy', mode?: string): string {
+  if (mandatoryReason === 'policy') {
+    return "your organization's policy requires it";
+  }
+  if (mandatoryReason === 'dangerous') {
+    return 'the command looks destructive';
+  }
+  const name = KIND_NAMES[kind] ?? kind;
+  if (mode === 'safe') {
+    return `${name} = Safe only, and this command is not on the safe list`;
+  }
+  if (mode === 'always') {
+    return 'a permission rule or the agent asked for confirmation';
+  }
+  return `${name} = ${MODE_NAMES[mode ?? 'ask'] ?? 'Ask'}`;
+}
+
+/**
+ * "Always allow in this workspace": sets `localpilot.approvals.<kind>` to `always` in the workspace settings (the
+ * folder scope when the value lives there). Returns an error text when the policy rules it out or there is no folder.
+ */
+export async function allowInWorkspace(kind: string, log?: vscode.LogOutputChannel): Promise<string | undefined> {
+  const item = autoApproveState(log).items.find((i) => i.key === kind);
+  if (!item || kind === 'autoMode') {
+    return `Cannot always allow ${kind}`;
+  }
+  if (item.locked?.values.includes('always')) {
+    return item.locked.reason;
+  }
+  if (!vscode.workspace.workspaceFolders?.length) {
+    return 'Open a folder first: "always allow in this workspace" is saved in its settings';
+  }
+  const target = section().inspect(SETTING[item.key])?.workspaceFolderValue !== undefined ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+  await section().update(SETTING[item.key], 'always', target);
+  return undefined;
+}

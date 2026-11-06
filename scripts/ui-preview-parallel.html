@@ -40,7 +40,8 @@ body{margin:0}
     <div id="status" class="status hidden"><span class="spinner"></span><span id="statusText" class="text"></span></div>
     <div id="box" class="box">
       <div class="ctx-row"><button id="btnAddCtx" class="ctxbtn"><span class="at">@</span><span class="lbl">Add context</span></button><div id="chips" class="chips"></div></div>
-      <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask anything, or describe a task…"></textarea>
+      <div id="hints" class="hints hidden" role="group" aria-label="Message box shortcuts"><button type="button" data-h="@" title="Add a file, folder or other context"><b>@</b> file</button><span aria-hidden="true">·</span><button type="button" data-h="#" title="Attach the project file tree (@workspace)"><b>#</b> codebase</button><span aria-hidden="true">·</span><button type="button" data-h="/" title="Commands, modes and skills"><b>/</b> command</button></div>
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
@@ -55,6 +56,7 @@ body{margin:0}
         <button id="btnPause" class="send pause hidden"><svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
       </div>
     </div>
+    <p id="disclaimer" class="disclaimer hidden">AI can make mistakes. Review generated changes before applying.</p>
   </footer>
 <div id="popover" class="popover hidden"></div><div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 <script>

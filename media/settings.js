@@ -899,6 +899,18 @@
     app.appendChild(layout);
     wireGlobal(top); wireGlobal(side);
   }
+  /** Scrolls to a setting's row, flashes it and focuses its control (search hits and deep links from the chat). */
+  function focusSetting(key) {
+    // The row itself, not a component around it that happens to depend on the same key.
+    const hits = [...app.querySelectorAll('[data-deps]')].filter((e) => e.dataset.deps.split(/[\s,]+/).includes(key));
+    const row = hits.find((e) => e.classList.contains('field')) || hits[0];
+    if (!row) { return false; }
+    row.scrollIntoView({ block: 'center', behavior: calm() ? 'auto' : 'smooth' });
+    row.classList.remove('hit'); void row.offsetWidth; row.classList.add('hit');
+    setTimeout(() => row.classList.remove('hit'), 1800);
+    const ctl = row.querySelector('.ctl input, .ctl select, .ctl textarea, .ctl button'); if (ctl) { ctl.focus({ preventScroll: true }); }
+    return true;
+  }
   /** Header search: results list under the box; ↑/↓ + Enter or click jumps to the section and flashes the setting.
    *  On narrow panels the box folds to an icon that opens it over the header. */
   function wireFind(top) {
@@ -927,16 +939,7 @@
       if (h.sec === 'mcp' && h.key) { mcpCatState().view = 'installed'; }
       render();
       if (!h.key) { window.scrollTo({ top: 0 }); return; }
-      requestAnimationFrame(() => {
-        // The row itself, not a component around it that happens to depend on the same key.
-        const hits = [...app.querySelectorAll('[data-deps]')].filter((e) => e.dataset.deps.split(/[\s,]+/).includes(h.key));
-        const row = hits.find((e) => e.classList.contains('field')) || hits[0];
-        if (!row) { return; }
-        row.scrollIntoView({ block: 'center', behavior: calm() ? 'auto' : 'smooth' });
-        row.classList.remove('hit'); void row.offsetWidth; row.classList.add('hit');
-        setTimeout(() => row.classList.remove('hit'), 1800);
-        const ctl = row.querySelector('.ctl input, .ctl select, .ctl textarea, .ctl button'); if (ctl) { ctl.focus({ preventScroll: true }); }
-      });
+      requestAnimationFrame(() => focusSetting(h.key));
     };
     q.oninput = () => { sel = 0; paint(); };
     q.onfocus = () => { if (q.value.trim()) { paint(); } };
@@ -4396,6 +4399,10 @@
         }
         if (nav && m.page) { state.page = m.page; }
         if (nav && m.section) { state.section = m.section; }
+        // A deep link from the chat (Set API key, Raise context window): open that provider card / jump to that setting.
+        if (nav && m.expand) { state.expanded = m.expand; }
+        if (nav && m.focusKey) { const key = m.focusKey; setTimeout(() => { if (!focusSetting(key)) { requestAnimationFrame(() => focusSetting(key)); } }, 60); }
+        if (nav && m.expand) { const id = m.expand; setTimeout(() => { const card = [...app.querySelectorAll('.prov[data-prov]')].find((c) => c.dataset.prov === id); if (card) { card.scrollIntoView({ block: 'start', behavior: calm() ? 'auto' : 'smooth' }); const k = card.querySelector('input[type="password"], input'); if (k) { k.focus({ preventScroll: true }); } } }, 60); }
         // A key added from the wizard's "Add key" link: check the providers again so the row turns green.
         if (state.keyAdded && state.page === 'setup') { state.keyAdded = false; state.busy = true; post({ type: 'probe' }); }
         if (nav && m.section === 'models' && state.models && !state.modelsRequested) { state.modelsRequested = true; post({ type: 'loadModels' }); }

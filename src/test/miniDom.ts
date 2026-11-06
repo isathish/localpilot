@@ -98,6 +98,10 @@ export class MiniElement {
   get children(): MiniElement[] { return this.childNodes.filter((c): c is MiniElement => c instanceof MiniElement); }
   get firstChild(): Child | null { return this.childNodes[0] || null; }
   get lastElementChild(): MiniElement | null { const c = this.children; return c[c.length - 1] || null; }
+  get nextSibling(): Child | null { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
+  get nextElementSibling(): MiniElement | null { const p = this.parentNode; if (!p) { return null; } const c = p.children; return c[c.indexOf(this) + 1] || null; }
+  /** Inserts nodes right after this element (Element.after). */
+  after(...nodes: Child[]): void { const p = this.parentNode; if (!p) { return; } const ref = this.nextSibling; for (const n of nodes) { p.insertBefore(n, ref); } }
   get isConnected(): boolean { let p: MiniElement | null = this; while (p.parentNode) { p = p.parentNode; } return p.tagName === '#ROOT'; }
   get className(): string { return this.getAttribute('class') || ''; }
   set className(v: string) { this.setAttribute('class', v); }

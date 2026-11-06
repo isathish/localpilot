@@ -10,6 +10,7 @@
     changes: $('changes'), changesList: $('changesList'), changesLabel: $('changesLabel'), changesToggle: $('changesToggle'),
     tabs: $('tabs'), progress: $('progress'), tasks: $('tasks'), tasksList: $('tasksList'), tasksLabel: $('tasksLabel'), tasksMeter: $('tasksMeter'), tasksToggle: $('tasksToggle'),
     popover: $('popover'), newTab: $('btnNewTab'), btnComposerMore: $('btnComposerMore'), history: $('btnHistory'), bgruns: $('bgruns'),
+    hints: $('hints'), disclaimer: $('disclaimer'),
   };
   // Webview state survives the view being hidden/restored: which chats are open as tabs.
   const persisted = (typeof vscode.getState === 'function' && vscode.getState()) || {};
@@ -29,7 +30,7 @@
     open: '<svg viewBox="0 0 16 16"><path d="M6 3H3.5A.5.5 0 0 0 3 3.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10M9 3h4v4M13 3L7 9"/></svg>',
     undo: '<svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg>',
     restore: '<svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg>',
-    diff: '<svg viewBox="0 0 16 16"><path d="M5 2.5v6M2 5.5h6M8.5 12h5.5"/></svg>',
+    diff: '<svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3M8 6.5v3M6.5 8h3M6.5 11.5h3"/></svg>',
     bot: '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1" fill="currentColor"/><circle cx="15" cy="9.5" r="1" fill="currentColor"/></svg>',
     warn: '<svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.8v.2"/></svg>',
     book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
@@ -72,16 +73,34 @@
     gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6L5 5M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4"/></svg>',
     key: '<svg viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="3"/><path d="M7.6 8.4L13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2"/></svg>',
     ask: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.6 1.6c-.6.4-.8.7-.8 1.4M8 11.5h.01"/></svg>',
+    compass: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M10.6 5.4 9.1 9.1 5.4 10.6 6.9 6.9z"/></svg>',
+    refactor: '<svg viewBox="0 0 16 16"><path d="M2.5 5h8.5M8.5 2.5 11 5 8.5 7.5M13.5 11H5M7.5 8.5 5 11l2.5 2.5"/></svg>',
   };
   /** The one quiet "running" marker used wherever a spinner would only add noise: tabs, background rows, worker lanes. */
   const LIVE_DOT = '<span class="dot live" aria-label="Running"></span>';
+  // Core modes, least to most autonomous: the picker, Mod+. and /mode follow this order. `tag` says whether files change.
   const MODES = {
-    agent: { label: 'Agent', icon: I.agent, desc: 'Edit files, run commands, verify', placeholder: 'Plan, build, fix anything… (@ context, / commands)' },
-    multitask: { label: 'Multitask', icon: I.layers, desc: 'Splits the work across background workers that run at the same time', placeholder: 'Coordinate parallel tasks… describe the outcome you want' },
-    debug: { label: 'Debug', icon: I.bug, desc: 'Reproduce the problem, find the cause, fix and verify', placeholder: 'Paste the error or describe what goes wrong…' },
-    plan: { label: 'Plan', icon: I.plan, desc: 'Investigate and prepare a plan you can build with one click', placeholder: 'Describe what you want; I will prepare a plan first' },
-    ask: { label: 'Ask', icon: I.ask, desc: 'Answer questions, read-only', placeholder: 'Ask anything about this code…' },
+    ask: { label: 'Ask', icon: I.ask, desc: 'Answer questions about the code, read-only', hint: 'Answer questions', tag: 'read-only', placeholder: 'Ask anything about this code…' },
+    agent: { label: 'Agent', icon: I.agent, desc: 'Edit files, run commands, verify', hint: 'Edit, run, verify', tag: 'edits files', placeholder: 'Ask anything, or describe a task…' },
+    plan: { label: 'Plan', icon: I.plan, desc: 'Investigate and prepare a plan you can build with one click', hint: 'Plan first, build with one click', tag: 'read-only', placeholder: 'Describe what you want; I will prepare a plan first' },
+    debug: { label: 'Debug', icon: I.bug, desc: 'Reproduce the problem, find the cause, fix and verify', hint: 'Reproduce, find the cause, fix', tag: 'edits files', placeholder: 'Paste the error or describe what goes wrong…' },
+    multitask: { label: 'Multitask', icon: I.layers, desc: 'Splits the work across background workers that run at the same time', hint: 'Parallel background workers', tag: 'edits files', placeholder: 'Coordinate parallel tasks… describe the outcome you want' },
   };
+  // "More modes": a specialist runs in its base mode (which decides permissions) with a built-in agent's playbook added
+  // to the prompt by the host (SPECIALISTS in src/agent/builtinAgents.ts; keep the two tables in step).
+  const SPECIALISTS = {
+    architect: { label: 'Architect', base: 'plan', icon: I.compass, desc: 'Design the change: modules, interfaces, risks, ordered steps', hint: 'Design first: interfaces, risks, steps', placeholder: 'Describe the change to design…' },
+    review: { label: 'Review', base: 'ask', icon: I.diff, desc: 'Review uncommitted changes or a file, findings by severity', hint: 'Findings by severity, no edits', placeholder: 'Review my changes, or name a file…' },
+    test: { label: 'Test', base: 'agent', icon: I.beaker, desc: 'Write and run tests, then fix failures', hint: 'Write, run and fix tests', placeholder: 'What should I test?' },
+    refactor: { label: 'Refactor', base: 'agent', icon: I.refactor, desc: 'Restructure code without changing what it does, checked by tests', hint: 'Same behaviour, better structure', placeholder: 'What should I restructure?' },
+    explain: { label: 'Explain', base: 'ask', icon: I.book, desc: 'Walk through code, data flow and concepts', hint: 'Walk through code and concepts', placeholder: 'What should I explain?' },
+    terminal: { label: 'Terminal', base: 'agent', icon: I.term, desc: 'Shell tasks, each command shown before it runs', hint: 'Shell tasks, commands shown first', placeholder: 'What should I do in the terminal?' },
+    project: { label: 'Project', base: 'ask', icon: I.folder, desc: 'Project overview: structure, entry points, build and test', hint: 'Structure, entry points, build, test', placeholder: 'What do you want to know about the project?' },
+  };
+  /** The chat's specialist id, only while the chat is still in that specialist's base mode. */
+  function specOf(s) { const k = s && s.specialist; return k && SPECIALISTS[k] && SPECIALISTS[k].base === s.mode ? k : ''; }
+  /** Label, icon, description and placeholder the chat's mode shows: the specialist's when one is active. */
+  function modeView(s) { const k = specOf(s); const m = MODES[(s && s.mode) || 'agent'] || MODES.agent; return k ? { ...SPECIALISTS[k], tag: m.tag, baseLabel: m.label } : { ...m, baseLabel: '' }; }
   const READ_TOOLS = new Set(['read_file', 'list_dir', 'file_search', 'grep_search', 'find_symbol', 'find_references', 'get_diagnostics', 'get_editor_state', 'memory_read', 'memory_list', 'load_skill', 'web_search', 'web_fetch']);
   /** Consecutive calls to these fold into one "Explored" row in the transcript (see foldExplore). */
   const EXPLORE_TOOLS = new Set([...READ_TOOLS, 'gather_context', 'read_pdf', 'repo_graph', 'analyze_workspace', 'mcp_read_resource', 'git_status', 'ci_status']);
@@ -89,8 +108,9 @@
   // the rest run as soon as they are picked. /smol (same as /compact) still works when typed.
   const SLASH = [
     ['/clear', 'Clear this chat', 'Chat'], ['/compact', 'Summarise older messages', 'Chat'], ['/newtask ', 'Continue in a new chat that starts from a summary of this one', 'Chat'], ['/context', 'Context usage', 'Chat'],
-    ['/mode agent', 'Agent mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode ask', 'Ask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
-    ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md', 'Plan & delegate'], ['/team ', 'Split a task for background workers and the shared board', 'Plan & delegate'], ['/agent ', 'Delegate to a subagent', 'Plan & delegate'],
+    ['/mode ask', 'Ask mode', 'Chat'], ['/mode agent', 'Agent mode', 'Chat'], ['/mode plan', 'Plan mode', 'Chat'], ['/mode debug', 'Debug mode', 'Chat'], ['/mode multitask', 'Multitask mode', 'Chat'], ['/model ', 'Switch model for this chat', 'Chat'],
+    ['/mode architect', 'Architect: design the change first (Plan)', 'More modes'], ['/mode review', 'Review: findings by severity (Ask)', 'More modes'], ['/mode test', 'Test: write and run tests (Agent)', 'More modes'], ['/mode refactor', 'Refactor: same behaviour, better structure (Agent)', 'More modes'], ['/mode explain', 'Explain: walk through code (Ask)', 'More modes'], ['/mode terminal', 'Terminal: shell tasks, commands shown first (Agent)', 'More modes'], ['/mode project', 'Project: overview, build and test (Ask)', 'More modes'],
+    ['/deep-planning ', 'Investigate, ask, then write implementation_plan.md', 'Plan & delegate'], ['/team ', 'Split a task for background workers and the shared board', 'Plan & delegate'], ['/agent ', 'Delegate to a subagent', 'Plan & delegate'], ['/agent new ', 'Create a custom subagent', 'Plan & delegate'],
     ['/help', 'Show commands', 'Info'], ['/memory', 'Instruction files and saved memory notes', 'Info'], ['/permissions', 'Permission rules from settings.json', 'Info'], ['/hooks', 'Configured hooks', 'Info'], ['/board', 'Shared task board', 'Info'], ['/agents', 'List subagents', 'Info'], ['/commands', 'List custom slash commands', 'Info'],
     ['/skills', 'List skills', 'Skills'], ['/skill ', 'Run a task with a skill', 'Skills'], ['/skill install ', 'Install a skill from GitHub, a URL or a folder', 'Skills'], ['/skill browse ', 'Search and install from the skill catalog', 'Skills'],
   ];
@@ -115,12 +135,18 @@
     worktree: new Map(),
     /** sid → self-healing cards of the current/last turn and its outcome; sid → interrupted recovery state. */
     recovery: new Map(), interrupted: new Map(),
+    /** sid → the Run interrupted card's facts (a run cut off by a reload); sid → a model fallback this turn ({ wanted, used, … }). */
+    runInt: new Map(), rerouted: new Map(),
   };
 
   // ------------------------------------------------------------------ utils
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function el(tag, cls, html) { const e = document.createElement(tag); if (cls) { e.className = cls; } if (html !== undefined) { e.innerHTML = html; } return e; }
-  function post(m) { vscode.postMessage(m); }
+  function post(m) {
+    // A stop the user asked for settles the turn as "Stopped by you", not as a failure (finishLive / settleWork).
+    if (m && (m.type === 'stop' || (m.type === 'toolFailureAction' && m.action === 'stop'))) { const lv = state.live.get(m.sessionId); if (lv) { lv.stopped = true; } }
+    vscode.postMessage(m);
+  }
   // Toasts float just above the composer, however tall the draft, approvals and task panels make it.
   const composerEl = document.getElementById('composer');
   if (composerEl && window.ResizeObserver) { new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', `${composerEl.offsetHeight}px`)).observe(composerEl); }
@@ -255,7 +281,7 @@
     const file = titleM ? titleM[2] : parts.find((p) => /[\w-]+\.[a-z0-9]+$/i.test(p) && !p.includes('=')) || '';
     const lines = code.split('\n').length;
     const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${esc(file)}</span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
-    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file), closed)}</code></pre></div>`;
+    return `<div class="code" data-lang="${esc(normLang(lang))}"><div class="code-head">${head}<span class="meta">${lines > 1 ? `${lines} lines` : ''}</span><button data-code="copy" title="Copy">${I.copy}<span>Copy</span></button><button data-code="insert" title="Insert at cursor" aria-label="Insert at cursor">${I.insert}</button><button data-code="apply" title="Apply to active file" aria-label="Apply to active file">${I.apply}</button></div><pre><code>${highlight(code, lang || langForPath(file), closed)}</code></pre></div>`;
   }
   /** `NNN | text` lines from read_file → numbered, highlighted listing. */
   function numberedListing(text, lang) {
@@ -552,6 +578,67 @@
     const stat = node.querySelector(':scope > .card-head .stat'); if (stat) { stat.textContent = 'Denied'; }
     const g = node.closest('.editgroup'); if (g) { updateEditGroup(g); }
   }
+  /** A step cut short by Stop ("Cancelled", "Not run: the user stopped the run") is neutral like a denial, not a failure. */
+  function isCancelled(r) { return !!r && !!r.isError && /^(Cancelled\b|Not run: the user stopped|Stopped by user\b)/.test(String(r.content || '')); }
+  function markCancelled(node) {
+    if (!node || !node.classList) { return; }
+    node.classList.remove('error'); node.classList.add('denied', 'cancelled');
+    const ico = node.querySelector(':scope > summary .ico, :scope > .card-head .ico'); if (ico) { ico.innerHTML = I.stop; }
+    const meta = node.querySelector(':scope > summary .meta'); if (meta) { meta.textContent = 'Cancelled'; }
+    const stat = node.querySelector(':scope > .card-head .stat'); if (stat) { stat.textContent = 'Cancelled'; }
+    const g = node.closest('.editgroup'); if (g) { updateEditGroup(g); }
+    dropFailBar(node);
+  }
+  // ---- failed steps: Retry / Edit & retry / Skip / Stop run under the row (spec 03). The host turns a click into a
+  // steer while the run lasts and into a new turn once it ended, so it goes through the normal tools and approvals.
+  /** The row a failure bar sits under: the top-level step (a failed read inside an Explored group, an edit inside its group). */
+  function failAnchor(node) { const top = node.closest('.steps > *'); return top || node; }
+  function dropFailBar(node) { if (node && node.__failBar) { node.__failBar.remove(); node.__failBar = null; } }
+  /** Tool and target of a step, to tell a later success of the same step ("retried ✓") from a different one. */
+  function stepKey(node) {
+    const tool = node.classList.contains('card') ? (node.dataset.write === '1' ? 'write_file' : 'edit_file') : node.dataset.tool || '';
+    const a = node.__args || parseArgs(node.dataset.args || '{}');
+    return `${tool === 'write_file' ? 'edit_file' : tool}|${a.path || a.command || a.url || a.query || ''}`;
+  }
+  function failText(content) { const t = String(content || '').replace(/^\$ .*\n/, '').split('\n').map((l) => l.trim()).find((l) => l && !/^\[exit code/.test(l)) || 'The step failed'; return t.length > 160 ? `${t.slice(0, 159)}…` : t; }
+  function failBar(node, content, sid) {
+    if (!node || node.__failBar || node.classList.contains('denied') || !sid) { return; }
+    const tool = node.classList.contains('card') ? (node.dataset.write === '1' ? 'write_file' : 'edit_file') : node.dataset.tool;
+    if (!tool || tool === 'manage_todos' || node.closest('.subrows, .rec-rows')) { return; }
+    const args = node.__args ? JSON.stringify(node.__args) : node.dataset.args || '{}';
+    const running = state.running.has(sid);
+    const bar = el('div', 'tool-fail', `<span class="why" title="${esc(String(content || '').slice(0, 1500))}">${esc(failText(content))}</span><span class="acts"><button class="btn sm" data-f="retry" title="Ask the agent to try this step again">${I.refresh}<span>Retry</span></button><button class="btn sm ghost" data-f="edit" title="Change the ${tool === 'run_command' ? 'command' : 'arguments'}, then retry">${I.edit}<span>Edit &amp; retry</span></button>${running ? `<button class="btn sm ghost" data-f="skip" title="Carry on without this step">Skip</button><button class="btn sm ghost" data-f="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop run</span></button>` : ''}</span>`);
+    bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'Failed step actions');
+    const send = (action, extra) => { post(Object.assign({ type: 'toolFailureAction', sessionId: sid, action, tool, args, error: String(content || '').slice(0, 2000) }, extra || {})); bar.querySelectorAll('button, textarea').forEach((b) => { b.disabled = true; }); bar.classList.add('sent'); };
+    bar.onclick = (e) => {
+      const b = e.target.closest('button[data-f]'); if (!b || b.disabled) { return; }
+      const f = b.dataset.f;
+      if (f === 'edit') {
+        let form = bar.querySelector('.tf-edit');
+        if (!form) {
+          const a = parseArgs(args); const cmd = tool === 'run_command' && typeof a.command === 'string';
+          form = el('form', 'tf-edit', `<textarea rows="${cmd ? 2 : 5}" spellcheck="false" aria-label="${cmd ? 'Command to run instead' : 'Arguments (JSON) for the retry'}"></textarea><span class="tf-row"><button class="btn sm primary" type="submit">${cmd ? 'Run instead' : 'Retry with these'}</button><button class="btn sm ghost" type="button" data-x="1">Cancel</button></span>`);
+          const ta = form.querySelector('textarea'); ta.value = cmd ? a.command : JSON.stringify(a, null, 2);
+          form.onsubmit = (ev) => { ev.preventDefault(); const v = ta.value.trim(); if (v) { send('edit', { args: v }); } };
+          ta.onkeydown = (ev) => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); form.requestSubmit(); } else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); form.remove(); } };
+          form.querySelector('[data-x]').onclick = () => form.remove();
+          bar.appendChild(form);
+        }
+        form.querySelector('textarea').focus(); return;
+      }
+      send(f);
+    };
+    node.__failBar = bar;
+    failAnchor(node).after(bar);
+  }
+  /** A later success of the same step: its bar goes, the failed row says it was retried. */
+  function noteRetried(okNode) {
+    const container = okNode.closest('.turn'); if (!container) { return; }
+    const key = stepKey(okNode);
+    for (const n of container.querySelectorAll('.step.error[data-tool], .card.edit.error')) {
+      if (n !== okNode && n.__failBar && stepKey(n) === key) { dropFailBar(n); n.classList.add('retried'); const meta = n.querySelector(':scope > summary .meta, :scope > .card-head .stat'); if (meta) { meta.insertAdjacentHTML('beforeend', ' <span class="retried-tag">retried ✓</span>'); } }
+    }
+  }
   const LANG_EXT = { ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', json: 'json', md: 'md', css: 'css', scss: 'css', html: 'html', py: 'py', go: 'go', rs: 'rs', java: 'java', cs: 'cs', rb: 'rb', php: 'php', sh: 'sh', bash: 'sh', zsh: 'sh', yml: 'yml', yaml: 'yml', toml: 'toml', sql: 'sql', svg: 'svg', vue: 'vue', swift: 'swift', kt: 'kt' };
   /** File / folder / URL chip, like the resource pills in VS Code chat. Files open on click; URLs open externally. */
   function fchip(path, kind = 'file', extra) {
@@ -646,7 +733,7 @@
     card.dataset.path = a.path || ''; card.dataset.add = String(d.add); card.dataset.del = String(d.del); card.dataset.write = isWrite ? '1' : '0';
     // The diff body is parsed into the DOM only when the card is expanded (most edits in a long transcript never are).
     card.innerHTML = `<div class="card-head"><span class="ico">${result ? (result.isError ? I.x : I.edit) : I.spin}</span><span class="name" title="${esc(a.path || '')}">${esc(a.path || '')}</span><span class="stat"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span><span class="acts"><button data-open="${esc(a.path || '')}" title="Open file">${I.open}</button></span></div><div class="diff collapsed"></div>`;
-    card.__diff = d.html;
+    card.__diff = d.html; card.__args = a;
     card.querySelector('.card-head').onclick = (e) => { if (e.target.closest('[data-open]')) { post({ type: 'openFile', path: e.target.closest('[data-open]').dataset.open, sessionId: state.session && state.session.id }); return; } const diff = card.querySelector('.diff'); if (card.__diff !== undefined) { diff.innerHTML = card.__diff; card.__diff = undefined; } diff.classList.toggle('collapsed'); };
     if (result && result.isError) { const err = el('div', 'term', ''); err.textContent = result.content; card.appendChild(err); }
     return card;
@@ -680,8 +767,17 @@
     const s = stepEl(`step term ${result ? (result.isError ? 'error' : 'ok') : 'running'}`, toolLabel('run_command', a, !result));
     s.__ico = I.term; s.dataset.tool = 'run_command'; s.dataset.args = JSON.stringify(a || {});
     const c = s.querySelector(':scope > .content'); c.className = 'content termout';
-    c.innerHTML = `<div class="term-acts"><button data-copy title="Copy command">${I.copy}<span>Command</span></button><button data-copyout title="Copy output">${I.term}<span>Output</span></button></div><pre class="term"></pre>`;
-    c.onclick = (e) => { const b = e.target.closest('button'); if (!b || b.classList.contains('term-more')) { return; } e.preventDefault(); if (b.hasAttribute('data-copy')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Command copied')); } else { navigator.clipboard.writeText(c.querySelector('.term').textContent).then(() => toast('Output copied')); } };
+    // The folder it ran in when that is not the workspace root; Rerun goes through the agent (same tool, same approval rules).
+    const cwd = typeof a.cwd === 'string' && a.cwd.trim() && !/^\.\/?$/.test(a.cwd.trim()) ? a.cwd.trim() : '';
+    c.innerHTML = `<div class="term-acts">${cwd ? `<span class="cwd" title="Ran in ${esc(cwd)}">${I.folder}<span>${esc(short(cwd, 40))}</span></span>` : ''}<span class="sp"></span><button data-copy title="Copy command" aria-label="Copy command">${I.copy}<span>Command</span></button><button data-copyout title="Copy output" aria-label="Copy output">${I.term}<span>Output</span></button><button data-rerun title="Ask the agent to run this command again (your approval settings apply)" aria-label="Rerun">${I.refresh}<span>Rerun</span></button><button data-openterm title="Put this command in a terminal without running it" aria-label="Open in terminal">${I.open}<span>Open in terminal</span></button></div><pre class="term"></pre>`;
+    c.onclick = (e) => {
+      const b = e.target.closest('button'); if (!b || b.classList.contains('term-more') || b.closest('.tests')) { return; } e.preventDefault();
+      const sid = state.session && state.session.id;
+      if (b.hasAttribute('data-copy')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Command copied')); }
+      else if (b.hasAttribute('data-copyout')) { navigator.clipboard.writeText(c.querySelector('.term').textContent).then(() => toast('Output copied')); }
+      else if (b.hasAttribute('data-rerun') && sid) { post({ type: 'toolFailureAction', sessionId: sid, action: 'rerun', tool: 'run_command', args: JSON.stringify(a) }); b.disabled = true; toast(state.running.has(sid) ? 'Asked the agent to run it again' : 'Running it again…'); }
+      else if (b.hasAttribute('data-openterm')) { post({ type: 'openInTerminal', sessionId: sid, command: a.command || '', cwd: cwd || undefined }); }
+    };
     // Running (or detached): let the agent proceed while the command keeps going, or stop it.
     const ctl = el('span', 'cmdctl', `<button data-c="detach" title="Let the agent continue while the command keeps running; later output goes to a log the agent can read">${I.play}<span>Proceed While Running</span></button><button data-c="stop" title="Stop the command and everything it started">${I.stop}</button>`);
     ctl.onclick = (e) => {
@@ -738,11 +834,42 @@
     meta.innerHTML = running ? '' : `${n > 1 ? `<span class="lines">${n} lines</span>` : ''}${m ? `<span class="exit ${m[1] === '0' ? 'good' : 'bad'}">exit ${m[1]}</span>` : ''}`;
   }
 
+  /** A test run's result on its command row: "6 passed · 1 failed", the failing tests first, Re-run failed / Fix failures. */
+  function testSummary(node, t) {
+    if (!node || !t || typeof t !== 'object') { return; }
+    const n = (k) => Math.max(0, Number(k) || 0);
+    const passed = n(t.passed), failed = n(t.failed), skipped = n(t.skipped);
+    const meta = node.querySelector(':scope > summary .meta');
+    const badge = `<span class="tests-badge" title="${esc(`${t.runner || 'Tests'}: ${passed} passed, ${failed} failed, ${skipped} skipped`)}">${failed ? `<b class="f">${failed} failed</b>` : ''}${failed && passed ? '<i>·</i>' : ''}${passed ? `<b class="p">${passed} passed</b>` : ''}${skipped ? `<i>·</i><b class="s">${skipped} skipped</b>` : ''}</span>`;
+    if (meta) { const lines = meta.querySelector('.lines'); if (lines) { lines.remove(); } meta.insertAdjacentHTML('afterbegin', badge); }
+    if (!failed) { return; }
+    const rows = (Array.isArray(t.failures) ? t.failures : []).slice(0, 20);
+    const box = el('div', 'tests', `<ul>${rows.map((f) => `<li><span class="x" aria-hidden="true">${I.x}</span><span class="tn" title="${esc(f.name || '')}">${short(f.name || 'test', 90)}</span>${f.file ? fchip(f.file, 'file', { line: f.line }) : ''}${f.message && f.message !== f.name ? `<span class="tm" title="${esc(f.message)}">${short(f.message, 140)}</span>` : ''}</li>`).join('')}${failed > rows.length ? `<li class="more">${failed - rows.length} more failing in the output below</li>` : ''}</ul><span class="tacts"><button class="btn sm" data-t="rerunFailed" title="Ask the agent to run only the failing tests again">${I.refresh}<span>Re-run failed</span></button><button class="btn sm ghost" data-t="fixFailures" title="Ask the agent to fix the failing tests and re-run them">${I.edit}<span>Fix failures</span></button><button class="link heal hidden" data-t="heal" title="Show the self-healing card">Self-healing is fixing this</button></span>`);
+    const names = rows.map((f) => `${f.name || 'test'}${f.file ? ` (${f.file}${f.line ? `:${f.line}` : ''})` : ''}${f.message && f.message !== f.name ? `: ${f.message}` : ''}`);
+    box.onclick = (e) => {
+      const b = e.target.closest('button[data-t]'); if (!b || b.disabled) { return; }
+      e.preventDefault(); e.stopPropagation();
+      if (b.dataset.t === 'heal') { const card = node.closest('.turn') && [...node.closest('.turn').querySelectorAll(':scope > .rec')].pop(); if (card) { card.scrollIntoView({ block: 'center', behavior: calmMotion() ? 'auto' : 'smooth' }); } return; }
+      const sid = state.session && state.session.id; if (!sid) { return; }
+      post({ type: 'toolFailureAction', sessionId: sid, action: b.dataset.t, tool: 'run_command', args: node.dataset.args || '{}', tests: names });
+      b.disabled = true;
+    };
+    const c = node.querySelector(':scope > .content'); const pre = c && c.querySelector('.term');
+    if (pre) { pre.before(box); } else if (c) { c.appendChild(box); }
+    node.classList.add('has-tests');
+    syncHealLink(node);
+  }
+  /** "Self-healing is fixing this" shows on a failing test row once a recovery card is running in the same turn. */
+  function syncHealLink(node) {
+    const link = node.querySelector('.tests .heal'); const turn = node.closest('.turn'); if (!link || !turn) { return; }
+    link.classList.toggle('hidden', !turn.querySelector(':scope > .rec.running'));
+  }
+
   // Subagent pill: "agent · task · model" with its own nested step rows streaming underneath.
   function modelName(ref) { const m = state.models.find((x) => x.id === ref); const n = m ? m.name : ref ? String(ref).split('/').pop() : ''; return n.replace(/[-_:]?(instruct|chat)\b/i, ''); }
   function subagentCard(agent, prompt, model, label) {
     const d = stepEl('subagent running', '');
-    d.__ico = I.agent; d.dataset.calls = '0'; d.dataset.pending = '1'; d.dataset.agent = agent || ''; d.dataset.label = label || '';
+    d.__ico = I.agent; d.dataset.calls = '0'; d.dataset.pending = '1'; d.dataset.agent = agent || ''; d.dataset.label = label || ''; d.__prompt = prompt || label || '';
     const mdl = modelName(model) || (model === null ? '' : currentModel() ? modelName(currentModel().id) : '');
     // Who (agent · model) and what (task) are separate cells so a narrow sidebar can put the task on its own line
     // instead of squeezing it to nothing.
@@ -790,6 +917,15 @@
     const ctl = d.querySelector(':scope > summary .lanectl'); if (ctl) { ctl.remove(); }
     d.classList.remove('paused');
     delete d.dataset.pending;
+    const sid = state.session && state.session.id;
+    if (error && sid && state.running.has(sid)) { laneRetry(d, error, sid); }
+  }
+  /** A failed worker lane gets Retry: the agent delegates the same task again (a steer while running, else a new turn). */
+  function laneRetry(d, error, sid) {
+    if (!d || /^(Cancelled|Stopped)\b/i.test(String(error || '')) || d.querySelector(':scope > summary .lane-retry') || !d.__prompt) { return; }
+    const b = el('button', 'lane-retry', `${I.refresh}<span>Retry</span>`); b.type = 'button'; b.title = `Run this ${d.dataset.agent || 'worker'} task again`; b.setAttribute('aria-label', `Retry the ${d.dataset.agent || 'worker'} task`);
+    b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); post({ type: 'toolFailureAction', sessionId: sid, action: 'retry', tool: 'run_subagent', args: JSON.stringify({ agent: d.dataset.agent || '', prompt: d.__prompt }), error: String(error).slice(0, 2000) }); b.disabled = true; };
+    d.querySelector(':scope > summary .chev').before(b);
   }
   /** Host step for run_parallel_subagents while live: a queued lane per task becomes the child's pill as it starts. */
   /** Workers card ("4 working · Stop all"): one row per background worker with its current step; rows expand to the full trace. */
@@ -847,7 +983,8 @@
     const label = host.querySelector(':scope > summary .label'); const meta = host.querySelector(':scope > summary .meta');
     if (!host.classList.contains('running')) { return; }
     const { running, queued, done } = hostCounts(host);
-    const extra = [queued && `${queued} queued`, done && `${done} done`].filter(Boolean).join(' · ');
+    const failed = host.querySelectorAll(':scope > .content > .step.subagent.error').length;
+    const extra = [queued && `${queued} queued`, done && `${done} done`, failed && `${failed} failed`].filter(Boolean).join(' · ');
     if (label) { label.innerHTML = `<b>${running ? `${running} working` : queued ? 'Starting workers' : 'Finishing'}</b>${extra ? `<span class="muted"> · ${extra}</span>` : ''}`; }
     if (meta) { meta.textContent = ''; }
   }
@@ -870,7 +1007,7 @@
     const a = parseArgs(tc.arguments);
     if (tc.name === 'manage_todos') { return null; }
     if (tc.name === 'edit_file' || tc.name === 'write_file') { const g = editGroup(container, true); const c = editCard(tc.name, a, result); c.dataset.callId = tc.id; g.querySelector(':scope > .content').appendChild(c); updateEditGroup(g); return c; }
-    if (tc.name === 'run_command') { const s = termRow(a, result); s.dataset.callId = tc.id; applyCommandState(s); container.appendChild(s); return s; }
+    if (tc.name === 'run_command') { const s = termRow(a, result); s.dataset.callId = tc.id; applyCommandState(s); if (result && result.tests) { testSummary(s, result.tests); } container.appendChild(s); return s; }
     if (tc.name === 'run_parallel_subagents' && !result) { const h = subHost(tc.name, a); h.dataset.callId = tc.id; container.appendChild(h); return h; }
     if ((tc.name === 'run_parallel_subagents' || tc.name === 'run_todos_parallel') && result) { const h = subHostSettled(tc.name, a, result); if (h) { h.dataset.callId = tc.id; container.appendChild(h); return h; } }
     if (tc.name === 'run_todos_parallel' && !result) {
@@ -940,9 +1077,11 @@
     g.querySelector(':scope > summary').title = files.join('\n');
     setState(g, running ? 'running' : errs === rows.length ? 'error' : 'ok');
   }
-  function finishTool(node, payload) {
+  function finishTool(node, payload, sid) {
     if (!node) { return; }
     const ok = !payload.isError;
+    const cancelled = isCancelled(payload);
+    node.__t0 = 0; node.classList.remove('slow'); if (node.title === SLOW_TIP) { node.removeAttribute('title'); }
     const secs = payload.cached ? 'cached' : payload.durationMs > 800 ? `${(payload.durationMs / 1000).toFixed(1)}s` : '';
     if (node.classList.contains('subhost')) {
       setState(node, ok ? 'ok' : 'error');
@@ -965,6 +1104,7 @@
       const ico = node.querySelector('.card-head .ico'); if (ico) { ico.innerHTML = ok ? I.edit : I.x; }
       if (!ok) { const err = el('div', 'term', ''); err.textContent = payload.content || ''; node.appendChild(err); }
       const g = node.closest('.editgroup'); if (g) { updateEditGroup(g); }
+      if (cancelled) { markCancelled(node); } else if (!ok && !isDenied(payload)) { failBar(node, payload.content, sid); } else if (ok) { noteRetried(node); }
       return;
     }
     setState(node, ok ? 'ok' : 'error');
@@ -973,7 +1113,17 @@
     if (node.dataset.tool === 'run_command') {
       setTermRow(node, payload.content || '', false);
       node.classList.toggle('detached', cmdStates.get(node.dataset.callId) === 'detached');
+      const tests = (payload.data && payload.data.tests) || payload.tests;
+      if (tests) { testSummary(node, tests); }
+      if (cancelled) { markCancelled(node); return; }
       if (!ok) { node.open = true; } else if (node.__autoOpen) { node.open = false; }
+      // While the run goes on, a failed command is the agent's next input: say so (finishLive turns it into "run stopped").
+      const exit = /\[exit code (\d+)\]\s*$/.exec(String(payload.content || ''));
+      if (!ok && exit && exit[1] !== '0' && sid && state.running.has(sid) && !isDenied(payload)) {
+        const next = el('div', 'term-next', `Exit ${esc(exit[1])}<i>·</i><span>${tests && tests.failed ? 'the agent will read the failures and try a fix' : 'the agent will read the output and try a fix'}</span>`); next.dataset.live = '1';
+        const c = node.querySelector(':scope > .content'); if (c) { c.appendChild(next); }
+      }
+      if (ok) { noteRetried(node); } else if (!isDenied(payload) && !(exit && sid && state.running.has(sid))) { failBar(node, payload.content, sid); }
       return;
     }
     toolContent(node, node.dataset.tool, args, payload.content || '', false, payload);
@@ -983,6 +1133,7 @@
     node.querySelector(':scope > summary .meta').textContent = secs;
     const group = node.parentElement && node.parentElement.closest('.step.explore');
     if (group) { updateExploreGroup(group); }
+    if (cancelled) { markCancelled(node); } else if (!ok && !isDenied(payload)) { failBar(node, payload.content, sid); } else if (ok) { noteRetried(node); }
   }
 
   // ------------------------------------------------------------------ transcript rendering
@@ -1102,7 +1253,7 @@
     const d = el('div', 'turn assistant');
     const steps = el('div', 'steps');
     if (m.thinking) { steps.appendChild(thinkingRow(m.thinking, 0, false)); }
-    for (const tc of m.toolCalls || []) { const r = results.get(tc.id) || { content: '(no result)', isError: false }; const node = placeTool(steps, tc, r); if (isDenied(r)) { markDenied(node); } }
+    for (const tc of m.toolCalls || []) { const r = results.get(tc.id) || { content: '(no result)', isError: false }; const node = placeTool(steps, tc, r); if (isDenied(r)) { markDenied(node); } else if (isCancelled(r)) { markCancelled(node); } else if (node && r.isError) { node.__err = r.content; } }
     if (steps.children.length) { d.appendChild(steps); }
     const err = m.meta && m.meta.error;
     if (err) {
@@ -1148,13 +1299,16 @@
    * stays the secondary action and Show log is always there.
    */
   function errorActions(box, sid) {
+    if (box.dataset.kind === 'mistake_limit') { mistakeActions(box, sid); return; }
     const kind = box.dataset.kind || '', ollama = box.dataset.provider === 'ollama';
     const fix = kind === 'connection' ? (ollama ? { a: 'ollama', icon: I.play, label: 'Start Ollama', title: 'Start the local Ollama server (and pull a model if none is installed), then Retry' } : { a: 'models', icon: I.gear, label: 'Open model settings', title: 'Check the model server and its models in Settings, then Retry' })
       : kind === 'auth' ? { a: 'key', icon: I.key, label: 'Set API key…', title: 'Enter a valid API key in Settings → Providers, then Retry' }
+      : kind === 'quota' ? { a: 'key', icon: I.key, label: 'Provider settings…', title: 'Check the account or key in Settings → Providers, or pick another model' }
       : kind === 'context' ? { a: 'compact', icon: I.layers, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' }
       : null;
     const retryBtn = `<button class="btn sm ${fix ? '' : 'primary'}" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`;
-    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.layers}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
+    const raise = kind === 'context' ? `<button class="btn sm ghost" data-a="ctxwin" title="Settings → Models → Context window: give the model a larger window">${I.gear}<span>Raise context window</span></button>` : '';
+    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button>${raise}<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.layers}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
     // Rate limited: Retry counts down the moment the server is likely to accept requests again.
     if (kind === 'ratelimit') {
       const span = acts.querySelector('[data-a="retry"] span'); let left = 10;
@@ -1170,8 +1324,29 @@
       else if (a === 'compact') { b.disabled = true; b.classList.add('busy'); post({ type: 'compactNow', sessionId: sid, retry: true }); }
       else if (a === 'ollama') { post({ type: 'autoSetupModels' }); }
       else if (a === 'models') { post({ type: 'openSettings', section: 'models' }); }
-      else if (a === 'key') { post({ type: 'openSettings', section: 'providers' }); }
+      // Deep links: the chat's provider card opens with its key field focused; the context window setting is highlighted.
+      else if (a === 'key') { const cm = currentModel(); post({ type: 'openSettings', section: 'providers', ...(cm ? { expand: cm.providerId } : {}) }); }
+      else if (a === 'ctxwin') { post({ type: 'openSettings', section: 'models', key: 'contextWindow' }); }
       else { els.modelBtn.click(); }
+    };
+    box.appendChild(acts);
+  }
+  /** The mistake limit: Continue with guidance (a short note, sent as the next message), Restore checkpoint, Show log. */
+  function mistakeActions(box, sid) {
+    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm primary" data-a="guide" title="Tell LocalPilot what to do differently; it continues from here">${I.play}<span>Continue with guidance</span></button>`);
+    acts.onclick = (e) => {
+      const b = e.target.closest('[data-a]'); if (!b) { return; }
+      if (b.dataset.a === 'log') { post({ type: 'showLog' }); return; }
+      if (state.running.has(sid)) { return; }
+      if (b.dataset.a === 'restore') { b.disabled = true; post({ type: 'runAction', sessionId: sid, action: 'restore' }); return; }
+      let form = box.querySelector('.err-guide');
+      if (!form) {
+        form = el('form', 'err-guide rec-guide', '<input type="text" placeholder="What should LocalPilot do differently?" aria-label="Guidance to continue with"><button class="btn sm primary" type="submit">Continue</button><button class="btn sm ghost" type="button" data-x="1">Cancel</button>');
+        form.onsubmit = (ev) => { ev.preventDefault(); const t = form.querySelector('input').value.trim(); if (!t || !state.session || state.session.id !== sid) { return; } els.input.value = t; autoGrow(); updateSendEnabled(); sendCurrent(); form.remove(); };
+        form.querySelector('[data-x]').onclick = () => form.remove();
+        box.appendChild(form);
+      }
+      form.querySelector('input').focus();
     };
     box.appendChild(acts);
   }
@@ -1202,7 +1377,7 @@
     if (!s.messages.length && !inFlight) { renderEmpty(); }
     const results = new Map();
     for (const m of s.messages) {
-      if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: /^(Tool .* failed|User declined|The user (denied|declined)|Error|Cancelled|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content) }); }
+      if (m.role === 'tool' && m.toolCallId) { results.set(m.toolCallId, { content: m.content, isError: (m.meta && m.meta.failed) || /^(Tool .* failed|User declined|The user (denied|declined)|Error|Cancelled|Not run: the user stopped|old_text not found)/i.test(m.content) || /\[exit code [1-9]/.test(m.content), ...(m.meta && m.meta.tests ? { tests: m.meta.tests } : {}) }); }
       // Text-protocol models get every result of a step in one user message: split it back into the tool rows' results.
       if (m.role === 'user' && m.meta && m.meta.toolResults) { const parts = [...m.content.matchAll(/<tool_result name="[^"]*">\n?([\s\S]*?)\n?<\/tool_result>/g)].map((x) => x[1]); m.meta.toolResults.forEach((id, k) => { const c = parts[k]; if (c !== undefined) { results.set(id, { content: c, isError: /^(Tool .* failed|User declined|The user (denied|declined)|Error|Cancelled|old_text not found)/i.test(c) || /\[exit code [1-9]/.test(c) }); } }); }
       // Images captured by tools travel in a user-role carrier message; attach them to the originating step instead of showing a bubble.
@@ -1213,7 +1388,8 @@
     const settleReplay = () => {
       if (!cur) { return; }
       const st = turnStats(cur.el);
-      if (st.steps || st.workers) { const w = workStrip(); cur.el.insertBefore(w, cur.el.firstChild); settleWork(cur.el, w, st, cur.dur || (cur.end && cur.start ? cur.end - cur.start : 0), false); }
+      if (st.steps || st.workers) { const w = workStrip(); cur.el.insertBefore(w, cur.el.firstChild); settleWork(cur.el, w, st, cur.dur || (cur.end && cur.start ? cur.end - cur.start : 0), false, cur.stopped); }
+      if (cur.stopped) { cur.el.classList.add('stopped'); }
       cur = null;
     };
     const cutoff = inFlight && typeof s.liveFrom === 'number' ? s.liveFrom : s.messages.length;
@@ -1236,7 +1412,8 @@
       }
       const node = m.role === 'user' ? userTurn(m, i) : assistantTurn(m, results);
       if (m.role === 'user') { settleReplay(); }
-      if (!node) { return; }
+      // An assistant message with nothing to draw still carries the turn's facts (duration, stopped).
+      if (!node) { if (cur && m.role === 'assistant' && m.meta) { if (m.meta.durationMs) { cur.dur = m.meta.durationMs; } if (m.meta.stopped) { cur.stopped = true; } } return; }
       // Consecutive assistant messages (tool calls, then the answer) form one turn, exactly as they streamed live —
       // so settling the transcript at the end of a turn does not shift the layout.
       const prev = els.messages.lastElementChild;
@@ -1244,11 +1421,11 @@
         const act = node.querySelector(':scope > .actions, :scope > .afoot');
         if (act) { for (const old of prev.querySelectorAll(':scope > .actions, :scope > .afoot')) { old.remove(); } }
         while (node.firstChild) { prev.appendChild(node.firstChild); }
-        if (cur && cur.el === prev) { cur.end = ts || cur.end; if (m.meta && m.meta.durationMs) { cur.dur = m.meta.durationMs; } }
+        if (cur && cur.el === prev) { cur.end = ts || cur.end; if (m.meta && m.meta.durationMs) { cur.dur = m.meta.durationMs; } if (m.meta && m.meta.stopped) { cur.stopped = true; } }
         return;
       }
       els.messages.appendChild(node);
-      if (m.role !== 'user') { cur = { el: node, start: ts, end: ts, dur: m.meta && m.meta.durationMs }; }
+      if (m.role !== 'user') { cur = { el: node, start: ts, end: ts, dur: m.meta && m.meta.durationMs, stopped: !!(m.meta && m.meta.stopped) }; }
     });
     // The turn still streaming is the live element below, not a settled one.
     if (!state.running.has(s.id) && !state.live.has(s.id)) { settleReplay(); }
@@ -1256,6 +1433,8 @@
     const lastTurn = els.messages.lastElementChild;
     const failedBox = !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .error-box:last-child');
     if (failedBox) { errorActions(failedBox, s.id); }
+    // The latest turn: Continue / Discard after a stop, and the actions on steps that failed and were not retried.
+    if (!inFlight && lastTurn && lastTurn.classList.contains('assistant')) { settledRunActions(lastTurn, s.id); }
     const foot = !failedBox && !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .afoot .acts');
     if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept)" aria-label="Regenerate">${I.refresh}</button>`); }
     syncViewChanges(s.id);
@@ -1273,6 +1452,62 @@
     if (stick) { scrollToBottom(true); } else { m.scrollTop = y; }
     updateJump();
   }
+  /** Continue / Discard changes under a turn the user stopped; Retry / Edit & retry on its failed steps that were never retried. */
+  function settledRunActions(turn, sid) {
+    const failed = [...turn.querySelectorAll('.steps .step.error[data-tool], .steps .card.edit.error')].filter((n) => !n.classList.contains('denied') && !n.closest('.subrows, .rec-rows'));
+    const ok = [...turn.querySelectorAll('.steps .step.ok[data-tool], .steps .card.edit.ok')];
+    // After the run, a failure the agent simply moved past is history; the bar stays where the run ended on it (or broke off).
+    const all = [...turn.querySelectorAll('.steps .step[data-tool], .steps .card.edit')].filter((n) => !n.closest('.subrows, .rec-rows'));
+    const brokeOff = turn.classList.contains('stopped') || !!turn.querySelector(':scope > .error-box');
+    for (const n of failed) {
+      const key = stepKey(n);
+      const later = ok.some((o) => stepKey(o) === key && (n.compareDocumentPosition(o) & 4));
+      if (later) { n.classList.add('retried'); continue; }
+      if (brokeOff || n === all[all.length - 1]) { failBar(n, n.__err || '', sid); }
+    }
+    for (const lane of turn.querySelectorAll('.steps .step.subagent.error')) { laneRetry(lane, 'failed', sid); }
+    if (!turn.classList.contains('stopped')) { return; }
+    const pending = (state.changes.get(sid) || []).length;
+    const bar = el('div', 'stopped-acts', `<span class="muted">${turn.querySelector(':scope > .work') ? '' : `${I.stop} Stopped by you`}</span><span class="acts"><button class="btn sm primary" data-s="continue" title="Pick the task up where it stopped">${I.play}<span>Continue</span></button>${pending ? `<button class="btn sm ghost" data-s="discard" title="Revert the ${pending} file${pending === 1 ? '' : 's'} this chat changed and you have not kept">${I.undo}<span>Discard changes</span></button>` : ''}</span>`);
+    bar.onclick = (e) => {
+      const b = e.target.closest('button[data-s]'); if (!b || state.running.has(sid)) { return; }
+      b.disabled = true;
+      if (b.dataset.s === 'continue') { post({ type: 'runAction', sessionId: sid, action: 'continue' }); } else { post({ type: 'undoChanges', sessionId: sid }); b.remove(); }
+    };
+    const work = turn.querySelector(':scope > .work');
+    if (work) { work.after(bar); } else { turn.appendChild(bar); }
+  }
+  /** "Run interrupted": a run that never ended (VS Code reloaded or closed mid-run). Resume, Restore checkpoint, Dismiss. */
+  function renderRunInterrupted(s) {
+    const st = state.runInt.get(s.id); if (!st) { return; }
+    const changed = state.changes.get(s.id) || [];
+    const files = changed.length ? changed.map((f) => f.path || f.fsPath) : Array.isArray(st.files) ? st.files : [];
+    const facts = [st.steps ? `Stopped during step ${st.steps + 1}` : 'Stopped before it finished', st.tasksTotal ? `Tasks ${st.tasksDone || 0}/${st.tasksTotal}` : '', files.length ? `${files.length} file${files.length === 1 ? '' : 's'} edited` : ''].filter(Boolean).join(' · ');
+    const list = files.slice(0, 6).map((f) => `<li title="${esc(f)}">${esc(f)}</li>`).join('') + (files.length > 6 ? `<li class="more">+${files.length - 6} more</li>` : '');
+    const when = st.startedAt ? new Date(st.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const card = el('div', 'rec rec-int run-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Run interrupted</span>${when ? `<span class="when">started ${esc(when)}</span>` : ''}</div><div class="rec-body"><div class="rec-title">${esc(facts)}</div><div class="rec-cause">VS Code closed or reloaded while LocalPilot was working. Nothing ran since.</div>${list ? `<ul class="rec-files">${list}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-run="continue" title="Start a turn that checks what was done and carries on">${I.play}<span>Resume</span></button><button class="btn sm" data-run="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button>${files.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made">${I.diff}<span>Review changes</span></button>` : ''}<button class="btn sm ghost" data-run="dismiss" title="Keep everything as it is and hide this card">Dismiss</button></div></div>`);
+    card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Run interrupted');
+    card.querySelector('.rec-acts').onclick = (e) => {
+      const b = e.target.closest('button[data-run]'); if (!b) { return; }
+      post({ type: 'runAction', sessionId: s.id, action: b.dataset.run });
+      if (b.dataset.run === 'review') { return; }
+      if (b.dataset.run === 'continue') { card.querySelectorAll('button').forEach((x) => { x.disabled = true; }); b.classList.add('busy'); return; }
+      state.runInt.delete(s.id); card.remove();
+    };
+    els.messages.appendChild(card);
+  }
+  /** The host's `git diff --diff-filter=U` for a conflict card: resolved files are ticked, Resume turns on when none are left. */
+  function applyConflicts(sid, files) {
+    const left = new Set(files);
+    for (const card of document.querySelectorAll(`.rec[data-conflict="1"][data-sid="${CSS.escape(sid)}"]`)) {
+      for (const li of card.querySelectorAll('.rec-conflicts li[data-file]')) {
+        const done = !left.has(li.dataset.file); li.classList.toggle('resolved', done);
+        const b = li.querySelector('button[data-merge]'); if (b) { b.disabled = done; b.textContent = done ? 'Resolved' : 'Open in merge editor'; }
+      }
+      const resume = card.querySelector('.rec-final button[data-ra="resume"][data-wait]');
+      if (resume && !files.length && !(card.__p && card.__p.done)) { resume.disabled = false; delete resume.dataset.wait; resume.title = 'No conflicts left: continue the task'; card.dataset.resolved = '1'; }
+    }
+  }
   function planCard(s) {
     const todos = s.todos || [];
     const d = el('div', 'turn assistant plancard');
@@ -1289,17 +1524,54 @@
     d.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b) { return; }
       if (b.dataset.a === 'build') { post({ type: 'buildPlan', sessionId: s.id }); b.disabled = true; b.textContent = 'Building…'; }
-      else if (b.dataset.a === 'revise') { if (state.session && state.session.id === s.id) { setMode('plan'); } state.revising = s.id; syncPlaceholder(); els.input.focus(); }
+      else if (b.dataset.a === 'revise') { if (state.session && state.session.id === s.id && state.session.mode !== 'plan') { setMode('plan'); } state.revising = s.id; syncPlaceholder(); els.input.focus(); }
       else if (b.dataset.a === 'open' && s.plan.file) { post({ type: 'openFile', path: s.plan.file }); }
       else if (b.dataset.a === 'copy') { navigator.clipboard.writeText(todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')).then(() => toast('Checklist copied')); }
       else if (b.dataset.a === 'detail') { const prev = d.previousElementSibling; if (prev && prev.classList.contains('assistant')) { prev.scrollIntoView({ behavior: calmMotion() ? 'auto' : 'smooth', block: 'start' }); } }
     };
     return d;
   }
+  /** The context strip's status: the first thing that needs attention, else Ready. */
+  function ctxStatus() {
+    const ws = state.workspace || {}; const n = ws.interventions || 0;
+    if (!state.models.length && state.modelsLoading) { return { cls: 'busy', spin: true, text: 'Finding models…' }; }
+    if (!state.models.length) { return { cls: 'warn', text: 'No model, set one up', action: 'setup', title: 'Set up a local model, look for model servers, or add a cloud provider' }; }
+    if (n) { return { cls: 'warn', text: `${n} task${n === 1 ? ' needs' : 's need'} you · Review`, action: 'interventions', title: 'Self-healing stopped and is waiting for you: open the queue' }; }
+    if (ws.indexing) { return { cls: 'busy', spin: true, text: `Indexing ${Number(ws.indexing).toLocaleString()} files…` }; }
+    if (state.offline) { return { cls: 'muted', text: state.models.some((x) => !x.remote) ? 'Offline · local models only' : 'Offline', title: 'No network: cloud models and web tools are unavailable' }; }
+    return { cls: 'ok', text: 'Ready', title: 'A model is available' };
+  }
+  /** Folder · branch · status under the welcome heading; redrawn in place when any of them changes. */
+  function renderCtxStrip(strip) {
+    strip = strip || els.messages.querySelector(':scope > .empty .ctx-strip'); if (!strip) { return; }
+    const ws = state.workspace || {}; const st = ctxStatus(); const parts = [];
+    // No folder (the window has none): a chat that cannot touch files; Open folder is the way out.
+    if (ws.folders === 0) { parts.push(`<span class="seg folder">${I.folder}<span class="t">No folder open · chat only</span></span><button class="link" data-a="openFolder">Open folder…</button>`); }
+    else {
+      if (ws.name) { parts.push(`<span class="seg folder" title="${esc(`Workspace: ${ws.name}${ws.folders > 1 ? ` (${ws.folders} folders)` : ''}`)}">${I.folder}<span class="t">${esc(ws.name)}</span></span>`); }
+      if (ws.branch) { parts.push(`<span class="seg branch" title="${esc(`Git branch: ${ws.branch}`)}">${I.git}<span class="t">${esc(ws.branch)}</span></span>`); }
+    }
+    const lead = st.spin ? '<span class="spinner" aria-hidden="true"></span>' : '<i class="dot" aria-hidden="true"></i>';
+    parts.push(`<span class="seg status ${st.cls}"${st.title ? ` title="${esc(st.title)}"` : ''}>${lead}${st.action ? `<button class="link" data-a="${st.action}">${esc(st.text)}</button>` : `<span class="t">${esc(st.text)}</span>`}</span>`);
+    const html = parts.join('');
+    if (strip.dataset.sig !== html) { strip.dataset.sig = html; strip.innerHTML = html; }
+  }
   function renderEmpty() {
-    // No greeting or explainer: a short list of things to start with, then the recent chats.
+    // A heading that says what this is for, the mode it will run in, where it runs, then things to start with and recent chats.
     const wrap = el('div', 'empty');
     const news = whatsNewCard(); if (news) { wrap.appendChild(news); }
+    const ws = state.workspace || {}; const noFolder = ws.folders === 0;
+    const hero = el('div', 'hero', `<h2>What are we building today?</h2><p class="sub">Ask a question, or describe a task: LocalPilot plans it, edits files, runs commands and checks the result.</p><p class="modeline"><span class="txt"></span> <span class="chg"><span aria-hidden="true">· </span><button class="link" data-a="mode" aria-haspopup="listbox" aria-label="Change mode">change</button></span></p>`);
+    hero.querySelector('[data-a="mode"]').onclick = (e) => { e.stopPropagation(); openModeMenu(); };
+    wrap.appendChild(hero);
+    const strip = el('div', 'ctx-strip'); strip.setAttribute('role', 'status'); strip.setAttribute('aria-label', 'Workspace and status');
+    strip.onclick = (e) => {
+      const a = e.target.closest('[data-a]'); if (!a) { return; }
+      if (a.dataset.a === 'openFolder') { post({ type: 'workspaceAction', action: 'openFolder' }); }
+      else if (a.dataset.a === 'interventions') { post({ type: 'workspaceAction', action: 'interventions' }); }
+      else if (a.dataset.a === 'setup') { openModelMenu(''); }
+    };
+    renderCtxStrip(strip); wrap.appendChild(strip);
     // Without a model nothing can answer: setting one up comes first, and the suggestions wait for it.
     const noModels = !state.models.length && !state.modelsLoading;
     if (noModels) {
@@ -1307,43 +1579,70 @@
       n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
-    wrap.appendChild(el('div', 'recent-h', 'Start with'));
-    const sug = el('div', 'suggestions');
-    // Suggestions name the file you are on (sent by the host as the active editor changes); without one, project-wide ones.
-    const file = state.activeFile ? base(state.activeFile) : '';
-    const picks = file ? [
-      [I.file, `Explain ${file}`, `Explain what ${state.activeFile} does and how it fits into the codebase.`, 'ask'],
-      [I.bug, `Fix problems in ${file}`, `Run get_diagnostics for ${state.activeFile} and fix every error.`, 'agent'],
-      [I.beaker, state.hasSelection ? 'Write tests for my selection' : `Write tests for ${file}`, state.hasSelection ? "Write unit tests for the selected code using the project's existing test framework." : `Write unit tests for ${state.activeFile} using the project's existing test framework.`, 'agent'],
-      [I.sparkle, 'Give me an overview of this project', 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.', 'ask'],
+    // One row per starter. `send` runs at once (in `mode` for that turn only); otherwise the chat switches to `mode` and
+    // the draft is prefilled, so the user finishes the sentence.
+    const row = (icon, label, tag, act, tagTitle) => {
+      const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span>${tag ? `<span class="mode${act.count ? ' count' : ''}"${tagTitle ? ` title="${esc(tagTitle)}"` : ''}>${esc(tag)}</span>` : ''}`);
+      b.title = noModels && !act.always ? 'Set up a model first' : act.title || act.send || label;
+      if (noModels && !act.always) { b.setAttribute('aria-disabled', 'true'); }
+      b.onclick = () => {
+        if (noModels && !act.always) { return; }
+        if (act.run) { act.run(); return; }
+        if (act.send) { els.input.value = act.send; sendCurrent(true, { modeOverride: act.mode }); return; }
+        if (act.mode) { setMode(act.mode); }
+        for (const ref of act.attach || []) { addAttachment(ref); }
+        els.input.value = act.fill || ''; autoGrow(); updateSendEnabled(); syncEmptyChrome();
+        els.input.focus(); els.input.selectionStart = els.input.selectionEnd = els.input.value.length;
+      };
+      return b;
+    };
+    const group = (title, cls, rows) => { const g = el('div', `sgroup ${cls}`); g.appendChild(el('div', 'recent-h', esc(title))); const list = el('div', 'suggestions'); rows.forEach((r) => list.appendChild(r)); g.appendChild(list); wrap.appendChild(g); };
+    const errs = ws.errors || 0;
+    const OVERVIEW = 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.';
+    group('Start', 'starters', noFolder ? [
+      row(I.ask, 'Ask a coding question', 'Ask', { mode: 'ask', title: 'Switches to Ask and puts the cursor in the message box' }),
+      row(I.bug, 'Explain an error', 'Ask', { mode: 'ask', fill: 'Explain this error and how to fix it:\n', title: 'Paste the error after the prompt' }),
+      row(I.file, 'Write a snippet', 'Ask', { mode: 'ask', fill: 'Write a ', title: 'Code in the answer, nothing is written to disk' }),
+      row(I.folder, 'Open a folder', '', { always: true, run: () => post({ type: 'workspaceAction', action: 'openFolder' }), title: 'Open a folder so LocalPilot can edit files and run commands' }),
     ] : [
-      [I.sparkle, 'Give me an overview of this project', 'Explore the workspace structure and summarise what this project does, its main modules and how to build/run it.', 'ask'],
-      [I.search, 'Where should I start reading?', 'Find the entry points of this project and the five files a newcomer should read first, with one line on each.', 'ask'],
-      [I.bug, 'Find and fix errors in the workspace', 'Run get_diagnostics for the workspace and fix every error.', 'agent'],
-    ];
-    for (const [icon, label, prompt, mode] of picks) {
-      const b = el('button', 'suggestion', `<span class="ico">${icon}</span><span class="lbl">${esc(label)}</span><span class="mode" title="${mode === 'ask' ? 'Answers without changing files' : 'Edits files and runs commands'}">${mode === 'ask' ? 'Ask' : 'Agent'}</span>`);
-      b.title = noModels ? 'Set up a model first' : prompt;
-      if (noModels) { b.setAttribute('aria-disabled', 'true'); }
-      // The suggestion's mode applies to that turn only: the chat keeps the mode the user picked.
-      b.onclick = () => { if (noModels) { return; } els.input.value = prompt; sendCurrent(true, { modeOverride: mode }); };
-      sug.appendChild(b);
+      row(I.sparkle, 'Build a feature', 'Agent', { mode: 'agent', fill: 'Build ', title: 'Switches to Agent and starts the request: describe the feature' }),
+      // With errors in the Problems panel they go along as context (@problems) and the tag counts them.
+      row(I.bug, 'Fix a bug', errs ? `${errs.toLocaleString()} error${errs === 1 ? '' : 's'}` : 'Debug', { mode: 'debug', fill: 'Fix: ', count: errs > 0, attach: errs ? ['problems'] : [], title: errs ? `Switches to Debug and attaches the ${errs} error${errs === 1 ? '' : 's'} VS Code is showing` : 'Switches to Debug: describe the bug or paste the error' }, errs ? 'Errors in the Problems panel' : 'Runs in Debug mode'),
+      row(I.agent, 'Create an agent', 'Subagent', { mode: 'agent', fill: '/agent new ', title: 'Describe a job; LocalPilot writes a reusable subagent for it (.localpilot/agents)' }),
+      row(I.search, 'Understand codebase', 'Ask', { mode: 'ask', send: OVERVIEW }),
+    ]);
+    // The file you are on (sent by the host as the active editor changes): actions on it, sent at once.
+    const file = !noFolder && state.activeFile ? base(state.activeFile) : '';
+    if (file) {
+      group(`For ${file}`, 'forfile', [
+        row(I.file, `Explain ${file}`, 'Ask', { mode: 'ask', send: `Explain what ${state.activeFile} does and how it fits into the codebase.` }),
+        row(I.bug, `Fix problems in ${file}`, 'Agent', { mode: 'agent', send: `Run get_diagnostics for ${state.activeFile} and fix every error.` }),
+        row(I.beaker, state.hasSelection ? 'Write tests for my selection' : `Write tests for ${file}`, 'Agent', { mode: 'agent', send: state.hasSelection ? "Write unit tests for the selected code using the project's existing test framework." : `Write unit tests for ${state.activeFile} using the project's existing test framework.` }),
+      ]);
     }
-    wrap.appendChild(sug);
-    // Pick up where you left off: the latest chats with something in them, one click away.
-    const recent = state.sessions.filter((x) => x.messageCount > 0 && x.id !== (state.session && state.session.id)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
+    // Pick up where you left off: the latest chats with something in them (five on tall panels, three on short ones).
+    const recent = state.sessions.filter((x) => x.messageCount > 0 && x.id !== (state.session && state.session.id)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
     if (recent.length) {
-      const r = el('div', 'recent', `<div class="recent-h">Recent<button data-a="all">All chats</button></div>`);
+      const r = el('div', 'recent', `<div class="recent-h">Recent<button data-a="all" title="Search every chat and its messages">Search all chats</button></div>`);
       for (const x of recent) {
-        const row = el('button', 'recent-row', `<span class="ico">${state.running.has(x.id) ? LIVE_DOT : x.pinned ? I.pin : I.reply}</span><span class="t">${esc(x.title || 'New chat')}</span><span class="when">${esc(timeAgo(x.updatedAt))}</span>`);
-        row.title = `Open “${x.title || 'New chat'}”`;
+        const v = modeView(x);
+        const row = el('button', 'recent-row', `<span class="ico">${state.running.has(x.id) ? LIVE_DOT : v.icon}</span><span class="t">${esc(x.title || 'New chat')}</span><span class="when">${esc(timeAgo(x.updatedAt))}</span>`);
+        row.title = `Open “${x.title || 'New chat'}” · ${v.label}`;
         row.onclick = () => historyOpen(x.id);
         r.appendChild(row);
       }
+      // History opens with its search box focused.
       r.querySelector('[data-a="all"]').onclick = () => els.history.click();
       wrap.appendChild(r);
     }
     els.messages.appendChild(wrap);
+    syncModeLine();
+  }
+  /** The hint row and the disclaimer belong to a chat with nothing in it yet; the hints step aside once you type. */
+  function syncEmptyChrome() {
+    const s = state.session; const empty = !!s && !s.messages.length && !state.running.has(s.id) && !state.pendingSend.has(s.id) && !state.live.has(s.id);
+    if (els.hints) { els.hints.classList.toggle('hidden', !empty || !!els.input.value.trim()); }
+    if (els.disclaimer) { els.disclaimer.classList.toggle('hidden', !empty); }
   }
 
   // ------------------------------------------------------------------ live streaming
@@ -1352,7 +1651,40 @@
   // settles it becomes "Worked for 1m 12s · 9 steps · …" and folds the steps away on click (as Copilot does).
   const PHASES = { read_file: 'Reading the code', list_dir: 'Exploring the workspace', grep_search: 'Searching the code', file_search: 'Searching the code', find_symbol: 'Looking up symbols', find_references: 'Looking up references', gather_context: 'Gathering context', get_editor_state: 'Reading the editor', get_diagnostics: 'Checking for errors', edit_file: 'Editing files', apply_patch: 'Editing files', write_file: 'Writing files', create_directory: 'Writing files', delete_path: 'Deleting files', run_command: 'Running a command', web_search: 'Researching on the web', web_fetch: 'Reading documentation', browser_inspect: 'Checking the UI', browser_screenshot: 'Checking the UI', open_browser: 'Opening the browser', manage_todos: 'Planning', load_skill: 'Loading a skill', memory_read: 'Recalling notes', memory_list: 'Recalling notes', memory_save: 'Saving a note', ask_user: 'Waiting for your answer', run_subagent: 'Delegating', run_parallel_subagents: 'Coordinating workers', run_todos_parallel: 'Coordinating workers' };
   function workStrip() { return el('div', 'work running', `<span class="ico">${I.spin}</span><span class="phase">Starting…</span><span class="facts"></span><span class="time"></span><span class="chev">${I.chev}</span>`); }
-  function setPhase(live, text) { if (live.work && text && live.phase !== text) { live.phase = text; live.work.querySelector('.phase').textContent = text; } }
+  function setPhase(live, text) { if (live.work && text && live.phase !== text) { live.phase = text; if (!live.pausedAt) { live.work.querySelector('.phase').textContent = text; } } }
+  const SLOW_TIP = 'Still running; Esc stops the run';
+  /** Time the turn has been working: paused stretches do not count. */
+  function liveElapsed(live, now) { return Math.max(0, now - live.startedAt - (live.pausedMs || 0) - (live.pausedAt ? now - live.pausedAt : 0)); }
+  /** The work strip while the loop holds at a step boundary: pause icon, "Paused after step N", frozen timer, Resume. */
+  function syncWorkPause(live, now) {
+    if (!live.work) { return; }
+    const p = state.paused.get(live.sid); const held = !!(p && p.paused && p.holding);
+    if (held && !live.pausedAt) {
+      live.pausedAt = now;
+      live.work.classList.add('paused');
+      live.work.querySelector('.ico').innerHTML = I.pause;
+      const n = turnStats(live.root).steps;
+      live.work.querySelector('.phase').textContent = n ? `Paused after step ${n}` : 'Paused';
+      const b = el('button', 'btn sm work-resume', `${I.play}<span>Resume</span>`); b.type = 'button'; b.title = `Resume (${kb('Alt+Esc')})`;
+      b.onclick = (e) => { e.stopPropagation(); post({ type: 'resume', sessionId: live.sid }); b.disabled = true; };
+      live.work.querySelector('.chev').before(b);
+    } else if (!held && live.pausedAt) {
+      live.pausedMs = (live.pausedMs || 0) + (now - live.pausedAt); live.pausedAt = 0;
+      live.work.classList.remove('paused');
+      live.work.querySelector('.ico').innerHTML = I.spin;
+      live.work.querySelector('.phase').textContent = live.phase || 'Working';
+      const b = live.work.querySelector('.work-resume'); if (b) { b.remove(); }
+    }
+  }
+  /** Elapsed time on a running step's row; after 30 s it turns `slow` (Esc stops the run). Frozen while paused. */
+  function stepClock(n, now) {
+    if (!n.__t0 || !n.classList.contains('running') || n.classList.contains('subhost') || n.classList.contains('subagent') || n.classList.contains('card')) { return; }
+    const ms = now - n.__t0; if (ms < 3000) { return; }
+    const meta = n.querySelector(':scope > summary .meta'); if (!meta) { return; }
+    let t = meta.querySelector(':scope > .el'); if (!t) { t = el('span', 'el', ''); meta.appendChild(t); }
+    t.textContent = fmtDur(ms);
+    if (ms >= 30000 && !n.classList.contains('slow')) { n.classList.add('slow'); if (!n.title) { n.title = SLOW_TIP; } }
+  }
   /** What a turn did, counted from its rows — the same for the live turn and a replayed one. A worker's own rows are not the parent's steps. */
   function turnStats(root) {
     const st = { steps: 0, files: new Set(), searches: 0, edits: new Set(), cmds: 0, web: 0, workers: 0 };
@@ -1382,18 +1714,27 @@
     if (st.workers) { p.push(n(st.workers, 'worker')); }
     return p.join(' · ');
   }
+  /** Checklist items a worker failed (skipped with a reason other than "Not run"; see run_todos_parallel). */
+  function todoFailed(t) { return t.status === 'skipped' && !!t.result && !/^Not run\b/.test(String(t.result)); }
+  /** "6 steps · 2 files edited · 1 task failed": only the failed part is in the error colour. */
+  function workFacts(work, text, failed) { work.querySelector('.facts').innerHTML = `${esc(text)}${failed ? `${text ? ' · ' : ''}<b class="bad">${failed} task${failed === 1 ? '' : 's'} failed</b>` : ''}`; }
+  function failedTodos() { const todos = state.session && Array.isArray(state.session.todos) ? state.session.todos : []; return todos.filter(todoFailed); }
   function fmtDur(ms) { const s = Math.max(1, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
   function updateWork(live) {
     if (!live.work || live.workPending) { return; }
     live.workPending = true;
-    requestAnimationFrame(() => { live.workPending = false; if (live.work) { live.work.querySelector('.facts').textContent = factsText(turnStats(live.root)); } });
+    requestAnimationFrame(() => { live.workPending = false; if (live.work) { workFacts(live.work, factsText(turnStats(live.root)), state.session && state.session.id === live.sid ? failedTodos().length : 0); } });
   }
-  function settleWork(root, work, st, ms, failed) {
+  function settleWork(root, work, st, ms, failed, stopped) {
     if (!st.steps && !st.workers) { work.remove(); return; }
-    work.className = `work done${failed ? ' failed' : ''}`;
-    work.querySelector('.ico').innerHTML = failed ? I.x : I.check;
-    work.querySelector('.phase').textContent = ms ? `${failed ? 'Stopped after' : 'Worked for'} ${fmtDur(ms)}` : 'Work done';
-    work.querySelector('.facts').textContent = factsText(st);
+    // Stopped by the user is not a failure: muted stop icon and its own wording (Continue / Discard come with the latest turn).
+    work.className = `work done${stopped ? ' stopped' : failed ? ' failed' : ''}`;
+    work.querySelector('.ico').innerHTML = stopped ? I.stop : failed ? I.x : I.check;
+    work.querySelector('.phase').textContent = stopped ? (ms ? `Stopped by you after ${fmtDur(ms)}` : 'Stopped by you') : ms ? `${failed ? 'Stopped after' : 'Worked for'} ${fmtDur(ms)}` : 'Work done';
+    const res = work.querySelector('.work-resume'); if (res) { res.remove(); }
+    // The checklist's failed items belong to the latest turn only (the todos are the chat's current plan).
+    const ft = root.classList.contains('live') || !root.nextElementSibling ? failedTodos().length : 0;
+    workFacts(work, factsText(st), ft);
     work.querySelector('.time').textContent = '';
     work.title = 'Show or hide the steps of this turn';
     work.onclick = () => { root.classList.toggle('folded'); };
@@ -1415,10 +1756,16 @@
       if (!live.work) { continue; }
       any = true;
       if (state.session && state.session.id === live.sid) {
+        syncWorkPause(live, now);
+        if (live.pausedAt) { continue; }
         const rate = streamRate(live, now);
         const t = live.work.querySelector('.time');
-        t.textContent = rate ? `~${rate} tok/s · ${fmtDur(now - live.startedAt)}` : fmtDur(now - live.startedAt);
-        t.title = rate ? 'Model output speed over the last few seconds, and time since you sent' : 'Time since you sent';
+        const ms = liveElapsed(live, now);
+        t.textContent = rate ? `~${rate} tok/s · ${fmtDur(ms)}` : fmtDur(ms);
+        t.title = rate ? 'Model output speed over the last few seconds, and time spent working (pauses not counted)' : 'Time spent working since you sent (pauses not counted)';
+        for (const n of live.tools.values()) { stepClock(n, now); }
+        for (const n of live.subTools.values()) { stepClock(n, now); }
+        if (live.waitRow) { tickWait(live, now); }
       }
     }
     if (!any) { clearInterval(workTicker); workTicker = 0; }
@@ -1482,6 +1829,89 @@
     live.thinkingEl.querySelector(':scope > summary .meta').textContent = `${secs}s`;
     live.thinkingEl = null;
   }
+  // ---- slow model: the wait for the first token is a row in the transcript ("Loading gemma4:12b into memory · 24s"),
+  // with the limit it times out at, and Switch model / Stop once it has taken 20 s.
+  const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+  function waitText(p, secs) {
+    const name = p.name || modelName(p.model) || 'the model';
+    return p.phase === 'load' ? `Loading ${name} into memory · ${secs}s` : p.phase === 'queue' ? `Waiting for ${name}: busy with other requests · ${secs}s` : `${name} is reading the prompt · ${secs}s`;
+  }
+  function showWait(live, sid, p) {
+    if (p.done) { clearWait(live); return; }
+    const secs = Math.max(0, Number(p.seconds) || 0);
+    // A few seconds of prefill is normal; the row appears only when the wait is noticeable.
+    if (secs < 4 && !live.waitRow) { return; }
+    let row = live.waitRow && live.waitRow.isConnected ? live.waitRow : null;
+    if (!row) {
+      rotateBody(live);
+      row = el('div', 'note wait', `<span class="ico">${I.spin}</span><span class="t"></span><span class="lim"></span><span class="acts hidden"><button class="btn sm ghost" data-w="switch" title="Stop this request and send the message again with another model">${I.layers}<span>Switch model</span></button><button class="btn sm ghost" data-w="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop</span></button></span>`);
+      row.setAttribute('role', 'status');
+      row.onclick = (e) => {
+        const b = e.target.closest('button[data-w]'); if (!b) { return; }
+        if (b.dataset.w === 'stop') { post({ type: 'stop', sessionId: sid }); b.disabled = true; return; }
+        modelPickThen = (id) => { if (id && id !== live.waitRow?.__p?.model) { post({ type: 'switchModelAndRetry', sessionId: sid, model: id }); return true; } return false; };
+        openModelMenu();
+      };
+      live.root.insertBefore(row, live.body); live.waitRow = row;
+      clearTyping(live);
+    }
+    row.__p = p; row.__at = Date.now(); row.__secs = secs;
+    paintWait(row, secs);
+    followLive(live);
+  }
+  function paintWait(row, secs) {
+    const p = row.__p || {};
+    row.querySelector('.t').textContent = waitText(p, secs);
+    const lim = Number(p.limitSec) || 0;
+    row.querySelector('.lim').textContent = lim ? `times out at ${fmtClock(lim)}` : '';
+    row.querySelector('.acts').classList.toggle('hidden', secs < 20);
+    row.classList.toggle('long', lim > 0 && secs > lim * 0.75);
+  }
+  /** Between the host's once-a-second updates (or if they pause) the counter keeps moving. */
+  function tickWait(live, now) { const row = live.waitRow; if (!row || !row.isConnected || !row.__at) { return; } paintWait(row, row.__secs + Math.floor((now - row.__at) / 1000)); }
+  function clearWait(live) { if (live.waitRow) { live.waitRow.remove(); live.waitRow = null; } }
+  /** Output arrived after a retry: the retry row turns into "Recovered on attempt N". */
+  function retryRecovered(live) {
+    const row = live.retryRow; if (!row) { return; }
+    live.retryRow = null;
+    if (!row.isConnected) { return; }
+    row.className = 'note retry ok';
+    row.innerHTML = `<span class="ico">${I.check}</span><span>Recovered on attempt ${esc(row.dataset.attempt || '2')}</span>`;
+  }
+  // ---- model fallback: a note at the top of the turn says which model answers instead, with a way to keep it or go back.
+  function routeNote(live, sid, p) {
+    if (!p.used || !p.wanted) { return; }
+    state.rerouted.set(sid, p); if (state.session && state.session.id === sid) { syncModel(); }
+    const old = live.root.querySelector(':scope > .note.route'); if (old) { old.remove(); }
+    const wanted = modelName(p.wanted) || p.wanted; const used = p.usedName || modelName(p.used) || p.used;
+    const n = el('div', 'note route', `<span class="ico">${I.warn}</span><span class="t"><b>${esc(wanted)}</b> ${p.unavailable ? 'is not answering' : 'is not available'}. This turn uses <b>${esc(used)}</b>${p.cloud ? ' <span class="badge cloud" title="Cloud model: prompts leave this machine">cloud</span>' : ''}.</span><span class="acts"><button class="btn sm ghost" data-r="keep" title="Make ${esc(used)} this chat's model">Use for this chat</button><button class="btn sm ghost" data-r="retry" title="Stop and send the message again with ${esc(wanted)}">${I.refresh}<span>Retry with ${esc(short(wanted, 24))}</span></button></span>`);
+    n.title = p.reason || '';
+    n.onclick = (e) => {
+      const b = e.target.closest('button[data-r]'); if (!b) { return; }
+      if (b.dataset.r === 'keep') { post({ type: 'setModel', sessionId: sid, model: p.used, makeDefault: false }); if (state.session && state.session.id === sid) { state.session.model = p.used; } state.rerouted.delete(sid); syncModel(); n.querySelector('.acts').innerHTML = `<span class="muted">${I.check} ${esc(used)} is now this chat's model</span>`; }
+      else { post({ type: 'switchModelAndRetry', sessionId: sid, model: p.wanted }); b.disabled = true; }
+    };
+    const anchor = live.work && live.work.parentElement === live.root ? live.work.nextSibling : live.root.firstChild;
+    live.root.insertBefore(n, anchor);
+  }
+  // ---- todo ↔ step links: rows carry data-todo; a linked checklist item scrolls to its first step.
+  function linkTodo(id) { const li = els.tasksList && els.tasksList.querySelector(`li.todo[data-id="${CSS.escape(id)}"]`); if (li && !li.classList.contains('linked')) { li.classList.add('linked'); li.tabIndex = 0; li.setAttribute('role', 'button'); } }
+  // ---- approval ↔ step: the row waiting on a prompt reads "Needs approval · Review".
+  const APPROVAL_TOOLS = { terminal: ['run_command'], write: ['edit_file', 'write_file', 'apply_patch', 'create_directory'], delete: ['delete_path'], network: ['web_fetch', 'web_search', 'browser_screenshot', 'browser_inspect', 'open_browser'] };
+  function markApprovalRow(a) {
+    const live = state.live.get(a.sessionId); if (!live) { return; }
+    const tools = APPROVAL_TOOLS[a.kind];
+    const rows = [...live.tools.values()].filter((n) => n.classList.contains('running') && !n.__approval && (n.classList.contains('card') ? !tools || tools.includes(n.dataset.write === '1' ? 'write_file' : 'edit_file') : !tools ? /^mcp_/.test(n.dataset.tool || '') : tools.includes(n.dataset.tool)));
+    const row = rows.pop(); if (!row) { return; }
+    row.__approval = a.id; row.classList.add('needs');
+    const where = row.classList.contains('card') ? row.querySelector(':scope > .card-head .stat') : row.querySelector(':scope > summary .meta');
+    if (!where) { return; }
+    const tag = el('span', 'needs-tag', `<span class="lbl">Needs approval</span><i>·</i><button class="link" type="button" title="Go to the approval prompt" aria-label="Review the approval this step is waiting for">Review</button>`);
+    tag.querySelector('button').onclick = (e) => { e.preventDefault(); e.stopPropagation(); const d = els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`); if (d) { d.scrollIntoView({ block: 'nearest' }); if (d._focusFirst) { d._focusFirst(); } } };
+    where.prepend(tag);
+  }
+  function unmarkApproval(node) { if (!node || !node.__approval) { return; } node.__approval = null; node.classList.remove('needs'); const t = node.querySelector('.needs-tag'); if (t) { t.remove(); } }
+  function unmarkApprovalId(id) { for (const live of state.live.values()) { for (const n of live.tools.values()) { if (n.__approval === id) { unmarkApproval(n); } } } }
   /** An `error` event's text: a plain string (older transcripts), or `{ message, kind, provider }`; the mistake limit has `latest`. */
   function errorText(p) { return p && typeof p === 'object' ? String(p.message || p.latest || 'Error') : String(p); }
   /** The kind of a stored error (the transcript keeps only its text), read from the wording describeModelError uses. */
@@ -1495,14 +1925,26 @@
   /** Ollama is the likely server when the chat's model is on it, or when no model was found at all. */
   function guessProvider() { const cm = currentModel(); return cm ? (/ollama/i.test(`${cm.providerId} ${state.providerNames && state.providerNames[cm.providerId] || ''}`) && !cm.remote ? 'ollama' : '') : (!state.models.length ? 'ollama' : ''); }
   /** Error row for an `error` event or a stored failure; the mistake limit names the latest failure and how to carry on. */
+  /** The error box's title by kind: what went wrong in a few words, the message below says why and what to do. */
+  const ERR_TITLE = { connection: 'Cannot reach the model server', auth: 'API key rejected', quota: 'Out of credits', ratelimit: 'Rate limited', stall: 'Model stopped responding', context: 'Prompt too large', server: 'Model server error', mistake_limit: 'Stopped after repeated errors', other: 'Something went wrong' };
+  function errorHead(kind, text) {
+    const h = el('div', 'err-head', `<span class="ico">${I.warn}</span><b>${esc(ERR_TITLE[kind] || ERR_TITLE.other)}</b><button class="err-copy" type="button" title="Copy error" aria-label="Copy error">${I.copy}</button>`);
+    h.querySelector('.err-copy').onclick = (e) => { e.stopPropagation(); copyTo(e.currentTarget, text); };
+    return h;
+  }
   function errorBox(p) {
     if (p && typeof p === 'object' && p.kind === 'mistake_limit') {
-      return el('div', 'error-box mistake-limit', `<span class="msg">LocalPilot ran into ${esc(p.count)} errors in a row and stopped.<br>Latest: <code>${esc(p.latest || 'unknown error')}</code><br>Send a message to guide it and continue.</span>`);
+      const box = el('div', 'error-box mistake-limit', `<span class="msg">LocalPilot ran into ${esc(p.count)} errors in a row and stopped.<br>Latest: <code>${esc(p.latest || 'unknown error')}</code><br>Tell it what to do differently and it carries on, or go back to before this turn.</span>`);
+      box.dataset.kind = 'mistake_limit';
+      box.prepend(errorHead('mistake_limit', `LocalPilot ran into ${p.count} errors in a row and stopped. Latest: ${p.latest || 'unknown error'}`));
+      return box;
     }
     const box = el('div', 'error-box', `<span class="msg">${esc(errorText(p))}</span>`);
     const obj = p && typeof p === 'object';
     box.dataset.kind = obj && p.kind ? String(p.kind) : guessErrorKind(errorText(p));
     box.dataset.provider = obj && p.provider ? String(p.provider) : guessProvider();
+    box.prepend(errorHead(box.dataset.kind, errorText(p)));
+    box.setAttribute('role', 'alert');
     return box;
   }
   /** Inline note under a retracted reply: why the model is being asked to act instead of the turn ending. */
@@ -1568,9 +2010,11 @@
       const st = String(c.status || ''); const sym = st === 'passed' ? '✓' : st === 'failed' ? '✗' : st === 'timeout' ? '⏱' : st === 'skipped' ? '' : '…';
       const ms = typeof c.ms === 'number' && st !== 'skipped' ? (c.ms >= 1000 ? `${(c.ms / 1000).toFixed(1)}s` : `${Math.round(c.ms)}ms`) : '';
       const tip = st === 'skipped' ? `Skipped${c.skipReason ? `: ${c.skipReason}` : ''}` : `${c.id}: ${st}${ms ? ` in ${ms}` : ''}`;
-      return `<span class="rchip ${esc(st)}" title="${esc(tip)}">${sym ? `<b>${sym}</b>` : ''}<span class="n">${esc(c.id)}</span>${st === 'skipped' ? '<i>skipped</i>' : ms ? `<i>${esc(ms)}</i>` : ''}</span>`;
+      // A failed check with an excerpt expands (click / Enter) to show what failed.
+      const ex = c.excerpt && (st === 'failed' || st === 'timeout') ? ` data-ex="${esc(c.id)}" tabindex="0" role="button" aria-expanded="false"` : '';
+      return `<span class="rchip ${esc(st)}" title="${esc(ex ? `${tip} · show what failed` : tip)}"${ex}>${sym ? `<b>${sym}</b>` : ''}<span class="n">${esc(c.id)}</span>${st === 'skipped' ? '<i>skipped</i>' : ms ? `<i>${esc(ms)}</i>` : ''}</span>`;
     };
-    const patch = (x) => `<li class="${x.result === 'rolled_back' ? 'rb' : ''}" title="${esc(x.file)}${x.result ? ` (${esc(String(x.result).replace(/_/g, ' '))})` : ''}"><span class="f">${esc(x.file)}</span><span class="a">+${esc(x.added || 0)}</span><span class="r">−${esc(x.removed || 0)}</span></li>`;
+    const patch = (x) => `<li class="${x.result === 'rolled_back' ? 'rb' : ''}" title="${esc(x.file)}${x.result ? ` (${esc(String(x.result).replace(/_/g, ' '))})` : ''} · open its diff" data-file="${esc(x.file)}" tabindex="0" role="button"><span class="f">${esc(x.file)}</span><span class="a">+${esc(x.added || 0)}</span><span class="r">−${esc(x.removed || 0)}</span></li>`;
     const checks = Array.isArray(p.checks) ? p.checks : []; const patches = Array.isArray(p.patches) ? p.patches : [];
     // Once the card stopped, each attempt's patches that are still applied can be rolled back (all of them when the
     // payload does not say which attempt wrote a patch).
@@ -1605,10 +2049,25 @@
     const iv = p.intervention;
     const reason = iv ? REC_REASON[iv.reason] || String(iv.reason || '').replace(/_/g, ' ') : out === 'failed' ? 'recovery failed' : 'the task is not finished';
     fin.innerHTML = `${I.warn}<span>Needs you: ${esc(reason)}</span>`;
+    // A git conflict lists its files, each with its own merge editor; Resume stays off until git reports none left.
+    const conflict = iv && iv.reason === 'git_conflict';
+    const files = conflict && Array.isArray(iv.files) ? iv.files : [];
+    if (files.length) { fin.insertAdjacentHTML('beforeend', `<ul class="rec-conflicts">${files.map((f) => `<li data-file="${esc(f)}"><span class="f" title="${esc(f)}">${esc(f)}</span><button class="btn sm" type="button" data-merge="${esc(f)}" title="Open ${esc(f)} in the merge editor">Open in merge editor</button></li>`).join('')}</ul>`); }
+    if (iv && iv.next) { fin.insertAdjacentHTML('beforeend', `<div class="rec-next">${esc(iv.next)}</div>`); }
+    if (conflict) {
+      card.dataset.conflict = '1';
+      fin.onclick = (e) => { const b = e.target.closest('button[data-merge]'); if (b) { recPost(card.dataset.sid, card.dataset.rid || p.id, 'openMergeEditor', { file: b.dataset.merge }); } };
+      post({ type: 'checkConflicts', sessionId: card.dataset.sid });
+      if (typeof setInterval === 'function' && !card.__poll) { card.__poll = setInterval(() => { if (!card.isConnected || card.dataset.conflict !== '1' || (card.__p && card.__p.done)) { clearInterval(card.__poll); card.__poll = 0; return; } post({ type: 'checkConflicts', sessionId: card.dataset.sid }); }, 5000); }
+    }
     // Accepting a risk is only ever offered for a security finding.
     const sec = p.category === 'security' || (iv && iv.reason === 'security');
-    const acts = (iv && Array.isArray(iv.nextActions) ? iv.nextActions : []).filter((a) => a && a.action && (a.action !== 'acceptRisk' || sec));
-    if (acts.length && !p.done) { fin.appendChild(recActions(card, p, acts)); }
+    const acts = (iv && Array.isArray(iv.nextActions) ? iv.nextActions : []).filter((a) => a && a.action && (a.action !== 'acceptRisk' || sec) && !(a.action === 'openMergeEditor' && files.length));
+    if (acts.length && !p.done) {
+      const box = recActions(card, p, acts); fin.appendChild(box);
+      const resume = conflict && box.querySelector('button[data-ra="resume"]');
+      if (resume && !card.dataset.resolved) { resume.disabled = true; resume.dataset.wait = '1'; resume.title = 'Resolve the conflicts first (save the merged files); this turns on once git reports none left'; }
+    }
   }
   /**
    * Webview -> host `{ type: 'recoveryAction', sessionId, recoveryId, action, text?, attempt? }`: `text` is the guidance of
@@ -1654,10 +2113,24 @@
     recFinal(card, p);
   }
   function recCardEl(sid, p) {
-    const card = el('div', 'rec running', `<div class="rec-head"><span class="ico">${I.refresh}</span><span class="t"></span></div><div class="rec-body"></div><div class="rec-verify"><div class="rec-vh">Verification</div><div class="rec-rows"></div></div><div class="rec-final"></div>`);
+    const card = el('div', 'rec running', `<div class="rec-head"><span class="ico">${I.refresh}</span><span class="t"></span><button class="link rec-details" type="button" title="Open this chat's recovery in the self-healing dashboard">Details</button></div><div class="rec-body"></div><div class="rec-verify"><div class="rec-vh">Verification</div><div class="rec-rows"></div></div><div class="rec-final"></div>`);
     card.dataset.sid = sid; card.dataset.rid = p.id || '';
     card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Self-healing');
-    card.querySelector(':scope > .rec-body').onclick = (e) => {
+    card.querySelector(':scope > .rec-head .rec-details').onclick = () => post({ type: 'openRecovery', sessionId: card.dataset.sid });
+    const body = card.querySelector(':scope > .rec-body');
+    // Enter / Space on a chip or patch row acts like a click (they are role=button).
+    body.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-ex], li[data-file]')) { e.preventDefault(); e.target.click(); } };
+    body.onclick = (e) => {
+      const chip = e.target.closest('[data-ex]');
+      if (chip) {
+        const c = ((card.__p && card.__p.checks) || []).find((x) => x.id === chip.dataset.ex); const host = chip.closest('.rec-checks'); if (!c || !host) { return; }
+        const open = host.nextElementSibling && host.nextElementSibling.classList.contains('rec-ex') && host.nextElementSibling.dataset.id === c.id ? host.nextElementSibling : null;
+        for (const x of body.querySelectorAll('.rec-ex')) { x.remove(); } for (const x of body.querySelectorAll('[data-ex]')) { x.setAttribute('aria-expanded', 'false'); }
+        if (!open) { const pre = el('pre', 'rec-ex'); pre.dataset.id = c.id; pre.textContent = c.excerpt; host.after(pre); chip.setAttribute('aria-expanded', 'true'); }
+        return;
+      }
+      const row = e.target.closest('li[data-file]');
+      if (row && !e.target.closest('button')) { post({ type: 'showDiff', sessionId: card.dataset.sid, fsPath: row.dataset.file }); return; }
       const b = e.target.closest('button[data-rb]'); const cur = card.__p; if (!b || b.disabled || !cur) { return; }
       const k = b.dataset.rb;
       recPost(card.dataset.sid, card.dataset.rid || cur.id, 'rollback', k ? { attempt: Number(k) } : null);
@@ -1754,7 +2227,9 @@
   function renderInterrupted() {
     for (const n of els.messages.querySelectorAll(':scope > .rec-int')) { n.remove(); }
     const s = state.session; const st = s && state.interrupted.get(s.id);
-    if (!st || state.running.has(s.id) || state.live.has(s.id)) { return; }
+    if (!s || state.running.has(s.id) || state.live.has(s.id)) { return; }
+    // No recovery to resume: a plain run cut off by a reload gets the Run interrupted card (drawn outside this section).
+    if (!st) { if (typeof renderRunInterrupted === 'function') { renderRunInterrupted(s); } return; }
     const n = typeof st.attempt === 'number' ? st.attempt : Array.isArray(st.attempts) ? st.attempts.length : 0;
     const last = Array.isArray(st.attempts) && st.attempts.length ? st.attempts[st.attempts.length - 1] : null;
     const cat = st.category || (last && last.category);
@@ -1763,8 +2238,13 @@
     const facts = [ph ? `Stopped while ${REC_PHASE[ph] || ph}` : 'Stopped before it finished', n && `attempt ${n}${st.max ? `/${st.max}` : ''}`, cat && (REC_CAT[cat] || cat)].filter(Boolean).join(' · ');
     const fails = (Array.isArray(st.active) ? st.active : []).slice(0, 3).map((f) => `<li>${f.code ? `<code>${esc(f.code)}</code> ` : ''}${short(String(f.message || ''), 120)}${f.file ? ` <span class="at">${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</span>` : ''}</li>`).join('');
     const cause = (st.intervention && st.intervention.rootCause) || (last && last.rootCause) || st.rootCause;
-    const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button><button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">Dismiss</button></div></div>`);
+    // The files changed so far (not yet kept or reverted), so Resume / Rollback are not a blind choice.
+    const changed = (state.changes && state.changes.get(s.id)) || [];
+    const files = changed.slice(0, 6).map((f) => `<li title="${esc(f.path || f.fsPath || '')}">${esc(f.path || f.fsPath || '')}</li>`).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
+    const review = changed.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made so far">${I.diff || ''}<span>Review changes so far</span></button>` : '';
+    const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}${files ? `<div class="rec-vh">${changed.length} file${changed.length === 1 ? '' : 's'} changed so far</div><ul class="rec-files">${files}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button>${review}<button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">Dismiss</button></div></div>`);
     card.querySelector('.rec-acts').onclick = (e) => {
+      const r = e.target.closest('button[data-run]'); if (r) { post({ type: 'runAction', sessionId: s.id, action: r.dataset.run }); return; }
       const b = e.target.closest('button[data-ra]'); if (!b) { return; }
       recPost(s.id, recInterruptedId(s.id, st), b.dataset.ra);
       if (b.dataset.ra === 'resume') { card.querySelectorAll('button').forEach((x) => { x.disabled = true; }); b.classList.add('busy'); }
@@ -1795,12 +2275,15 @@
     // The composer floats over the transcript, so the button sits just above the composer, not at the transcript's edge.
     if (show) { jump.style.top = `${Math.round((composerEl ? composerEl.getBoundingClientRect().top : m.getBoundingClientRect().bottom) - 40)}px`; }
   }
-  els.messages.addEventListener('scroll', () => { noteScroll(); updateJump(); }, { passive: true });
+  // A line cut by the transcript's top edge fades out instead of looking like it slides under the task card.
+  const markScrolled = () => { const m = els.messages; const top = m.scrollTop > 2; const below = m.scrollHeight - m.scrollTop - m.clientHeight > 2; if (m.classList.contains('scrolled') !== top) { m.classList.toggle('scrolled', top); } if (m.classList.contains('below') !== below) { m.classList.toggle('below', below); } };
+  els.messages.addEventListener('scroll', () => { noteScroll(); updateJump(); markScrolled(); }, { passive: true });
   window.addEventListener('resize', () => { noteScroll(); updateJump(); });
   // Sticky last user message: once the request the reader is looking at has scrolled out above the viewport, a strip
   // at the top of the transcript shows it; clicking it scrolls back to that message.
+  // A plain strip, not a tooltip: an aria-label names the action, and the "Jump" hint shows on hover and focus.
   const stickyUser = el('button', 'stickyuser hidden');
-  stickyUser.type = 'button'; stickyUser.title = 'Scroll to this message';
+  stickyUser.type = 'button'; stickyUser.setAttribute('aria-label', 'Your request. Jump back to this message');
   $('app').appendChild(stickyUser);
   let stickyTarget = null; let stickyPending = false;
   function updateStickyUser() {
@@ -1817,11 +2300,22 @@
     stickyTarget = target;
     if (!target) { stickyUser.classList.add('hidden'); return; }
     const ut = target.querySelector('.utext');
-    stickyUser.innerHTML = `${I.reply}<span class="txt"></span>`;
-    stickyUser.querySelector('.txt').textContent = ((ut ? ut.textContent : target.textContent) || '').replace(/\s+/g, ' ').trim();
-    stickyUser.style.top = `${Math.round(m.offsetTop)}px`;
+    const text = ((ut ? ut.textContent : target.textContent) || '').replace(/\s+/g, ' ').trim();
+    if (stickyUser.dataset.text !== text) {
+      stickyUser.dataset.text = text;
+      stickyUser.innerHTML = `<span class="lead">${I.reply}<span>You</span></span><span class="txt"></span><span class="go" aria-hidden="true">Jump<svg viewBox="0 0 16 16"><path d="M4.5 9.5 8 6l3.5 3.5"/></svg></span>`;
+      stickyUser.querySelector('.txt').textContent = text;
+    }
+    placeSticky();
     stickyUser.classList.remove('hidden');
   }
+  /** Pins the strip to the transcript's top edge, measured, not remembered: the task header above changes height on its own. */
+  function placeSticky() {
+    const top = Math.round(els.messages.getBoundingClientRect().top - $('app').getBoundingClientRect().top);
+    if (stickyUser.style.top !== `${top}px`) { stickyUser.style.top = `${top}px`; }
+  }
+  // The transcript moves when the task header collapses, expands or gets its badges: re-pin (and re-check) then.
+  if (typeof ResizeObserver === 'function') { new ResizeObserver(() => { markScrolled(); if (!stickyUser.classList.contains('hidden')) { scheduleSticky(); } }).observe(els.messages); }
   const scheduleSticky = () => { if (!stickyPending) { stickyPending = true; requestAnimationFrame(updateStickyUser); } };
   els.messages.addEventListener('scroll', scheduleSticky, { passive: true });
   window.addEventListener('resize', scheduleSticky);
@@ -1881,11 +2375,14 @@
     clearTyping(live);
     live.body.innerHTML = renderMarkdown(live.text);
     live.root.classList.remove('live');
-    for (const node of [...live.subTools.values(), ...live.tools.values()]) { if (node.classList.contains('running')) { finishTool(node, { isError: true, content: 'Cancelled' }); } }
+    for (const node of [...live.subTools.values(), ...live.tools.values()]) { if (node.classList.contains('running')) { finishTool(node, { isError: true, content: 'Cancelled' }, sessionId); } }
+    clearWait(live);
+    // "Exit 1 · the agent will read the output…" no longer holds once the run is over.
+    for (const n of live.root.querySelectorAll('.term-next[data-live]')) { if (live.stopped) { n.querySelector('span').textContent = 'run stopped'; delete n.dataset.live; } else { n.remove(); } }
     for (const c of live.subs.values()) { if (c.classList.contains('running')) { finishSubagent(c, '', 'Cancelled'); } }
     // Hook rows still running are left as they are: their result arrives after the turn (handleEvent's outside-a-run branch).
     finishThinking(live);
-    if (live.work) { settleWork(live.root, live.work, turnStats(live.root), live.durationMs || Date.now() - live.startedAt, live.failed); live.work = null; }
+    if (live.work) { settleWork(live.root, live.work, turnStats(live.root), live.durationMs || liveElapsed(live, Date.now()), live.failed && !live.stopped, !!live.stopped); live.work = null; }
     // The recovery cards (with their verification rows and any open guidance box) outlive the live turn: the reloaded transcript reuses them.
     const rc = state.recovery.get(sessionId); if (rc) { rc.els = [...live.root.querySelectorAll(':scope > .rec')]; for (const c of rc.els) { if (c.classList.contains('running')) { c.classList.remove('running'); c.querySelector(':scope > .rec-body .rec-decision')?.remove(); } } }
     // Where the turn sits in the transcript (its user message is before `liveFrom`): replay only puts the cards back there.
@@ -1919,7 +2416,7 @@
       return;
     }
     switch (e.type) {
-      case 'assistant_delta': live.text += e.payload; noteStream(live, String(e.payload).length); setPhase(live, 'Writing'); scheduleRender(live); break;
+      case 'assistant_delta': if (live.waitRow) { clearWait(live); } if (live.retryRow) { retryRecovered(live); } live.text += e.payload; noteStream(live, String(e.payload).length); setPhase(live, 'Writing'); scheduleRender(live); break;
       case 'steer': {
         // Queued rows become part of the transcript; what streams next belongs after them.
         rotateBody(live);
@@ -1928,6 +2425,7 @@
         showTyping(live); break;
       }
       case 'thinking_delta':
+        if (live.waitRow) { clearWait(live); } if (live.retryRow) { retryRecovered(live); }
         live.thinking += e.payload; noteStream(live, String(e.payload).length); clearTyping(live); setPhase(live, 'Thinking');
         if (!live.thinkingEl) {
           // Open while the model reasons so the user reads along; it folds back to "Thought …" once the answer starts.
@@ -1950,7 +2448,7 @@
           const d = e.payload.data || {}; const sub = live.subs.get(e.payload.childId);
           if (sub && d.name !== 'manage_todos') {
             const rows = d.origin === 'healing' ? recChild(sub, d, true) : sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
-            if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); }
+            if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); node.__t0 = Date.now(); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); }
           }
           childStatus(live, sid, e.payload.childId, e.payload.agent, plainLabel(toolLabel(d.name, d.args || {}, true)), visible);
           followLive(live);
@@ -1958,8 +2456,9 @@
         }
         const heal = e.payload.origin === 'healing';
         if (!heal) { rotateBody(live); }
+        clearWait(live); retryRecovered(live);
         const node = placeTool(heal ? recToolRows(live, sid) : live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
-        if (node) { live.tools.set(e.payload.id, node); }
+        if (node) { live.tools.set(e.payload.id, node); node.__t0 = Date.now(); if (e.payload.todoId) { node.dataset.todo = String(e.payload.todoId); linkTodo(String(e.payload.todoId)); } }
         setPhase(live, heal ? 'Verifying' : PHASES[e.payload.name] || 'Working'); updateWork(live);
         noteStatus(sid, toolLabel(e.payload.name, e.payload.args || {}, true).replace(/<[^>]+>/g, ''));
         followLive(live);
@@ -1973,7 +2472,7 @@
       }
       case 'tool_end':
         if (e.payload && e.payload.childId) { const d = e.payload.data || {}; finishTool(live.subTools.get(`${e.payload.childId}:${d.id}`), d); break; }
-        finishTool(live.tools.get(e.payload.id), e.payload); if (isDenied(e.payload)) { markDenied(live.tools.get(e.payload.id)); } showTyping(live); break;
+        finishTool(live.tools.get(e.payload.id), e.payload, sid); if (isDenied(e.payload)) { markDenied(live.tools.get(e.payload.id)); } unmarkApproval(live.tools.get(e.payload.id)); showTyping(live); break;
       case 'subagent_start': {
         rotateBody(live);
         // Prefer the pill created at run_subagent's tool_start (same agent, not yet claimed), else a lane in a parallel host, else a new pill.
@@ -2018,7 +2517,7 @@
         }
         state.modelOf.set(sid, e.payload.model); if (e.payload.queued) { noteStatus(sid, `Waiting for ${e.payload.name} — busy with ${e.payload.queued} other chat${e.payload.queued === 1 ? '' : 's'}…`); } scheduleBg(); break;
       }
-      case 'todos': if (state.session && state.session.id === sid) { state.session.todos = Array.isArray(e.payload) ? e.payload : []; renderTasks(); } break;
+      case 'todos': if (state.session && state.session.id === sid) { state.session.todos = Array.isArray(e.payload) ? e.payload : []; renderTasks(); updateWork(live); } break;
       case 'nudge': {
         // Self-healing's hidden fix prompts are not nudges: nothing was retracted.
         if (e.payload && e.payload.healing) { break; }
@@ -2054,9 +2553,23 @@
         break;
       }
       case 'rules_applied': { const files = (e.payload && e.payload.files) || []; if (files.length) { rotateBody(live); live.root.insertBefore(el('div', 'note rules', `Conditional rules applied: ${files.map((f) => `<code>${esc(f)}</code>`).join(', ')}`), live.body); } break; }
-      case 'retry': { rotateBody(live); const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection to the model server dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting' }[e.payload && e.payload.reason] || 'a transient error'; live.root.insertBefore(el('div', 'note retry', `${I.spin} Retrying (${esc(e.payload.attempt)}/${esc(e.payload.max)}) — ${esc(why)}.`), live.body); noteStatus(sid, `Retrying (${e.payload.attempt}/${e.payload.max})…`); if (visible) { setStatus(`Retrying (${e.payload.attempt}/${e.payload.max})…`); } break; }
-      case 'error': { rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
-      case 'recovery': onRecovery(live, sid, e.payload, visible); break;
+      case 'retry': {
+        // One row per turn, updated in place: "Retrying 2/3 in 4s: connection dropped", then "Recovered on attempt 2".
+        clearWait(live);
+        const p = e.payload || {}; const why = { empty: 'the model returned nothing', stall: 'the model stopped responding', network: 'the connection dropped', server: 'the model server returned an error', ratelimit: 'the server is rate limiting', overload: 'the model ran out of memory', toolcall: 'the tool call could not be read' }[p.reason] || 'a temporary error';
+        const total = Number(p.max) + 1; const next = Number(p.attempt) + 1; const wait = Number(p.delayMs) >= 1000 ? ` in ${Math.round(p.delayMs / 1000)}s` : '';
+        let row = live.retryRow && live.retryRow.isConnected ? live.retryRow : null;
+        if (!row) { rotateBody(live); row = el('div', 'note retry'); row.setAttribute('role', 'status'); live.root.insertBefore(row, live.body); live.retryRow = row; }
+        row.className = 'note retry'; row.dataset.attempt = String(next);
+        row.innerHTML = `<span class="ico">${I.spin}</span><span>Retrying ${esc(next)}/${esc(total)}${esc(wait)}: ${esc(why)}${p.adjust ? ` (${esc(p.adjust)})` : ''}</span>`;
+        row.title = String(p.message || '');
+        noteStatus(sid, `Retrying (${p.attempt}/${p.max})…`); if (visible) { setStatus(`Retrying (${p.attempt}/${p.max})…`); }
+        break;
+      }
+      case 'waiting': showWait(live, sid, e.payload || {}); break;
+      case 'route': routeNote(live, sid, e.payload || {}); break;
+      case 'error': { clearWait(live); if (live.retryRow) { live.retryRow.className = 'note retry failed'; live.retryRow.querySelector('.ico').innerHTML = I.warn; live.retryRow = null; } rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
+      case 'recovery': onRecovery(live, sid, e.payload, visible); for (const n of live.root.querySelectorAll('.step.has-tests')) { syncHealLink(n); } break;
       case 'turn_end': noteStatus(sid, 'Finishing…'); recTurnEnd(live, sid, e.payload, visible); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
   }
@@ -2119,8 +2632,8 @@
 
   // ------------------------------------------------------------------ composer state
   function setStatus(text) { els.statusText.textContent = text || ''; els.status.classList.toggle('hidden', !text); }
-  function setRunning(running) { els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
-  function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; }
+  function setRunning(running) { fitModelChip(); els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
+  function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; syncEmptyChrome(); }
   /** Pause button, progress bar and placeholder follow the active session's pause state. */
   function syncPause() {
     const sid = state.session && state.session.id; const p = (sid && state.paused.get(sid)) || { paused: false, holding: false };
@@ -2182,11 +2695,41 @@
   function effectiveWindow(m) { const native = m.contextWindow > 0 ? m.contextWindow : 32768; const want = state.contextWindow > 0 ? state.contextWindow : native; return Math.max(4096, Math.min(native, want)); }
   function ctxCapped(m) { return m.contextWindow > effectiveWindow(m); }
   function ctxLabel(m) { const w = effectiveWindow(m); return ctxCapped(m) ? `${fmtTok(w)} used of ${fmtTok(m.contextWindow)}` : `${fmtTok(w)} ctx`; }
-  function syncMode() { syncPlaceholder(); const m = MODES[(state.session && state.session.mode) || 'agent']; els.modeLabel.textContent = m.label; els.modeIcon.innerHTML = m.icon; const tip = `Mode: ${m.label} (${kb('Mod+.')} to switch)`; els.modeBtn.title = tip; els.modeBtn.setAttribute('aria-label', tip); }
+  function syncMode() {
+    syncPlaceholder(); const v = modeView(state.session);
+    if (els.modeBtn.dataset.view !== v.label) { els.modeBtn.dataset.view = v.label; els.modeLabel.textContent = v.label; els.modeIcon.innerHTML = v.icon; }
+    // A specialist names the mode it runs in, since that decides whether files change ("Review · runs in Ask (read-only)").
+    els.modeBtn.title = `${v.baseLabel ? `${v.label} · runs in ${v.baseLabel} (${v.tag})` : `Mode: ${v.label} (${v.tag})`} · ${kb('Mod+.')} to switch`;
+    els.modeBtn.setAttribute('aria-label', `Mode: ${v.label}${v.baseLabel ? `, runs in ${v.baseLabel}` : ''}. Change mode`);
+    syncModeLine();
+  }
+  /** The welcome screen's "Agent mode: edits files… · change" line follows the picker. */
+  function syncModeLine() {
+    const line = els.messages.querySelector(':scope > .empty .modeline .txt'); if (!line) { return; }
+    const v = modeView(state.session);
+    const what = v.baseLabel ? v.hint : v.desc;
+    line.textContent = `${v.label} mode${v.baseLabel ? ` (runs in ${v.baseLabel})` : ''}: ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+  }
   /** Keyboard mode switch (Shift+Tab with a draft, Ctrl/Cmd+.). The toast sits in the polite #toasts live region, so it is
    *  also what a screen reader hears: "Mode: Plan — investigate and prepare a plan…". */
+  // Cycles the core modes only; from a specialist the next one is the mode after its base.
   function rotateMode() { const keys = Object.keys(MODES); const next = keys[(keys.indexOf(state.session.mode) + 1) % keys.length]; const m = MODES[next]; setMode(next); toast(`Mode: ${m.label} — ${m.desc.charAt(0).toLowerCase()}${m.desc.slice(1)}`); }
-  function setMode(mode) { if (!state.session || state.session.mode === mode) { return; } state.session.mode = mode; syncMode(); post({ type: 'setMode', sessionId: state.session.id, mode }); }
+  /** Switches the chat's mode; `specialist` picks a "More modes" entry that runs in `mode`, and anything else clears it. */
+  function setMode(mode, specialist) {
+    const s = state.session; if (!s || !MODES[mode]) { return; }
+    const sp = specialist && SPECIALISTS[specialist] && SPECIALISTS[specialist].base === mode ? specialist : undefined;
+    if (s.mode === mode && (specOf(s) || undefined) === sp) { return; }
+    s.mode = mode; s.specialist = sp; syncMode();
+    post({ type: 'setMode', sessionId: s.id, mode, ...(sp ? { specialist: sp } : {}) });
+  }
+  /** The mode picker: the five core modes, the specialists under "More modes", then Manage modes. */
+  function openModeMenu() {
+    const s = state.session; const cur = s ? s.mode : 'agent'; const sp = specOf(s);
+    const items = Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: m.desc, icon: m.icon, tags: [{ text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: () => setMode(k) }))
+      .concat(Object.entries(SPECIALISTS).map(([k, x]) => { const b = MODES[x.base]; return { group: 'More modes', label: x.label, desc: x.hint, title: `${x.desc}. Runs in ${b.label} mode.`, icon: x.icon, tags: [{ text: b.tag, cls: b.tag === 'read-only' ? 'ro' : 'rw', title: `Runs in ${b.label} mode` }], selected: sp === k, onPick: () => setMode(x.base, k) }; }))
+      .concat([{ hr: true }, { label: 'Manage modes…', desc: 'Skills and subagents in Settings', icon: I.gear, onPick: () => post({ type: 'openSettings', section: 'skills' }) }]);
+    openMenu(els.modeBtn, items, { label: 'Mode', cls: 'modes', foot: `<span><kbd>${esc(kb('Mod+.'))}</kbd> to switch</span>` });
+  }
   /** What the router resolves Auto to right now (sent by the host); falls back to the default model until it arrives. */
   function autoModelId() { return state.autoModel || state.defaultModel || ''; }
   function currentModel() { const s = state.session; const want = (s && s.model) || autoModelId(); return state.models.find((m) => m.id === want) || null; }
@@ -2195,15 +2738,38 @@
     els.modelBtn.classList.toggle('warn', !state.models.length && !state.modelsLoading);
     els.modelBtn.classList.toggle('finding', !state.models.length && !!state.modelsLoading);
     // No models yet: say what is happening (still looking) or what to do (set one up) — the picker offers the actions.
-    if (!state.models.length) { els.modelLabel.innerHTML = state.modelsLoading ? '<span class="spinner"></span>Finding models…' : 'Set up a model'; els.modelBtn.title = state.modelsLoading ? 'Looking for local model servers…' : 'No models found — click to set one up, look again, or add a cloud provider'; return; }
+    if (!state.models.length) { els.modelLabel.innerHTML = state.modelsLoading ? '<span class="spinner"></span>Finding models…' : 'Set up a model'; els.modelBtn.title = state.modelsLoading ? 'Looking for local model servers…' : 'No models found — click to set one up, look again, or add a cloud provider'; els.modelBtn.removeAttribute('aria-label'); return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
     // Narrow composers show the short form: no provider prefix, no ':latest' / ':14b' tag (the full id is in the title).
     const shortName = name.split('/').pop().replace(/:[^:/]+$/, '') || name;
-    const label = shortName === name ? esc(name) : `<span class="nm-full">${esc(name)}</span><span class="nm-short">${esc(shortName)}</span>`;
-    els.modelLabel.innerHTML = m && !explicit ? `<span class="auto">Auto · </span>${label}` : label;
-    els.modelBtn.title = m ? `${m.id} · ${ctxLabel(m)}${ctxCapped(m) ? ' (Settings → Models → Context window)' : ''}${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}${m.remote ? ' · cloud: prompts leave this machine' : ''}` : explicit || 'Model';
+    const label = `<span class="nm">${shortName === name ? esc(name) : `<span class="nm-full">${esc(name)}</span><span class="nm-short">${esc(shortName)}</span>`}</span>`;
+    // "<provider> · <model|Auto · resolved>" with a dot for where it runs; the provider gives way first as the composer narrows.
+    const prov = m ? providerLabel(m.providerId) : '';
+    const auto = m && !explicit;
+    const html = `${m ? `<i class="where ${m.remote ? 'cloud' : 'local'}" aria-hidden="true"></i>` : ''}${prov ? `<span class="prov">${esc(prov)} · </span>` : ''}${auto ? '<span class="auto">Auto · </span>' : ''}${label}`;
+    if (els.modelLabel.innerHTML !== html) { els.modelLabel.innerHTML = html; }
+    const facts = m ? `${m.id} · ${ctxLabel(m)}${ctxCapped(m) ? ' (Settings → Models → Context window)' : ''}${m.supportsTools ? ' · tools' : ' · prompt-based tools'}${m.supportsVision ? ' · vision' : ''}${m.remote ? ' · cloud: prompts leave this machine' : ' · local: runs on this machine'}` : '';
+    els.modelBtn.title = m ? (auto ? `Auto picks a model per task; now: ${facts}` : facts) : explicit || 'Model';
+    // A fallback answered the last turn: a warning dot on the chip until the chat picks a model or a turn routes normally.
+    const rr = s && state.rerouted.get(s.id);
+    els.modelBtn.classList.toggle('rerouted', !!rr);
+    if (rr) { els.modelBtn.title = `${modelName(rr.wanted) || rr.wanted} is not answering; the last turn used ${rr.usedName || modelName(rr.used)}.\n${els.modelBtn.title}`; }
+    els.modelBtn.setAttribute('aria-label', `Model: ${auto ? `Auto, now ${name}` : name}${prov ? ` (${prov}${m.remote ? ', cloud' : ', local'})` : ''}. Change model`);    fitModelChip();
   }
+  /** Drops the provider, then "Auto ·", while the chip's label does not fit, so the model's name is what gets the room. */
+  let fitPending = false;
+  function fitModelChip() {
+    if (fitPending) { return; } fitPending = true;
+    requestAnimationFrame(() => {
+      fitPending = false; const l = els.modelLabel; if (!l.querySelector('.nm')) { return; }
+      l.classList.remove('no-prov', 'no-auto');
+      const over = () => l.scrollWidth > l.clientWidth;
+      if (over()) { l.classList.add('no-prov'); if (over()) { l.classList.add('no-auto'); } }
+    });
+  }
+  /** A provider's display name without the parenthesised extra ("Anthropic (Claude)" → "Anthropic"). */
+  function providerLabel(pid) { const n = (state.providerNames && state.providerNames[pid]) || pid || ''; return n.replace(/\s*\(.*\)$/, ''); }
   function timeAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)}m`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)}h`; } return `${Math.floor(d / 86400e3)}d`; }
   // ------------------------------------------------------------------ chat tabs (multitasking)
   // Every chat is an independent agent. Tabs keep a stable, browser-like order (pinned first, then creation order) so
@@ -2898,12 +3464,14 @@
     const score = (t) => { const l = t.toLowerCase(); if (l === q) { return -1; } if (l.startsWith(q)) { return 100; } const tokens = l.split(/[^a-z0-9]+/).filter(Boolean); if (!whole.every((w) => tokens.includes(w)) || !tokens.some((tk) => tk.startsWith(last))) { return 0; } return 60 - Math.min(30, Math.max(0, l.length - q.length) / 4); };
     return [...new Set([...pool.map((s) => s.title), ...recent])].map((t) => ({ t, s: score(t) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 6).map((x) => x.t);
   }
-  els.newTab.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent' });
+  els.newTab.onclick = () => post({ type: 'newSession', mode: (state.session && state.session.mode) || 'agent', ...(specOf(state.session) ? { specialist: specOf(state.session) } : {}) });
   els.history.onclick = openHistory;
   // Placeholder adapts to the composer width.
-  const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask, plan or build… (@ context)'], [420, 'Plan, build, fix anything… (@ context, / commands)']];
+  const PLACEHOLDERS = [[0, 'Ask anything…'], [300, 'Ask anything, or describe a task…']];
   function basePlaceholder() { const w = els.box.clientWidth; let p = PLACEHOLDERS[0][1]; for (const [min, t] of PLACEHOLDERS) { if (w >= min) { p = t; } } return p; }
-  new ResizeObserver(() => syncPlaceholder()).observe(els.box);
+  new ResizeObserver(() => { syncPlaceholder(); fitModelChip(); }).observe(els.box);
+  // Pickers next to the model chip come and go (thinking, Stop): its own size changing is the cue to refit the label.
+  new ResizeObserver(() => fitModelChip()).observe(els.modelBtn);
   function syncPlaceholder() {
     const sid = state.session && state.session.id; const p = sid && state.paused.get(sid);
     const mode = state.session && MODES[state.session.mode];
@@ -2911,11 +3479,20 @@
     const wide = els.box.clientWidth >= 380;
     // Revise on a plan card: the next message is feedback on the plan, until it is sent.
     if (sid && state.revising === sid && !state.running.has(sid)) { els.input.placeholder = 'What should change in the plan?'; return; }
-    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? `Type to steer this agent (used at its next step), ${kb('Mod+Shift+Enter')} for a new tab…` : 'Steer this agent…') : mode && state.session.mode !== 'agent' && els.box.clientWidth >= 300 ? mode.placeholder : basePlaceholder();
+    els.input.placeholder = p && p.paused ? (wide ? 'Add instructions — the agent reads them when it resumes…' : 'Instructions for when it resumes…') : sid && state.running.has(sid) ? (wide ? `Type to steer this agent (used at its next step), ${kb('Mod+Shift+Enter')} for a new tab…` : 'Steer this agent…') : mode && (state.session.mode !== 'agent' || specOf(state.session)) && els.box.clientWidth >= 300 ? modeView(state.session).placeholder : basePlaceholder();
   }
   let tasksSig = '';
   /** Per-session open/closed choice for the Tasks panel, once the user has toggled it. */
   const tasksUserOpen = new Map();
+  /** A linked checklist item: scroll to the first step it ran and flash it. */
+  function goToTodo(id) {
+    const row = els.messages.querySelector(`[data-todo="${CSS.escape(id)}"]`); if (!row) { return; }
+    const turn = row.closest('.turn'); if (turn) { turn.classList.remove('folded'); }
+    row.scrollIntoView({ block: 'center', behavior: calmMotion() ? 'auto' : 'smooth' });
+    row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1600);
+  }
+  els.tasksList.addEventListener('click', (e) => { const li = e.target.closest('li.todo.linked'); if (li) { goToTodo(li.dataset.id); } });
+  els.tasksList.addEventListener('keydown', (e) => { const li = e.target.closest('li.todo.linked'); if (li && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); goToTodo(li.dataset.id); } });
   function renderTasks() {
     const todos = state.session && Array.isArray(state.session.todos) ? state.session.todos : [];
     els.tasks.classList.toggle('hidden', !todos.length); if (!todos.length) { tasksSig = ''; return; }
@@ -2936,8 +3513,15 @@
     els.tasksList.innerHTML = '';
     for (const t of todos) {
       // in_progress is a filled marker, not a spinner: the Workers card and the status line already show the motion.
-      const li = el('li', `todo ${t.status}`, `<span class="box">${t.status === 'done' ? I.check : t.status === 'in_progress' ? '<i class="now"></i>' : t.status === 'skipped' ? I.x : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent${t.dependsOn && t.dependsOn.length ? ` after ${t.dependsOn.join(', ')}` : ''}` : t.status === 'in_progress' ? `The ${t.agent} subagent is working on this` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}${t.dependsOn && t.dependsOn.length ? `<span class="todo-after">after ${esc(t.dependsOn.join(', '))}</span>` : ''}</span>` : ''}`);
-      if (t.result) { li.title = t.result.slice(0, 600); }
+      // A failed item (a worker's error) is marked ✕ in the error colour; skipped ones get a dash and say why.
+      const bad = todoFailed(t);
+      const li = el('li', `todo ${t.status}${bad ? ' failed' : ''}`, `<span class="box" aria-hidden="true">${t.status === 'done' ? I.check : t.status === 'in_progress' ? '<i class="now"></i>' : bad ? I.x : t.status === 'skipped' ? '<i class="dash"></i>' : ''}</span><span class="title">${esc(t.title)}</span>${t.agent ? `<span class="todo-agent" title="${esc(t.status === 'pending' ? `Will be delegated to the ${t.agent} subagent${t.dependsOn && t.dependsOn.length ? ` after ${t.dependsOn.join(', ')}` : ''}` : t.status === 'in_progress' ? `The ${t.agent} subagent is working on this` : `Delegated to the ${t.agent} subagent`)}">${I.agent}${esc(t.agent)}${t.dependsOn && t.dependsOn.length ? `<span class="todo-after">after ${esc(t.dependsOn.join(', '))}</span>` : ''}</span>` : ''}`);
+      li.dataset.id = String(t.id);
+      const st = bad ? 'Failed' : t.status === 'skipped' ? 'Skipped' : t.status === 'done' ? 'Done' : t.status === 'in_progress' ? 'In progress' : 'To do';
+      li.setAttribute('aria-label', `${st}: ${t.title}`);
+      if (t.result) { li.title = `${st}: ${t.result.slice(0, 600)}`; }
+      // Linked to the steps that ran it (rows carry data-todo): click or Enter scrolls to the first one.
+      if (els.messages.querySelector(`[data-todo="${CSS.escape(String(t.id))}"]`)) { li.classList.add('linked'); li.tabIndex = 0; li.setAttribute('role', 'button'); }
       els.tasksList.appendChild(li);
     }
     els.tasksList.scrollTop = y;
@@ -2947,12 +3531,15 @@
     if (!state.session || state.session.id !== sid) { return; }
     const last = els.messages.lastElementChild;
     const foot = last && last.classList.contains('assistant') && !state.running.has(sid) ? last.querySelector(':scope > .afoot .acts') : null;
-    els.messages.querySelectorAll('.afoot [data-act="viewChanges"]').forEach((b) => { if (!foot || b.parentElement !== foot) { b.remove(); } });
+    els.messages.querySelectorAll('.afoot [data-act="viewChanges"]').forEach((b) => { if (!foot || b.parentElement !== foot) { if (b.nextElementSibling && b.nextElementSibling.classList.contains('sep')) { b.nextElementSibling.remove(); } b.remove(); } });
     const lt = state.lastTurn.get(sid); const n = lt ? lt.files : 0;
     let b = foot && foot.querySelector('[data-act="viewChanges"]');
-    if (!foot || !n) { if (b) { b.remove(); } return; }
-    if (!b) { foot.insertAdjacentHTML('afterbegin', `<button data-act="viewChanges">${I.diff}</button>`); b = foot.firstElementChild; }
-    b.title = `View changes: ${n} file${n === 1 ? '' : 's'} changed since your last message, in one diff`; b.setAttribute('aria-label', b.title);
+    if (!foot || !n) { if (b) { if (b.nextElementSibling && b.nextElementSibling.classList.contains('sep')) { b.nextElementSibling.remove(); } b.remove(); } return; }
+    // A labelled chip, not a bare glyph: what it opens (the changed files) is the point, so it says how many.
+    if (!b) { foot.insertAdjacentHTML('afterbegin', `<button class="chg" data-act="viewChanges">${I.diff}<span></span></button><i class="sep" aria-hidden="true"></i>`); b = foot.firstElementChild; }
+    const label = `${n} file${n === 1 ? '' : 's'}`;
+    if (b.lastElementChild.textContent !== label) { b.lastElementChild.textContent = label; }
+    b.title = `View changes: ${label} changed since your last message, in one diff`; b.setAttribute('aria-label', b.title);
   }
   let changesSig = '';
   /** The inline "Reject N files?" row while it is open. */
@@ -3039,7 +3626,7 @@
 
   // ------------------------------------------------------------------ popover menus
   let menuState = null;
-  function closeMenu() { menuA11yClose(); els.popover.classList.add('hidden'); els.popover.innerHTML = ''; menuState = null; hist.open = false; hist.renaming = null; hist.confirm = null; }
+  function closeMenu() { menuA11yClose(); els.popover.classList.add('hidden'); els.popover.innerHTML = ''; els.popover.dataset.menu = ''; menuState = null; hist.open = false; hist.renaming = null; hist.confirm = null; }
   /** Above the anchor when there is room, else below; never past the right edge. */
   function placePopover(anchor) {
     const p = els.popover; const r = anchor.getBoundingClientRect(); const pw = Math.min(360, window.innerWidth - 20);
@@ -3048,7 +3635,7 @@
     if (above >= Math.min(ph, 200)) { p.style.top = `${Math.max(8, r.top - 6 - ph)}px`; } else { p.style.top = `${r.bottom + 6}px`; }
   }
   function openMenu(anchor, items, opts = {}) {
-    const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden');
+    const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden'); p.dataset.menu = opts.cls || '';
     menuState = { items: [], sel: 0, onPick: opts.onPick, inline: !!opts.inline };
     let search = null;
     if (opts.search) { search = el('input', 'search'); search.placeholder = opts.search; p.appendChild(search); }
@@ -3076,7 +3663,7 @@
         if (it.group && it.group !== lastGroup && !ql) { list.appendChild(el('div', 'grp', `${it.groupIcon ? `<span class="gico" aria-hidden="true">${it.groupIcon}</span>` : ''}${esc(it.group)}`)); lastGroup = it.group; }
         const star = it.onStar ? `<button class="star${it.starred ? ' on' : ''}" title="${it.starred ? 'Unstar' : 'Star: pin to the top'}" aria-label="${it.starred ? 'Unstar' : 'Star'} ${esc(it.label)}" aria-pressed="${it.starred ? 'true' : 'false'}">${STAR_ICON}</button>` : '';
         const row = el('div', 'item', `<span class="ico">${it.icon || ''}</span><span class="txt"><span class="lbl">${it.labelHtml || esc(it.label)}</span>${it.desc ? `<span class="desc">${it.descHtml || esc(it.desc)}</span>` : ''}</span>${(it.tags || [it.tag && { text: it.tag }]).filter(Boolean).map((t) => `<span class="tag${t.cls ? ` ${t.cls}` : ''}"${t.title ? ` title="${esc(t.title)}"` : ''}>${esc(t.text)}</span>`).join('')}${star}<span class="check">${it.selected ? I.check : ''}</span>`);
-        if (it.desc) { row.title = it.desc; }
+        if (it.title || it.desc) { row.title = it.title || it.desc; }
         row.onmousedown = (e) => { e.preventDefault(); pick(it); };
         // Mouse down only keeps focus and the menu; the toggle runs on click so Enter / Space on a focused star work too.
         if (it.onStar) { const st = row.querySelector('.star'); st.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); }; st.onclick = (e) => { e.preventDefault(); e.stopPropagation(); star(it); }; }
@@ -3099,6 +3686,7 @@
     if (search && opts.query) { search.value = opts.query; }
     render(search ? search.value : '');
     if (items.some((it) => it.onStar)) { p.appendChild(el('div', 'mfoot', `<span>↑↓ move</span><span>↵ pick</span><span>⇧↵ star</span>`)); }
+    else if (opts.foot) { p.appendChild(el('div', 'mfoot', opts.foot)); }
     placePopover(anchor);
     const key = (e) => {
       if (!menuState || e.isComposing || e.keyCode === 229) { return; }
@@ -3124,8 +3712,10 @@
   }
   window.addEventListener('resize', () => { if (menuState) { closeMenu(); } });
 
-  els.modeBtn.onclick = () => openMenu(els.modeBtn, Object.entries(MODES).map(([k, m]) => ({ label: m.label, desc: m.desc, icon: m.icon, selected: (state.session && state.session.mode) === k, onPick: () => setMode(k) })));
-  els.modelBtn.onclick = () => openModelMenu('');
+  els.modeBtn.onclick = openModeMenu;
+  els.modelBtn.onclick = () => { modelPickThen = null; openModelMenu(''); };
+  /** Set by "Switch model" on a slow request: the picked model restarts the turn instead of only applying to the next one. */
+  let modelPickThen = null;
   /** The model menu: starred models pinned on top, typing ranks by fuzzy match, unmatched text can be used as a model id. */
   function openModelMenu(query) {
     // Nothing to pick from: offer the three ways to get a model instead of an empty list.
@@ -3167,7 +3757,7 @@
     post({ type: 'toggleFavoriteModel', model: id });
     openModelMenu(q);
   }
-  function chooseModel(id) { if (!state.session) { return; } state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
+  function chooseModel(id) { if (!state.session) { return; } const then = modelPickThen; modelPickThen = null; if (then && then(id)) { return; } state.rerouted.delete(state.session.id); state.session.model = id; syncModel(); updateCtx(); post({ type: 'setModel', sessionId: state.session.id, model: id, makeDefault: false }); }
   // ------------------------------------------------------------------ thinking level for this chat
   const THINK_LEVELS = {
     auto: { label: 'Auto', desc: 'High for Plan and Debug, medium for the agent, low for Ask and subagents' },
@@ -3232,7 +3822,7 @@
   }
   // MCP servers: a popover with a switch, status dot and restart per server, and the total tool count (context cost).
   const MCP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/></svg>';
-  const SLASH_GROUPS = { Chat: { order: 0, icon: I.bot }, 'Plan & delegate': { order: 1, icon: I.plan }, Info: { order: 2, icon: I.ask }, Custom: { order: 3, icon: I.sparkle }, Skills: { order: 4, icon: I.book }, MCP: { order: 5, icon: MCP_ICON } };
+  const SLASH_GROUPS = { Chat: { order: 0, icon: I.bot }, 'More modes': { order: 0.5, icon: I.sparkle }, 'Plan & delegate': { order: 1, icon: I.plan }, Info: { order: 2, icon: I.ask }, Custom: { order: 3, icon: I.sparkle }, Skills: { order: 4, icon: I.book }, MCP: { order: 5, icon: MCP_ICON } };
   const GEAR_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>';
   let mcpBtn = null;
   function syncMcp() {
@@ -3310,6 +3900,18 @@
     openMenu(els.addCtx, items, { search: 'Add files, folders, docs…' });
   }
   els.addCtx.onclick = openContextMenu;
+  // The composer's hint row (empty chats only): @ opens the context menu, # attaches the project tree, / starts a command.
+  if (els.hints) {
+    els.hints.onclick = (e) => {
+      const b = e.target.closest('[data-h]'); if (!b) { return; }
+      if (b.dataset.h === '@') { openContextMenu(); }
+      else if (b.dataset.h === '#') { addAttachment('workspace'); toast('Attached the project file tree (@workspace)'); }
+      else { els.input.value = '/'; els.input.focus(); els.input.selectionStart = els.input.selectionEnd = 1; els.input.dispatchEvent(new Event('input')); }
+    };
+  }
+  // The welcome strip says when the machine is offline: cloud models and web tools will fail, local models still work.
+  state.offline = navigator.onLine === false;
+  for (const ev of ['online', 'offline']) { window.addEventListener(ev, () => { state.offline = navigator.onLine === false; renderCtxStrip(); }); }
   // Screenshot capture options (like a native screenshot tool): area, this window, another window, full screen, timed.
   function shot(mode, delayMs, msg) { return () => { if (msg) { toast(msg); } post({ type: 'captureScreenshot', mode, delayMs }); }; }
   function screenshotItems() {
@@ -3394,7 +3996,7 @@
         .concat(t.tok.startsWith('/skill ') ? state.skills.filter((s) => `/skill ${s.name}`.startsWith(t.tok.trimEnd())).map((s) => ({ group: 'Skills', label: `/skill ${s.name}`, desc: s.description, onPick: () => fill(`/skill ${s.name} `) })) : [])
         .concat(t.tok.startsWith('/agent ') ? state.agents.filter((a) => `/agent ${a.name}`.startsWith(t.tok.trimEnd())).map((a) => ({ group: 'Plan & delegate', label: `/agent ${a.name}`, desc: a.description, onPick: () => fill(`/agent ${a.name} `) })) : [])
         // One heading per group, in a fixed order; each group has its own icon on the heading and its rows.
-        .map((it, n) => ({ ...it, n, icon: (/^\/mode (\w+)$/.test(it.label) && MODES[it.label.slice(6)] || SLASH_GROUPS[it.group]).icon, groupIcon: SLASH_GROUPS[it.group].icon }))
+        .map((it, n) => ({ ...it, n, icon: (/^\/mode (\w+)$/.test(it.label) && (MODES[it.label.slice(6)] || SPECIALISTS[it.label.slice(6)]) || SLASH_GROUPS[it.group]).icon, groupIcon: SLASH_GROUPS[it.group].icon }))
         .sort((a, b) => SLASH_GROUPS[a.group].order - SLASH_GROUPS[b.group].order || a.n - b.n);
       if (!items.length) { return closeMenu(); }
       openMenu(els.box, items, { inline: true }); els.input.focus();
@@ -3872,7 +4474,7 @@
   }
   function dispatch(m) {
     switch (m.type) {
-      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; if (m.workspace) { state.workspace = m.workspace; } syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (state.session) { updateCtx(); } if (hist.open) { histRefresh(); } break;
       case 'sessionPage': histPage(m); break;
       case 'session': {
@@ -3885,12 +4487,12 @@
         if (!document.activeElement || document.activeElement === document.body || els.messages.contains(document.activeElement)) { els.input.focus(); }
         break;
       }
-      case 'changes': state.changes.set(m.sessionId, m.files); state.checkpoints.set(m.sessionId, m.checkpoints || []); state.gitCheckpoints.set(m.sessionId, m.gitCheckpoints || []); if (m.checkpointsEnabled !== undefined) { state.checkpointsOn = m.checkpointsEnabled; } if (m.lastTurn) { state.lastTurn.set(m.sessionId, m.lastTurn); } else { state.lastTurn.delete(m.sessionId); } if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); syncViewChanges(m.sessionId); } break;
+      case 'changes': state.changes.set(m.sessionId, m.files); if (state.session && state.session.id === m.sessionId && els.messages.querySelector(':scope > .rec-int')) { requestAnimationFrame(renderInterrupted); } state.checkpoints.set(m.sessionId, m.checkpoints || []); state.gitCheckpoints.set(m.sessionId, m.gitCheckpoints || []); if (m.checkpointsEnabled !== undefined) { state.checkpointsOn = m.checkpointsEnabled; } if (m.lastTurn) { state.lastTurn.set(m.sessionId, m.lastTurn); } else { state.lastTurn.delete(m.sessionId); } if (m.worktree) { state.worktree.set(m.sessionId, m.worktree); } else { state.worktree.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderChanges(); els.messages.querySelectorAll('.turn.user').forEach((t) => syncRestoreButton(t, m.sessionId)); syncViewChanges(m.sessionId); } break;
       case 'skills': state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || state.commands || []; if (m.skillsMode) { state.skillsMode = m.skillsMode; } syncSkills(); break;
       case 'mcpStatus': state.mcp = m.servers || []; syncMcp(); break;
       case 'autoApprove': renderAutoApprove(m); break;
       case 'sessionGrants': if (m.kinds && m.kinds.length) { grants.set(m.sessionId, m.kinds); } else { grants.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderGrants(); } break;
-      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); if (hadNone && m.models.length && asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } /* The empty chat's notice and suggestions depend on having a model: redraw when that flips, either way. */ if ((hadNone !== !m.models.length || (hadNone && wasLoading)) && state.session && !state.session.messages.length) { renderSession(); } break; }
+      case 'models': { const hadNone = !state.models.length; const asked = state.modelsRequested; const wasLoading = state.modelsLoading; state.modelsRequested = false; state.modelsLoading = false; state.models = m.models; state.providerNames = m.providerNames || {}; state.favorites = m.favorites || []; state.manualProviders = m.manualProviders || []; if (m.thinking) { state.thinking = m.thinking; } state.defaultModel = m.defaultModel; state.autoModel = m.autoModel || ''; state.visionRouting = !!m.visionRouting; if (m.contextWindow !== undefined) { state.contextWindow = Number(m.contextWindow) || 0; } syncModel(); updateCtx(); renderCtxStrip(); if (hadNone && m.models.length && asked) { toast(`${m.models.length} model${m.models.length === 1 ? '' : 's'} found`); } /* The empty chat's notice and suggestions depend on having a model: redraw when that flips, either way. */ if ((hadNone !== !m.models.length || (hadNone && wasLoading)) && state.session && !state.session.messages.length) { renderSession(); } break; }
       case 'event': if (m.event && typeof m.event === 'object' && typeof m.event.sessionId === 'string') { handleEvent(m.event); } break;
       case 'skillInstall': {
         // The session redraw replaces a settled offer; this settles chips still inside a live turn.
@@ -3905,6 +4507,7 @@
         state.paused.set(m.sessionId, { paused: m.paused, holding: m.holding });
         noteStatus(m.sessionId, m.paused ? (m.holding ? 'Paused' : 'Pausing after this step…') : 'Resuming…');
         if (state.session && state.session.id === m.sessionId) { syncPause(); setStatus(state.status.get(m.sessionId) || ''); renderChanges(); }
+        { const lv = state.live.get(m.sessionId); if (lv && state.session && state.session.id === m.sessionId) { syncWorkPause(lv, Date.now()); } }
         renderTabs();
         break;
       }
@@ -3934,14 +4537,17 @@
         if (!m.running) { state.paused.delete(m.sessionId); }
         clearTimeout(state.pendingSend.get(m.sessionId)); state.pendingSend.delete(m.sessionId);
         state.scroll.delete(m.sessionId);
-        if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); state.interrupted.delete(m.sessionId); noteStatus(m.sessionId, 'Starting…'); }
+        if (m.running) { state.running.add(m.sessionId); state.unread.delete(m.sessionId); state.interrupted.delete(m.sessionId); state.runInt.delete(m.sessionId); if (state.rerouted.delete(m.sessionId) && isActive) { syncModel(); } noteStatus(m.sessionId, 'Starting…'); }
         else { state.running.delete(m.sessionId); finishLive(m.sessionId); noteStatus(m.sessionId, ''); if (!isActive && !state.dismissed.delete(m.sessionId) && state.sessions.some((s) => s.id === m.sessionId)) { state.unread.add(m.sessionId); } for (const [aid, sid] of [...state.approvalSid]) { if (sid === m.sessionId) { state.approvalSid.delete(aid); removeApproval(aid); } } state.attention.delete(m.sessionId); }
         if (isActive) { setRunning(m.running); renderTasks(); renderChanges(); if (!m.running) { post({ type: 'selectSession', id: m.sessionId }); } }
         renderTabs();
         break;
       }
-      case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your approval'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
-      case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
+      case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); markApprovalRow(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your approval'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
+      case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); unmarkApprovalId(m.id); break; }
+      // Host -> webview: a run cut off by a reload (`state` with its facts) or null once it was continued or dismissed.
+      case 'runInterrupted': if (typeof m.sessionId === 'string') { if (m.state && typeof m.state === 'object') { state.runInt.set(m.sessionId, m.state); } else { state.runInt.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderInterrupted(); } } break;
+      case 'conflicts': applyConflicts(m.sessionId, Array.isArray(m.files) ? m.files : []); break;
       case 'question': state.approvalSid.set(m.id, m.sessionId); renderQuestion(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your answer'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Question waiting in “${(s && s.title) || 'another chat'}”`); } break;
       case 'questionResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
       case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level, m.action); } if (m.level === 'error') { editChecks.forEach((c) => c.release && c.release()); } break;
@@ -3961,6 +4567,13 @@
       case 'focusInput': els.input.focus(); post({ type: 'requestOpenFiles' }); break;
       case 'historyCleared': state.openTabs = null; state.unread.clear(); state.attention.clear(); for (const id of [...state.live.keys()]) { if (!state.running.has(id)) { state.live.delete(id); } } renderTabs(); break;
       case 'mentionResults': mentionResults(m); break;
+      case 'workspaceInfo': {
+        const prev = state.workspace || {}; state.workspace = m.workspace || {};
+        // Errors and folder changes alter the starters (the error count, chat-only rows); the rest redraws the strip in place.
+        const welcome = els.messages.querySelector(':scope > .empty');
+        if (welcome && (prev.folders !== state.workspace.folders || (prev.errors || 0) !== (state.workspace.errors || 0))) { renderSession(); } else { renderCtxStrip(); }
+        break;
+      }
       case 'openFiles': {
         const was = `${state.activeFile}|${state.hasSelection}`;
         state.openFiles = m.files || []; state.activeFile = m.active || ''; state.hasSelection = !!m.selection;
@@ -4084,10 +4697,31 @@
     // A dangerous command or an organization rule asks every time, so there is no "allow all" to offer.
     const why = a.mandatory ? (a.mandatoryReason === 'policy' ? 'Always asks — required by your organization' : a.kind === 'terminal' ? 'Always asks — dangerous command' : 'Always asks for this action') : '';
     d.dataset.kind = a.kind; d.dataset.sid = a.sessionId; d.dataset.waiting = String(a.waitingSameKind || 0); if (a.mandatory) { d.dataset.mandatory = '1'; }
-    const all = a.mandatory ? '' : `<button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button>`;
-    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><button class="btn ghost" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button>${all}<button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>${why ? `<div class="always">${esc(why)}</div>` : ''}`;
-    d.querySelector('pre').textContent = a.detail;
-    const answer = (act, feedback) => { const f = act === 'deny' && feedback ? String(feedback).trim() : ''; post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session', ...(f ? { feedback: f } : {}) }); removeApproval(a.id); resolveAttention(a.id); els.input.focus(); };
+    // "Allow all … in this chat" with a split menu that also offers the workspace-wide grant (never for a mandatory prompt).
+    const all = a.mandatory ? '' : `<span class="split"><button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button><button class="btn split-more" data-a="more" title="More ways to allow" aria-label="More ways to allow" aria-haspopup="menu">${I.chev}</button></span>`;
+    const edit = a.editable ? `<button class="btn ghost" data-a="edit" title="Change the command before it runs; the edited command is what runs">${I.edit}<span class="long">Edit</span></button>` : '';
+    // Why it asked, and where that is set: the policy, a destructive command, or the approval setting for this kind.
+    const because = a.askedBecause ? `${a.mandatory ? 'Always asks' : 'Asked'} because ${a.askedBecause}` : why;
+    const foot = because ? `<div class="always"><span>${esc(because)}</span><i>·</i><button class="link" data-a="settings" title="Settings → Agent → approvals">Change in Settings</button></div>` : '';
+    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><button class="btn ghost" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button>${edit}${all}<button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>${foot}`;
+    const pre = d.querySelector('pre');
+    const cmdLine = a.kind === 'terminal' && /^\$ /.test(String(a.detail || '')) ? String(a.detail).split('\n')[0].slice(2) : '';
+    if (cmdLine) { pre.innerHTML = `<span class="sh-prompt">$ </span>${highlight(cmdLine, 'sh')}${esc(String(a.detail).slice(cmdLine.length + 2))}`; pre.classList.add('cmd'); } else { pre.textContent = a.detail; }
+    let editor = null;
+    const answer = (act, feedback) => {
+      const f = act === 'deny' && feedback ? String(feedback).trim() : '';
+      const edited = act !== 'deny' && editor && editor.value.trim() && editor.value.trim() !== cmdLine ? editor.value.trim() : '';
+      post({ type: 'approval', id: a.id, approved: act !== 'deny', remember: act === 'session', ...(f ? { feedback: f } : {}), ...(edited ? { editedArgs: edited } : {}) }); removeApproval(a.id); resolveAttention(a.id); els.input.focus();
+    };
+    const openEditor = () => {
+      if (editor) { editor.focus(); return; }
+      editor = el('textarea', 'cmd-edit'); editor.rows = Math.min(6, Math.max(2, cmdLine.split('\n').length + 1)); editor.spellcheck = false; editor.value = cmdLine; editor.setAttribute('aria-label', 'Command to run (edit, then Allow)');
+      editor.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); answer('allow'); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editor.value = cmdLine; } };
+      pre.after(editor); pre.classList.add('hidden');
+      const b = d.querySelector('[data-a="edit"]'); if (b) { b.disabled = true; b.title = 'Editing: Allow runs the edited command (Mod+Enter)'; }
+      d.querySelector('[data-a="allow"] .long').textContent = 'Allow edited';
+      editor.focus(); editor.setSelectionRange(editor.value.length, editor.value.length);
+    };
     // Deny with a reason: the reason box, or whatever is in the composer when Deny is clicked (then the draft is used up).
     const reasonBox = d.querySelector('.reason'); const reasonIn = reasonBox.querySelector('input');
     const openReason = () => { reasonBox.classList.remove('hidden'); if (!reasonIn.value && els.input.value.trim()) { reasonIn.value = els.input.value.trim(); } reasonIn.focus(); };
@@ -4095,7 +4729,20 @@
     reasonIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); answer('deny', reasonIn.value); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); reasonBox.classList.add('hidden'); els.input.focus(); } };
     // Y/A/N answer the oldest pending prompt only; with several queued, one keypress must not resolve them all.
     const key = (e) => { if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || els.approvals.firstElementChild !== d || !promptKeyTarget(d, e)) { return; } const k = e.key.toLowerCase(); if (k === 'n' && e.shiftKey) { openReason(); } else if (k === 'y') { answer('allow'); } else if (k === 'a' && !a.mandatory) { answer('session'); } else if (k === 'n' || k === 'escape') { answer('deny'); } else { return; } e.preventDefault(); e.stopPropagation(); };
-    d.onclick = (ev) => { const b = ev.target.closest('[data-a]'); if (!b) { return; } const act = b.dataset.a; if (act === 'open') { selectTab(a.sessionId); return; } if (act === 'reason') { openReason(); return; } if (act === 'denyReason') { answer('deny', reasonIn.value); return; } if (act === 'deny') { denyWithDraft(); return; } answer(act); };
+    d.onclick = (ev) => {
+      const b = ev.target.closest('[data-a]'); if (!b) { return; } const act = b.dataset.a;
+      if (act === 'open') { selectTab(a.sessionId); return; } if (act === 'reason') { openReason(); return; } if (act === 'denyReason') { answer('deny', reasonIn.value); return; } if (act === 'deny') { denyWithDraft(); return; }
+      if (act === 'edit') { openEditor(); return; }
+      if (act === 'settings') { post({ type: 'openSettings', section: 'agent', key: `approvals.${a.kind}` }); return; }
+      if (act === 'more') {
+        openMenu(b, [
+          { label: GRANT_LABEL[a.kind] || 'Allow all of these in this chat', desc: 'Until this chat ends; removable from the auto-approve bar', icon: I.check, onPick: () => answer('session') },
+          { label: 'Always allow in this workspace…', desc: `Saves ${GRANT_CHIP[a.kind] || a.kind}: Always in this workspace's settings (asks to confirm)`, icon: I.folder, onPick: () => post({ type: 'approval', id: a.id, approved: true, scope: 'workspace' }) },
+        ]);
+        return;
+      }
+      answer(act);
+    };
     document.addEventListener('keydown', key, true);
     d._dispose = () => document.removeEventListener('keydown', key, true);
     els.approvals.appendChild(d); syncWaiting();

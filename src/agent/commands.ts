@@ -381,6 +381,17 @@ export function agentTaskPrompt(agent: string, task: string): string {
   return `Delegate this to the "${agent}" subagent via run_subagent and relay its report: ${task.trim()}`;
 }
 
+/**
+ * `/agent new <what it should do>`: the request that writes a custom subagent file (front-matter + system prompt) the
+ * skill manager picks up on its own. `inWorkspace` false (no folder open) writes it to the user's agents folder.
+ */
+export function createAgentPrompt(task: string, inWorkspace = true): string {
+  const dir = inWorkspace ? '.localpilot/agents' : '~/.localpilot/agents';
+  return `Create a custom subagent for this job: ${task.trim()}
+
+Write it to ${dir}/<name>.md, where <name> is a short kebab-case name for the job. Use YAML front-matter with \`name\` (the same name), \`description\` (one sentence saying when to delegate to it) and \`tools\` (only the tools it needs, for example read_file, grep_search, edit_file, run_command; leave it out to allow all tools). The Markdown body is the agent's system prompt: its role, the step-by-step procedure${inWorkspace ? ' that fits this project (read the relevant code and conventions first so it is specific)' : ''}, how to verify the result, and the structure of its final report. Keep it under 60 lines. Finish by saying how to use it: \`/agent <name> <task>\`.`;
+}
+
 /** `<name> <task>` after `/skill` or `/agent`: the task keeps its newlines and indentation. */
 export function parseTaskArgs(rest: string): { name: string; task: string } {
   const m = /^(\S+)\s*([\s\S]*)$/.exec(rest.trim());

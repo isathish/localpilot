@@ -1,6 +1,6 @@
 import type { RoutingConfig } from '../config';
 import type { ModelRole } from '../providers/catalog';
-import { SubagentDefinition } from '../types';
+import { Session, SpecialistId, SubagentDefinition, isSpecialistId } from '../types';
 import { mapToolNames } from './toolAliases';
 
 /**
@@ -154,6 +154,82 @@ ${REPORT_RULES}
 Structure: Answer (direct, 3–6 sentences) → Details / options with trade-offs → Sources (URLs) → Uncertain or version-dependent points.`,
     },
   ];
+}
+
+/**
+ * The "More modes" specialists. A specialist is not a host mode: it runs in its `base` mode (which decides the tools and
+ * approvals) and adds the named built-in agent's playbook plus a short brief to the main chat's system prompt.
+ */
+export interface SpecialistDef {
+  label: string;
+  base: Session['mode'];
+  /** Built-in agent whose instructions become the playbook (a workspace/user agent of the same name replaces it). */
+  agent?: string;
+  /** What this specialist does, written for the main chat (it talks to the user directly). */
+  brief: string;
+}
+
+export const SPECIALISTS: Record<SpecialistId, SpecialistDef> = {
+  architect: {
+    label: 'Architect',
+    base: 'plan',
+    agent: 'planner',
+    brief: 'Design the change before anything is built: the modules and interfaces involved, how data flows through them, the risks, and an ordered set of steps that can each be verified. Prefer the smallest design that fits the patterns this codebase already uses, and name the alternatives you rejected and why.',
+  },
+  review: {
+    label: 'Review',
+    base: 'ask',
+    agent: 'reviewer',
+    brief: 'Review code and report findings; never edit files. Without a named scope, review the uncommitted changes (run `git diff` and `git diff --staged`) and say so; otherwise review the file, folder, commit or branch the user names. Order findings by severity and give each a concrete fix.',
+  },
+  test: {
+    label: 'Test',
+    base: 'agent',
+    agent: 'tester',
+    brief: "Write tests and run them. Find the project's test framework and conventions first and match them. Run the new tests; when one fails because of a real bug in the code under test, fix the code with the smallest change and say so — never weaken a test to make it pass.",
+  },
+  refactor: {
+    label: 'Refactor',
+    base: 'agent',
+    agent: 'coder',
+    brief: 'Restructure code without changing what it does. Before editing, find how the behaviour is checked (tests, type-check, build) and run it for a baseline. Keep public APIs and behaviour identical unless the user asks otherwise, change in small steps, then run the same checks again and report any difference. Do not mix in bug fixes or features: list them as follow-ups.',
+  },
+  explain: {
+    label: 'Explain',
+    base: 'ask',
+    agent: 'explore',
+    brief: 'Explain code, data flow and concepts to someone new to them. Read the code before explaining it. Start with a two- or three-sentence summary, then walk through the flow step by step with `path:line` references and short quoted excerpts, and define project-specific terms. Do not change anything.',
+  },
+  terminal: {
+    label: 'Terminal',
+    base: 'agent',
+    brief: "Shell-centred work. Prefer run_command when a command does the job instead of editing files by hand. Before every run_command, write the exact command and one line on what it does, run one command per call, and read the exit code and output before the next one. Use this platform's shell syntax. Say so before anything that deletes, overwrites or rewrites git history.",
+  },
+  project: {
+    label: 'Project',
+    base: 'ask',
+    agent: 'explore',
+    brief: 'Give an overview of this project. Call analyze_workspace first, then read the manifests, the README and the entry points. Report what the project does, its structure (main folders and their roles), the entry points, the exact commands to build, run and test it (from the manifests and scripts), and the five files to read first.',
+  },
+};
+
+/** The specialist that applies to a run in `mode`, or undefined (unknown id, or the chat has moved to another mode). */
+export function specialistFor(id: unknown, mode: Session['mode']): SpecialistDef | undefined {
+  return isSpecialistId(id) && SPECIALISTS[id].base === mode ? SPECIALISTS[id] : undefined;
+}
+
+/**
+ * The system-prompt section of a specialist: its brief and the agent's playbook. `agent` is the definition in effect
+ * (a workspace agent file can replace a built-in); the subagent-only report rules are dropped, since the main chat
+ * answers the user, not a parent agent.
+ */
+export function specialistSection(def: SpecialistDef, agent?: Pick<SubagentDefinition, 'name' | 'systemPrompt'>): string {
+  const parts = [`# Specialist: ${def.label}\nThe user picked the ${def.label} specialist for this chat. ${def.brief}`];
+  const playbook = agent?.systemPrompt.replace(REPORT_RULES, '').trim();
+  if (playbook) {
+    parts.push(`Follow this playbook (the "${agent!.name}" agent's instructions). Where it mentions a parent agent, that is the user; where it says you cannot ask the user, the question rules of this chat apply instead.\n<playbook>\n${playbook}\n</playbook>`);
+  }
+  return parts.join('\n');
 }
 
 /** Aliases accepted by run_subagent in addition to the canonical names. */

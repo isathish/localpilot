@@ -47,7 +47,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
 body { background: var(--bg); color: var(--fg); font-family: var(--vscode-font-family); font-size: var(--fs); line-height: 1.5; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-#app { display: flex; flex-direction: column; height: 100vh; min-width: 0; position: relative; }
+#app { display: flex; flex-direction: column; height: 100vh; min-width: 0; position: relative; overflow-x: clip; }
 .hidden { display: none !important; }
 .spacer { flex: 1 1 0; min-width: 0; }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
@@ -190,6 +190,9 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 
 /* transcript */
 #messages { flex: 1 1 auto; min-height: min(80px, 20vh); overflow-y: auto; overflow-x: hidden; padding: 8px 0 8px; display: flex; flex-direction: column; container-type: inline-size; container-name: messages; }
+#messages.scrolled { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px); mask-image: linear-gradient(to bottom, transparent, #000 28px); }
+#messages.below { -webkit-mask-image: linear-gradient(to top, transparent, #000 22px); mask-image: linear-gradient(to top, transparent, #000 22px); }
+#messages.scrolled.below { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 22px), transparent); }
 .turn { position: relative; padding: 6px 12px; min-width: 0; }
 /* Only turns that genuinely appear animate; a transcript rebuild (end of turn, mode change) must not blink. */
 .turn.fresh, .turn.live { animation: fadeUp .18s ease-out; }
@@ -605,9 +608,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .change button.name { display: block; padding: 0; border-radius: 3px; color: inherit; } .change button.name[aria-disabled="true"] { cursor: default; }
 .change .acts button { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 3px; color: var(--muted); }
 .change .acts button:hover { background: var(--tint-2); color: var(--fg); } .change .acts svg { width: 12px; height: 12px; }
-.status { display: flex; align-items: center; gap: 8px; min-height: 18px; padding: 0 4px; font-size: var(--fs-sm); color: var(--muted); overflow: hidden; }
-.status .text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status .spinner { width: 12px; height: 12px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+.status { display: flex; align-items: flex-start; gap: 8px; min-height: 18px; padding: 0 4px; font-size: var(--fs-sm); line-height: 18px; color: var(--muted); overflow: hidden; }
+/* Two lines, then an ellipsis: "gemma4:12b is reading the prompt (~7,300 tokens)" stays readable in a narrow sidebar. */
+.status .text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.status .spinner { margin-top: 3px; width: 12px; height: 12px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 .box { position: relative; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--input-bg); display: flex; flex-direction: column; min-width: 0; transition: border-color .12s; }
 .box:focus-within { border-color: var(--focus); }
 .box.drop { border-color: var(--accent); border-style: dashed; }
@@ -685,9 +689,23 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .quoteprev .qtxt { flex: 1; min-width: 0; max-height: 4.4em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
 .quoteprev .ib { width: 20px; height: 20px; } .quoteprev .ib svg { width: 11px; height: 11px; }
 /* Sticky last user message, shown once the request being read has scrolled above the viewport. */
-.stickyuser { position: absolute; left: 12px; right: 12px; z-index: 55; display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border-soft); border-radius: 0 0 var(--radius) var(--radius); background: var(--vscode-sideBar-background, var(--bg)); box-shadow: var(--shadow); color: var(--fg); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; animation: fadeUp .18s ease-out; }
-.stickyuser:hover { background: var(--tint); } .stickyuser svg { width: 12px; height: 12px; flex: none; color: var(--brand-text); }
-.stickyuser .txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .stickyuser.hidden { display: none; }
+.stickyuser { position: absolute; left: 10px; right: 10px; z-index: 55; display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 4px; padding: 4px 6px 4px 8px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--bg); box-shadow: 0 6px 14px -8px rgba(0, 0, 0, .35); color: var(--fg); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; animation: fadeUp .16s ease-out; }
+/* Opaque from the transcript edge down, then a short fade: no half-covered line peeks out above or below the strip. */
+.stickyuser::before { content: ''; position: absolute; left: -11px; right: -11px; top: -5px; height: 5px; background: var(--bg); pointer-events: none; }
+.stickyuser::after { content: ''; position: absolute; left: -11px; right: -11px; top: calc(100% + 1px); height: 12px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
+.stickyuser .lead { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 7px 0 6px; border-radius: 10px; background: color-mix(in srgb, var(--brand-text, var(--accent)) 14%, transparent); color: var(--brand-text, var(--accent)); font-size: var(--fs-xs); font-weight: 600; }
+.stickyuser .lead svg { width: 12px; height: 12px; }
+.stickyuser .txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-2, var(--fg)); }
+.stickyuser .go { display: inline-flex; align-items: center; gap: 2px; flex: none; height: 20px; padding: 0 4px 0 6px; border-radius: var(--radius-sm); color: var(--muted); font-size: var(--fs-xs); opacity: 0; transition: opacity .12s; }
+.stickyuser .go svg { width: 12px; height: 12px; }
+.stickyuser:hover { border-color: var(--border); }
+.stickyuser:hover .txt { color: var(--fg); }
+.stickyuser:hover .go, .stickyuser:focus-visible .go { opacity: 1; color: var(--fg); }
+.stickyuser:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.stickyuser.hidden { display: none; }
+@media (max-width: 260px) { .stickyuser .lead span, .stickyuser .go { display: none; } }
+@media (prefers-reduced-motion: reduce) { .stickyuser, .stickyuser .go { animation: none; transition: none; } }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .stickyuser { box-shadow: none; border-color: var(--vscode-contrastBorder, var(--border)); }
 /* Paused indicators in tabs and the background strip. */
 .pausedind { display: inline-grid; place-items: center; color: var(--brand-text); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
 .tab .ind .pausedind svg { width: 12px; height: 12px; }
@@ -864,8 +882,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 }
 /* Narrow transcript: file names matter more than their language badges. */
 @container messages (max-width: 420px) { .step .fchip .lang { display: none; } }
+@container (max-width: 330px) { .pick.mode .lbl { display: none; } }
 @container (max-width: 340px) {
-  .pick.mode .lbl { display: none; }
   .pick.model { max-width: 120px; }
   #btnImage { display: none; }
   .ctxbtn .lbl { display: none; }
@@ -890,6 +908,15 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .pick.model .nm-short { display: inline; }
 }
 @container (max-width: 260px) { .pick.model { flex: none; min-width: 0; } }
+/* The row never overflows the composer: the thinking picker keeps only its bulb, the model name gives way first, and
+   while a run is going (Pause + Stop) the context ring steps aside below 320 px. */
+@container (max-width: 360px) {
+  .pick.think { padding: 0 5px; } .pick.think .chev { display: none; }
+  .pick.model { min-width: 56px; }
+  .send { margin-left: 2px; }
+}
+@container (max-width: 320px) { #box:has(#btnStop:not(.hidden)) .ctx { display: none; } }
+#box .row { min-width: 0; }
 /* Wide hosts (editor tab, a wide Panel): scroll areas stay full width so scrollbars sit at the window edge; the content is centred at a readable measure. */
 @media (min-width: 900px) {
   #messages { padding-inline: max(0px, calc((100% - 884px) / 2)); }
@@ -1102,14 +1129,21 @@ pre.numbered .t { padding-right: 14px; }
 .afoot .info i { font-style: normal; opacity: .6; }
 .afoot .info span { overflow: hidden; text-overflow: ellipsis; }
 .afoot .mdl { color: var(--muted); max-width: 180px; }
-.afoot .acts { display: inline-flex; gap: 2px; margin-left: auto; flex: none; opacity: .6; transition: opacity .12s; }
-.turn:hover .afoot .acts, .afoot .acts:focus-within { opacity: 1; }
+.afoot .acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
+/* The icon actions stay quiet until the turn is hovered; the View changes chip keeps full contrast. */
+.afoot .acts > button:not(.chg) { opacity: .6; transition: opacity .12s; }
+.turn:hover .afoot .acts > button, .afoot .acts:focus-within > button { opacity: 1; }
 .afoot .acts button { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--muted); }
 .afoot .acts button:hover { background: var(--tint-2); color: var(--fg); }
 .afoot .acts button:disabled { opacity: .4; pointer-events: none; }
 .afoot .acts svg { width: 14px; height: 14px; }
+/* View changes is a labelled chip (it says how many files), set apart from the icon actions by a hairline. */
+.afoot .acts button.chg { display: inline-flex; gap: 4px; width: auto; padding: 0 7px 0 5px; border: 1px solid var(--border-soft); border-radius: 12px; color: var(--fg-2, var(--fg)); font: inherit; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.afoot .acts button.chg:hover { border-color: var(--border); background: var(--tint-2); color: var(--fg); }
+.afoot .acts .sep { align-self: center; width: 1px; height: 14px; margin: 0 4px; background: var(--border-soft); }
+@container messages (max-width: 300px) { .afoot .acts button.chg span { display: none; } .afoot .acts button.chg { width: 24px; padding: 0; justify-content: center; } }
 @container messages (max-width: 340px) { .afoot .mdl { max-width: 120px; } }
-@media (hover: none) { .afoot .acts { opacity: 1; } }
+@media (hover: none) { .afoot .acts > button { opacity: 1; } }
 /* Copied: the button itself confirms. */
 button.copied, button.copied:hover { color: var(--ok-text) !important; }
 
@@ -1195,7 +1229,7 @@ body.vscode-high-contrast-light :is(.tk-s, .tk-n, .tk-k, .tk-t, .tk-f, .tk-p, .t
 /* Thin strokes antialias to grey on white, and muted text at reduced opacity drops to ~2:1, so light themes draw
    icons a little heavier and keep secondary icons near full strength. */
 body.vscode-light svg[viewBox="0 0 16 16"] { stroke-width: 1.65; }
-body.vscode-light .afoot .acts { opacity: .85; }
+body.vscode-light .afoot .acts > button:not(.chg) { opacity: .85; }
 body.vscode-light :is(.lane .ico, .work .chev, .task-row .rm) { opacity: .8; }
 body.vscode-light :is(.lane .who, .panel .chev svg, .step.subhost.workers .lane .who) { opacity: 1; }
 body.vscode-light pre.numbered .n { opacity: 1; }
@@ -1247,7 +1281,7 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 .taskhead .th-text:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
 .taskhead .th-text code { font-family: var(--mono); font-size: .88em; background: var(--tint-2); padding: 1px 4px; border-radius: 4px; }
 .taskhead .path-link { color: var(--link); cursor: pointer; }
-@media (max-width: 300px) { .taskhead .badge { display: none; } }
+@media (max-width: 340px) { .taskhead .badge { display: none; } }
 
 /* Context ring (U3): hover breakdown and the compact confirmation. */
 .ctx[aria-disabled="true"] { opacity: .55; cursor: default; }
@@ -1264,11 +1298,11 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 .ctxcard .acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 
 /* Feature tips (U8) under the status row, and the What's new card on the empty chat. */
-.tiprow { display: flex; align-items: center; gap: 6px; padding: 0 4px 2px 24px; font-size: var(--fs-xs); color: var(--muted); animation: fadeUp .2s ease-out; }
+.tiprow { display: flex; align-items: flex-start; line-height: 18px; gap: 6px; padding: 0 4px 2px 24px; font-size: var(--fs-xs); color: var(--muted); animation: fadeUp .2s ease-out; }
 .tiprow .k { flex: none; font-weight: 600; color: var(--brand-text, var(--accent)); }
-.tiprow .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiprow .t { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 /* Hidden until the row is hovered or focused; the hit area stays 24 px even at the narrowest width. */
-.tiprow .tip-x { width: 24px; height: 24px; margin-left: auto; opacity: 0; }
+.tiprow .tip-x { width: 24px; height: 18px; margin-left: auto; opacity: 0; flex: none; }
 .tiprow:hover .tip-x, .tiprow:focus-within .tip-x, .tiprow .tip-x[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .tiprow .tip-x { opacity: 1; } }
 .tiprow .tip-x svg { width: 12px; height: 12px; }
@@ -1304,7 +1338,7 @@ body.vscode-light pre.numbered .n { opacity: 1; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) { --tint: transparent; --tint-2: transparent; --sel: transparent; --shadow: none; --border-soft: var(--vscode-contrastBorder, var(--border)); }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item.sel, .hist-row.sel, .task-row .ac .opt.sel, .tab.active, .tab.selected, .aa-row .seg button.on) { outline: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item, .hist-row, .tab, .ib, .pick, .ctxbtn, .btn.ghost, .aa-grants .grant, .toast button):hover { outline: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.afoot .acts, .afoot .info i, .task-row .rm, .lane .ico, .lane .who, .lane.pending::after, .work .chev, .work .time, .work .facts:not(:empty)::before, .step .meta, .step.explore > summary .label .muted, .step.explore > summary .label .dot, .pill i, .pill .model, .par .lbl i, .report > summary .n, .note.hook i, .aa-head .chev svg, .panel .chev svg, .todo .todo-after, .popover .item.sel .desc, .hist-row .desc.snippet, pre.numbered .n, .a2, .tk-op, .dot.idle, .step.subhost.workers .lane .who, .step.subhost.workers .lane .now, .plan-foot .build kbd) { opacity: 1; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.afoot .acts, .afoot .acts > button, .afoot .info i, .task-row .rm, .lane .ico, .lane .who, .lane.pending::after, .work .chev, .work .time, .work .facts:not(:empty)::before, .step .meta, .step.explore > summary .label .muted, .step.explore > summary .label .dot, .pill i, .pill .model, .par .lbl i, .report > summary .n, .note.hook i, .aa-head .chev svg, .panel .chev svg, .todo .todo-after, .popover .item.sel .desc, .hist-row .desc.snippet, pre.numbered .n, .a2, .tk-op, .dot.idle, .step.subhost.workers .lane .who, .step.subhost.workers .lane .now, .plan-foot .build kbd) { opacity: 1; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .toast { border-color: var(--vscode-contrastBorder, var(--border)); }
 /* /clear confirmation above the composer: one quiet row, the destructive button keeps the error colour. */
 .confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 6px; padding: 6px 8px; font-size: var(--fs-sm); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-soft)); background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: var(--radius-sm); }
@@ -1396,3 +1430,201 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .toast { border-colo
   .rec-rb .btn { flex: 1 1 auto; }
 }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-color: var(--vscode-contrastBorder, var(--border)); border-right-color: var(--vscode-contrastBorder, var(--border)); border-bottom-color: var(--vscode-contrastBorder, var(--border)); }
+
+/* ---- Welcome screen (a chat with nothing in it): heading, mode line, context strip, starters, recent chats. ---- */
+.empty .hero { padding: 0 8px 10px; }
+.empty .hero h2 { margin: 0 0 4px; font-size: 1.25em; line-height: 1.3; }
+.empty .hero .sub { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--muted); text-wrap: pretty; }
+.empty .modeline { margin: 0; font-size: var(--fs-xs); color: var(--muted); }
+.empty .modeline .chg { white-space: nowrap; }
+.empty .link, .ctx-strip .link { padding: 0; font-size: inherit; color: var(--link); text-align: left; }
+.empty .link:hover, .ctx-strip .link:hover { text-decoration: underline; }
+/* Folder · branch · status: one quiet line, no box; only a status that needs you gets colour. */
+.ctx-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; margin: 0 8px 14px; font-size: var(--fs-xs); color: var(--muted); }
+.ctx-strip .seg { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.ctx-strip .seg svg { width: 12px; height: 12px; flex: none; }
+.ctx-strip .seg.folder .t { color: var(--fg); }
+.ctx-strip .t, .ctx-strip .seg .link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-strip .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--muted); }
+.ctx-strip .ok .dot { background: var(--ok); }
+.ctx-strip .warn .dot { background: var(--warn); }
+.ctx-strip .warn .link { color: var(--warn-text); }
+.ctx-strip .spinner { width: 10px; height: 10px; flex: none; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+.empty > .notice { margin: 0 8px 14px; }
+.empty .sgroup + .sgroup { margin-top: 12px; }
+.empty .sgroup + .recent { margin-top: 14px; }
+/* Four starters: a list in a narrow panel, a 2 × 2 grid once there is room. */
+@container messages (min-width: 420px) { .empty .starters .suggestions { grid-template-columns: 1fr 1fr; column-gap: 6px; } }
+/* The error count is information, not a mode name: it stays in a narrow panel, in the warning colour. */
+@container messages (max-width: 340px) { .suggestion .mode.count { display: inline; } }
+.suggestion .mode.count { color: var(--warn-text); }
+.empty .forfile .recent-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* Short panels keep the actions and drop the explanations: the subtitle, then the older recent chats. */
+@media (max-height: 560px) { .empty .hero .sub { display: none; } }
+@media (max-height: 760px) { .empty .recent-row:nth-of-type(n+4) { display: none; } }
+@media (prefers-reduced-motion: reduce) { .ctx-strip .spinner { animation: none; opacity: .6; } }
+/* Composer hint row (empty chats only) and the disclaimer under the box. */
+.hints { display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; margin: -2px 0 2px; padding: 0 6px; font-size: var(--fs-xs); color: var(--muted); }
+.hints button { padding: 0 4px; border-radius: var(--radius-sm); color: var(--muted); line-height: 18px; }
+.hints button b { font-family: var(--mono); font-weight: 600; }
+.hints button:hover { background: var(--tint); color: var(--fg); }
+.disclaimer { margin: 0; text-align: center; font-size: var(--fs-xs); color: var(--muted); text-wrap: balance; }
+@media (max-height: 520px) { .disclaimer { display: none; } }
+/* Model chip: a dot for where the model runs (filled = this machine, ring = cloud), then "provider · model". */
+/* Squeezed by the row, the provider and then "Auto ·" give way before the model's name does (fitModelChip in chat.js). */
+.pick.model .lbl.no-prov .prov, .pick.model .lbl.no-auto .auto { display: none; }
+.pick.model .where { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; background: var(--ok); }
+.pick.model .where.cloud { background: transparent; box-shadow: inset 0 0 0 1.5px var(--link); }
+/* The model name wins over the provider: with Auto the provider steps aside first, then the :tag, then "Auto ·". */
+@container (max-width: 520px) { .pick.model .nm-full { display: none; } .pick.model .nm-short { display: inline; } }
+/* The model chip keeps a readable name: below 520 px the thinking and skills pickers give up their labels before it shrinks. */
+.pick.model { min-width: 72px; }
+@container (max-width: 520px) { .pick.think .lbl, .pick.skills .lbl, .pick.think .chev, .pick.skills .chev, .ctx .txt { display: none; } .pick.think, .pick.skills { padding: 0 6px; } }
+@container (max-width: 360px) { .pick.model .prov { display: none; } }
+/* Mode picker: "Modes" and "More modes" headers; the read-only / edits files tags stay quiet. */
+.popover[data-menu="modes"] .item { padding: 5px 8px; }
+.popover[data-menu="modes"] .item .txt { display: flex; align-items: baseline; gap: 8px; }
+.popover[data-menu="modes"] .item .lbl { flex: none; }
+.popover[data-menu="modes"] .item .desc { flex: 1 1 auto; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; }
+.popover[data-menu="modes"] .item .tag { white-space: nowrap; }
+@media (max-width: 340px) { .popover[data-menu="modes"] .item .desc { display: none; } }
+
+/* ---- Run cards and failure handling (spec 03/04): failure bar, stopped/paused strip, slow steps, wait/route/retry
+   notes, typed error box, test summaries, approval upgrades, todo links, recovery card details. Tokens only. */
+/* Failed step: one quiet row under it; the reason is muted text, the buttons do the talking. */
+.tool-fail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 4px 26px; padding: 2px 0 2px 8px; border-left: 2px solid color-mix(in srgb, var(--error) 55%, transparent); font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.tool-fail .why { flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-fail .acts { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.tool-fail .btn { height: 22px; padding: 0 7px; font-size: var(--fs-xs); }
+.tool-fail .btn svg { width: 11px; height: 11px; }
+.tool-fail.sent { opacity: .6; }
+.tool-fail .tf-edit { display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; }
+.tool-fail textarea, .approval textarea.cmd-edit { width: 100%; min-height: 40px; padding: 6px 8px; resize: vertical; font-family: var(--mono); font-size: 11.5px; line-height: 1.45; color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--border-2); border-radius: var(--radius-sm); }
+.tool-fail textarea:focus, .approval textarea.cmd-edit:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
+.tool-fail .tf-row { display: inline-flex; gap: 4px; }
+.retried-tag { font-style: normal; color: var(--muted); }
+.step.retried > summary .ico, .card.edit.retried .card-head .ico { color: var(--muted); }
+.step.cancelled > summary .label, .card.edit.cancelled .name { opacity: .75; }
+/* Running step: elapsed time, warning colour once it has run 30 s. */
+.step .meta .el { font-variant-numeric: tabular-nums; }
+.step.running.slow > summary .meta .el { color: var(--warn-text); }
+.step.flash > summary, .card.flash { animation: stepFlash 1.6s ease-out; }
+@keyframes stepFlash { 0%, 30% { background: color-mix(in srgb, var(--focus) 22%, transparent); } 100% { background: transparent; } }
+/* "Needs approval · Review" on the row the prompt is about. */
+.needs-tag { display: inline-flex; align-items: center; gap: 4px; color: var(--warn-text); font-style: normal; white-space: nowrap; }
+.needs-tag i { font-style: normal; opacity: .6; }
+.needs-tag .link, .tool-fail .link { color: var(--link); font-size: var(--fs-xs); padding: 0; }
+.needs-tag .link:hover { text-decoration: underline; }
+/* Work strip: stopped by you (muted, not a failure), paused (timer frozen, inline Resume). */
+.work.done.stopped .ico { color: var(--muted); }
+.work.done.stopped .ico svg { width: 11px; height: 11px; }
+.work.paused .ico { color: var(--muted); } .work.paused .ico svg { animation: none; }
+.work.paused .time { opacity: .55; }
+.work .work-resume { flex: none; height: 22px; padding: 0 8px; font-size: var(--fs-xs); }
+.work .work-resume svg { width: 10px; height: 10px; }
+.work .facts .bad { font-weight: 400; color: var(--error-text); }
+.stopped-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; font-size: var(--fs-xs); }
+.stopped-acts .muted { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.stopped-acts .muted:empty { display: none; }
+.stopped-acts .muted svg { width: 10px; height: 10px; }
+.stopped-acts .acts { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.stopped-acts .btn { height: 24px; } .stopped-acts .btn svg { width: 11px; height: 11px; }
+/* Slow model, fallback and retry notes: one row each, no dashed box. */
+.note.wait, .note.route, .note.retry { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 0; padding: 2px 0; border: none; font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.note.wait .ico, .note.route .ico, .note.retry .ico { display: inline-grid; place-items: center; flex: none; width: 14px; }
+.note.wait .ico svg, .note.retry .ico svg { width: 12px; height: 12px; animation: spin 1.2s linear infinite; }
+.note.retry.ok .ico svg, .note.retry.failed .ico svg { animation: none; }
+.note.retry.ok .ico { color: var(--ok-text); } .note.retry.failed .ico { color: var(--warn-text); }
+.note.wait .t { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+.note.wait .lim { opacity: .85; white-space: nowrap; }
+.note.wait.long .lim { color: var(--warn-text); }
+.note.wait .acts, .note.route .acts { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.note.wait .btn, .note.route .btn { height: 22px; padding: 0 7px; font-size: var(--fs-xs); } .note.wait .btn svg, .note.route .btn svg { width: 11px; height: 11px; }
+.note.route { padding: 4px 8px; border-left: 2px solid var(--warn); border-radius: 0; background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.note.route .ico { color: var(--warn-text); } .note.route .ico svg { width: 12px; height: 12px; }
+.note.route .t { flex: 1 1 180px; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.note.route .acts .muted { display: inline-flex; align-items: center; gap: 4px; } .note.route .acts .muted svg { width: 11px; height: 11px; color: var(--ok-text); }
+.badge.cloud { display: inline-block; padding: 0 5px; line-height: 15px; font-size: 10px; border-radius: 8px; color: var(--link); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--link) 60%, transparent); vertical-align: 1px; }
+/* The model chip carries a warning dot after a fallback answered. */
+.pick.model.rerouted { position: relative; }
+.pick.model.rerouted::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 1.5px var(--bg); }
+/* Typed error box: a title row (kind + Copy), the message, then the fix. */
+.error-box .err-head { display: flex; align-items: center; gap: 6px; flex-basis: 100%; min-width: 0; font-weight: 600; }
+.error-box .err-head .ico { display: inline-grid; place-items: center; flex: none; } .error-box .err-head .ico svg { width: 13px; height: 13px; }
+.error-box .err-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error-box .err-copy { margin-left: auto; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); flex: none; }
+.error-box .err-copy:hover { background: var(--tint-2); color: var(--fg); } .error-box .err-copy svg { width: 12px; height: 12px; }
+.error-box .msg { color: var(--fg); }
+.error-box .err-guide { flex-basis: 100%; }
+/* Command rows: cwd chip, Rerun / Open in terminal, the next-step line, test summary. */
+.term-acts { align-items: center; flex-wrap: wrap; }
+.term-acts .sp { flex: 1 1 0; }
+.term-acts .cwd { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 50%; padding: 0 4px; font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+.term-acts .cwd span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .term-acts .cwd svg { width: 11px; height: 11px; flex: none; }
+.term-acts button:disabled { opacity: .5; cursor: default; }
+@container messages (max-width: 380px) { .term-acts button span { display: none; } }
+.term-next { padding: 4px 8px; font-size: var(--fs-xs); color: var(--muted); border-top: 1px solid var(--border-soft); }
+.term-next i { font-style: normal; margin: 0 5px; opacity: .6; }
+.step .meta .tests-badge { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.tests-badge b { font-weight: 500; } .tests-badge i { font-style: normal; opacity: .6; }
+.tests-badge .p { color: var(--vscode-testing-iconPassed, var(--ok-text)); } .tests-badge .f { color: var(--vscode-testing-iconFailed, var(--error-text)); } .tests-badge .s { color: var(--muted); font-weight: 400; }
+.tests { padding: 4px 8px 6px; border-bottom: 1px solid var(--border-soft); font-size: var(--fs-xs); }
+.tests ul { margin: 0; padding: 0; list-style: none; }
+.tests li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; padding: 1px 0; }
+.tests li .x { display: inline-grid; place-items: center; flex: none; color: var(--vscode-testing-iconFailed, var(--error-text)); } .tests li .x svg { width: 10px; height: 10px; }
+.tests li .tn { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.tests li .tm { flex-basis: 100%; padding-left: 16px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tests li.more { color: var(--muted); padding-left: 16px; }
+.tests .tacts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.tests .btn { height: 22px; padding: 0 7px; font-size: var(--fs-xs); } .tests .btn svg { width: 11px; height: 11px; } .tests .btn:disabled { opacity: .5; }
+.tests .heal { margin-left: auto; color: var(--link); font-size: var(--fs-xs); } .tests .heal:hover { text-decoration: underline; }
+/* Approval prompt: highlighted command, edit box, split "allow all" menu, why-it-asked footer. */
+.approval pre.cmd .sh-prompt { color: var(--muted); user-select: none; }
+.approval textarea.cmd-edit { display: block; width: calc(100% - 20px); margin: 8px 10px 0; }
+.approval .split { display: inline-flex; flex: none; }
+.approval .split > .btn { flex: none; }
+.approval .split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* With Edit and the split menu the row no longer fits a narrow panel on one line: let it wrap instead of squeezing. */
+.approval .actions:has([data-a="edit"], .split) { flex-wrap: wrap; }
+.approval .actions [data-a="edit"] { flex: none; }
+.approval .split > .split-more { width: 22px; padding: 0; border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; flex: none; }
+.approval .split-more svg { width: 10px; height: 10px; transform: rotate(90deg); }
+.approval .actions .btn svg { width: 12px; height: 12px; }
+.approval .always { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px 5px; }
+.approval .always i { font-style: normal; opacity: .6; }
+.approval .always .link { color: var(--link); font-size: var(--fs-xs); padding: 0; } .approval .always .link:hover { text-decoration: underline; }
+@container (max-width: 330px) { .approval [data-a="edit"] .long { display: none; } }
+/* Checklist: failed and skipped items, and items linked to the steps that ran them. */
+.todo.failed .box { border-color: var(--error); color: var(--error-text); }
+.todo.failed .title { color: var(--fg); font-style: normal; }
+.todo.skipped .box .dash { width: 6px; height: 1.5px; background: var(--muted); }
+.todo.linked { cursor: pointer; } .todo.linked:hover { background: var(--tint); }
+.todo.linked:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+/* Workers: a failed lane's Retry. */
+.lane-retry { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; margin-left: 4px; border-radius: 4px; color: var(--fg); font-size: var(--fs-xs); }
+.lane-retry:hover { background: var(--tint-2); } .lane-retry svg { width: 11px; height: 11px; } .lane-retry:disabled { opacity: .5; }
+/* Recovery card: Details link, expandable failed checks, patch rows that open their diff, conflict files. */
+.rec-head .rec-details { margin-left: auto; flex: none; font-weight: 400; font-size: var(--fs-xs); color: var(--link); padding: 0 2px; }
+.rec-head .rec-details:hover { text-decoration: underline; }
+.rec-head .when { margin-left: auto; flex: none; font-weight: 400; font-size: var(--fs-xs); color: var(--muted); }
+.rchip[data-ex] { cursor: pointer; } .rchip[data-ex]:hover { filter: brightness(1.15); }
+.rchip[data-ex]:focus-visible, .rec-patches li[data-file]:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.rec-ex { margin: 4px 0 0; padding: 6px 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-xs); color: var(--fg-2); background: var(--editor-bg); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.rec-patches li[data-file] { cursor: pointer; border-radius: 3px; } .rec-patches li[data-file]:hover .f { color: var(--link); text-decoration: underline; }
+.rec-conflicts, .rec-files { flex-basis: 100%; margin: 2px 0 0; padding: 0; list-style: none; font-weight: 400; color: var(--fg); font-size: var(--fs-xs); }
+.rec-conflicts li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 0; }
+.rec-conflicts .f, .rec-files li { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.rec-conflicts .f { flex: 1 1 auto; }
+.rec-conflicts .btn { height: 22px; padding: 0 7px; font-size: var(--fs-xs); flex: none; }
+.rec-conflicts li.resolved .f { color: var(--muted); text-decoration: line-through; }
+.rec-files li.more { font-family: var(--vscode-font-family); color: var(--muted); }
+.rec-next { flex-basis: 100%; font-weight: 400; color: var(--fg); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.run-int .rec-cause { color: var(--muted); }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.tool-fail, .note.wait .lim, .tests-badge i, .work.paused .time) { opacity: 1; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .note.route { background: none; }
+@media (prefers-reduced-motion: reduce) { .step.flash > summary, .card.flash { animation: none; } }
+/* While a step waits for approval nothing runs yet: its run controls and clock give way to "Needs approval · Review". */
+.step.term.running.needs > summary .cmdctl, .step.running.needs > summary .meta .el { display: none; }
+@container messages (max-width: 380px) { .needs-tag > :not(.link) { display: none; } }
+/* A test summary says pass/fail already: on narrow panels the exit chip gives it the room. */
+@container messages (max-width: 400px) { .step.has-tests > summary .meta .exit { display: none; } }

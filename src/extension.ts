@@ -868,7 +868,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Commands ----------------------------------------------------------------------------
   const cmd = (id: string, fn: (...a: unknown[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
-  cmd('localpilot.openSettings', (section?: unknown) => settingsPanel.show('settings', typeof section === 'string' ? (section as SettingsSection) : undefined));
+  // A second argument `{ key?, expand? }` deep-links to one setting (scrolled to and highlighted) or opens a provider card.
+  cmd('localpilot.openSettings', (section?: unknown, focus?: unknown) => {
+    const f = focus && typeof focus === 'object' ? (focus as { key?: unknown; expand?: unknown }) : {};
+    settingsPanel.show('settings', typeof section === 'string' ? (section as SettingsSection) : undefined, { key: typeof f.key === 'string' ? f.key : undefined, expand: typeof f.expand === 'string' ? f.expand : undefined });
+  });
   cmd('localpilot.openMarkdownViewer', async (arg?: unknown) => {
     // Explorer / editor-title pass a Uri; the palette uses the active editor, then a Markdown file on screen (the
     // Settings page has the focus when its button runs this), then asks for a file.

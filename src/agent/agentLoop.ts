@@ -11,6 +11,7 @@ import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
 import { parseArgs, ToolRegistry } from '../tools/registry';
 import { deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
+import type { TestSummary } from './healing/parsers/testSummary';
 import { isReadOnlyOrSafe } from './commandGuard';
 import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, HealingRawOutcome, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolCallDecision, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
 import { addUsage } from './usage';
@@ -414,6 +415,10 @@ export class AgentRunner {
     if (route.reason) {
       status(route.reason);
     }
+    // A substitute model answers this turn: say so in the chat (a note at the top of the turn), not only in the status line.
+    if (depth === 0 && route.fallback && requested && requested !== model.id) {
+      emit({ sessionId: session.id, type: 'route', payload: { wanted: requested, used: model.id, usedName: model.name, reason: route.reason ?? '', fallback: true, unavailable: !!route.unavailable, cloud: !!model.remote } });
+    }
     // Keep the session on the user's chosen model when a turn was redirected (e.g. to a vision model); an
     // unavailable model is replaced for good so the picker reflects what is actually answering — unless only its
     // server missed the last check, then the substitute answers this turn and the next one tries it again. A model chosen only
@@ -464,6 +469,8 @@ export class AgentRunner {
     const system = await buildSystemPrompt({
       contextPaths,
       mode: turnMode,
+      // Only the chat's own turns: a one-off mode (an empty-chat suggestion) or a subagent run is not the specialist.
+      specialist: depth === 0 && !o.roleOverride && turnMode === session.mode ? session.specialist : undefined,
       workspaceRoot: o.workspaceRoot,
       model,
       toolsEnabled,
@@ -1090,6 +1097,7 @@ export class AgentRunner {
         others ? `Waiting for ${model.name} — queued behind ${others} other request${others === 1 ? '' : 's'}`
         : loaded === false ? `Loading ${model.name} into memory`
         : `${model.name} is reading the prompt (~${promptTokens.toLocaleString()} tokens)`;
+      const waitPhase: 'queue' | 'load' | 'prefill' = others ? 'queue' : loaded === false ? 'load' : 'prefill';
       status(others ? `Waiting for ${model.name} — busy with ${others} other chat${others === 1 ? '' : 's'}…` : loaded === false ? `${waitingFor}…` : iter === 0 ? `Thinking with ${model.name}…` : `Continuing (${iter + 1})…`);
       emit({ sessionId: session.id, type: 'model_request', payload: { model: model.id, name: model.name, queued: others } });
       busy.add(session.id);
@@ -1148,20 +1156,28 @@ export class AgentRunner {
           const patience = watchdogFor(model, profile?.modelBudgetGb);
           // Ollama sends nothing while it buffers a tool call: a measured-slow model gets time for a max-length one.
           const measured = stats.genMs && stats.genTokens ? (cfg.maxOutputTokens / (stats.genTokens / (stats.genMs / 1000))) * 1.5 * 1000 : 0;
+          // The provider's own timeout is a floor: a slow gateway or cold start is not called a stall before it.
+          const firstTokenMs = Math.max(
+            firstTokenFloor(cfg.providers.find((p) => p.id === model.providerId)),
+            Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first)
+          );
           const guarded = withWatchdog(stream, {
-            // The provider's own timeout is a floor: a slow gateway or cold start is not called a stall before it.
-            firstTokenMs: Math.max(
-              firstTokenFloor(cfg.providers.find((p) => p.id === model.providerId)),
-              Math.min(((onSide ? o.firstTokenTimeoutMs : undefined) ?? FIRST_TOKEN_TIMEOUT_MS) * patience.first * (1 + others), FIRST_TOKEN_TIMEOUT_MAX_MS * patience.first)
-            ),
+            firstTokenMs,
             idleMs: Math.max(IDLE_TIMEOUT_MS * patience.idle, measured),
             abort: () => ac.abort(),
-            onWaiting: (s) => status(`${waitingFor} · ${s}s…`),
+            onWaiting: (s) => {
+              status(`${waitingFor} · ${s}s…`);
+              emit({ sessionId: session.id, type: 'waiting', payload: { phase: waitPhase, model: model.id, name: model.name, seconds: s, limitSec: Math.round(firstTokenMs / 1000) } });
+            },
           });
           for await (const ev of guarded) {
             if (first && (ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool_call')) {
               first = false;
               firstAt = Date.now();
+              // The chat's "Loading … into memory" row goes once output starts (it only appears after a few seconds).
+              if (firstAt - requestedAt > 1500) {
+                emit({ sessionId: session.id, type: 'waiting', payload: { done: true } });
+              }
               emit({ sessionId: session.id, type: 'status', payload: ev.type === 'thinking' ? 'Thinking…' : 'Responding…' });
               this.noteFirstToken(model, others, requestedAt);
             }
@@ -1305,7 +1321,7 @@ export class AgentRunner {
             const wait = retryDelayMs(kind, e, attempt, RETRY_BACKOFF_MS);
             this.log.warn(`model call failed (${kind}), retry ${attempt}/${maxModelRetries} in ${wait}ms: ${msg}`);
             status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? `The server is rate limiting — waiting ${Math.round(wait / 1000)} s` : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
-            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: kind, message: msg } });
+            emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: kind, message: msg, delayMs: wait } });
             await sleep(wait, o.signal);
             if (o.signal.aborted) {
               aborted = true;
@@ -1717,6 +1733,15 @@ export class AgentRunner {
       // Which model answered and how fast, for the footer under the answer (kept with the transcript, never sent).
       last.meta = { ...last.meta, durationMs, model: stats.model || undefined, outputTokens: stats.genTokens || undefined, genMs: stats.genMs || undefined };
     }
+    // A turn the user stopped is marked on its last assistant message (the transcript may end on a tool result), so the
+    // chat redraws it as "Stopped by you" with Continue / Discard changes rather than as finished work.
+    if (depth === 0 && (o.signal.aborted || control.aborted)) {
+      const at = session.messages.map((m) => m.role).lastIndexOf('assistant');
+      if (at >= 0) {
+        const m = session.messages[at];
+        m.meta = { ...m.meta, stopped: true, durationMs: m.meta?.durationMs ?? durationMs };
+      }
+    }
     // Self-healing: the turn's outcome (completed, completed_unverified, incomplete, blocked, cancelled), its contract and recovery summary.
     let healed: Record<string, unknown> | undefined;
     if (heal) {
@@ -2025,6 +2050,8 @@ export class AgentRunner {
       let callCtx: ToolContext = { ...ctx, callId: call.id, output: (chunk) => emit({ sessionId, type: 'tool_progress', payload: { id: call.id, chunk } }) };
       /** Set when the user denied an approval of this call: the reason they gave, or '' for none. */
       let denial: string | undefined;
+      /** The command line the user edited in this call's approval prompt before allowing it. */
+      let edited: string | undefined;
       if (coordinatorFirst && call.name === 'run_command') {
         result = { content: 'Nothing was run. In Multitask mode you coordinate and workers do the work: call run_todos_parallel now with each piece in "tasks" (title, agent, complete prompt). Use run_command only to verify after the workers report.', isError: true };
       }
@@ -2117,10 +2144,14 @@ export class AgentRunner {
           // Tools see a yes/no answer; a denial's reason goes to the model in place of the tool's fixed refusal text.
           callCtx = {
             ...callCtx,
+            approvalEdit: () => edited,
             requestApproval: async (t, d, k, o) => {
               const v = await approve(t, d, k, o);
               if (!v.ok && v.byUser) {
                 denial = v.feedback ?? denial ?? '';
+              }
+              if (v.ok && v.edited && call.name === 'run_command') {
+                edited = v.edited;
               }
               if (!v.ok) {
                 refused = ctx.signal.aborted ? { blockedBy: 'stopped' } : refusalOf(v);
@@ -2194,12 +2225,19 @@ export class AgentRunner {
       if (result.isError && denial === undefined) {
         failed.add(call.id);
       }
-      return { msg: toolMsg(call, content, !!result.isError), isError: !!result.isError };
+      const msg = toolMsg(call, content, !!result.isError);
+      const tests = call.name === 'run_command' ? (result.data as { tests?: TestSummary } | undefined)?.tests : undefined;
+      if (tests) {
+        msg.meta = { ...msg.meta, tests };
+      }
+      return { msg, isError: !!result.isError };
     };
     const runOne = async (call: ToolCall): Promise<ChatMessage> => {
       const args = parseArgs(call.arguments);
       const tool = byName.get(call.name);
-      emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args } });
+      // The checklist item in progress when the call starts: the chat links the row to that task (and back).
+      const todoId = call.name === 'manage_todos' ? undefined : ctx.todos?.get().find((t) => t.status === 'in_progress')?.id;
+      emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args, ...(todoId ? { todoId } : {}) } });
       const key = callKey(call.name, args);
       if (callCounts) {
         const n = (callCounts.get(key) ?? 0) + 1;

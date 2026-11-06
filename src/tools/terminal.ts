@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../config';
 import { checkReadOnlyCommand, isReadOnlyOrSafe } from '../agent/commandGuard';
+import { summarizeTests, type TestSummary } from '../agent/healing/parsers/testSummary';
 import { profileInvocation } from '../terminal/profiles';
 import { agentTerminalProfile } from '../terminal/profileSetting';
 import { CommandOutcome, CommandRun, formatCommandOutcome, OutputCapture, stripAnsi } from '../terminal/commandRun';
@@ -50,7 +51,7 @@ export const runCommandTool: Tool = {
     },
   },
   async execute(args, ctx) {
-    const command = String(args.command ?? '').trim();
+    let command = String(args.command ?? '').trim();
     if (!command) {
       return { content: 'command is required', isError: true };
     }
@@ -91,6 +92,20 @@ export const runCommandTool: Tool = {
     if (ctx.signal.aborted) {
       return { content: 'Not run: the user stopped the run.', isError: true };
     }
+    // The user rewrote the command in the approval prompt: that is what runs (still read-only in Ask/Plan), and the model is told.
+    const edited = ctx.approvalEdit?.()?.trim();
+    let editNote = '';
+    if (edited && edited !== command) {
+      if (ctx.readOnly) {
+        const guard = checkReadOnlyCommand(edited);
+        if (!guard.ok) {
+          return { content: `${ctx.mode === 'ask' ? 'Ask' : 'Plan'} mode: ${guard.reason}. The edited command was not run.`, isError: true };
+        }
+      }
+      editNote = `[The user edited the command before running it. Ran: ${edited}]\n`;
+      command = edited;
+    }
+    const noted = <T extends { content: string }>(r: T): T => (editNote ? { ...r, content: editNote + r.content } : r);
 
     const termCfg = getConfig().terminal;
     const explicit = Number(args.timeout_seconds) > 0;
@@ -117,8 +132,8 @@ export const runCommandTool: Tool = {
       const r = await integrated.run(ctx.sessionId, command, cwd, ctx.signal, timeoutMs, termCfg.reveal, opts).catch(() => undefined);
       if (r) {
         report(r);
-        const res = formatCommandOutcome(command, r);
-        return { ...res, data: { ...res.data, terminal: true } };
+        const res = noted(formatCommandOutcome(command, r));
+        return { ...res, data: { ...res.data, terminal: true, ...testData(command, r.output, root) } };
       }
     }
     const profile = agentTerminalProfile();
@@ -142,9 +157,20 @@ export const runCommandTool: Tool = {
     child.on('close', (code) => run.finish(code));
     const outcome = await run.result;
     report(outcome);
-    return formatCommandOutcome(command, outcome);
+    const res = noted(formatCommandOutcome(command, outcome));
+    return { ...res, data: { ...res.data, ...testData(command, outcome.output, root) } };
   },
 };
+
+/** `{ tests }` for the chat's result badge when the output is a test run's (counts and the failing tests), else nothing. */
+function testData(command: string, output: string | undefined, root: string): { tests?: TestSummary } {
+  try {
+    const tests = output ? summarizeTests(stripAnsi(output), root, command) : undefined;
+    return tests ? { tests } : {};
+  } catch {
+    return {};
+  }
+}
 
 /** A profile's env for a child process: null entries unset the variable, so they become undefined. */
 function profileEnv(env: Record<string, string | null> | undefined): NodeJS.ProcessEnv {

@@ -366,7 +366,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <button id="btnAddCtx" class="ctxbtn" title="Add context (@)"><span class="at">@</span><span class="lbl">Add context</span></button>
         <div id="chips" class="chips"></div>
       </div>
-      <textarea id="input" rows="1" placeholder="Plan, build, fix anything… (@ context, / commands)" aria-label="Chat input"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask anything, or describe a task…" aria-label="Chat input"></textarea>
+      <div id="hints" class="hints hidden" role="group" aria-label="Message box shortcuts"><button type="button" data-h="@" title="Add a file, folder or other context"><b>@</b> file</button><span aria-hidden="true">·</span><button type="button" data-h="#" title="Attach the project file tree (@workspace)"><b>#</b> codebase</button><span aria-hidden="true">·</span><button type="button" data-h="/" title="Commands, modes and skills"><b>/</b> command</button></div>
       <div class="row">
         <button id="modeBtn" class="pick mode" title="Mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
         <button id="modelBtn" class="pick model" title="Model"><span class="ico">${svg('<path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/><circle cx="6.5" cy="7.5" r=".8" fill="currentColor"/><circle cx="9.5" cy="7.5" r=".8" fill="currentColor"/>')}</span><span id="modelLabel" class="lbl">Auto</span><span class="chev">${svg('<path d="M4 6l4 4 4-4"/>')}</span></button>
@@ -383,6 +384,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <button id="btnStop" class="send stop hidden" title="Stop (Esc)">${svg('<rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/>')}</button>
       </div>
     </div>
+    <p id="disclaimer" class="disclaimer hidden">AI can make mistakes. Review generated changes before applying.</p>
   </footer>
   <div id="popover" class="popover hidden"></div>
   <div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
