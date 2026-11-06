@@ -1173,8 +1173,10 @@ async function runTurn(core: Core, session: Session, text: string, files: string
           case 'status': if (typeof e.payload === 'string') {r.status(e.payload);} break;
           case 'tool_start': if (!p.childId) {r.toolStart(String(p.id), String(p.name), (p.args as Record<string, unknown>) ?? {}, p.origin === 'healing');} break;
           case 'tool_progress': if (!p.childId) {r.toolOutput(String(p.id), String(p.chunk ?? ''));} break;
-          case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached, p.origin === 'healing');} break;
-          case 'recovery': if (!p.childId) {recovery = p as unknown as RecoveryEventPayload; notes.lines(recovery).forEach((l) => r.note(l));} break;
+          case 'tool_end': if (!p.childId) {r.toolEnd(String(p.id), String(p.name), !!p.isError, String(p.content ?? ''), p.data, !!p.cached, p.origin === 'healing'); core.store?.save(session);} break;
+          // A recovery phase change (checks starting, a fix attempt) comes before the long waits: the chat is written at once,
+          // so a crash or a hard kill there (Windows has no SIGTERM) still leaves it on disk for -c and recovery resume.
+          case 'recovery': if (!p.childId) {recovery = p as unknown as RecoveryEventPayload; notes.lines(recovery).forEach((l) => r.note(l)); if (core.store) { core.store.save(session); void core.store.flush(session).catch(() => undefined); }} break;
           case 'todos': r.todos((e.payload as TodoItem[]) ?? []); break;
           case 'memory': r.note(`Saved to memory: ${((p.saved as string[]) ?? []).join(', ')}`); break;
           case 'compaction': r.note(`Context compacted ${(p.before as number).toLocaleString()} → ${(p.after as number).toLocaleString()} tokens`); break;

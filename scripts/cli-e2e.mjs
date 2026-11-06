@@ -415,7 +415,7 @@ try {
       }
       return false;
     };
-    const interrupted = async (label) => {
+    const interrupted = async (label, sig = 'SIGTERM') => {
       const dir = healWorkspace({ 'package.json': nodePackage('node slow-test.js'), 'slow-test.js': slow });
       const flag = path.join(dir, 'started.flag');
       let signalled = false;
@@ -425,7 +425,7 @@ try {
             if (fs.existsSync(flag)) {
               clearInterval(poll);
               signalled = true;
-              child.kill('SIGTERM');
+              child.kill(sig);
             }
           }, 100);
           child.on('exit', () => clearInterval(poll));
@@ -436,25 +436,34 @@ try {
       try { sid = JSON.parse(hist.out.slice(hist.out.indexOf('[')))[0]?.id; } catch { sid = undefined; }
       // Windows has no SIGTERM: kill() is TerminateProcess, no handler runs. What still holds there: the session was
       // saved as the run went, and the next command finds the recovery interrupted (its stale lock is taken over).
-      const win = process.platform === 'win32';
-      check(`SIGTERM during the checks (${label}): ${win ? 'killed (Windows: no handler)' : 'exit 143'}, the session is saved`, signalled && (win ? run.code !== 0 : run.code === 143) && !!sid, { signalled, code: run.code, out: run.out.slice(0, 600), hist: hist.out.slice(0, 300) });
+      // A hard kill (SIGKILL anywhere, any kill on Windows) runs no handler: only what was already on disk survives.
+      const win = process.platform === 'win32' || sig === 'SIGKILL';
+      check(`${sig} during the checks (${label}): ${win ? 'killed (no handler runs)' : 'exit 143'}, the session is saved`, signalled && (win ? run.code !== 0 : run.code === 143) && !!sid, { signalled, code: run.code, out: run.out.slice(0, 600), hist: hist.out.slice(0, 300) });
       const show = await healCmd(['recovery', 'show', String(sid), '--json'], dir);
       let st;
       try { st = JSON.parse(show.stdout.slice(show.stdout.indexOf('{'))); } catch { st = undefined; }
       const lock = path.join(healHome, '.localpilot', 'recovery', `${encodeURIComponent(String(sid))}.lock`);
-      check(`SIGTERM (${label}): phase interrupted persisted${win ? '' : ', owner lock released'}`, show.code === 0 && st?.phase === 'interrupted' && (win || !fs.existsSync(lock)), { code: show.code, phase: st?.phase, lock: fs.existsSync(lock) });
+      check(`${sig} (${label}): phase interrupted persisted${win ? '' : ', owner lock released'}`, show.code === 0 && st?.phase === 'interrupted' && (win || !fs.existsSync(lock)), { code: show.code, phase: st?.phase, lock: fs.existsSync(lock) });
       const pid = Number(fs.existsSync(flag) ? fs.readFileSync(flag, 'utf8') : NaN);
       if (win) {
         // A terminated process cannot stop its children: end the orphaned check tree so the workspace can be removed.
         if (Number.isInteger(pid) && pid > 0) {
-          await new Promise((res) => spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('exit', res).on('error', res));
+          if (process.platform === 'win32') {
+            await new Promise((res) => spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('exit', res).on('error', res));
+          } else {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+          }
         }
       } else {
-        check(`SIGTERM (${label}): the running check process was killed, not left running`, Number.isInteger(pid) && pid > 0 && (await gone(pid)), pid);
+        check(`${sig} (${label}): the running check process was killed, not left running`, Number.isInteger(pid) && pid > 0 && (await gone(pid)), pid);
       }
       return { dir, sid };
     };
 
+    // Hard kill on every OS (what Windows always does): the chat and the recovery state must already be on disk.
+    const hard = await interrupted('hard kill', 'SIGKILL');
+    r = await healCmd(['recovery', 'list'], hard.dir);
+    check('hard kill: the recovery is listed as interrupted', r.code === 0 && !!hard.sid && r.out.includes(hard.sid) && /interrupted/.test(r.out), r.out);
     const intA = await interrupted('-c');
     r = await healCmd(['recovery', 'list'], intA.dir);
     check('recovery list: the interrupted recovery', r.code === 0 && !!intA.sid && r.out.includes(intA.sid) && /interrupted/.test(r.out), r.out);

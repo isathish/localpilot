@@ -716,18 +716,25 @@ export class SessionStore implements vscode.Disposable {
         s.title = userText(firstUser.content).replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
       }
     }
-    clearTimeout(this.saveTimers.get(s.id));
     // The caller's object is the live one: make sure it is the one the store hands out (and lists) from now on.
     this.sessions.delete(s.id);
     this.sessions.set(s.id, s);
     this.index.set(s.id, summaryOf(s, this.index.get(s.id)?.bytes));
-    this.saveTimers.set(
-      s.id,
-      setTimeout(() => {
-        this.saveTimers.delete(s.id);
-        void this.flush(s);
-      }, 400)
-    );
+    // At most one write per 400 ms, never postponed: restarting the timer on every save (a busy run saves after each
+    // step) could keep a chat off disk for a whole run, and a crash or a hard kill (Windows has no SIGTERM) lost it.
+    // The write takes the latest state of the chat when it fires.
+    if (!this.saveTimers.has(s.id)) {
+      this.saveTimers.set(
+        s.id,
+        setTimeout(() => {
+          this.saveTimers.delete(s.id);
+          const live = this.sessions.get(s.id) ?? s;
+          if (!this.deleted.has(live.id)) {
+            void this.flush(live);
+          }
+        }, 400)
+      );
+    }
     // Listeners rebuild session lists / tree views; while agents stream, save() runs after every tool result,
     // so coalesce the notification to a few times per second.
     if (immediate) {

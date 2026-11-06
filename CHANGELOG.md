@@ -38,6 +38,7 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 - **Fewer "finished" notifications.** With the default `localpilot.notifications: whenHidden`, a run that finished normally is announced only when it took longer than 20 seconds; errors and runs that need you are still always announced. Notices now say how long the run took and their button reads **Open chat**.
 
 ### Fixed
+- **A CLI run killed mid-run no longer loses its chat.** A one-shot `localpilot` run wrote the chat to disk only when it ended, and saves during a busy run kept postponing each other. A crash, a hard kill, or Windows, which has no SIGTERM, lost the chat and its recovery state. The chat is now saved as the run goes, and written at once when checks or a fix attempt start, so `-c` and `localpilot recovery resume` find it.
 - **Clicking a file in an isolated copy's Changes list opens its diff.** It used to show "Nothing left to review in this chat".
 - **"Open all changes in one diff" has a clear icon.** The button under an answer and in the Changes panel showed an unclear "+−" glyph. It now shows a stack of files.
 - **The welcome screen no longer sits under a large empty area on tall panels.** It stays next to the message box on a normal-height panel and is centred when the panel is tall.
