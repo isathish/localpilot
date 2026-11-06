@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.6.0 — 2026-11-06
+
 ### Added
 - **Pick the folder a chat works in (multi-root workspaces).** With several folders open, the welcome screen's folder name and a chip next to **Add context** show which folder the chat works in, with that folder's git branch. Pick another folder before the first message and the chat's file tools, terminal, @ file search, git, checkpoints and hooks all use it; files in the other folders stay reachable as `folder:path`. Once a chat has messages it keeps its folder, and picking another one starts a new chat there. New chats start in the folder of the chat you were in, and **Add folder to workspace…** is in the same menu.
 - **`#codebase`.** Type `#` in the message box for context you can attach by name: `#codebase` gives the model the project's folders, its import graph (most-used files, packages, cycles), a file list and the files whose names or top-level symbols match your message. `#git`, `#problems`, `#selection`, `#editors`, `#terminal` and `#workspace` work the same way as their `@` forms, and `@codebase` works too. The `#` in the hint row under an empty message box now attaches `#codebase`. LocalPilot has no semantic (embedding) index, so related files are matched by name and symbol, and the attachment says so. The CLI accepts `#codebase` as well.
