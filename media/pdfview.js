@@ -248,6 +248,15 @@
     clearThumbs();
   }
 
+  /** The file bytes as a Uint8Array, also when they arrive JSON-encoded (a Node Buffer becomes {type: 'Buffer', data}). */
+  function bytes(d) {
+    if (d instanceof Uint8Array) { return d; }
+    if (d instanceof ArrayBuffer || ArrayBuffer.isView(d)) { return new Uint8Array(d.buffer || d, d.byteOffset || 0, d.byteLength); }
+    if (d && Array.isArray(d.data)) { return Uint8Array.from(d.data); }
+    if (Array.isArray(d)) { return Uint8Array.from(d); }
+    return d;
+  }
+
   async function open(m) {
     await closeDocument();
     const gen = generation;
@@ -269,9 +278,17 @@
     }
     const urls = { cmaps: cfg.cmaps, standardFonts: cfg.standardFonts, wasm: cfg.wasm, iccs: cfg.iccs };
     const init = m.mode === 'range'
-      ? { range: new HostRangeTransport(m.length, m.initial), rangeChunkSize: 262144 }
-      : { data: m.data };
-    loadingTask = pdfjsLib.getDocument(pdfLoadOptions(urls, init));
+      ? { range: new HostRangeTransport(m.length, bytes(m.initial)), rangeChunkSize: 262144 }
+      : { data: bytes(m.data) };
+    try {
+      loadingTask = pdfjsLib.getDocument(pdfLoadOptions(urls, init));
+    } catch (e) {
+      // getDocument throws at once on bad input (not via task.promise): show it instead of an endless spinner.
+      if (gen !== generation) { return; }
+      setProgress(null);
+      showPanel(`Could not open ${esc(fileName)}: ${esc((e && e.message) || e)}`, [{ label: 'Reload', primary: true, run: () => reload() }, systemViewer]);
+      return;
+    }
     const task = loadingTask;
     task.onProgress = ({ loaded, total }) => { if (gen === generation) { setProgress(total ? loaded / total : null); } };
     task.onPassword = (update, reason) => askPassword(update, reason === PasswordResponses.INCORRECT_PASSWORD, fromDisk);
@@ -961,7 +978,7 @@
       case 'open': void open(m); break;
       case 'rangeData': {
         const r = inflight.get(m.id); inflight.delete(m.id);
-        if (r && r.gen === generation) { r.split.fill(r.part, m.data); }
+        if (r && r.gen === generation) { r.split.fill(r.part, bytes(m.data)); }
         pump();
         break;
       }

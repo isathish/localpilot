@@ -7,6 +7,7 @@ import { loadOptionsBlock, pdfLoadOptions } from '../pdf/options';
 import { openFileTool } from '../tools/editor';
 import { ToolContext } from '../types';
 import { ChatController } from '../ui/chatController';
+import { exact } from '../ui/pdf/pdfEditor';
 import { isAllowedExternalLink, isBase64, MAX_RANGE_BYTES, pageFromFragment, rangeAllowed, rememberPosition, selectionDraft, validatePdfViewerMessage } from '../pdf/viewerMessages';
 import { makePdf } from './fixtures/makePdf';
 
@@ -59,6 +60,24 @@ suite('PDF viewer: pure rules', () => {
     const one = splitRange(0, 262144, 4 * MB, (b) => small.push(b));
     one.fill(one.parts[0], new Uint8Array(262144));
     assert.deepStrictEqual(small, [0]);
+  });
+
+  test('file bytes reach the webview as a plain Uint8Array, never as a JSON-encoded Buffer', () => {
+    // workspace.fs.readFile returns a Node Buffer; VS Code sends only plain typed arrays to a webview as binary.
+    const pooled = Buffer.from('%PDF-1.7 small file');
+    for (const input of [pooled, Buffer.from(fs.readFileSync(__filename)), new Uint8Array(new ArrayBuffer(32), 8, 16)]) {
+      const out = exact(input);
+      assert.strictEqual(Object.getPrototypeOf(out), Uint8Array.prototype, 'a plain Uint8Array, not a Buffer');
+      assert.strictEqual(out.byteOffset, 0);
+      assert.strictEqual(out.byteLength, out.buffer.byteLength, 'covers its whole buffer');
+      assert.deepStrictEqual([...out], [...input], 'same bytes');
+      assert.ok(!/"type":"Buffer"/.test(JSON.stringify({ data: out })), 'not serialised as {type: Buffer}');
+    }
+    const plain = new Uint8Array([1, 2, 3]);
+    assert.strictEqual(exact(plain), plain, 'an exact plain array is sent as is');
+    const js = fs.readFileSync(path.join(__dirname, '..', '..', 'media', 'pdfview.js'), 'utf8');
+    assert.match(js, /data: bytes\(m\.data\)/, 'the webview also accepts a JSON-encoded Buffer');
+    assert.match(js, /try \{\n\s+loadingTask = pdfjsLib\.getDocument/, 'a getDocument that throws shows an error, not an endless spinner');
   });
 
   test('a page image attached before any chat view exists is kept until one boots', () => {

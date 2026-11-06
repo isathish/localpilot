@@ -48,8 +48,13 @@ type ToPdfViewer =
 const POSITIONS_KEY = 'localpilot.pdf.positions';
 /** Bytes sent with a range-mode open, enough for pdf.js to find the trailer of a linearized file. */
 const INITIAL_RANGE = 64 * 1024;
-/** A view that covers its whole buffer, so postMessage never copies bytes outside it (pooled or partly-read buffers). */
-const exact = (u: Uint8Array): Uint8Array => (u.byteOffset === 0 && u.byteLength === u.buffer.byteLength ? u : u.slice());
+/**
+ * A plain Uint8Array that covers its whole buffer. VS Code sends only plain typed arrays to a webview as binary: a Node
+ * Buffer (what workspace.fs.readFile returns) is JSON-encoded as {type, data} and pdf.js rejects it. `Buffer#slice`
+ * is a view, not a copy, so the copy is made with the Uint8Array constructor. Covering the whole buffer also keeps
+ * postMessage from sending bytes outside it (pooled or partly-read buffers).
+ */
+export const exact = (u: Uint8Array): Uint8Array => (Object.getPrototypeOf(u) === Uint8Array.prototype && u.byteOffset === 0 && u.byteLength === u.buffer.byteLength ? u : new Uint8Array(u));
 
 /** One PDF file: its size (re-read on change) and a watcher that tells the open viewer to reload. */
 class PdfDocument implements vscode.CustomDocument {
