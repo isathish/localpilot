@@ -4,6 +4,10 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.9 — 2026-11-06
+### Added
+- Implement file-by-file review functionality in the chat controller
+
 ## 1.5.8 — 2026-11-06
 
 ### Added
