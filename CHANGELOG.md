@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.6.1 — 2026-11-06
+
 ### Added
 - **Auto mode picks the mode for each message.** **Auto**, at the top of the mode picker (`/mode auto`, `--auto` in the CLI), reads each message and runs it in the mode that fits: Ask for a question, Plan for a plan, Debug for an error, Agent for a change, Multitask for several independent tasks, or a specialist such as Review, Test, Refactor, Explain, Architect, Terminal or Project. The choice and the reason show under your message (*Auto → Debug · describes an error*), and picking a mode yourself turns Auto off. New chats start in Auto until you pick a mode. The choice is made on your machine, without a model call.
 - **Model Auto takes the task into account.** With the model on Auto, plans, designs and reviews go to the best reasoning model and quick questions to a small fast model, as long as that model is already in memory or fits next to what is. A model you picked for the chat is always used as is, and the reason for any switch shows on the turn.
