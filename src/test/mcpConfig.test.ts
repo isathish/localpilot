@@ -150,6 +150,11 @@ suite('LocalPilot MCP configuration files', () => {
       await mcp.reload();
       assert.strictEqual(asked.length, 1, 'a "Not now" is not asked again in the same session');
 
+      // This manager's part is over: it started nothing, and it must stop watching the file. Left running, its watcher
+      // sees the writes below, is now trusted (answer = true) and starts its own servers into the shared tool registry,
+      // which made the removal and count checks below fail now and then.
+      assert.strictEqual(clients().size, 0);
+      mcp.dispose();
       answer = true;
       const fresh = new McpManager(tools, log, '0.0.0-test');
       fresh.projectFolders = () => [ws];
@@ -171,12 +176,6 @@ suite('LocalPilot MCP configuration files', () => {
         assert.strictEqual((await tools.get('mcp_beta__echo')!.execute({}, ctx)).content, 'tag=b2');
         await fs.writeFile(file, JSON.stringify({ mcpServers: { alpha: { ...server('a'), timeout: 30 } } }));
         await fresh.reloadIfChanged();
-        // A reload queued by the file watcher (from the earlier write) can still be settling on a loaded CI machine:
-        // the server must be gone soon after, not at this exact instant.
-        for (let i = 0; i < 30 && (fc().has('beta') || tools.get('mcp_beta__echo')); i++) {
-          await new Promise((r) => setTimeout(r, 100));
-          await fresh.reloadIfChanged();
-        }
         assert.ok(!fc().has('beta') && !tools.get('mcp_beta__echo'), 'a removed server is stopped and its tools withdrawn');
         assert.strictEqual(fc().get('alpha'), alpha);
         // Caught mid-save (empty) or with a typo, the file keeps its servers running instead of stopping them.
@@ -191,7 +190,6 @@ suite('LocalPilot MCP configuration files', () => {
       } finally {
         fresh.dispose();
       }
-      assert.strictEqual(clients().size, 0);
     } finally {
       mcp.dispose();
     }
