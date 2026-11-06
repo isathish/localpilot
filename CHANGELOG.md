@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.8 — 2026-11-06
+
 ### Added
 - **Failed steps come with what to do next.** A step that fails in the chat now has **Retry**, **Edit & retry** (change the command or arguments first) and, while the run lasts, **Skip** and **Stop run** under it. Your choice goes to the agent as a message, so it runs through the same tools and approval rules. When a later attempt of the same step succeeds, the failed one is marked *retried ✓*.
 - **Command rows: Rerun, Open in terminal and test results.** A command the agent ran has **Rerun** and **Open in terminal** (types the command into a terminal at the same folder without running it), and shows the folder it ran in when that is not the workspace root. A test run shows its result, for example *6 passed · 1 failed*, lists the failing tests first with links to them, and offers **Re-run failed** and **Fix failures**. Jest, Vitest, Mocha, node:test, pytest, Go, Cargo, .NET and Maven/Gradle output is recognised. While the run goes on, a failed command says *Exit 1 · the agent will read the output and try a fix*.
