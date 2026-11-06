@@ -257,7 +257,9 @@ export function extractPdfText(fsPathOrBytes: string | Uint8Array, opts: Extract
       }
     });
     child.on('error', (e) => finish(e));
-    child.on('exit', (code, signal) => finish(new Error(`PDF extraction failed (${signal ?? `exit ${code}`})${stderr.trim() ? `: ${stderr.trim().split('\n').slice(-3).join(' ')}` : ''}`)));
+    // 'close', not 'exit': the child sends its result and exits at once, and 'exit' can come before that last IPC message
+    // is read (seen on Windows: a successful extraction reported as "failed (exit 0)"). 'close' follows the IPC channel.
+    child.on('close', (code, signal) => finish(new Error(`PDF extraction failed (${signal ?? `exit ${code}`})${stderr.trim() ? `: ${stderr.trim().split('\n').slice(-3).join(' ')}` : ''}`)));
     child.send(req);
   });
 }

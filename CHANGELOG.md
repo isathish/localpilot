@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **Reading a PDF no longer fails now and then on Windows.** A PDF that was read correctly could still be reported as "PDF extraction failed (exit 0)": the reader finished and exited before LocalPilot had received its result. The result is now always received first.
+
 ## 1.6.0 — 2026-11-06
 
 ### Added
