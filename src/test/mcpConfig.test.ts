@@ -171,6 +171,12 @@ suite('LocalPilot MCP configuration files', () => {
         assert.strictEqual((await tools.get('mcp_beta__echo')!.execute({}, ctx)).content, 'tag=b2');
         await fs.writeFile(file, JSON.stringify({ mcpServers: { alpha: { ...server('a'), timeout: 30 } } }));
         await fresh.reloadIfChanged();
+        // A reload queued by the file watcher (from the earlier write) can still be settling on a loaded CI machine:
+        // the server must be gone soon after, not at this exact instant.
+        for (let i = 0; i < 30 && (fc().has('beta') || tools.get('mcp_beta__echo')); i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          await fresh.reloadIfChanged();
+        }
         assert.ok(!fc().has('beta') && !tools.get('mcp_beta__echo'), 'a removed server is stopped and its tools withdrawn');
         assert.strictEqual(fc().get('alpha'), alpha);
         // Caught mid-save (empty) or with a typo, the file keeps its servers running instead of stopping them.
