@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.5.7 — 2026-11-06
+
 ### Fixed
 - **The PDF viewer opens PDFs again instead of loading forever.** Most PDFs stayed on the loading spinner because their contents reached the viewer in a form it could not read; only very large PDFs, which load in parts, were unaffected. PDFs of every size now open. If a PDF still cannot be opened, the viewer now shows the error with **Reload** and **Open with system viewer** instead of an endless spinner.
 
