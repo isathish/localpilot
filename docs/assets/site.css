@@ -1003,3 +1003,25 @@ a.card-link h3::after { content: ' →'; color: var(--accent-text); }
 @keyframes vm-flow { to { stroke-dashoffset: -20; } }
 .vm-n.n1 { top: 16px; } .vm-n.n2 { top: 58px; } .vm-n.n3 { top: 100px; }
 @media (prefers-reduced-motion: reduce) { .vm-svg line { animation: none; } }
+
+/* compare: even columns, LocalPilot highlighted but not stretched */
+.landing .compare table { table-layout: fixed; min-width: 760px; }
+.landing .compare th:first-child, .landing .compare td:first-child { width: 24%; }
+.landing .compare th:nth-child(2), .landing .compare td:nth-child(2) { width: 22%; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.landing .compare thead th:nth-child(2) { color: var(--accent-text); }
+.landing .compare td { vertical-align: middle; line-height: 1.45; }
+
+/* everything included: a grouped checklist of the whole product */
+.lp-inc { margin-top: 44px; padding: 32px; border-radius: 20px; border: 1px solid var(--border); background: radial-gradient(700px 240px at 50% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 70%), var(--panel); }
+.lp-inc-head { text-align: center; margin-bottom: 26px; }
+.lp-inc-head h3 { font-size: clamp(22px, 2.8vw, 28px); letter-spacing: -0.025em; margin: 0 0 6px; }
+.lp-inc-head p { margin: 0; color: var(--muted); }
+.lp-inc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px 32px; }
+.lp-inc-col h3 { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent-text); margin: 0 0 12px; }
+.lp-inc-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.lp-inc-col li { position: relative; padding-left: 24px; color: var(--fg-2); font-size: 14.5px; line-height: 1.45; }
+.lp-inc-col li::before { content: ''; position: absolute; left: 0; top: 3px; width: 15px; height: 15px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 18%, transparent); }
+.lp-inc-col li::after { content: ''; position: absolute; left: 5.5px; top: 6px; width: 3px; height: 7px; border: solid var(--ok); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.lp-inc-col code { font-size: 12.5px; }
+@media (max-width: 900px) { .lp-inc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .lp-inc { padding: 22px; } .lp-inc-grid { grid-template-columns: 1fr; } }
