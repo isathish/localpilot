@@ -105,10 +105,6 @@ nav:
     url: /security/
   - title: Development
     url: /docs/development/
-  - title: Chat experience (UX spec)
-    url: /docs/chat-experience/
-  - title: Publishing
-    url: /docs/publishing/
 guides:
   - title: Ollama in VS Code
     url: /guides/ollama-vscode/

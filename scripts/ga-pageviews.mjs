@@ -3,7 +3,7 @@
 // (docs/_data/pageviews.json), so every page of the static site can show its own count at build time.
 // Nothing runs in the visitor's browser beyond the Google Analytics tag the site already has.
 //
-// Needs two secrets (see docs/docs/publishing.md); without them it exits quietly and the site builds without counts:
+// Needs two secrets (see dev/publishing.md); without them it exits quietly and the site builds without counts:
 //   GA_PROPERTY_ID  numeric GA4 property id (Admin → Property settings), not the G-… measurement id
 //   GA_CREDENTIALS  JSON key of a Google Cloud service account that has Viewer access to the property
 import { createSign } from 'node:crypto';
