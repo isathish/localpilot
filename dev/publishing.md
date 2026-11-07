@@ -1,8 +1,4 @@
----
-title: Publishing to the Marketplace
-description: One-time publisher setup, then publish LocalPilot to the VS Code Marketplace and Open VSX from CI or from your own machine.
-permalink: /docs/publishing/
----
+# Publishing to the Marketplace
 
 ## One-time setup
 

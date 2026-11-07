@@ -1,9 +1,4 @@
----
-title: Chat experience (UX spec)
-description: The design spec for LocalPilot's chat panel. It covers the modes, every screen and failure scenario with its status today, and the roadmap for building the rest.
-permalink: /docs/chat-experience/
-keywords: LocalPilot UX, chat panel design, agent run cards, file-by-file review, mode picker, failure handling, approvals
----
+# Chat experience (UX spec)
 
 This page is the design spec for the LocalPilot chat panel. It is written for contributors and for users who want to know where the UI is heading. Each scenario has a **status** that describes the code today:
 
