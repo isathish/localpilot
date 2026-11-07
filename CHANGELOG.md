@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.7.0 — 2026-11-07
+
 ### Added
 - **One store for your conversations, shared by VS Code and the CLI.** LocalPilot now keeps every change to your conversations, memory and agent runs in an append-only log on your computer, with a search index built from it. Each window and each `localpilot` process writes its own log, so two windows never overwrite each other, and a crash loses at most the last quarter second. If the index is damaged it is rebuilt from the log on its own; you can also run **LocalPilot: Rebuild Conversation Index**. Your chats keep loading exactly as before while the index starts up.
 - **Your 1.6 history is imported automatically.** The first time 1.7 starts, it imports the chats of every workspace of this VS Code profile and of the CLI (including messages folded away by compaction), their run traces, checkpoints and interrupted runs, your project and global memory notes, and your custom commands. It runs in the background. Nothing is deleted or changed: the original files are first copied to `continuity/migration/legacy-backup`, and stay there until you click **Remove migration backup** in **Settings → Continuity & sync**. A file that cannot be read is listed there with **Retry**.
