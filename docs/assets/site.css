@@ -855,3 +855,151 @@ a.card-link h3::after { content: ' →'; color: var(--accent-text); }
 }
 /* the tab row scrolls sideways: its edges fade so a cut tab reads as "more this way" */
 .lp-slider .lp-tabs { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); padding-left: 14px; padding-right: 14px; }
+
+/* ---------------------------------------------------------------- feature cards: one animated illustration each
+   Large, readable, in the theme's colours; each shows what the feature does in a few seconds and loops. */
+.lp-vcard { padding: 0 !important; display: flex; flex-direction: column; }
+.lp-vcard > h3 { margin: 18px 20px 6px !important; }
+.lp-vcard > p { margin: 0 20px 20px !important; }
+.lp-vis { position: relative; height: 150px; overflow: hidden; border-bottom: 1px solid var(--border); border-radius: var(--lp-radius) var(--lp-radius) 0 0;
+  background: radial-gradient(260px 120px at 50% 0%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%), var(--bg-2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 14px; font-size: 13px; color: var(--fg-2); }
+.lp-vis code { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; color: var(--fg); }
+.lp-vis b { font-weight: 700; }
+.lp-vcard:hover .lp-vis { background: radial-gradient(260px 120px at 50% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%), var(--bg-2); }
+
+/* 1 · Auto mode: three requests take turns, each with the mode Auto picks */
+.v-auto .va-row { position: absolute; left: 14px; right: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); opacity: 0; animation: va-cycle 9s infinite; }
+.v-auto .va-row:nth-child(2) { animation-delay: 3s; } .v-auto .va-row:nth-child(3) { animation-delay: 6s; }
+.va-q { color: var(--fg); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.va-row b { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; }
+.m-ask { background: color-mix(in srgb, #4a9eff 18%, transparent); color: #4a9eff; }
+.m-dbg { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.m-pln { background: color-mix(in srgb, #9b7bff 20%, transparent); color: #9b7bff; }
+@keyframes va-cycle { 0% { opacity: 0; transform: translateY(14px); } 6%, 30% { opacity: 1; transform: none; } 36%, 100% { opacity: 0; transform: translateY(-14px); } }
+
+/* 2 · Skills: a fan of playbook cards deals out */
+.v-skills { flex-direction: row; }
+.vs-c { position: absolute; width: 92px; height: 104px; display: grid; place-items: end center; padding-bottom: 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border-2); color: var(--fg); font: 600 13px var(--mono); box-shadow: 0 10px 24px -12px rgba(0,0,0,.5); transform-origin: 50% 120%; animation: vs-fan 6s ease-in-out infinite; }
+.vs-c::before { content: 'SKILL.md'; position: absolute; top: 12px; left: 12px; font-size: 10px; color: var(--muted); }
+.vs-c.c1 { --r: -24deg; } .vs-c.c2 { --r: -8deg; } .vs-c.c3 { --r: 8deg; } .vs-c.c4 { --r: 24deg; border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent-text); }
+.vs-c.c4::before { content: 'subagent'; }
+@keyframes vs-fan { 0%, 12% { transform: rotate(0); } 35%, 75% { transform: rotate(var(--r)); } 95%, 100% { transform: rotate(0); } }
+
+/* 3 · Rules: the files you already have slide in and are read */
+.v-rules { gap: 6px; }
+.vr-f { padding: 5px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); font: 600 12.5px var(--mono); color: var(--fg); opacity: 0; animation: vr-in 6s infinite; }
+.vr-f.f2 { animation-delay: .4s; } .vr-f.f3 { animation-delay: .8s; }
+.vr-ok { color: var(--ok); font-weight: 700; font-size: 12.5px; opacity: 0; animation: vr-ok 6s infinite 1.4s; }
+@keyframes vr-in { 0% { opacity: 0; transform: translateX(-30px); } 10%, 80% { opacity: 1; transform: none; } 92%, 100% { opacity: 0; transform: translateX(30px); } }
+@keyframes vr-ok { 0%, 4% { opacity: 0; } 12%, 70% { opacity: 1; } 80%, 100% { opacity: 0; } }
+
+/* 4 · MCP: the agent connected to tools, data flowing along the lines */
+.v-mcp { display: block; }
+.vm-hub, .vm-n { position: absolute; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 650; background: var(--panel); border: 1px solid var(--border-2); color: var(--fg); z-index: 1; }
+.vm-hub { left: 16px; top: 50%; transform: translateY(-50%); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent-text); }
+.vm-n { right: 14px; } .vm-n.n1 { top: 18px; } .vm-n.n2 { top: 58px; } .vm-n.n3 { top: 98px; }
+.vm-l { position: absolute; left: 82px; right: 96px; top: 74px; height: 2px; background: repeating-linear-gradient(90deg, var(--border-2) 0 5px, transparent 5px 9px); transform-origin: 0 50%; }
+.vm-l.l1 { transform: rotate(-17deg); } .vm-l.l3 { transform: rotate(17deg); }
+.vm-l::after { content: ''; position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: vm-pk 1.8s linear infinite; }
+.vm-l.l2::after { animation-delay: .6s; background: #2fb8a6; box-shadow: 0 0 8px #2fb8a6; } .vm-l.l3::after { animation-delay: 1.2s; background: #9b7bff; box-shadow: 0 0 8px #9b7bff; }
+@keyframes vm-pk { from { left: 0; opacity: 0; } 15%, 85% { opacity: 1; } to { left: calc(100% - 8px); opacity: 0; } }
+
+/* 5 · Inline completions: ghost text types after your code; Tab accepts it */
+.v-comp code { max-width: 100%; white-space: nowrap; overflow: hidden; font-size: 12px; }
+.vc-k { color: #c678dd; }
+.vc-ghost { display: inline-block; vertical-align: bottom; max-width: 0; overflow: hidden; white-space: nowrap; color: var(--muted); opacity: .75; animation: vc-type 6s steps(32) infinite; }
+.vc-tab { padding: 4px 12px; border-radius: 7px; border: 1px solid var(--border-2); border-bottom-width: 3px; font-size: 12px; font-weight: 700; color: var(--fg-2); animation: vc-tab 6s infinite; }
+@keyframes vc-type { 0%, 8% { max-width: 0; color: var(--muted); } 45%, 62% { max-width: 260px; color: var(--muted); } 66%, 92% { max-width: 260px; color: var(--fg); opacity: 1; } 100% { max-width: 260px; opacity: 0; } }
+@keyframes vc-tab { 0%, 56% { transform: none; background: transparent; color: var(--fg-2); } 60%, 66% { transform: translateY(2px); background: var(--accent); color: var(--accent-fg); border-color: var(--accent); } 72%, 100% { transform: none; } }
+
+/* 6 · Vision: a scan line sweeps a page and finds what is wrong */
+.vv-win { position: relative; width: 170px; height: 88px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border-2); overflow: hidden; padding: 12px; }
+.vv-win i { display: block; height: 7px; border-radius: 4px; background: var(--border-2); margin-bottom: 8px; width: 80%; }
+.vv-win i:nth-child(2) { width: 55%; }
+.vv-win i.vv-btn { position: absolute; right: -16px; bottom: 12px; width: 56px; height: 22px; border-radius: 6px; background: var(--accent); color: var(--accent-fg); font: 700 11px/22px var(--sans); font-style: normal; text-align: center; margin: 0; }
+.vv-scan { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: #2fb8a6; box-shadow: 0 0 12px #2fb8a6; animation: vv-scan 4s ease-in-out infinite; }
+.vv-box { position: absolute; right: -20px; bottom: 7px; width: 66px; height: 32px; border: 2px solid var(--bad); border-radius: 8px; opacity: 0; animation: vv-box 4s infinite; }
+.vv-note { font-size: 12px; color: var(--bad); font-weight: 650; opacity: 0; animation: vv-box 4s infinite; }
+@keyframes vv-scan { 0% { top: 0; opacity: 1; } 55% { top: 100%; opacity: 1; } 60%, 100% { top: 100%; opacity: 0; } }
+@keyframes vv-box { 0%, 52% { opacity: 0; transform: scale(1.3); } 60%, 92% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* 7 · Long tasks: the context fills, older turns are summarised, it drops back */
+.v-ctx { align-items: stretch; padding: 22px 24px; }
+.vx-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.vx-lbl { font-family: var(--mono); }
+.vx-bar { height: 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); overflow: hidden; }
+.vx-bar i { display: block; height: 100%; width: 20%; border-radius: inherit; background: linear-gradient(90deg, #2fb8a6, var(--accent)); animation: vx-fill 6s ease-in-out infinite; }
+.vx-note { align-self: center; font-size: 12.5px; font-weight: 650; color: var(--ok); opacity: 0; animation: vx-note 6s infinite; }
+@keyframes vx-fill { 0% { width: 20%; } 50% { width: 92%; background: linear-gradient(90deg, var(--accent), var(--bad)); } 62%, 100% { width: 38%; } }
+@keyframes vx-note { 0%, 52% { opacity: 0; transform: translateY(6px); } 62%, 90% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* 8 · No tool calling: a text-protocol tool call types out and is run */
+.vp-line { display: inline-block; max-width: 0; overflow: hidden; white-space: nowrap; animation: vp-type 5s steps(26) infinite; }
+.vp-ok { color: var(--ok); font-weight: 700; font-size: 12.5px; opacity: 0; animation: vp-ok 5s infinite; }
+@keyframes vp-type { 0% { max-width: 0; } 45%, 100% { max-width: 240px; } }
+@keyframes vp-ok { 0%, 50% { opacity: 0; transform: translateY(6px); } 58%, 90% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* 9 · Self-healing: a failing test is fixed and passes */
+.vh-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); font: 600 12.5px var(--mono); color: var(--fg); animation: vh-row 6s infinite; }
+.vh-ic { width: 16px; height: 16px; border-radius: 50%; flex: none; animation: vh-ic 6s infinite; }
+.vh-st { position: relative; height: 18px; width: 90px; }
+.vh-st b { position: absolute; inset: 0; text-align: center; font-size: 12.5px; opacity: 0; }
+.vh-st .s1 { color: var(--bad); animation: vh-s1 6s infinite; } .vh-st .s2 { color: var(--accent-text); animation: vh-s2 6s infinite; } .vh-st .s3 { color: var(--ok); animation: vh-s3 6s infinite; }
+@keyframes vh-ic { 0%, 30% { background: var(--bad); box-shadow: 0 0 10px var(--bad); } 34%, 62% { background: var(--accent); box-shadow: 0 0 10px var(--accent); } 66%, 100% { background: var(--ok); box-shadow: 0 0 10px var(--ok); } }
+@keyframes vh-row { 0%, 30% { border-color: color-mix(in srgb, var(--bad) 50%, var(--border)); } 66%, 100% { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); } }
+@keyframes vh-s1 { 0%, 30% { opacity: 1; } 34%, 100% { opacity: 0; } }
+@keyframes vh-s2 { 0%, 32% { opacity: 0; } 36%, 62% { opacity: 1; } 66%, 100% { opacity: 0; } }
+@keyframes vh-s3 { 0%, 64% { opacity: 0; } 68%, 96% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 10 · Branches: a regenerated answer becomes a branch; ‹ 1/2 › switches */
+.vb-git { position: relative; width: 180px; height: 56px; }
+.vb-git::before { content: ''; position: absolute; left: 0; right: 40px; top: 18px; height: 2px; background: var(--border-2); }
+.vb-git i { position: absolute; top: 12px; width: 14px; height: 14px; border-radius: 50%; background: var(--panel); border: 2px solid var(--muted); }
+.vb-git .d1 { left: 0; } .vb-git .d2 { left: 50px; } .vb-git .d3 { left: 100px; border-color: var(--accent); }
+.vb-fork { position: absolute; left: 56px; top: 19px; width: 70px; height: 26px; border-left: 2px solid #9b7bff; border-bottom: 2px solid #9b7bff; border-bottom-left-radius: 14px; transform-origin: 0 0; animation: vb-fork 6s infinite; }
+.vb-git .d4 { left: 120px; top: 38px; border-color: #9b7bff; animation: vb-d4 6s infinite; }
+.vb-pg { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); font: 600 12.5px var(--mono); color: var(--fg); }
+.vb-n { display: inline-grid; }
+.vb-n > span { grid-area: 1 / 1; }
+.vb-pg .p1 { animation: vb-p1 6s infinite; } .vb-pg .p2 { opacity: 0; animation: vb-p2 6s infinite; }
+@keyframes vb-fork { 0%, 15% { clip-path: inset(0 100% 0 0); } 45%, 100% { clip-path: inset(0 0 0 0); } }
+@keyframes vb-d4 { 0%, 40% { opacity: 0; transform: scale(.4); } 50%, 100% { opacity: 1; transform: none; } }
+@keyframes vb-p1 { 0%, 46% { opacity: 1; } 50%, 96% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes vb-p2 { 0%, 46% { opacity: 0; } 50%, 96% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 11 · Checkpoints: a marker rewinds the timeline to an earlier turn */
+.vt-line { position: relative; display: flex; justify-content: space-between; width: 190px; }
+.vt-line::before { content: ''; position: absolute; left: 6px; right: 6px; top: 6px; height: 2px; background: var(--border-2); }
+.vt-line i { position: relative; width: 14px; height: 14px; border-radius: 50%; background: var(--panel); border: 2px solid var(--muted); }
+.vt-mark { position: absolute; top: -5px; width: 24px; height: 24px; margin-left: -5px; border-radius: 50%; border: 2px solid var(--accent); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); animation: vt-mark 6s ease-in-out infinite; }
+.vt-note { font-size: 12.5px; font-weight: 650; color: var(--accent-text); opacity: 0; animation: vt-note 6s infinite; }
+@keyframes vt-mark { 0%, 25% { left: 100%; transform: translateX(-14px); } 55%, 85% { left: 25%; transform: translateX(-2px); } 100% { left: 100%; transform: translateX(-14px); } }
+@keyframes vt-note { 0%, 50% { opacity: 0; } 58%, 85% { opacity: 1; } 95%, 100% { opacity: 0; } }
+
+/* 12 · Private: work bounces inside your machine; the cloud gets nothing */
+.v-priv { flex-direction: column; gap: 10px; }
+.vp-box { position: relative; display: grid; gap: 6px; justify-items: center; padding: 22px 14px 14px; border-radius: 12px; border: 1.5px dashed color-mix(in srgb, var(--ok) 60%, var(--border)); }
+.vp-lbl { position: absolute; top: -9px; left: 10px; padding: 0 6px; background: var(--bg-2); color: var(--ok); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.vp-box code { font-size: 11.5px; }
+.vp-pk { position: absolute; bottom: 6px; left: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: vp-pk 2.2s ease-in-out infinite alternate; }
+.vp-cloud { white-space: nowrap; padding: 4px 10px; border-radius: 999px; border: 1px dashed var(--border-2); color: var(--muted); font-size: 11.5px; font-weight: 650; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 70%, transparent); }
+@keyframes vp-pk { from { left: 12px; } to { left: calc(100% - 20px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-vis *, .lp-vis *::before, .lp-vis *::after { animation: none !important; }
+  .v-auto .va-row { opacity: 0; } .v-auto .va-row:nth-child(2) { opacity: 1; }
+  .vr-f, .vr-ok, .vv-box, .vv-note, .vx-note, .vp-ok, .vt-note { opacity: 1; }
+  .vc-ghost, .vp-line { max-width: 260px; }
+  .vh-st .s3 { opacity: 1; } .vb-pg .p2 { opacity: 0; }
+}
+@media (max-width: 560px) { .lp-vcard { display: flex !important; } .lp-mini .lp-vcard > *:not(.ico) { grid-column: auto; } }
+
+/* MCP: SVG lines from the agent to each tool, dashes flowing outwards */
+.vm-svg { position: absolute; inset: 0; z-index: 0; overflow: visible; }
+.vm-svg line { stroke: color-mix(in srgb, var(--accent) 70%, var(--border-2)); stroke-width: 2; stroke-dasharray: 4 6; stroke-linecap: round; animation: vm-flow 1.2s linear infinite; }
+.vm-svg line:nth-child(2) { stroke: color-mix(in srgb, #2fb8a6 75%, var(--border-2)); animation-duration: 1.5s; }
+.vm-svg line:nth-child(3) { stroke: color-mix(in srgb, #9b7bff 75%, var(--border-2)); animation-duration: 1.8s; }
+@keyframes vm-flow { to { stroke-dashoffset: -20; } }
+.vm-n.n1 { top: 16px; } .vm-n.n2 { top: 58px; } .vm-n.n3 { top: 100px; }
+@media (prefers-reduced-motion: reduce) { .vm-svg line { animation: none; } }
