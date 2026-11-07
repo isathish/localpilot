@@ -19,17 +19,22 @@ permalink: /
     <ul class="lp-proof"><li>Free &amp; MIT licensed</li><li>No account</li><li>Works offline</li><li>No telemetry upload</li></ul>
     {% include pageviews.html total=true %}
     <div class="lp-stage">
-    <div class="lp-cube" aria-hidden="true"><div class="lp-cube-in"><b>{ }</b><b>✓</b><b>$_</b><b>±</b><b>⌘</b><b>AI</b></div></div>
-    <div class="lp-ring" aria-hidden="true"></div>
-    <span class="lp-chip lp-chip-1" aria-hidden="true"><i class="ok"></i>tests 2 · pass 2</span>
-    <span class="lp-chip lp-chip-2" aria-hidden="true"><i class="add"></i>+1 −1 · cart.js</span>
-    <span class="lp-chip lp-chip-3" aria-hidden="true"><i class="loc"></i>0 bytes sent to the cloud</span>
-    <div class="lp-window-glow">
-    <figure class="lp-window">
-      <div class="lp-window-bar" aria-hidden="true"><i></i><i></i><i></i><span>LocalPilot — VS Code</span></div>
-      <img src="{{ '/assets/screenshots/hero-agent.png' | relative_url }}" width="1800" height="1125" alt="LocalPilot inside VS Code: the agent read cart.js and its test, fixed applyDiscount with a +1/−1 edit, ran npm test (2 passing) in the LocalPilot Agent terminal, and offers Apply to workspace or Discard" loading="eager" fetchpriority="high">
-    </figure>
-    </div>
+      <figure class="lp-window lp-hot-window">
+        <div class="lp-window-bar" aria-hidden="true"><i></i><i></i><i></i><span>LocalPilot — VS Code</span></div>
+        <div class="lp-hot-area">
+          <img src="{{ '/assets/screenshots/hero-agent.png' | relative_url }}" width="1800" height="1125" alt="LocalPilot inside VS Code: the agent read cart.js and its test, fixed applyDiscount with a +1/−1 edit, ran npm test (2 passing) in the LocalPilot Agent terminal, and offers Apply to workspace or Discard" loading="eager" fetchpriority="high">
+          <button type="button" class="lp-hot" data-hot="1" style="--x:15.6%;--y:23.3%" aria-label="Step 1: it reads the code"><span>1</span></button>
+          <button type="button" class="lp-hot" data-hot="2" style="--x:20%;--y:44.8%" aria-label="Step 2: a one-line edit"><span>2</span></button>
+          <button type="button" class="lp-hot" data-hot="3" style="--x:54.5%;--y:78.6%" aria-label="Step 3: the tests run"><span>3</span></button>
+          <button type="button" class="lp-hot" data-hot="4" style="--x:28.6%;--y:77.2%" aria-label="Step 4: you review and apply"><span>4</span></button>
+        </div>
+      </figure>
+      <ol class="lp-legend">
+        <li data-hot="1"><span class="lp-legend-n">1</span><div><b>Reads the code</b><p>Finds <code>cart.js</code> and its test on its own.</p></div></li>
+        <li data-hot="2"><span class="lp-legend-n">2</span><div><b>Makes a small edit</b><p>One line changed: <span class="t-add">+1</span> <span class="t-del">−1</span>.</p></div></li>
+        <li data-hot="3"><span class="lp-legend-n">3</span><div><b>Runs your tests</b><p>In a terminal you can watch: 2 of 2 pass.</p></div></li>
+        <li data-hot="4"><span class="lp-legend-n">4</span><div><b>You decide</b><p><em>Apply to workspace</em> or <em>Discard</em>.</p></div></li>
+      </ol>
     </div>
     <p class="lp-caption">A real session: <code>gpt-oss:20b</code> in Ollama fixed a failing test, ran the suite and asked for review.</p>
   </div>
@@ -442,6 +447,22 @@ permalink: /
       new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting && !started) { started = true; tick(); } else if (!e.isIntersecting && started) { clearTimeout(timer); started = false; } }), { threshold: 0.3 }).observe(term);
       show(0);
     }
+  }
+  // Hero: the four steps take turns; pointing at a step or its marker shows that one.
+  const hotRoot = document.querySelector('.lp-stage');
+  if (hotRoot) {
+    const parts = [...hotRoot.querySelectorAll('[data-hot]')];
+    let cur = 1, held = false, cycle = 0;
+    const set = (n) => { cur = n; parts.forEach((el) => el.classList.toggle('on', el.dataset.hot === String(n))); };
+    parts.forEach((el) => { const n = +el.dataset.hot;
+      el.addEventListener('pointerenter', () => { held = true; set(n); });
+      el.addEventListener('pointerleave', () => { held = false; });
+      el.addEventListener('focus', () => { held = true; set(n); });
+      el.addEventListener('blur', () => { held = false; });
+      el.addEventListener('click', () => set(n));
+    });
+    set(1);
+    if (!calm) cycle = setInterval(() => { if (!held) set(cur % 4 + 1); }, 2600);
   }
   // Copy buttons on command lines.
   document.querySelectorAll('.lp-copy').forEach((b) => b.addEventListener('click', () => {
