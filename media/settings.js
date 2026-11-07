@@ -876,7 +876,7 @@
     };
     const tabLinks = (ids) => ids.map((id) => byId[id]).filter(Boolean).map(([id, label, icon]) => `<a data-sec="${id}" role="tab" tabindex="-1" title="${esc(label)}">${icon}<span class="lbl">${esc(label)}</span></a>`).join('');
     const tabsHtml = `<div class="navhome">${tabLinks(NAV_HOME)}</div>` + NAV_GROUPS.map((g) => group(g.id, g.label, tabLinks(g.items))).join('');
-    const helpHtml = `<a data-cmd="localpilot.openWelcome" role="button" tabindex="0" title="Run setup again">${I.rocket}<span class="lbl">Run setup again</span></a><a data-url="https://isathish.github.io/localpilot/docs/configuration/" role="link" tabindex="0" title="Documentation">${I.book}<span class="lbl">Documentation</span></a>`;
+    const helpHtml = `<a data-cmd="localpilot.openWelcome" role="button" tabindex="0" title="Run setup again">${I.rocket}<span class="lbl">Run setup again</span></a><a data-cmd="localpilot.rate" role="button" tabindex="0" title="Rate LocalPilot: pick stars in the chat, then post them on the Marketplace">${I.star}<span class="lbl">Rate LocalPilot</span></a><a data-url="https://isathish.github.io/localpilot/docs/configuration/" role="link" tabindex="0" title="Documentation">${I.book}<span class="lbl">Documentation</span></a>`;
     side.innerHTML = `<div class="navbar"><button class="navtog" title="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-label="${navPrefs.rail ? 'Expand sidebar' : 'Collapse sidebar'}" aria-pressed="${navPrefs.rail}"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6.5 3v10"/></svg></button><button class="navall" title="Expand all groups" aria-label="Expand or collapse all groups">${I.chev}</button></div><div class="tabs" role="tablist" aria-orientation="vertical">${tabsHtml}</div>${group('help', 'Help', helpHtml)}`;
     // Arrow keys move between the sections that are visible right now (a collapsed group keeps only its active entry).
     const visibleTabs = () => [...side.querySelectorAll('[data-sec]')].filter((a) => a.offsetParent !== null);
@@ -1653,12 +1653,17 @@
       // Installed models normally fit; only say so when they don't (tight / too big).
       if (m.fit !== 'ok') { tags.innerHTML += fitBadge(m.fit); }
       right.appendChild(tags);
-      const acts = el('div', 'acts');
+      // Two fixed slots (Set default, Delete), empty when they do not apply, so every row's buttons line up.
+      const acts = el('div', 'acts mdl-acts');
       if (!m.disabled && m.id !== def) {
         const b = el('button', 'btn ghost sm', 'Set default'); b.title = 'Use for new chats'; b.onclick = () => set('defaultModel', m.id);
         acts.appendChild(b);
+      } else {
+        acts.appendChild(el('span', 'slot', ''));
       }
-      if (m.removable) {
+      if (!m.removable) {
+        acts.appendChild(el('span', 'slot', ''));
+      } else {
         const rj = activeJob('remove', m.removable, m.modelId);
         const b = el('button', 'btn ghost sm danger', rj ? '<span class="spinner"></span>' : I.trash); b.title = `Delete from ${TARGET_LABEL[m.removable]}`; b.disabled = !!rj;
         b.onclick = () => post({ type: 'removeModel', target: m.removable, model: m.modelId, providerId: m.providerId, name: m.name });

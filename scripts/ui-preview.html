@@ -312,4 +312,16 @@ window.acquireVsCodeApi=()=>({postMessage(m){
     // ?sticky=1: without the task card the pinned strip takes over (the card steps aside in a long chat).
     if (q.get('sticky')) { const th = document.querySelector('.taskhead'); if (th) { th.classList.add('hidden'); } m.dispatchEvent(new Event('scroll')); } }, 1200); })();
 </script>
+<script>
+// ?rate=1 shows the rating card (with Marketplace stats); rate=hot hovers 4 stars; rate=low / rate=high the follow-up after a pick.
+(() => { const r = new URLSearchParams(location.search).get('rate'); if (!r) return;
+  document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.ratecard { animation: none !important; }' }));
+  setTimeout(() => {
+    window.postMessage({ type: 'rating', card: { store: 'marketplace', reviewUrl: '', stats: { average: 4.6, count: 23, at: 0 } } }, '*');
+    setTimeout(() => {
+      if (r === 'hot') { const b = document.querySelectorAll('.rc-star')[3]; b && b.dispatchEvent(new Event('mouseenter')); }
+      if (r === 'low' || r === 'high') { window.postMessage({ type: 'rated', stars: r === 'low' ? 2 : 5, store: 'marketplace', issue: r === 'low' }, '*'); }
+    }, 200);
+  }, 1300); })();
+</script>
 </body></html>

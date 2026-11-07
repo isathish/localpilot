@@ -61,6 +61,7 @@ import { ModelInfo, Session } from './types';
 import { AgentsTreeProvider } from './ui/agentsView';
 import { ChatController, ToWebview } from './ui/chatController';
 import { WhatsNew } from './ui/whatsNew';
+import { RatingPrompt } from './ui/ratingPrompt';
 import { registerChatParticipant } from './ui/chatParticipant';
 import { AGENTS_VIEW_ID, ATTACH_FILTERS, CHAT_LOCATIONS, CHAT_VIEW_ID, ChatViewProvider, getChatLocation } from './ui/chatViewProvider';
 import { WorktreeManager } from './agent/worktrees';
@@ -208,6 +209,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   controller.modelPrefs = context.globalState;
   // After an update the empty chat shows the top bullets of the bundled CHANGELOG section once.
   controller.whatsNew = WhatsNew.forExtension(context.globalState, String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'), context.extensionPath);
+  // After enough successful runs, a star rating card that leads to the Marketplace review form (never mid-run).
+  controller.rating = new RatingPrompt(context.globalState, String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'), vscode.env.appName);
   // Each window prunes only its own worktrees: other windows on the same repository and the CLI keep theirs.
   controller.worktreeOwner = `vscode:${crypto.createHash('sha1').update((context.storageUri ?? context.globalStorageUri).toString()).digest('hex').slice(0, 8)}`;
   runner.telemetry = telemetry;
@@ -981,6 +984,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
 
   cmd('localpilot.openChat', () => view.reveal());
+  cmd('localpilot.rate', async () => {
+    await view.reveal();
+    await controller.rating?.show();
+  });
   cmd('localpilot.openChatInEditor', async (arg?: unknown) => {
     // From an Agents-view row: open that chat, not the one on screen.
     const id = (arg as { session?: { id: string } } | undefined)?.session?.id;

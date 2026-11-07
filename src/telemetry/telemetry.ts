@@ -25,6 +25,8 @@ interface Base {
   spanId?: string;
 }
 export type TelemetryEvent =
+  /** The user's own star rating from the rating card (kept on this machine like all telemetry). */
+  | (Base & { type: 'rating'; stars: number })
   /** One model request (an attempt; retries record their own event). */
   | (Base & { type: 'model'; sid: string; model: string; provider: string; mode: string; depth: number; promptTokens?: number; completionTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; /** Priced from the bundled model facts or reported by the provider; absent for local models. */ costUsd?: number; ttftMs?: number; durationMs: number; outcome: ModelOutcome; reason?: string })
   /** One tool execution. */

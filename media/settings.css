@@ -141,7 +141,11 @@ textarea { min-height: 84px; resize: vertical; font-family: var(--mono); font-si
 input.invalid, select.invalid { border-color: var(--error); }
 .err-text { color: var(--error-text); font-size: 11.5px; }
 .ok-text { color: var(--ok-text); font-size: 11.5px; }
-.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--border-2); border-radius: 6px; overflow: hidden; }
+.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--border-2); border-radius: 6px; overflow: hidden; max-width: 100%; flex-wrap: wrap; }
+/* A field whose control is a segmented picker gets the room the picker needs (Extended thinking has seven choices),
+   instead of the fixed 300 px column; when even that is too narrow, the options wrap inside the control. */
+.field:has(> .ctl > .seg) { grid-template-columns: minmax(0, 1fr) auto; }
+.field:has(> .ctl > .seg) > .ctl { max-width: 100%; }
 .seg button { padding: 5px 11px; font-size: 12px; color: var(--muted); border-right: 1px solid var(--border-2); }
 .seg button:last-child { border-right: none; }
 .seg button.on { background: var(--accent); color: var(--accent-fg); }
@@ -163,6 +167,9 @@ body.vscode-high-contrast .toggle, body.vscode-high-contrast-light .toggle { bor
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn svg { width: 13px; height: 13px; }
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* The sentence in a button row takes the free width (and its own line when narrow); the buttons stay side by side. */
+.btnrow > .muted { flex: 1 1 220px; min-width: 0; }
+.btnrow > .muted + .spacer { display: none; }
 .top .saved { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; font-size: 12px; color: var(--ok-text); opacity: 0; transform: translateY(2px); transition: opacity .2s, transform .2s; pointer-events: none; } .top .saved svg { width: 12px; height: 12px; stroke-width: 2.2; } .top .saved.show { opacity: 1; transform: none; }
 input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 22%, transparent); }
 .card > .btnrow { padding: 10px 14px 12px; border-top: 1px solid var(--border-soft); }
@@ -170,6 +177,10 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; background: var(--input-bg); }
 .list li code { background: none; padding: 0; }
 .list li .x { margin-left: auto; }
+/* A path or repository stays on one line (a hyphen is not a place to break it); a long status after it shrinks instead. */
+.list li code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list li .sk-st { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.list li .sk-st .badge { vertical-align: 1px; }
 .empty { padding: 22px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius); font-size: 12.5px; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 12.5px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; }
@@ -496,6 +507,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .job .btn { grid-area: x; }
 .job:has(.progress) { grid-template-columns: auto minmax(0, 1fr) minmax(90px, 160px) 40px auto; grid-template-areas: "dot t bar pct x"; }
 .mrow { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 6px; }
+/* Rows without an on/off switch (registry, marketplace, catalog): icon, text, actions. With the switch's column left in,
+   the text fell into an auto-width column, a long description pushed the badges and Install past the card's edge. */
+.mrow:not(:has(> .toggle)) { grid-template-columns: auto minmax(0, 1fr) auto; }
 .mrow .brand-mark { width: 26px; height: 26px; border-radius: 7px; font-size: 10px; }
 .mrow .brand-mark svg { width: 13px; height: 13px; }
 .mrow .brand-mark svg.logo { width: 15px; height: 15px; }
@@ -505,7 +519,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .mrow .mrow-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
 .mrow .tags { justify-content: flex-end; }
 .mrow .tags:empty { display: none; }
+/* Wide panes: badges and actions on one centred line, so every row's buttons line up in the same column. */
+@media (min-width: 820px) {
+  .mrow .mrow-right { flex-direction: row; align-items: center; gap: 8px; }
+}
 .mrow .acts { display: flex; gap: 2px; }
+.mrow .acts.mdl-acts { display: grid; grid-template-columns: 92px 28px; gap: 2px; justify-items: end; align-items: center; }
+.mrow .acts.mdl-acts .slot { display: block; width: 1px; height: 1px; }
 .cat-head .ic:not(.brand-mark) { background: var(--tint-2); border-radius: var(--radius-sm); }
 .cat-var { gap: 6px 10px; padding: 8px 14px; }
 .cat-var .sz { min-width: 48px; }
@@ -552,6 +572,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .rts { grid-template-columns: 1fr; }
   .job:has(.progress) { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "dot t x" "bar bar pct"; }
   .mrow { grid-template-columns: auto auto minmax(0, 1fr); }
+  .mrow:not(:has(> .toggle)) { grid-template-columns: auto minmax(0, 1fr); }
   .mrow .mrow-right { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .mrow .tags { justify-content: flex-start; }
   .cat-head .tags { max-width: none; justify-content: flex-start; width: 100%; order: 3; }
@@ -582,6 +603,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 @media (min-width: 1400px) {
   .content { max-width: 960px; }
 }
+/* Forms stay at a readable measure; the dashboard's charts and tables use the width a large screen has. */
+.content:has(> .dash-sec), .content:has(> * > .dash-sec) { max-width: 1440px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
@@ -605,7 +628,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .tblwrap::-webkit-scrollbar { height: 6px; } .tblwrap::-webkit-scrollbar-thumb { border-radius: 3px; }
 .tbl.notes td:nth-child(2) { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tbl.notes td, .tbl.notes th { white-space: nowrap; }
-.tbl.notes { width: 100%; margin: 0; }
+.tbl.notes { width: 100%; margin: 0; table-layout: fixed; }
+.tbl.notes th:nth-child(1) { width: 26%; } .tbl.notes th:nth-child(3) { width: 84px; } .tbl.notes th:nth-child(4) { width: 84px; } .tbl.notes th:last-child { width: 48px; }
+.tbl.notes td { overflow: hidden; text-overflow: ellipsis; }
 .tbl.notes td:nth-child(2) { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tbl.notes tr.busy { opacity: .5; pointer-events: none; }
 .tbl.notes a[data-open] { cursor: pointer; }
@@ -615,6 +640,7 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 
 /* ---- skills & subagents */
 .mrow.sk { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+.mrow.sk:not(:has(> .toggle)) { grid-template-columns: auto minmax(0, 1fr) auto; }
 .mrow.sk .t b { font-family: var(--mono); }
 .mrow.sk .t > span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mrow.sk.have .t b { color: var(--fg); }
@@ -622,7 +648,6 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 .mrow.sk .note.err { color: var(--error-text); }
 .sk-ic { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--tint-2, var(--code-bg)); color: var(--muted); }
 .sk-ic svg { width: 14px; height: 14px; }
-.gal-results > .card .mrow:not(:first-child) { border-top: 1px solid var(--border); }
 .gal-search.sk-filter { margin: 10px 12px 2px; }
 .gal-search.sk-filter input { height: 28px; font-size: 12px; }
 
@@ -700,11 +725,13 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
   .spark { height: 16px; }
 }
 @container dash (max-width: 299px) { .kpis { grid-template-columns: minmax(0, 1fr); } }
-.dash-cols { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.dash-cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .dash-cols > .card { margin: 0; min-width: 0; }
 .dash-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .dash-side > .card { margin: 0; }
-@media (max-width: 1180px) { .dash-cols { grid-template-columns: 1fr; } }
+/* Two columns only when the dashboard itself is wide enough for both tables (its width, not the window's: the
+   content column is capped, so a wide window did not mean wide columns and the tables scrolled sideways). */
+@container dash (max-width: 1280px) { .dash-cols { grid-template-columns: 1fr; } }
 .dash .card h3 { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .dash .card h3 .count { color: var(--muted); font-weight: 400; }
 .dash .card { padding: 12px 14px; }

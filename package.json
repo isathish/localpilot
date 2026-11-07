@@ -226,6 +226,12 @@
         "icon": "$(add)"
       },
       {
+        "command": "localpilot.rate",
+        "title": "Rate LocalPilot",
+        "category": "LocalPilot",
+        "icon": "$(star-empty)"
+      },
+      {
         "command": "localpilot.showSessions",
         "title": "Show Chats…",
         "category": "LocalPilot",

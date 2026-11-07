@@ -1860,3 +1860,31 @@ body.vscode-high-contrast .pl-scope .pick.on, body.vscode-high-contrast-light .p
 .turn.user .autopick .lnk { flex: none; padding: 0 2px; color: var(--link); font-size: inherit; opacity: 0; }
 .turn.user:hover .autopick .lnk, .turn.user .autopick .lnk:focus-visible { opacity: 1; }
 @media (hover: none) { .turn.user .autopick .lnk { opacity: 1; } }
+
+/* ---- Rating card above the composer: one quiet strip, stars in the brand colour, actions on the right. ---- */
+.ratecard { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 2px; padding: 9px 34px 9px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: color-mix(in srgb, var(--brand) 6%, var(--bg)); font-size: var(--fs-sm); animation: fadeUp .2s ease-out; }
+.ratecard.hidden { display: none; }
+.ratecard .rc-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ratecard .rc-q { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.ratecard .rc-q b { font-weight: 600; color: var(--fg); }
+.ratecard .rc-sub { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
+.ratecard .rc-stats { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.ratecard .rc-stats svg { width: 11px; height: 11px; fill: var(--brand); stroke: none; }
+.ratecard .rc-stats b { color: var(--fg); font-weight: 600; }
+.ratecard .rc-stars { display: flex; align-items: center; gap: 2px; }
+.ratecard .rc-star { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--muted); }
+.ratecard .rc-star svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.3; transition: transform .1s; }
+.ratecard .rc-star.hot, .ratecard .rc-star.on { color: var(--brand); }
+.ratecard .rc-star.hot svg, .ratecard .rc-star.on svg { fill: var(--brand); stroke: var(--brand); }
+.ratecard .rc-star:hover svg { transform: scale(1.12); }
+.ratecard .rc-star:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.ratecard .rc-word { margin-left: 6px; min-width: 64px; color: var(--muted); font-size: var(--fs-xs); }
+.ratecard .rc-given { display: inline-flex; gap: 1px; } .ratecard .rc-given i svg { width: 13px; height: 13px; fill: none; stroke: var(--muted); }
+.ratecard .rc-given i.on svg { fill: var(--brand); stroke: var(--brand); }
+.ratecard .rc-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-left: auto; }
+.ratecard .lnk { color: var(--muted); font-size: var(--fs-xs); padding: 2px 0; }
+.ratecard .lnk:hover { color: var(--fg); text-decoration: underline; }
+.ratecard .rc-x { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; }
+.ratecard .rc-x svg { width: 12px; height: 12px; }
+@media (prefers-reduced-motion: reduce) { .ratecard { animation: none; } .ratecard .rc-star svg { transition: none; } }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .ratecard { background: transparent; border-color: var(--vscode-contrastBorder, var(--border)); }

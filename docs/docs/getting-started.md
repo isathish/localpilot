@@ -111,6 +111,15 @@ The changes bar above the composer lists every file the agent changed. Click a f
 
 Rejecting restores the exact content from before the agent's edit.
 
+## Rate LocalPilot
+
+After you have used LocalPilot for a few days (eight successful runs), a small card above the message box asks *How is LocalPilot working for you?* and shows its current rating on the VS Code Marketplace. Pick a number of stars:
+
+- **4–5 stars:** **Rate on Marketplace** opens the Marketplace review form. You sign in there and post the rating; extensions cannot post ratings for you.
+- **1–3 stars:** **Report an issue** opens a GitHub issue with your LocalPilot version and platform filled in, and **Rate on Marketplace** is offered too.
+
+**Later** asks again in about six weeks (at most three times); **Don't ask again** stops it. Your stars are kept on this machine only. You can rate at any time with **LocalPilot: Rate LocalPilot** in the Command Palette, or **Rate LocalPilot** under Help in Settings. In editors that do not use the VS Code Marketplace (Cursor, VSCodium), the link goes to the GitHub repository instead.
+
 ## Next steps
 
 - [Agent modes]({{ '/docs/agent-modes/' | relative_url }}): Agent, Multitask, Debug, Plan and Ask.

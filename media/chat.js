@@ -38,6 +38,7 @@
     book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
     closeOthers: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 3.5V3.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-.5M5 8l3 3M8 8l-3 3"/></svg>',
     rules: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>',
+    star: '<svg viewBox="0 0 16 16"><path d="M8 2.2l1.75 3.6 3.95.55-2.87 2.77.7 3.93L8 11.2l-3.53 1.85.7-3.93L2.3 6.35l3.95-.55z" stroke-linejoin="round"/></svg>',
     sparkle: '<svg viewBox="0 0 16 16"><path d="M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4z"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg>',
     folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
@@ -5526,6 +5527,39 @@
       `<kbd>${alt}↑</kbd> / <kbd>${alt}↓</kbd> switch between chat tabs.`,
     ];
   }
+  // ---- rating card: "How's LocalPilot working for you?" above the composer, after enough good runs (host decides when).
+  // A star leads to the Marketplace review form (only the user can post a rating there); 1–3 stars also offer an issue.
+  const rateCard = el('div', 'ratecard hidden'); rateCard.setAttribute('role', 'region'); rateCard.setAttribute('aria-label', 'Rate LocalPilot');
+  els.status.before(rateCard);
+  const STAR_WORDS = ['', 'Poor', 'Fair', 'Good', 'Very good', 'Excellent'];
+  function renderRateCard(card) {
+    if (!card) { rateCard.classList.add('hidden'); rateCard.innerHTML = ''; return; }
+    const st = card.stats && card.stats.count ? `<span class="rc-stats" title="${card.stats.count} rating${card.stats.count === 1 ? '' : 's'} on the VS Code Marketplace">${I.star}<b>${card.stats.average.toFixed(1)}</b> · ${card.stats.count.toLocaleString()} rating${card.stats.count === 1 ? '' : 's'}</span>` : card.stats && card.store === 'marketplace' ? '<span class="rc-stats">No ratings yet: be the first</span>' : '';
+    const stars = [1, 2, 3, 4, 5].map((n) => `<button class="rc-star${card.rated && n <= card.rated ? ' on' : ''}" data-n="${n}" aria-label="${n} star${n === 1 ? '' : 's'}: ${STAR_WORDS[n]}" title="${STAR_WORDS[n]}">${I.star}</button>`).join('');
+    rateCard.innerHTML = `<div class="rc-main"><div class="rc-q"><b>${card.rated ? 'Change your rating' : 'How is LocalPilot working for you?'}</b>${st}</div><div class="rc-stars" role="group" aria-label="Rating">${stars}<span class="rc-word" aria-hidden="true"></span></div></div><div class="rc-acts"><button class="lnk" data-r="later" title="Ask again in a few weeks">Later</button><button class="lnk" data-r="never" title="Never show this again (the Rate LocalPilot command still works)">Don't ask again</button></div><button class="ib rc-x" data-r="later" title="Close" aria-label="Close">${I.x}</button>`;
+    const word = rateCard.querySelector('.rc-word'); const btns = [...rateCard.querySelectorAll('.rc-star')];
+    const fill = (n) => { btns.forEach((b, i) => b.classList.toggle('hot', i < n)); word.textContent = n ? STAR_WORDS[n] : ''; };
+    btns.forEach((b) => { b.onmouseenter = b.onfocus = () => fill(Number(b.dataset.n)); });
+    rateCard.querySelector('.rc-stars').onmouseleave = () => fill(0);
+    rateCard.onclick = (e) => {
+      const star = e.target.closest('.rc-star'); if (star) { post({ type: 'rate', stars: Number(star.dataset.n) }); return; }
+      const a = e.target.closest('[data-r]'); if (!a) { return; }
+      post({ type: 'ratingDismiss', forever: a.dataset.r === 'never' });
+    };
+    rateCard.classList.remove('hidden');
+  }
+  /** After a star: thanks, and the next step (the review form; for 1–3 stars, a prefilled issue first). */
+  function renderRated(m) {
+    const store = m.store === 'github' ? 'Star on GitHub' : 'Rate on Marketplace';
+    const low = m.stars <= 3;
+    rateCard.innerHTML = `<div class="rc-main"><div class="rc-q"><span class="rc-given" aria-label="${m.stars} of 5 stars">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= m.stars ? 'on' : ''}">${I.star}</i>`).join('')}</span><b>${low ? 'Thanks for telling us.' : 'Thank you!'}</b></div><div class="rc-sub">${low ? 'What went wrong? An issue with the details helps us fix it.' : m.store === 'github' ? 'A star on GitHub helps other developers find LocalPilot.' : 'Posting your rating on the Marketplace helps other developers find LocalPilot. It opens the review form; you sign in there.'}</div></div><div class="rc-acts">${m.issue ? `<button class="btn sm primary" data-l="issue">${I.bug}<span>Report an issue</span></button><button class="btn sm" data-l="review">${I.star}<span>${store}</span></button>` : `<button class="btn sm primary" data-l="review">${I.star}<span>${store}</span></button>`}<button class="lnk" data-l="close">Close</button></div>`;
+    rateCard.classList.remove('hidden');
+    rateCard.onclick = (e) => {
+      const b = e.target.closest('[data-l]'); if (!b) { return; }
+      if (b.dataset.l !== 'close') { post({ type: 'ratingLink', which: b.dataset.l }); }
+      rateCard.classList.add('hidden');
+    };
+  }
   const tipRow = el('div', 'tiprow hidden', `<span class="k">Tip</span><span class="t"></span><button class="ib tip-x" title="Hide tips" aria-label="Hide tips" aria-haspopup="menu">${I.x}</button>`);
   tipRow.setAttribute('role', 'note');
   els.status.after(tipRow);
@@ -5955,6 +5989,8 @@
     const m = ev.data; if (!m || typeof m !== 'object' || typeof m.type !== 'string') { return; }
     try {
       switch (m.type) {
+        case 'rating': renderRateCard(m.card); break;
+        case 'rated': renderRated(m); break;
         case 'uiPrefs': {
           const had = !!uiPrefs.whatsNew;
           Object.assign(uiPrefs, { showTips: m.showTips !== false, compactionThreshold: Number(m.compactionThreshold) || 0.75, autoCompact: m.autoCompact !== false, whatsNew: m.whatsNew || null });

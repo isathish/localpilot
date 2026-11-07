@@ -66,6 +66,7 @@ import { parseThinkChoice } from '../agent/thinking';
 import { affectsAutoApprove, AutoApproveMsg, autoApproveState, allowInWorkspace, approvalReason, setAutoApprove } from './autoApproveBar';
 import { affectsUiPrefs, checkPathsExist, PathsExistMsg, uiPrefsMsg, UiPrefsMsg } from './chatUiExtras';
 import type { WhatsNew } from './whatsNew';
+import type { RatingCard, RatingPrompt } from './ratingPrompt';
 import { toDecision } from '../agent/approvalLevel';
 import { commandRuleFiles, commandRuleText, suggestedCommandPattern, writeCommandRule } from '../agent/commandRules';
 import { onDidChangeWorkspaceGrants } from '../agent/workspaceApprovals';
@@ -106,6 +107,9 @@ export interface WorkspaceInfo {
 }
 
 export type ToWebview =
+  /** The rating card above the composer (null: hidden), and the follow-up after a star was picked. */
+  | { type: 'rating'; card: RatingCard | null }
+  | { type: 'rated'; stars: number; store: RatingCard['store']; issue: boolean }
   | { type: 'init'; sessions: ReturnType<SessionStore['list']>; activeSessionId?: string; workspace?: WorkspaceInfo; models: ModelInfo[]; defaultModel: string; contextWindow: number; skills: { name: string; description: string }[]; agents: { name: string; description: string }[]; commands?: CommandListItem[]; skillsMode: 'auto' | 'ask' | 'off'; running: string[]; paused: string[]; platform: NodeJS.Platform }
   /** Folder, branch and status for the welcome screen's context strip; sent when any of them changes. */
   | { type: 'workspaceInfo'; workspace: WorkspaceInfo }
@@ -409,6 +413,10 @@ export type FromWebview =
   /** Path links in an answer, batch-checked so links to files that do not exist render as plain code. */
   | { type: 'pathsExist'; seq: number; paths: string[]; sessionId?: string }
   | { type: 'dismissWhatsNew' }
+  /** The rating card: a star picked, put off or turned off; `ratingLink` opens the review form or a prefilled issue. */
+  | { type: 'rate'; stars: number }
+  | { type: 'ratingDismiss'; forever: boolean }
+  | { type: 'ratingLink'; which: 'review' | 'issue' }
   | { type: 'openChangelog' }
   | { type: 'copyText'; text: string }
   /**
@@ -502,6 +510,16 @@ export class ChatController implements vscode.Disposable {
   modelPrefs?: vscode.Memento;
   /** The "What's new" card shown on the empty chat after an update (set by the extension host). */
   whatsNew?: WhatsNew;
+  /** Asks for a star rating after enough successful runs; set by the extension. */
+  private _rating?: RatingPrompt;
+  private lastRatingLinks?: { reviewUrl: string; issueUrl?: string };
+  set rating(r: RatingPrompt | undefined) {
+    this._rating = r;
+    r?.subscribe(() => this.broadcast({ type: 'rating', card: r.pending ?? null }));
+  }
+  get rating(): RatingPrompt | undefined {
+    return this._rating;
+  }
   private readonly disposables: vscode.Disposable[] = [];
   private readonly _onDidChangeActive = new vscode.EventEmitter<Session | undefined>();
   readonly onDidChangeActive = this._onDidChangeActive.event;
@@ -2200,6 +2218,27 @@ export class ChatController implements vscode.Disposable {
         (reply ?? { post: (m: ToWebview) => this.broadcast(m) }).post({ type: 'pathsExistResult', seq: msg.seq, sessionId: msg.sessionId, exists });
         return;
       }
+      case 'rate': {
+        if (!this._rating || typeof msg.stars !== 'number') {
+          return;
+        }
+        const r = await this._rating.rate(msg.stars, `${process.platform} ${process.arch}`);
+        this.lastRatingLinks = { reviewUrl: r.reviewUrl, issueUrl: r.issueUrl };
+        this.telemetry?.record({ type: 'rating', stars: Math.max(1, Math.min(5, Math.round(msg.stars))) });
+        this.broadcast({ type: 'rated', stars: Math.max(1, Math.min(5, Math.round(msg.stars))), store: r.store, issue: !!r.issueUrl });
+        return;
+      }
+      case 'ratingDismiss':
+        await this._rating?.dismiss(!!msg.forever);
+        return;
+      case 'ratingLink': {
+        // Only links the host built: the review form, or the prefilled issue of the rating just given.
+        const url = msg.which === 'issue' ? this.lastRatingLinks?.issueUrl : this.lastRatingLinks?.reviewUrl ?? this._rating?.pending?.reviewUrl;
+        if (url) {
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+        return;
+      }
       case 'dismissWhatsNew':
         await this.whatsNew?.dismiss();
         this.broadcast(uiPrefsMsg());
@@ -3103,6 +3142,7 @@ export class ChatController implements vscode.Disposable {
       setTimeout(() => void this.mentionIndex.list(), 1500);
     }
     post(uiPrefsMsg(this.whatsNew?.pending));
+    post({ type: 'rating', card: this._rating?.pending ?? null });
     post(this.connectivity);
     // Commands that outlive a run (detached dev servers) keep their Stop control on rows this webview draws later.
     for (const r of runningCommands()) {
@@ -3668,6 +3708,10 @@ export class ChatController implements vscode.Disposable {
       const healed = this.outcomes.get(sessionId);
       const attention = healed?.outcome === 'incomplete' || healed?.outcome === 'blocked';
       this.notifier.finished(sessionId, session.title, silent, turnErrored ? 'error' : attention ? 'attention' : 'ok', this.tracker.forSession(sessionId).length, attention ? healed?.report : undefined);
+      // Only runs that ended well count toward asking for a rating (never one that failed or was stopped).
+      if (!session.group) {
+        void this._rating?.noteRun(!control.aborted && !turnErrored && !attention).catch(() => undefined);
+      }
     }
   }
 

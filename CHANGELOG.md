@@ -4,6 +4,16 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Rate LocalPilot.** After a few days of use (eight successful runs), a small card above the message box asks how LocalPilot is working for you and shows its current rating on the VS Code Marketplace. Pick 1–5 stars. **Rate on Marketplace** opens the Marketplace review form, where you sign in and post it; extensions cannot post ratings for you. With 1–3 stars, **Report an issue** also opens a prefilled GitHub issue. **Later** asks again in about six weeks, at most three times, and **Don't ask again** stops it. It never appears during a run or after a failed one. Rate any time with **LocalPilot: Rate LocalPilot** or **Rate LocalPilot** under Help in Settings. Your stars stay on this machine.
+
+### Fixed
+- **Skill and marketplace lists no longer push badges and Install off the card.** In Settings → Skills & subagents (Skill registry) and Settings → Marketplace, a skill with a long description pushed its source badge and its **Install** or **Reinstall** button past the card's right edge, so they were cut off or hidden. Descriptions now wrap to two lines and the badge and button always stay in view.
+- **Cleaner separators in those lists.** Rows were separated by two borders, which looked like thick grey bars; there is now a single thin line.
+- **Settings layout adapts to the screen size.** On a wide screen, each row's badges and buttons sit on one line, and in Installed models "Set default" and Delete line up in fixed columns even when a row has only one of them. Segmented choices with many options (Extended thinking) get the room they need instead of being cut off at "Max". The Memory notes table truncates long summaries instead of pushing its delete buttons off the card. In rows such as Clear chat history, the explanation flexes and the buttons stay together.
+- **The Dashboard uses the width of a large screen.** Its charts and tables are no longer squeezed into a narrow column with empty space beside it. It switches to two columns only when both fit, so tables such as Models, Runs by mode and Subagents no longer scroll sideways or cut off their last columns.
+- **Repository and folder names stay on one line.** In lists such as Skill registry → Repositories, a name like `github/awesome-copilot/skills` no longer breaks at a hyphen; a long status after it is shortened instead.
+
 ## 1.6.1 — 2026-11-06
 
 ### Added
