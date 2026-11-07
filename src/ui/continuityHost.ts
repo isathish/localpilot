@@ -20,6 +20,8 @@ import type { MemoryStore } from '../agent/memory';
 import { memoryAction, memoryPageData } from './memoryHost';
 import { contextAction, contextPageData, modelSwitchNotice, onChatOpened } from './contextHost';
 import { checkpointMessageIndex, checkpointsPageData } from './sessionHost';
+import type { SyncHost } from './syncHost';
+import { importCheckpointBundle } from '../continuity/sync/extras';
 
 const FORMAT_LABEL: Record<ExportFormat, string> = { json: 'JSON', markdown: 'Markdown', html: 'HTML', pdf: 'PDF (print-ready page)' };
 
@@ -162,6 +164,8 @@ export class ContinuityHost implements vscode.Disposable {
 
   /** The MemoryStore (set by extension.ts): the Memory manager edits note files through it. */
   memory?: MemoryStore;
+  /** SYNC (set by extension.ts): the Sync manager page and its actions. */
+  sync?: SyncHost;
 
   private async dispatch(msg: ContinuityFromWebview, reply?: Sink): Promise<void> {
     const mgr = this.mgr;
@@ -179,6 +183,17 @@ export class ContinuityHost implements vscode.Disposable {
     }
     if (msg.type === 'checkpointAction') {
       return this.checkpointAction(msg);
+    }
+    if (msg.type === 'syncAction' || msg.type === 'resolveConflict') {
+      await this.sync?.handle(msg);
+      if (msg.type === 'resolveConflict' || msg.action !== 'settings') {
+        this.post({ type: 'continuityPage', page: 'sync', data: await this.sync?.pageData() }, reply);
+      }
+      return;
+    }
+    if (msg.type === 'continuityPage' && msg.page === 'sync' && this.sync) {
+      this.post({ type: 'continuityPage', page: 'sync', data: await this.sync.pageData() }, reply);
+      return;
     }
     if (msg.type === 'contextAction') {
       return contextAction(msg, {
@@ -289,6 +304,10 @@ export class ContinuityHost implements vscode.Disposable {
   // ---------------------------------------------------------------------------------------------- navigator
 
   private async nav(msg: Extract<ContinuityFromWebview, { type: 'nav' }>, reply?: Sink): Promise<void> {
+    if (this.sync) {
+      // The navigator's Sync manager dot.
+      this.post({ type: 'syncStatus', ...this.sync.view() }, reply);
+    }
     const mgr = this.mgr;
     const empty = { rows: [], total: 0, offset: 0, limit: 0 };
     if (!mgr || !(await this.indexReady())) {
@@ -639,6 +658,19 @@ export class ContinuityHost implements vscode.Disposable {
     if (this.controller.activeSession?.id !== id) {
       await this.controller.handle({ type: 'selectSession', id });
     }
+    // SYNC: a checkpoint taken on another device restores here once its synced contents are in this repository.
+    const c = this.c;
+    if (c?.sessions && c.sync) {
+      const row = (await c.sessions.checkpoints({ conversationId: id }).catch(() => [])).find((r) => r.run === msg.run);
+      const root = s.folder ?? this.controller.workspace?.root;
+      if (row && row.device && row.device !== c.device.deviceId && row.contentBlob && row.ref && root) {
+        const r = await importCheckpointBundle({ blobs: c.blobs, fetchBlob: (sha) => c.sync!.fetchBlob(sha) }, row.contentBlob, row.ref, root);
+        if (!r.ok) {
+          this.toast(`This checkpoint's contents cannot be used here: ${r.message}`, 'warn');
+          return;
+        }
+      }
+    }
     if (msg.action === 'view') {
       await this.controller.handle({ type: 'viewChanges', sessionId: id, scope: 'turn', run: msg.run });
       return;
@@ -721,6 +753,13 @@ async function withChat(controller: ChatController, reveal: () => void, ms = 400
     await new Promise((r) => setTimeout(r, 100));
   }
   return controller.hasSurface();
+}
+
+/** Opens a continuity page in the chat (revealing it first). */
+export async function showContinuityPage(controller: ChatController, reveal: () => void, page: ContinuityPageName, params?: Record<string, unknown>): Promise<void> {
+  if (await withChat(controller, reveal)) {
+    controller.publish({ type: 'openContinuityPage', page, ...(params ? { params } : {}) });
+  }
 }
 
 export function registerConversationCommands(context: vscode.ExtensionContext, controller: ChatController, handle: ContinuityHandle, reveal: () => void): void {

@@ -450,10 +450,114 @@
     body.appendChild(list);
     body.appendChild(el('p', 'cp-note', 'Restore asks before it changes anything; in a git repository your current state is saved in git stash first. A checkpoint taken on another device lists its files here; its content stays there unless sync carries checkpoint contents.'));
   }
+  // ---- Sync manager (SYNC): status, queue, Sync now / Pause, conflicts, devices, what syncs, activity, keys.
+  const SYNC_LINE = { off: 'Sync is off', idle: 'Up to date', syncing: 'Syncing…', offline: 'Offline', paused: 'Paused', error: 'Sync failed', unavailable: 'Sync is not available' };
+  const CF_KIND = { field: 'Changed on two devices', 'text-merge': 'Edited on two devices', 'branch-split': 'Continued on two devices', 'trash-vs-edit': 'Deleted on one device, edited on another', 'remote-damaged': 'Damaged on the storage', 'clock-skew': 'Clock ahead' };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  function syncDot(st) { return st.state === 'off' || st.state === 'unavailable' ? 'off' : st.conflicts || st.state === 'error' || st.state === 'offline' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off'; }
+  function syncAct(action, extra) { post({ type: 'syncAction', action, ...(extra || {}) }); }
+  function fmtSize(b) { return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
+  function cfActions(c) {
+    const k = c.kind;
+    const b = (r, label, primary, title) => `<button class="btn sm${primary ? '' : ' ghost'}" data-r="${r}"${title ? ` title="${esc(title)}"` : ''}>${esc(label)}</button>`;
+    if (k === 'field') { return b('ours', `Keep ${c.oursDevice}'s`, c.applied === 'ours') + b('theirs', `Keep ${c.theirsDevice}'s`, c.applied !== 'ours'); }
+    if (k === 'text-merge') { return `<button class="btn sm" data-x="compare" title="Open both versions side by side">${I.compare || I.diff}<span>Compare…</span></button>` + b('ours', `Keep ${c.oursDevice}'s`) + b('theirs', `Keep ${c.theirsDevice}'s`) + b('both', 'Keep both'); }
+    if (k === 'branch-split') { return b('keep-applied', 'Keep both', true, 'Both lines stay; switch between them with the branch switcher') + b('theirs', `Use ${c.theirsDevice}'s branch`); }
+    if (k === 'trash-vs-edit') { return b('keep-applied', 'Keep it', true, 'It stays out of Trash with the edit') + b('theirs', 'Move to Trash again'); }
+    if (k === 'remote-damaged') { return `<button class="btn sm ghost" data-x="reupload" title="Upload this device's history again">${I.refresh}<span>Re-upload from this device</span></button>` + b('keep-applied', 'Dismiss'); }
+    return b('keep-applied', 'Dismiss', true);
+  }
   function sync(d) {
-    const body = frame('Sync', '', '');
-    body.innerHTML = `<div class="cp-empty"><span class="sdot off" aria-hidden="true"></span><p><b>Sync is off.</b> This computer (${esc(d.device || '')}) keeps its conversations, memory and backups locally.</p><p class="cp-note">Sync with a folder (iCloud Drive, Dropbox, OneDrive…), a Git repository, S3-compatible storage or WebDAV, end-to-end encrypted with your passphrase.</p><button class="btn sm" data-c="setup">${I.gear}<span>Set up sync…</span></button></div>`;
-    body.querySelector('[data-c="setup"]').onclick = () => { post({ type: 'openSettings', section: 'continuity' }); close(false); };
+    const st = d.status || { state: 'unavailable' };
+    const busy = st.state === 'syncing';
+    const configured = !!d.configured && d.enabled;
+    const acts = configured ? `<button class="btn sm" data-c="now"${busy && !st.elsewhere ? ' disabled' : ''} title="Sync now">${busy ? '<span class="spinner"></span>' : I.sync}<span>Sync now</span></button>${st.state === 'paused' && st.reason === 'user' ? `<button class="btn sm ghost" data-c="resume" title="Resume automatic sync">${I.play}<span>Resume</span></button>` : `<button class="btn sm ghost" data-c="pause" title="Pause automatic sync"${st.state === 'paused' ? ' disabled' : ''}>${I.pause}<span>Pause</span></button>`}` : '';
+    const sub = configured ? `${esc(SYNC_LINE[st.state] || st.state)}${st.lastSync ? ` · last ${esc(ago(st.lastSync))}` : ''}` : '';
+    const body = frame('Sync', sub, acts);
+    const head = root.querySelector('.cp-acts');
+    if (head) { head.onclick = (e) => { const b = e.target.closest('[data-c]'); if (b && !b.disabled) { syncAct(b.dataset.c); if (b.dataset.c === 'now') { b.disabled = true; b.innerHTML = `<span class="spinner"></span><span>Sync now</span>`; } } }; }
+    if (!configured) {
+      const need = d.configured && !d.enabled;
+      body.innerHTML = `<div class="cp-empty"><span class="sdot off" aria-hidden="true"></span><p><b>${need ? 'Sync is turned off on this device.' : 'Sync is off.'}</b> This computer (${esc((d.device && d.device.name) || '')}) keeps its conversations, memory and backups locally.</p><p class="cp-note">Sync with a folder (iCloud Drive, Dropbox, OneDrive, Google Drive), a Git repository, S3-compatible storage or WebDAV. Everything is encrypted on this device with your passphrase before it leaves; the storage only sees ciphertext.</p><div class="sy-btns"><button class="btn sm" data-c="setup">${I.sync}<span>Set up sync…</span></button><button class="btn sm ghost" data-c="settings">${I.gear}<span>Sync settings…</span></button></div></div>`;
+      body.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => { syncAct(b.dataset.c); if (b.dataset.c === 'settings') { close(false); } }));
+      return;
+    }
+    // ---- status card
+    const card = el('section', `cp-sec sy-status sy-${syncDot(st)}`);
+    const waiting = [st.pending ? plural(st.pending, 'change') : '', st.pendingBlobs ? plural(st.pendingBlobs, 'attachment') : ''].filter(Boolean).join(' and ');
+    let line = `<b>${esc(SYNC_LINE[st.state] || st.state)}</b>`;
+    if (st.state === 'offline') { line += ` — ${waiting ? `${esc(waiting)} waiting` : 'nothing waiting'}; it retries on its own`; }
+    else if (st.state === 'paused' && st.reason !== 'user') { line = `<b>Sync paused</b> — ${esc(st.message || st.reason || '')}`; }
+    else if (st.state === 'error') { line += ` — ${esc(st.message || '')}`; }
+    else if (st.state === 'syncing') { line += st.elsewhere ? ' in another window or the CLI' : ''; }
+    else { line += waiting ? ` · ${esc(waiting)} waiting` : ''; }
+    // Same signal as the navigator's dot: open conflicts need a choice even when everything else is up to date.
+    if (st.conflicts && st.state !== 'off' && st.state !== 'unavailable') { line += ` · ${esc(plural(st.conflicts, 'conflict'))} to resolve`; }
+    const fix = st.needsPassphrase || st.reason === 'passphrase' || st.reason === 'remote-replaced' ? `<button class="btn sm" data-c="unlock">${I.key}<span>Enter passphrase…</span></button>` : st.reason === 'auth' && (d.backend === 's3' || d.backend === 'webdav') ? `<button class="btn sm" data-c="setSecret">${I.key}<span>Update credentials…</span></button>` : st.state === 'paused' && st.reason !== 'user' ? `<button class="btn sm" data-c="settings">${I.gear}<span>Fix…</span></button>` : '';
+    card.innerHTML = `<div class="sy-line" role="status" aria-live="polite"><span class="sdot ${syncDot(st)}" aria-hidden="true"></span><span>${line}</span></div><p class="cp-note">${esc(d.backendLabel || '')}: <span class="sy-where" title="${esc(d.label || '')}">${esc(d.label || '')}</span> · end-to-end encrypted · every ${esc(d.interval || 5)} min and after changes</p><div class="sy-btns">${fix}<button class="btn sm ghost" data-c="settings">${I.gear}<span>Sync settings…</span></button></div>`;
+    card.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => { syncAct(b.dataset.c); if (b.dataset.c === 'settings') { close(false); } }));
+    body.appendChild(card);
+    // ---- conflicts
+    const cfs = d.conflicts || [];
+    const cs = el('section', 'cp-sec sy-conflicts', `<h3>Conflicts <span class="cp-count">${cfs.length}</span></h3>`);
+    cs.id = 'sy-conflicts';
+    if (!cfs.length) { cs.appendChild(el('p', 'cp-note', 'None. When the same thing changes on two devices before they sync, it is listed here; LocalPilot keeps the later change until you choose.')); }
+    const cl = el('div', 'cp-list'); cl.setAttribute('role', 'list');
+    for (const c of cfs) {
+      const it = el('div', 'mm-item sy-cf'); it.setAttribute('role', 'listitem');
+      const what = c.label ? `${esc(c.label)}` : esc(c.entity);
+      const sides = c.kind === 'field' ? `<div class="sy-sides"><div><span>${esc(c.oursDevice)}</span><code>${esc(c.ours || '—')}</code></div><div><span>${esc(c.theirsDevice)}</span><code>${esc(c.theirs || '—')}</code></div></div>` : c.kind === 'text-merge' ? `<div class="sy-sides"><div><span>${esc(c.oursDevice)}</span><pre>${esc((c.ours || '').slice(0, 240))}</pre></div><div><span>${esc(c.theirsDevice)}</span><pre>${esc((c.theirs || '').slice(0, 240))}</pre></div></div>` : '';
+      it.innerHTML = `<div class="cp-row"><span class="cp-main"><span class="cp-name">${esc(CF_KIND[c.kind] || c.kind)}${c.field && c.kind === 'field' ? ` · ${esc(c.field)}` : ''}</span><span class="cp-meta">${what} · ${when(c.createdAt)}</span></span></div>${sides}<div class="mm-acts">${cfActions(c)}</div>`;
+      it.onclick = (e) => {
+        const r = e.target.closest('[data-r]'); const x = e.target.closest('[data-x]');
+        if (r) { it.classList.add('mm-busy'); post({ type: 'resolveConflict', id: c.id, resolution: r.dataset.r }); }
+        else if (x && x.dataset.x === 'compare') { syncAct('showConflict', { id: c.id }); }
+        else if (x && x.dataset.x === 'reupload') { syncAct('reupload'); }
+      };
+      cl.appendChild(it);
+    }
+    cs.appendChild(cl); body.appendChild(cs);
+    // ---- devices
+    const devs = d.devices || [];
+    const ds = el('section', 'cp-sec', `<h3>Devices <span class="cp-count">${devs.filter((x) => !x.revokedAt).length}</span></h3>`);
+    const dl = el('div', 'cp-list'); dl.setAttribute('role', 'list');
+    for (const x of devs) {
+      const r = row(x.revokedAt ? 'sy-revoked' : '', `<span class="cp-main"><span class="cp-name">${esc(x.name)}${x.thisDevice ? ' <span class="cp-tag">this device</span>' : ''}${x.revokedAt ? ' <span class="cp-tag warn">removed</span>' : ''}</span><span class="cp-meta">${esc([x.platform, x.app].filter(Boolean).join(' · '))}${x.thisDevice ? '' : x.lastSeen ? ` · last seen ${when(x.lastSeen)}` : ' · not seen yet'}</span></span><span class="cp-ra">${x.thisDevice ? `<button class="btn sm ghost" data-d="rename" title="Rename this device" aria-label="Rename this device">${I.rename}<span>Rename</span></button>` : x.revokedAt ? `<button class="btn sm ghost" data-d="reinstate" title="List it as an active device again">${I.undo}<span>List again</span></button>` : `<button class="btn sm ghost" data-d="remove" title="Remove this device (and rotate the key)" aria-label="Remove ${esc(x.name)}">${I.trash}<span>Remove…</span></button>`}</span>`);
+      r.setAttribute('role', 'listitem');
+      r.onclick = (e) => { const b = e.target.closest('[data-d]'); if (!b) { return; } syncAct(b.dataset.d === 'rename' ? 'renameDevice' : b.dataset.d === 'reinstate' ? 'reinstate' : 'removeDevice', { deviceId: x.id }); };
+      dl.appendChild(r);
+    }
+    ds.appendChild(dl); body.appendChild(ds);
+    // ---- what syncs
+    const cats = d.categories || [];
+    const ws = el('section', 'cp-sec', '<h3>What syncs</h3>');
+    const grid = el('div', 'sy-cats');
+    for (const k of cats) {
+      const lab = el('label', 'mm-check', `<input type="checkbox"${k.on ? ' checked' : ''}><span>${esc(k.label)}${k.withheld ? ` <span class="cp-tag" title="Held back while it was off; sent when you turn it on">${k.withheld} held back</span>` : ''}</span>`);
+      lab.querySelector('input').onchange = (e) => syncAct('setCategory', { category: k.id, on: e.target.checked });
+      grid.appendChild(lab);
+    }
+    ws.appendChild(grid);
+    ws.appendChild(el('p', 'cp-note', 'API keys and credentials never sync. Turning a category off keeps it on this device; turning it on later sends what it held back.'));
+    body.appendChild(ws);
+    // ---- activity
+    const act = d.activity || [];
+    const as = el('section', 'cp-sec', '<h3>Activity</h3>');
+    const al = el('div', 'cp-list sy-act');
+    for (const a of act.slice(0, 12)) {
+      const what = a.kind === 'sync' ? (a.up || a.down ? `↑ ${a.up} · ↓ ${a.down}${a.bytes ? ` · ${fmtSize(a.bytes)}` : ''}` : 'Nothing new') : a.kind === 'offline' ? 'Offline' : a.kind === 'paused' ? 'Paused' : 'Failed';
+      al.appendChild(row(a.error ? 'sy-err' : '', `<span class="cp-main"><span class="cp-name">${esc(what)}</span>${a.error ? `<span class="cp-meta" title="${esc(a.error)}">${esc(a.error)}</span>` : ''}</span><span class="cp-meta">${when(a.at)}</span>`));
+    }
+    if (!act.length) { al.appendChild(el('p', 'cp-note', 'No sync yet.')); }
+    as.appendChild(al); body.appendChild(as);
+    // ---- keys
+    const ks = el('section', 'cp-sec', '<h3>Passphrase and key</h3>');
+    const kb = el('div', 'sy-btns', `<button class="btn sm ghost" data-c="changePassphrase">${I.key}<span>Change passphrase…</span></button><button class="btn sm ghost" data-c="rotateKey">${I.refresh}<span>Rotate key…</span></button><button class="btn sm ghost" data-c="turnOff">${I.x}<span>Turn off sync…</span></button><button class="btn sm ghost danger" data-c="startOver" title="Forgot the passphrase? Delete the synced data and upload again from this device">${I.warn}<span>Start over…</span></button>`);
+    kb.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => syncAct(b.dataset.c)));
+    ks.appendChild(kb);
+    ks.appendChild(el('p', 'cp-note', 'The passphrase never leaves your devices and cannot be recovered. The storage sees object names, sizes and times — never titles, messages, code, memory or device names.'));
+    body.appendChild(ks);
+    if (cur && cur.params && cur.params.view === 'conflicts') { setTimeout(() => { const t = document.getElementById('sy-conflicts'); if (t) { t.scrollIntoView({ block: 'start' }); } }, 0); cur.params.view = ''; }
   }
   function off(page, why) {
     const body = frame(TITLES[page] || page);
@@ -486,6 +590,7 @@
 
   function receive(m) {
     if (!cur) { return; }
+    if (m.type === 'syncStatus') { if (cur.page === 'sync' && cur.data && !root.querySelector('.mm-busy')) { const was = cur.data.status && cur.data.status.state; cur.data.status = { ...m }; if (was !== m.state || m.state !== 'syncing') { request(); } } return; }
     if (m.type === 'versionsList' && cur.page === 'versions') { versions({ ...m, id: m.id }); return; }
     if (m.type === 'memoryVersions' && cur.page === 'memory') { cur.versions = m; cur.vsel = null; cur.params.view = 'versions'; if (cur.data) { memory(cur.data); } return; }
     if (m.type === 'memoryDone') {

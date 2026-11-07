@@ -557,13 +557,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .side a { flex: none; height: 28px; padding: 0 11px; border-radius: 999px; font-size: var(--fs-sm); border: 1px solid transparent; }
   .side a.on { box-shadow: none; border-color: var(--border-soft); }
   .side .tabs { display: contents; }
-  /* Edge fades tell the user the pill strip scrolls, only on an edge with more pills past it. The right fade ends
-     before the ⋯ button, which stays pinned at the end of the strip. */
-  .side { --fl: 0px; --fr: 0px; --fade: linear-gradient(90deg, transparent, #000 var(--fl), #000 calc(100% - 40px - var(--fr)), transparent calc(100% - 40px), #000 calc(100% - 40px)); }
-  .side.fade-l, .side.fade-r { -webkit-mask: linear-gradient(#000 0 0) bottom / 100% 1px no-repeat, var(--fade); mask: linear-gradient(#000 0 0) bottom / 100% 1px no-repeat, var(--fade); }
-  .side.fade-l { --fl: 28px; }
-  .side:not(.fade-r) { --fade: linear-gradient(90deg, transparent, #000 var(--fl)); }
-  .side.fade-r { --fr: 28px; }
+  /* Edge fades tell the user the pill strip scrolls, only on an edge with more pills past it. They are overlays in the
+     strip's own colour, not a mask: a mask would make this sticky header see-through, showing the page scrolled under
+     it. The left one sticks to the start of the strip; the right one hangs off the ⋯ button pinned at its end. */
+  .side::before { content: ''; position: sticky; left: -12px; flex: none; width: 28px; margin: 0 -20px 0 -12px; align-self: stretch; background: linear-gradient(90deg, var(--bg) 30%, transparent); z-index: 1; pointer-events: none; opacity: 0; transition: opacity .15s; }
+  .side.fade-l::before { opacity: 1; }
+  .side > .navmore::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 28px; background: linear-gradient(90deg, transparent, var(--bg)); pointer-events: none; opacity: 0; transition: opacity .15s; }
+  .side.fade-r > .navmore::before { opacity: 1; }
   .content { padding: 16px 14px 48px; }
   .content h1 { font-size: 18px; }
   .btnrow .spacer + .muted { width: 100%; }
@@ -1459,3 +1459,30 @@ li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 
 
 /* Memory & history: the Memory manager link between the settings card and the notes table (1.7). */
 .btnrow.mmgr { margin: 10px 2px 12px; }
+
+/* Continuity & sync → Sync: cards stack in narrow panes; two columns from 1000 px (status and storage, what syncs and devices). */
+.sync-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.sync-grid > .card { margin: 0; min-width: 0; }
+@media (min-width: 1000px) {
+  .sync-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .sync-grid > .sync-status, .sync-grid > .sync-keys { grid-column: 1 / -1; }
+}
+.sync-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.sync-line .muted { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.sync-body .sdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); opacity: .6; }
+.sync-body .sdot.ok { background: var(--ok); opacity: 1; } .sync-body .sdot.busy { background: var(--brand); opacity: 1; } .sync-body .sdot.err { background: var(--error); opacity: 1; }
+.sync-test { display: inline-flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.sync-test svg { width: 13px; height: 13px; flex: none; margin-top: 1px; }
+.sync-test.ok svg { color: var(--ok-text, var(--ok)); } .sync-test.err { color: var(--error-text); }
+.sync-secret { padding: 10px 14px 12px; border-top: 1px solid var(--border-soft); }
+.sync-secret svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; color: var(--ok-text, var(--ok)); }
+.sync-secret .btn svg { color: inherit; }
+.sync-catlist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.sync-cat { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); min-width: 0; }
+.sync-cat input { margin: 0; accent-color: var(--brand); }
+.sync-cat input:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.sync-devices td.act { text-align: right; white-space: nowrap; }
+.sync-keys .btnrow .btn { white-space: nowrap; }
+body.vscode-high-contrast .sync-body .sdot, body.vscode-high-contrast-light .sync-body .sdot { outline: 1px solid var(--border); }
+/* In the two-column Sync layout each card is half width: labels sit above their controls. */
+@media (min-width: 1000px) { .sync-grid .field { grid-template-columns: minmax(0, 1fr); } }

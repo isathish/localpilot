@@ -38,13 +38,18 @@ Auto-detection also probes a few other local ports and running Docker containers
 | Plugin marketplaces (fetched with `git`) | When you browse or install plugins | Remove them from `localpilot.plugins.marketplaces` |
 | Model gallery listings from ollama.com, hub.docker.com and huggingface.co | While the model gallery is open | Don't open the gallery |
 | Browser tools (open and read web pages) | When the agent calls them | `localpilot.approvals.network` (`ask` to approve each, `never` to block) |
+| Sync with your other devices: encrypted objects to the folder, Git repository, S3-compatible bucket or WebDAV server you choose | Only after you set sync up; then every few minutes and after changes | Off by default; **Turn off sync…** or `localpilot.sync.enabled: false` |
 
 There is no account, no analytics SDK and no update check in the extension. Extension updates come from VS Code itself, the same as for any other extension.
 
 ### What stays on your disk
 
 - **Usage metrics** for the Dashboard and model tuning: model calls, tokens, latency, tool runs, agent turns, completion acceptance. They are daily JSONL files in `~/.localpilot/telemetry`, kept for `localpilot.telemetry.retentionDays` (default 30). Nothing reads them except LocalPilot on your machine. Turn recording off with `localpilot.telemetry.enabled: false`, or delete everything from **Dashboard → Delete all recorded data**.
-- **Chats, memory notes and checkpoints** in VS Code's extension storage and in `.localpilot/` inside your project.
+- **Chats, memory notes and checkpoints** in VS Code's extension storage and in `.localpilot/` inside your project, and since 1.7 in `~/.localpilot/continuity` (the change log, search index, attachments and backups shared by VS Code and the CLI). Not encrypted by LocalPilot; use your disk encryption. Backups can be encrypted with a passphrase.
+
+### Sync (off unless you set it up)
+
+Sync stores your data on storage **you** choose; there is no LocalPilot server. Everything is encrypted on your computer before upload (AES-256-GCM; the key is protected by your passphrase through scrypt), so the storage only sees ciphertext. What it can see: object names (random-looking device and log ids, sequence numbers), sizes, counts, upload times, how many devices sync, and the key-derivation parameters. What it cannot see: titles, messages, code, project names and paths, memory, tags, device names, preferences, or which attachments match files it knows (attachment names are keyed hashes). The passphrase is never stored or sent; each device keeps the data key in its keychain. API keys, provider endpoints and storage credentials never sync. Details: [Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}#sync-across-devices).
 
 ### How to check this yourself
 

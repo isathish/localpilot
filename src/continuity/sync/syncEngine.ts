@@ -49,6 +49,7 @@ import {
   streamPrefix,
 } from './protocol';
 import { SyncScheduler, Trigger } from './scheduler';
+import type { SyncExtra } from './extras';
 
 export interface SyncSettings {
   enabled: boolean;
@@ -166,6 +167,8 @@ export interface SyncEngineOptions {
   passphraseHint?: () => string | undefined;
   /** Blob bytes downloaded per cycle (lazy beyond). */
   blobBudgetBytes?: number;
+  /** Prompts, preferences, checkpoint contents (extras.ts): log local changes before the push, apply after the pull. */
+  extras?: SyncExtra[];
 }
 
 const DAY = 86_400_000;
@@ -219,6 +222,7 @@ export class SyncEngine {
   private subs: { dispose(): void }[] = [];
   private lastStatus = '';
   private backendCache?: { sig: string; backend: SyncBackend };
+  private pulledOnce = false;
 
   constructor(private readonly o: SyncEngineOptions) {
     this.dir = path.join(o.root, 'sync');
@@ -529,7 +533,8 @@ export class SyncEngine {
   }
 
   private commitMessage(what: string): string {
-    return `LocalPilot sync from ${this.o.log.device.name}${what ? ` (${what})` : ''}`;
+    // No device name: the storage (a Git host) must not learn anything in plaintext beyond object names and times.
+    return `LocalPilot sync${what ? ` (${what})` : ''}`;
   }
 
   // ---------------------------------------------------------------------------------------------- status
@@ -651,6 +656,8 @@ export class SyncEngine {
       return false;
     }
     const s = this.settings();
+    // Another process (the CLI, another window) may have set this root up, paused or resumed it.
+    this.reload();
     if (!s.enabled || !this.st.remoteId) {
       return true;
     }
@@ -699,6 +706,11 @@ export class SyncEngine {
       }
       // Categories turned on since the last cycle: what they withheld is sent now.
       this.resendWithheld(s.categories);
+      for (const x of this.o.extras ?? []) {
+        if (s.categories[x.category]) {
+          await x.beforePush().catch((e) => this.o.warn?.(`sync ${x.category}: ${(e as Error).message}`));
+        }
+      }
       await this.devices.register({ name: s.deviceName || undefined, streams: this.ownStreams() });
       await this.o.log.flush();
       // ---- push
@@ -727,6 +739,14 @@ export class SyncEngine {
       if (down) {
         await this.o.index.catchUp().catch(() => 0);
         this.appliedEmitter.fire({ events: down, devices: pulled.devices });
+      }
+      if (down || !this.pulledOnce) {
+        this.pulledOnce = true;
+        for (const x of this.o.extras ?? []) {
+          if (s.categories[x.category]) {
+            await x.afterPull().catch((e) => this.o.warn?.(`sync ${x.category}: ${(e as Error).message}`));
+          }
+        }
       }
       bytes += await this.downloadBlobs(backend);
       // ---- housekeeping

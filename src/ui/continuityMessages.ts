@@ -4,6 +4,7 @@ import type { BranchRow, ConversationRow, NavCounts, VersionRow } from '../conti
 import type { Siblings } from '../continuity/conversation/conversationManager';
 import type { MemoryFromWebview, MemoryToWebview } from './memoryHost';
 import type { ContextFromWebview, ContextToWebview } from './contextHost';
+import type { SyncFromWebview, SyncToWebview } from './syncHost';
 
 export type NavView = 'all' | 'pinned' | 'favorites' | 'archived' | 'trash';
 export type ConvActionName = 'open' | 'rename' | 'favorite' | 'unfavorite' | 'archive' | 'unarchive' | 'pin' | 'unpin' | 'trash' | 'restore' | 'purge' | 'emptyTrash' | 'duplicate' | 'merge' | 'repoint';
@@ -43,7 +44,9 @@ export type ContinuityFromWebview =
   /** Memory manager page, "Remember in this chat", "Save to knowledge", `#memory:` suggestions (MEMORY). */
   | MemoryFromWebview
   /** Context library, "What did the model see?", related conversations, `#context:` / `#chat:` suggestions (CONTEXT). */
-  | ContextFromWebview;
+  | ContextFromWebview
+  /** Sync manager: Sync now, Pause / Resume, devices, keys, conflicts (SYNC). */
+  | SyncFromWebview;
 
 export type ContinuityToWebview =
   | { type: 'navPage'; seq: number; indexState: string; counts?: NavCounts; projects: NavProject[]; currentProject?: string; page: { rows: NavRow[]; total: number; offset: number; limit: number; query?: string }; tags?: string[] }
@@ -58,6 +61,8 @@ export type ContinuityToWebview =
   | { type: 'openNavigator'; view?: NavView }
   | { type: 'openContinuityPage'; page: ContinuityPageName; params?: Record<string, unknown> }
   | MemoryToWebview
-  | ContextToWebview;
+  | ContextToWebview
+  /** The navigator's sync dot and the Sync manager's status line (SYNC). */
+  | SyncToWebview;
 
-export const CONTINUITY_MESSAGES = new Set<string>(['nav', 'convAction', 'setTags', 'exportConversations', 'importConversations', 'shareConversation', 'branch', 'branches', 'regenerateWith', 'compareVersions', 'versions', 'restoreVersion', 'continuityPage', 'remoteReload', 'memoryAction', 'contextAction', 'checkpointAction']);
+export const CONTINUITY_MESSAGES = new Set<string>(['nav', 'convAction', 'setTags', 'exportConversations', 'importConversations', 'shareConversation', 'branch', 'branches', 'regenerateWith', 'compareVersions', 'versions', 'restoreVersion', 'continuityPage', 'remoteReload', 'memoryAction', 'contextAction', 'checkpointAction', 'syncAction', 'resolveConflict']);

@@ -417,7 +417,7 @@ export const cliOverrides: Record<string, unknown> = {};
 function flatten(obj: Record<string, unknown>, into: Record<string, unknown>, prefix = ''): void {
   for (const [k, v] of Object.entries(obj)) {
     const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos', 'headers', 'policies', 'toolApprovals'].includes(key.split('.').pop()!)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && !['providers', 'mcpServers', 'repos', 'headers', 'policies', 'toolApprovals', 'categories'].includes(key.split('.').pop()!)) {
       flatten(v as Record<string, unknown>, into, key);
     } else {
       into[key] = v;

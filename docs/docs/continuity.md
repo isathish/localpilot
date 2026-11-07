@@ -12,7 +12,8 @@ permalink: /docs/continuity/
      conversations", "What did the model see?", the local-only policy and the local -> cloud notice, the "reopened chat"
      and "smaller window" rows of "When things go wrong") and SESSION ("Checkpoints", "Agent runs and crash recovery", the
      crash / laptop-off / half-done-changes / provider-down rows of "When things go wrong", `recovery runs`,
-     `history show --runs`). Still target: Sync. -->
+     `history show --runs`) and SYNC ("Sync across devices", the network / storage / two-devices rows of "When things go
+     wrong", `localpilot sync`). Every module is built. -->
 
 LocalPilot keeps your conversations, the agent's memory, what the model saw and what the agent did, so you can pick up any
 piece of work later, on this machine or another one. Everything stays on your computer unless you turn on sync, and
@@ -40,7 +41,8 @@ Everything lives in one folder per computer, shared by VS Code and the `localpil
 
 - default: `~/.localpilot/continuity` (or `$LOCALPILOT_DATA_DIR/continuity` when you set `LOCALPILOT_DATA_DIR`)
 - change it with `localpilot.continuity.dataDir` (takes effect after a window reload; LocalPilot does not move existing
-  data for you)
+  data for you). The CLI reads the same setting from your user settings or `~/.localpilot/config.json`; an explicit
+  `--data-dir <dir>` on the command line wins and uses `<dir>/continuity`.
 
 Inside it, LocalPilot writes an append-only log of every change (one log per window or CLI process, so two windows never
 overwrite each other) and a search index built from that log. Changes reach the disk within a quarter of a second, and
@@ -327,67 +329,101 @@ its content stays on that device unless sync carries **Checkpoint contents** (of
 
 ## Sync across devices
 
-Sync is off by default. Turn it on in **Settings → Continuity & sync → Sync**, or with **LocalPilot: Set Up Sync**.
+Sync is off by default. Turn it on in **Settings → Continuity & sync → Sync**: choose the storage, fill in its fields,
+click **Test connection**, then **Set up sync…** (also **LocalPilot: Set Up Sync…**). From the terminal:
+`localpilot sync setup`.
 
 ### Choose where your data goes
 
-| Backend | Use it with | You provide |
+| Storage | Use it with | You provide |
 |---|---|---|
-| Folder | iCloud Drive, Dropbox, OneDrive, Google Drive for desktop, a network share | A folder that your sync app keeps up to date on every device |
-| Git | Any git host (a **separate, private** repository, not your project's) | The repository URL; your usual git credentials are used |
-| S3-compatible | Amazon S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi | Endpoint, region, bucket, optional prefix, access key ID and secret key |
-| WebDAV | Nextcloud, ownCloud, Synology, any WebDAV server | URL, user name and password or token (HTTPS required) |
+| Folder | iCloud Drive, Dropbox, OneDrive, Google Drive for desktop, a network share | A folder that your sync app keeps up to date on every device (**Browse…**) |
+| Git | Any git host: a **separate, private** repository, not your project's | The repository URL and a branch (`localpilot-sync`); your usual git credentials or SSH keys are used |
+| S3-compatible | Amazon S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi | Endpoint, region, bucket, optional folder in the bucket, access key ID, and the secret key (**Set…**) |
+| WebDAV | Nextcloud, ownCloud, Synology, any WebDAV server | URL, user name, and the password or an app password (**Set…**) |
 
-Passwords and secret keys are kept in VS Code's secret storage (the CLI's key file for `localpilot`). **Test connection**
-checks access before anything is written.
+LocalPilot writes everything into a `localpilot-sync` folder (or prefix) of that storage. S3 and WebDAV need HTTPS (plain
+HTTP is accepted only for `localhost`). The S3 secret key and the WebDAV password are kept in VS Code's secret storage (the
+OS keychain), or in `~/.localpilot/keys.json` for the CLI; they never go into settings and never sync. A Git URL that
+points at a folder with a working tree (a project) is refused. With Git, attachments over 5 MB stay local.
+
+**Test connection** checks access and says whether the storage is empty (set-up creates the encrypted remote) or already
+holds LocalPilot data (set-up joins it with your passphrase). A wrong passphrase changes nothing.
 
 ### Your passphrase
 
-The first device creates a sync **passphrase**. Everything LocalPilot uploads is encrypted with a key derived from it
-(AES-256-GCM, key derived with scrypt), on your computer, before it leaves. Your storage provider only sees encrypted
-files, their sizes and when they were written; it cannot read titles, messages, code, project names, memory or device
-names.
+The first device creates a sync **passphrase** (asked twice, with a strength hint). Everything LocalPilot uploads is
+encrypted on your computer before it leaves, with AES-256-GCM and a random data key; the data key is protected by a key
+derived from your passphrase with scrypt. The passphrase itself is never stored; each device keeps only the data key, in
+its secret storage. Your storage provider sees object names (random-looking ids and numbers), sizes, counts and when they
+were written, and how many devices there are; it cannot read titles, messages, code, project names and paths, memory,
+tags, device names, or tell which attachments are the same as files it knows.
 
-- Each new device asks for the passphrase once, then keeps the key in its secret storage.
-- **Change passphrase** works from any signed-in device; other devices keep syncing.
-- If you lose the passphrase, synced data cannot be decrypted by anyone, including you. Your local data is not affected;
-  **Start over with a new passphrase** uploads this device's data again under a new passphrase, and other devices join
-  again.
+- Each new device asks for the passphrase once (`LOCALPILOT_SYNC_PASSPHRASE` for unattended machines).
+- **Change passphrase…** works from any device that syncs; the others keep syncing, new devices join with the new one.
+- **Rotate key…** makes a new data key for everything uploaded from then on (history stays readable). Your other devices
+  pause once and ask for the passphrase (**Enter passphrase…**).
+- If you lose the passphrase, synced data cannot be decrypted by anyone, including you. Your local data is not affected:
+  **Start over…** deletes the synced copies (of every device) and uploads this device's data again under a new
+  passphrase; other devices join again with it.
+- **Turn off sync…** stops this device and forgets its key; the storage and your other devices are not changed.
 
 ### What is synced
 
-Choose categories in sync settings: conversations (with branches, summaries, model changes and context), memory,
-attachments and images (up to `localpilot.sync.maxAttachmentMB`, 20 MB by default), agent activity (runs, tool logs,
-checkpoint details), checkpoint contents (off by default), prompt templates, custom commands and project instructions that
-are not in git, and preferences (favourite models, default model per mode; never API keys). Pinned, favorite, archived and
-deleted states always travel with their conversations.
+**What syncs** (Sync settings or the Sync manager) has seven switches:
 
-Sync runs at start-up, every `localpilot.sync.intervalMinutes` (5 by default), shortly after you finish a message, and when
-you click **Sync now**. It only sends what changed. While offline, changes wait in a queue and go out when the connection
-is back; the Sync manager shows how many are waiting.
+| Category | What it carries |
+|---|---|
+| Conversations | Conversations with their branches, summaries, model changes and context snapshots; pinned, favorite, archived, tags and Trash travel with them |
+| Memory and context sets | Memory notes of every type and the context library |
+| Attachments | Images and files attached to chats, up to `localpilot.sync.maxAttachmentMB` (20 MB) |
+| Agent runs and checkpoints | Agent runs, what they did, and the list of checkpoints |
+| Checkpoint contents | Off by default. A git bundle of each git checkpoint (up to 50 MB), so a checkpoint taken on another device can be viewed and restored here |
+| Custom commands | Your own custom commands (`~/.localpilot/commands`) |
+| Preferences | Default model, plan-mode model, thinking level, approval levels, Auto mode and your starred models; never API keys, endpoints or credentials |
+
+A category you turn off stays on this device (the Sync manager says how many items it held back); turning it on later
+sends them. Attachments are downloaded in the background after the conversations that use them.
+
+Sync runs 10 seconds after start-up, every `localpilot.sync.intervalMinutes` (5 by default), 15 seconds after a change,
+when the window gets focus, and on **Sync now**. It only sends what changed. While offline, changes wait (they are just
+the part of the log not uploaded yet, so they survive a restart) and retry after 5 s, 15 s, 1 min, 5 min, then every
+15 min. Only one window (or the CLI) syncs at a time on a computer; the others see the result. A cycle with nothing new
+costs one listing and no downloads.
 
 ### Sync manager
 
-Shows the status (up to date, syncing, offline, paused and why), the last sync, the queue, **Sync now**, **Pause**, your
-**devices** (rename this one, remove another), recent activity and **conflicts**.
+Open it from the conversation navigator (**Knowledge & continuity → Sync manager**, whose dot shows synced, syncing,
+offline, paused or a conflict count) or **LocalPilot: Open Sync Manager**. It shows the status and the last sync, what is
+waiting, **Sync now**, **Pause** / **Resume**, the **conflicts**, your **devices** (rename this one, **Remove…** another,
+**List again**), what syncs, recent activity, and **Change passphrase…**, **Rotate key…**, **Turn off sync…** and
+**Start over…**. When sync needs you, the status says why with the fix next to it: **Enter passphrase…** (the key was
+rotated or sync started over elsewhere), **Update credentials…** (sign-in failed), or **Sync settings…** (the folder,
+bucket or repository is gone).
 
 ### Conflicts
 
 Most simultaneous changes merge on their own: pins, favorites, tags and other settings take the latest change; memory
-notes edited on two devices are merged line by line when the edits do not overlap. When they do conflict, LocalPilot keeps
-both versions and lists a conflict:
+notes edited on two devices are merged line by line when the edits do not overlap. When they do conflict, LocalPilot
+applies the later change, keeps the other, and lists a conflict on every device (**LocalPilot: Show Sync Conflicts**):
 
-- **The same conversation continued on two devices**: both continuations are kept as branches; the chat says "Continued on
-  <device> too". Keep both, switch to the other branch, or merge them.
-- **A memory note or template changed on two devices**: compare the versions in a diff and keep yours, theirs, both, or edit
-  the merged text.
-- **Deleted on one device, continued on another**: the conversation is restored; move it back to Trash if you meant it.
-- **A renamed conversation**: the latest title is used; the other is one click away.
+- **Changed on two devices** (for example a title): keep either device's value.
+- **Edited on two devices** (a memory note or a custom command): **Compare…** opens both versions in VS Code's diff editor,
+  then keep either one, both, or edit the merged text. A note file or command you edited here is never overwritten.
+- **Continued on two devices**: both continuations are kept as branches; the chat says "Continued on <device> too".
+  **Keep both**, or use the other device's branch.
+- **Deleted on one device, edited on another**: it stays out of Trash; **Move to Trash again** if you meant it.
+- **Damaged on the storage**: an object that fails its check is skipped; **Re-upload from this device** writes this
+  device's data again.
+
+A resolution made on one device clears the conflict everywhere. In the terminal: `localpilot sync conflicts` and
+`localpilot sync resolve <id> --keep mine|theirs|both` (a text conflict without `--keep` prints the diff).
 
 ### Removing a device
 
-**Remove** in the Sync manager stops listing the device. Choose **Remove and rotate key** so that it cannot read anything
-synced afterwards, and revoke its access at your storage provider too.
+**Remove…** in the Sync manager (or `localpilot sync remove-device <id> --rotate`) stops listing the device; what it synced
+stays. Choose **Remove and Rotate Key** so it cannot read anything synced afterwards, and revoke its access at your
+storage provider too (LocalPilot does not manage those credentials).
 
 ## When things go wrong
 
@@ -395,16 +431,17 @@ synced afterwards, and revoke its access at your storage provider too.
 |---|---|
 | VS Code crashed during an agent task | The chat shows **Run interrupted** with what ran, the files it changed (**Keep**, **Review diff**), and **Resume**, **Restore checkpoint** or **Dismiss** |
 | The laptop turned off during an answer | The text written so far comes back as a **Partial answer** with **Continue**, **Regenerate** and **Discard** |
-| The network dropped during sync | Nothing is lost; changes wait and sync resumes when the connection returns |
+| The network dropped during sync | Nothing is lost; the status says **Offline** with how many changes wait, and sync retries on its own (5 s up to every 15 min) |
 | The model provider is down | Switch model and retry from the same point; the conversation keeps its history, and the switch is recorded with its reason |
 | The conversation is too long for the model | Older messages are summarised; the full transcript stays searchable and restorable |
 | You switched from a local to a cloud model | One notice about what will be sent; **Local only** items stay out, and a chat tagged `local-only` is not sent |
 | You switched to a model with a smaller window | The chat says so, and older messages are summarised before the next request |
 | You reopened a chat after its files changed | Its working files and todos come back, and the files changed since are listed |
-| The same conversation is open on two devices | Both continuations are kept as branches |
+| The same conversation is open on two devices | Both continuations are kept as branches, and a **Continued on two devices** conflict lets you pick |
 | You moved or renamed the project folder | Conversations follow the project (matched by its git repository); otherwise confirm once that it is the same project |
 | You deleted something by accident | **Undo**, or restore it from Trash; older items from a backup |
-| The storage provider is down or your credentials expired | Sync pauses with the reason and a **Fix** button; everything works locally |
+| The storage provider is down or your credentials expired | Sync pauses with the reason and the fix (**Update credentials…**, **Sync settings…**); everything works locally |
+| You forgot the sync passphrase | Nothing can decrypt the synced copies; your local data is intact. **Start over…** uploads this device's data under a new passphrase |
 | An agent left code changes half done | The interrupted run lists its changed files with **Keep** / **Review diff**, and **Restore checkpoint** puts the files back as they were before the run |
 | You want an earlier version of a conversation | **Versions → Restore** brings it back as a branch |
 
@@ -449,8 +486,10 @@ localpilot recovery runs                 # runs a crash or a closed terminal cut
 localpilot memory list --type knowledge   # all types without --type; --all-projects; --trash; --json
 localpilot memory add --type knowledge deploy-steps "kubectl rollout restart deploy/api"   # - reads stdin
 localpilot memory search "rollout"        # every type; memory show|edit|rm|restore|move|pin|local-only|versions <id|name>
-localpilot sync setup --backend folder --path ~/Dropbox/localpilot   # asks for the passphrase
-localpilot sync status
+localpilot sync setup --backend folder --folder ~/Dropbox/localpilot   # asks for the passphrase (twice for a new one)
+localpilot sync setup --backend s3 --endpoint https://s3.eu-west-1.amazonaws.com --bucket my-bucket --access-key AKIA…
+localpilot sync status                   # also now, pause, resume, devices, conflicts (--json)
+localpilot sync resolve cf_… --keep mine # passphrase, rotate-key, remove-device <id> [--rotate], off, start-over --yes
 localpilot data stats                    # where the data is, sizes, index and import state
 localpilot data backup --encrypt         # passphrase prompted, or LOCALPILOT_BACKUP_PASSPHRASE
 localpilot data restore ~/backups/20261107-101500.lpbackup
@@ -463,7 +502,9 @@ Ids can be shortened to any unique prefix. In the interactive CLI, `/history sea
 `/memory list|search|add|rm …` takes the `localpilot memory` actions (a bare `/memory` still shows the memory report). `history
 delete <id>` still deletes a chat of this folder at once, as in 1.6.
 
-For unattended machines, set `LOCALPILOT_SYNC_PASSPHRASE` instead of typing the passphrase. See
+`/sync` (`status`, `now`, `pause`, `resume`) works in the interactive CLI, and a CLI session syncs in the background like
+VS Code. For unattended machines, set `LOCALPILOT_SYNC_PASSPHRASE` (and `LOCALPILOT_SYNC_SECRET` for the S3 secret key or
+WebDAV password at set-up) instead of typing them. See
 [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}) for the rest of the CLI.
 
 ## Settings
@@ -479,7 +520,7 @@ For unattended machines, set `LOCALPILOT_SYNC_PASSPHRASE` instead of typing the 
 | `localpilot.continuity.backup.enabled` / `.intervalDays` / `.keep` | `true` / `7` / `4` | Automatic local backups |
 | `localpilot.memory.taskExpiryDays` | `14` | Days task memory is kept after its task is done |
 | `localpilot.sync.enabled` | `false` | Turn sync on |
-| `localpilot.sync.backend` | `folder` | `folder`, `git`, `s3` or `webdav`, with the settings of that backend |
+| `localpilot.sync.backend` | `folder` | `folder`, `git`, `s3` or `webdav`, with the settings of that backend: `sync.folder.path`; `sync.git.url`, `sync.git.branch`; `sync.s3.endpoint`, `.region`, `.bucket`, `.prefix`, `.accessKeyId`, `.pathStyle`; `sync.webdav.url`, `.username` |
 | `localpilot.sync.intervalMinutes` | `5` | How often to sync |
 | `localpilot.sync.categories` | all except checkpoint contents | What to sync |
 | `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment that is synced |

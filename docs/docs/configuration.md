@@ -323,6 +323,33 @@ Conversations, memory, attachments and backups are kept in one data folder per c
 | `localpilot.continuity.relatedConversations` | `true` | While you write the first message of a new chat, offer up to three related earlier conversations of the project (**Related: … · Add**). Nothing is added until you click **Add** |
 | `localpilot.continuity.captureToolOutput` | `summary` | How much of each tool call's output an agent run's history keeps (**What ran** on the Run interrupted card, `localpilot history show --runs`): `errors` (only the error text of failed steps), `summary` (the first 2 KB of every step) or `full` (everything; over 2 KB as an attachment) |
 
+### Sync
+
+Sync between your devices through storage you choose, end-to-end encrypted (see
+[Sync across devices]({{ '/docs/continuity/' | relative_url }}#sync-across-devices)). Set it up in **Settings →
+Continuity & sync → Sync** or with `localpilot sync setup`; the passphrase, the S3 secret key and the WebDAV password are
+never settings (they live in the OS keychain, or `~/.localpilot/keys.json` for the CLI). All are machine settings.
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.sync.enabled` | `false` | Sync on this device. Set up sync turns it on |
+| `localpilot.sync.backend` | `folder` | `folder`, `git`, `s3` or `webdav` |
+| `localpilot.sync.folder.path` | `""` | Folder to sync through (a cloud drive folder or a network share); LocalPilot writes `localpilot-sync` inside it |
+| `localpilot.sync.git.url` | `""` | A dedicated, empty Git repository (never a project's own) |
+| `localpilot.sync.git.branch` | `localpilot-sync` | Branch of the sync repository |
+| `localpilot.sync.s3.endpoint` | `""` | S3 endpoint URL (HTTPS; plain HTTP only for localhost) |
+| `localpilot.sync.s3.region` | `us-east-1` | Region (`auto` for Cloudflare R2) |
+| `localpilot.sync.s3.bucket` | `""` | Bucket |
+| `localpilot.sync.s3.prefix` | `""` | Folder in the bucket (optional) |
+| `localpilot.sync.s3.accessKeyId` | `""` | Access key ID; the secret key is kept in the keychain |
+| `localpilot.sync.s3.pathStyle` | `null` | `true`: `endpoint/bucket` addressing; `false`: `bucket.endpoint`; empty: path style except on AWS |
+| `localpilot.sync.webdav.url` | `""` | WebDAV folder URL (HTTPS; plain HTTP only for localhost) |
+| `localpilot.sync.webdav.username` | `""` | WebDAV user; the password is kept in the keychain |
+| `localpilot.sync.intervalMinutes` | `5` | Minutes between automatic syncs (also 15 s after a change, on focus, and on Sync now) |
+| `localpilot.sync.categories` | all on except `checkpointContents` | `conversations`, `memory`, `attachments`, `agentState`, `checkpointContents`, `prompts`, `preferences`. A category turned off stays on this device; turning it on later sends what it held back |
+| `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment synced (with Git, over 5 MB stays local) |
+| `localpilot.sync.deviceName` | `""` | This device's name on your other devices (empty: the computer's name) |
+
 ## Web search
 
 | Setting | Default | Description |

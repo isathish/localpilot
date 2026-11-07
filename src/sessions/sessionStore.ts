@@ -993,6 +993,18 @@ export class SessionStore implements vscode.Disposable {
     return true;
   }
 
+  /**
+   * Another device moved this chat to Trash or archived it: it leaves this store without a new event (it stays in the
+   * conversation log, so Restore brings it back). False while a run uses it.
+   */
+  async dropRemote(id: string): Promise<boolean> {
+    if (!this.index.has(id) || this.inUse(id)) {
+      return false;
+    }
+    await this.drop(id, true);
+    return true;
+  }
+
   /** Removes a chat for good: its file, transcript archive, and (through onDidDelete) checkpoints, traces, logs. */
   async purge(id: string): Promise<void> {
     await this.remove(id, true);

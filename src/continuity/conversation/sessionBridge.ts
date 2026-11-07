@@ -91,6 +91,8 @@ export class SessionBridge implements SessionStoreBridge {
   private readonly firstSeen = new Set<string>();
   private readonly now: () => number;
   private readonly pending = new Map<string, Session>();
+  /** Folders being resolved to a project, with the chats logged without one meanwhile (patched when it is known). */
+  private readonly unresolved = new Map<string, { ids: Set<string>; done: Promise<void> }>();
   /** Listeners for "a chat was logged" (tests, the navigator's refresh). */
   onLogged?: (id: string) => void;
 
@@ -274,6 +276,7 @@ export class SessionBridge implements SessionStoreBridge {
   /** Waits for every chat waiting on its first look at the index (tests, shutdown). */
   async settle(): Promise<void> {
     await Promise.all([...this.convs.values()].map((c) => c.adopting).filter(Boolean));
+    await Promise.all([...this.unresolved.values()].map((u) => u.done));
   }
 
   private ownFields(s: Session, st: ConvState): Partial<OwnFields> {
@@ -295,8 +298,27 @@ export class SessionBridge implements SessionStoreBridge {
     }
     const hit = this.o.projects.peek(folder);
     if (!hit) {
-      // Resolved in the background; the next save carries it.
-      void this.o.projects.resolve(folder).catch(() => undefined);
+      // Resolved in the background (git); once known, the chats logged without it meanwhile get it, so a chat saved
+      // once right after start is still matched to its project on other devices.
+      let u = this.unresolved.get(folder);
+      if (!u) {
+        const ids = new Set<string>();
+        const done = this.o.projects
+          .resolve(folder)
+          .then(() => {
+            for (const id of ids) {
+              const live = this.pending.get(id) ?? this.o.peek?.(id);
+              if (live && this.state(id).exists) {
+                this.safeProcess(live);
+              }
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => this.unresolved.delete(folder));
+        u = { ids, done };
+        this.unresolved.set(folder, u);
+      }
+      u.ids.add(s.id);
     }
     return hit?.id;
   }

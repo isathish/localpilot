@@ -15,7 +15,7 @@ export const CATEGORY_LABELS: Record<SyncCategory, string> = {
   attachments: 'Attachments (images, files)',
   agentState: 'Agent runs and checkpoints',
   checkpointContents: 'Checkpoint contents',
-  prompts: 'Prompts and instructions',
+  prompts: 'Custom commands',
   preferences: 'Preferences',
 };
 

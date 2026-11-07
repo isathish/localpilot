@@ -27,7 +27,8 @@ export async function openCliContinuity(o: { cwd: string; dataDir?: string; log:
   const vscodeGlobal = path.join(path.dirname(userSettingsPath()), 'globalStorage', EXTENSION_ID);
   const home = path.join(os.homedir(), '.localpilot');
   return Continuity.open({
-    dataDir: continuityDataDir(getConfig().continuity.dataDir || (o.dataDir ? path.join(o.dataDir, 'continuity') : '')),
+    // An explicit --data-dir wins over the `continuity.dataDir` setting (tests and second profiles rely on it).
+    dataDir: continuityDataDir(o.dataDir ? path.join(o.dataDir, 'continuity') : getConfig().continuity.dataDir || ''),
     writer: 'cli',
     appVersion: o.version ?? '0.0.0',
     secrets: cliKeysBox(readCliKeys, writeCliKey),
@@ -48,7 +49,7 @@ export async function openCliContinuity(o: { cwd: string; dataDir?: string; log:
 
 const fmtBytes = (b: number) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${(b / 1024).toFixed(1)} KB`);
 
-async function askHidden(question: string): Promise<string | undefined> {
+export async function askHidden(question: string): Promise<string | undefined> {
   if (!process.stdin.isTTY) {
     return undefined;
   }

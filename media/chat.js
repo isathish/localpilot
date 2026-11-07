@@ -3516,6 +3516,25 @@
     box.dataset.ready = '1';
     box.innerHTML = `<summary>Knowledge &amp; continuity</summary><div class="know-list">${[['memory', I.memory, 'Memory manager'], ['context', I.layers, 'Context library'], ['checkpoints', I.restore, 'Checkpoints'], ['sync', I.sync, 'Sync manager'], ['trash', I.trash, 'Trash'], ['settings', I.gear, 'Settings']].map(([k, ico, l]) => `<button class="know" data-k="${k}">${ico}<span>${l}</span>${k === 'sync' ? '<i class="sdot off" title="Sync is off"></i>' : ''}</button>`).join('')}</div>`;
     box.onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) { return; } if (b.dataset.k === 'settings') { closeMenu(); post({ type: 'openSettings', section: 'continuity' }); } else { openContinuityPage(b.dataset.k); } };
+    applySyncDot();
+  }
+  /** The Sync manager item's status dot (synced / syncing / offline / paused / conflicts n), from `syncStatus`. */
+  const SYNC_TITLE = { off: 'Sync is off', idle: 'Synced', syncing: 'Syncing…', offline: 'Offline — changes wait', paused: 'Sync paused', error: 'Sync failed', unavailable: 'Sync is not available' };
+  function applySyncDot() {
+    const st = state.sync; if (!st) { return; }
+    const cls = st.state === 'off' || st.state === 'unavailable' ? 'off' : st.conflicts || st.state === 'offline' || st.state === 'error' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off';
+    const title = `${SYNC_TITLE[st.state] || st.state}${st.conflicts ? ` · ${st.conflicts} conflict${st.conflicts === 1 ? '' : 's'}` : ''}${st.pending && st.state !== 'off' ? ` · ${st.pending} change${st.pending === 1 ? '' : 's'} waiting` : ''}`;
+    document.querySelectorAll('.know[data-k="sync"]').forEach((b) => {
+      const d = b.querySelector('.sdot'); if (d) { d.className = `sdot ${cls}`; d.title = title; }
+      let n = b.querySelector('.sbadge');
+      if (st.conflicts) { if (!n) { n = el('i', 'sbadge'); b.insertBefore(n, d); } n.textContent = String(st.conflicts); n.setAttribute('aria-label', `${st.conflicts} sync conflict${st.conflicts === 1 ? '' : 's'}`); } else if (n) { n.remove(); }
+      b.setAttribute('aria-label', `Sync manager — ${title}`);
+    });
+    // Collapsed under 360 px: the disclosure's summary carries the dot when sync needs attention.
+    document.querySelectorAll('.nav-know > summary').forEach((sm) => {
+      let d = sm.querySelector('.sdot');
+      if (cls === 'err') { if (!d) { d = el('i', 'sdot'); sm.appendChild(d); } d.className = 'sdot err'; d.title = title; } else if (d) { d.remove(); }
+    });
   }
   /** The manager pages live in media/continuity.js (Back returns to the navigator). */
   function openContinuityPage(page, params) {
@@ -5355,6 +5374,7 @@
       case 'compare': if (window.LPContinuity) { window.LPContinuity.compare(m); } break;
       case 'branches': state.branches.set(m.sessionId, m); if (state.session && state.session.id === m.sessionId) { applyBranches(); } break;
       case 'remoteUpdate': remoteBanner(m); break;
+      case 'syncStatus': state.sync = m; applySyncDot(); if (window.LPContinuity) { window.LPContinuity.receive(m); } break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
         if (switching && prev) { saveDraft(prev); }

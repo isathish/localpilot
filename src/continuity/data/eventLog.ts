@@ -497,13 +497,15 @@ export class FileEventLog implements EventLog {
       return false;
     }
     fs.mkdirSync(dir, { recursive: true });
-    for (const f of listSegments(dir)) {
-      fs.rmSync(f.file, { force: true });
-    }
     const target = path.join(dir, `compact-${String(cut).padStart(12, '0')}.jsonl`);
     const tmp = `${target}.tmp-${process.pid}`;
+    // The base is in place before the segments it covers go: a crash in between leaves both, never neither.
+    const old = listSegments(dir).filter((f) => path.resolve(f.file) !== path.resolve(target));
     fs.writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
     fs.renameSync(tmp, target);
+    for (const f of old) {
+      fs.rmSync(f.file, { force: true });
+    }
     for (const e of events) {
       this.hlc.observe(e.hlc);
     }

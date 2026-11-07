@@ -69,7 +69,7 @@ import { shouldRingBell } from '../ui/notifyPolicy';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { cmdMcp, parseMcpArgs } from './mcpCmd';
 import { setSecretValues } from '../providers/cloud';
-import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
+import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, loadSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
 import { audit as auditPolicy, describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard, canFinish } from '../agent/teamBoard';
@@ -98,6 +98,7 @@ import { CliHealing, attemptBudget, createCliHealing } from './healing';
 import { RecoveryNotes, RESUME_PROMPT, outcomeBlock, stateDetail } from './recoveryRender';
 import { recoverySlash, RECOVERY_USAGE } from './slash/recovery';
 import { cmdData, openCliContinuity } from './continuityCmd';
+import { cliPreferences, cmdSync, syncSlash } from './syncCmd';
 import { attachMemory } from '../ui/memoryHost';
 import { attachContext } from '../ui/contextHost';
 import { attachSessions } from '../ui/sessionHost';
@@ -184,6 +185,9 @@ ${bold('Usage')}
                                           (~/.localpilot/continuity): sizes, backups [-o file] [--encrypt], the 1.6 import
   localpilot memory list|show|add|edit|rm|restore|search|move|pin|local-only|versions   every memory type: project and
                                           developer notes, conversation, task, knowledge and agent memory (localpilot memory help)
+  localpilot sync setup|status|now|pause|resume|devices|conflicts|resolve|passphrase|rotate-key|remove-device|off
+                                          end-to-end encrypted sync with your other devices through a folder, Git, S3 or
+                                          WebDAV (localpilot sync help)
   localpilot schedule create <name> --cron "0 3 * * *" --prompt "…"   scheduled unattended runs via cron/launchd/Task
                                           Scheduler [--cwd] [--mode] [--model] [--timeout]; schedule list|run|pause|resume|delete|history <name>
   localpilot --acp                        Agent Client Protocol server on stdio (Zed, JetBrains, Neovim)
@@ -229,6 +233,7 @@ ${bold('In a session')}
   /thinking auto|off|low|medium|high|max   how hard the model thinks in this session (remembered)
   /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
   /history search <words>   every conversation   /trash [restore <id>]   /branch [switch <n>|from <messageId>]
+  /sync [status|now|pause|resume]   sync with your other devices (set up: localpilot sync setup)
   ${RECOVERY_USAGE}   self-healing state of this session: re-run the checks and continue, undo fix attempts, past attempts
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /undo [N [f|c|b]]   go back to an earlier turn: restore its files, the chat or both (Esc Esc at an empty prompt)   /undo all   revert every pending change
@@ -2150,9 +2155,22 @@ async function main(): Promise<void> {
     process.exitCode = await cmdSchedule(process.argv.slice(3), STYLE, cliLauncher());
     return;
   }
+  // `data`, `memory` and `history` open the continuity data root: they read the same settings (continuity.dataDir,
+  // retention…) from ~/.localpilot/config.json and the editor's user settings as a session does.
+  if (process.argv[2] === 'data' || process.argv[2] === 'memory' || process.argv[2] === 'history') {
+    loadSettings(process.cwd());
+  }
   // `data …` manages the continuity data root (event log, index, backups) and needs no model or agent.
   if (process.argv[2] === 'data') {
     process.exitCode = await cmdData(process.argv.slice(3), STYLE, { cwd: process.cwd(), version: VERSION });
+    process.exit(process.exitCode);
+  }
+  // `sync …` (1.7): end-to-end encrypted sync of the continuity data with a folder, Git, S3-compatible storage or WebDAV.
+  if (process.argv[2] === 'sync') {
+    process.exitCode = await cmdSync(process.argv.slice(3), STYLE, { cwd: process.cwd(), version: VERSION }).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
     process.exit(process.exitCode);
   }
   // `memory list|show|add|edit|rm|search|…` (1.7) manages every memory type; other `memory …` words stay a prompt.
@@ -2318,8 +2336,18 @@ async function main(): Promise<void> {
       return { checkpoints: used?.total ?? 0, logs: deleteCommandLogs(s.id, path.join(lpHome, 'cmd-logs')) };
     };
     const words = args.prompt.split(/\s+/).filter(Boolean);
-    const run = words[0] === 'import' ? cmdHistoryImport(store, words.slice(1), { json: args.historyOpts.json }, STYLE, args.cwd, process.stdin.isTTY ? (q) => ask(q) : undefined) : cmdHistory(store, words, { ...args.historyOpts, deleteCheckpoints }, STYLE, args.cwd);
+    // The list shows what other devices did since (after a sync): their new chats of this project and continued ones.
+    if (!words.length || words[0] === 'list' || words[0] === 'ls') {
+      const c = await openCliContinuity({ cwd: args.cwd, dataDir: args.dataDir, log: vscode.window.createOutputChannel('LocalPilot CLI', { log: true }), schedules: false, autoMigrate: false, version: VERSION }).catch(() => undefined);
+      if (c && !c.degraded) {
+        c.attachSessionStore(store, { defaultFolder: () => args.cwd });
+        await Promise.race([c.ready.then(async () => (c.indexFailed ? 0 : ((await c.conversations?.refreshStale()) ?? 0) + ((await c.conversations?.adoptRemote()) ?? 0))).catch(() => 0), new Promise((r) => setTimeout(r, 8000).unref())]);
+      }
+      await c?.dispose();
+    }
+    // Taken before the command starts: a delete can finish before its first await.
     const before = new Set(store.list().map((x) => x.id));
+    const run = words[0] === 'import' ? cmdHistoryImport(store, words.slice(1), { json: args.historyOpts.json }, STYLE, args.cwd, process.stdin.isTTY ? (q) => ask(q) : undefined) : cmdHistory(store, words, { ...args.historyOpts, deleteCheckpoints }, STYLE, args.cwd);
     process.exitCode = await run.catch((e) => {
       console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
       return 1;
@@ -2436,6 +2464,8 @@ async function main(): Promise<void> {
         attachContext(c, { runner: core.runner, workspace: core.workspace, memory: core.memory, tools: core.tools, defaultFolder: () => args.cwd, log: core.log, sink: { post: (m) => (m.type === 'contextNotice' ? process.stderr.write(`\n${STYLE.dim(`note: ${m.text}`)}\n`) : undefined) } });
         // Sessions (1.7): runs, what they did, checkpoints and model sessions; drafts of partial answers; crash recovery.
         attachSessions(c, { runner: core.runner, checkpoints: core.runner.checkpoints, recovery: core.healing.store, sessionOf: (id) => (store.has(id) ? store.get(id) : undefined), models: () => core.providers.cachedModels(), log: core.log });
+        // Sync (1.7): while a CLI session runs, it syncs like VS Code does (one cycle at a time per data root).
+        c.attachSync({ settings: () => getConfig().sync, warn: (m) => core.log.warn(m), info: (m) => core.log.info(m), passphraseHint: () => process.env.LOCALPILOT_SYNC_PASSPHRASE, preferences: cliPreferences() });
       }
     })
     .catch((e) => core.log.warn(`continuity: ${e instanceof Error ? e.message : String(e)}`));
@@ -2443,6 +2473,22 @@ async function main(): Promise<void> {
   const out = quiet ? process.stderr : process.stdout;
   let resumed: Session | undefined;
   if (args.continue || args.resume !== undefined) {
+    // Chats of this project another device started or continued (sync, a restored backup) are brought up to date first.
+    await Promise.race([
+      (async () => {
+        await continuityOpening;
+        const conv = core.continuity?.degraded ? undefined : core.continuity?.conversations;
+        if (conv && core.continuity) {
+          await core.continuity.ready;
+          await conv.refreshStale();
+          await conv.adoptRemote();
+          if (typeof args.resume === 'string' && /^[a-z]+[-_]/i.test(args.resume) && !store.has(args.resume)) {
+            await conv.load(args.resume);
+          }
+        }
+      })().catch((e) => core.log.warn(`continuity: ${String(e)}`)),
+      new Promise((r) => setTimeout(r, 8000).unref()),
+    ]);
     const list = newestFirst(store.list());
     let pick = args.continue && args.resume === undefined ? list[0] : undefined;
     if (args.resume === true) {
@@ -2759,7 +2805,7 @@ async function main(): Promise<void> {
   const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
   /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
   let shiftTab = false;
-  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/trash', '/branch', '/recovery', '/skill', '/agent', '/commands', '/prompts', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/trash', '/branch', '/sync', '/recovery', '/skill', '/agent', '/commands', '/prompts', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
   const completer = createCompleter({
     commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
     root: () => runRoot(),
@@ -3009,6 +3055,8 @@ async function main(): Promise<void> {
           return conversationSlash('history-search', arg.replace(/^search\s*/, ''), { c: core.continuity, sessionId: () => session.id, style: STYLE });
         }
         return sessionSlash(cmd, arg, { store, current: () => session, switchTo, ask: (q) => ask(q), style: STYLE });
+      case 'sync':
+        return syncSlash(arg, { c: core.continuity, style: STYLE });
       case 'trash': case 'branch':
         return conversationSlash(cmd, arg, { c: core.continuity, sessionId: () => session.id, style: STYLE, reload: (id) => { const s = store.get(id); if (s && id === session.id) { session = s; console.log(resumeBanner(session, STYLE, 'Resumed')); } } });
       case 'recovery':

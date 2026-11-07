@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import type { ContinuityAction, ContinuityView } from './continuityData';
+import type { SyncSettingsAction, SyncSettingsView } from './continuitySettings';
+import type { SyncCategory } from '../continuity/sync/merge';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -180,6 +182,8 @@ type ToSettings =
   | { type: 'otlpTest'; ok: boolean; status?: number; url: string; error?: string }
   | { type: 'redisTest'; ok: boolean; info?: RedisPingInfo; error?: string }
   | { type: 'continuity'; view: ContinuityView; message?: string }
+  /** Settings → Continuity & sync → Sync: status, secret stored, devices, categories, last connection test. */
+  | { type: 'sync'; view: SyncSettingsView; message?: string }
   | { type: 'mcpCatalog'; entries: McpCatalogEntry[]; registry: boolean; loading?: boolean; error?: string; installed?: string }
   /** Settings → Marketplace: the plugins the configured marketplaces list (`configured` = how many are set up). */
   | { type: 'pluginCatalog'; entries: PluginCatalogEntry[]; errors: { spec: string; error: string }[]; configured: number; loading?: boolean; installed?: string };
@@ -252,6 +256,8 @@ type FromSettings =
   | { type: 'testRedis' }
   | { type: 'continuityLoad' }
   | { type: 'continuityAction'; action: ContinuityAction }
+  | { type: 'syncLoad' }
+  | { type: 'syncAction'; action: SyncSettingsAction; deviceId?: string; category?: SyncCategory; on?: boolean }
   | { type: 'loadCustomize' }
   | { type: 'customToggle'; kind: CustomKind; file: string; enabled: boolean }
   | { type: 'customOpen'; kind: CustomKind; file: string }
@@ -279,6 +285,8 @@ const SETTING_KEYS = [
   'healing.checkTiming', 'healing.scopeTests', 'healing.checkTimeoutSeconds', 'healing.checkTimeBudgetSeconds', 'healing.baseline', 'healing.checks', 'healing.policies', 'healing.dependencyInstall', 'healing.gitConflicts',
   'healing.securityCheck', 'healing.delegateFixes', 'healing.memory',
   'continuity.dataDir', 'continuity.trashRetentionDays', 'continuity.historyDays', 'continuity.indexMaxMB', 'continuity.backup.enabled', 'continuity.backup.intervalDays', 'continuity.backup.keep', 'continuity.relatedConversations', 'continuity.captureToolOutput',
+  'sync.enabled', 'sync.backend', 'sync.folder.path', 'sync.git.url', 'sync.git.branch', 'sync.s3.endpoint', 'sync.s3.region', 'sync.s3.bucket', 'sync.s3.prefix', 'sync.s3.accessKeyId', 'sync.s3.pathStyle', 'sync.webdav.url', 'sync.webdav.username',
+  'sync.intervalMinutes', 'sync.categories', 'sync.maxAttachmentMB', 'sync.deviceName',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -290,6 +298,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.editMcpConfig', 'localpilot.setupRedis', 'localpilot.telemetry.testOtlp', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
   'localpilot.selectTerminalProfile', 'localpilot.browsePlugins', 'localpilot.managePlugins', 'workbench.action.reloadWindow', 'localpilot.setProviderApiKey',
   'localpilot.continuity.rebuildIndex', 'localpilot.continuity.backupNow', 'localpilot.continuity.restoreBackup', 'localpilot.continuity.openDataFolder', 'localpilot.continuity.openMemoryManager', 'localpilot.continuity.openContextLibrary', 'localpilot.continuity.openCheckpoints',
+  'localpilot.sync.setup', 'localpilot.sync.now', 'localpilot.sync.openManager', 'localpilot.sync.showConflicts', 'localpilot.sync.changePassphrase', 'localpilot.sync.rotateKey', 'localpilot.sync.turnOff',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network' | 'mcp', 'ask' | 'always' | 'never'>> = {
@@ -357,6 +366,8 @@ export class SettingsPanel implements vscode.Disposable {
   openChecks?: () => Promise<void>;
   /** Continuity & sync: storage sizes, migration, Trash, backups (set by the extension host). */
   continuity?: { view: () => Promise<ContinuityView>; action: (a: ContinuityAction) => Promise<string | undefined> };
+  /** Continuity & sync → Sync (set by the extension host). */
+  sync?: { view: () => Promise<SyncSettingsView>; action: (a: SyncSettingsAction, o: { deviceId?: string; category?: SyncCategory; on?: boolean }) => Promise<string | undefined> };
   /** Installed plugins (set by the extension host): the Marketplace's installed state, refreshed after an install. */
   plugins?: { readonly all: PluginInfo[]; refresh(): Promise<unknown> };
   /** Marketplaces loaded for the Marketplace's plugin rows, kept for Install. */
@@ -488,6 +499,17 @@ export class SettingsPanel implements vscode.Disposable {
 
   private title(): string {
     return this.page === 'setup' ? 'Welcome to LocalPilot' : 'LocalPilot Settings';
+  }
+
+  /** Pushes the Sync form's data (also called by the host when sync's status changes). */
+  async pushSync(message?: string): Promise<void> {
+    if (!this.panel || !this.sync) {
+      return;
+    }
+    const view = await this.sync.view().catch(() => undefined);
+    if (view) {
+      this.post({ type: 'sync', view, ...(message ? { message } : {}) });
+    }
   }
 
   private async pushContinuity(message?: string): Promise<void> {
@@ -773,6 +795,16 @@ export class SettingsPanel implements vscode.Disposable {
       }
       case 'continuityLoad':
         return this.pushContinuity();
+      case 'syncLoad':
+        return this.pushSync();
+      case 'syncAction': {
+        const allowed: readonly SyncSettingsAction[] = ['setup', 'test', 'now', 'pause', 'resume', 'setSecret', 'pickFolder', 'changePassphrase', 'rotateKey', 'turnOff', 'startOver', 'unlock', 'renameDevice', 'removeDevice', 'openManager', 'setCategory'];
+        if (!this.sync || !allowed.includes(m.action)) {
+          return this.post({ type: 'toast', level: 'warn', text: 'Sync is not available in this window' });
+        }
+        const message = await this.sync.action(m.action, { deviceId: m.deviceId, category: m.category, on: m.on }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+        return this.pushSync(message);
+      }
       case 'continuityAction': {
         const allowed: readonly ContinuityAction[] = ['rebuildIndex', 'openFolder', 'retryMigration', 'removeMigrationBackup', 'emptyTrash', 'backupNow', 'restoreBackup'];
         if (!this.continuity || !allowed.includes(m.action)) {

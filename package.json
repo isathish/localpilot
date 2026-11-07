@@ -697,6 +697,44 @@
         "category": "LocalPilot"
       },
       {
+        "command": "localpilot.sync.setup",
+        "title": "Set Up Sync…",
+        "category": "LocalPilot",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "localpilot.sync.now",
+        "title": "Sync Now",
+        "category": "LocalPilot",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "localpilot.sync.openManager",
+        "title": "Open Sync Manager",
+        "category": "LocalPilot",
+        "icon": "$(cloud)"
+      },
+      {
+        "command": "localpilot.sync.showConflicts",
+        "title": "Show Sync Conflicts",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.sync.changePassphrase",
+        "title": "Change Sync Passphrase…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.sync.rotateKey",
+        "title": "Rotate Sync Key…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.sync.turnOff",
+        "title": "Turn Off Sync…",
+        "category": "LocalPilot"
+      },
+      {
         "command": "localpilot.clearHistory",
         "title": "Clear Chat History…",
         "category": "LocalPilot",
@@ -2099,6 +2137,171 @@
           ],
           "default": "summary",
           "markdownDescription": "What a run's history keeps of each step's output (**What ran** on the Run interrupted card, `localpilot history show --runs`). Streaming text is never kept here; the chat keeps the answers."
+        },
+        "localpilot.sync.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Sync conversations, memory and agent state with your other devices through the storage below, end-to-end encrypted with your passphrase. Turned on by **Set up sync…** (Settings → Continuity & sync); the passphrase and storage credentials are kept in the OS keychain, never in settings."
+        },
+        "localpilot.sync.backend": {
+          "type": "string",
+          "enum": [
+            "folder",
+            "git",
+            "s3",
+            "webdav"
+          ],
+          "enumDescriptions": [
+            "A folder a cloud drive keeps in step (iCloud Drive, Dropbox, OneDrive, Google Drive for desktop) or a network share.",
+            "A dedicated Git repository (never a project's own), branch `localpilot-sync`.",
+            "S3-compatible object storage: AWS S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi.",
+            "WebDAV: Nextcloud, ownCloud, Synology, Apache."
+          ],
+          "default": "folder",
+          "scope": "machine",
+          "markdownDescription": "Where synced data is stored. Storage only ever sees encrypted objects."
+        },
+        "localpilot.sync.folder.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Folder to sync through (backend `folder`). LocalPilot writes into a `localpilot-sync` folder inside it."
+        },
+        "localpilot.sync.git.url": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "URL of a dedicated, empty Git repository (backend `git`). Sign-in uses your Git credential helper or SSH keys."
+        },
+        "localpilot.sync.git.branch": {
+          "type": "string",
+          "default": "localpilot-sync",
+          "scope": "machine",
+          "markdownDescription": "Branch of the sync repository."
+        },
+        "localpilot.sync.s3.endpoint": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "S3 endpoint, e.g. `https://s3.eu-west-1.amazonaws.com`, `https://<account>.r2.cloudflarestorage.com` or your MinIO URL. HTTPS is required (plain HTTP only for localhost)."
+        },
+        "localpilot.sync.s3.region": {
+          "type": "string",
+          "default": "us-east-1",
+          "scope": "machine",
+          "markdownDescription": "S3 region (`auto` for Cloudflare R2)."
+        },
+        "localpilot.sync.s3.bucket": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "S3 bucket."
+        },
+        "localpilot.sync.s3.prefix": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Folder inside the bucket (optional). LocalPilot writes under `<prefix>/localpilot-sync/`."
+        },
+        "localpilot.sync.s3.accessKeyId": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "S3 access key ID. The secret access key is kept in the OS keychain (Settings → Continuity & sync → **Set secret key…**)."
+        },
+        "localpilot.sync.s3.pathStyle": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null,
+          "scope": "machine",
+          "markdownDescription": "Address the bucket as `https://endpoint/bucket` (path style) instead of `https://bucket.endpoint`. Empty: path style for custom endpoints, virtual-hosted for AWS."
+        },
+        "localpilot.sync.webdav.url": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "WebDAV folder URL, e.g. `https://cloud.example.com/remote.php/dav/files/me/LocalPilot`. HTTPS is required (plain HTTP only for localhost)."
+        },
+        "localpilot.sync.webdav.username": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "WebDAV user name. The password (or an app password / token) is kept in the OS keychain."
+        },
+        "localpilot.sync.intervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "scope": "machine",
+          "markdownDescription": "Minutes between automatic syncs. Sync also runs 15 s after a change, when the window gets focus, and on **Sync now**."
+        },
+        "localpilot.sync.categories": {
+          "type": "object",
+          "properties": {
+            "conversations": {
+              "type": "boolean",
+              "default": true,
+              "description": "Conversations, branches, summaries, model and context history."
+            },
+            "memory": {
+              "type": "boolean",
+              "default": true,
+              "description": "Memory notes of every type and context sets."
+            },
+            "attachments": {
+              "type": "boolean",
+              "default": true,
+              "description": "Images and files attached to chats (up to localpilot.sync.maxAttachmentMB)."
+            },
+            "agentState": {
+              "type": "boolean",
+              "default": true,
+              "description": "Agent runs, what they did, checkpoint lists."
+            },
+            "checkpointContents": {
+              "type": "boolean",
+              "default": false,
+              "description": "The contents of git checkpoints (a git bundle per checkpoint, up to 50 MB), so they can be restored on another device."
+            },
+            "prompts": {
+              "type": "boolean",
+              "default": true,
+              "description": "Your own custom commands (`~/.localpilot/commands`). Workspace commands and instruction files are not synced; they travel with your project."
+            },
+            "preferences": {
+              "type": "boolean",
+              "default": true,
+              "description": "A short list of preferences: favorite models, default model per mode, thinking level, approval level. Never API keys."
+            }
+          },
+          "default": {
+            "conversations": true,
+            "memory": true,
+            "attachments": true,
+            "agentState": true,
+            "checkpointContents": false,
+            "prompts": true,
+            "preferences": true
+          },
+          "additionalProperties": false,
+          "scope": "machine",
+          "markdownDescription": "What sync carries. A category turned off stays on this device; turning it on later sends what it held back."
+        },
+        "localpilot.sync.maxAttachmentMB": {
+          "type": "number",
+          "default": 20,
+          "minimum": 0,
+          "scope": "machine",
+          "markdownDescription": "Largest attachment synced, in MB. With the Git backend attachments over 5 MB stay local."
+        },
+        "localpilot.sync.deviceName": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "This device's name in the device list on your other devices. Empty uses the computer's name."
         },
         "localpilot.history.includeCli": {
           "type": "boolean",

@@ -46,6 +46,7 @@ body.vscode-high-contrast .vchip.on, body.vscode-high-contrast-light .vchip.on {
 .nav-know[open] > summary::before { transform: rotate(90deg); }
 .nav-know > summary:hover { color: var(--fg); background: var(--tint); }
 .nav-know > summary:focus-visible { outline: 1px solid var(--focus); }
+.nav-know > summary .sdot { margin-left: 6px; vertical-align: 1px; }
 .know-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1px 4px; padding: 2px 0 2px; }
 .know { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 8px; border-radius: var(--radius-sm); font-size: 11.5px; color: var(--fg); text-align: left; min-width: 0; }
 .know span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -263,3 +264,37 @@ body.vscode-high-contrast .cx-bar i::after, body.vscode-high-contrast-light .cx-
   .cpk-pick .btn { flex: 1 1 auto; }
   .cpk-why { flex-basis: 100%; margin: 2px 0 0; }
 }
+
+/* ---- Sync manager (SYNC) ------------------------------------------------------------------------------------ */
+.know .sbadge { font-style: normal; font-size: 10px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px; margin-left: auto; display: inline-grid; place-items: center; background: var(--error); color: var(--bg); font-variant-numeric: tabular-nums; }
+.know .sbadge + .sdot { margin-left: 4px; }
+.sy-btns { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.sy-btns .btn { height: 24px; padding: 0 8px; gap: 4px; } .sy-btns .btn svg { width: 12px; height: 12px; }
+.cp-empty .sy-btns { justify-content: center; margin-top: 4px; }
+.sy-status { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--tint); }
+.sy-status.sy-err { border-color: var(--error); }
+body.vscode-high-contrast .sy-status, body.vscode-high-contrast-light .sy-status { border-color: var(--vscode-contrastBorder, var(--border)); }
+.sy-line { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-sm); min-width: 0; }
+.sy-line > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.sy-line .sdot { margin: 5px 0 0; flex: none; }
+.sy-status .cp-note { margin: 4px 0 6px; overflow-wrap: anywhere; }
+.sy-where { font-family: var(--mono, monospace); font-size: 10.5px; }
+.sy-cf .cp-row { padding-bottom: 2px; }
+.sy-sides { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 0 4px 6px; min-width: 0; }
+.sy-sides > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sy-sides span { font-size: 10.5px; color: var(--muted); }
+.sy-sides code, .sy-sides pre { margin: 0; padding: 3px 6px; border-radius: var(--radius-sm); background: var(--code-bg, var(--tint-2)); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 96px; overflow: auto; }
+@container (min-width: 480px) { .sy-sides { grid-template-columns: 1fr 1fr; } }
+.sy-revoked .cp-name { opacity: .7; }
+.sy-cats { display: grid; grid-template-columns: 1fr; gap: 2px 12px; padding: 2px 4px; }
+@container (min-width: 480px) { .sy-cats { grid-template-columns: 1fr 1fr; } }
+.sy-cats .mm-check { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--fg); min-width: 0; }
+.sy-cats .mm-check span { min-width: 0; }
+.sy-cats input { accent-color: var(--brand); margin: 0; }
+.sy-cats input:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.sy-act .cp-row { padding: 4px; }
+.sy-err .cp-name { color: var(--error-text, var(--error)); }
+.btn.danger.ghost { color: var(--error-text, var(--error)); }
+/* Conflict choices are labelled buttons ("Keep Office desktop's"): they keep their words at every width and wrap. */
+.sy-cf .mm-acts .btn { width: auto; height: auto; min-height: 24px; padding: 2px 8px; white-space: normal; text-align: left; line-height: 1.3; }
+@container (max-width: 359px) { .sy-cf .mm-acts .btn span { display: inline; } .sy-cf .mm-acts .btn { width: auto; padding: 2px 8px; } }

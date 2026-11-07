@@ -305,6 +305,10 @@ try {
   check('history share / open-share: sealed file opens with its code only', r.code === 0 && !!code && opened.code === 0 && /Opened/.test(opened.out) && wrong.code !== 0, [r.out, opened.out, wrong.out]);
   r = await cli(['history', 'delete', hist[0].id]);
   check('history delete removes the session', r.code === 0 && !JSON.parse((await cli(['history', '--json'])).out.replace(/^[^[]*/, '')).some((s) => s.id === hist[0].id), r.out);
+  const afterDelete = await cli(['history', 'search', 'mango', '--all-projects', '--json']);
+  const left = (() => { try { return JSON.parse(afterDelete.out.slice(afterDelete.out.indexOf('['))); } catch { return []; } })();
+  const everywhere = await cli(['history', '--all-projects', '--json']);
+  check('history delete also deletes it from the conversation log (search, every project)', !left.some((h) => h.conversationId === hist[0].id) && !everywhere.out.includes(hist[0].id), [afterDelete.out.slice(0, 400), everywhere.out.slice(0, 400)]);
 
   console.log('[localpilot memory]');
   r = await cli(['memory', 'add', '--type', 'knowledge', 'release-steps', 'bump the version, then tag the commit']);
@@ -607,6 +611,44 @@ try {
   check('data migrate --remove-backup', r.code === 0 && !fs.existsSync(path.join(data16, 'continuity', 'migration', 'legacy-backup')), r.out);
   r = await cli(['data', 'nonsense']);
   check('data: unknown subcommand is a usage error', r.code === 2 && /unknown data command/.test(r.out), r.out);
+
+  console.log('\n[localpilot sync]');
+  // Two devices (two homes, two data folders) and a folder as the storage: data16 (one migrated chat) sets sync up,
+  // another data folder joins with the passphrase from the environment; a rename travels with `sync now`.
+  const remoteDir = path.join(home, 'sync-remote');
+  fs.mkdirSync(remoteDir, { recursive: true });
+  const devHome = (n) => { const h = path.join(home, `sync-home-${n}`); fs.mkdirSync(h, { recursive: true }); return { HOME: h, USERPROFILE: h, APPDATA: path.join(h, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(h, '.config') }; };
+  const pass = { LOCALPILOT_SYNC_PASSPHRASE: 'e2e sync passphrase' };
+  const envA = { ...devHome('a'), LOCALPILOT_DATA_DIR: data16, ...pass };
+  const envB = { ...devHome('b'), LOCALPILOT_DATA_DIR: path.join(home, 'sync-data-b'), ...pass };
+  r = await cli(['sync', 'setup', '--backend', 'folder', '--folder', remoteDir, '--device-name', 'Laptop'], { env: envA });
+  const remoteFiles = () => { const out = []; const walk = (d) => { for (const n of fs.existsSync(d) ? fs.readdirSync(d) : []) { const f = path.join(d, n); if (fs.statSync(f).isDirectory()) { walk(f); } else { out.push(f); } } }; walk(remoteDir); return out; };
+  check('sync setup (folder) creates an encrypted remote', r.code === 0 && /sync set up/.test(r.out) && fs.existsSync(path.join(remoteDir, 'localpilot-sync', 'keyring.json')), r.out);
+  check('sync: the storage never sees the chat in the clear', remoteFiles().every((f) => !fs.readFileSync(f).includes('Flaky parser')), remoteFiles());
+  const remoteBefore = remoteFiles().length;
+  r = await cli(['sync', 'setup', '--backend', 'folder', '--folder', remoteDir], { env: { ...envB, LOCALPILOT_SYNC_PASSPHRASE: 'not it' } });
+  check('sync setup with a wrong passphrase fails and writes nothing to the storage', r.code === 1 && /does not unlock/.test(r.out) && remoteFiles().length === remoteBefore, r.out);
+  r = await cli(['sync', 'setup', '--backend', 'folder', '--folder', remoteDir, '--device-name', 'Desktop'], { env: envB });
+  const statsB = await cli(['data', 'stats', '--json'], { env: envB });
+  check('sync setup on a second device joins and pulls the chat', r.code === 0 && /sync joined/.test(r.out) && JSON.parse(statsB.stdout || '{}').conversations === 1, r.out + statsB.out);
+  r = await cli(['history', 'rename', 'cli-e2edata0001', 'Parser flake (renamed on the laptop)'], { env: envA });
+  const nowA = await cli(['sync', 'now'], { env: envA });
+  const nowB = await cli(['sync', 'now'], { env: envB });
+  const listB = await cli(['history', '--all-projects', '--json'], { env: envB });
+  check('sync now moves a change from one device to the other', nowA.code === 0 && nowB.code === 0 && /received [1-9]/.test(nowB.out) && /renamed on the laptop/.test(listB.stdout), nowA.out + nowB.out + listB.out);
+  r = await cli(['sync', 'devices', '--json'], { env: envB });
+  const devs = r.code === 0 ? JSON.parse(r.stdout) : [];
+  check('sync devices lists both devices by name', devs.length === 2 && devs.some((d) => d.name === 'Laptop') && devs.some((d) => d.name === 'Desktop' && d.thisDevice), r.out);
+  r = await cli(['sync', 'status', '--json'], { env: envA });
+  const stA = r.code === 0 ? JSON.parse(r.stdout) : {};
+  check('sync status --json: idle, nothing waiting', stA.state === 'idle' && stA.pending === 0 && stA.configured === true, r.out);
+  r = await cli(['sync', 'conflicts'], { env: envA });
+  check('sync conflicts: none', r.code === 0 && /no conflicts/.test(r.out), r.out);
+  r = await cli(['sync', 'off'], { env: envB });
+  const offB = await cli(['sync', 'status', '--json'], { env: envB });
+  check('sync off: this device stops, the storage keeps its data', r.code === 0 && JSON.parse(offB.stdout || '{}').state === 'off' && remoteFiles().length >= remoteBefore, r.out + offB.out);
+  r = await cli(['sync', 'nonsense']);
+  check('sync: unknown subcommand is a usage error', r.code === 2 && /unknown sync command/.test(r.out), r.out);
 } finally {
   srv.close();
   healSrv.close();

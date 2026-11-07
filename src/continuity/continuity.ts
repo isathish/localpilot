@@ -25,6 +25,7 @@ import { ContextService } from './context/contextService';
 import { SessionManager } from './session/sessionManager';
 import type { CaptureMode } from './session/runBridge';
 import { SyncEngine, SyncEngineOptions, SyncSettings } from './sync/syncEngine';
+import { CheckpointContentsExtra, PreferenceAccess, PreferencesExtra, PromptsExtra } from './sync/extras';
 
 export interface ContinuitySettings {
   /** Empty = default (`~/.localpilot/continuity`, or `$LOCALPILOT_DATA_DIR/continuity`). */
@@ -199,7 +200,7 @@ export class Continuity implements Disposable {
     const projects = this.projectResolver();
     // Chats are logged once the 1.6 import settled (so a chat being imported is not written twice concurrently).
     const bridge = new SessionBridge({ log, index, blobs, ready: Promise.all([this.ready, this.migrated]), healthy, projects, defaultFolder: o.defaultFolder, origin: o.origin, hint: (id) => store.takeHint(id), peek: (id) => (store.has(id) ? store.get(id) : undefined), warn: o.warn });
-    const manager = new ConversationManager({ log, index, blobs, retention, store, bridge, projects, root: this.dataDir, summarize: o.summarize, warn: o.warn });
+    const manager = new ConversationManager({ log, index, blobs, retention, store, bridge, projects, root: this.dataDir, defaultFolder: o.defaultFolder, summarize: o.summarize, warn: o.warn });
     store.bridge = bridge;
     this.bridge = bridge;
     this.projects = projects;
@@ -223,6 +224,7 @@ export class Continuity implements Disposable {
       .then(async () => {
         if (healthy()) {
           await manager.refreshStale();
+          await manager.adoptRemote();
           await bridge.reconcile(store.list(), (id) => (store.has(id) ? store.get(id) : undefined));
         }
       })
@@ -402,7 +404,7 @@ export class Continuity implements Disposable {
    * devices' streams back, end-to-end encrypted. Cycles run only when `settings().enabled` and the remote is set up.
    * Never throws; a degraded continuity (or a failed index) returns undefined and everything stays local as in 1.6.
    */
-  attachSync(o: { settings: () => SyncSettings; start?: boolean; startDelayMs?: number } & Partial<Pick<SyncEngineOptions, 'fetch' | 'gitPath' | 'backend' | 'kdfN' | 'effects' | 'passphraseHint' | 'warn' | 'info' | 'blobBudgetBytes'>>): SyncEngine | undefined {
+  attachSync(o: { settings: () => SyncSettings; start?: boolean; startDelayMs?: number; preferences?: PreferenceAccess; promptsDir?: string } & Partial<Pick<SyncEngineOptions, 'fetch' | 'gitPath' | 'backend' | 'kdfN' | 'effects' | 'passphraseHint' | 'warn' | 'info' | 'blobBudgetBytes'>>): SyncEngine | undefined {
     if (!this.parts || this.disposed) {
       return undefined;
     }
@@ -428,6 +430,11 @@ export class Continuity implements Disposable {
       info: o.info,
       passphraseHint: o.passphraseHint,
       blobBudgetBytes: o.blobBudgetBytes,
+      extras: [
+        new PromptsExtra({ log, index, root: this.dataDir, dir: o.promptsDir, warn: o.warn }),
+        new CheckpointContentsExtra({ log, index, blobs, warn: o.warn }),
+        ...(o.preferences ? [new PreferencesExtra({ log, index, root: this.dataDir, access: o.preferences })] : []),
+      ],
       // A resolution changes memory files and chat branches through their managers when they are attached.
       effects:
         o.effects ??

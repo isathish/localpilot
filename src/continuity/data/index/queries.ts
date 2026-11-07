@@ -190,14 +190,14 @@ export interface VersionRow {
 export const NAMED_QUERIES = [
   'referencedBlobs', 'trashedBefore', 'streamCursors', 'conversationIds', 'runningAgentSessions', 'checkpoints', 'conflicts', 'sizes', 'branches', 'siblings', 'executionEvents', 'agentSessions', 'projectByPathHash', 'projectByGit', 'latestContextSnapshot', 'syncEvents',
   // CONVERSATION
-  'messageIds', 'entityStates', 'attachments', 'conversationVersions', 'children', 'projects',
+  'messageIds', 'entityStates', 'attachments', 'conversationVersions', 'purgedConversations', 'children', 'projects',
   'projectMemory',
   // CONTEXT
   'contextSnapshots', 'contextSnapshot', 'contextLibrary', 'relatedTerms', 'projectConversationCount', 'conversationTags',
   // SESSION
   'modelSessions', 'interruptedAgentSessions',
   // SYNC
-  'syncDevices', 'checkpointsWithoutContent',
+  'syncDevices', 'checkpointsWithoutContent', 'promptTemplates', 'preferences',
 ] as const;
 export type NamedQuery = (typeof NAMED_QUERIES)[number];
 
@@ -737,6 +737,11 @@ export function named(db: Db, name: NamedQuery, p: Record<string, unknown>, fts:
       ];
     case 'streamCursors':
       return db.all('SELECT * FROM stream_cursors ORDER BY stream');
+    case 'purgedConversations': {
+      // Which of these conversations were purged (deleted for good), here or on another device.
+      const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).slice(0, 2000);
+      return ids.length ? db.all<{ id: string }>(`SELECT id FROM conversations WHERE purged = 1 AND id IN (${ids.map(() => '?').join(',')})`, ids) : [];
+    }
     case 'conversationIds':
       return db.all<{ id: string }>('SELECT id FROM conversations WHERE purged = 0 ORDER BY updated_at DESC').map((r) => r.id);
     case 'runningAgentSessions':
@@ -777,6 +782,12 @@ export function named(db: Db, name: NamedQuery, p: Record<string, unknown>, fts:
     case 'syncDevices':
       // SYNC: the device registry (device entities).
       return db.all('SELECT * FROM sync_devices ORDER BY this_device DESC, last_seen DESC');
+    case 'promptTemplates':
+      // SYNC: prompt templates of a scope (user-level custom commands), trashed ones included.
+      return db.all('SELECT id, name, body, scope, file, trashed_at FROM prompt_templates WHERE scope = ? ORDER BY name', [s('scope') || 'user']);
+    case 'preferences':
+      // SYNC: synced preferences (allow-listed keys only ever reach the log).
+      return db.all('SELECT key, value, updated_at FROM preferences ORDER BY key');
     case 'checkpointsWithoutContent':
       // SYNC: this device's git checkpoints whose contents have not been bundled yet (checkpointContents).
       return db.all("SELECT id, conversation_id, run, ref, sha, root, kind FROM checkpoints WHERE device = ? AND content_blob IS NULL AND ref IS NOT NULL AND ref != '' ORDER BY created_at DESC LIMIT ?", [s('device'), Math.max(1, Math.min(200, n('limit') || 20))]);

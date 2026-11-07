@@ -34,6 +34,7 @@
     book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
     download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
     play: '<svg viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></svg>',
+    key: '<svg viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="2.5"/><path d="M7.3 8.7L13 3M11 5l1.5 1.5M9.5 6.5L11 8"/></svg>',
     star: '<svg viewBox="0 0 16 16"><path d="M8 2l1.8 3.7 4.2.6-3 2.9.7 4.1L8 11.4l-3.7 1.9.7-4.1-3-2.9 4.2-.6z"/></svg>',
     chip: '<svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6h1.5M1.5 10h1.5M13 6h1.5M13 10h1.5"/><rect x="6" y="6" width="4" height="4"/></svg>',
     search: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>',
@@ -80,7 +81,7 @@
     web: 'searxng brave tavily duckduckgo browser screenshot fetch internet offline online',
     documents: 'markdown reader preview mermaid outline toc front matter export pdf viewer zoom thumbnails page colours dark sepia scroll sync',
     memory: 'history chats notes retention transcripts',
-    continuity: 'continuity sync backup restore trash undelete version history index rebuild search data folder storage migration import 1.6 legacy event log',
+    continuity: 'continuity sync backup restore trash undelete version history index rebuild search data folder storage migration import 1.6 legacy event log devices passphrase encryption icloud dropbox onedrive google drive git s3 r2 minio webdav nextcloud conflicts',
     mcp: 'model context protocol server tools reconnect',
     dashboard: 'telemetry metrics usage logs redis stats throughput self-healing recovery failures root cause patches regression intervention',
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
@@ -102,6 +103,9 @@
     ['memory', 'memory.maxNoteChars', 'Largest memory note'], ['memory', 'memory.maxNotes', 'Memory notes per scope'], ['memory', 'memory.taskExpiryDays', 'Keep task memory after the task is done'],
     ['continuity', 'continuity.dataDir', 'Data folder'], ['continuity', 'continuity.indexMaxMB', 'Largest search index'], ['continuity', 'continuity.trashRetentionDays', 'Keep deleted items in Trash'], ['continuity', 'continuity.historyDays', 'Keep version history'],
     ['continuity', 'continuity.backup.enabled', 'Back up automatically'], ['continuity', 'continuity.backup.intervalDays', 'Days between backups'], ['continuity', 'continuity.backup.keep', 'Backups kept'], ['continuity', 'continuity.relatedConversations', 'Offer related earlier conversations'], ['continuity', 'continuity.captureToolOutput', 'Run history keeps of tool output'],
+    ['continuity', 'sync.enabled', 'Sync on this device'], ['continuity', 'sync.categories', 'What syncs'], ['continuity', 'sync.backend', 'Sync storage'], ['continuity', 'sync.folder.path', 'Sync folder'], ['continuity', 'sync.git.url', 'Sync Git repository URL'], ['continuity', 'sync.git.branch', 'Sync Git branch'],
+    ['continuity', 'sync.s3.endpoint', 'S3 endpoint'], ['continuity', 'sync.s3.region', 'S3 region'], ['continuity', 'sync.s3.bucket', 'S3 bucket'], ['continuity', 'sync.s3.prefix', 'S3 folder in the bucket'], ['continuity', 'sync.s3.accessKeyId', 'S3 access key ID'], ['continuity', 'sync.s3.pathStyle', 'S3 bucket address'],
+    ['continuity', 'sync.webdav.url', 'WebDAV URL'], ['continuity', 'sync.webdav.username', 'WebDAV user name'], ['continuity', 'sync.intervalMinutes', 'Sync every'], ['continuity', 'sync.maxAttachmentMB', 'Largest synced attachment'], ['continuity', 'sync.deviceName', 'This device’s name'],
     ['advanced', 'supervisor.enabled', 'Keep local services running'], ['advanced', 'supervisor.intervalSeconds', 'Service check interval'], ['advanced', 'supervisor.autoInstall', 'Install Ollama without asking'],
     ['skills', 'skillsPaths', 'Skill folders'], ['skills', 'skills.repositories', 'Skill repositories'], ['skills', 'skills.disabled', 'Disabled skills'], ['skills', 'pluginPaths', 'Plugin folders'],
     ['agent', 'approvals.terminal', 'Terminal commands approval'], ['agent', 'approvals.write', 'File edits approval'], ['agent', 'approvals.delete', 'Deleting files approval'],
@@ -526,8 +530,8 @@
       const b = switchBtn(v, label, (on) => set(key, on)); b.dataset.fk = key; ctl.appendChild(b);
     } else if (kind === 'select') {
       const s = el('select'); s.setAttribute('aria-label', label);
-      for (const [ov, ol, od] of opts.options) { const o = el('option'); o.value = ov; o.textContent = ol + (od ? ` — ${od}` : ''); if (String(ov) === String(v)) { o.selected = true; } s.appendChild(o); }
-      if (opts.options.every(([ov]) => String(ov) !== String(v)) && v !== undefined && v !== '') { const o = el('option'); o.value = v; o.textContent = `${v} (not available)`; o.selected = true; s.appendChild(o); }
+      for (const [ov, ol, od] of opts.options) { const o = el('option'); o.value = ov; o.textContent = ol + (od ? ` — ${od}` : ''); if (String(ov) === String(v ?? '')) { o.selected = true; } s.appendChild(o); }
+      if (opts.options.every(([ov]) => String(ov) !== String(v ?? '')) && v !== undefined && v !== null && v !== '') { const o = el('option'); o.value = v; o.textContent = `${v} (not available)`; o.selected = true; s.appendChild(o); }
       s.onchange = () => set(key, opts.cast ? opts.cast(s.value) : s.value);
       ctl.appendChild(s);
     } else if (kind === 'seg') {
@@ -2726,13 +2730,126 @@
     ba.innerHTML = `<span class="muted small">${st.lastBackup ? `Last backup ${fmtAgo(st.lastBackup.at)} · ${fmtBytes(st.lastBackup.bytes)}` : 'No backup yet.'}</span><span class="spacer"></span>${contBtn('restoreBackup', 'Restore from file…', I.undo)}${contBtn('backupNow', 'Back up now', I.download)}`;
     bc.appendChild(ba);
     body.appendChild(bc);
-    body.appendChild(el('p', 'muted small', 'Data on this computer is not encrypted by LocalPilot (like your source code); use your operating system’s disk encryption. Backups can be encrypted with a passphrase.'));
+    // ---- sync (SYNC)
+    body.appendChild(el('h2', 'sub', 'Sync'));
+    const syncBox = el('div', 'sync-body'); syncBox.id = 'syncBody';
+    body.appendChild(syncBox);
+    renderSyncBody();
+    body.appendChild(el('p', 'muted small', 'Data on this computer is not encrypted by LocalPilot (like your source code); use your operating system’s disk encryption. Backups can be encrypted with a passphrase; synced data always is.'));
     body.querySelectorAll('[data-cact]').forEach((x) => (x.onclick = () => contAct(x.dataset.cact)));
     wireGlobal(body);
     fitTables(body);
     if (prog.state === 'running' || v.indexState === 'catching-up' || v.indexState === 'rebuilding' || v.indexState === 'loading') {
       clearTimeout(state.contTimer); state.contTimer = setTimeout(() => state.section === 'continuity' && contLoad(), 2000);
     }
+  }
+
+  // ------------------------------------------------------------------ sync (Continuity & sync → Sync)
+  /** The Sync subsection: status, storage per backend (folder / Git / S3 / WebDAV), Test connection, Set up sync (the
+   *  passphrase and storage secrets are asked by VS Code input boxes, never typed here), what syncs, devices, keys.
+   *  Data comes from the host (`syncLoad` → `sync`); buttons post `syncAction`. */
+  function syncLoad() { state.syncReq = Date.now(); post({ type: 'syncLoad' }); }
+  function syncAct(action, extra) { state.syncBusy = action; renderSyncBody(); post({ type: 'syncAction', action, ...(extra || {}) }); }
+  const SYNC_STATE = { off: 'Off', idle: 'Up to date', syncing: 'Syncing…', offline: 'Offline', paused: 'Paused', error: 'Failed', unavailable: 'Not available' };
+  const BACKENDS = [['folder', 'Folder', 'iCloud, Dropbox, OneDrive…'], ['git', 'Git repository', ''], ['s3', 'S3-compatible', 'S3, R2, MinIO, B2…'], ['webdav', 'WebDAV', 'Nextcloud, Synology…']];
+  function syncBtn(action, label, icon, opts = {}) {
+    const busy = state.syncBusy === action;
+    return `<button class="btn sm${opts.primary ? ' primary' : ''}${opts.danger ? ' danger' : ''}" data-sact="${action}"${opts.disabled || state.syncBusy ? ' disabled' : ''}${opts.title ? ` title="${esc(opts.title)}"` : ''}>${busy ? '<span class="spinner"></span>' : icon || ''}${esc(label)}</button>`;
+  }
+  function syncBackendFields() {
+    const wrap = el('div', 'sync-fields');
+    wrap.dataset.deps = 'sync.backend';
+    wrap._rebuild = syncBackendFields;
+    const b = val('sync.backend') || 'folder';
+    if (b === 'folder') {
+      const f = field('sync.folder.path', 'Folder', 'A folder your cloud drive keeps in step on every device (or a network share). LocalPilot writes a <code>localpilot-sync</code> folder inside it.', 'text', { placeholder: '~/Library/Mobile Documents/com~apple~CloudDocs' });
+      const br = el('div', 'btnrow'); br.innerHTML = `<span class="spacer"></span>${syncBtn('pickFolder', 'Browse…', I.folder)}`; f.querySelector('.ctl').appendChild(br);
+      wrap.appendChild(f);
+    } else if (b === 'git') {
+      wrap.append(
+        field('sync.git.url', 'Repository URL', 'A dedicated, empty repository (never a project’s own). Sign-in uses your Git credential helper or SSH keys.', 'text', { placeholder: 'git@github.com:me/localpilot-sync.git' }),
+        field('sync.git.branch', 'Branch', '', 'text', { placeholder: 'localpilot-sync' })
+      );
+    } else if (b === 's3') {
+      wrap.append(
+        field('sync.s3.endpoint', 'Endpoint', 'HTTPS required (plain HTTP only for localhost).', 'text', { placeholder: 'https://s3.eu-west-1.amazonaws.com' }),
+        field('sync.s3.region', 'Region', '<code>auto</code> for Cloudflare R2.', 'text', { placeholder: 'us-east-1' }),
+        field('sync.s3.bucket', 'Bucket', '', 'text', { placeholder: 'my-bucket' }),
+        field('sync.s3.prefix', 'Folder in the bucket', 'Optional.', 'text', { placeholder: 'localpilot' }),
+        field('sync.s3.accessKeyId', 'Access key ID', 'The secret access key is kept in the OS keychain.', 'text', { placeholder: 'AKIA…' }),
+        field('sync.s3.pathStyle', 'Bucket address', 'Path style (<code>endpoint/bucket</code>) suits MinIO and most S3-compatible stores.', 'select', { options: [['', 'Automatic', ''], ['true', 'Path style', ''], ['false', 'Virtual-hosted', '']], cast: (v) => (v === '' ? null : v === 'true') })
+      );
+    } else {
+      wrap.append(
+        field('sync.webdav.url', 'WebDAV URL', 'HTTPS required (plain HTTP only for localhost).', 'text', { placeholder: 'https://cloud.example.com/remote.php/dav/files/me/LocalPilot' }),
+        field('sync.webdav.username', 'User name', 'The password (or an app password) is kept in the OS keychain.', 'text', { placeholder: 'me' })
+      );
+    }
+    if (b === 's3' || b === 'webdav') {
+      const v = state.sync && state.sync.view;
+      const r = el('div', 'btnrow sync-secret');
+      r.innerHTML = `<span class="small"><b>${b === 's3' ? 'Secret access key' : 'Password'}</b> <span class="muted">${v && v.hasSecret ? `${I.check}stored in the OS keychain on this device` : 'not set on this device'}</span></span><span class="spacer"></span>${syncBtn('setSecret', v && v.hasSecret ? 'Change…' : 'Set…', I.key, { primary: !(v && v.hasSecret) })}`;
+      wrap.appendChild(r);
+    }
+    wrap.querySelectorAll('[data-sact]').forEach((x) => (x.onclick = () => syncAct(x.dataset.sact)));
+    return wrap;
+  }
+  function renderSyncBody() {
+    const box = document.getElementById('syncBody');
+    if (!box) { return; }
+    const v = state.sync && state.sync.view;
+    if (!v) { box.replaceChildren(skeleton('Loading sync…', 2)); if (!state.syncReq || Date.now() - state.syncReq > 3000) { syncLoad(); } return; }
+    const st = v.status || {};
+    const on = st.enabled && st.configured;
+    box.replaceChildren();
+    const grid = el('div', 'sync-grid');
+    // ---- status
+    const sc = el('div', 'card sync-status');
+    const dot = st.state === 'idle' ? 'ok' : st.state === 'syncing' ? 'busy' : st.state === 'offline' || st.state === 'error' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : 'off';
+    const waiting = [st.pending ? plural(st.pending, 'change') : '', st.pendingBlobs ? plural(st.pendingBlobs, 'attachment') : ''].filter(Boolean).join(', ');
+    const detail = !on ? (st.configured ? 'Set up, but turned off on this device.' : 'Not set up. Choose where to sync, then Set up sync.') : st.state === 'paused' || st.state === 'error' || st.state === 'offline' ? esc(st.message || '') : `${st.lastSync ? `Last sync ${fmtAgo(st.lastSync)}` : 'Not synced yet'}${waiting ? ` · ${esc(waiting)} waiting` : ''}${st.conflicts ? ` · <b>${plural(st.conflicts, 'conflict')}</b>` : ''}`;
+    const fix = st.needsPassphrase || st.reason === 'passphrase' || st.reason === 'remote-replaced' ? syncBtn('unlock', 'Enter passphrase…', I.key, { primary: true }) : st.reason === 'auth' && (st.backend === 's3' || st.backend === 'webdav') ? syncBtn('setSecret', 'Update credentials…', I.key, { primary: true }) : '';
+    const acts = on ? `${fix}${syncBtn('now', 'Sync now', I.refresh)}${st.state === 'paused' && st.reason === 'user' ? syncBtn('resume', 'Resume', I.play || I.refresh) : syncBtn('pause', 'Pause', I.pause || I.x, { disabled: st.state === 'paused' })}${syncBtn('openManager', 'Open Sync manager', I.external || I.cloud)}` : `${fix}${syncBtn('setup', st.configured ? 'Turn sync on…' : 'Set up sync…', I.cloud, { primary: true })}`;
+    sc.innerHTML = `<div class="field wide"><div class="sync-line" role="status" aria-live="polite"><span class="sdot ${dot}" aria-hidden="true"></span><b>${esc(SYNC_STATE[st.state] || st.state || '')}</b><span class="muted small">${detail}</span></div></div><div class="btnrow"><span class="muted small">End-to-end encrypted: storage only sees ciphertext. Your passphrase never leaves your devices.</span><span class="spacer"></span>${acts}</div>`;
+    grid.appendChild(sc);
+    // ---- storage
+    const stc = el('div', 'card sync-storage');
+    stc.appendChild(field('sync.backend', 'Storage', 'Where encrypted copies are kept. Every device chooses the same one.', 'select', { options: BACKENDS }));
+    stc.appendChild(syncBackendFields());
+    const t = v.test;
+    const tr = el('div', 'btnrow');
+    tr.innerHTML = `<span class="muted small sync-test${t ? (t.ok ? ' ok' : ' err') : ''}" role="status">${t ? `${t.ok ? I.check : I.warn}${esc(t.message)}` : 'Checks the storage and whether it already holds LocalPilot data.'}</span><span class="spacer"></span>${syncBtn('test', 'Test connection', I.plug || I.refresh)}`;
+    stc.appendChild(tr);
+    grid.appendChild(stc);
+    // ---- what syncs
+    const cc = el('div', 'card sync-cats');
+    const cats = v.categories || [];
+    const cl = el('div', 'field wide');
+    cl.innerHTML = `<div><div class="lbl">What syncs</div><div class="desc">API keys and storage credentials never sync. A category turned off stays on this device; turning it on later sends what it held back.</div></div><div class="ctl sync-catlist">${cats.map((c) => `<label class="sync-cat"><input type="checkbox" data-cat="${esc(c.id)}"${c.on ? ' checked' : ''}><span>${esc(c.label)}${c.withheld ? ` <span class="badge" title="Held back while it was off">${c.withheld} held back</span>` : ''}</span></label>`).join('')}</div>`;
+    cl.querySelectorAll('[data-cat]').forEach((x) => (x.onchange = () => post({ type: 'syncAction', action: 'setCategory', category: x.dataset.cat, on: x.checked })));
+    cc.appendChild(cl);
+    cc.appendChild(field('sync.intervalMinutes', 'Sync every', 'Also 15 s after a change, when the window gets focus, and on Sync now.', 'number', { min: 1, max: 1440, step: 1, unit: 'min' }));
+    cc.appendChild(field('sync.maxAttachmentMB', 'Largest attachment', 'Bigger ones stay on this device. With Git, attachments over 5 MB always do.', 'number', { min: 0, max: 2048, step: 1, unit: 'MB' }));
+    cc.appendChild(field('sync.deviceName', 'This device’s name', 'Shown on your other devices. Empty uses the computer’s name.', 'text', { placeholder: 'My laptop' }));
+    grid.appendChild(cc);
+    // ---- devices + keys (set up only)
+    if (st.configured) {
+      const dc = el('div', 'card tblwrap sync-devices');
+      const devs = v.devices || [];
+      dc.innerHTML = `<h3>Devices <span class="count">${devs.filter((d) => !d.revokedAt).length}</span></h3><table class="tbl"><thead><tr><th>Device</th><th>Last seen</th><th class="act"><span class="sr-only">Actions</span></th></tr></thead><tbody>${devs.map((d) => `<tr><td><b>${esc(d.name)}</b>${d.thisDevice ? ' <span class="badge">this device</span>' : ''}${d.revokedAt ? ' <span class="badge err">removed</span>' : ''}<div class="muted small">${esc(d.platform || '')}</div></td><td class="muted small">${d.thisDevice ? 'now' : d.lastSeen ? fmtAgo(d.lastSeen) : 'not yet'}</td><td class="act">${d.thisDevice ? `<button class="btn sm ghost" data-dev="rename" title="Rename this device">${I.edit || ''}Rename</button>` : d.revokedAt ? '' : `<button class="btn sm ghost danger" data-dev="remove" data-id="${esc(d.id)}" title="Remove ${esc(d.name)} (and rotate the key)">${I.trash}Remove…</button>`}</td></tr>`).join('')}</tbody></table>`;
+      dc.querySelectorAll('[data-dev]').forEach((x) => (x.onclick = () => post({ type: 'syncAction', action: x.dataset.dev === 'rename' ? 'renameDevice' : 'removeDevice', deviceId: x.dataset.id })));
+      grid.appendChild(dc);
+      const kc = el('div', 'card sync-keys');
+      const kr = el('div', 'btnrow');
+      kr.innerHTML = `<span class="muted small">Change the passphrase (devices keep syncing), rotate the key after removing a device, or start over if the passphrase is lost (deletes the synced copies; this device uploads again).</span><span class="spacer"></span>${syncBtn('changePassphrase', 'Change passphrase…', I.key)}${syncBtn('rotateKey', 'Rotate key…', I.refresh)}${syncBtn('turnOff', 'Turn off sync…', I.x)}${syncBtn('startOver', 'Start over…', I.warn, { danger: true })}`;
+      kc.appendChild(kr);
+      grid.appendChild(kc);
+    }
+    box.appendChild(grid);
+    box.querySelectorAll('.sync-status [data-sact], .sync-storage > .btnrow [data-sact], .sync-keys [data-sact]').forEach((x) => (x.onclick = () => syncAct(x.dataset.sact)));
+    wireGlobal(box);
+    fitTables(box);
+    if (st.state === 'syncing') { clearTimeout(state.syncTimer); state.syncTimer = setTimeout(() => state.section === 'continuity' && syncLoad(), 2000); }
   }
 
   // ------------------------------------------------------------------ skills & subagents
@@ -5058,6 +5175,12 @@
         if (f && f._rebuild) { const fresh = f._rebuild(); old.replaceWith(fresh.querySelector('#otlpResult')); const tb = f.querySelector('.ctl .row .btn'); const nb = fresh.querySelector('.ctl .row .btn'); if (tb && nb) { tb.replaceWith(nb); } }
         break;
       }
+      case 'sync':
+        state.sync = { view: m.view };
+        state.syncBusy = null;
+        if (m.message) { toast(m.message, 'info'); }
+        if (state.section === 'continuity') { renderSyncBody(); }
+        break;
       case 'continuity':
         state.cont = { ...(state.cont || {}), view: m.view, busy: null };
         if (m.message) { toast(m.message, 'info'); }

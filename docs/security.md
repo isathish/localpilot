@@ -31,6 +31,7 @@ LocalPilot runs an AI agent that can read your project, edit files and run comma
       <div class="flow-box"><b>OSV.dev dependency checks</b><span>a security scan sends lockfile package names and versions (<code>approvals.network</code>, <code>--offline</code>)</span></div>
       <div class="flow-box"><b>Plugin marketplaces</b><span>fetched with <code>git</code> when you browse or install plugins</span></div>
       <div class="flow-box"><b>Model gallery</b><span>ollama.com, Docker Hub and Hugging Face listings while it is open</span></div>
+      <div class="flow-box"><b>Sync</b><span>you set it up: end-to-end encrypted objects to your own folder, Git repository, S3 bucket or WebDAV server</span></div>
     </div>
   </div>
   <div class="flow-zone never">
@@ -45,6 +46,16 @@ LocalPilot runs an AI agent that can read your project, edit files and run comma
 - `${env:NAME}` keys are read from the environment at use and never written anywhere.
 - The Settings webview is told only whether a key resolves and where it comes from, never the key.
 - Removing a provider deletes its stored key. Keys go only to that provider's own endpoint: as a Bearer token, `x-api-key` for Anthropic, or `api-key` for Azure.
+
+## Sync encryption
+
+Sync (off by default) is end-to-end encrypted, always:
+
+- **Keys.** A random 256-bit data key per key id encrypts everything; it is wrapped with AES-256-GCM under a key derived from your passphrase with scrypt (N = 2^17, r = 8, p = 1, a random 16-byte salt). Only the wrapped keys and the scrypt parameters are stored on the remote (`keyring.json`); a wrong passphrase fails the GCM check and nothing is written. Devices keep the data key (never the passphrase) in VS Code's `SecretStorage` or the CLI's `~/.localpilot/keys.json` (mode 0600).
+- **Objects.** Every object is AES-256-GCM with a sub-key (HKDF-SHA256) of the data key; the object's name is bound as associated data, so an object cannot be moved, swapped or replayed under another name without failing authentication. The IV is derived from the key, the name and the content, so a retried upload is byte-for-byte identical and different content never reuses an IV. Attachment names are an HMAC of their hash under another sub-key. Objects that fail authentication are skipped and reported in the Sync manager.
+- **Devices and keys.** Removing a device stops listing it; **Rotate key** adds a new data key for everything uploaded afterwards, so a removed device (which knows only the old key) cannot read new data. Revoke its storage credentials at your provider too. **Change passphrase** re-wraps the keys; no data is re-encrypted.
+- **Transport.** S3 requests are signed with AWS Signature Version 4; S3 and WebDAV require HTTPS (plain HTTP only for `localhost`). Git uses your own credential helper or SSH keys; LocalPilot never prompts for or stores git credentials, and refuses a repository that is a project's working tree.
+- **Not covered.** The storage still sees object sizes, counts and times. Local data at rest is not encrypted by LocalPilot (use disk encryption); a forgotten passphrase cannot be recovered by anyone.
 
 ## What the agent can do, and what stops it
 

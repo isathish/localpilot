@@ -79,7 +79,9 @@ import { MarkdownCustomEditor } from './ui/markdown/customEditor';
 import { registerMarkdownCommands } from './ui/markdown/commands';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
 import { continuityView, openContinuity, registerContinuityCommands, runContinuityAction } from './ui/continuityData';
-import { ContinuityHost, registerConversationCommands } from './ui/continuityHost';
+import { ContinuityHost, registerConversationCommands, showContinuityPage } from './ui/continuityHost';
+import { registerSyncCommands, SyncHost } from './ui/syncHost';
+import { SyncSettings } from './ui/continuitySettings';
 import { attachMemory } from './ui/memoryHost';
 import { attachContext } from './ui/contextHost';
 import { attachSessions, chatSessionRuns } from './ui/sessionHost';
@@ -436,6 +438,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   });
   controller.continuityHost = continuityHost;
   context.subscriptions.push(continuityHost);
+  // Sync (1.7): end-to-end encrypted sync of the log with a folder, Git, S3-compatible storage or WebDAV.
+  let pushSyncSettings: (() => void) | undefined;
+  const syncHost = new SyncHost({ context, handle: continuity, log, publish: (m) => controller.publish(m as ToWebview), onChanged: () => pushSyncSettings?.() });
+  continuityHost.sync = syncHost;
+  context.subscriptions.push(syncHost);
   const shutdownBeforeContinuity = shutdown;
   shutdown = async () => {
     await continuity.current?.dispose().catch(() => undefined);
@@ -448,6 +455,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, view, { webviewOptions: { retainContextWhenHidden: true } }));
   context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelViewType, { deserializeWebviewPanel: async (panel) => view.adoptPanel(panel) }));
   registerConversationCommands(context, controller, continuity, () => view.reveal());
+  const openSyncManager = (params?: Record<string, unknown>) => showContinuityPage(controller, () => view.reveal(), 'sync', params);
+  registerSyncCommands(context, syncHost, openSyncManager);
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
@@ -614,6 +623,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     });
   settingsPanel.learner = learner;
   settingsPanel.continuity = { view: () => continuityView(continuity), action: (a) => runContinuityAction(continuity.current, a, log) };
+  const syncSettings = new SyncSettings(syncHost, () => openSyncManager());
+  settingsPanel.sync = { view: () => syncSettings.view(), action: (a, o) => syncSettings.action(a, o) };
+  pushSyncSettings = () => void settingsPanel.pushSync();
   // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
   const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
   context.subscriptions.push(tuner);

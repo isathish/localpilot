@@ -44,13 +44,14 @@ interface Side {
   root: string;
 }
 
-async function side(name: string, backend: SyncBackend, o: { root?: string; secrets?: SecretBox } = {}): Promise<Side> {
+async function side(name: string, backend: SyncBackend, o: { root?: string; secrets?: SecretBox; promptsDir?: string; prefs?: Map<string, unknown> } = {}): Promise<Side> {
   const root = o.root ?? tmp(name);
   const secrets = o.secrets ?? memorySecretBox();
   const c = await Continuity.open({ dataDir: root, writer: 'vscode', appVersion: 'test', secrets, log: quiet, settings: () => cfg, wasmPath: process.env.LOCALPILOT_SQLJS_WASM ?? '', workerPath: '', inProcessIndex: true, schedules: false, autoMigrate: false, flushMs: 5 });
   await c.ready;
   const settings: SyncSettings = { ...DEFAULT_SYNC_SETTINGS, enabled: true, categories: { ...DEFAULT_CATEGORIES } };
-  const sync = c.attachSync({ settings: () => settings, backend, kdfN: 1024, start: false })!;
+  const prefs = o.prefs;
+  const sync = c.attachSync({ settings: () => settings, backend, kdfN: 1024, start: false, promptsDir: o.promptsDir ?? tmp(`${name}-cmds`), ...(prefs ? { preferences: { read: (k: string) => prefs.get(k), write: async (k: string, v: unknown) => void prefs.set(k, v) } } : {}) })!;
   return { c, sync, settings, secrets, root };
 }
 
@@ -84,8 +85,119 @@ const offline = () => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9'
 export async function syncSmoke(check: Check): Promise<void> {
   console.log('\n[continuity: sync — protocol, conflicts, categories, keys, scheduler, backends]');
   await protocol(check);
+  await extras(check);
   await scheduler(check);
   await backends(check);
+  await everyBackendEndToEnd(check);
+}
+
+/** A backend whose calls fail like a lost network while `down` is set (the offline queue over a real backend). */
+function flaky(inner: SyncBackend): SyncBackend & { down: boolean } {
+  const w = {
+    down: false,
+    kind: inner.kind,
+    label: inner.label,
+    gate<T>(f: () => Promise<T>): Promise<T> {
+      return w.down ? Promise.reject(offline()) : f();
+    },
+    check: () => (w.down ? Promise.resolve({ ok: false as const, reason: 'offline' as const, message: 'offline' }) : inner.check()),
+    list: (p: string, a?: string) => w.gate(() => inner.list(p, a)),
+    get: (k: string) => w.gate(() => inner.get(k)),
+    head: inner.head ? (k: string) => w.gate(() => inner.head!(k)) : undefined,
+    put: (k: string, b: Uint8Array, o?: { ifAbsent?: boolean; ifMatch?: string }) => w.gate(() => inner.put(k, b, o)),
+    delete: (k: string) => w.gate(() => inner.delete(k)),
+    begin: inner.begin ? () => w.gate(() => inner.begin!()) : undefined,
+    commit: inner.commit ? (m: string) => w.gate(() => inner.commit!(m)) : undefined,
+    dispose: () => inner.dispose(),
+  };
+  return w as unknown as SyncBackend & { down: boolean };
+}
+
+/**
+ * The same flow through every backend (folder, local bare git, fake S3, fake WebDAV): set up on A, join on B, a chat
+ * with a recognisable secret moves A → B, B works offline and its queue goes out when it is back, a concurrent title
+ * edit is a conflict on both devices whose resolution travels, and the raw bytes on the storage never contain the
+ * secret, the title, the device names or the passphrase.
+ */
+async function everyBackendEndToEnd(check: Check): Promise<void> {
+  const SECRET = 'TOPSECRET-7f3a9c';
+  const run = async (label: string, mk: () => SyncBackend, extraScan?: () => string) => {
+    const A = await side(`${label}-ea`, flaky(mk()));
+    const bB = flaky(mk());
+    const B = await side(`${label}-eb`, bB);
+    try {
+      await A.sync.create(PASS);
+      await B.sync.join(PASS);
+      newConv(A, 'conv_e2e', `Plan ${SECRET}`);
+      msg(A, 'conv_e2e', 'm_e2e_1', undefined, `the launch code is ${SECRET}`);
+      await round(A, B);
+      check(`sync e2e ${label}: a chat and its message move A → B`, (await B.c.index.conversation('conv_e2e'))?.title === `Plan ${SECRET}` && (await B.c.index.search(SECRET)).length > 0);
+      // Offline on B: its edit waits in the queue, then goes out.
+      bB.down = true;
+      B.c.log.append('conversation', 'conv_e2e', 'patch', { tags: { offline: true } }, { durable: true });
+      await settle(B);
+      const okOff = await B.sync.cycle('now');
+      check(`sync e2e ${label}: offline, B keeps its change queued`, !okOff && B.sync.status().state === 'offline' && B.sync.pendingCount() > 0, B.sync.status());
+      bB.down = false;
+      await round(B, A);
+      check(`sync e2e ${label}: back online, the queue reaches A`, B.sync.pendingCount() === 0 && JSON.stringify((await A.c.index.conversation('conv_e2e'))?.tags ?? {}).includes('offline'));
+      // Concurrent title edits: a conflict on both; a resolution on A travels to B.
+      A.c.log.append('conversation', 'conv_e2e', 'patch', { title: 'Title from A' }, { base: A.c.log.peekHlc(), durable: true });
+      B.c.log.append('conversation', 'conv_e2e', 'patch', { title: 'Title from B' }, { base: B.c.log.peekHlc(), durable: true });
+      await round(A, B, A);
+      const cf = (await A.sync.conflicts.list()).find((c) => c.kind === 'field' && c.field === 'title');
+      check(`sync e2e ${label}: a concurrent title edit is a conflict on both devices`, !!cf && (await B.sync.conflicts.list()).some((c) => c.id === cf.id));
+      if (cf) {
+        await A.sync.conflicts.resolve(cf.id, 'ours');
+        await round(A, B);
+        const ta = (await A.c.index.conversation('conv_e2e'))?.title;
+        check(`sync e2e ${label}: the resolution reaches the other device`, ta === cf.ours.value && (await B.c.index.conversation('conv_e2e'))?.title === ta && !(await B.sync.conflicts.list()).some((c) => c.id === cf.id), ta);
+      }
+      // Ciphertext only: read every object back from the storage itself.
+      const raw = mk();
+      await raw.begin?.();
+      const keys = (await raw.list('')).map((e) => e.key);
+      let text = '';
+      for (const k of keys) {
+        text += Buffer.from((await raw.get(k)) ?? new Uint8Array()).toString('latin1');
+      }
+      text += extraScan?.() ?? '';
+      raw.dispose();
+      const leaks = [SECRET, 'Title from', 'launch code', PASS, A.c.device.name, B.c.device.name, 'conv_e2e'].filter((x) => x && text.includes(x));
+      check(`sync e2e ${label}: the storage holds only ciphertext (${keys.length} objects)`, keys.length > 4 && keys.every((k) => k === 'format.json' || k === 'keyring.json' || k.endsWith('.lpe')) && leaks.length === 0, { leaks, keys: keys.slice(0, 8) });
+    } finally {
+      await A.c.dispose();
+      await B.c.dispose();
+    }
+  };
+  console.log('\n[continuity: sync — the same flow through every backend, ciphertext only]');
+  const shared = tmp('e2e-folder');
+  await run('folder', () => new FolderBackend(shared));
+  let hasGit = true;
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' });
+  } catch {
+    hasGit = false;
+  }
+  if (hasGit) {
+    const bare = path.join(tmp('e2e-bare'), 'sync.git');
+    execFileSync('git', ['init', '-q', '--bare', bare]);
+    // Commit messages and authors are plaintext on a Git host: they are scanned too.
+    await run('git', () => new GitBackend({ url: bare, branch: 'localpilot-sync', workDir: tmp('e2e-gw') }), () => execFileSync('git', ['--git-dir', bare, 'log', '--all', '--format=%an %ae %s %b']).toString());
+  }
+  const s3 = await startFakeS3({ accessKeyId: 'AKTEST', secretAccessKey: 'sekret', bucket: 'lp', pageSize: 3 });
+  try {
+    await run('s3', () => new S3Backend({ endpoint: s3.url, region: 'us-east-1', bucket: 'lp', prefix: 'e2e', accessKeyId: 'AKTEST', secretAccessKey: 'sekret' }), () => s3.keys().join('\n'));
+    check('sync e2e s3: every request was signed correctly', s3.badSignatures() === 0);
+  } finally {
+    await s3.close();
+  }
+  const dav = await startFakeWebDav({ username: 'me', password: 'pw' });
+  try {
+    await run('webdav', () => new WebDavBackend({ url: `${dav.url}/remote.php/dav/files/me`, username: 'me', password: 'pw' }), () => dav.paths().join('\n'));
+  } finally {
+    await dav.close();
+  }
 }
 
 async function protocol(check: Check): Promise<void> {
@@ -288,6 +400,80 @@ async function protocol(check: Check): Promise<void> {
   }
   void chunkKey;
   void blobKey;
+}
+
+async function extras(check: Check): Promise<void> {
+  const remote = new MemoryBackend('extras');
+  const cmdA = tmp('cmd-a');
+  const cmdB = tmp('cmd-b');
+  const prefsA = new Map<string, unknown>([['defaultModel', 'ollama/qwen3:8b'], ['thinking', 'high'], ['favoriteModels', ['a', 'b']]]);
+  const prefsB = new Map<string, unknown>();
+  fs.writeFileSync(path.join(cmdA, 'review.md'), '---\ndescription: Review the diff\n---\nReview my changes.\n');
+  const A = await side('xa', remote, { promptsDir: cmdA, prefs: prefsA });
+  const B = await side('xb', remote, { promptsDir: cmdB, prefs: prefsB });
+  try {
+    A.settings.categories = { ...A.settings.categories, checkpointContents: true };
+    B.settings.categories = { ...B.settings.categories, checkpointContents: true };
+    await A.sync.create(PASS);
+    await B.sync.join(PASS);
+    await round(A, B, B);
+    check('sync prompts: a custom command written on A appears as a file on B', fs.existsSync(path.join(cmdB, 'review.md')) && fs.readFileSync(path.join(cmdB, 'review.md'), 'utf8').includes('Review my changes.'));
+    check('sync preferences: allow-listed settings reach B', prefsB.get('defaultModel') === 'ollama/qwen3:8b' && prefsB.get('thinking') === 'high' && JSON.stringify(prefsB.get('favoriteModels')) === '["a","b"]', [...prefsB]);
+    // B edits the command; A gets the edit (its file still holds what it last saw).
+    fs.writeFileSync(path.join(cmdB, 'review.md'), '---\ndescription: Review the diff\n---\nReview my changes carefully.\n');
+    await round(B, A, A);
+    check('sync prompts: an edit on B is written back on A', fs.readFileSync(path.join(cmdA, 'review.md'), 'utf8').includes('carefully'));
+    // Both edit before syncing: the file that changed here is kept and a conflict is recorded.
+    fs.writeFileSync(path.join(cmdA, 'review.md'), 'A version\n');
+    fs.writeFileSync(path.join(cmdB, 'review.md'), 'B version\n');
+    await round(A, B, A, B);
+    const cf = [...(await A.sync.conflicts.list()), ...(await B.sync.conflicts.list())].find((c) => c.entity === 'prompt_template');
+    check('sync prompts: concurrent edits keep each machine\'s file and record a conflict', !!cf && /version/.test(fs.readFileSync(path.join(cmdA, 'review.md'), 'utf8')), cf);
+    // Deleting the file on A trashes it; B removes its unchanged copy.
+    fs.writeFileSync(path.join(cmdA, 'tmp-cmd.md'), 'temp\n');
+    await round(A, B, B);
+    fs.rmSync(path.join(cmdA, 'tmp-cmd.md'));
+    await round(A, B, B);
+    check('sync prompts: a deleted command goes away on the other device', !fs.existsSync(path.join(cmdB, 'tmp-cmd.md')));
+    // A preference changed on B travels back to A.
+    prefsB.set('thinking', 'low');
+    await round(B, A, A);
+    check('sync preferences: a change on B reaches A', prefsA.get('thinking') === 'low');
+    // Checkpoint contents: a git bundle of A's checkpoint, restorable in a clone on B.
+    let hasGit = true;
+    try {
+      execFileSync('git', ['--version'], { stdio: 'ignore' });
+    } catch {
+      hasGit = false;
+    }
+    if (hasGit) {
+      const repo = fs.realpathSync(tmp('cp-repo'));
+      const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+      g(repo, 'init', '-q', '-b', 'main');
+      g(repo, 'config', 'user.email', 'a@b');
+      g(repo, 'config', 'user.name', 'a');
+      fs.writeFileSync(path.join(repo, 'app.txt'), 'v1\n');
+      g(repo, 'add', '.');
+      g(repo, 'commit', '-q', '-m', 'init');
+      const clone = path.join(tmp('cp-clone'), 'repo');
+      execFileSync('git', ['clone', '-q', repo, clone]);
+      fs.writeFileSync(path.join(repo, 'app.txt'), 'v2 (work in progress)\n');
+      const stash = g(repo, 'stash', 'create', 'checkpoint');
+      const ref = 'refs/localpilot/checkpoints/conv_cp/1';
+      g(repo, 'update-ref', ref, stash);
+      A.c.log.append('checkpoint', 'cp_conv_cp_1', 'create', { conversationId: 'conv_cp', run: 1, kind: 'stash', ref, sha: stash, root: repo, device: A.c.device.deviceId, createdAt: Date.now(), files: [] }, { durable: true });
+      await round(A, A, B);
+      const cpA = (await A.c.index.query<{ content_blob: string | null }>('checkpoints', { conversationId: 'conv_cp' }))[0];
+      check('sync checkpoint contents: a git bundle of the checkpoint is stored as a blob', !!cpA?.content_blob && A.c.blobs.has(cpA.content_blob), cpA);
+      check('sync checkpoint contents: the bundle reached B', !!cpA?.content_blob && B.c.blobs.has(cpA.content_blob));
+      const { importCheckpointBundle } = await import('../src/continuity/sync/extras');
+      const r = await importCheckpointBundle({ blobs: B.c.blobs }, cpA!.content_blob!, ref, clone);
+      check('sync checkpoint contents: the bundle imports into a clone on another device', r.ok && g(clone, 'rev-parse', ref) === stash, r);
+    }
+  } finally {
+    await A.c.dispose();
+    await B.c.dispose();
+  }
 }
 
 async function scheduler(check: Check): Promise<void> {

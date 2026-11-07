@@ -1594,3 +1594,126 @@ Named queries `modelSessions`, `interruptedAgentSessions`. `apply.ts` deletes ag
 checkpoints and model sessions that are purged or redacted (no `conversationId`), and `purgeMessages` removes a purged
 conversation's rows from those tables. Setting `localpilot.continuity.captureToolOutput` (Settings → Continuity & sync →
 Runs and checkpoints, with **Open Checkpoints**).
+
+---
+
+## 25. As built: SYNC module (1.7.0)
+
+What the SYNC builder changed or added relative to §1–§24.
+
+### 25.1 Files
+
+`src/continuity/sync/{syncEngine,protocol,merge,conflicts,devices,scheduler,extras}.ts`,
+`sync/backends/{backend,create,folder,git,s3,sigv4,webdav}.ts` (pure Node); VS Code side `src/ui/syncHost.ts` (engine
+start, set-up / join / passphrase / key / turn-off / start-over flows through VS Code input boxes, Sync manager page data
+and actions, conflict resolution with `vscode.diff` on `localpilot-version:` documents, `syncStatus`, the
+`localpilot.sync.*` commands) and `src/ui/continuitySettings.ts` (Settings → Continuity & sync → Sync); CLI
+`src/cli/syncCmd.ts` (`localpilot sync …`, `/sync`); webviews: Sync manager in `media/continuity.js` / `.css`, the
+navigator dot in `media/chat.js`, the Sync subsection in `media/settings.js` / `.css`; fakes `src/test/fakes/{s3Server,
+webdavServer}.ts`; tests `scripts/smokeSync.ts`, `src/test/continuitySync.test.ts`, the `[localpilot sync]` section of
+`scripts/cli-e2e.mjs`. `createBackend` lives in `backends/create.ts` (not `backend.ts`) to keep the interface module free
+of the implementations.
+
+### 25.2 Composition
+
+- `Continuity.attachSync({ settings, preferences?, promptsDir?, start?, … })` creates the `SyncEngine` (`continuity.sync`).
+  Cycles run only when `settings().enabled` and the data root has joined a remote (`sync/state.json` has a `remoteId` and
+  a data key is in the SecretBox). `Continuity` now keeps the `SecretBox`, writer and app version it was opened with.
+- One cycle per data root: `sync/lease.json` (the DATA `Lease`). Every process has a scheduler; a process that finds the
+  lease held re-reads `state.json` and returns (its index sees the imports through the log). The lease holder uploads
+  **every stream of this device** on this machine (all windows' and the CLI's), not only its own.
+- `state.json` (single writer: the lease holder): `remoteId`, `keyIds`/`current`, per own stream `{ uploaded, base,
+  pending[] }`, remote devices `{ name, lastSeen, heads, bases, etag }`, `withheld` (per category, entity ids),
+  `uploadedBlobs`, `pendingBlobs` (sha → attempts), `paused`, `lastError`, `last`. The offline queue is
+  `lastSeq(stream) − uploaded`.
+
+### 25.3 Protocol (changes to §14.1–14.2)
+
+- `format.json` gains `remoteId` (random, not secret): it names the remote's keys in the SecretBox
+  (`localpilot.sync.<remoteId>.key.<keyId>` / `sync:<remoteId>:<keyId>`) and detects a remote that was started over
+  (`remote-replaced` → paused, **Enter passphrase…** joins the new one and re-uploads).
+- **Deterministic objects.** `sealObject` uses a synthetic IV: `HMAC(HKDF(dek, 'localpilot/sync-iv'), objectKey ‖ 0 ‖
+  plaintext)[0..12]`. Same key + name + plaintext → identical bytes (a retried upload is the same object); different
+  plaintext never reuses an IV except with negligible probability. gzip output is deterministic in Node.
+- Chunk boundaries (`pending`, with a signature of the category settings) are saved before upload and reused first on a
+  retry. Cursors advance only after the cycle's `commit()` (git push) succeeded.
+- **Withheld events.** Remote streams must stay gapless (`importRemote`), so an event that is `local` or whose category
+  is off is uploaded as a **stand-in**: same `id/seq/hlc/ent/eid`, `op: 'patch'`, `p: { __withheld: reason }`
+  (`events.ts` `withheldStandIn` / `isWithheld`). The reducer and the index skip stand-ins. Entities withheld because of a
+  category are remembered in `state.withheld`; when the category is turned on, `resendWithheld` reduces this device's own
+  events of those entities (all own streams, HLC order) and appends one `create` each with `__clocks` / `__bases` /
+  `__edits` (compaction's format), so LWW still holds everywhere. Known limit: a re-sent message's `created` HLC is the
+  re-send time on other devices (branch-split ordering of very old messages may differ).
+- Compacted bases (`base-<to>.lpe`) are uploaded when this device compacted past what it uploaded (first set-up after
+  `historyDays`) and by the daily housekeeping, which then deletes own chunks with `to ≤ cut`. Withheld entities are left
+  out of bases and recorded as above. Pull installs a base with `log.importBase` only when no chunk continues the local
+  copy.
+- Device files carry `{ streams: { [id]: { head, base } }, lastSeen, name, platform, appVersions }`; a device file is
+  rewritten only when heads changed or hourly, and is not re-downloaded while its listing etag is unchanged, so a cycle
+  with nothing new is one `list` (+ format/keyring reads; 3 requests with git/folder locally).
+- Blobs: uploaded after the chunks that refer to them (category and size filtered; attachments over
+  `maxAttachmentMB`, any blob over 5 MB on git), name `blobs/HMAC(blobKey(current key), sha).lpe`, `ifAbsent`. Downloads
+  are queued per referenced sha and fetched after the pull, 64 MB per cycle (lazy beyond), trying the current key's name
+  first and older keys after; `SyncEngine.fetchBlob(sha)` fetches one now. A blob never found is dropped from the queue
+  after 20 cycles.
+- HLC skew > 10 min from another device is reported once per process as a local `clock-skew` conflict; an object that fails
+  authentication as a local `remote-damaged` conflict (**Re-upload from this device** = `reupload()`, cursors reset).
+
+### 25.4 Keys (changes to §15)
+
+- Set-up writes `format.json` and `keyring.json` with `ifAbsent`; join unlocks the keyring (a wrong passphrase writes
+  nothing: no state, no secret, no remote object). Key changes (`changePassphrase`, `rotateKey`) are a compare-and-swap
+  on `keyring.json` (etag `ifMatch` on S3 / WebDAV / folder, push rejection on git), retried 3 times.
+- After a rotation elsewhere the keyring's `current` key is unknown here: the cycle pauses with `passphrase`
+  (**Enter passphrase…** → `unlock`). The CLI uses `LOCALPILOT_SYNC_PASSPHRASE` silently when set.
+- **Start over** deletes every object under `localpilot-sync/` and creates a new remote from this device.
+- Turn off deletes this device's data keys from the SecretBox and clears `state.json`; the remote is untouched.
+
+### 25.5 Conflicts, devices, extras
+
+- The reducer's conflicts reach `sync_conflicts` on every device with the same ids, so they are **not** written as
+  entities at detection; a **resolution** is written as a durable `conflict` `create` (full record + `resolvedAt`,
+  `resolution`), which syncs and clears it everywhere (a re-detection during a rebuild is `INSERT OR IGNORE`, the
+  resolution `INSERT OR REPLACE`). Actions: `field` → patch the chosen value with `base = peekHlc()` (no new conflict);
+  `text-merge` → memory via `MemoryManager` (note files are written and logged through the bridge) or a body patch;
+  `branch-split` → `switchBranch`; `trash-vs-edit` → trash again or keep (memory: restore and keep this machine's text).
+  `remote-damaged` / `clock-skew` are local-only (their resolution too).
+- Devices are `device` entities (named query `syncDevices`); `register` writes a create/patch only when name, versions or
+  streams changed or daily. Revocation is a `revokedAt` patch by any device; `reinstate` clears it.
+- `extras.ts`: **prompts** = user custom commands (`~/.localpilot/commands/*.md`) ↔ `prompt_template` entities with a
+  per-machine seen-hash file (`sync/prompts-seen.json`) and the memory bridge's write-back rules (write only an unchanged
+  file, else a `text-merge` conflict; a deleted file trashes the template). Workspace commands and project instruction
+  files are **not** synced (git carries them). **preferences** = allow-list `defaultModel`, `routing.reasoning`,
+  `thinking`, `approvals.{terminal,write,delete,network,mcp}`, `autoMode.enabled`, and the starred models (VS Code
+  globalState) ↔ `preference` entities (`sync/preferences-seen.json`; user-level values only; a value changed here since
+  the last sync wins next cycle by HLC). **checkpointContents** = `git bundle create <ref> ^<ref>^1` (≤ 50 MB, 3 per
+  cycle) → blob → `checkpoint.contentBlob`; `importCheckpointBundle` fetches it into the local repository under the same
+  ref before the Checkpoints page's View changes / Restore of another device's checkpoint.
+- Named queries added: `syncDevices`, `checkpointsWithoutContent`, `promptTemplates`, `preferences`.
+
+### 25.6 Backends (changes to §14.5)
+
+- Folder: `link()` for create-if-absent (`open(wx)` fallback); `ifMatch` = size-mtime etag plus a read-back check;
+  ignores names with `(conflicted copy…)`, `-conflict-`, ` (n)`, temporary names; `.x.icloud` placeholders are reported
+  in `notDownloaded` and retried next cycle.
+- Git: the working clone is `<root>/sync/git/<sha(url#branch)>`; refuses a local URL that has a working tree; never
+  prompts (`GIT_TERMINAL_PROMPT=0`); `begin` = fetch + `checkout -B` + `reset --hard` (or an orphan branch on an empty
+  remote); `commit` = add/commit (`LocalPilot sync from <device>`, author LocalPilot) + push, rebase-and-retry ×3.
+- S3: path style by default for non-AWS endpoints; `content-length` is not signed (fetch sets it); 501 / 400
+  NotImplemented to `If-None-Match` switches to HEAD-then-PUT for the rest of the process. SigV4 is checked against the AWS
+  documentation vectors (IAM `ListUsers` and S3 `GET test.txt`).
+- WebDAV: `MKCOL` per missing level (405 = exists, cached), PUT to `<key>.tmp-<rand>` then `MOVE` with `Overwrite`
+  (`F` for create-if-absent → 412), Basic auth from the SecretBox password (or a bearer token).
+- Error mapping: 401/SignatureDoesNotMatch/InvalidAccessKeyId → `auth`; 403 → `forbidden`; 404/NoSuchBucket →
+  `not-found`; connection errors → `offline`. `auth`, `forbidden`, `not-found` pause sync (no retries) with the reason;
+  `offline` and other errors back off 5 s / 15 s / 1 min / 5 min / 15 min.
+
+### 25.7 UI and messages
+
+FromWebview `syncAction { action: now | pause | resume | setup | settings | renameDevice | removeDevice | reinstate |
+rotateKey | unlock | reupload | changePassphrase | turnOff | startOver | showConflict | test | setSecret | pickFolder |
+setCategory }`, `resolveConflict { id, resolution }`; ToWebview `syncStatus` (pushed on every status change and with each
+navigator page). Settings messages `syncLoad`, `syncAction` → `sync { view }`. Passphrases and storage secrets are only
+ever typed into VS Code input boxes (or the CLI's hidden prompt), never into a webview. Commands `localpilot.sync.setup`,
+`.now`, `.openManager`, `.showConflicts`, `.changePassphrase`, `.rotateKey`, `.turnOff`; the `localpilot-version:` content
+provider is registered with them.

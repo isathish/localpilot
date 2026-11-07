@@ -13,6 +13,7 @@ import { Continuity } from '../src/continuity/continuity';
 import { memorySecretBox } from '../src/continuity/data/crypto/secretBox';
 import { SessionStore } from '../src/sessions/sessionStore';
 import type { ChatMessage, Session } from '../src/types';
+import type { EventEnvelope } from '../src/continuity/events';
 import { viewOfPath } from '../src/continuity/conversation/sessionBridge';
 import { exportAs, exportFileName, parseExport } from '../src/continuity/conversation/export';
 import { createShare, findSecrets, formatCode, openShare, redactSecrets, WrongShareCodeError } from '../src/continuity/conversation/share';
@@ -378,4 +379,84 @@ export async function conversationSmoke(check: Check): Promise<void> {
   check('a chat continued by another process is reloaded here (not in use)', remoteSeen.includes(`${c2.id}:true`) && store.get(c2.id)!.messages.at(-1)?.content === 'continued in the CLI', remoteSeen);
   await other.dispose();
   await r.dispose();
+  await crossDevice(check);
+}
+
+/** What sync does, without a backend: this device's own streams copied into the other device's log. */
+async function ship(from: Rig, to: Rig): Promise<void> {
+  await from.c.log.flush();
+  for (const st of await from.c.log.streams()) {
+    if (st.own) {
+      const evs: EventEnvelope[] = [];
+      for await (const e of from.c.log.read(st.id)) {
+        evs.push(e);
+      }
+      await to.c.log.importRemote(st.id, evs);
+    }
+  }
+  await to.c.index.catchUp();
+  // What a window or `localpilot history` does on start; also what the index notice triggers on its own.
+  await to.c.conversations!.refreshStale();
+  await to.c.conversations!.adoptRemote();
+}
+
+/**
+ * Two devices (own data roots and device ids), the same git repository cloned at different paths: a chat started on
+ * one is listed and continued on the other, and Trash, Restore and Delete on either reach the other's chat list.
+ */
+async function crossDevice(check: Check): Promise<void> {
+  console.log('\n[continuity: conversations — continue on another device]');
+  const repoA = path.join(tmp('devA'), 'app');
+  const repoB = path.join(tmp('devB'), 'app-clone');
+  try {
+    fs.mkdirSync(repoA, { recursive: true });
+    const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { stdio: 'ignore' });
+    g(repoA, 'init', '-q');
+    g(repoA, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-q', '-m', 'root');
+    g(repoA, 'remote', 'add', 'origin', 'https://github.com/example/app.git');
+    execFileSync('git', ['clone', '-q', repoA, repoB], { stdio: 'ignore' });
+    g(repoB, 'remote', 'set-url', 'origin', 'https://github.com/example/app.git');
+  } catch {
+    check('cross-device: git is available for the fixture', false);
+    return;
+  }
+  const a = await openRig(tmp('rootA'), tmp('wsA'), repoA);
+  const b = await openRig(tmp('rootB'), tmp('wsB'), repoB);
+  try {
+    check('cross-device: two devices', a.c.log.device.deviceId !== b.c.log.device.deviceId);
+    const s = a.store.create('ollama/qwen', 'ask');
+    s.messages.push(say('user', 'Reply with the code word'), say('assistant', 'PELICAN'));
+    a.store.save(s);
+    await a.settle(s);
+    check('a chat saved once before its project was resolved still gets the project', !!(await a.c.index.conversation(s.id))?.projectId);
+    await ship(a, b);
+    check('a chat started on another device is in this chat list (same repo, other path)', b.store.has(s.id) && b.store.get(s.id)!.messages.length === 2, b.store.list().map((x) => x.id));
+    const onB = b.store.get(s.id)!;
+    onB.messages.push(say('user', 'And again?'), say('assistant', 'PELICAN again'));
+    b.store.save(onB);
+    await b.settle(onB);
+    await ship(b, a);
+    check('continuing it there updates the chat here', a.store.get(s.id)?.messages.at(-1)?.content === 'PELICAN again', a.store.get(s.id)?.messages.map((m) => m.content));
+    await a.c.conversations!.trash([s.id]);
+    await a.settle();
+    await ship(a, b);
+    check('Trash on one device takes the chat out of the other chat list', !b.store.has(s.id) && !!(await b.c.index.conversation(s.id))?.trashedAt);
+    await b.c.conversations!.restore([s.id]);
+    await b.settle();
+    check('Restore there brings it back to that chat list', b.store.has(s.id) && b.store.get(s.id)!.messages.length === 4);
+    await ship(b, a);
+    check('and to this one', a.store.has(s.id) && a.store.get(s.id)!.messages.length === 4);
+    await a.c.conversations!.purge([s.id]);
+    await a.settle();
+    await ship(a, b);
+    check('Delete for good on one device removes it from the other', !b.store.has(s.id) && !(await b.c.index.conversation(s.id)));
+    const fresh = b.store.create('ollama/qwen', 'ask');
+    fresh.messages.push(say('user', 'not indexed yet'));
+    b.store.save(fresh);
+    await b.c.conversations!.refreshStale();
+    check('a local chat the index has not caught up with is left alone', b.store.has(fresh.id));
+  } finally {
+    await a.dispose();
+    await b.dispose();
+  }
 }
