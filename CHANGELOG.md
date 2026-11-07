@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.6.2 — 2026-11-07
+
 ### Added
 - **Rate LocalPilot.** After a few days of use (eight successful runs), a small card above the message box asks how LocalPilot is working for you and shows its current rating on the VS Code Marketplace. Pick 1–5 stars. **Rate on Marketplace** opens the Marketplace review form, where you sign in and post it; extensions cannot post ratings for you. With 1–3 stars, **Report an issue** also opens a prefilled GitHub issue. **Later** asks again in about six weeks, at most three times, and **Don't ask again** stops it. It never appears during a run or after a failed one. Rate any time with **LocalPilot: Rate LocalPilot** or **Rate LocalPilot** under Help in Settings. Your stars stay on this machine.
 
