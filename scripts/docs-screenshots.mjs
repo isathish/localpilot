@@ -79,6 +79,19 @@ const SHOTS = [
     clip: 'viewport',
   },
   { file: 'questions.png', url: harness('ui-preview.html', 'live=0&question=1'), size: [471, 836], wait: 1200, clip: 'viewport' },
+  // 1.6–1.7: Auto mode, branches and compare, the conversation navigator and the continuity pages, the rating card.
+  { file: 'auto-mode.png', url: harness('ui-preview.html', 'live=0&auto=1'), size: [471, 836], wait: 1200, steps: [`document.getElementById('messages').scrollTop = 0`, 400], clip: 'viewport' },
+  { file: 'compare-answers.png', url: harness('ui-preview.html', 'live=0&compare=1'), size: [471, 236], wait: 1600, clip: 'viewport' },
+  { file: 'conversations-navigator.png', url: harness('ui-preview.html', 'live=0&navview=all'), size: [471, 836], wait: 1800, clip: 'viewport' },
+  { file: 'conversations-search.png', url: harness('ui-preview.html', 'live=0&navview=all&navq=docker'), size: [471, 836], wait: 2200, clip: 'viewport' },
+  { file: 'memory-manager.png', url: harness('ui-preview.html', 'live=0&page=memory'), size: [471, 316], wait: 1800, clip: 'viewport' },
+  { file: 'context-library.png', url: harness('ui-preview.html', 'live=0&page=context'), size: [471, 322], wait: 1800, clip: 'viewport' },
+  { file: 'checkpoints.png', url: harness('ui-preview.html', 'live=0&page=checkpoints&cppick=1'), size: [471, 496], wait: 2000, clip: 'viewport' },
+  { file: 'sync-manager.png', url: harness('ui-preview.html', 'live=0&page=sync&sync=conflicts'), size: [471, 836], wait: 1800, clip: 'viewport' },
+  { file: 'run-interrupted.png', url: harness('ui-preview.html', 'live=0&runint=1'), size: [471, 836], wait: 1600, steps: [`(() => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; })()`, 400], clip: 'viewport' },
+  { file: 'rating-card.png', url: harness('ui-preview.html', 'live=0&rate=hot'), size: [471, 836], wait: 1600, clip: 'viewport' },
+  { file: 'settings-continuity.png', url: settings('section=continuity'), size: [900, 760], clip: 'viewport' },
+  { file: 'settings-sync.png', url: settings('section=continuity&scroll=sync'), size: [900, 760], wait: 1800, clip: 'viewport' },
 ];
 
 // ------------------------------------------------------------------ DevTools Protocol

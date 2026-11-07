@@ -108,6 +108,42 @@ permalink: /
 
       <article class="feature-row">
         <div class="fr-text">
+          <span class="fr-kicker">Conversations &amp; memory</span>
+          <h3>Find any conversation and carry on where you stopped</h3>
+          <p>Every chat is kept and searchable: titles, what you asked, the answers, code blocks and error output. Editing a prompt or regenerating an answer keeps the earlier version as a branch instead of overwriting it.</p>
+          <ul class="checks">
+            <li>Pinned, Favorites, Archive, tags and Trash with restore</li>
+            <li>Six kinds of memory: project, developer, conversation, task, knowledge and agent</li>
+            <li>Export to Markdown, HTML, PDF or JSON; share a chat as an encrypted file</li>
+          </ul>
+          <a class="more" href="{{ '/docs/continuity/' | relative_url }}">Conversations and memory</a>
+        </div>
+        <figure class="shot duo">
+          <img src="{{ '/assets/screenshots/conversations-search.png' | relative_url }}" width="942" height="1672" alt="The conversation navigator searching for docker: matches in an error message, a code block and an answer, with All, Pinned, Favorites, Archived and Trash views and tag chips" loading="lazy">
+          <img src="{{ '/assets/screenshots/memory-manager.png' | relative_url }}" width="942" height="632" alt="The Memory manager: project, developer, conversation, task, knowledge and agent memory, with a pinned build-and-test note" loading="lazy">
+        </figure>
+      </article>
+
+      <article class="feature-row">
+        <div class="fr-text">
+          <span class="fr-kicker">Sync &amp; recovery</span>
+          <h3>Your work follows you, and a crash loses nothing</h3>
+          <p>Sync conversations, memory and checkpoints between your computers through a folder in your cloud drive, a Git repository, S3-compatible storage or WebDAV. Everything is encrypted on your machine with your passphrase first; there is no LocalPilot server or account.</p>
+          <ul class="checks">
+            <li>Start a chat on your laptop, continue it on your desktop</li>
+            <li>Works offline; conflicts are shown, never silently lost</li>
+            <li>A crashed or closed run comes back with Resume, and a cut-off answer with Continue</li>
+          </ul>
+          <a class="more" href="{{ '/docs/continuity/' | relative_url }}">Sync and recovery</a>
+        </div>
+        <figure class="shot duo">
+          <img src="{{ '/assets/screenshots/sync-manager.png' | relative_url }}" width="942" height="1672" alt="The Sync manager: up to date with three conflicts to resolve (a title, a memory note and a chat continued on two devices), and the list of devices" loading="lazy">
+          <img src="{{ '/assets/screenshots/run-interrupted.png' | relative_url }}" width="942" height="1672" alt="An interrupted run in the chat with what it did, the files changed so far, and Resume, Rollback fixes and Review changes" loading="lazy">
+        </figure>
+      </article>
+
+      <article class="feature-row">
+        <div class="fr-text">
           <span class="fr-kicker">Terminal &amp; CLI</span>
           <h3>Commands run where you can see them</h3>
           <p>When the agent runs <code>npm test</code>, it runs in a LocalPilot terminal inside VS Code. You see the output live and the agent gets the real exit code.</p>
@@ -131,7 +167,7 @@ permalink: /
       <h2>Everything else you'd expect</h2>
     </div>
     <div class="mini-grid">
-      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><h3>Five modes</h3><p>Agent, Multitask and Debug change files. Plan and Ask only read.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><h3>Auto mode</h3><p>Picks Ask, Agent, Plan, Debug, Review, Test and more for each message, and the model to match. Or choose one of 12 modes yourself.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v13a1.5 1.5 0 0 0-1.5-1.5H4zM20 5h-6a2 2 0 0 0-2 2v13a1.5 1.5 0 0 1 1.5-1.5H20z"/></svg></span><h3>Skills &amp; subagents</h3><p>14 built-in playbooks and nine subagents. Write your own or install skills from GitHub.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg></span><h3>Your rules, as they are</h3><p>Reads <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>, Claude Code skills, hooks and commands.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/></svg></span><h3>MCP &amp; web search</h3><p>Add an MCP server and its tools show up. Search with DuckDuckGo, SearXNG, Brave or Tavily.</p></div>
@@ -139,6 +175,9 @@ permalink: /
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-7 7"/></svg></span><h3>Screenshots &amp; vision</h3><p>Capture a region, window or web page and let a vision model fix what it sees.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/></svg></span><h3>Long tasks, small contexts</h3><p>Old tool output goes first, then older turns are summarised, so an 8k model still finishes.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></span><h3>No tool calling? Still works</h3><p>Models without native tools fall back to a text protocol for agent mode.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v4h-4"/></svg></span><h3>Self-healing runs</h3><p>After each change it runs your build, tests and linters, and fixes what it broke before it says it is done.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6 3v12M18 9a3 3 0 1 0 0-.01M6 21a3 3 0 1 0 0-.01M18 12c0 4-6 3-12 6"/></svg></span><h3>Branches &amp; compare</h3><p>Regenerate with another model and compare the answers side by side; earlier versions are kept.</p></div>
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg></span><h3>Checkpoints</h3><p>Every turn is a checkpoint. Restore files and chat, files only, or chat only, from one page.</p></div>
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><h3>Private by default</h3><p>No account, no telemetry upload. Model servers are <code>localhost</code> unless you add one. <a href="{{ '/privacy/' | relative_url }}">Privacy</a> · <a href="{{ '/security/' | relative_url }}">Security</a></p></div>
     </div>
     <p class="section-foot"><a class="more" href="{{ '/docs/features/' | relative_url }}">See every feature</a></p>

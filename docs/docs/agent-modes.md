@@ -4,7 +4,7 @@ description: The five LocalPilot modes, what each one may change, and how approv
 permalink: /docs/agent-modes/
 ---
 
-<p><img src="{{ '/assets/screenshots/mode-picker.png' | relative_url }}" alt="Mode picker: Agent, Multitask, Debug, Plan and Ask" width="370"></p>
+<p><img src="{{ '/assets/screenshots/mode-picker.png' | relative_url }}" alt="Mode picker: Auto, then Ask, Agent, Plan, Debug and Multitask, and more modes: Architect, Review, Test, Refactor, Explain, Terminal and Project" width="370"></p>
 
 LocalPilot has five modes, plus [Auto](#auto), which picks one for each message. Agent, Multitask and Debug can change files and run commands. Plan and Ask are read-only.
 
@@ -21,6 +21,8 @@ Switch modes with the picker under the composer, <kbd>Shift+Tab</kbd> or <kbd>Ct
 ## Auto
 
 Pick **Auto** at the top of the mode picker (`/mode auto`, or `--auto` in the CLI) and each message chooses its own mode from what it asks. New chats start in Auto until you pick a mode yourself, and a new chat keeps the choice of the chat you were in. The choice shows under your message, for example *✦ Auto → Debug · describes an error*; **change** opens the picker, and picking any mode turns Auto off.
+
+<p><img src="{{ '/assets/screenshots/auto-mode.png' | relative_url }}" alt="A message in Auto mode with the note Auto → Debug · describes an error under it, and the agent fixing the parser" width="420"></p>
 
 | The message… | Runs in |
 |---|---|

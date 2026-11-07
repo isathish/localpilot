@@ -217,6 +217,11 @@ pre code { background: none; border: none; padding: 0; }
 .fr-text p { color: var(--fg-2); font-size: 16.5px; margin: 0 0 20px; }
 .feature-row .shot img { max-height: 560px; object-fit: cover; object-position: left top; }
 .feature-row .shot img.crop { aspect-ratio: 4 / 3; }
+/* Two chat-panel shots side by side (the chat is a narrow sidebar): each shows its top part. */
+.feature-row .shot.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.feature-row .shot.duo img { max-height: 520px; aspect-ratio: auto; object-fit: cover; object-position: center top; }
+.feature-row .shot.duo figcaption { grid-column: 1 / -1; }
+@media (max-width: 520px) { .feature-row .shot.duo { grid-template-columns: 1fr; } .feature-row .shot.duo img { aspect-ratio: auto; max-height: 460px; } }
 .checks { list-style: none; padding: 0; margin: 0 0 22px; display: grid; gap: 10px; }
 .checks li { position: relative; padding-left: 28px; color: var(--fg-2); font-size: 15px; line-height: 1.5; }
 .checks li::before { content: ''; position: absolute; left: 0; top: 1px; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 16%, transparent); }

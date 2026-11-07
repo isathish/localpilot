@@ -1,6 +1,6 @@
 ---
 title: Features
-description: Everything LocalPilot does in VS Code, from setup to models, the agent, parallel work, change review, tools, the CLI and the dashboard, with links to the details.
+description: Everything LocalPilot does in VS Code, from setup to models, Auto mode and the agent, parallel work, change review, self-healing, tools, the CLI, the dashboard, and conversations, memory and encrypted sync, with links to the details.
 permalink: /docs/features/
 ---
 
@@ -47,14 +47,18 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
 
 ## 3. Work with the agent
 
-- **Five modes.**
+- **Auto mode, five core modes and seven specialists.**
+  - **Auto** (the default for new chats) picks the mode for each message from what it asks, for example *Auto → Debug · describes an error*, and with model Auto also the model: a reasoning model for plans and reviews, a small fast one for a quick question.
   - **Agent** edits and runs commands.
   - **Multitask** splits work across background workers.
   - **Debug** reproduces a bug before fixing it.
   - **Plan** writes a plan without editing.
   - **Ask** answers read-only.
+  - Specialists: **Architect**, **Review**, **Test**, **Refactor**, **Explain**, **Terminal** and **Project**.
 
   See [Agent modes]({{ '/docs/agent-modes/' | relative_url }}).
+
+  <p><img src="{{ '/assets/screenshots/auto-mode.png' | relative_url }}" alt="A message in Auto mode with the note Auto → Debug · describes an error under it" width="420"></p>
 - **Questions before it starts.** For a new feature or an open-ended request, the agent reads the code first. Then it asks up to four questions in one card. Each option explains itself and one is marked **Recommended**. You answer with <kbd>1</kbd>–<kbd>9</kbd> and <kbd>Enter</kbd>, or **Skip**. Clear requests start at once (`localpilot.clarify.questions`).
 - **Understands terse requests.** "fix this" or "make it faster" gets a snapshot of your editor, errors and git state. The agent states how it understood the request before acting.
 - **Improve prompt** (<kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd>). It rewrites your draft into a precise request that names the real file, function or selection. It never adds requirements. <kbd>⌘Z</kbd> brings your original back.
@@ -72,7 +76,7 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **What's new.** After an update, the empty chat shows the top items of the new version's changelog once, with **Open changelog**. Nothing is fetched from the network.
 - **Every answer shows its model and speed,** with Copy, **Regenerate**, Open as document and **Trace**: the run's model calls, tool calls, retries, fallbacks and approvals in order with durations, exportable as JSON (kept on this machine). A failed answer keeps **Retry** and **Change model**.
 - **Quote and find your place.** Select text in an answer and click **Quote**. The quote shows above the input (✕ removes it) and is sent in front of your reply as a `> ` block. When you scroll up past your last request, a strip at the top shows it; click the strip to jump back to it.
-- **Sessions.** Chats are saved per workspace, with a history panel (search, sort, and filters by mode and by workspace folder), fork, pin, rename and export to Markdown. **Edit** any of your messages, or use **Restore checkpoint** to restore the files, the conversation, or both ([details](#checkpoints)). Restore checkpoint applies to chats that edit the workspace directly; in an isolated worktree chat use **Discard**, or **Edit** and **Reset Chat** to rewind only the conversation.
+- **Conversations.** Every chat is kept and searchable in the conversation navigator (see [Keep, find and sync your work](#10-keep-find-and-sync-your-work)), with fork, pin, rename and export. **Edit** any of your messages, or use **Restore checkpoint** to restore the files, the conversation, or both ([details](#checkpoints)). Restore checkpoint applies to chats that edit the workspace directly; in an isolated worktree chat use **Discard**, or **Edit** and **Reset Chat** to rewind only the conversation.
 - **Prompt library.** Keep the prompts you reuse. Write one in the message box and choose ⋯ → **Save as prompt…** (or the bookmark on a message you sent), name it, and save it for this workspace (`.localpilot/commands/<name>.md`, shareable through git) or just for you (`~/.localpilot/commands`). ⋯ → **Prompt library…** or `/prompts` lists them with search and a Workspace / You / Plugins filter; click one to insert it, or edit and delete it. Each saved prompt also runs as `/name`, and the welcome screen shows the first few.
 - **Marketplace.** Settings → **Marketplace** (or ⋯ → **Marketplace…**) searches skills, MCP servers, plugins and subagents together, shows where each comes from and whether it is installed, and installs it ([details]({{ '/docs/skills-and-agents/#marketplace' | relative_url }})).
 - **Slash commands.** `/help`, `/model`, `/mode`, `/compact` (or `/smol`), `/newtask` (continue in a new chat that starts from a summary of this one), `/deep-planning <task>` (investigate, ask, then write `implementation_plan.md`), `/team <task>` (split the work for background workers and the shared board), `/newrule` (or `/init`, write a project rule file in `.localpilot/rules/`), `/<skill-name> <task>`, `/clear`, `/skills`, `/agents`, `/commands`, `/prompts`, `/skill`, `/agent`, `/memory`, `/permissions`, `/hooks`, `/context`.
@@ -87,6 +91,7 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **Pause, steer, stop.** Pause after the current step, type a correction the agent reads when it resumes, or stop. Works for the whole run or a single subagent. While it runs, <kbd>Enter</kbd> adds your message to the run and <kbd>Alt+Enter</kbd> (**Send after this turn**) queues it for the next turn; a hint under the message box says so. A banner lists queued messages so you can cancel or edit them before they are sent.
 - **Permission rules and hooks.** Claude Code `settings.json` allow, ask and deny rules and hooks apply as written.
 - **Safe commands.** Destructive commands are detected. Stop and timeouts kill the whole process tree.
+- **Self-healing.** After each change the agent runs your build, type checks, tests and linters, reads what failed and fixes it, within a budget of attempts, before it reports the task as done. You can roll fix attempts back. See [Self-healing]({{ '/docs/self-healing/' | relative_url }}).
 
 ## 5. Run work in parallel
 
@@ -130,7 +135,8 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 - **Long tasks in small windows.** A per-model token budget prunes old tool output first, then summarises older turns. An 8k model still finishes. See [Context]({{ '/docs/context/' | relative_url }}).
 - **@ mentions.** `@workspace`, `@selection`, `@problems`, `@git`, `@editors`, `@terminal`, files, `file#L10-L20` ranges and folders, with fuzzy search across the whole workspace.
 - **Your rules, as they are.** `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules`, `.github/copilot-instructions.md` and `.localpilot/rules.md`.
-- **Memory.** Project and global notes the agent saves and recalls in later sessions, with size limits so they stay useful. See [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
+- **Memory.** Six kinds: project and developer notes the agent saves and recalls in later sessions, plus conversation, task, knowledge and agent memory, all in the **Memory manager** with versions, Trash and size limits so they stay useful. See [Conversations, memory & sync]({{ '/docs/continuity/#memory' | relative_url }}) and [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}).
+- **Context library.** Named sets of files, folders, snippets, notes and earlier chats; attach one with `#context:name`, or an earlier chat with `#chat:`. **What did the model see?** shows exactly what a turn sent.
 - **Tools:**
   - files: read, edit, write, list, delete, and `apply_patch` (one `*** Begin Patch` patch that updates, adds, moves and deletes several files after a single approval; context is matched exactly, then ignoring trailing and then surrounding whitespace, and line endings are kept)
   - search: ripgrep, symbols and references, a repository map
@@ -168,6 +174,23 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
   - Your models in VS Code's language-model picker, with cloud ones labelled.
   - An extension API: `runPrompt`, `runParallel`, `runBestOfN`, `queue`, `send`, `stop`, `applyWorktree`, `listModels`. See [Development]({{ '/docs/development/' | relative_url }}).
 - **Private by default.** No account and no telemetry upload. Code goes only to the providers you configure. See [Privacy]({{ '/privacy/' | relative_url }}).
+- **Rate LocalPilot.** After you have used it for a while, a small card asks how it is working, shows the Marketplace rating and opens the review form; **LocalPilot: Rate LocalPilot** does it any time.
+
+## 10. Keep, find and sync your work
+
+- **Conversation navigator.** All, Pinned, Favorites, Archived and Trash with counts, this project or every project, tags, and **Select** for several at once. Conversations of other projects open in the current window.
+- **Search everything you said and saw.** Titles, your messages, answers, code blocks and error output, with filters such as `in:code`, `in:errors`, `from:user`, `project:`, `tag:`, `model:`, `before:` and `after:`.
+- **Branches, not overwrites.** Editing a prompt or regenerating keeps the earlier version (`‹ 1/2 ›`). **Regenerate with another model** and **Compare** the answers side by side; **Continue from here** and **Duplicate from here** on any message.
+- **Trash and versions.** Deleted conversations and notes stay in Trash for 30 days; earlier titles, pins and tags are kept for 90 days and can be restored.
+- **Export, import and share.** Markdown, HTML, PDF or JSON; import a JSON export; share a conversation as an encrypted file opened with a one-time code.
+- **Checkpoints page.** Every checkpoint of the project with the files each turn changed: **View changes**, **Restore…** (files and chat, files only, chat only) and **Open chat**.
+- **Crash recovery.** A run that a crash or a closed window cut off comes back with what it did, its changed files, **Resume** and **Restore checkpoint**; an answer cut off mid-sentence comes back as a **Partial answer** with **Continue**.
+- **End-to-end encrypted sync.** Conversations, memory, context sets, attachments, agent runs, checkpoints, custom commands and a few preferences sync between your computers through a cloud-drive folder, a Git repository, S3-compatible storage or WebDAV. It is encrypted on your machine with your passphrase (AES-256-GCM); there is no LocalPilot server or account. Offline changes wait and go out later; conflicts are listed with a choice, never silently lost.
+- **Backups and data management.** Automatic backups, **Back up now** and **Restore from file…**, a rebuildable search index, and `localpilot data`, `history`, `memory` and `sync` in the terminal. Chats from 1.6 are imported automatically.
+
+<p><img src="{{ '/assets/screenshots/sync-manager.png' | relative_url }}" alt="The Sync manager: three conflicts to resolve and the devices list" width="420"></p>
+
+See [Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}).
 - **Web access switch.** Set `localpilot.webSearch.enabled` to `false` and the agent gets no `web_search`, `web_fetch` or browser tools, and `@https://…` mentions are not fetched. Your model providers keep working.
 - **Response language.** `localpilot.preferredLanguage` makes the agent answer in one of 18 languages, in the chat and the CLI, while code and commands stay as written.
 

@@ -4,17 +4,6 @@ description: What LocalPilot keeps about your work, where it keeps it, how to fi
 permalink: /docs/continuity/
 ---
 
-<!-- Target behaviour for LocalPilot 1.7.0. Builders correct this page as each part lands; nothing here is shipped until its module is built and reviewed. Engineering design: docs/design/continuity-architecture.md
-     Built so far: DATA ("Where it is stored", "Upgrading from 1.6", "Data management", `localpilot data`) and CONVERSATION
-     ("Finding your conversations", "Organising conversations", "Continuing, branching and restoring", "Trash and recovery
-     from mistakes", "Export, import and sharing", `localpilot history`) and MEMORY ("Memory", `localpilot memory`, the
-     "Remember in this chat" / "Save to knowledge" message actions, memory notes in Trash) and CONTEXT ("Context library and earlier
-     conversations", "What did the model see?", the local-only policy and the local -> cloud notice, the "reopened chat"
-     and "smaller window" rows of "When things go wrong") and SESSION ("Checkpoints", "Agent runs and crash recovery", the
-     crash / laptop-off / half-done-changes / provider-down rows of "When things go wrong", `recovery runs`,
-     `history show --runs`) and SYNC ("Sync across devices", the network / storage / two-devices rows of "When things go
-     wrong", `localpilot sync`). Every module is built. -->
-
 LocalPilot keeps your conversations, the agent's memory, what the model saw and what the agent did, so you can pick up any
 piece of work later, on this machine or another one. Everything stays on your computer unless you turn on sync, and
 synced data is always encrypted with a passphrase only you know. There is no LocalPilot server and no account.
@@ -36,6 +25,8 @@ API keys and passwords are never part of this. They stay in VS Code's secret sto
 synced.
 
 ## Where it is stored
+
+<p><img src="{{ '/assets/screenshots/settings-continuity.png' | relative_url }}" alt="Settings → Continuity &amp; sync → Storage: the data folder, conversations and messages, change log, search index (ready), attachments, backups and this device, with Open folder and Rebuild index" width="720"></p>
 
 Everything lives in one folder per computer, shared by VS Code and the `localpilot` CLI:
 
@@ -80,6 +71,8 @@ first time it opens.
 
 ## Finding your conversations
 
+<p><img src="{{ '/assets/screenshots/conversations-navigator.png' | relative_url }}" alt="The conversation navigator: search box and New conversation, All, Pinned, Favorites, Archived and Trash with counts, this project, tag chips, a running chat and today&#39;s chats, and Knowledge &amp; continuity" width="420"></p>
+
 Click the history button in the chat's title bar (or run **LocalPilot: Open Conversations**) to open the navigator:
 
 - **Search** and **New conversation** at the top.
@@ -98,6 +91,8 @@ While the search index is still being built (the first start after the upgrade),
 history…** and lists this folder's chats as in 1.6; the other views appear as soon as the index is ready.
 
 ### Search
+
+<p><img src="{{ '/assets/screenshots/conversations-search.png' | relative_url }}" alt="Searching for docker: a match in error output, one in a code block and one in an answer, sorted by relevance" width="420"></p>
 
 Search looks at titles, your messages, the answers, code blocks and error output, and shows the matching part of the
 conversation (marked **Code:** or **Error:** when the match is in code or an error). Narrow it down by typing filters into
@@ -144,6 +139,8 @@ From a conversation's menu in the navigator (**⋯**, or right-click):
 **Select** lets you pick several conversations and **Archive**, **Tag**, **Export** or **Trash** them together.
 
 ## Continuing, branching and restoring
+
+<p><img src="{{ '/assets/screenshots/compare-answers.png' | relative_url }}" alt="Compare answers: two answers to the same request, from qwen2.5-coder:14b and claude-sonnet-4-6" width="460"></p>
 
 Conversation history is never overwritten:
 
@@ -197,6 +194,8 @@ If conversation storage is off (see Where it is stored), deleting works as in 1.
 LocalPilot has six kinds of memory. Open them all in **Memory manager** (**Knowledge & continuity → Memory manager**,
 **LocalPilot: Open Memory Manager**, or **Open Memory manager** in Settings → Memory & history).
 
+<p><img src="{{ '/assets/screenshots/memory-manager.png' | relative_url }}" alt="The Memory manager: Project, Developer, Conversation, Task, Knowledge and Agent tabs with counts, and two project notes, one pinned" width="420"></p>
+
 | Type | What it holds | Applies to | Where |
 |---|---|---|---|
 | Conversation | A summary of the conversation, and notes you asked it to remember | That conversation only | LocalPilot's store |
@@ -233,6 +232,8 @@ is only rewritten when it still holds what LocalPilot last saw of it, otherwise 
 conflict. Project notes tracked by git are never rewritten (git moves them).
 
 ## Context library and earlier conversations
+
+<p><img src="{{ '/assets/screenshots/context-library.png' | relative_url }}" alt="The Context library: three named context sets with their #context: names, Attach, edit and delete" width="420"></p>
 
 **Context library.** Open it from **Knowledge & continuity → Context library**, **LocalPilot: Open Context Library**, or
 **Open Context library** in Settings → Continuity & sync. A context set has a name, an optional description and items:
@@ -291,6 +292,8 @@ set by `localpilot.continuity.captureToolOutput`: `errors` (only the error text 
 2 KB of every step, the default) or `full` (everything; output over 2 KB is stored as an attachment). The text the model
 streams is not stored here; the chat keeps the answers.
 
+<p><img src="{{ '/assets/screenshots/run-interrupted.png' | relative_url }}" alt="An interrupted run: stopped while validating, the failing assertion, the two files changed so far, and Resume, Rollback fixes, Review changes so far and Dismiss" width="420"></p>
+
 The model that answered is kept too. Each stretch of a conversation answered by one model is recorded with why the model
 changed: you picked another one, Auto picked it, a fallback took over, or the provider was down.
 
@@ -311,6 +314,8 @@ synced, and a draft is removed as soon as the answer it belongs to is saved. In 
 puts the partial answer back and says so; type "continue" to pick it up.
 
 ## Checkpoints
+
+<p><img src="{{ '/assets/screenshots/checkpoints.png' | relative_url }}" alt="The Checkpoints page: three checkpoints of this project with their changed files, View changes, Restore (files and chat, files only, chat only) and Open chat" width="460"></p>
 
 A checkpoint is taken before each agent turn (Settings → Agent → Checkpoints): a git snapshot in a git repository, file
 snapshots otherwise. **Checkpoints** (in **Knowledge & continuity**, the command **LocalPilot: Open Checkpoints**, or
@@ -400,6 +405,8 @@ waiting, **Sync now**, **Pause** / **Resume**, the **conflicts**, your **devices
 **Start over…**. When sync needs you, the status says why with the fix next to it: **Enter passphrase…** (the key was
 rotated or sync started over elsewhere), **Update credentials…** (sign-in failed), or **Sync settings…** (the folder,
 bucket or repository is gone).
+
+<p><img src="{{ '/assets/screenshots/sync-manager.png' | relative_url }}" alt="The Sync manager: up to date with three conflicts (a title, a memory note edited on two devices with Compare, and a chat continued on two devices) and the devices list" width="420"></p>
 
 ### Conflicts
 
@@ -525,6 +532,8 @@ WebDAV password at set-up) instead of typing them. See
 | `localpilot.sync.categories` | all except checkpoint contents | What to sync |
 | `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment that is synced |
 | `localpilot.sync.deviceName` | host name | How this device appears on your other devices |
+
+<p><img src="{{ '/assets/screenshots/settings-sync.png' | relative_url }}" alt="Settings → Continuity &amp; sync → Sync: status with Sync now, Pause and Open Sync manager, storage (folder), Test connection, and what syncs" width="720"></p>
 
 See also [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }}),
 [Self-healing & recovery]({{ '/docs/self-healing/' | relative_url }}) and

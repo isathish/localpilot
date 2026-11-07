@@ -114,15 +114,19 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 
 | Feature | What you get |
 |---|---|
-| **Agent · Plan · Ask · Debug · Multitask** | Autonomous edit-and-run loop with approval gates, a live task checklist, diagnostics checks and retries. |
+| **Auto · Agent · Plan · Ask · Debug · Multitask** | Auto picks the mode (and the model) for each message; or choose one of 12 modes, including Review, Test, Refactor and Architect. Autonomous edit-and-run loop with approval gates, a live task checklist and diagnostics checks. |
+| **Self-healing** | After each change it runs your build, tests and linters and fixes what it broke before saying it is done. Fix attempts can be rolled back. |
 | **Questions before it starts** | For a new feature, the agent reads the code and asks up to four explained questions in one card, with a recommended answer. Then it plans and builds. |
-| **Auto mode & task queue** | A small local reviewer approves safe actions so long runs don't stop to ask. Risky ones always ask. Queue tasks to run one after another or side by side. |
+| **Auto-approve & task queue** | A small local reviewer approves safe actions so long runs don't stop to ask. Risky ones always ask. Queue tasks to run one after another or side by side. |
 | **Improve prompt** <kbd>⌘I</kbd> | Turns a terse draft into a precise request naming the real file or function, and fixes mistyped file and symbol names. |
 | **Parallel agents** | Independent tabs, one worktree each, Best-of-N across models, live Agents panel, per-agent pause and stop. |
 | **Change review & checkpoints** | Side-by-side diffs, accept or reject per file or session, restore any checkpoint. |
 | **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp, the OmniRoute and LiteLLM gateways, and model servers in Docker. |
 | **Cloud providers, your own key** | One-click presets for OpenAI, Anthropic (Claude), Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Azure OpenAI and Ollama Cloud. Keys go to your OS keychain. Automatic picks keep preferring local models. |
-| **Memory** | Durable project and personal notes the agent saves and recalls across sessions. |
+| **Conversations & search** | Every chat kept and searchable, including code and error output. Pinned, Favorites, Archive, tags, Trash with restore, branches instead of overwrites, Compare answers, export to Markdown, HTML, PDF or JSON. |
+| **Memory & context** | Six kinds of memory (project, developer, conversation, task, knowledge, agent) in one manager, and named context sets you attach with `#context:`. |
+| **Encrypted sync** | Continue a chat on another computer. Conversations, memory and checkpoints sync through your cloud-drive folder, Git, S3-compatible storage or WebDAV, end-to-end encrypted with your passphrase. No server, no account. |
+| **Crash recovery** | A run cut off by a crash or a closed window comes back with Resume; a cut-off answer with Continue. Every checkpoint is on one page. |
 | **Skills & subagents** | 14 built-in `SKILL.md` playbooks and 9 subagents (`explore`, `coder`, `reviewer`, `tester`, `debugger`…). Install any skill from GitHub in one step; matching skills from `anthropics/skills`, `obra/superpowers` and `github/awesome-copilot` install themselves when needed. |
 | **Screenshots & images** | Capture a selection, window or screen, paste or drop an image, and let a vision model fix what it sees. |
 | **Inline edit** <kbd>⌘⌥K</kbd> | Describe a change and the selection is rewritten in place. In a terminal, English becomes a reviewed command. |

@@ -115,6 +115,8 @@ Rejecting restores the exact content from before the agent's edit.
 
 After you have used LocalPilot for a few days (eight successful runs), a small card above the message box asks *How is LocalPilot working for you?* and shows its current rating on the VS Code Marketplace. Pick a number of stars:
 
+<p><img src="{{ '/assets/screenshots/rating-card.png' | relative_url }}" alt="The rating card above the composer: How is LocalPilot working for you?, the Marketplace average of 4.6 from 23 ratings, four of five stars picked, Later and Don&#39;t ask again" width="420"></p>
+
 - **4–5 stars:** **Rate on Marketplace** opens the Marketplace review form. You sign in there and post the rating; extensions cannot post ratings for you.
 - **1–3 stars:** **Report an issue** opens a GitHub issue with your LocalPilot version and platform filled in, and **Rate on Marketplace** is offered too.
 
