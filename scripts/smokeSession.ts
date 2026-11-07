@@ -55,6 +55,12 @@ async function openC(root: string, settings: () => ContinuitySettings): Promise<
   return c;
 }
 
+/** The same folder, whatever the spelling (Windows: 8.3 names, case, separators). */
+const samePath = (a: string | undefined, b: string): boolean => {
+  const n = (p: string) => { let r = p; try { r = fs.realpathSync.native(p); } catch { /* gone */ } r = path.resolve(r); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  return !!a && n(a) === n(b);
+};
+
 export async function sessionSmoke(check: Check): Promise<void> {
   console.log('\n[continuity: sessions — agent sessions, execution events, checkpoints, model sessions, crash recovery, drafts]');
   const root = tmp('root');
@@ -63,7 +69,8 @@ export async function sessionSmoke(check: Check): Promise<void> {
   const store = new SessionStore({ storageUri: vscode.Uri.file(tmp('store')) } as unknown as vscode.ExtensionContext, log);
   await store.load();
   // A git repository for checkpoints (the CheckpointService takes a stash-shaped commit before each turn).
-  const repo = fs.realpathSync(tmp('repo'));
+  // .native expands Windows 8.3 names (RUNNER~1), as the paths git and the checkpoints report do.
+  const repo = fs.realpathSync.native(tmp('repo'));
   const g = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { stdio: 'ignore' });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 'a@b');
@@ -155,7 +162,7 @@ export async function sessionSmoke(check: Check): Promise<void> {
 
     // ---- checkpoint entity per snapshot, linked to the run and the message
     let cps = await mgr.checkpoints({ conversationId: s1.id });
-    check('a checkpoint entity per snapshot: run, git snapshot, this device, linked to the agent session and user message', cps.length === 1 && cps[0].run === 1 && cps[0].agentSessionId === as1.id && cps[0].messageId === userMsg?.meta?.id && cps[0].device === c.device.deviceId && !!cps[0].sha && !!cps[0].ref && cps[0].root === repo, cps);
+    check('a checkpoint entity per snapshot: run, git snapshot, this device, linked to the agent session and user message', cps.length === 1 && cps[0].run === 1 && cps[0].agentSessionId === as1.id && cps[0].messageId === userMsg?.meta?.id && cps[0].device === c.device.deviceId && !!cps[0].sha && !!cps[0].ref && samePath(cps[0].root, repo), cps);
 
     // ---- full capture, an error with errors capture
     cfg.captureToolOutput = 'full';
