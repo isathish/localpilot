@@ -798,3 +798,60 @@ a.card-link h3::after { content: ' →'; color: var(--accent-text); }
   .lp-hot-window { transform: none; }
   .lp-start::after { transform: scaleX(1); transition: none; }
 }
+
+/* ---------------------------------------------------------------- landing: feature slider (assets/landing.js) */
+.lp-slider { position: relative; }
+.lp-slider .lp-tabs { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; max-width: 100%; width: fit-content; margin-left: auto; margin-right: auto; scroll-padding: 0 12px; }
+.lp-slider .lp-tabs::-webkit-scrollbar { display: none; }
+.lp-slider .lp-tabs [role="tab"] { position: relative; flex: none; overflow: hidden; white-space: nowrap; }
+.lp-tab-label { position: relative; z-index: 1; }
+/* the active tab fills up while its slide plays; the slider then moves on */
+.lp-tab-fill { position: absolute; left: 10px; right: 10px; bottom: 3px; height: 2px; border-radius: 2px; background: var(--accent); transform-origin: 0 50%; transform: scaleX(0); opacity: 0; z-index: 1; }
+.lp-slider.playing [aria-selected="true"] .lp-tab-fill { opacity: 1; animation: lp-fill var(--dur, 7000ms) linear forwards; }
+.lp-slider:not(.playing) [aria-selected="true"] .lp-tab-fill { opacity: .5; transform: scaleX(1); animation: none; }
+@keyframes lp-fill { to { transform: scaleX(1); } }
+/* slides glide in from the side they come from */
+.lp-panel { animation: none; }
+.lp-panel.from-right { animation: lp-slide-r .55s cubic-bezier(.2,.7,.2,1) both; }
+.lp-panel.from-left { animation: lp-slide-l .55s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes lp-slide-r { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+@keyframes lp-slide-l { from { opacity: 0; transform: translateX(-40px); } to { opacity: 1; transform: none; } }
+.lp-panel.from-right .lp-shot, .lp-panel.from-left .lp-shot { animation: lp-shot-in .8s cubic-bezier(.2,.7,.2,1) .08s both; }
+@keyframes lp-shot-in { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+.lp-panel.from-right .checks li, .lp-panel.from-left .checks li { animation: lp-rise .5s cubic-bezier(.2,.7,.2,1) both; }
+.lp-panel .checks li:nth-child(1) { animation-delay: .35s; } .lp-panel .checks li:nth-child(2) { animation-delay: .45s; }
+/* the typed headline: a caret while it types */
+.lp-type { min-height: 2.3em; }
+.lp-type.typing::after { content: ''; display: inline-block; width: 3px; height: .95em; margin-left: 3px; vertical-align: -.1em; background: var(--accent); animation: lp-blink .8s steps(1) infinite; }
+/* a tall chat screenshot: centred in a soft stage instead of stretched across */
+.lp-panel { min-height: 560px; }
+.lp-shot.lp-tall { display: grid; place-items: center; padding: 24px; border-radius: 18px; background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), color-mix(in srgb, var(--bg) 60%, transparent); border: 1px solid var(--border); }
+.lp-shot.lp-tall img { width: auto; max-width: 100%; max-height: 480px; object-fit: contain; }
+.lp-shot.lp-duo img { max-height: 480px; }
+.lp-panel-text .lp-kicker { font-variant-numeric: tabular-nums; }
+/* play / pause */
+.lp-slider-ctl { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 18px; color: var(--muted); font-size: 13px; }
+.lp-play { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border-2); background: var(--panel); color: var(--fg-2); cursor: pointer; }
+.lp-play:hover { color: var(--fg); border-color: var(--muted); }
+.lp-play svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.lp-play .pl { display: none; fill: currentColor; stroke: none; }
+.lp-slider.paused .lp-play .pz { display: none; }
+.lp-slider.paused .lp-play .pl { display: block; }
+.lp-slider:not(.js) .lp-slider-ctl { display: none; }
+@media (max-width: 1000px) { .lp-panel { min-height: 0; } .lp-shot.lp-tall img { max-height: 420px; } }
+@media (max-width: 720px) { .lp-slider .lp-tabs { width: 100%; border-radius: 999px; } .lp-slider-hint { display: none; } }
+
+/* feature cards: a screenshot thumbnail on top */
+.lp-mini .card { overflow: hidden; }
+.lp-thumb { margin: -22px -22px 16px; height: 128px; overflow: hidden; border-bottom: 1px solid var(--border); background: #1b1d21; }
+.lp-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center top; transform: scale(1.02); transition: transform .6s cubic-bezier(.2,.7,.2,1); filter: saturate(.95); }
+.lp-mini .card:hover .lp-thumb img { transform: scale(1.08); }
+.lp-models .lp-thumb { display: none; }
+@media (max-width: 560px) { .lp-thumb { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-panel.from-right, .lp-panel.from-left, .lp-panel .lp-shot, .lp-panel .checks li, .lp-tab-fill, .lp-type.typing::after { animation: none !important; }
+  .lp-thumb img { transition: none; }
+}
+/* the tab row scrolls sideways: its edges fade so a cut tab reads as "more this way" */
+.lp-slider .lp-tabs { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); padding-left: 14px; padding-right: 14px; }
